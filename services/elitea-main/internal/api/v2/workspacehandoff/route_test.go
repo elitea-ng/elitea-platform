@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -438,5 +439,42 @@ func TestPolicyAnswersTheEffectivePolicy(t *testing.T) {
 	if answer := decode(t, response); answer["env_allow"] != nil || answer["enabled"] != false ||
 		len(answer["exclusions_platform"].([]any)) != 0 || len(answer["exclusions_project"].([]any)) != 0 {
 		t.Fatalf("an empty policy = %v", answer)
+	}
+}
+
+// Every refusal used to read as the organisation's policy: the 403 and the
+// policy GET now name the reason, and a bare ErrDisabled carries none.
+func TestDisabledNamesItsReason(t *testing.T) {
+	for _, reason := range []string{handoffapp.DisabledPlatformOff, handoffapp.DisabledProjectOff,
+		handoffapp.DisabledDeviceOff, handoffapp.DisabledNoExecutor, handoffapp.DisabledStorageEncryptionUnconfirmed} {
+		recorder := httptest.NewRecorder()
+		writeError(context.Background(), recorder, "begin", fmt.Errorf("wrapped: %w", &handoffapp.DisabledError{Reason: reason}))
+		answer := decode(t, recorder)
+		details, _ := answer["details"].(map[string]any)
+		if recorder.Code != http.StatusForbidden || answer["error"] != "cloud_handoff_disabled" || details["reason"] != reason {
+			t.Fatalf("%s: %d %v", reason, recorder.Code, answer)
+		}
+		h := &handler{handoff: &fakeHandoff{policy: handoffapp.Policy{DisabledReason: reason}},
+			store: &fakeStore{}, conversations: fakeConversations{}}
+		response := serve(t, h.policy, nativeUser(), []string{SendPermission}, http.MethodGet, PolicyPath,
+			"/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/1", "")
+		if got := decode(t, response); got["enabled"] != false || got["disabled_reason"] != reason {
+			t.Fatalf("policy %s = %v", reason, got)
+		}
+	}
+	recorder := httptest.NewRecorder()
+	writeError(context.Background(), recorder, "begin", handoffapp.ErrDisabled)
+	if answer := decode(t, recorder); answer["error"] != "cloud_handoff_disabled" || answer["details"] != nil {
+		t.Fatalf("bare disabled = %v", answer)
+	}
+	h := &handler{handoff: &fakeHandoff{policy: handoffapp.Policy{Enabled: true}}, store: &fakeStore{}, conversations: fakeConversations{}}
+	response := serve(t, h.policy, nativeUser(), []string{SendPermission}, http.MethodGet, PolicyPath,
+		"/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/1", "")
+	if got := decode(t, response); got["enabled"] != true || got["disabled_reason"] != nil {
+		t.Fatalf("enabled policy = %v", got)
+	}
+	if _, present := decode(t, serve(t, h.policy, nativeUser(), []string{SendPermission}, http.MethodGet, PolicyPath,
+		"/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/1", ""))["disabled_reason"]; !present {
+		t.Fatal("disabled_reason is always present (null while enabled)")
 	}
 }

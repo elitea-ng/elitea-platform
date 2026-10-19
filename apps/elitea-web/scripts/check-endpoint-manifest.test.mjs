@@ -740,7 +740,13 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 330 -> 331 (client contract 1.8, ADR-0034 amendment of 2026-10-15):
 // getWorkspaceHandoffPolicy, the effective policy the desktop's send dialog
 // reads. The manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 331;
+// 331 -> 335 (ADR-0034 decision 11, owner decision 2026-10-19): a project's
+// Send to cloud switch, read and written from the project settings page
+// (getProjectCloudExecutor, setProjectCloudExecutor) and from the admin
+// Projects page for any project (getAdminProjectCloudExecutor,
+// setAdminProjectCloudExecutor). Their manifest entries land with the pages
+// that call them (see MANIFEST_ENTRY_COUNT).
+const GENERATED_OPERATION_COUNT = 335;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -933,8 +939,16 @@ const GENERATED_OPERATION_COUNT = 331;
  * shared/api/themePreference.ts calls `eliteaFetch` directly so both requests
  * can be `background` (a 401 on a theme sync must not open the re-auth
  * window), which the generated functions cannot ask for.
+ *
+ * 275 -> 277 (ADR-0034 decision 11): admin.getAdminProjectCloudExecutor and
+ * admin.setAdminProjectCloudExecutor, the admin Projects page's Send to cloud
+ * dialog (pages/admin/AdminProjectCloudExecutorDialog.tsx). Generated.
+ *
+ * 277 -> 279 (ADR-0034 decision 11): settings.getProjectCloudExecutor and
+ * settings.setProjectCloudExecutor, Settings, General's Send to cloud
+ * section (features/cloud-executor-switch). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 275;
+const MANIFEST_ENTRY_COUNT = 279;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

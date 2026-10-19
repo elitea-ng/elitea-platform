@@ -47,8 +47,33 @@ import type { RequestHandlerOptions } from "msw";
 import type {
   EntitySettingsUpdateResponse,
   OkResponse,
+  ProjectCloudExecutorSwitch,
   ProjectContextDraft,
 } from "../model";
+
+export const getGetProjectCloudExecutorResponseMock = (
+  overrideResponse: Partial<Extract<ProjectCloudExecutorSwitch, object>> = {},
+): ProjectCloudExecutorSwitch => ({
+  project_id: faker.number.int(),
+  platform_enabled: faker.datatype.boolean(),
+  project_default_enabled: faker.datatype.boolean(),
+  explicit: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  enabled: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getSetProjectCloudExecutorResponseMock = (
+  overrideResponse: Partial<Extract<ProjectCloudExecutorSwitch, object>> = {},
+): ProjectCloudExecutorSwitch => ({
+  project_id: faker.number.int(),
+  platform_enabled: faker.datatype.boolean(),
+  project_default_enabled: faker.datatype.boolean(),
+  explicit: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  enabled: faker.datatype.boolean(),
+  ...overrideResponse,
+});
 
 export const getGenerateProjectContextDraftResponseMock = (
   overrideResponse: Partial<Extract<ProjectContextDraft, object>> = {},
@@ -109,6 +134,58 @@ export const getReplaceParticipantSettingsResponseMock = (
   },
   ...overrideResponse,
 });
+
+export const getGetProjectCloudExecutorMockHandler = (
+  overrideResponse?:
+    | ProjectCloudExecutorSwitch
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ProjectCloudExecutorSwitch> | ProjectCloudExecutorSwitch),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/project_cloud_executor/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetProjectCloudExecutorResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetProjectCloudExecutorMockHandler = (
+  overrideResponse?:
+    | ProjectCloudExecutorSwitch
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ProjectCloudExecutorSwitch> | ProjectCloudExecutorSwitch),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/project_cloud_executor/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetProjectCloudExecutorResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 
 export const getGenerateProjectContextDraftMockHandler = (
   overrideResponse?:
@@ -189,6 +266,8 @@ export const getReplaceParticipantSettingsMockHandler = (
   );
 };
 export const getSettingsMock = () => [
+  getGetProjectCloudExecutorMockHandler(),
+  getSetProjectCloudExecutorMockHandler(),
   getGenerateProjectContextDraftMockHandler(),
   getPatchEntitySettingsMockHandler(),
   getReplaceParticipantSettingsMockHandler(),

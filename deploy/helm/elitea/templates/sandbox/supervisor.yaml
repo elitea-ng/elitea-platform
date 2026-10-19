@@ -5,7 +5,13 @@
 {{- fail "Kubernetes supervisor image must use a registry SHA-256 digest" }}{{ end }}
 {{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $s.supervisor.materialSecret) }}
 {{- fail "Kubernetes supervisor requires a named materialSecret" }}{{ end }}
-{{- if or (lt (len $s.supervisor.profiles) 1) (gt (len $s.supervisor.profiles) 8) }}
+{{- /* The cloud executor's workspace profile (workspace-profile.yaml) is
+rendered by the chart and counts toward the eight. */}}
+{{- $workspace := and $s.workspaceRuns.enabled $s.supervisor.enabled }}
+{{- $wp := $s.workspaceRuns.profile }}
+{{- $workspaceIndex := len $s.supervisor.profiles }}
+{{- $profileCount := add (len $s.supervisor.profiles) (ternary 1 0 $workspace) }}
+{{- if or (lt $profileCount 1) (gt $profileCount 8) }}
 {{- fail "Kubernetes supervisor requires one to eight profiles" }}{{ end }}
 {{- $ports := dict }}{{- $files := dict }}{{- $services := dict }}
 {{- range $s.supervisor.profiles }}
@@ -44,6 +50,12 @@ spec:
     metadata:
       labels:
         {{- include "elitea-sandbox-supervisor.selectorLabels" . | nindent 8 }}
+      {{- if $workspace }}
+      annotations:
+        # The profile is copied into private material at start: a change
+        # must restart the supervisor.
+        checksum/workspace-profile: {{ include "elitea-sandbox.workspaceProfile" . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $s.supervisorServiceAccount }}
       {{- include "elitea.imagePullSecrets" (dict "local" (list) "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -108,10 +120,18 @@ spec:
             - --config
             - {{ printf "/run/elitea-sandbox/%s" .file | quote }}
             {{- end }}
+            {{- if $workspace }}
+            - --config
+            - "/run/elitea-sandbox/workspace.json"
+            {{- end }}
           ports:
             {{- range $index, $profile := $s.supervisor.profiles }}
             - name: profile-{{ $index }}
               containerPort: {{ $profile.port }}
+            {{- end }}
+            {{- if $workspace }}
+            - name: profile-{{ $workspaceIndex }}
+              containerPort: {{ $wp.port }}
             {{- end }}
           readinessProbe:
             tcpSocket:
@@ -133,9 +153,21 @@ spec:
             {{- end }}
       volumes:
         - name: projected-material
+          {{- if $workspace }}
+          # One projected revision: the material Secret and the rendered
+          # workspace profile (it holds no secret).
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: {{ $s.supervisor.materialSecret }}
+              - configMap:
+                  name: elitea-sandbox-workspace-profile
+          {{- else }}
           secret:
             secretName: {{ $s.supervisor.materialSecret }}
             defaultMode: 0440
+          {{- end }}
         - name: private-material
           emptyDir:
             medium: Memory
@@ -163,6 +195,28 @@ spec:
       port: {{ $profile.port }}
       targetPort: profile-{{ $index }}
     {{- end }}
+    {{- if $workspace }}
+    - name: profile-{{ $workspaceIndex }}
+      port: {{ $wp.port }}
+      targetPort: profile-{{ $workspaceIndex }}
+    {{- end }}
+{{- if $workspace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $wp.serviceName }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: sandbox-supervisor
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  ports:
+    - name: profile-{{ $workspaceIndex }}
+      port: {{ $wp.port }}
+      targetPort: profile-{{ $workspaceIndex }}
+{{- end }}
 {{- range $index, $profile := $s.supervisor.profiles }}
 {{- if $profile.serviceName }}
 ---

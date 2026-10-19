@@ -470,6 +470,21 @@ fn answer_error(answer: &Answer) -> HandoffError {
     }
 }
 
+/// The device's own refusal: `local_work.allowed` or
+/// `local_work.cloud_handoff` is off.
+const DEVICE_OFF: &str = "device_off";
+
+/// `cloud_handoff_disabled` with the reason the UI picks its text by
+/// (`details.reason`, as the server's 403 carries it), or no details when
+/// the server named none.
+fn disabled(reason: Option<&str>, message: &str) -> HandoffError {
+    let mut error = HandoffError::new("cloud_handoff_disabled", message);
+    if let Some(reason) = reason {
+        error.details = json!({ "reason": reason });
+    }
+    error
+}
+
 fn ok_body(answer: Answer) -> Result<Value, HandoffError> {
     if (200..300).contains(&answer.status) {
         Ok(answer.body)
@@ -578,8 +593,8 @@ impl HandoffHost {
             .and_then(|section| serde_json::from_value(section).ok())
             .unwrap_or_default();
         if !policy.allowed || !policy.cloud_handoff {
-            return Err(HandoffError::new(
-                "cloud_handoff_disabled",
+            return Err(disabled(
+                Some(DEVICE_OFF),
                 "Sending threads to the cloud is turned off by your organisation's policy.",
             ));
         }
@@ -697,8 +712,8 @@ impl HandoffHost {
             EffectivePolicy::from_server(&ok_body(answer)?)
         };
         if !policy.enabled {
-            return Err(HandoffError::new(
-                "cloud_handoff_disabled",
+            return Err(disabled(
+                policy.disabled_reason.as_deref(),
                 "Sending threads to the cloud is turned off for this project.",
             ));
         }

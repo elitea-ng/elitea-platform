@@ -498,6 +498,8 @@ export * from "./projectBudget.zod";
 export * from "./projectBudgetListing.zod";
 export * from "./projectBudgetRow.zod";
 export * from "./projectBudgetWrite.zod";
+export * from "./projectCloudExecutorSwitch.zod";
+export * from "./projectCloudExecutorSwitchUpdate.zod";
 export * from "./projectContext.zod";
 export * from "./projectContextDraft.zod";
 export * from "./projectContextUpdateRequest.zod";

@@ -47,9 +47,15 @@ export const WorkspaceHandoffErrorDetails = zod
     current: WorkspaceNullableRefMap.optional(),
     names: zod.array(zod.string()).optional(),
     paths: zod.array(zod.string()).optional(),
+    reason: zod
+      .string()
+      .optional()
+      .describe(
+        "`cloud_handoff_disabled`: one of `platform_off`, `project_off`, `device_off`, `no_executor`, `storage_encryption_unconfirmed`.",
+      ),
   })
   .describe(
-    "`current` for `ref_conflict` (the stored value, null when absent, of every ref the publish named), `names` for `env_name_denied`, `paths` for `path_denied`.",
+    "`current` for `ref_conflict` (the stored value, null when absent, of every ref the publish named), `names` for `env_name_denied`, `paths` for `path_denied`, `reason` for `cloud_handoff_disabled`.",
   );
 
 export type WorkspaceHandoffErrorDetails = zod.input<

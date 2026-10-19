@@ -119,6 +119,11 @@ pub struct EffectivePolicy {
     /// `server`, or `defaults` when the server has no policy route.
     pub source: &'static str,
     pub enabled: bool,
+    /// Why `enabled` is false, as the server names it (`platform_off`,
+    /// `project_off`, `device_off`, `no_executor`,
+    /// `storage_encryption_unconfirmed`); `None` when enabled or when the
+    /// server predates the field.
+    pub disabled_reason: Option<String>,
     /// Platform and project patterns (`user` empty: the folder's own).
     pub patterns: Patterns,
     pub path_deny: Vec<String>,
@@ -147,6 +152,7 @@ impl EffectivePolicy {
         Self {
             source: "defaults",
             enabled: true,
+            disabled_reason: None,
             patterns: Patterns::default(),
             path_deny: Vec::new(),
             allow_user_include: true,
@@ -196,6 +202,11 @@ impl EffectivePolicy {
         Self {
             source: "server",
             enabled: body.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+            disabled_reason: body
+                .get("disabled_reason")
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.is_empty())
+                .map(str::to_owned),
             patterns,
             path_deny: strings(body.get("path_deny")).unwrap_or_default(),
             allow_user_include: flag("allow_user_include"),

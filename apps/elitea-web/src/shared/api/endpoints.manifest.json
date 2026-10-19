@@ -3253,6 +3253,46 @@
         "shared/ui/ThemeModeToggle.tsx",
         "app/ThemePreferenceSync.tsx"
       ]
+    },
+    {
+      "id": "admin.getAdminProjectCloudExecutor",
+      "method": "GET",
+      "path": "/admin/project_cloud_executor/administration/{project_id}",
+      "operationId": "getAdminProjectCloudExecutor",
+      "source": "generated",
+      "responseSchema": "ProjectCloudExecutorSwitch",
+      "fixture": null,
+      "usedBy": ["pages/admin/AdminProjectCloudExecutorDialog.tsx"]
+    },
+    {
+      "id": "admin.setAdminProjectCloudExecutor",
+      "method": "PUT",
+      "path": "/admin/project_cloud_executor/administration/{project_id}",
+      "operationId": "setAdminProjectCloudExecutor",
+      "source": "generated",
+      "responseSchema": "ProjectCloudExecutorSwitch",
+      "fixture": null,
+      "usedBy": ["pages/admin/AdminProjectCloudExecutorDialog.tsx"]
+    },
+    {
+      "id": "settings.getProjectCloudExecutor",
+      "method": "GET",
+      "path": "/elitea_core/project_cloud_executor/prompt_lib/{project_id}",
+      "operationId": "getProjectCloudExecutor",
+      "source": "generated",
+      "responseSchema": "ProjectCloudExecutorSwitch",
+      "fixture": null,
+      "usedBy": ["features/cloud-executor-switch"]
+    },
+    {
+      "id": "settings.setProjectCloudExecutor",
+      "method": "PUT",
+      "path": "/elitea_core/project_cloud_executor/prompt_lib/{project_id}",
+      "operationId": "setProjectCloudExecutor",
+      "source": "generated",
+      "responseSchema": "ProjectCloudExecutorSwitch",
+      "fixture": null,
+      "usedBy": ["features/cloud-executor-switch"]
     }
   ]
 }

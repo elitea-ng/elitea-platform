@@ -155,7 +155,49 @@ type Policy struct {
 	EnvDeny            []string
 	// EnvAllow, when not nil, is the only list of names that can be harvested.
 	EnvAllow *[]string
+	// DisabledReason is why Enabled is false (one of the Disabled* values),
+	// empty when it is true. Clients show one message per reason instead of
+	// reading every refusal as the organisation's policy.
+	DisabledReason string
 }
+
+// Why the effective policy turns the cloud executor off, in the order they
+// are reported when several apply: the deliberate switches first (platform,
+// project, device), then what the deployment lacks.
+const (
+	// DisabledPlatformOff: the platform ceiling (cloud_executor.enabled) is off.
+	DisabledPlatformOff = "platform_off"
+	// DisabledProjectOff: the project's cloud_executor setting turns it off,
+	// or the project set nothing and the platform's project default
+	// (cloud_executor.project_default_enabled) is off.
+	DisabledProjectOff = "project_off"
+	// DisabledDeviceOff: the native client policy (local_work.allowed or
+	// local_work_cloud_handoff) does not allow handoff.
+	DisabledDeviceOff = "device_off"
+	// DisabledNoExecutor: the deployment runs no cloud executor (no
+	// workspace-run supervisor), so a handed-off turn could never run.
+	DisabledNoExecutor = "no_executor"
+	// DisabledStorageEncryptionUnconfirmed: the startup check could not
+	// confirm the object store's default encryption at rest (decision 4).
+	DisabledStorageEncryptionUnconfirmed = "storage_encryption_unconfirmed"
+)
+
+// DisabledError is ErrDisabled with its reason; errors.Is(err, ErrDisabled)
+// holds for it.
+type DisabledError struct{ Reason string }
+
+func (e *DisabledError) Error() string {
+	if e.Reason == "" {
+		return ErrDisabled.Error()
+	}
+	return ErrDisabled.Error() + ": " + e.Reason
+}
+
+// Is makes a DisabledError match ErrDisabled.
+func (e *DisabledError) Is(target error) bool { return target == ErrDisabled }
+
+// disabled answers the refusal of a policy that is off.
+func disabled(policy Policy) error { return &DisabledError{Reason: policy.DisabledReason} }
 
 // PolicySource answers the effective policy, recomputed on every call.
 type PolicySource interface {

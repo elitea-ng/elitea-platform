@@ -388,6 +388,16 @@ func mergeSectionValues(section configSection, stored map[string]any) map[string
 			values[key] = got
 		}
 	}
+	// The cloud executor's project default follows the saved `enabled`
+	// while it was never saved itself (platformconfig's upgrade rule). The
+	// form shows that effective value rather than the schema default, so an
+	// upgraded deployment's administrator sees the projects are on.
+	if section.id == platformconfig.SectionCloudExecutor {
+		if _, saved := stored[platformconfig.KeyCloudExecutorProjectDefaultEnabled].(bool); !saved {
+			values[platformconfig.KeyCloudExecutorProjectDefaultEnabled] =
+				platformconfig.CloudExecutorSettingsFromValues(stored).ProjectDefaultEnabled
+		}
+	}
 	return values
 }
 

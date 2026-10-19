@@ -1001,6 +1001,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -1057,6 +1060,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -1096,6 +1102,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -1135,6 +1144,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -1216,6 +1228,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -8322,6 +8337,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -8378,6 +8396,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -8417,6 +8438,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -8498,6 +8522,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -8540,6 +8567,7 @@
               "type": "object",
               "required": [
                 "allow_user_include",
+                "disabled_reason",
                 "enabled",
                 "env_allow",
                 "env_deny",
@@ -8557,6 +8585,10 @@
               "properties": {
                 "allow_user_include": {
                   "type": "boolean"
+                },
+                "disabled_reason": {
+                  "type": "string",
+                  "nullable": true
                 },
                 "enabled": {
                   "type": "boolean"
@@ -8707,6 +8739,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -8763,6 +8798,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -8844,6 +8882,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -9008,6 +9049,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -9064,6 +9108,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -9103,6 +9150,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -9184,6 +9234,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -9285,6 +9338,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -9341,6 +9397,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -9380,6 +9439,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -9461,6 +9523,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15359,6 +15424,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -15415,6 +15483,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15454,6 +15525,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15493,6 +15567,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15532,6 +15609,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15571,6 +15651,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15610,6 +15693,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15691,6 +15777,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15822,6 +15911,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -15878,6 +15970,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15917,6 +16012,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15956,6 +16054,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -15995,6 +16096,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16034,6 +16138,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16115,6 +16222,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16274,6 +16384,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -16330,6 +16443,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16369,6 +16485,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16408,6 +16527,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16447,6 +16569,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16486,6 +16611,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16567,6 +16695,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16660,6 +16791,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -16716,6 +16850,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16755,6 +16892,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16794,6 +16934,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -16875,6 +17018,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17012,6 +17158,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -17068,6 +17217,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17107,6 +17259,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17146,6 +17301,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17185,6 +17343,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17224,6 +17385,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17305,6 +17469,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17483,6 +17650,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -17539,6 +17709,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17578,6 +17751,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17617,6 +17793,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17661,6 +17840,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17700,6 +17882,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17739,6 +17924,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17820,6 +18008,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -17999,6 +18190,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -18055,6 +18249,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18094,6 +18291,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18133,6 +18333,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18172,6 +18375,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18211,6 +18417,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18250,6 +18459,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18331,6 +18543,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18454,6 +18669,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -18510,6 +18728,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18549,6 +18770,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18588,6 +18812,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18627,6 +18854,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18666,6 +18896,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -18747,6 +18980,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -19261,6 +19497,9 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reason": {
+                          "type": "string"
                         }
                       }
                     },
@@ -19317,6 +19556,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -19356,6 +19598,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -19395,6 +19640,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -19434,6 +19682,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -19473,6 +19724,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },
@@ -19554,6 +19808,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "reason": {
+                      "type": "string"
                     }
                   }
                 },

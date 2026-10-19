@@ -42,6 +42,11 @@ func cloudExecutorSection() map[string]any {
 		"fields": []map[string]any{
 			{"key": platformconfig.KeyCloudExecutorEnabled, "type": "boolean", "title": "Enable the Cloud Executor",
 				"description": "Allow Send to cloud from the desktop.", "section": section, "default": defaults.Enabled},
+			{"key": platformconfig.KeyCloudExecutorProjectDefaultEnabled, "type": "boolean", "title": "Default for Projects",
+				"description": "Whether a project that has not turned the cloud executor on or off has it on. " +
+					"Existing projects follow this default too. A project can still turn it on or off itself; " +
+					"with the cloud executor disabled above, it is off everywhere.",
+				"section": section, "default": defaults.ProjectDefaultEnabled},
 			{"key": platformconfig.KeyCloudExecutorShell, "type": "boolean", "title": "Allow Shell Commands",
 				"description": "Whether cloud turns may run shell commands in their sandbox.", "section": section,
 				"default": defaults.Shell},
