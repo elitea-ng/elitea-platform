@@ -234,7 +234,7 @@ Revert checks:
 |---|---|---|---|---|---|
 | Supervisor × P10 (Docker) | runtime container killed (`docker kill`, daemon or host stop) or removed | F after `timeout+90` | **I** (no platform client); F typed (platform client, clean journal); C (possible effect) | `runtime.rs:699,847`, `runtime_loss.rs:67`, `code_attempt_remote.rs:844`, `node_recovery.rs:452,1062` | wiring + journal real-PG tests; deployed compose KILL-js `54fe68de…` |
 | Supervisor × P10 (Docker) | runtime OOM-killed | F after `timeout+90` | F typed `sandbox.memory_limit`, at once | `runtime_loss.rs:67` | `synthesized_receipt_tests` |
-| Supervisor × P10 (Kubernetes) | node loss / restart, the kubelet reports `Unknown` 255 | F typed (`ddc2a1c5…`) | **I**, inside the 15 min window | `kubernetes/client.rs:415`, `runtime_loss.rs:93` | `killed_original_pod_returns_failure_without_runner_logs`; deployed kind run pending (below) |
+| Supervisor × P10 (Kubernetes) | node loss / restart, the kubelet reports `Unknown` 255 | F typed (`ddc2a1c5…`) | **I**, inside the 15 min window | `kubernetes/client.rs:415`, `runtime_loss.rs:93` | `killed_original_pod_returns_failure_without_runner_logs`; deployed kind NODE-js `b0b76ae6…`, NODEDOWN-js `fedd3c29…` |
 | Supervisor × P10 (Kubernetes) | node never returns (the Pod stays `Terminating` without a terminated state) | F after the deadline | unchanged (G-SUP-02 residual) | — | — |
 | Supervisor × P10 | kubelet eviction (`Evicted`, `TerminationByKubelet`) | F | F typed (deliberate) | `runtime_loss.rs:93` | `a_kubelet_eviction_is_not_loss` |
 | Worker × P10 | user code throws | F typed | F typed, never re-run | `code_attempt_remote.rs:844` | `a_user_code_failure_*` (3 suites) |
@@ -276,13 +276,46 @@ were loaded fresh and then reloaded. 881 shows the single answer `"JS started=17
 
 Observed, not changed here: `execution_settlements.error_code` is empty for the FAILED run (FU-217).
 
-### Kubernetes (k8s1084): not run
+### Deployed runs: Kubernetes (kind cluster `k8s1084`, 2026-10-19)
 
-The images are in the kind registry as `k8s1084-registry:5000/{elitea-main,elitea-worker-rust,elitea-sandbox-supervisor}:fu214-89521291a`
-(supervisor `sha256:19a3b1651bb3feec12f22fb52cd9bcdc828faee18eebb124a9f2c52999f1ff74`). The deployment rollout and
-the node-kill faults (NODE-js, NODEDOWN-js) were not run in this session. Until they are, the Kubernetes row rests on
-the unit tests of the kubelet-reported state (`Unknown`, 255) seen in the earlier `ddc2a1c5…` run, not on a
-deployed re-run.
+- Cluster: two-node kind (`k8s1084-control-plane`, `k8s1084-worker`), the chart deployment of the #1084 Kubernetes
+  matrix (the Code runtime Pods run on `k8s1084-worker`).
+- Images from commit `89521291a`, pushed to the cluster registry, same binaries as the compose run:
+  - Main `k8s1084-registry:5000/elitea-main:fu214-89521291a`;
+  - Worker `k8s1084-registry:5000/elitea-worker-rust:fu214-89521291a`;
+  - Supervisor by digest `sha256:19a3b1651bb3feec12f22fb52cd9bcdc828faee18eebb124a9f2c52999f1ff74`.
+
+  The merged main shared/tenant migrations were applied with the Main image's own migrator before the Main rollout.
+- Harness: `handoffs/crash-recovery-suite/k8s/scen.py` (local tooling, outside git). It sends a saved pipeline with one
+  JavaScript Code node that records its start time and sleeps 25 s. It waits for the execution job to be dispatched,
+  then 8 s later runs `docker kill k8s1084-worker` (the kind node container) and `docker start` again after the
+  delay.
+- Fixtures were created through the product API as the cluster's OIDC test user (project 2), not in the database.
+
+| Case | Execution | Chat | Fault | Outcome | Fault to settlement |
+|---|---|---|---|---|---|
+| NODE-js | `b0b76ae6ac75d729b4f9a8b1b1c25b61` | 973 | node killed 14:18:52.8Z, started again after 21 s | attempt 1 job `failed` / `sandbox.runtime_lost` (kubelet-reported terminated container); attempt 2 job `completed`; Main visits for attempts 1 and 2; claim 1 `LEASE_EXPIRED` (the Worker Pod was on the same node), claim 2 settled SUCCEEDED; answer `JS started=1792419631161` (after the fault: the code ran again) | 129.9 s |
+| NODEDOWN-js | `fedd3c2973c50f801561f0c0a3453456` | 974 | node killed 14:21:46.0Z, started again after 423 s | same: `sandbox.runtime_lost` then `completed`, visits 1 and 2, claim 2 settled SUCCEEDED, answer `JS started=1792420174693`; the re-run started 476 s after the first attempt, inside the 900 s window | 498.4 s (76 s after the node returned) |
+
+Every harness invariant held in both runs:
+- one execution row and one committed settlement, bound to the last claim, with at most one terminal replay event;
+- claim attempts contiguous;
+- the command outbox and the NATS agent stream drained;
+- two execution jobs, none left reserved or dispatched;
+- each runtime Pod created exactly once and deleted, and no orphan Pod;
+- the FU-214 checks: the first job ended `sandbox.runtime_lost`, the re-run completed, the run settled SUCCEEDED, and
+  the user code started again after the fault.
+
+Results: `handoffs/crash-recovery-suite/k8s/runs-fu214/{NODE-js,NODEDOWN-js}/result.json`.
+
+Before this change the same NODE-js fault settled FAILED `PIPELINE_CODE_FAILED` (`ddc2a1c5…`, code-live-owner-recovery-20261008.md).
+
+Most of the fault-to-settlement time is the Worker's own recovery, because the Worker Pod sat on the killed node: its
+claim lease had to expire before claim 2 could start (FU-215). The re-run itself took about 25 s of user code.
+
+Browser: the user's Chrome, in a new tab, signed in through the cluster's OIDC mock test identity. Chats 973 and 974
+were loaded and then reloaded. Each shows exactly one answer (`"JS started=1792419631161"` and
+`"JS started=1792420174693"`) and no failure card. The tab was closed afterwards.
 
 ## Follow-ups
 
