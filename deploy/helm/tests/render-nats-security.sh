@@ -203,7 +203,7 @@ refuse "bootstrap: a fractional maxMsgs (YAML float)" "deltas.maxMsgs must be a 
 refuse "bootstrap: a fractional maxMsgs (--set)" "deltas.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxMsgs=1.5
 refuse "bootstrap: a runtime maxMsgs typo"     "runtime.agent.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set runtime.agent.maxMsgs=1o24
 # The scheduler's write-back rule: never without a scrape path.
-refuse "elitea: a non-integer maxAckPending in the rule" "maxAckPending must be a positive integer" "${EL[@]}" --api-versions monitoring.coreos.com/v1 --set scheduler.metrics.prometheusRule.maxAckPending=40k
+refuse "elitea: a non-integer maxAckPending in the rule" "scheduler.metrics.prometheusRule.maxAckPending must be a whole number" "${EL[@]}" --api-versions monitoring.coreos.com/v1 --set scheduler.metrics.prometheusRule.maxAckPending=40k
 # With the Prometheus Operator served, a rendered budget-writeback rule ALWAYS
 # comes with a scrape path (the PodMonitor, or the scrape annotations): a rule
 # over a metric nothing scrapes is an alert that cannot fire.

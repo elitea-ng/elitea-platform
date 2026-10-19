@@ -191,7 +191,12 @@ mounts = {m["name"]: m for m in c["volumeMounts"]}
 assert mounts["egress-token-signing-key"]["mountPath"] == "/etc/elitea/egress-token"
 assert mounts["egress-token-signing-key"]["readOnly"] is True
 vol = {v["name"]: v for v in pod["volumes"]}["egress-token-signing-key"]["secret"]
-assert vol["secretName"] == "elitea-egress-token-signing" and vol["defaultMode"] == 0o400
+assert vol["secretName"] == "elitea-egress-token-signing"
+# Main runs as a non-root user and the pod sets no fsGroup, so the projected
+# file is root-owned: 0400 made it unreadable and Main exited at start
+# ("permission denied") on the first deployment that enabled the proxy.
+assert "fsGroup" not in (pod.get("securityContext") or {}) or vol["defaultMode"] & 0o040, vol
+assert vol["defaultMode"] & 0o004, oct(vol["defaultMode"])
 assert vol["items"] == [{"key": "signing.pem", "path": "signing.pem"}]
 
 # The proxy pod never references the signing key Secret.
@@ -275,6 +280,14 @@ expect_refusal() {
   fi
 }
 
+echo "== a quoted integer override renders as itself"
+if helm template t "$chart" "${base[@]}" -f "$fixture" --set-string egressProxy.limits.runMaxBytes=3000000000 \
+    | grep -A1 'name: ELITEA_EGRESS_PROXY_RUN_MAX_BYTES' | grep -qF 'value: "3000000000"'; then
+  note "runMaxBytes \"3000000000\" reaches the proxy unchanged"
+else
+  fail "a quoted runMaxBytes did not render as the same integer"
+fi
+
 echo "== refusals"
 expect_refusal "no public keys" "needs the run-token public keys" --set egressProxy.publicKeys.keys=null
 expect_refusal "keys and existingSecret together" "set existingSecret or keys, not both" \
@@ -292,6 +305,19 @@ expect_refusal "no client pod labels" "clientPodLabels must name" \
 expect_refusal "a malformed deny CIDR" "is not an explicit CIDR block" \
   --set 'egressProxy.networkPolicy.denyCidrs[0]=metadata.internal'
 expect_refusal "one replica" "replicaCount must be at least 2" --set egressProxy.replicaCount=1
+# The integer limits: a unit suffix, a fraction, a leading zero (octal to
+# sprig's int64), hex, and zero are refused by name instead of reaching the
+# proxy as a different number.
+expect_refusal "a unit-suffixed limit" "egressProxy.limits.runMaxBytes must be a whole number" \
+  --set-string egressProxy.limits.runMaxBytes=2Gi
+expect_refusal "a fractional limit" "egressProxy.limits.runMaxConnections must be a whole number" \
+  --set egressProxy.limits.runMaxConnections=0.5
+expect_refusal "a leading-zero limit" "egressProxy.limits.maxConnections must be a whole number" \
+  --set-string egressProxy.limits.maxConnections=0100
+expect_refusal "a hex limit" "egressProxy.limits.runMaxBytes must be a whole number" \
+  --set-string egressProxy.limits.runMaxBytes=0x10
+expect_refusal "a zero limit" "egressProxy.limits.maxHeaderBytes must be at least 1" \
+  --set egressProxy.limits.maxHeaderBytes=0
 expect_refusal "a grace period shorter than the drain" "terminationGracePeriodSeconds must be at least" \
   --set egressProxy.terminationGracePeriodSeconds=30
 expect_refusal "a grace period without the audit's last reports" "plus 10 for the last audit reports" \

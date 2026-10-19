@@ -111,17 +111,14 @@ spec:
               value: {{ $e.publicKeys.reloadInterval | quote }}
             - name: ELITEA_EGRESS_PROXY_DENY_CIDRS
               value: {{ include "elitea-egress-proxy.denyCidrs" . | quote }}
-            {{- /* int64 first: Helm reads a values-file number as a float, and
-                   toString prints 2147483648 as "2.147483648e+09", which the
-                   proxy refuses to start on. */}}
             - name: ELITEA_EGRESS_PROXY_MAX_CONNECTIONS
-              value: {{ $l.maxConnections | int64 | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.maxConnections" "value" $l.maxConnections "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_MAX_HEADER_BYTES
-              value: {{ $l.maxHeaderBytes | int64 | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.maxHeaderBytes" "value" $l.maxHeaderBytes "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_RUN_MAX_CONNECTIONS
-              value: {{ $l.runMaxConnections | int64 | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.runMaxConnections" "value" $l.runMaxConnections "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_RUN_MAX_BYTES
-              value: {{ $l.runMaxBytes | int64 | toString | quote }}
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.runMaxBytes" "value" $l.runMaxBytes "min" 1) | quote }}
             - name: ELITEA_EGRESS_PROXY_IDLE_TIMEOUT
               value: {{ $l.idleTimeout | quote }}
             - name: ELITEA_EGRESS_PROXY_MAX_CONNECTION_LIFETIME

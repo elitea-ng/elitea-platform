@@ -366,7 +366,10 @@ spec:
         - name: egress-token-signing-key
           secret:
             secretName: {{ .Values.egressProxy.signingKey.existingSecret }}
-            defaultMode: 0400
+            # Readable by Main's non-root user: the pod sets no fsGroup, so
+            # 0400 left the file root-only and Main exited on "permission
+            # denied". The same mode as the other Secret sources here.
+            defaultMode: 0444
             items:
               - key: {{ .Values.egressProxy.signingKey.key }}
                 path: {{ .Values.egressProxy.signingKey.key }}
