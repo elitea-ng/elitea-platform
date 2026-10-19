@@ -345,6 +345,7 @@ pub fn run() {
             local_commands::workspace_agent_settings_set,
             local_commands::workspace_files,
             local_commands::agent_turn_start,
+            local_commands::agent_prewarm,
             local_commands::agent_turn_cancel,
             local_commands::agent_turn_status,
             local_commands::approval_respond,

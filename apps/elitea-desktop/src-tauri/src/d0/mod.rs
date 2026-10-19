@@ -10,6 +10,8 @@
 //!
 //! * [`api`] — the platform operations (resolved definition, local turn
 //!   start/commit, remote toolkit call) over HTTPS with the native token;
+//! * [`cache`] — the session's in-memory caches of the agent versions and
+//!   the conversations' answering participants (a warm turn's one round trip);
 //! * [`definition`] — what D0 runs, and the refusals for what it does not;
 //! * [`model`] — `ModelTransport` over `/llm` (llm-wire + reqwest);
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
@@ -28,6 +30,7 @@
 
 pub mod api;
 pub mod approvals;
+pub mod cache;
 pub mod definition;
 pub mod environment;
 pub mod events;

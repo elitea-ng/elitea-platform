@@ -111,6 +111,15 @@ impl Credentials for PinnedCredentials {
     }
 }
 
+impl PinnedCredentials {
+    /// The identity these credentials are pinned to (whose caches a turn
+    /// may use).
+    #[must_use]
+    pub fn pinned_identity(&self) -> &str {
+        &self.identity
+    }
+}
+
 /// A refused or failed platform call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiError {
@@ -143,6 +152,8 @@ impl std::fmt::Display for ApiError {
 pub struct Answer {
     pub status: u16,
     pub body: Value,
+    /// The `ETag` header, when the platform sent one.
+    pub etag: Option<String>,
 }
 
 impl Answer {
@@ -182,6 +193,18 @@ pub struct ResolvedVersion {
     #[serde(default)]
     pub project_context_withheld: bool,
     pub version_details: Map<String, Value>,
+}
+
+/// What a (conditional) `resolved_version` read answered.
+#[derive(Clone, Debug)]
+pub enum Revalidated {
+    /// The copy the caller holds is current (304, or 200 with its tag).
+    NotModified,
+    /// The document, and its tag when the platform sent one.
+    Fresh {
+        resolved: ResolvedVersion,
+        etag: Option<String>,
+    },
 }
 
 /// `startLocalTurn` (decision 5c).
@@ -340,6 +363,11 @@ impl PlatformApi {
             }
         })?;
         let status = response.status().as_u16();
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let bytes = response
             .bytes()
             .await
@@ -349,28 +377,50 @@ impl PlatformApi {
         } else {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         };
-        Ok(Answer { status, body })
+        Ok(Answer { status, body, etag })
     }
 
+    /// The agent version resolved for execution, revalidated against
+    /// `if_none_match` (the `ETag` of a copy the caller holds) when given.
+    /// Every call is the platform's full read under the caller's
+    /// permissions; only the body is spared when nothing changed.
+    ///
     /// # Errors
     ///
-    /// Refused (404, 422 …) or failed.
+    /// Refused (403, 404, 422 …) or failed.
     pub async fn resolved_version(
         &self,
         project_id: i64,
         application_id: i64,
         version_id: i64,
-    ) -> Result<ResolvedVersion, ApiError> {
-        self.send(
-            Method::GET,
-            &format!(
-                "/api/v2/elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}"
-            ),
-            None,
-            &[],
-        )
-        .await?
-        .into_ok()
+        if_none_match: Option<&str>,
+    ) -> Result<Revalidated, ApiError> {
+        let headers: Vec<(&str, &str)> = if_none_match
+            .map(|etag| ("If-None-Match", etag))
+            .into_iter()
+            .collect();
+        let answer = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}"
+                ),
+                None,
+                &headers,
+            )
+            .await?;
+        if answer.status == StatusCode::NOT_MODIFIED.as_u16() && if_none_match.is_some() {
+            return Ok(Revalidated::NotModified);
+        }
+        // A server that ignores If-None-Match answers 200 with the same tag.
+        if if_none_match.is_some() && answer.etag.as_deref() == if_none_match {
+            return Ok(Revalidated::NotModified);
+        }
+        let etag = answer.etag.clone();
+        Ok(Revalidated::Fresh {
+            resolved: answer.into_ok()?,
+            etag,
+        })
     }
 
     /// The conversation's participant that answers with this agent version,

@@ -20,6 +20,7 @@
     "allow-workspace-agent-settings-set",
     "allow-workspace-files",
     "allow-agent-turn-start",
+    "allow-agent-prewarm",
     "allow-agent-turn-cancel",
     "allow-agent-turn-status",
     "allow-approval-respond",

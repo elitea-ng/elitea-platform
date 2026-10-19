@@ -13,7 +13,15 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
-import { toWorkspaceIpcError, type AgentEvent, type ApprovalDecision, type TurnDonePayload, type TurnStartRequest, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import {
+  toWorkspaceIpcError,
+  type AgentEvent,
+  type ApprovalDecision,
+  type TurnDonePayload,
+  type TurnPrewarmRequest,
+  type TurnStartRequest,
+  type WorkspaceIpc,
+} from '@/shared/desktop/workspaceIpc';
 
 import { describeWorkspaceError } from './describeWorkspaceError';
 import { activeView, earlierViews, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
@@ -32,6 +40,8 @@ export interface WorkspaceTurn {
   startError: string | null;
   /** Resolves `true` once the host started the turn; `false` when it refused (see `startError`). */
   start(request: TurnStartRequest): Promise<boolean>;
+  /** Let the host read ahead for a turn to this agent (fire and forget: a failure only means the turn reads it itself). */
+  prewarm(request: TurnPrewarmRequest): void;
   cancel(): Promise<void>;
   answer(requestId: string, decision: ApprovalDecision): Promise<void>;
   /** Forget the shown turn (the transcript only; nothing on the host changes). Ignored while a turn runs. */
@@ -154,5 +164,12 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
 
   const adopt = useCallback((adopted: string, events: readonly AgentEvent[]) => dispatch({ type: 'adopt', turnId: adopted, events }), []);
 
-  return { view, turnId, earlier, busy, startError, start, cancel, answer, clear, adopt };
+  const prewarm = useCallback(
+    (request: TurnPrewarmRequest) => {
+      ipc.prewarm(request).catch(() => undefined);
+    },
+    [ipc],
+  );
+
+  return { view, turnId, earlier, busy, startError, start, prewarm, cancel, answer, clear, adopt };
 }

@@ -165,6 +165,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
             onStop={() => void turn.cancel()}
             onCommand={session.run}
+            onFocus={session.prewarm}
           />
         </Box>
       </Box>

@@ -27,6 +27,7 @@ describe('createWorkspaceIpc', () => {
       mentions: ['src/main.rs', 'docs/'],
       skills: ['Style'],
     });
+    await ipc.prewarm({ project_id: 7, application_id: 3, version_id: 9, conversation_id: 'c1' });
     await ipc.cancelTurn('t1');
     await ipc.turnStatus('t1');
     await ipc.respondApproval('r1', 'allow_always');
@@ -47,6 +48,7 @@ describe('createWorkspaceIpc', () => {
         'agent_turn_start',
         { workspace_id: 'w1', project_id: 7, conversation_id: 'c1', application_id: 3, version_id: 9, prompt: 'hi', plan_mode: true, mentions: ['src/main.rs', 'docs/'], skills: ['Style'] },
       ],
+      ['agent_prewarm', { project_id: 7, application_id: 3, version_id: 9, conversation_id: 'c1' }],
       ['agent_turn_cancel', { turn_id: 't1' }],
       ['agent_turn_status', { turn_id: 't1' }],
       ['approval_respond', { request_id: 'r1', decision: 'allow_always' }],

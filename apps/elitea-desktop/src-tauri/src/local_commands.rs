@@ -24,7 +24,8 @@ use crate::d0::approvals::UiDecision;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
 use crate::d0::turn::{
-    AgentHost, PolicySource, RestorePreview, TurnError, TurnRequest, TurnStarted, TurnStatus,
+    AgentHost, PolicySource, PrewarmRequest, Prewarmed, RestorePreview, TurnError, TurnRequest,
+    TurnStarted, TurnStatus,
 };
 use crate::error::HostError;
 use crate::history::StoredTurn;
@@ -544,6 +545,28 @@ pub async fn agent_turn_start(
             plan_mode,
             mentions: mentions.unwrap_or_default(),
             skills: skills.unwrap_or_default(),
+        })
+        .await?)
+}
+
+/// Read ahead what a turn to this agent version (and conversation) reads
+/// first, while the person is still typing: the turn then makes one serial
+/// request before the model, its start. Starts nothing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn agent_prewarm(
+    state: State<'_, LocalState>,
+    project_id: i64,
+    application_id: i64,
+    version_id: i64,
+    conversation_id: Option<Value>,
+) -> Result<Prewarmed, IpcError> {
+    Ok(state
+        .agents
+        .prewarm(PrewarmRequest {
+            project_id,
+            application_id,
+            version_id,
+            conversation_id,
         })
         .await?)
 }

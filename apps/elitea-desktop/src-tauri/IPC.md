@@ -144,12 +144,30 @@ inside the folder.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
+| `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
+
+**One round trip before the first token.** The host keeps, for the app's
+session only (never on disk; dropped on sign-out, a new sign-in or another
+deployment), the last resolved agent version per project, agent and
+version, with its `ETag`, and each conversation's answering participant and
+UUID per agent version. A cold turn reads the version and the conversation
+together. A warm one admits the cached version at once and sends the
+local turn's start right away, on the cached participant, with the
+version's revalidation (`If-None-Match`; a `304` costs nothing) and the
+conversation's re-read (its message count decides the session's seed)
+beside it. A changed version is admitted again before the model's first
+request; a refused or unreadable one (`403`, `404`, a local refusal) stops
+the turn with its code before any model request, and its execution
+expires on the server. A participant that changed, or a start the platform
+refuses for it (`404`, `422`), is started again on the fresh one, once.
+The start itself is never cached: its memory recall is computed fresh at
+every turn.
 
 `agent_turn_start` resolves the agent version, checks it, and starts the
 local turn on the platform before it resolves; the run then continues in
@@ -932,10 +950,11 @@ turn measured since the previous `status` (absent when none was):
 type Timing = { phase: "resolving" | "participant" | "starting" | "first_token" | "tools" | "committing"; ms_since_turn_start: number; phase_ms: number };
 ```
 
-`resolving` is the agent version's read (`resolved_version`), `participant`
-the conversation lookup (the answering participant and UUID), `starting`
-from `status` `starting` to the local turn's start (a session seed
-included), `first_token` from `status` `running` to the model's first
+`resolving` is the agent version's read (`resolved_version`; on a warm
+turn its revalidation, beside the start), `participant` the conversation
+lookup (the answering participant and UUID; on a warm turn its re-read,
+beside the start), `starting` from `status` `starting` until the local turn
+is started and its session ready (a seed included), `first_token` from `status` `running` to the model's first
 streamed chunk, `tools` the wall time any tool call ran (overlapping calls
 counted once), `committing` the commit request. `ms_since_turn_start` is
 when the phase ended, from `agent_turn_start`. A phase before the first

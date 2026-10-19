@@ -51,8 +51,12 @@ use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
 use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
 
-use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, PlatformApi};
+use super::api::{
+    AnsweringParticipant, ApiError, Credentials, LocalTurnStarted, PinnedCredentials, PlatformApi,
+    ResolvedVersion, Revalidated,
+};
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
+use super::cache::{ParticipantKey, TurnCaches, VersionKey};
 use super::definition::{self, Admitted};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents};
@@ -156,6 +160,23 @@ pub struct TurnStarted {
     pub execution_id: String,
 }
 
+/// `agent_prewarm`'s arguments: what the composer is about to send to.
+#[derive(Clone, Debug)]
+pub struct PrewarmRequest {
+    pub project_id: i64,
+    pub application_id: i64,
+    pub version_id: i64,
+    /// The conversation's numeric id or UUID, when the thread has one.
+    pub conversation_id: Option<Value>,
+}
+
+/// `agent_prewarm`'s answer: what a turn to it would find cached now.
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct Prewarmed {
+    pub version: bool,
+    pub participant: bool,
+}
+
 /// `agent_turn_status`'s answer.
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 pub struct TurnStatus {
@@ -256,6 +277,64 @@ impl Drop for WorkspaceClaim {
 }
 
 const TURN_RUNNING: &str = "A turn is already running in this workspace.";
+const CONTEXT_WITHHELD: &str =
+    "You cannot view this project's context, so this turn runs without it.";
+
+/// The names a remote tool may not take: every local tool's and every index
+/// tool's (whether or not this workspace has an index: names stay stable as
+/// the index comes and goes).
+fn local_tool_names() -> Vec<&'static str> {
+    TOOLS
+        .iter()
+        .map(|tool| tool.name)
+        .chain(INDEX_TOOLS)
+        .collect()
+}
+
+/// The conversation's participant that answers with the request's agent
+/// version, and its UUID.
+async fn lookup_participant(
+    api: &PlatformApi,
+    request: &TurnRequest,
+    conversation: &str,
+) -> Result<AnsweringParticipant, TurnError> {
+    Ok(api
+        .answering_participant(
+            request.project_id,
+            conversation,
+            request.application_id,
+            request.version_id,
+        )
+        .await?)
+}
+
+/// `start` of the local turn (never cached: its memory recall is computed
+/// fresh at each turn, ADR-0029 decision 8).
+async fn start_turn(
+    api: &PlatformApi,
+    request: &TurnRequest,
+    answering: &AnsweringParticipant,
+    question_id: &str,
+) -> Result<LocalTurnStarted, TurnError> {
+    Ok(api
+        .start_turn(
+            request.project_id,
+            &answering.conversation_uuid,
+            &json!({
+                "question_id": question_id,
+                "user_input": request.prompt,
+                "participant_id": answering.id,
+            }),
+        )
+        .await?)
+}
+
+/// The platform refused a start for its conversation or participant
+/// (`local_turn_not_found`, `local_turn_participant`): a cached participant
+/// may be out of date.
+fn refused_for_participant(error: &TurnError) -> bool {
+    matches!(error.status, Some(404 | 422))
+}
 
 /// What `checkpoint_restore` can put back for a turn.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -500,6 +579,8 @@ pub struct AgentHost {
     /// Whose history the signed-in session writes: the session's identity
     /// (origin and sign-in) and the owner it resolved to.
     owner: Mutex<Option<(String, Owner)>>,
+    /// The agent versions and answering participants read this session.
+    caches: TurnCaches,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -649,6 +730,7 @@ impl AgentHost {
             busy: BusySet::default(),
             turns: Mutex::new(TurnTable::default()),
             owner: Mutex::new(None),
+            caches: TurnCaches::default(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
@@ -1002,6 +1084,156 @@ impl AgentHost {
         }
     }
 
+    /// Admit `resolved` for `request`: D0's refusals, the step limit, the
+    /// picked skills (one of this version's own, as the platform answered
+    /// it to this person) and the rest of the runtime's instruction
+    /// admission (the project context, the catalogue's bounds). `run_agent`
+    /// admits the same definition again under the real ids.
+    fn admit(
+        &self,
+        request: &TurnRequest,
+        resolved: &ResolvedVersion,
+    ) -> Result<(Admitted, Vec<InvokedSkill>), TurnError> {
+        let admitted = definition::admit(resolved, &local_tool_names())
+            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
+            .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
+        let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
+        InstructionPlan::admit(&execution_request(
+            request,
+            &admitted,
+            "admission",
+            "admission",
+        ))
+        .map_err(|_| {
+            TurnError::new(
+                "skill_invalid",
+                "The agent's frozen skills or project context could not be loaded, so the turn was not started.",
+            )
+        })?;
+        Ok((admitted, invoked))
+    }
+
+    /// The conversation's agent session for this turn (see [`SessionPlan`]).
+    async fn open_memory(
+        &self,
+        api: &PlatformApi,
+        owner: Option<&Owner>,
+        request: &TurnRequest,
+        policy: &LocalWorkPolicy,
+        answering: &AnsweringParticipant,
+        question_id: &str,
+    ) -> Result<SessionPlan, TurnError> {
+        SessionPlan::open(
+            self.deps.sessions.as_ref(),
+            owner,
+            api,
+            request.project_id,
+            policy,
+            answering,
+            question_id,
+        )
+        .await
+        .map_err(|error| match error {
+            SessionError::Api(error) => TurnError::from(error),
+            SessionError::Busy => TurnError::new(
+                "conversation_busy",
+                "Another turn of this conversation is still running.",
+            ),
+        })
+    }
+
+    /// `agent_prewarm`: read what a turn to this agent version (and
+    /// conversation) would read first and keep it in the caches, so the
+    /// turn's start is its only serial request. Starts no execution and
+    /// never reads the memory recall (`start` is never cached). Only an
+    /// admissible version is kept; a failed read is just not cached.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `local_work_disabled`, `not_signed_in`.
+    pub async fn prewarm(&self, request: PrewarmRequest) -> Result<Prewarmed, TurnError> {
+        check_project_id(request.project_id)?;
+        let conversation = request
+            .conversation_id
+            .as_ref()
+            .map(conversation_key)
+            .transpose()?;
+        self.policy()?;
+        let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
+        let identity = pinned.pinned_identity().to_owned();
+        let api = self.api.with_credentials(Arc::new(pinned));
+        let version_key = VersionKey {
+            identity: identity.clone(),
+            project_id: request.project_id,
+            application_id: request.application_id,
+            version_id: request.version_id,
+        };
+        let participant_key = conversation.map(|conversation| ParticipantKey {
+            identity,
+            project_id: request.project_id,
+            conversation,
+            application_id: request.application_id,
+            version_id: request.version_id,
+        });
+        let turn = TurnRequest {
+            workspace_id: String::new(),
+            project_id: request.project_id,
+            conversation_id: Value::Null,
+            application_id: request.application_id,
+            version_id: request.version_id,
+            prompt: String::new(),
+            plan_mode: false,
+            mentions: Vec::new(),
+            skills: Vec::new(),
+        };
+        let need_version = self.caches.version(&version_key).is_none();
+        let need_participant = participant_key
+            .as_ref()
+            .is_some_and(|key| self.caches.participant(key).is_none());
+        let (version, participant, _) = tokio::join!(
+            async {
+                if need_version {
+                    Some(
+                        api.resolved_version(
+                            request.project_id,
+                            request.application_id,
+                            request.version_id,
+                            None,
+                        )
+                        .await,
+                    )
+                } else {
+                    None
+                }
+            },
+            async {
+                match (&participant_key, need_participant) {
+                    (Some(key), true) => {
+                        Some(lookup_participant(&api, &turn, &key.conversation).await)
+                    }
+                    _ => None,
+                }
+            },
+            // Whose session this is: the turn's session store needs it.
+            self.owner(&api),
+        );
+        if let Some(Ok(Revalidated::Fresh { resolved, etag })) = version
+            && definition::admit(&resolved, &local_tool_names()).is_ok()
+        {
+            self.caches
+                .keep_version(version_key.clone(), &resolved, etag.as_deref());
+        }
+        if let (Some(Ok(answering)), Some(key)) = (participant, &participant_key) {
+            self.caches.keep_participant(key.clone(), &answering);
+        }
+        Ok(Prewarmed {
+            version: self.caches.version(&version_key).is_some(),
+            participant: participant_key
+                .as_ref()
+                .is_some_and(|key| self.caches.participant(key).is_some()),
+        })
+    }
+
     async fn prepare(
         &self,
         request: &TurnRequest,
@@ -1033,63 +1265,102 @@ impl AgentHost {
         };
         // Every request of the turn, from here to its commit, goes out under
         // the session signed in now, or not at all (`identity_changed`).
-        let credentials: Arc<dyn Credentials> =
-            Arc::new(PinnedCredentials::current(self.deps.credentials.clone())?);
+        let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
+        let identity = pinned.pinned_identity().to_owned();
+        let credentials: Arc<dyn Credentials> = Arc::new(pinned);
         let api = Arc::new(self.api.with_credentials(credentials));
-        let resolving = std::time::Instant::now();
-        let resolved = api
-            .resolved_version(
-                request.project_id,
-                request.application_id,
-                request.version_id,
-            )
-            .await?;
-        events.timed(Timed::Resolving, resolving.elapsed());
-        if resolved.project_context_withheld {
-            events.status(
-                Phase::Resolving,
-                Some("You cannot view this project's context, so this turn runs without it."),
-            );
+        let version_key = VersionKey {
+            identity: identity.clone(),
+            project_id: request.project_id,
+            application_id: request.application_id,
+            version_id: request.version_id,
+        };
+        let participant_key = ParticipantKey {
+            identity,
+            project_id: request.project_id,
+            conversation: conversation.clone(),
+            application_id: request.application_id,
+            version_id: request.version_id,
+        };
+        // A cached version is admitted now and revalidated beside the start
+        // (below); one that no longer admits (a skill picked from a newer
+        // list of them) is read again as if it were not cached.
+        let warm = self.caches.version(&version_key).and_then(|cached| {
+            self.admit(request, &cached.resolved)
+                .ok()
+                .map(|admitted| (cached, admitted))
+        });
+        let cached_participant = self.caches.participant(&participant_key);
+        // What is not cached is read now, the version and the conversation
+        // together (neither depends on the other), with whose session this
+        // is (cached after the session's first turn).
+        let reading = std::time::Instant::now();
+        let (fetched, looked_up, owner) = tokio::join!(
+            async {
+                if warm.is_some() {
+                    return None;
+                }
+                let answer = api
+                    .resolved_version(
+                        request.project_id,
+                        request.application_id,
+                        request.version_id,
+                        None,
+                    )
+                    .await;
+                events.timed(Timed::Resolving, reading.elapsed());
+                Some(answer)
+            },
+            async {
+                if cached_participant.is_some() {
+                    return None;
+                }
+                let answer = lookup_participant(&api, request, &conversation).await;
+                events.timed(Timed::Participant, reading.elapsed());
+                Some(answer)
+            },
+            async { self.owner(&api).await.ok() },
+        );
+        // The version's refusals come before the conversation's.
+        let (resolved_withheld, (admitted, invoked), revalidate) = match (warm, fetched) {
+            (Some((cached, admitted)), _) => (
+                cached.resolved.project_context_withheld,
+                admitted,
+                Some(cached.etag),
+            ),
+            (None, Some(fetched)) => {
+                let Revalidated::Fresh { resolved, etag } = fetched? else {
+                    return Err(TurnError::new(
+                        "invalid_response",
+                        "the platform answered an unconditional read as not modified",
+                    ));
+                };
+                let admitted = self.admit(request, &resolved).inspect_err(|_| {
+                    self.caches.forget_version(&version_key);
+                })?;
+                self.caches
+                    .keep_version(version_key.clone(), &resolved, etag.as_deref());
+                (resolved.project_context_withheld, admitted, None)
+            }
+            (None, None) => {
+                return Err(TurnError::new(
+                    "internal",
+                    "the agent version was neither cached nor read",
+                ));
+            }
+        };
+        if resolved_withheld {
+            events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
-        // A remote tool never takes a local tool's name, nor an index
-        // tool's (whether or not this workspace has an index: names stay
-        // stable as the index comes and goes).
-        let local_names: Vec<&str> = TOOLS
-            .iter()
-            .map(|tool| tool.name)
-            .chain(INDEX_TOOLS)
-            .collect();
-        let admitted = definition::admit(&resolved, &local_names)
-            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
-            .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
-        // A picked skill must be one of this version's own, as the platform
-        // answered it to this person: refused here, before the turn starts.
-        let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
-        // The rest of the runtime's instruction admission (the project
-        // context, the catalogue's bounds), also before the turn starts:
-        // run_agent admits the same definition again under the real ids.
-        InstructionPlan::admit(&execution_request(
-            request,
-            &admitted,
-            "admission",
-            "admission",
-        ))
-        .map_err(|_| {
-            TurnError::new(
-                "skill_invalid",
-                "The agent's frozen skills or project context could not be loaded, so the turn was not started.",
-            )
-        })?;
-        let looking_up = std::time::Instant::now();
-        let answering = api
-            .answering_participant(
-                request.project_id,
-                &conversation,
-                request.application_id,
-                request.version_id,
-            )
-            .await?;
-        events.timed(Timed::Participant, looking_up.elapsed());
+        let fresh_participant = match looked_up {
+            Some(answer) => {
+                let answering = answer?;
+                self.caches
+                    .keep_participant(participant_key.clone(), &answering);
+                Some(answering)
+            }
+            None => None,
+        };
         // Checked and taken atomically, per workspace id, before the session
         // may be rebuilt; released on every early return below.
         let claim = WorkspaceClaim::take(&self.busy, &request.workspace_id, TURN_RUNNING)?;
@@ -1104,41 +1375,122 @@ impl AgentHost {
         )?;
         events.status(Phase::Starting, None);
         let starting = std::time::Instant::now();
-        let question_id = uuid::Uuid::new_v4().to_string();
+        let mut question_id = uuid::Uuid::new_v4().to_string();
+        // A cached version's revalidation runs beside the start: a 304 costs
+        // the turn nothing, and whatever it answers is acted on before the
+        // model's first request.
+        let revalidation = async {
+            let tag = revalidate.as_deref()?;
+            let revalidating = std::time::Instant::now();
+            let answer = api
+                .resolved_version(
+                    request.project_id,
+                    request.application_id,
+                    request.version_id,
+                    Some(tag),
+                )
+                .await;
+            events.timed(Timed::Resolving, revalidating.elapsed());
+            Some(answer)
+        };
         // The conversation's session: reopened from the store, seeded from
         // the server when it is behind (a take-back, a new device, a refused
         // commit). Held (tagged with the question until the server names the
         // execution) so no second turn of the conversation writes to it.
-        let owner = self.owner(&api).await.ok();
-        let mut memory = SessionPlan::open(
-            self.deps.sessions.as_ref(),
-            owner.as_ref(),
-            &api,
-            request.project_id,
-            &policy,
-            &answering,
-            &question_id,
-        )
-        .await
-        .map_err(|error| match error {
-            SessionError::Api(error) => TurnError::from(error),
-            SessionError::Busy => TurnError::new(
-                "conversation_busy",
-                "Another turn of this conversation is still running.",
-            ),
-        })?;
-        let started = api
-            .start_turn(
-                request.project_id,
-                &answering.conversation_uuid,
-                &json!({
-                    "question_id": question_id,
-                    "user_input": request.prompt,
-                    "participant_id": answering.id,
-                }),
-            )
-            .await;
-        let started = started?;
+        let (answering, started, mut memory, revalidated) =
+            match (fresh_participant, cached_participant) {
+                (Some(answering), _) => {
+                    // The conversation was just read: its session first, then
+                    // the start.
+                    let memory = self
+                        .open_memory(
+                            &api,
+                            owner.as_ref(),
+                            request,
+                            &policy,
+                            &answering,
+                            &question_id,
+                        )
+                        .await?;
+                    let (started, revalidated) = tokio::join!(
+                        start_turn(&api, request, &answering, &question_id),
+                        revalidation,
+                    );
+                    (answering, started?, memory, revalidated)
+                }
+                (None, Some(cached)) => {
+                    // The start goes out on the cached participant while the
+                    // conversation is read again: its message count decides the
+                    // session's seed, and a participant that changed (or a start
+                    // refused for it) is started again on the fresh one, once.
+                    let looking_up = std::time::Instant::now();
+                    let (started, looked_up, revalidated) = tokio::join!(
+                        start_turn(&api, request, &cached, &question_id),
+                        async {
+                            let answer = lookup_participant(&api, request, &conversation).await;
+                            events.timed(Timed::Participant, looking_up.elapsed());
+                            answer
+                        },
+                        revalidation,
+                    );
+                    let answering = looked_up.inspect_err(|_| {
+                        self.caches.forget_participant(&participant_key);
+                    })?;
+                    self.caches
+                        .keep_participant(participant_key.clone(), &answering);
+                    let same = answering.id == cached.id
+                        && answering.conversation_uuid == cached.conversation_uuid;
+                    let started = match started {
+                        Ok(started) if same => started,
+                        Err(error) if same && !refused_for_participant(&error) => {
+                            return Err(error);
+                        }
+                        // The started execution (if any) is left to expire.
+                        _ => {
+                            question_id = uuid::Uuid::new_v4().to_string();
+                            start_turn(&api, request, &answering, &question_id).await?
+                        }
+                    };
+                    let memory = self
+                        .open_memory(
+                            &api,
+                            owner.as_ref(),
+                            request,
+                            &policy,
+                            &answering,
+                            &question_id,
+                        )
+                        .await?;
+                    (answering, started, memory, revalidated)
+                }
+                (None, None) => {
+                    return Err(TurnError::new(
+                        "internal",
+                        "the conversation was neither cached nor read",
+                    ));
+                }
+            };
+        // The freshest definition is admitted before the model is asked: a
+        // changed one again, and a refused (or unreadable) one stops the turn
+        // here. Its execution expires, as an abandoned run's does.
+        let (admitted, invoked) = match revalidated {
+            None | Some(Ok(Revalidated::NotModified)) => (admitted, invoked),
+            Some(Ok(Revalidated::Fresh { resolved, etag })) => {
+                let readmitted = self.admit(request, &resolved).inspect_err(|_| {
+                    self.caches.forget_version(&version_key);
+                })?;
+                self.caches
+                    .keep_version(version_key.clone(), &resolved, etag.as_deref());
+                if resolved.project_context_withheld && !resolved_withheld {
+                    events.status(Phase::Starting, Some(CONTEXT_WITHHELD));
+                }
+                readmitted
+            }
+            Some(Err(error)) => {
+                self.caches.forget_version(&version_key);
+                return Err(error.into());
+            }
+        };
         events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
         Ok(Prepared {
@@ -1688,6 +2040,7 @@ impl AgentHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.caches.clear();
     }
 
     /// A turn changed `files` files of the workspace: its index (if open)

@@ -14,6 +14,8 @@ export interface SendPrompt {
   sendError: string | null;
   /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the agent's skills it invokes with "/". */
   send: (prompt: string, planMode: boolean, mentions: string[], skills?: string[]) => Promise<boolean>;
+  /** The composer got focus with an agent selected: the host reads ahead what the send will need. */
+  prewarm: () => void;
 }
 
 /**
@@ -106,5 +108,15 @@ export function useSendPrompt(
     }
   };
 
-  return { canSend: agent !== undefined && version !== undefined && !turn.busy && !sending, sendError, send };
+  const prewarm = (): void => {
+    if (agent === undefined || version === undefined) return;
+    turn.prewarm({
+      project_id: projectId,
+      application_id: Number(agent.id),
+      version_id: version.id,
+      ...(selection.conversationId === '' ? {} : { conversation_id: selection.conversationId }),
+    });
+  };
+
+  return { canSend: agent !== undefined && version !== undefined && !turn.busy && !sending, sendError, send, prewarm };
 }

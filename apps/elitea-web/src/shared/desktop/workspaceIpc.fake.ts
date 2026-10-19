@@ -10,6 +10,7 @@ import type {
   RestorePreview,
   StoredTurn,
   TurnChanges,
+  TurnPrewarmRequest,
   TurnStartRequest,
   TurnStarted,
   TurnStatus,
@@ -38,6 +39,7 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
   emit(event: AgentEvent): void;
   readonly calls: {
     started: TurnStartRequest[];
+    prewarmed: TurnPrewarmRequest[];
     cancelled: string[];
     approvals: { requestId: string; decision: ApprovalDecision }[];
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
@@ -82,7 +84,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const failure = (command: FailableCommand): Promise<never> | undefined => {
@@ -122,6 +124,10 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const needle = query.toLowerCase();
       const found = (options.files ?? []).filter((file) => file.path.toLowerCase().includes(needle));
       return Promise.resolve(found.slice(0, limit ?? 50));
+    },
+    prewarm(request) {
+      calls.prewarmed.push(request);
+      return Promise.resolve({ version: true, participant: request.conversation_id !== undefined });
     },
     startTurn(request): Promise<TurnStarted> {
       calls.started.push(request);

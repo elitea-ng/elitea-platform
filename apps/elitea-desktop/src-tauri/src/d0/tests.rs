@@ -3747,3 +3747,371 @@ async fn status_events_carry_the_turns_phase_timings() {
         .collect();
     assert!(since.windows(2).all(|w| w[0] <= w[1]), "{since:?}");
 }
+
+// ---- One round trip before the first token (#1213 stage 3) ----
+
+/// A platform whose agent version can change between turns and is tagged
+/// (`ETag`, a 304 for `If-None-Match` with the current tag), whose answers
+/// to the pre-model requests take `delay`, and which logs when each request
+/// arrived and was answered.
+struct Versioned {
+    details: Mutex<Value>,
+    withheld: Mutex<Vec<String>>,
+    /// The version read answers this status instead (a revoked permission).
+    refuse: Mutex<Option<u16>>,
+    /// The conversation's agent participant, and starts for it refused.
+    participant: Mutex<i64>,
+    delay: Mutex<Duration>,
+    log: Mutex<Vec<(String, std::time::Instant, std::time::Instant)>>,
+}
+
+impl Versioned {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            details: Mutex::new(agent_details()),
+            withheld: Mutex::new(Vec::new()),
+            refuse: Mutex::new(None),
+            participant: Mutex::new(77),
+            delay: Mutex::new(Duration::ZERO),
+            log: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn etag(&self) -> String {
+        let text = format!(
+            "{}{:?}",
+            self.details.lock().unwrap(),
+            self.withheld.lock().unwrap()
+        );
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+        format!(
+            "\"{}\"",
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, digest)
+        )
+    }
+
+    /// The requests logged so far, from `from` on.
+    fn since(&self, from: usize) -> Vec<(String, std::time::Instant, std::time::Instant)> {
+        self.log.lock().unwrap()[from..].to_vec()
+    }
+}
+
+fn short_path(path: &str) -> String {
+    let path = path.split('?').next().unwrap_or(path);
+    for (prefix, name) in [
+        ("/api/v2/elitea_core/resolved_version/", "resolved_version"),
+        ("/api/v2/elitea_core/conversation/", "conversation"),
+        ("/api/v2/elitea_core/local_turn/", "start"),
+        ("/api/v2/elitea_core/local_turn_commit/", "commit"),
+        ("/llm/", "llm"),
+    ] {
+        if path.starts_with(prefix) {
+            return name.to_owned();
+        }
+    }
+    path.to_owned()
+}
+
+async fn versioned_platform(state: Arc<Versioned>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    serve(move |req: &Req| {
+        let arrived = std::time::Instant::now();
+        let name = short_path(&req.path);
+        let delay = *state.delay.lock().unwrap();
+        if matches!(name.as_str(), "resolved_version" | "conversation" | "start") && !delay.is_zero() {
+            tokio::task::block_in_place(|| std::thread::sleep(delay));
+        }
+        let res = match name.as_str() {
+            "resolved_version" => {
+                if let Some(status) = *state.refuse.lock().unwrap() {
+                    Res::json(status, &json!({"error": "forbidden", "message": "No access to this version."}))
+                } else {
+                    let etag = state.etag();
+                    if req.headers.get("if-none-match") == Some(&etag) {
+                        Res { status: 304, headers: vec![("ETag", etag)], body: String::new(), raw: Vec::new() }
+                    } else {
+                        let held = state.withheld.lock().unwrap().clone();
+                        let withheld: Vec<&str> = held.iter().map(String::as_str).collect();
+                        let mut res = Res::json(200, &resolved(&state.details.lock().unwrap(), &withheld));
+                        res.headers.push(("ETag", etag));
+                        res
+                    }
+                }
+            }
+            "conversation" if !req.path.contains("messages_limit") => {
+                let participant = *state.participant.lock().unwrap();
+                Res::json(
+                    200,
+                    &json!({"id": 42, "message_count": 0, "uuid": CONVERSATION_UUID, "participants": [
+                        {"id": 70, "entity_name": "user", "entity_meta": {"id": 1}},
+                        {"id": participant, "entity_name": "application", "entity_meta": {"id": 5, "project_id": 1},
+                         "entity_settings": {"version_id": 9}}
+                    ]}),
+                )
+            }
+            "start" => {
+                let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+                if body["participant_id"] != *state.participant.lock().unwrap() {
+                    Res::json(422, &json!({"error": "local_turn_participant", "message": "not a participant"}))
+                } else {
+                    inner(req)
+                }
+            }
+            "llm" => say("Done."),
+            _ => inner(req),
+        };
+        state.log.lock().unwrap().push((name, arrived, std::time::Instant::now()));
+        res
+    })
+    .await
+}
+
+/// A turn of `h` to the end; the platform requests it made before its
+/// first model request, as (name, arrived, answered).
+async fn timed_turn(
+    h: &Harness,
+    state: &Versioned,
+) -> Vec<(String, std::time::Instant, std::time::Instant)> {
+    let from = state.log.lock().unwrap().len();
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &started.turn_id).await;
+    state
+        .since(from)
+        .into_iter()
+        .take_while(|(name, _, _)| name != "llm")
+        .collect()
+}
+
+/// Every one of `requests` arrived before any of them was answered: one
+/// round trip, however many requests.
+fn one_round_trip(requests: &[(String, std::time::Instant, std::time::Instant)]) -> bool {
+    let last_arrival = requests
+        .iter()
+        .map(|(_, arrived, _)| *arrived)
+        .max()
+        .unwrap();
+    let first_answer = requests
+        .iter()
+        .map(|(_, _, answered)| *answered)
+        .min()
+        .unwrap();
+    last_arrival < first_answer
+}
+
+fn names(requests: &[(String, std::time::Instant, std::time::Instant)]) -> Vec<&str> {
+    let mut names: Vec<&str> = requests.iter().map(|(name, _, _)| name.as_str()).collect();
+    names.sort_unstable();
+    names
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_cold_turn_reads_the_version_and_the_conversation_together() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.delay.lock().unwrap() = Duration::from_millis(300);
+    let before = timed_turn(&h, &state).await;
+    let reads: Vec<_> = before
+        .iter()
+        .filter(|(name, _, _)| name == "resolved_version" || name == "conversation")
+        .cloned()
+        .collect();
+    assert_eq!(names(&reads), ["conversation", "resolved_version"]);
+    assert!(
+        one_round_trip(&reads),
+        "read one after the other: {before:?}"
+    );
+    // The start needs both, so it follows them.
+    let start = before.iter().find(|(name, _, _)| name == "start").unwrap();
+    assert!(reads.iter().all(|(_, _, answered)| *answered <= start.1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn warm_turn_makes_one_request_before_the_model() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    timed_turn(&h, &state).await;
+    *state.delay.lock().unwrap() = Duration::from_millis(300);
+    let from = h.server.seen().len();
+    let before = timed_turn(&h, &state).await;
+    // The start, with the version's revalidation and the conversation's
+    // re-read beside it: one round trip, nothing serial before the model.
+    assert_eq!(
+        names(&before),
+        ["conversation", "resolved_version", "start"],
+        "{before:?}"
+    );
+    assert!(
+        one_round_trip(&before),
+        "a request waited for another: {before:?}"
+    );
+    let revalidation = h.server.seen()[from..]
+        .iter()
+        .find(|req| short_path(&req.path) == "resolved_version")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        revalidation.headers.get("if-none-match"),
+        Some(&state.etag())
+    );
+    // The start is never cached: each turn opened its own execution, with
+    // its own question.
+    let starts = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    );
+    assert_eq!(starts.len(), 2);
+    let question =
+        |req: &Req| serde_json::from_str::<Value>(&req.body).unwrap()["question_id"].clone();
+    assert_ne!(question(&starts[0]), question(&starts[1]));
+}
+
+#[tokio::test]
+async fn changed_definition_is_readmitted_before_the_model() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let system = |h: &Harness| {
+        llm_bodies(&h.server).last().unwrap()["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    timed_turn(&h, &state).await;
+    assert!(system(&h).starts_with("Be brief."));
+    // Changed between turns: the second turn's model sees the new one.
+    state.details.lock().unwrap()["instructions"] = json!("Be thorough.");
+    timed_turn(&h, &state).await;
+    assert!(system(&h).starts_with("Be thorough."), "{}", system(&h));
+    // Now refused locally: the turn stops with the refusal, the model is
+    // never asked.
+    let models = llm_bodies(&h.server).len();
+    state.withheld.lock().unwrap().push("/instructions".into());
+    let error = h.host.start(request(&h.workspace_id)).await.unwrap_err();
+    assert_eq!(error.code, "secrets_withheld");
+    assert_eq!(llm_bodies(&h.server).len(), models);
+    // A revoked permission is the same: the platform's 403 stops the turn.
+    state.withheld.lock().unwrap().clear();
+    *state.refuse.lock().unwrap() = Some(403);
+    assert_eq!(
+        h.host
+            .start(request(&h.workspace_id))
+            .await
+            .unwrap_err()
+            .code,
+        "forbidden"
+    );
+    assert_eq!(llm_bodies(&h.server).len(), models);
+    // Nothing of the refused versions was kept: the next turn reads afresh
+    // (no If-None-Match) and runs.
+    *state.refuse.lock().unwrap() = None;
+    let from = h.server.seen().len();
+    timed_turn(&h, &state).await;
+    let reads: Vec<Req> = h.server.seen()[from..]
+        .iter()
+        .filter(|req| short_path(&req.path) == "resolved_version")
+        .cloned()
+        .collect();
+    assert_eq!(reads.len(), 1);
+    assert!(!reads[0].headers.contains_key("if-none-match"));
+    assert_eq!(llm_bodies(&h.server).len(), models + 1);
+}
+
+#[tokio::test]
+async fn a_participant_that_changed_is_looked_up_and_started_again() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    timed_turn(&h, &state).await;
+    // The agent left and joined again: a new participant id.
+    *state.participant.lock().unwrap() = 78;
+    let before = timed_turn(&h, &state).await;
+    let starts: Vec<Value> = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    )
+    .iter()
+    .map(|req| serde_json::from_str::<Value>(&req.body).unwrap()["participant_id"].clone())
+    .collect();
+    assert_eq!(starts, [json!(77), json!(77), json!(78)], "{before:?}");
+    // The cache holds the new one: the next turn starts on it at once.
+    timed_turn(&h, &state).await;
+    let starts = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&starts[3].body).unwrap()["participant_id"],
+        78
+    );
+    assert_eq!(starts.len(), 4);
+}
+
+#[tokio::test]
+async fn prewarm_fills_both_caches_and_starts_nothing() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let prewarm = super::turn::PrewarmRequest {
+        project_id: 1,
+        application_id: 5,
+        version_id: 9,
+        conversation_id: Some(json!(42)),
+    };
+    let warmed = h.host.prewarm(prewarm.clone()).await.unwrap();
+    assert_eq!(
+        warmed,
+        super::turn::Prewarmed {
+            version: true,
+            participant: true
+        }
+    );
+    let seen_names: Vec<String> = h
+        .server
+        .seen()
+        .iter()
+        .map(|req| short_path(&req.path))
+        .collect();
+    assert!(
+        !seen_names
+            .iter()
+            .any(|name| name == "start" || name == "llm"),
+        "{seen_names:?}"
+    );
+    // Already warm: no request at all.
+    let count = h.server.seen().len();
+    h.host.prewarm(prewarm.clone()).await.unwrap();
+    assert_eq!(h.server.seen().len(), count);
+    // The first turn is a warm one.
+    *state.delay.lock().unwrap() = Duration::ZERO;
+    let before = timed_turn(&h, &state).await;
+    assert_eq!(
+        names(&before),
+        ["conversation", "resolved_version", "start"]
+    );
+    // Signing out forgets both.
+    h.host.forget_identity();
+    let warmed = h
+        .host
+        .prewarm(super::turn::PrewarmRequest {
+            conversation_id: None,
+            ..prewarm
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        warmed,
+        super::turn::Prewarmed {
+            version: true,
+            participant: false
+        }
+    );
+    assert!(
+        h.server.seen()[count..]
+            .iter()
+            .rfind(|req| short_path(&req.path) == "resolved_version")
+            .is_some_and(|req| !req.headers.contains_key("if-none-match")),
+        "read afresh after the sign-out"
+    );
+}

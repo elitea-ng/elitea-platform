@@ -555,6 +555,7 @@ describe('WorkspaceSessionPage', () => {
         busy: false,
         startError: null,
         start: () => Promise.resolve(started),
+        prewarm: () => undefined,
         cancel: () => Promise.resolve(),
         answer: () => Promise.resolve(),
         clear: () => undefined,
@@ -851,6 +852,17 @@ describe('WorkspaceSessionPage', () => {
       await user.keyboard('{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.mentions).toEqual([]);
+    });
+
+    it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      expect(ipc.calls.prewarmed).toEqual([]);
+      await user.click(screen.getByTestId('chat-message-input'));
+      await waitFor(() => expect(ipc.calls.prewarmed.length).toBeGreaterThan(0));
+      // A new thread has no conversation yet: only the agent version is read ahead.
+      expect(ipc.calls.prewarmed[0]).toEqual({ project_id: 42, application_id: 5, version_id: 9 });
+      expect(ipc.calls.started).toHaveLength(0);
     });
 
     it('Shift+Enter breaks the line and Enter sends', async () => {

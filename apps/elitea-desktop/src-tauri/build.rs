@@ -20,6 +20,7 @@ fn main() {
             "workspace_agent_settings_set",
             "workspace_files",
             "agent_turn_start",
+            "agent_prewarm",
             "agent_turn_cancel",
             "agent_turn_status",
             "approval_respond",

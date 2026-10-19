@@ -31,6 +31,21 @@ export interface TurnStartRequest {
   skills: string[];
 }
 
+/** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
+export interface TurnPrewarmRequest {
+  project_id: number;
+  application_id: number;
+  version_id: number;
+  /** The thread's conversation, when it has one. */
+  conversation_id?: string;
+}
+
+/** What a turn to it would find cached on the host now. */
+export interface TurnPrewarmed {
+  version: boolean;
+  participant: boolean;
+}
+
 /** One match of `workspace_files` (the "@" picker). */
 export interface WorkspaceFile {
   /** Workspace-relative, without a trailing `/`. */
@@ -193,6 +208,8 @@ export interface WorkspaceIpc {
   /** The "@" picker: the workspace's files and folders matching `query`, best first. */
   files(workspaceId: string, query: string, limit?: number): Promise<WorkspaceFile[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Have the host read ahead what a turn to this agent reads first (the composer got focus); starts nothing. */
+  prewarm(request: TurnPrewarmRequest): Promise<TurnPrewarmed>;
   cancelTurn(turnId: string): Promise<void>;
   /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
   turnStatus(turnId: string): Promise<TurnStatus>;
@@ -235,6 +252,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     files: (workspaceId, query, limit) =>
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
+    prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
     respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
