@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { getGetAdminProjectCloudExecutorQueryKey } from '@/shared/api/generated/admin/admin';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
@@ -53,8 +54,7 @@ function grant(permissions: readonly string[]) {
   );
 }
 
-function mount(projectName = 'Team Alpha') {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function mount(projectName = 'Team Alpha', client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   renderWithTheme(
     <QueryClientProvider client={client}>
       <ProjectGeneral projectId="7" projectName={projectName} />
@@ -136,5 +136,29 @@ describe('Settings › General — Send to cloud', () => {
     for (const name of [/Use the default for projects/, 'On', 'Off']) {
       expect(within(section()).getByRole('radio', { name })).toBeDisabled();
     }
+  });
+
+  it('updates the admin Projects cache of the same switch too (PR #1319 review)', async () => {
+    // Admin › Projects caches the same switch under its own key; a save here
+    // must not leave that dialog showing the old value.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const adminKey = getGetAdminProjectCloudExecutorQueryKey('7');
+    client.setQueryData(adminKey, { data: state, status: 200 });
+    grant(['models.project_settings.edit']);
+    const user = userEvent.setup();
+    mount('Team Alpha', client);
+
+    await waitFor(() => {
+      expect(within(section()).getByRole('radio', { name: 'Off' })).toBeEnabled();
+    });
+    await user.click(within(section()).getByRole('radio', { name: 'Off' }));
+
+    await waitFor(() => {
+      expect(client.getQueryData<{ data: SwitchState }>(adminKey)?.data).toMatchObject({
+        explicit: false,
+        enabled: false,
+        source: 'explicit',
+      });
+    });
   });
 });

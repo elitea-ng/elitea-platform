@@ -12,9 +12,12 @@
 #   (/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl, or
 #   config-v3.toml.tmpl on containerd 2.0), generated from k3s's base
 #   template, then restarts k3s-agent (k3s on server nodes).
-# containerd: plain containerd, e.g. EKS AL2023 or generic nodes: a drop-in in
-#   /etc/containerd/config.d imported by /etc/containerd/config.toml, validated
-#   with `containerd config dump`, then restarts containerd.
+# containerd: plain containerd, e.g. EKS AL2023 or generic nodes. Config
+#   version 3 (containerd 2.x): a drop-in in /etc/containerd/config.d imported
+#   by /etc/containerd/config.toml. Version 2 (containerd 1.7, whose imports
+#   replace a plugin table wholesale): a marked runsc block appended to
+#   config.toml. Validated with `containerd config dump`, then restarts
+#   containerd.
 mode: k3s
 
 # The sandbox nodes. The installer runs on these only, and the RuntimeClass's
@@ -49,8 +52,9 @@ k3s:
 
 containerd:
   config: /etc/containerd/config.toml
+  # Config version 3 only; version 2 edits `config` itself.
   dropinDir: /etc/containerd/config.d
-  # Add `imports = ["<dropinDir>/*.toml"]` to a config.toml that has no
+  # Version 3: add `imports = ["<dropinDir>/*.toml"]` to a config.toml that has no
   # imports. A config with an imports list that does not cover the drop-in
   # is refused, never rewritten.
   patchImports: true

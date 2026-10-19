@@ -12,8 +12,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
+import { QueryClient } from '@tanstack/react-query';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { getGetProjectCloudExecutorQueryKey } from '@/shared/api/generated/settings/settings';
 import { server } from '@/test/setup';
 
 import { AdminProjectCloudExecutorDialog } from './AdminProjectCloudExecutorDialog';
@@ -81,8 +83,8 @@ afterEach(() => {
   resetGeneratedClient();
 });
 
-function open(canEdit = true) {
-  return renderAdminRoute(<AdminProjectCloudExecutorDialog project={PROJECT} canEdit={canEdit} onClose={() => undefined} />);
+function open(canEdit = true, queryClient?: QueryClient) {
+  return renderAdminRoute(<AdminProjectCloudExecutorDialog project={PROJECT} canEdit={canEdit} onClose={() => undefined} />, queryClient ? { queryClient } : {});
 }
 
 describe('AdminProjectCloudExecutorDialog', () => {
@@ -151,5 +153,25 @@ describe('AdminProjectCloudExecutorDialog', () => {
 
     await user.click(await screen.findByRole('radio', { name: 'Off' }));
     expect(await screen.findByText(/cannot be turned on for a project/)).toBeInTheDocument();
+  });
+
+  it('updates the Settings › General cache of the same switch too (PR #1319 review)', async () => {
+    // The project's own route caches the same switch under another key; a
+    // save here must not leave that screen showing the old value.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const settingsKey = getGetProjectCloudExecutorQueryKey('42');
+    queryClient.setQueryData(settingsKey, { data: state, status: 200 });
+    const user = userEvent.setup();
+    open(true, queryClient);
+
+    await user.click(await screen.findByRole('radio', { name: 'On' }));
+
+    await waitFor(() => {
+      expect(queryClient.getQueryData<{ data: SwitchState }>(settingsKey)?.data).toMatchObject({
+        explicit: true,
+        enabled: true,
+        source: 'explicit',
+      });
+    });
   });
 });

@@ -22,12 +22,12 @@ import Typography from '@mui/material/Typography';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
-import { CloudExecutorSwitchControl, describeCloudExecutorSwitchError } from '@/features/cloud-executor-switch';
 import {
-  getGetAdminProjectCloudExecutorQueryKey,
-  setAdminProjectCloudExecutor,
-  useGetAdminProjectCloudExecutor,
-} from '@/shared/api/generated/admin/admin';
+  CloudExecutorSwitchControl,
+  describeCloudExecutorSwitchError,
+  storeSavedCloudExecutorSwitch,
+} from '@/features/cloud-executor-switch';
+import { setAdminProjectCloudExecutor, useGetAdminProjectCloudExecutor } from '@/shared/api/generated/admin/admin';
 import type { ProjectCloudExecutorSwitch } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
@@ -65,7 +65,8 @@ function ProjectSwitch({ project, canEdit }: { readonly project: AdminProjectRow
   const mutation = useMutation({
     mutationFn: (enabled: boolean | null) => setAdminProjectCloudExecutor(projectId, { enabled }),
     onSuccess: (response) => {
-      queryClient.setQueryData(getGetAdminProjectCloudExecutorQueryKey(projectId), response);
+      // Both keys: Settings › General caches the same switch.
+      storeSavedCloudExecutorSwitch(queryClient, projectId, response);
     },
   });
   const { mutate } = mutation;

@@ -58,3 +58,25 @@ func TestCloudExecutorAmendmentKeys(t *testing.T) {
 		t.Fatalf("env_allow is set by default")
 	}
 }
+
+// The upgrade rule: a project default that was never saved is the saved
+// `enabled`, so a deployment that had the executor on keeps it on for
+// projects without their own value; a saved project default always wins.
+func TestCloudExecutorProjectDefaultFollowsEnabledUntilSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values Values
+		want   bool
+	}{
+		{"new install", Values{}, false},
+		{"upgrade with the executor on", Values{KeyCloudExecutorEnabled: true}, true},
+		{"upgrade with the executor off", Values{KeyCloudExecutorEnabled: false}, false},
+		{"saved off with the executor on", Values{KeyCloudExecutorEnabled: true, KeyCloudExecutorProjectDefaultEnabled: false}, false},
+		{"saved on", Values{KeyCloudExecutorEnabled: true, KeyCloudExecutorProjectDefaultEnabled: true}, true},
+		{"wrong type is absent", Values{KeyCloudExecutorEnabled: true, KeyCloudExecutorProjectDefaultEnabled: "no"}, true},
+	} {
+		if got := CloudExecutorSettingsFromValues(tc.values).ProjectDefaultEnabled; got != tc.want {
+			t.Errorf("%s: project default = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

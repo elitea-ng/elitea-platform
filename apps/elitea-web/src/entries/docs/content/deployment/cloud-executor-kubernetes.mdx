@@ -182,7 +182,7 @@ kubectl run sandbox-check --rm -it --restart=Never --image=busybox:1.36 \
 Under gVisor, `dmesg` prints gVisor's own boot lines ("Starting gVisor..."), not the host kernel's. Use your RuntimeClass name and node selector.
 
 <Note title="The supervisor checks the handler itself">
-Before it creates any workspace-run Pod, the supervisor reads the RuntimeClass named in `sandboxKubernetes.runtimeClass.name` and accepts only the handlers `runsc`, `gvisor` and `kata*`. A missing RuntimeClass, a read the API server refuses, and `runc` or `crun` all stop the supervisor at start, with `workspace_run_runtime_class_refused` in its log. It checks again before each run. The chart grants it `get` on that one RuntimeClass, and nothing else cluster-wide.
+Before it creates any workspace-run Pod, the supervisor reads the RuntimeClass named in `sandboxKubernetes.runtimeClass.name` and accepts only the handlers `runsc`, `gvisor` and `kata*`. It checks at start and again before each run. A missing RuntimeClass, a read the API server refuses, and `runc` or `crun` refuse every workspace run, with `workspace_run_runtime_class_refused` in its log (and `workspace_run_runtime_class_unverified` at start). The supervisor itself keeps running, so its other profiles keep working, and a fixed RuntimeClass is picked up within seconds, without a restart. The chart grants it `get` on that one RuntimeClass, and nothing else cluster-wide.
 </Note>
 
 ## Step 2: the bucket
@@ -302,11 +302,13 @@ Send to cloud needs four switches, all on. If one is off, the desktop says which
 | Switch | Where | Reason shown when off |
 |---|---|---|
 | Cloud executor: **Enabled** | Admin, Configuration, *Cloud executor* (`cloud_executor.enabled`) | `platform_off` |
-| The project's own on/off: its explicit value, or else **Default for Projects** | Default: Admin, Configuration, *Cloud executor* (`cloud_executor.project_default_enabled`, off unless you turn it on). Explicit: Admin, Projects, a project's *Send to cloud* action (any project), or the project's Settings, General, *Send to cloud* (its project admin). Both store `enabled` in the project's `cloud_executor` setting; *Use the default for projects* removes it | `project_off` |
+| The project's own on/off: its explicit value, or else **Default for Projects** | Default: Admin, Configuration, *Cloud executor* (`cloud_executor.project_default_enabled`; off on a new install, see the upgrade rule below). Explicit: Admin, Projects, a project's *Send to cloud* action (any project), or the project's Settings, General, *Send to cloud* (its project admin). Both store `enabled` in the project's `cloud_executor` setting; *Use the default for projects* removes it | `project_off` |
 | Native client policy: `local_work_allowed` and `local_work_cloud_handoff` | Admin, Configuration, *Native client policy*, Local work | `device_off` |
 | A configured executor and confirmed bucket encryption | Steps 2 to 4 | `no_executor`, `storage_encryption_unconfirmed` |
 
 **Enabled** always wins: while it is off, Send to cloud is off in every project, whatever the project says. While it is on, a project that turned it on or off keeps its choice, and a project that never chose follows **Default for Projects**. That includes every project that existed before this switch, so turning **Enabled** on with the default off (the default) turns Send to cloud on nowhere yet. Turn it on per project, or turn the default on to open it everywhere and let projects opt out. `project_off` covers both an explicit off and a default that is off.
+
+**Upgrade rule.** Until an administrator saves **Default for Projects**, it equals the saved **Enabled**. A new install has neither saved, so both are off. A deployment upgraded with **Enabled** already on keeps Send to cloud on in every project without its own value, as before the switch existed, and the Configuration page shows **Default for Projects** on. Once you save the field, the saved value wins, whatever **Enabled** is. Saving other fields of the form does not save it. To close Send to cloud by default after an upgrade, turn **Default for Projects** off and save.
 
 The project setting's other fields (shell, network and its allowlist, history, caps, exclusions and environment rules) can only narrow the platform values.
 
@@ -339,7 +341,7 @@ kubectl -n elitea-code-execution exec "$POD" -c workspace -- dmesg | head -2
 
 The Pod runs on a sandbox node with your RuntimeClass, and `dmesg` shows gVisor, not the host. A project with a host allowlist reaches only those hosts. `egress_proxy.run_summary` in the proxy's log, and the turn's audit event in Main, list the hosts reached and refused.
 
-To prove the refusal, point `sandboxKubernetes.runtimeClass.name` at a RuntimeClass with `handler: runc` in a test cluster. The supervisor must refuse to start, with `workspace_run_runtime_class_refused` in its log.
+To prove the refusal, point `sandboxKubernetes.runtimeClass.name` at a RuntimeClass with `handler: runc` in a test cluster. The supervisor must refuse every workspace run, with `workspace_run_runtime_class_refused` in its log.
 
 ## Troubleshooting
 
@@ -349,7 +351,7 @@ To prove the refusal, point `sandboxKubernetes.runtimeClass.name` at a RuntimeCl
 | "turned off for this project" (`project_off`) | The project turned it off, or never chose and **Default for Projects** is off |
 | "no cloud executor set up" (`no_executor`) | `sandboxKubernetes.workspaceRuns` or the supervisor is off. For a supervisor outside the chart, set `main.env.ELITEA_CLOUD_EXECUTOR_CONFIGURED: "true"` |
 | "could not confirm that its storage is encrypted" | No default encryption rule, or the IAM policy lacks `s3:GetEncryptionConfiguration`. See Main's start-up log line `cloud executor: default encryption at rest ... is not confirmed` |
-| The supervisor crash-loops with `workspace_run_runtime_class_refused` | The RuntimeClass is missing or not isolating, or the chart's ClusterRole was removed |
+| Every cloud turn is refused, and the supervisor logs `workspace_run_runtime_class_refused` | The RuntimeClass is missing or not isolating, or the chart's ClusterRole was removed |
 | A run fails with `workspace_run.unavailable` | `worker.runtime.workspaceRuns.target` does not reach the profile's Service, or the certificate SAN does not match it |
 | The installer pod is not Ready | Read its init container's log: `kubectl -n elitea-sandbox-runtime logs <pod> -c install`. Backups of every config it replaced are in `/var/lib/elitea-sandbox-runtime/backup` on the node |
 | Run Pods stay Pending | No node matches `nodeSelector`, or the taint is not tolerated. On GKE, the RuntimeClass adds the toleration |

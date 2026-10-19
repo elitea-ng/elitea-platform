@@ -19,6 +19,12 @@ else
   # containerd was restarted after the installer wrote it.
   host containerd config dump 2>/dev/null | grep -q 'io.containerd.runsc.v1'
   restarted=$(cat "$HOST_ROOT/var/lib/elitea-sandbox-runtime/containerd.restarted" 2>/dev/null || echo 0)
-  since=$(host systemctl show containerd --property=ActiveEnterTimestamp --value)
-  [ -n "$since" ] && [ "$(date -u -d "$since" +%s)" -ge "$restarted" ]
+  # ActiveEnterTimestampMonotonic (microseconds of CLOCK_MONOTONIC, which
+  # this pod shares with the host) converted to wall-clock seconds here. The
+  # human-readable ActiveEnterTimestamp carries a zone abbreviation that GNU
+  # date cannot parse for every zone. 0 means containerd never became active.
+  since=$(host systemctl show containerd --property=ActiveEnterTimestampMonotonic --value)
+  [[ "$since" =~ ^[1-9][0-9]*$ ]] || exit 1
+  since=$(python3 -c 'import sys, time; print(int(time.time() - (time.monotonic() - int(sys.argv[1]) / 1e6)))' "$since")
+  [ "$since" -ge "$restarted" ]
 fi

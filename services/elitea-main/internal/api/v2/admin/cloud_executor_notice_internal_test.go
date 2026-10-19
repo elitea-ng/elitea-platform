@@ -78,3 +78,28 @@ func TestCloudExecutorSectionOffersTheProjectDefault(t *testing.T) {
 		t.Fatal("a non-boolean project default was accepted")
 	}
 }
+
+// The form shows the effective project default: on an upgraded deployment
+// that saved only `enabled: true`, it is on (so saving the untouched form
+// keeps every project on); a saved value is shown as saved.
+func TestCloudExecutorFormShowsTheEffectiveProjectDefault(t *testing.T) {
+	section, ok := findConfigSection(platformconfig.SectionCloudExecutor)
+	if !ok {
+		t.Fatal("no cloud_executor section")
+	}
+	key := platformconfig.KeyCloudExecutorProjectDefaultEnabled
+	for _, tc := range []struct {
+		name   string
+		stored map[string]any
+		want   bool
+	}{
+		{"never saved", map[string]any{}, false},
+		{"upgrade: enabled saved, default absent", map[string]any{platformconfig.KeyCloudExecutorEnabled: true}, true},
+		{"enabled off, default absent", map[string]any{platformconfig.KeyCloudExecutorEnabled: false}, false},
+		{"saved default wins", map[string]any{platformconfig.KeyCloudExecutorEnabled: true, key: false}, false},
+	} {
+		if got := mergeSectionValues(section, tc.stored)[key]; got != tc.want {
+			t.Errorf("%s: %s = %v, want %v", tc.name, key, got, tc.want)
+		}
+	}
+}

@@ -22,12 +22,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	handoffapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -41,7 +43,7 @@ const (
 // Switch is *handoffapp.ProjectSwitchService.
 type Switch interface {
 	State(ctx context.Context, projectID int64) (handoffapp.ProjectSwitchState, error)
-	Set(ctx context.Context, projectID int64, enabled *bool) (handoffapp.ProjectSwitchState, error)
+	Set(ctx context.Context, projectID, actorID int64, enabled *bool) (handoffapp.ProjectSwitchState, error)
 }
 
 var _ Switch = (*handoffapp.ProjectSwitchService)(nil)
@@ -65,10 +67,18 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, state)
 }
 
-// Put stores the project's explicit value, or removes it for null.
+// Put stores the project's explicit value, or removes it for null. The
+// caller is the write's actor: the configuration lifecycle event records
+// who changed the switch, as a write through the configurations API does.
 func (h *Handler) Put(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := h.project(w, r)
 	if !ok {
+		return
+	}
+	principal, _ := auth.UserFromContext(r.Context())
+	actorID, ok := principal.OwningUserID()
+	if !ok || actorID > math.MaxInt32 {
+		apierr.WriteStatus(w, http.StatusUnauthorized, "the change needs a signed-in user")
 		return
 	}
 	var body map[string]json.RawMessage
@@ -86,7 +96,7 @@ func (h *Handler) Put(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusBadRequest, "enabled must be true, false or null")
 		return
 	}
-	state, err := h.projectSwitch.Set(r.Context(), projectID, enabled)
+	state, err := h.projectSwitch.Set(r.Context(), projectID, actorID, enabled)
 	if err != nil {
 		writeError(r.Context(), w, err)
 		return

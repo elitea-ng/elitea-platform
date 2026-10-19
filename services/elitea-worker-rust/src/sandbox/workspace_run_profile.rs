@@ -228,23 +228,39 @@ async fn backend(
                 .map_err(|_| StartupError("load in-cluster Kubernetes identity"))?;
             let client = kube::Client::try_from(cluster)
                 .map_err(|_| StartupError("construct Kubernetes TLS client"))?;
-            Arc::new(
-                super::kubernetes::workspace_run::KubernetesWorkspaceRuns::connect(
-                    client,
-                    namespace.clone(),
-                    runtime_class.clone(),
-                    node_selector.clone(),
-                )
-                .await
-                .map(|runs| runs.with_tolerations(tolerations.clone()))
-                .map_err(|_| {
-                    StartupError(
-                        "verify the workspace RuntimeClass isolates (handler runsc, gvisor or kata*; see workspace_run_runtime_class_refused)",
-                    )
-                })?,
+            kubernetes_backend(
+                client,
+                namespace.clone(),
+                runtime_class.clone(),
+                node_selector.clone(),
+                tolerations.clone(),
             )
+            .await
         }
     })
+}
+
+/// The Kubernetes backend. A `RuntimeClass` that does not (yet) isolate is a
+/// warning here, never a [`StartupError`]: failing startup would crash-loop
+/// the whole supervisor, its Code profiles included. The backend refuses each
+/// workspace run, fail-closed, until the check passes.
+async fn kubernetes_backend(
+    client: kube::Client,
+    namespace: String,
+    runtime_class: String,
+    node_selector: BTreeMap<String, String>,
+    tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+) -> Arc<dyn WorkspaceRunBackend> {
+    Arc::new(
+        super::kubernetes::workspace_run::KubernetesWorkspaceRuns::connect(
+            client,
+            namespace,
+            runtime_class,
+            node_selector,
+        )
+        .await
+        .with_tolerations(tolerations),
+    )
 }
 
 /// Serve one `workspace` profile until `shutdown`.
@@ -336,6 +352,38 @@ mod tests {
             r#"{{"revision":1,"purpose":"workspace","listen_address":"127.0.0.1:9470","owner":"workspace-runs","audience":"dns:elitea-sandbox-workspace","ca_path":"/run/ca.pem","certificate_path":"/run/c.pem","private_key_path":"/run/k.pem","verification_keyring_path":"/run/keys.json","image":"registry.example/runner@sha256:{}","concurrency":4,"max_workspace_bytes":10737418240,"max_cpu_millis":4000,"max_memory_bytes":8589934592,"max_wall_seconds":3600,"backend":{backend}}}"#,
             "d".repeat(64)
         )
+    }
+
+    /// A missing `RuntimeClass` at startup does not fail the supervisor
+    /// (a `StartupError` here would end every profile it serves, Code
+    /// profiles included): the backend is built, refuses each workspace run
+    /// fail-closed, and runs once the `RuntimeClass` isolates.
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_runtime_class_does_not_fail_startup() {
+        use super::super::kubernetes::workspace_run::tests::{Class, api_with, launch};
+        use super::super::workspace_run_service::BackendError;
+        let class: Class = Arc::new(std::sync::Mutex::new(None));
+        let (client, _, creates) = api_with(class.clone(), Duration::ZERO);
+        let runs = kubernetes_backend(
+            client,
+            "elitea-execution".into(),
+            "gvisor".into(),
+            BTreeMap::from([("a".to_owned(), "b".to_owned())]),
+            Vec::new(),
+        )
+        .await;
+        assert!(matches!(
+            runs.start(&launch()).await,
+            Err(BackendError::Refused)
+        ));
+        assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+        *class.lock().unwrap() = Some("runsc");
+        tokio::time::advance(Duration::from_secs(6)).await;
+        assert!(
+            runs.start(&launch())
+                .await
+                .expect("starts once it isolates")
+        );
     }
 
     /// The profile the chart renders (deploy/helm/tests/render-cloud-executor.sh

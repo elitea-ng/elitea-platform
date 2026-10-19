@@ -38,10 +38,16 @@ with `hostPID` and the host's `/` mounted at `/host`.
      The file is `config-v3.toml.tmpl` on containerd 2.0 (config version 3)
      and `config.toml.tmpl` on containerd 1.7, or the template that already
      exists. The operator's own content in that file is kept.
-   - `containerd` (EKS AL2023, generic nodes): the installer writes the
-     drop-in `/etc/containerd/config.d/50-elitea-runsc.toml`. If
-     `config.toml` has no `imports`, it adds
-     `imports = ["/etc/containerd/config.d/*.toml"]` to it. Before any
+   - `containerd` (EKS AL2023, generic nodes), config version 3
+     (containerd 2.x, whose imports merge plugin sections per key): the
+     installer writes the drop-in `/etc/containerd/config.d/50-elitea-runsc.toml`.
+     If `config.toml` has no `imports`, it adds
+     `imports = ["/etc/containerd/config.d/*.toml"]` to it. Config version 2
+     (containerd 1.7) replaces a whole plugin table from an import, which
+     would drop a customised cri section (`SystemdCgroup`, `sandbox_image`),
+     so there the installer appends only a marked
+     `[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]` block
+     to `config.toml` and uses no drop-in. Before any
      restart it validates with `containerd config dump`: the merged config
      must load, must register `runsc`, and must keep every setting it had
      before. Otherwise everything is rolled back and the pod fails.
@@ -49,8 +55,9 @@ with `hostPID` and the host's `/` mounted at `/host`.
    `containerd` through `nsenter` into PID 1, **exactly once per change**,
    and not at all when the config is already current. It backs up the
    previous file in `/var/lib/elitea-sandbox-runtime/backup`. If the unit
-   does not come back healthy within `restartTimeoutSeconds`, the installer
-   restores the backup and restarts the unit again.
+   does not come back healthy within `restartTimeoutSeconds` (one deadline
+   for the whole wait), the installer restores the backup and restarts the
+   unit again, waiting at most `restartTimeoutSeconds` more.
 4. **Readiness.** The pod is Ready only after `runsc --version` answers on the
    host and the running containerd lists the `runsc` runtime (`k3s crictl
    info`, or `crictl info`). Without crictl, the check uses the effective

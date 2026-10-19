@@ -2,7 +2,7 @@
 # The elitea-sandbox-runtime installer (files/install.sh) against a fake host:
 # a scratch root and a fake `host` command that plays systemd, k3s (which
 # re-renders config.toml from its template on restart), containerd
-# (`config dump`, merging the drop-in) and crictl. Proves: one restart per
+# (`config dump`, merging imports per config version) and crictl. Proves: one restart per
 # change and none when current, no download when current, both checksums
 # enforced, foreign templates kept, rollback on a failed restart, and the
 # containerd-mode refusals.
@@ -38,6 +38,52 @@ for arch in x86_64 aarch64; do
 done
 SHA=$(sha512sum "$work/gvisor.tar.bz2" | awk '{print $1}')
 
+# The fake `containerd config dump`: config.toml plus its imports, merged as
+# containerd does. Version 2 (containerd 1.7) replaces each plugin table an
+# import names wholesale; version 3 (containerd 2.x, PR #9982) merges per key.
+# $root/replace-plugin forces the wholesale merge on version 3 too. Emits
+# one fully-qualified table per section, sorted, so lines compare.
+cat > "$work/fakedump.py" <<'PY'
+import glob, json, os, re, sys, tomllib
+root = sys.argv[1]
+config = tomllib.load(open(f"{root}/etc/containerd/config.toml", "rb"))
+wholesale = config.get("version") == 2 or os.path.exists(f"{root}/replace-plugin")
+def deep(to, frm):
+    for key, value in frm.items():
+        if isinstance(value, dict) and isinstance(to.get(key), dict):
+            deep(to[key], value)
+        else:
+            to[key] = value
+for pattern in config.get("imports", []):
+    for path in sorted(glob.glob(root + pattern)):
+        imported = tomllib.load(open(path, "rb"))
+        for key, value in imported.items():
+            if key == "plugins" and wholesale:
+                config.setdefault("plugins", {}).update(value)
+            elif isinstance(value, dict):
+                deep(config.setdefault(key, {}), value)
+            elif key not in ("imports", "version"):
+                config[key] = value
+def name(key):
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+def value(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, list):
+        return "[" + ", ".join(value(x) for x in v) + "]"
+    return json.dumps(v) if isinstance(v, str) else str(v)
+def emit(table, path):
+    if path:
+        print("[" + ".".join(name(p) for p in path) + "]")
+    for key in sorted(table):
+        if not isinstance(table[key], dict):
+            print(f"  {name(key)} = {value(table[key])}")
+    for key in sorted(table):
+        if isinstance(table[key], dict):
+            emit(table[key], path + [key])
+emit(config, [])
+PY
+
 # The fake host. HOST_ROOT is the node's /; $LOG records restarts.
 cat > "$work/fakehost" <<'FAKE'
 #!/bin/bash
@@ -65,13 +111,15 @@ case "$1 ${2:-}" in
     ;;
   "systemctl is-active") [ ! -f "$root/fail-start" ] ;;
   "systemctl cat") [ "${FAKE_AGENT:-}" = 1 ] ;;
-  "systemctl show") date -u ;;
-  "containerd config")
-    # A merge that keeps the base and adds each imported file, or (when
-    # $root/replace-plugin exists) one where an import drops base settings.
-    if [ -f "$root/replace-plugin" ] && compgen -G "$root/etc/containerd/config.d/*.toml" >/dev/null; then grep -v 'SystemdCgroup' "$root/etc/containerd/config.toml"; else cat "$root/etc/containerd/config.toml"; fi
-    for f in "$root"/etc/containerd/config.d/*.toml; do if [ -f "$f" ]; then cat "$f"; fi; done
-    ;;
+  "systemctl show")
+    # containerd became active $ACTIVE_AGO seconds ago (default: now). The
+    # human-readable timestamp carries a zone abbreviation GNU date rejects.
+    case "$*" in
+      *ActiveEnterTimestampMonotonic*) python3 -c 'import sys, time; print(int((time.monotonic() - float(sys.argv[1])) * 1e6))' "${ACTIVE_AGO:-0}" ;;
+      *ActiveEnterTimestamp*) echo "Mon 2026-10-19 12:00:00 NZDT" ;;
+      *) exit 2 ;;
+    esac ;;
+  "containerd config") python3 "$(dirname "$0")/fakedump.py" "$root" ;;
   "k3s crictl") grep -q 'runtimes.runsc' "$k3sdir/config.toml" && echo '{"config":{"containerd":{"runtimes":{"runsc":{}}}}}' || echo '{}' ;;
   "sh -c") exit 1 ;;
   *)
@@ -95,7 +143,8 @@ k3s_node() {
 }
 run() { env MODE="$MODE" GVISOR_RELEASE=20261005.0 GVISOR_BASE_URL="file://$work/release" \
   GVISOR_SHA512_X86_64="${PIN:-$SHA}" GVISOR_SHA512_AARCH64="${PIN:-$SHA}" ALLOW_FILE_URL=true \
-  RESTART_TIMEOUT=4 bash "$INSTALL" > "$HOST_ROOT/out" 2>&1; }
+  RESTART_TIMEOUT=$TIMEOUT bash "$INSTALL" > "$HOST_ROOT/out" 2>&1; }
+TIMEOUT=4
 restarts() { grep -c '^restart' "$LOG" || true; }
 tmpl() { echo "$HOST_ROOT/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl"; }
 
@@ -146,7 +195,13 @@ k3s_node rollback
 printf '{{ template "base" . }}\n# operator\n' > "$(tmpl)"
 cp "$(tmpl)" "$work/operator.tmpl"
 touch "$HOST_ROOT/fail-start"
+started=$(date +%s)
 if run; then fail "a failed restart reads as success"; else pass "a failed restart fails the install"; fi
+# One RESTART_TIMEOUT for the restart, one for the rollback's restart, plus
+# slack; a wait that restarts its clock per probe takes about T^2/2 + T.
+elapsed=$(( $(date +%s) - started ))
+[ "$elapsed" -le $((2 * TIMEOUT + 3)) ] && pass "the rollback wait is bounded by the timeout (${elapsed}s)" \
+  || fail "rollback took ${elapsed}s, over 2x${TIMEOUT}s"
 cmp -s "$(tmpl)" "$work/operator.tmpl" && pass "and restores the previous template" || fail "rollback content"
 [ "$(restarts)" = 2 ] && pass "one restart, one rollback restart" || fail "rollback restarts: $(cat "$LOG")"
 compgen -G "$HOST_ROOT/var/lib/elitea-sandbox-runtime/backup/config-v3.toml.tmpl.*" >/dev/null && pass "a backup is kept" || fail "backup"
@@ -165,42 +220,106 @@ env MODE=k3s GVISOR_RELEASE=latest GVISOR_SHA512_X86_64="$SHA" GVISOR_SHA512_AAR
 
 echo "== containerd mode"
 MODE=containerd
+CFG() { echo "$HOST_ROOT/etc/containerd/config.toml"; }
+DROPIN() { echo "$HOST_ROOT/etc/containerd/config.d/50-elitea-runsc.toml"; }
+dump() { "$work/fakehost" containerd config dump; }
+# Version 2 (containerd 1.7) with a runc runtime, or version 3 (containerd 2.x).
 cd_node() {
   new_node "$1"; mkdir -p "$HOST_ROOT/etc/containerd"
-  printf 'version = 2\n\n[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]\n  SystemdCgroup = true\n' \
-    > "$HOST_ROOT/etc/containerd/config.toml"
+  printf 'version = 2\n\n[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]\n  SystemdCgroup = true\n' > "$(CFG)"
 }
+cd3_node() {
+  new_node "$1"; mkdir -p "$HOST_ROOT/etc/containerd"
+  printf "version = 3\n\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]\n  SystemdCgroup = true\n" > "$(CFG)"
+}
+
+echo "-- config version 2: the runtime goes into config.toml"
 cd_node plain
-run && pass "a plain containerd node installs" || { cat "$HOST_ROOT/out"; fail "containerd install"; }
-sed -n 2p "$HOST_ROOT/etc/containerd/config.toml" | grep -qx 'imports = \["/etc/containerd/config.d/\*.toml"\]' \
-  && pass "imports added after version" || { cat "$HOST_ROOT/etc/containerd/config.toml"; fail "imports"; }
-grep -qF '[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]' "$HOST_ROOT/etc/containerd/config.d/50-elitea-runsc.toml" \
-  && pass "the drop-in has the v2 table" || fail "drop-in"
+run && pass "a plain containerd 1.7 node installs" || { cat "$HOST_ROOT/out"; fail "containerd install"; }
+grep -q '^imports' "$(CFG)" && fail "imports added on version 2" || pass "no imports added"
+[ ! -e "$(DROPIN)" ] && pass "no drop-in" || fail "a drop-in on version 2"
+grep -qxF '[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]' "$(CFG)" && grep -qxF 'SystemdCgroup = true' <(sed 's/^ *//' "$(CFG)") \
+  && pass "config.toml keeps its content and gains the v2 runsc table" || { cat "$(CFG)"; fail "v2 config content"; }
 [ "$(restarts)" = 1 ] && grep -qx 'restart containerd' "$LOG" && pass "one containerd restart" || fail "restarts: $(cat "$LOG")"
-run && [ "$(restarts)" = 1 ] && pass "a second run restarts nothing" || fail "containerd rerun"
+cp "$(CFG)" "$work/v2-first.toml"
+run && [ "$(restarts)" = 1 ] && cmp -s "$(CFG)" "$work/v2-first.toml" && pass "a second run changes and restarts nothing" || fail "containerd rerun"
 MODE=containerd bash "$CHECK" && pass "ready (no crictl: config dump + restart time)" || fail "containerd readiness"
+ACTIVE_AGO=600 MODE=containerd bash "$CHECK" && fail "ready with a containerd started before the change" \
+  || pass "not ready while containerd predates the change"
 
-cd_node covered
-sed -i '1a imports = ["/etc/containerd/config.d/*.toml"]' "$HOST_ROOT/etc/containerd/config.toml"
-cp "$HOST_ROOT/etc/containerd/config.toml" "$work/covered.toml"
-run && cmp -s "$HOST_ROOT/etc/containerd/config.toml" "$work/covered.toml" && pass "covering imports leave config.toml as it is" || fail "covered"
+# EKS AL2023-style: imports already cover config.d, and the cri section is
+# customised. A cri drop-in would replace that whole table on containerd 1.7.
+cd_node customised
+cat > "$(CFG)" <<'TOML'
+version = 2
+imports = ["/etc/containerd/config.d/*.toml"]
 
-cd_node uncovered
-sed -i '1a imports = ["/etc/other/*.toml"]' "$HOST_ROOT/etc/containerd/config.toml"
-run && fail "an uncovering imports list was rewritten" || pass "an imports list that does not cover the drop-in is refused"
-[ ! -e "$HOST_ROOT/etc/containerd/config.d/50-elitea-runsc.toml" ] && [ "$(restarts)" = 0 ] && pass "and nothing changes" || fail "uncovered effects"
+[plugins."io.containerd.grpc.v1.cri"]
+  sandbox_image = "602401143452.dkr.ecr.us-west-2.amazonaws.com/eks/pause:3.10"
+  enable_cdi = true
 
-cd_node dropping
-touch "$HOST_ROOT/replace-plugin"
-cp "$HOST_ROOT/etc/containerd/config.toml" "$work/dropping.toml"
-run && fail "an import that drops settings was applied" || pass "an import that drops settings is refused"
-cmp -s "$HOST_ROOT/etc/containerd/config.toml" "$work/dropping.toml" && [ ! -e "$HOST_ROOT/etc/containerd/config.d/50-elitea-runsc.toml" ] \
-  && [ "$(restarts)" = 0 ] && pass "rolled back before any restart" || fail "dropping effects"
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  default_runtime_name = "runc"
+  discard_unpacked_layers = true
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+  SystemdCgroup = true
+
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d:/etc/docker/certs.d"
+TOML
+dump > "$work/customised-before.toml"
+run && pass "a customised 1.7 cri section installs" || { cat "$HOST_ROOT/out"; fail "customised v2 install"; }
+dump > "$work/customised-after.toml"
+grep -vxF -f "$work/customised-after.toml" "$work/customised-before.toml" | grep -q . \
+  && fail "settings lost: $(grep -vxF -f "$work/customised-after.toml" "$work/customised-before.toml")" \
+  || pass "every effective setting survives (SystemdCgroup, sandbox_image, ...)"
+grep -q 'io.containerd.runsc.v1' "$work/customised-after.toml" && [ ! -e "$(DROPIN)" ] && [ "$(restarts)" = 1 ] \
+  && pass "runsc registered without a drop-in, one restart" || fail "customised v2 effects"
+
+# An earlier installer's drop-in on a 1.7 node is removed, not kept beside the block.
+cd_node stale
+sed -i '1a imports = ["/etc/containerd/config.d/*.toml"]' "$(CFG)"
+mkdir -p "$(dirname "$(DROPIN)")"
+printf '[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]\n  runtime_type = "io.containerd.runsc.v1"\n' > "$(DROPIN)"
+run && [ ! -e "$(DROPIN)" ] && grep -qF 'runtimes.runsc]' "$(CFG)" && pass "a stale version-2 drop-in is replaced by the block" \
+  || { cat "$HOST_ROOT/out"; fail "stale drop-in"; }
 
 cd_node existing
-printf '\n[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]\n  runtime_type = "io.containerd.runsc.v1"\n' >> "$HOST_ROOT/etc/containerd/config.toml"
-run && [ "$(restarts)" = 0 ] && [ ! -e "$HOST_ROOT/etc/containerd/config.d/50-elitea-runsc.toml" ] \
+printf '\n[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]\n  runtime_type = "io.containerd.runsc.v1"\n' >> "$(CFG)"
+run && [ "$(restarts)" = 0 ] && [ ! -e "$(DROPIN)" ] \
   && pass "a node that already registers runsc is left alone" || fail "existing runsc"
+
+echo "-- config version 3: a drop-in, merged per key"
+cd3_node plain3
+run && pass "a containerd 2.x node installs" || { cat "$HOST_ROOT/out"; fail "containerd v3 install"; }
+sed -n 2p "$(CFG)" | grep -qx 'imports = \["/etc/containerd/config.d/\*.toml"\]' \
+  && pass "imports added after version" || { cat "$(CFG)"; fail "imports"; }
+grep -qF "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runsc]" "$(DROPIN)" \
+  && pass "the drop-in has the v3 table" || fail "drop-in"
+dump | grep -qx '  SystemdCgroup = true' && pass "the runc options survive the per-key merge" || fail "v3 merge"
+[ "$(restarts)" = 1 ] && run && [ "$(restarts)" = 1 ] && pass "one restart, none on the rerun" || fail "v3 restarts: $(cat "$LOG")"
+
+cd3_node covered
+sed -i '1a imports = ["/etc/containerd/config.d/*.toml"]' "$(CFG)"
+cp "$(CFG)" "$work/covered.toml"
+run && cmp -s "$(CFG)" "$work/covered.toml" && pass "covering imports leave config.toml as it is" || fail "covered"
+
+cd3_node uncovered
+sed -i '1a imports = ["/etc/other/*.toml"]' "$(CFG)"
+run && fail "an uncovering imports list was rewritten" || pass "an imports list that does not cover the drop-in is refused"
+[ ! -e "$(DROPIN)" ] && [ "$(restarts)" = 0 ] && pass "and nothing changes" || fail "uncovered effects"
+
+# A containerd whose import replaced the plugin table: the line check refuses.
+cd3_node dropping
+touch "$HOST_ROOT/replace-plugin"
+cp "$(CFG)" "$work/dropping.toml"
+run && fail "an import that drops settings was applied" || pass "an import that drops settings is refused"
+cmp -s "$(CFG)" "$work/dropping.toml" && [ ! -e "$(DROPIN)" ] \
+  && [ "$(restarts)" = 0 ] && pass "rolled back before any restart" || fail "dropping effects"
 
 [ "$fails" -eq 0 ] || { echo "$fails failure(s)" >&2; exit 1; }
 echo "sandbox runtime installer: ok"

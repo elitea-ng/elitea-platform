@@ -21,7 +21,10 @@ const (
 	// explicit `enabled` in its cloud_executor setting gets while the
 	// platform switch is on (owner decision 2026-10-19). A project with no
 	// setting row at all, which is every project that existed before the
-	// key, follows it too.
+	// key, follows it too. While the key was never saved it is the saved
+	// `enabled` (CloudExecutorSettingsFromValues): an upgraded deployment
+	// that had the executor on keeps it on for its projects, and a new one
+	// starts with both off.
 	KeyCloudExecutorProjectDefaultEnabled = "project_default_enabled"
 	KeyCloudExecutorShell                 = "shell"
 	KeyCloudExecutorNetwork               = "network"
@@ -117,7 +120,9 @@ type CloudExecutorSettings struct {
 
 // DefaultCloudExecutorSettings is the ceiling of a deployment that never saved
 // the section: the cloud executor is off, and off for every project that does
-// not turn it on; the rest applies once an administrator enables it.
+// not turn it on; the rest applies once an administrator enables it. (A
+// saved section without project_default_enabled is not this default: see
+// CloudExecutorSettingsFromValues.)
 func DefaultCloudExecutorSettings() CloudExecutorSettings {
 	return CloudExecutorSettings{
 		Enabled: false, ProjectDefaultEnabled: false, Shell: true, Network: true, NetworkAllowlist: []string{}, HistoryFullAllowed: false,
@@ -140,10 +145,17 @@ func LoadCloudExecutorSettings(ctx context.Context, pool *pgxpool.Pool) (CloudEx
 
 // CloudExecutorSettingsFromValues is the overlay. A value of the wrong type or
 // out of range is ABSENT and keeps its default.
+//
+// The upgrade rule: an absent project_default_enabled is the saved `enabled`.
+// Before the key existed, `enabled` on meant on for every project without a
+// setting of its own, so a deployment that saved `enabled: true` then keeps
+// that until an administrator saves the project default. A new deployment
+// (nothing saved) and one that saved `enabled: false` get false, the owner's
+// default for new installs. Once saved, the project default always wins.
 func CloudExecutorSettingsFromValues(values Values) CloudExecutorSettings {
 	settings := DefaultCloudExecutorSettings()
 	settings.Enabled = values.Bool(KeyCloudExecutorEnabled, settings.Enabled)
-	settings.ProjectDefaultEnabled = values.Bool(KeyCloudExecutorProjectDefaultEnabled, settings.ProjectDefaultEnabled)
+	settings.ProjectDefaultEnabled = values.Bool(KeyCloudExecutorProjectDefaultEnabled, settings.Enabled)
 	settings.Shell = values.Bool(KeyCloudExecutorShell, settings.Shell)
 	settings.Network = values.Bool(KeyCloudExecutorNetwork, settings.Network)
 	settings.HistoryFullAllowed = values.Bool(KeyCloudExecutorHistoryFullAllowed, settings.HistoryFullAllowed)

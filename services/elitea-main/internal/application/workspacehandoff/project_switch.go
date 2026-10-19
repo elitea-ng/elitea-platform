@@ -16,9 +16,10 @@ import (
 type ProjectSwitchStore interface {
 	ProjectSettingReader
 	// SetCloudExecutorProjectEnabled stores the explicit value, or removes it
-	// when enabled is nil. It answers ErrProjectNotFound for a project with
-	// no tenant schema.
-	SetCloudExecutorProjectEnabled(ctx context.Context, projectID int64, enabled *bool) error
+	// when enabled is nil, as a configuration mutation whose actor is
+	// actorID (the user making the change). It answers ErrProjectNotFound for
+	// a project with no tenant schema.
+	SetCloudExecutorProjectEnabled(ctx context.Context, projectID, actorID int64, enabled *bool) error
 }
 
 // Where a project's switch value comes from.
@@ -84,10 +85,11 @@ func (s *ProjectSwitchService) State(ctx context.Context, projectID int64) (Proj
 	return state, nil
 }
 
-// Set stores the project's explicit value (nil: follow the default) and
-// answers the new state. Turning it on while the platform is off is refused
-// with ErrProjectSwitchPlatformOff; off and unset are always accepted.
-func (s *ProjectSwitchService) Set(ctx context.Context, projectID int64, enabled *bool) (ProjectSwitchState, error) {
+// Set stores the project's explicit value (nil: follow the default) on
+// behalf of actorID and answers the new state. Turning it on while the
+// platform is off is refused with ErrProjectSwitchPlatformOff; off and unset
+// are always accepted.
+func (s *ProjectSwitchService) Set(ctx context.Context, projectID, actorID int64, enabled *bool) (ProjectSwitchState, error) {
 	if enabled != nil && *enabled {
 		ceiling, err := s.platform.CloudExecutorSettings(ctx)
 		if err != nil {
@@ -97,7 +99,7 @@ func (s *ProjectSwitchService) Set(ctx context.Context, projectID int64, enabled
 			return ProjectSwitchState{}, ErrProjectSwitchPlatformOff
 		}
 	}
-	if err := s.store.SetCloudExecutorProjectEnabled(ctx, projectID, enabled); err != nil {
+	if err := s.store.SetCloudExecutorProjectEnabled(ctx, projectID, actorID, enabled); err != nil {
 		return ProjectSwitchState{}, err
 	}
 	return s.State(ctx, projectID)

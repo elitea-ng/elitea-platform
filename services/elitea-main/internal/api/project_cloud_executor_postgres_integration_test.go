@@ -104,6 +104,20 @@ func cloudSwitchRow(t *testing.T, pool *pgxpool.Pool) map[string]any {
 	return data
 }
 
+// cloudSwitchLastActor is the actor of the project row's latest lifecycle
+// outbox event.
+func cloudSwitchLastActor(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	var actor int64
+	if err := pool.QueryRow(context.Background(), `
+SELECT outbox.actor_id FROM elitea_runtime.configuration_lifecycle_outbox AS outbox
+JOIN p_2.configuration AS row ON row.uuid = outbox.configuration_uuid
+WHERE row.type = 'cloud_executor' ORDER BY outbox.revision DESC LIMIT 1`).Scan(&actor); err != nil {
+		t.Fatalf("read the lifecycle outbox: %v", err)
+	}
+	return actor
+}
+
 func setCloudExecutorPlatform(t *testing.T, pool *pgxpool.Pool, key, value string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
@@ -188,6 +202,10 @@ func TestAdminProjectCloudExecutorSwitch(t *testing.T) {
 		if row := cloudSwitchRow(t, pool); row["enabled"] != true || row["shell"] != false {
 			t.Fatalf("row after on = %v", row)
 		}
+		// The central resolver resolves the admin himself: he is the actor.
+		if actor := cloudSwitchLastActor(t, pool); actor != cloudSwitchAdminID {
+			t.Fatalf("lifecycle actor = %d, want %d", actor, cloudSwitchAdminID)
+		}
 		// The platform's off wins over the stored on, which stays stored.
 		setCloudExecutorPlatform(t, pool, "enabled", "false")
 		if code, state := cloudSwitchCall(t, admin, http.MethodGet, path, nil); code != http.StatusOK ||
@@ -220,6 +238,16 @@ func TestProjectCloudExecutorSwitch(t *testing.T) {
 	setCloudExecutorPlatform(t, pool, "enabled", "true")
 	path := fmt.Sprintf("/api/v2/elitea_core/project_cloud_executor/prompt_lib/%d", cloudSwitchProjectID)
 
+	// The upgrade rule: with the platform on and Default for Projects never
+	// saved, a project that set nothing keeps Send to cloud on.
+	viewer := newCloudSwitchRouter(pool, cloudSwitchPlainID, viewerPermissions...)
+	if code, state := cloudSwitchCall(t, viewer, http.MethodGet, path, nil); code != http.StatusOK || !state.Enabled ||
+		!state.ProjectDefaultEnabled || state.Source != "default" {
+		t.Fatalf("default never saved: GET = %d %+v; want on", code, state)
+	}
+	// Once saved, the saved default wins.
+	setCloudExecutorPlatform(t, pool, "project_default_enabled", "false")
+
 	// A viewer or an editor reads it and cannot write it.
 	for _, granted := range [][]string{viewerPermissions, editorPermissions} {
 		router := newCloudSwitchRouter(pool, cloudSwitchPlainID, granted...)
@@ -243,6 +271,12 @@ func TestProjectCloudExecutorSwitch(t *testing.T) {
 	}
 	if row := cloudSwitchRow(t, pool); row["enabled"] != true {
 		t.Fatalf("row = %v", row)
+	}
+	// The write is a configuration mutation: its lifecycle event names the
+	// caller as the actor, the user the permission gate resolved (the fake
+	// project resolver resolves every caller to user 1).
+	if actor := cloudSwitchLastActor(t, pool); actor != 1 {
+		t.Fatalf("lifecycle actor = %d, want the resolved user 1", actor)
 	}
 	// Another project: the same caller holds nothing there.
 	if code, _ := cloudSwitchCall(t, projectAdmin, http.MethodPut,

@@ -20,7 +20,8 @@
 #                        the published SHA-512 of gvisor.tar.bz2 per arch
 #   K3S_SERVICE          optional: k3s or k3s-agent (default: detected)
 #   CONTAINERD_CONFIG    containerd mode: default /etc/containerd/config.toml
-#   CONTAINERD_DROPIN_DIR containerd mode: default /etc/containerd/config.d
+#   CONTAINERD_DROPIN_DIR containerd mode, config version 3: default
+#                        /etc/containerd/config.d (version 2 edits config.toml)
 #   PATCH_IMPORTS        containerd mode: "true" adds the drop-in directory to
 #                        a config.toml that has no `imports` (default true)
 #   RESTART_TIMEOUT      seconds to wait for a restarted unit (default 180)
@@ -196,13 +197,17 @@ restore() {
   if [ -n "$copy" ]; then cp -p "$copy" "$file"; else rm -f "$file"; fi
 }
 
-wait_active() {
-  local unit=$1 waited=0
-  until host systemctl is-active --quiet "$unit"; do
-    [ "$waited" -lt "$RESTART_TIMEOUT" ] || return 1
-    sleep 2; waited=$((waited + 2))
+# Wait until $2 (a `date +%s` deadline, default RESTART_TIMEOUT from now)
+# for the unit to be active and, when given, the command in $3.. to succeed.
+# Bounded by the deadline whatever each probe costs.
+wait_until() {
+  local unit=$1 deadline=$2; shift 2
+  until host systemctl is-active --quiet "$unit" && { [ "$#" -eq 0 ] || "$@"; }; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 2
   done
 }
+wait_active() { wait_until "$1" $(( $(date +%s) + RESTART_TIMEOUT )); }
 
 # Write $2 to $1 when it differs; echo "changed" or "unchanged".
 converge_file() {
@@ -248,18 +253,16 @@ configure_k3s() {
   install -m 0600 "$WORK/desired.tmpl" "$target"
   log "wrote $(basename "$target"); restarting $unit (once)"
   host systemctl restart "$unit" || true
-  local waited=0
-  until wait_active "$unit" && grep -q 'io.containerd.runsc.v1' "$rendered"; do
-    waited=$((waited + 2))
-    if [ "$waited" -ge "$RESTART_TIMEOUT" ]; then
-      log "$unit did not come back with runsc; restoring the previous $(basename "$target")"
-      restore "$target" "$saved"
-      host systemctl restart "$unit" || true
-      wait_active "$unit" || log "$unit is still not active after the rollback"
-      die "the k3s containerd template change was rolled back"
-    fi
-    sleep 2
-  done
+  # One deadline for the whole wait (a probe never restarts the clock), so a
+  # failed restart is rolled back after RESTART_TIMEOUT, and the rollback's
+  # own wait is one more RESTART_TIMEOUT at most.
+  if ! wait_until "$unit" $(( $(date +%s) + RESTART_TIMEOUT )) grep -q 'io.containerd.runsc.v1' "$rendered"; then
+    log "$unit did not come back with runsc; restoring the previous $(basename "$target")"
+    restore "$target" "$saved"
+    host systemctl restart "$unit" || true
+    wait_active "$unit" || log "$unit is still not active after the rollback"
+    die "the k3s containerd template change was rolled back"
+  fi
   log "$unit is active and its containerd config registers runsc"
 }
 
@@ -275,14 +278,35 @@ configure_containerd() {
   local version
   version=$(config_version "$config")
   [ "$version" = 2 ] || [ "$version" = 3 ] || die "containerd config version $version is not supported (2 or 3)"
-  runtime_block "$version" > "$WORK/dropin.toml"
-  valid_toml "$WORK/dropin.toml" || die "the drop-in is not valid TOML"
+  runtime_block "$version" > "$WORK/block.toml"
+  valid_toml "$WORK/block.toml" || die "the runtime block is not valid TOML"
 
-  # The drop-in must be imported. Add the directory to a config with no
-  # `imports`; refuse to rewrite an existing list that does not cover it.
-  cp "$config" "$WORK/config.toml"
-  local imports
-  imports=$(python3 - "$config" "$dropin" <<'PY'
+  # How the runtime reaches containerd depends on how its imports merge.
+  #
+  # Version 2 (containerd 1.7): an import replaces every plugin table it
+  # names wholesale (services/server/config/config.go: Plugins is a
+  # map[string]toml.Tree merged with mergo.WithOverride), so a drop-in with a
+  # cri sub-table would drop SystemdCgroup, sandbox_image and the rest of a
+  # customised cri section. The runsc sub-table is appended to config.toml
+  # itself instead, inside our managed block: valid TOML because no other
+  # table defines it (foreign_runsc above; valid_toml below).
+  #
+  # Version 3 (containerd 2.x): plugin sections from imports merge per key
+  # (containerd PR #9982, commit a21e379b, first released in v2.0.0; see
+  # TestMergingPluginsWithTwoCriRuntimeDropInConfigs in
+  # cmd/containerd/server/config/config_test.go), so a drop-in holding only
+  # the runsc table is safe, and config.toml only needs the import.
+  local desired_dropin=""
+  if [ "$version" = 2 ]; then
+    { strip_block < "$config" | trim_trailing; printf '\n'; cat "$WORK/block.toml"; } > "$WORK/config.toml"
+    valid_toml "$WORK/config.toml" || die "adding the runsc table would make $(basename "$config") invalid; add it by hand"
+  else
+    desired_dropin="$WORK/block.toml"
+    # The drop-in must be imported. Add the directory to a config with no
+    # `imports`; refuse to rewrite an existing list that does not cover it.
+    cp "$config" "$WORK/config.toml"
+    local imports
+    imports=$(python3 - "$config" "$dropin" <<'PY'
 import fnmatch, sys, tomllib
 config = tomllib.load(open(sys.argv[1], "rb"))
 if "imports" not in config:
@@ -293,22 +317,29 @@ else:
     print("uncovered")
 PY
 )
-  case "$imports" in
-    covered) ;;
-    absent)
-      [ "${PATCH_IMPORTS:-true}" = true ] || die "$(basename "$config") has no imports and PATCH_IMPORTS is off"
-      # Top level, right after `version`, before any table.
-      awk -v line="imports = [\"$dropin_dir/*.toml\"]" \
-        '!done && /^version[[:space:]]*=/ {print; print line; done=1; next} {print} END {if (!done) exit 1}' \
-        "$config" > "$WORK/config.toml" || die "$(basename "$config") has no top-level version line to add imports after"
-      valid_toml "$WORK/config.toml" || die "adding imports would make $(basename "$config") invalid"
-      ;;
-    *) die "$(basename "$config") imports a list that does not cover $dropin; add it there or set the runtime by hand" ;;
-  esac
+    case "$imports" in
+      covered) ;;
+      absent)
+        [ "${PATCH_IMPORTS:-true}" = true ] || die "$(basename "$config") has no imports and PATCH_IMPORTS is off"
+        # Top level, right after `version`, before any table.
+        awk -v line="imports = [\"$dropin_dir/*.toml\"]" \
+          '!done && /^version[[:space:]]*=/ {print; print line; done=1; next} {print} END {if (!done) exit 1}' \
+          "$config" > "$WORK/config.toml" || die "$(basename "$config") has no top-level version line to add imports after"
+        valid_toml "$WORK/config.toml" || die "adding imports would make $(basename "$config") invalid"
+        ;;
+      *) die "$(basename "$config") imports a list that does not cover $dropin; add it there or set the runtime by hand" ;;
+    esac
+  fi
 
-  local config_state dropin_state
+  # Version 2 wants no drop-in of ours: one left by an earlier installer
+  # would be the wholesale-replacing import this avoids.
+  local config_state dropin_state=unchanged
   config_state=$(converge_file "$config" "$WORK/config.toml")
-  dropin_state=$(converge_file "$HOST_ROOT$dropin" "$WORK/dropin.toml")
+  if [ -n "$desired_dropin" ]; then
+    dropin_state=$(converge_file "$HOST_ROOT$dropin" "$desired_dropin")
+  elif [ -e "$HOST_ROOT$dropin" ]; then
+    dropin_state=changed
+  fi
   if [ "$config_state" = unchanged ] && [ "$dropin_state" = unchanged ]; then
     log "containerd config is current"; return 0
   fi
@@ -319,8 +350,12 @@ PY
   local saved_config saved_dropin
   saved_config=$(backup "$config")
   saved_dropin=$(backup "$HOST_ROOT$dropin")
-  mkdir -p "$HOST_ROOT$dropin_dir"
-  install -m 0644 "$WORK/dropin.toml" "$HOST_ROOT$dropin"
+  if [ -n "$desired_dropin" ]; then
+    mkdir -p "$HOST_ROOT$dropin_dir"
+    install -m 0644 "$desired_dropin" "$HOST_ROOT$dropin"
+  else
+    rm -f "$HOST_ROOT$dropin"
+  fi
   install -m "$(stat -c %a "$config")" "$WORK/config.toml" "$config"
   rollback() {
     restore "$config" "$saved_config"
@@ -330,21 +365,23 @@ PY
     rollback; die "containerd rejects the new config: $(tail -1 "$WORK/dump.err")"
   fi
   if ! grep -q 'io.containerd.runsc.v1' "$WORK/after.toml"; then
-    rollback; die "containerd does not see the runsc runtime through the import"
+    rollback; die "containerd does not see the runsc runtime"
   fi
   # Every line of the old effective config must survive (an import that
   # replaced a whole plugin table would drop them).
   if grep -vxF -f "$WORK/after.toml" "$WORK/before.toml" | grep -v '^[[:space:]]*imports[[:space:]]*=' | grep -q .; then
-    rollback; die "the import would drop existing containerd settings; add the runsc runtime to $(basename "$config") by hand"
+    rollback; die "the change would drop existing containerd settings; add the runsc runtime to $(basename "$config") by hand"
   fi
-  log "wrote the runsc drop-in; restarting containerd (once)"
+  log "registered the runsc runtime (config version $version); restarting containerd (once)"
+  # Stamped before the restart, so the restart that check.sh looks for is
+  # never earlier than the stamp, even within the same second.
+  date -u +%s > "$HOST_ROOT$STATE_DIR/containerd.restarted"
   host systemctl restart containerd || true
   if ! wait_active containerd; then
     rollback
     host systemctl restart containerd || true
     die "containerd did not come back; the change was rolled back"
   fi
-  date -u +%s > "$HOST_ROOT$STATE_DIR/containerd.restarted"
   log "containerd is active with the runsc runtime"
 }
 

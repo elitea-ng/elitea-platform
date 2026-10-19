@@ -12,13 +12,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { memo, useCallback } from 'react';
 
 import type { ProjectCloudExecutorSwitch } from '@/shared/api/generated/model';
-import {
-  getGetProjectCloudExecutorQueryKey,
-  setProjectCloudExecutor,
-  useGetProjectCloudExecutor,
-} from '@/shared/api/generated/settings/settings';
+import { setProjectCloudExecutor, useGetProjectCloudExecutor } from '@/shared/api/generated/settings/settings';
 import { t } from '@/shared/i18n';
 
+import { storeSavedCloudExecutorSwitch } from '../model/queryKeys';
 import { CloudExecutorSwitchControl } from './CloudExecutorSwitchControl';
 import { describeCloudExecutorSwitchError } from './describeCloudExecutorSwitchError';
 
@@ -37,7 +34,8 @@ export const ProjectCloudExecutorSection = memo(function ProjectCloudExecutorSec
   const mutation = useMutation({
     mutationFn: (enabled: boolean | null) => setProjectCloudExecutor(projectId, { enabled }),
     onSuccess: (response) => {
-      queryClient.setQueryData(getGetProjectCloudExecutorQueryKey(projectId), response);
+      // Both keys: the admin Projects dialog caches the same switch.
+      storeSavedCloudExecutorSwitch(queryClient, projectId, response);
     },
   });
   const { mutate } = mutation;
