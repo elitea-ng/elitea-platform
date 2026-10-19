@@ -37,6 +37,7 @@ import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, P
 import { SessionPanel } from './SessionPanel';
 import { UnboundFolder } from './UnboundFolder';
 import { useAgentSkills } from './useAgentSkills';
+import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
 import { useThreadHandoff, type ThreadHandoff } from './useThreadHandoff';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
@@ -108,6 +109,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const nothingEarlier = session.history.kind === 'none' || session.history.kind === 'unavailable';
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
   const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
+  const codingAgent = useLocalCodingAgent(projectId, raw.empty);
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -130,7 +132,9 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               <CloudTranscript projectId={projectId} conversationId={conversationId} />
             ) : (
               <>
-              {raw.empty && <NoAgents busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
+              {raw.empty && (
+                <NoAgents codingAgent={codingAgent} busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />
+              )}
               {!raw.empty && !started && nothingEarlier && (
                 <ThreadIntro
                   workspace={workspace}
