@@ -34,7 +34,6 @@ pub enum Phase {
     Resolving,
     Starting,
     Running,
-    Committing,
     Done,
     Cancelled,
     Error,
@@ -47,7 +46,6 @@ impl Phase {
             Self::Resolving => "resolving",
             Self::Starting => "starting",
             Self::Running => "running",
-            Self::Committing => "committing",
             Self::Done => "done",
             Self::Cancelled => "cancelled",
             Self::Error => "error",
@@ -373,7 +371,7 @@ mod tests {
         events.tool_ended();
         events.tool_ended();
         events.tools_done();
-        events.status(Phase::Committing, None);
+        events.status(Phase::Done, None);
         let all = emitter.all();
         assert!(all[0].payload.get("timings").is_none());
         let starting = all[1].payload["timings"].as_array().unwrap();

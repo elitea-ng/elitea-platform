@@ -21,6 +21,7 @@ fn main() {
             "workspace_files",
             "agent_turn_start",
             "agent_prewarm",
+            "turn_commit_retry",
             "agent_turn_cancel",
             "agent_turn_status",
             "approval_respond",

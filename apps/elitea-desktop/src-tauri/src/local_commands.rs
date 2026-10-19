@@ -571,6 +571,16 @@ pub async fn agent_prewarm(
         .await?)
 }
 
+/// Send a turn's commit again after `commit_failed` (same execution, same
+/// body, in its conversation's order); resolves once it settled.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn turn_commit_retry(
+    state: State<'_, LocalState>,
+    execution_id: String,
+) -> Result<(), IpcError> {
+    Ok(state.agents.retry_commit(&execution_id).await?)
+}
+
 /// The "@" picker: files and folders of the workspace matching `query`
 /// (`.gitignore`, `.git` and `path_deny` left out, symlinks never listed or
 /// followed), best first, at most `limit` (default 50, at most 200). Walks

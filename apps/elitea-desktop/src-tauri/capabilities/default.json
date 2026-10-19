@@ -21,6 +21,7 @@
     "allow-workspace-files",
     "allow-agent-turn-start",
     "allow-agent-prewarm",
+    "allow-turn-commit-retry",
     "allow-agent-turn-cancel",
     "allow-agent-turn-status",
     "allow-approval-respond",

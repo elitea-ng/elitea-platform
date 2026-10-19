@@ -32,7 +32,8 @@ type FailableCommand =
   | 'restore'
   | 'restorePreview'
   | 'threadHistory'
-  | 'deleteThreadHistory';
+  | 'deleteThreadHistory'
+  | 'retryCommit';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
@@ -40,6 +41,7 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
   readonly calls: {
     started: TurnStartRequest[];
     prewarmed: TurnPrewarmRequest[];
+    commitRetries: string[];
     cancelled: string[];
     approvals: { requestId: string; decision: ApprovalDecision }[];
     restores: { turnId: string; path?: string; confirmOlder?: boolean }[];
@@ -84,7 +86,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const statuses = new Map<string, TurnStatus>();
   const history = new Map<string, StoredTurn[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const failure = (command: FailableCommand): Promise<never> | undefined => {
@@ -124,6 +126,10 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const needle = query.toLowerCase();
       const found = (options.files ?? []).filter((file) => file.path.toLowerCase().includes(needle));
       return Promise.resolve(found.slice(0, limit ?? 50));
+    },
+    retryCommit(executionId) {
+      calls.commitRetries.push(executionId);
+      return failure('retryCommit') ?? Promise.resolve();
     },
     prewarm(request) {
       calls.prewarmed.push(request);

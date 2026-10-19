@@ -115,7 +115,11 @@ interface EventBase {
 
 /** The `done` event's payload. */
 export interface TurnDonePayload {
+  /** True once the turn is saved in its conversation: `done` comes before the commit, so the event says `false` and `agent_turn_status` says how it settled. */
   committed: boolean;
+  /** `pending` (being saved after `done`), `committed`, `failed` (see `commit_failed`) or `none` (a cancelled turn saves nothing). */
+  commit?: 'pending' | 'committed' | 'failed' | 'none';
+  execution_id?: string;
   conversation_id: string;
   message_ids: string[];
   changed_files: number;
@@ -148,7 +152,9 @@ export type AgentEvent =
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
-  | (EventBase & { kind: 'done'; payload: TurnDonePayload });
+  | (EventBase & { kind: 'done'; payload: TurnDonePayload })
+  /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
+  | (EventBase & { kind: 'commit_failed'; payload: { execution_id: string; code: string; message: string } });
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
@@ -208,6 +214,8 @@ export interface WorkspaceIpc {
   /** The "@" picker: the workspace's files and folders matching `query`, best first. */
   files(workspaceId: string, query: string, limit?: number): Promise<WorkspaceFile[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
+  retryCommit(executionId: string): Promise<void>;
   /** Have the host read ahead what a turn to this agent reads first (the composer got focus); starts nothing. */
   prewarm(request: TurnPrewarmRequest): Promise<TurnPrewarmed>;
   cancelTurn(turnId: string): Promise<void>;
@@ -253,6 +261,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
     prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
+    retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
     respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),

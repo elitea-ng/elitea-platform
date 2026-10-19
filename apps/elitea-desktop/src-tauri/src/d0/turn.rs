@@ -48,7 +48,7 @@ use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
 use elitea_local_tools::provider::LocalToolProvider;
 use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use serde_json::{Map, Value, json};
 
 use super::api::{
@@ -57,6 +57,7 @@ use super::api::{
 };
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
+use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::definition::{self, Admitted};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents};
@@ -416,6 +417,19 @@ impl TurnEntry {
         events.send("done", payload);
     }
 
+    /// The turn's commit settled after its `done` (`committed` or
+    /// `failed`): `agent_turn_status` answers it from now on.
+    fn commit_settled(&self, outcome: &'static str) {
+        let mut done = self
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(Value::Object(payload)) = done.as_mut() {
+            payload.insert("commit".into(), json!(outcome));
+            payload.insert("committed".into(), json!(outcome == "committed"));
+        }
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, RunState> {
         self.state
             .lock()
@@ -581,6 +595,11 @@ pub struct AgentHost {
     owner: Mutex<Option<(String, Owner)>>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
+    /// The commits after `done`, one lane per conversation.
+    commits: CommitQueues,
+    /// Commits that failed after their retries, by execution id, for
+    /// `turn_commit_retry` (kept in memory until the app quits).
+    failed_commits: Mutex<HashMap<String, FailedCommit>>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -731,6 +750,8 @@ impl AgentHost {
             turns: Mutex::new(TurnTable::default()),
             owner: Mutex::new(None),
             caches: TurnCaches::default(),
+            commits: CommitQueues::default(),
+            failed_commits: Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
@@ -1400,8 +1421,12 @@ impl AgentHost {
         let (answering, started, mut memory, revalidated) =
             match (fresh_participant, cached_participant) {
                 (Some(answering), _) => {
-                    // The conversation was just read: its session first, then
-                    // the start.
+                    // The previous turn's commit first (its recall reads the
+                    // committed conversation), then the session, then the
+                    // start.
+                    self.commits
+                        .idle(&lane_key(request.project_id, &answering.conversation_uuid))
+                        .await;
                     let memory = self
                         .open_memory(
                             &api,
@@ -1423,6 +1448,9 @@ impl AgentHost {
                     // conversation is read again: its message count decides the
                     // session's seed, and a participant that changed (or a start
                     // refused for it) is started again on the fresh one, once.
+                    self.commits
+                        .idle(&lane_key(request.project_id, &cached.conversation_uuid))
+                        .await;
                     let looking_up = std::time::Instant::now();
                     let (started, looked_up, revalidated) = tokio::join!(
                         start_turn(&api, request, &cached, &question_id),
@@ -1523,6 +1551,7 @@ impl AgentHost {
         mut guard: LocalExecutionGuard,
     ) {
         let Prepared {
+            conversation_uuid,
             tap,
             project,
             invoked,
@@ -1596,6 +1625,7 @@ impl AgentHost {
                 &events,
                 json!({
                     "committed": false,
+                    "commit": "none",
                     "conversation_id": conversation_id,
                     "message_ids": [],
                     "changed_files": changes.len(),
@@ -1638,8 +1668,6 @@ impl AgentHost {
             events.error(&error.code, &error.message);
         }
         events.tools_done();
-        events.status(Phase::Committing, None);
-        let committing = std::time::Instant::now();
         let sandbox_mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
         let mut assistant = json!({ "content": answer });
         if let Some(error) = &failure {
@@ -1654,78 +1682,173 @@ impl AgentHost {
             local_work: recorder.work_report(sandbox_mode.as_str()),
         }
         .encode();
-        let committed = match &body {
-            Ok(body) => {
-                api.commit_turn(request.project_id, &started.execution_id, body)
-                    .await
-            }
-            Err(error) => Err(error.clone()),
-        };
-        events.timed(Timed::Committing, committing.elapsed());
-        // The session holds what the server holds, or is marked to be
-        // rebuilt from it.
-        memory
-            .settle(
-                &started.execution_id,
-                match &committed {
-                    Ok(_) => Ok(started.response_message_id.as_str()),
-                    Err(_) => Err(Refusal::NotSaved),
-                },
-            )
-            .await;
         // Free before `done`: the UI may send the next turn as soon as it sees it.
         drop(claim);
         let changes = recorder.changes(session.workspace());
         self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
-        let changed_files = changes.len();
-        events.log_timings();
-        if let Err(error) = &committed {
-            log::warn!(
-                "a local turn was not saved: {}",
-                log_reason(&error.code, error.status)
+        if failure.is_some() {
+            events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
+        } else if stopped_at_limit {
+            events.noted(
+                Phase::Done,
+                "Stopped at the step limit.",
+                step_limit::STEP_LIMIT_REACHED,
             );
+        } else {
+            events.status(Phase::Done, None);
         }
-        match committed {
-            Ok(_) => {
-                if failure.is_some() {
-                    events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
-                } else if stopped_at_limit {
-                    events.noted(
-                        Phase::Done,
-                        "Stopped at the step limit.",
-                        step_limit::STEP_LIMIT_REACHED,
-                    );
-                } else {
-                    events.status(Phase::Done, None);
-                }
-                entry.finish(
-                    &events,
-                    json!({
-                        "committed": true,
-                        "conversation_id": conversation_id,
-                        "message_ids": [started.question_id, started.response_message_id],
-                        "changed_files": changed_files,
-                    }),
-                );
-            }
+        // `done` before the commit: the person sees the answer at once. The
+        // commit follows in the conversation's lane (the next turn of the
+        // conversation waits for it); `commit_failed` reports one that did
+        // not land.
+        entry.finish(
+            &events,
+            json!({
+                "committed": false,
+                "commit": "pending",
+                "execution_id": started.execution_id,
+                "conversation_id": conversation_id,
+                "message_ids": [started.question_id, started.response_message_id],
+                "changed_files": changes.len(),
+            }),
+        );
+        let lane = lane_key(request.project_id, &conversation_uuid);
+        let host = self.clone();
+        let retry = self.commit_retry();
+        let project_id = request.project_id;
+        let job = async move {
+            let execution_id = started.execution_id.clone();
+            let committing = std::time::Instant::now();
+            let outcome = match &body {
+                Ok(body) => commits::commit(&api, project_id, &execution_id, body, retry).await,
+                Err(error) => Err(error.clone()),
+            };
+            events.timed(Timed::Committing, committing.elapsed());
+            // The session holds what the server holds, or is marked to be
+            // rebuilt from it.
+            memory
+                .settle(
+                    &execution_id,
+                    match &outcome {
+                        Ok(()) => Ok(started.response_message_id.as_str()),
+                        Err(_) => Err(Refusal::NotSaved),
+                    },
+                )
+                .await;
+            events.log_timings();
+            host.commit_settled(
+                &execution_id,
+                outcome,
+                body.ok().map(|body| FailedCommit {
+                    lane: lane_key(project_id, &conversation_uuid),
+                    api,
+                    project_id,
+                    body: Arc::new(body),
+                    events: events.clone(),
+                    entry: entry.clone(),
+                }),
+                &events,
+                &entry,
+            );
+        };
+        self.commits.push(&lane, job.boxed());
+    }
+
+    /// How a commit after `done` is retried.
+    fn commit_retry(&self) -> CommitRetry {
+        CommitRetry::from_remote(self.deps.retry)
+    }
+
+    /// A turn's commit settled: the turn says so, and one that did not land
+    /// is kept for `turn_commit_retry` and reported (`commit_failed`).
+    fn commit_settled(
+        &self,
+        execution_id: &str,
+        outcome: Result<(), ApiError>,
+        retry: Option<FailedCommit>,
+        events: &TurnEvents,
+        entry: &TurnEntry,
+    ) {
+        match outcome {
+            Ok(()) => entry.commit_settled("committed"),
             Err(error) => {
-                events.error(
-                    &error.code,
-                    &format!("The turn could not be saved: {}", error.message),
+                log::warn!(
+                    "a local turn was not saved: {}",
+                    log_reason(&error.code, error.status)
                 );
-                events.status(Phase::Error, Some(&error.message));
-                entry.finish(
-                    &events,
+                entry.commit_settled("failed");
+                if let Some(retry) = retry {
+                    self.failed_commits
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(execution_id.to_owned(), retry);
+                }
+                events.send(
+                    "commit_failed",
                     json!({
-                        "committed": false,
-                        "conversation_id": conversation_id,
-                        "message_ids": [],
-                        "changed_files": changed_files,
+                        "execution_id": execution_id,
+                        "code": error.code,
+                        "message": format!("The turn could not be saved: {}", error.message),
                     }),
                 );
             }
         }
+    }
+
+    /// `turn_commit_retry`: send a turn's failed commit again (same
+    /// execution id, same body), in its conversation's lane; resolves once
+    /// it settled.
+    ///
+    /// # Errors
+    ///
+    /// `commit_unknown` for an execution with no failed commit kept, or the
+    /// commit's refusal (it is then kept, and reported, again).
+    pub async fn retry_commit(self: &Arc<Self>, execution_id: &str) -> Result<(), TurnError> {
+        let failed = self
+            .failed_commits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(execution_id)
+            .ok_or_else(|| {
+                TurnError::new(
+                    "commit_unknown",
+                    "This app keeps no unsaved turn with that execution id.",
+                )
+            })?;
+        let (reply, settled) = tokio::sync::oneshot::channel();
+        let host = self.clone();
+        let retry = self.commit_retry();
+        let id = execution_id.to_owned();
+        let lane = failed.lane.clone();
+        self.commits.push(
+            &lane,
+            async move {
+                let outcome =
+                    commits::commit(&failed.api, failed.project_id, &id, &failed.body, retry).await;
+                let answer = outcome.clone().map_err(TurnError::from);
+                let (events, entry) = (failed.events.clone(), failed.entry.clone());
+                host.commit_settled(&id, outcome, Some(failed), &events, &entry);
+                let _ = reply.send(answer);
+            }
+            .boxed(),
+        );
+        settled
+            .await
+            .map_err(|_| TurnError::new("internal", "the commit stopped unexpectedly"))?
+    }
+
+    /// Commits queued or running, and failed ones kept: what a quit now
+    /// leaves unsaved (each such execution expires on the server).
+    #[must_use]
+    pub fn unsaved_commits(&self) -> (usize, usize) {
+        (
+            self.commits.pending(),
+            self.failed_commits
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2041,6 +2164,10 @@ impl AgentHost {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         self.caches.clear();
+        self.failed_commits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// A turn changed `files` files of the workspace: its index (if open)
@@ -2559,6 +2686,17 @@ where
             .map(|runtime| runtime.block_on(future))
             .map_err(|error| format!("could not run the repair: {error}")),
     }
+}
+
+/// A commit that failed after its retries, as `turn_commit_retry` sends it
+/// again.
+struct FailedCommit {
+    lane: String,
+    api: Arc<PlatformApi>,
+    project_id: i64,
+    body: Arc<Vec<u8>>,
+    events: Arc<TurnEvents>,
+    entry: Arc<TurnEntry>,
 }
 
 struct Prepared {

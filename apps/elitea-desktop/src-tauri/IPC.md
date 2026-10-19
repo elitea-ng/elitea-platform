@@ -146,11 +146,12 @@ inside the folder.
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
-| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
+| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
+| `turn_commit_retry` | `{execution_id}` | `null` once the turn's failed commit (`commit_failed`) is saved: sent again with the same execution id and body, in its conversation's order. Rejects `commit_unknown` when the host keeps no failed commit of that execution (it was saved, the app restarted, or the session signed out), or with the commit's refusal, which is also sent as another `commit_failed`. |
 
 **One round trip before the first token.** The host keeps, for the app's
 session only (never on disk; dropped on sign-out, a new sign-in or another
@@ -914,23 +915,39 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
 | `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
 | `error` | `{code, message}` |
-| `done` | `{committed: boolean, conversation_id, message_ids: string[], changed_files: number}` |
+| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
+| `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`)* →
-`status` `committing` → `status` `done` | `error` → `done`. A cancelled turn
-ends `status` `cancelled` → `done` with `committed: false`; nothing is
+`status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
+ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its
-`error` event comes before `status` `committing`. `done` is always the last
-event of a started turn, and the host holds the workspace (`workspace_busy`)
-until it is sent, so the UI is busy until `done`, not until `error`.
+`error` event comes before `status` `error`. `done` ends the turn for the
+UI, and the host holds the workspace (`workspace_busy`) until it is sent,
+so the UI is busy until `done`, not until `error`.
+
+**The commit after `done`.** `done` is sent as soon as the run ends; the
+turn's commit then runs in its conversation's lane (one at a time per
+conversation, in order). The next turn of that conversation starts (its
+`local_turn` start, whose memory recall reads the committed conversation)
+only once the previous commit settled, so it waits in `status` `starting`
+while one is still being saved. A commit that fails is retried with backoff
+on the same execution id and body (`409 local_turn_already_committed`
+counts as saved); after the last attempt (or at once for a refusal a retry
+cannot change, such as `410` or `403`) the host sends `commit_failed`
+(the turn's last event) and keeps the body in memory until the app quits.
+`agent_turn_status` answers the settled state: its `done` payload carries
+`committed: true, commit: "committed"`, or `commit: "failed"`. A quit with a
+commit still running or failed is logged; that execution expires on the
+server, as before.
 The read-only, concurrency-safe calls of one model step (`read_file`,
 `list_tree`, `search_files`, `read_document`, git reads, the index tools)
 run together, at most 8 at once, before the step's other calls; writes,
@@ -956,7 +973,8 @@ lookup (the answering participant and UUID; on a warm turn its re-read,
 beside the start), `starting` from `status` `starting` until the local turn
 is started and its session ready (a seed included), `first_token` from `status` `running` to the model's first
 streamed chunk, `tools` the wall time any tool call ran (overlapping calls
-counted once), `committing` the commit request. `ms_since_turn_start` is
+counted once), `committing` the commit with its retries (it runs after
+`done`, so it is in the log line only, never on a `status`). `ms_since_turn_start` is
 when the phase ended, from `agent_turn_start`. A phase before the first
 token that takes longer than 2 s is logged as a warning, and each turn
 logs one line with all of them (`local turn timings: resolving=…ms …`):
@@ -983,7 +1001,7 @@ each question as kind `continue`), and `status` `done` carries
 the turn.
 
 `message_ids` are the question's and the answer's message UUIDs, in that
-order, when committed. `approval_request.can_remember` is true when
+order: the messages the commit writes. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
 file change); otherwise `allow_always` answers once and the UI does not
 offer it. It is false for a `run_command` that would run unconfined,

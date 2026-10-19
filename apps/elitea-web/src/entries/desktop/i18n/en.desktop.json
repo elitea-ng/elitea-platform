@@ -70,6 +70,7 @@
   "workspace.tool.truncated": "(output truncated)",
   "workspace.agentsMdApplied": "AGENTS.md applied",
   "workspace.cancel": "Cancel",
+  "workspace.commitFailed.retry": "Retry",
   "workspace.git": "Git",
   "workspace.project": "Project",
   "workspace.bindHint": "Bind a project to work here",

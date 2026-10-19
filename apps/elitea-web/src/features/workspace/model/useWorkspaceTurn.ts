@@ -42,6 +42,8 @@ export interface WorkspaceTurn {
   start(request: TurnStartRequest): Promise<boolean>;
   /** Let the host read ahead for a turn to this agent (fire and forget: a failure only means the turn reads it itself). */
   prewarm(request: TurnPrewarmRequest): void;
+  /** Send a turn's failed commit again; a refusal comes back as another `commit_failed` on the turn. */
+  retryCommit(turnId: string, executionId: string): Promise<void>;
   cancel(): Promise<void>;
   answer(requestId: string, decision: ApprovalDecision): Promise<void>;
   /** Forget the shown turn (the transcript only; nothing on the host changes). Ignored while a turn runs. */
@@ -171,5 +173,17 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     [ipc],
   );
 
-  return { view, turnId, earlier, busy, startError, start, prewarm, cancel, answer, clear, adopt };
+  const retryCommit = useCallback(
+    async (retried: string, executionId: string) => {
+      try {
+        await ipc.retryCommit(executionId);
+        dispatch({ type: 'commit-saved', turnId: retried });
+      } catch {
+        // The host reported it as the turn's next `commit_failed`.
+      }
+    },
+    [ipc],
+  );
+
+  return { view, turnId, earlier, busy, startError, start, prewarm, retryCommit, cancel, answer, clear, adopt };
 }

@@ -69,6 +69,21 @@ describe('turnReducer', () => {
     ]);
   });
 
+  it('keeps a commit failure after done until a retry saves it, and shows a later one again', () => {
+    const done: AgentEvent = { turn_id: T, seq: 2, kind: 'done', payload: { committed: false, commit: 'pending', conversation_id: '7', message_ids: [], changed_files: 0 } };
+    const failed = (seq: number, message: string): AgentEvent => ({ turn_id: T, seq, kind: 'commit_failed', payload: { execution_id: 'e1', code: 'local_turn_unavailable', message } });
+    let state = run([status(1, 'done'), done, failed(3, 'not saved')]);
+    expect(activeView(state).commitFailed).toMatchObject({ executionId: 'e1', message: 'not saved' });
+    state = turnReducer(state, { type: 'commit-saved', turnId: T });
+    expect(activeView(state).commitFailed).toBeUndefined();
+    // A late re-delivery of the old failure does not bring it back.
+    state = run([failed(3, 'not saved'), text(0, 'answer')], state);
+    expect(activeView(state).commitFailed).toBeUndefined();
+    // A later failure (a retry refused) does.
+    state = run([failed(4, 'still not saved')], state);
+    expect(activeView(state).commitFailed).toMatchObject({ message: 'still not saved' });
+  });
+
   it('shows an unmatched tool_result rather than dropping it', () => {
     const view = activeView(run([result(1, 'ghost')]));
     expect(view.items[0]).toMatchObject({ type: 'tool', callId: 'ghost', result: { summary: 'ok' } });

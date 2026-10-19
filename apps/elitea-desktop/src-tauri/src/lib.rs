@@ -346,6 +346,7 @@ pub fn run() {
             local_commands::workspace_files,
             local_commands::agent_turn_start,
             local_commands::agent_prewarm,
+            local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
             local_commands::agent_turn_status,
             local_commands::approval_respond,
@@ -401,9 +402,19 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     // The history writer commits what it still holds before the process ends.
     if matches!(event, tauri::RunEvent::Exit)
         && let Some(local) = app.try_state::<LocalState>()
-        && let Some(history) = &local.history
     {
-        history.flush();
+        if let Some(history) = &local.history {
+            history.flush();
+        }
+        // A turn's commit runs after its `done`: one still queued, or kept
+        // after it failed, is not saved; its execution expires on the server.
+        let (pending, failed) = local.agents.unsaved_commits();
+        if pending + failed > 0 {
+            log::warn!(
+                "quitting with {pending} local turn commit(s) still running and {failed} failed; \
+                 those turns are not in their conversations"
+            );
+        }
     }
     #[cfg(target_os = "macos")]
     match event {
