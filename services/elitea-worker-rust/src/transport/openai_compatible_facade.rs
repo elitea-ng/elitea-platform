@@ -1089,9 +1089,9 @@ fn openai_assistant_message(content: &Content) -> Result<serde_json::Value, AdkE
     // edges refuse the fragment pattern.
     message.insert(
         "content".to_owned(),
-        if calls.is_empty() && reasoning.is_empty() && has_text {
-            serde_json::Value::String(text)
-        } else if text.is_empty() {
+        // Null only when no text part carries the message: an empty text-only
+        // answer stays an empty string.
+        if text.is_empty() && (!calls.is_empty() || !reasoning.is_empty() || !has_text) {
             serde_json::Value::Null
         } else {
             serde_json::Value::String(text)

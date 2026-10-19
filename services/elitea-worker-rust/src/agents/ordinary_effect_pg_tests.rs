@@ -29,6 +29,7 @@ const PENDING_ENV: &str = "ELITEA_ROOT_EFFECT_PG_PENDING";
 const PENDING_MARKER: &str = "ROOT_EFFECT_PENDING=";
 const EXIT_AFTER_DISPATCH: i32 = 86;
 const EXIT_AFTER_OUTCOME: i32 = 87;
+const EXIT_IN_BLOCKED_RESULT: i32 = 88;
 const GENERATION: u64 = 3;
 const DONE: &str = "root finished after the approved change";
 const LATER: &str = "root answered the later turn";
@@ -38,6 +39,13 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
         "approve" => &[("start", 0), ("approve", 0), ("repeat", 0)],
         "later_turn" => &[("start", 0), ("approve", 0), ("later", 0)],
         "block" => &[("start", 0), ("block", 0)],
+        // The Worker dies between the replayed call event and the local blocked
+        // result; the replacement continues the same Deny and serves it again.
+        "block_crash" => &[
+            ("start", 0),
+            ("block_crash", EXIT_IN_BLOCKED_RESULT),
+            ("block_recover", 0),
+        ],
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
         "stale" => &[("start", 0), ("stale", 0)],
         // The tool runs and its result is persisted; the Worker dies at the next model
@@ -105,6 +113,11 @@ async fn postgres_root_approved_effectful_call_runs_once_and_a_repeat_runs_nothi
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_root_later_turn_after_an_approval_sends_one_call_and_result() {
     run_scenario("later_turn").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_root_block_interrupted_before_its_result_resumes_and_runs_nothing() {
+    run_scenario("block_crash").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -468,6 +481,54 @@ async fn postgres_root_effect_child() {
                 "block: the Agent continues: {browser:?}"
             );
             assert_eq!(calls.load(Ordering::Acquire), 0, "block: never runs");
+        }
+        "block_crash" => {
+            super::super::direct_hitl::EXIT_IN_BLOCKED_REPLAY
+                .store(EXIT_IN_BLOCKED_RESULT, Ordering::Release);
+            let (assembler, _, _) = worker(&pool, Vec::new(), false);
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "block_with_comment", "not this one", 48),
+                    "execution-block-crash",
+                    2,
+                ))
+                .await
+                .expect("block_crash: assembles");
+            let _ = run_turn(invocation).await;
+            panic!("block_crash: the Worker did not die inside the blocked result");
+        }
+        "block_recover" => {
+            let (assembler, captured, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(text_response(DONE))],
+                false,
+            );
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "block_with_comment", "not this one", 49),
+                    "execution-block-recover",
+                    3,
+                ))
+                .await
+                .unwrap_or_else(|error| panic!("block_recover: the same Deny resumes: {error}"));
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "block_recover: {failure:?}");
+            assert!(
+                said(&browser, DONE),
+                "block_recover: the Agent continues: {browser:?}"
+            );
+            assert_eq!(
+                calls.load(Ordering::Acquire),
+                0,
+                "block_recover: never runs"
+            );
+            let captured = captured.lock().expect("captured");
+            assert_eq!(captured.len(), 1, "block_recover: one model call");
+            let body = String::from_utf8_lossy(&captured[0].body);
+            assert!(
+                body.contains("sensitive_tool_blocked") && body.contains("not this one"),
+                "block_recover: the model sees the blocked result: {body}"
+            );
         }
         "crash" => {
             let (assembler, _, _) = worker(&pool, Vec::new(), true);

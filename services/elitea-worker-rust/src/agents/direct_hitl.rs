@@ -75,6 +75,11 @@ const REPLAY_REJECTED_TEXT: &str =
     "The pending tool call was rejected. Continue without executing it.";
 const REPLAY_COMMENT_INFIX: &str = " Reviewer comment: ";
 
+/// Test-only: exit the process with this code inside the blocked-result adapter.
+#[cfg(test)]
+pub(crate) static EXIT_IN_BLOCKED_REPLAY: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+
 /// Stable direct-HITL admission and resolution failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DirectHitlErrorCode {
@@ -1258,6 +1263,18 @@ struct PersistedReplayState {
 }
 
 impl ResolvedDirectHitlDecision {
+    /// Test-only: the dispatch facts a nested decision reads from its journal.
+    #[cfg(test)]
+    pub(crate) fn with_journaled_dispatch(
+        mut self,
+        dispatched: bool,
+        dispatched_siblings: BTreeSet<String>,
+    ) -> Self {
+        self.dispatched = dispatched;
+        self.dispatched_siblings = dispatched_siblings;
+        self
+    }
+
     pub(crate) fn restore_authorization_scope(&self, catalog: &mut DelegatedAuthorizationCatalog) {
         for requirement in &self.prior_authorization_declines {
             catalog.decline(requirement);
@@ -1402,7 +1419,7 @@ impl ResolvedDirectHitlDecision {
                         response: response.clone(),
                         confirmation_decision: ToolConfirmationDecision::Approve,
                     });
-                } else if (self.dispatched || self.dispatched_siblings.contains(&call.call_id))
+                } else if self.dispatched_siblings.contains(&call.call_id)
                     && sensitive_tools.reruns_after_dispatch(&call.tool_name) != Some(true)
                 {
                     return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
@@ -1591,6 +1608,22 @@ impl DirectHitlReplay {
                     .any(|blocked| &blocked.call_id == *call_id)
             })
             .cloned()
+            .collect()
+    }
+
+    /// The executed calls the dispatch journal must own: those that may not
+    /// simply run again after a crash. A read-only call (and the workspace
+    /// command, which its own ledger serves) re-runs instead (class I), so it
+    /// costs no journal writes.
+    pub(crate) fn journaled_call_ids(&self, catalog: &SensitiveToolCatalog) -> BTreeSet<String> {
+        let executed = self.executed_call_ids();
+        self.calls
+            .iter()
+            .filter(|call| {
+                executed.contains(&call.call_id)
+                    && catalog.reruns_after_dispatch(&call.tool_name) != Some(true)
+            })
+            .map(|call| call.call_id.clone())
             .collect()
     }
 
@@ -1920,6 +1953,12 @@ impl Tool for BlockedTool {
             return Err(AdkError::agent(
                 "the blocked result does not match this exact tool call",
             ));
+        }
+        #[cfg(test)]
+        if let code @ 1.. = EXIT_IN_BLOCKED_REPLAY.load(std::sync::atomic::Ordering::Acquire) {
+            // Process-replacement proofs: the Worker dies after the replayed call
+            // event and before the local blocked result is persisted.
+            std::process::exit(code);
         }
         let mut actions = context.actions();
         actions.tool_confirmation_decision = Some(blocked.confirmation_decision);
@@ -2511,7 +2550,13 @@ fn persisted_replay_state_with_confirmation(
         } else {
             ReplayResumeMode::ExecuteCall
         },
-        dispatched: call_pending && result_persisted.is_none(),
+        // A dispatched call with no result is an effect of unknown outcome, unless
+        // this decision is a Deny: the exact marker proves the earlier continuation
+        // was the same Deny, whose local adapter has no effect, so its blocked result
+        // is served again.
+        dispatched: call_pending
+            && result_persisted.is_none()
+            && confirmation_decision != Some(ToolConfirmationDecision::Deny),
         // The replayed message dispatched every call it carries together.
         dispatched_siblings: if call_pending {
             replay_calls

@@ -60,6 +60,11 @@ pub(crate) fn policy_for_guardrails(
 pub(crate) struct SensitiveToolCatalog {
     scoped_entries: BTreeMap<SensitiveToolIdentity, SensitiveToolEntry>,
     provider_entries: BTreeMap<Box<str>, SensitiveToolEntry>,
+    /// Every other enumerated tool and whether it is read-only. A dispatched
+    /// sibling that is read-only re-runs (no effect to repeat).
+    other_tools: BTreeMap<SensitiveToolIdentity, bool>,
+    /// Provider names of read-only `other_tools`, each naming exactly one tool.
+    read_only_provider_names: BTreeSet<Box<str>>,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -103,6 +108,11 @@ impl SensitiveToolCatalog {
         self.provider_entries
             .get(tool_name)
             .map(|entry| entry.read_only || entry.conditional)
+            .or_else(|| {
+                self.read_only_provider_names
+                    .contains(tool_name)
+                    .then_some(true)
+            })
     }
 
     /// Add the cloud workspace's conditional `run_command` (ADR-0034).
@@ -167,6 +177,11 @@ impl SensitiveToolCatalog {
                 return Err(invalid_configuration());
             }
         }
+        for (identity, read_only) in other.other_tools {
+            if self.other_tools.insert(identity, read_only).is_some() {
+                return Err(invalid_configuration());
+            }
+        }
         self.rebuild_unqualified_provider_entries();
         Ok(())
     }
@@ -188,7 +203,47 @@ impl SensitiveToolCatalog {
             }
         }
         self.provider_entries = provider_entries;
+        let mut read_only = BTreeMap::<Box<str>, bool>::new();
+        for (identity, is_read_only) in &self.other_tools {
+            // A tool this binding does not offer the model cannot be a replayed call.
+            let Some(provider_name) =
+                binding.provider_name(&identity.toolkit_name, &identity.tool_name)
+            else {
+                continue;
+            };
+            if self.provider_entries.contains_key(provider_name)
+                || read_only
+                    .insert(provider_name.into(), *is_read_only)
+                    .is_some()
+            {
+                return Err(invalid_configuration());
+            }
+        }
+        self.read_only_provider_names = read_only
+            .into_iter()
+            .filter_map(|(name, is_read_only)| is_read_only.then_some(name))
+            .collect();
         Ok(self)
+    }
+
+    fn insert_other(
+        &mut self,
+        toolkit_name: &str,
+        tool_name: &str,
+        read_only: bool,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        if !valid_identity(toolkit_name) || !valid_identity(tool_name) {
+            return Err(invalid_configuration());
+        }
+        let identity = SensitiveToolIdentity {
+            toolkit_name: toolkit_name.into(),
+            tool_name: tool_name.into(),
+        };
+        if self.other_tools.insert(identity, read_only).is_some() {
+            return Err(invalid_configuration());
+        }
+        self.rebuild_unqualified_provider_entries();
+        Ok(())
     }
 
     fn insert_scoped(
@@ -222,6 +277,31 @@ impl SensitiveToolCatalog {
             .filter(|(identity, _)| counts.get(identity.tool_name.as_ref()) == Some(&1))
             .map(|(identity, entry)| (identity.tool_name.clone(), entry.clone()))
             .collect();
+        // A name shared with any other tool, sensitive or not, is ambiguous.
+        for identity in self.other_tools.keys() {
+            *counts.entry(&identity.tool_name).or_default() += 1;
+        }
+        self.read_only_provider_names = self
+            .other_tools
+            .iter()
+            .filter(|(identity, read_only)| {
+                **read_only && counts.get(identity.tool_name.as_ref()) == Some(&1)
+            })
+            .map(|(identity, _)| identity.tool_name.clone())
+            .collect();
+    }
+
+    /// Test-only: record one non-sensitive enumerated tool.
+    #[cfg(test)]
+    pub(crate) fn with_other_tool(
+        mut self,
+        toolkit_name: &str,
+        tool_name: &str,
+        read_only: bool,
+    ) -> Self {
+        self.insert_other(toolkit_name, tool_name, read_only)
+            .expect("fixture tool identity");
+        self
     }
 
     #[cfg(test)]
@@ -293,6 +373,7 @@ pub(crate) async fn sensitive_tools_for_kind(
             let Some(sensitive) =
                 policy.sensitive_tool(reference.tool_type(), reference.toolkit_name(), tool.name())
             else {
+                catalog.insert_other(reference.toolkit_name(), tool.name(), tool.is_read_only())?;
                 continue;
             };
             catalog.insert_scoped(

@@ -667,6 +667,18 @@ pub(crate) async fn prepare_nested_application_resume(
     coordinator: &ApplicationResumeCoordinator,
     delegate: Arc<dyn Llm>,
 ) -> Result<PreparedNestedApplicationResume, NativeAgentAssemblyError> {
+    if answered_by_a_dispatching_continuation(events, &decisions)? {
+        // The continuation that answered these cards died after it journaled an
+        // approved nested call. Its outcome cannot be served on this path, and the
+        // call is never repeated: the run ends with the registered reason instead
+        // of a configuration fault (a tool error the parent model could read past).
+        return Err(super::direct_hitl::assembly_error(
+            &super::direct_hitl::DirectHitlError::new(
+                super::direct_hitl::DirectHitlErrorCode::MayHaveStarted,
+            ),
+            "the approved nested agent tool call may already have started",
+        ));
+    }
     let (child_resumes, submitted_interrupt_ids) =
         build_nested_application_resume(events, decisions, applications)?;
     let calls = application_replay_calls(&child_resumes)?;
@@ -685,6 +697,43 @@ pub(crate) async fn prepare_nested_application_resume(
         user_content,
         run_config: application_run_config(),
     })
+}
+
+/// Whether a replay batch already consumed one of these cards and the root journal
+/// holds that decision's dispatch records: an earlier continuation of the same
+/// answer dispatched an approved nested call and stopped before it finished.
+fn answered_by_a_dispatching_continuation(
+    events: &[Event],
+    decisions: &[ResolvedDirectHitlDecision],
+) -> Result<bool, NativeAgentAssemblyError> {
+    let submitted = decisions
+        .iter()
+        .map(ResolvedDirectHitlDecision::interrupt_id)
+        .collect::<HashSet<_>>();
+    let mut consumed = false;
+    for event in events {
+        if let Some(batch) = replay_batch(event)?
+            && batch
+                .interrupt_ids
+                .iter()
+                .any(|id| submitted.contains(id.as_str()))
+        {
+            consumed = true;
+            break;
+        }
+    }
+    if !consumed {
+        return Ok(false);
+    }
+    for decision in decisions {
+        let recorded =
+            super::dispatch_journal::recorded_dispatches(events, decision.invocation_id())
+                .map_err(|_| invalid_configuration())?;
+        if !recorded.dispatched.is_empty() || !recorded.completed.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) async fn install_nested_application_resume(
@@ -3648,10 +3697,11 @@ impl LazyNestedAgent {
                 .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
-                // Every call of the replay that will really run journals its dispatch
-                // in the root session first, so a later continuation never runs
-                // it twice and serves its recorded outcome instead.
-                let executed = replay.executed_call_ids();
+                // Every call of the replay that will really run and may not simply
+                // run again journals its dispatch in the root session first, so a
+                // later continuation never runs it twice and serves its recorded
+                // outcome instead. A call that can re-run costs no journal writes.
+                let executed = replay.journaled_call_ids(sensitive_tools);
                 let toolsets = if executed.is_empty() {
                     self.toolsets.clone()
                 } else {

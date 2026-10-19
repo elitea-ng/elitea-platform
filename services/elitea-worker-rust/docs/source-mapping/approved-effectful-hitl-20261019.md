@@ -88,7 +88,7 @@ also found the replay marker resent on every later turn.
 
 Worker: `cargo test --offline --locked --no-fail-fast --all-targets --all-features` against a disposable `postgres:18`
 (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
-**2514 passed, 0 failed, 103 ignored** after merging `origin/main` (2507 / 0 / 93 before the merge), with no PostgreSQL skips. The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
+**2524 passed, 0 failed, 103 ignored** after the second review round (2514 / 0 / 103 after merging `origin/main`; 2507 / 0 / 93 before), with no PostgreSQL skips. The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
 separately. `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings` and
 `RUSTDOCFLAGS=-D warnings cargo doc` are clean. `libs/rust` workspace: 2739 passed, 0 failed, 1 ignored.
 Main: `go test ./...` passes (215 packages). `claims_test.go` `TestExpiredClaimRecoversTerminalOutputAcrossProducerReplacement`
@@ -146,7 +146,21 @@ An opus review of the first version found four defects. Each one is fixed and ha
 4. Non-sensitive siblings of the replayed message were neither journaled nor served. Every call of the message is now
    journaled, and its recorded outcome is served.
 
-## Performance
+### Second review round (coordinator, head `0a24f4d28`)
+
+| # | Finding | Change | Proof |
+|---|---|---|---|
+| 1 | A root Deny continuation that stopped between the replayed call event and its local blocked result was refused as stale forever. | A replayed call that follows this decision's exact Deny marker is not a dispatch (`direct_hitl.rs` `persisted_replay_state_with_confirmation`): the blocked adapter has no effect, so the same Deny resumes and the blocked result is served again. | Real PG, process replacement: `postgres_root_block_interrupted_before_its_result_resumes_and_runs_nothing`. The Worker exits inside the blocked adapter (test-only `EXIT_IN_BLOCKED_REPLAY`); the replacement completes, 0 tool calls, and the model sees the blocked result. The test is red without the fix. |
+| 2 | Under an ordinary root Agent, a nested "may have started" could reach the parent model as a tool error. | Investigation: at the ordinary root, a crash after the dispatch always leaves the card consumed by the dead continuation's replay batch, so the replacement was already refused at assembly before any nested or parent call, but as an untyped `InvalidConfiguration`. That refusal is now typed: when a replay batch consumed the cards and the root journal holds dispatch records for those decisions, assembly ends with `RECOVERY_REFUSED` (`application_tools.rs` `answered_by_a_dispatching_continuation`). | `ordinary_tests.rs` `a_nested_approved_call_that_may_have_started_ends_the_root_run_with_its_reason`: the approving Worker stops inside the approved nested tool; the replacement is refused at assembly with the recovery-refused cause; 0 repeated tool calls, 0 further model calls. |
+| 3 | The `ScopedAgent` path dropped the refusal (`_ => failure()`). | `pipeline/scoped_runtime.rs` `run_child_draining` maps `agent.recovery_refused` to the registered reason, as the unscoped node does. | The scoped path is admitted by 2a-1, whose scoped real-PG proofs assert it. |
+| 4 | Fan-out branches built their `ApplicationNode` without failure events. | Wired: `parallel_compiler.rs` and `map_compiler.rs` pass the branch/item event sender to `with_failure_events`. | Not separately proven here; Wave 2a-2 owns fan-out HITL journeys. |
+| 5 | For nested decisions, `self.dispatched ||` refused siblings whose journal shows they never started. | Siblings are judged only by `dispatched_siblings` (at the root that set already holds every result-less sibling of a dispatched message). | `direct_hitl_tests.rs` `a_journaled_dispatch_of_the_decided_call_does_not_refuse_an_unstarted_sibling`. |
+| 6 | A dispatched non-sensitive read-only sibling was refused (`reruns_after_dispatch` knew only sensitive tools). | The catalog records every enumerated tool's read-only flag (`sensitive_tools.rs` `other_tools`). A name counts as read-only only when it maps to exactly one tool. | `a_dispatched_non_sensitive_sibling_reruns_only_when_read_only` (read-only re-runs; data-changing or unknown is refused). |
+| 7 | A failed inner tool skipped the `completed` record. | The failure is recorded as the `{"error": ...}` result the model is shown, so recovery serves it. | `dispatch_journal.rs` `a_failed_call_records_the_error_the_model_saw`. |
+| 8 | No limit tests. | Added at limit and limit+1. | `a_record_at_the_byte_limit_reads_and_one_byte_more_fails_closed`, `a_record_at_the_byte_limit_writes_and_one_byte_more_is_refused`, `a_decision_reads_its_record_limit_and_refuses_one_more`. |
+| 9 | Two extra fenced root writes plus a result copy per journaled call. | Only calls that may not re-run are journaled (`DirectHitlReplay::journaled_call_ids`). A read-only call re-runs (class I) and costs no writes. **The full result is kept, not a digest or reference:** when the `completed` record is written, the nested function response is not yet durable in the root session (child events reach it through asynchronous forwarding). A reference would turn the after-outcome window from R into C. | Budget: `a_journaled_call_costs_two_appends_and_any_other_call_none` (exactly 2 appends per journaled call, 0 otherwise); `only_calls_that_may_not_rerun_are_journaled`. |
+| 10 | Cleanup. | The duplicated string branch in `openai_assistant_message` is folded; the redundant block in `graph/application.rs` is removed. | Existing facade tests. |
+
 
 - One extra fenced append before, and one after, each call a nested replay executes. These are the only new writes; there is
   no write per chunk or per token.
@@ -242,6 +256,11 @@ Chats 904 and 905 were diagnostic chats for the 403.
 - A nested call whose recorded result exceeds 256 KiB degrades to `RECOVERY_REFUSED` on a crash before the parent
   continues.
 - Gateway refusal log: PR #1320.
+- Ordinary root Agent, nested approved call, crash after the recorded outcome: the replacement is refused with
+  `RECOVERY_REFUSED` (class C) instead of serving the recorded result (R). The root's nested-resume derivation does
+  not yet accept a dead continuation's suffix; pipeline `agent` nodes do. Fixing it means rebuilding the nested
+  resume from the journal.
+- Fan-out branch refusals (review item 4) are wired but proven only with 2a-2's fan-out HITL journeys.
 - The upstream edge in front of the shared model endpoint refuses benign content combinations (for example backticks
   in a tool description, together with quoted text). That is an environment issue for the endpoint owner. User
   content can still trip it.

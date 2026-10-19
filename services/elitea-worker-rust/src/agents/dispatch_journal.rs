@@ -45,6 +45,7 @@ enum Phase {
 }
 
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(test, derive(Clone))]
 #[serde(deny_unknown_fields)]
 struct DispatchRecord {
     version: u8,
@@ -294,7 +295,14 @@ impl Tool for JournalTool {
                 result: None,
             })
             .await?;
-        let result = self.inner.execute(context, arguments).await?;
+        let outcome = self.inner.execute(context, arguments).await;
+        // A failed call has an outcome too: record what the model is shown
+        // (ADK's `{"error": ...}` function response), so recovery serves it
+        // instead of reporting "may have started".
+        let recorded = match &outcome {
+            Ok(result) => result.clone(),
+            Err(error) => serde_json::json!({ "error": error.to_string() }),
+        };
         if let Err(error) = self
             .scope
             .journal
@@ -303,7 +311,7 @@ impl Tool for JournalTool {
                 phase: Phase::Completed,
                 decision_invocation_id: self.scope.decision_invocation_id.clone(),
                 call_id,
-                result: Some(result.clone()),
+                result: Some(recorded),
             })
             .await
         {
@@ -315,7 +323,7 @@ impl Tool for JournalTool {
                 "approved nested call ran but its outcome was not recorded"
             );
         }
-        Ok(result)
+        outcome
     }
 }
 
@@ -391,6 +399,212 @@ mod tests {
             Some(pause.id)
         );
         assert!(continuation_pause(&[], is_pause).is_none());
+    }
+
+    fn padded(invocation: &str, call: &str, target_bytes: usize) -> Event {
+        let base = record(invocation, call, Phase::Completed, Some(json!({"pad": ""})));
+        let used = base.provider_metadata[DISPATCH_METADATA_KEY].len();
+        let pad = "x".repeat(target_bytes - used);
+        let event = record(
+            invocation,
+            call,
+            Phase::Completed,
+            Some(json!({ "pad": pad })),
+        );
+        assert_eq!(
+            event.provider_metadata[DISPATCH_METADATA_KEY].len(),
+            target_bytes
+        );
+        event
+    }
+
+    #[test]
+    fn a_record_at_the_byte_limit_reads_and_one_byte_more_fails_closed() {
+        let at_limit = padded("inv-1", "call-1", MAX_DISPATCH_RECORD_BYTES);
+        assert!(recorded_dispatches(&[at_limit], "inv-1").is_ok());
+        let over = padded("inv-1", "call-1", MAX_DISPATCH_RECORD_BYTES + 1);
+        assert!(recorded_dispatches(&[over], "inv-1").is_err());
+    }
+
+    #[test]
+    fn a_decision_reads_its_record_limit_and_refuses_one_more() {
+        let records = |count: usize| {
+            (0..count)
+                .map(|index| record("inv-1", &format!("call-{index}"), Phase::Dispatched, None))
+                .collect::<Vec<_>>()
+        };
+        assert!(recorded_dispatches(&records(MAX_DISPATCH_RECORDS * 2), "inv-1").is_ok());
+        assert!(recorded_dispatches(&records(MAX_DISPATCH_RECORDS * 2 + 1), "inv-1").is_err());
+        // Another decision's records do not count against this one.
+        let mut mixed = records(MAX_DISPATCH_RECORDS * 2);
+        mixed.push(record("inv-other", "call-x", Phase::Dispatched, None));
+        assert!(recorded_dispatches(&mixed, "inv-1").is_ok());
+    }
+
+    async fn journal_session() -> (
+        Arc<adk_rust::session::InMemorySessionService>,
+        DispatchJournal,
+    ) {
+        let sessions = Arc::new(adk_rust::session::InMemorySessionService::new());
+        sessions
+            .create(adk_rust::session::CreateRequest {
+                app_name: "elitea-agent-v1".to_owned(),
+                user_id: "user-1".to_owned(),
+                session_id: Some("session-1".to_owned()),
+                state: std::collections::HashMap::new(),
+            })
+            .await
+            .expect("fixture session");
+        let identity = AdkIdentity::new(
+            adk_rust::AppName::new("elitea-agent-v1").expect("app"),
+            adk_rust::UserId::new("user-1").expect("user"),
+            adk_rust::SessionId::new("session-1").expect("session"),
+        );
+        let journal = DispatchJournal::new(sessions.clone(), identity);
+        (sessions, journal)
+    }
+
+    async fn stored(sessions: &adk_rust::session::InMemorySessionService) -> Vec<Event> {
+        sessions
+            .get(adk_rust::session::GetRequest {
+                app_name: "elitea-agent-v1".to_owned(),
+                user_id: "user-1".to_owned(),
+                session_id: "session-1".to_owned(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .expect("session")
+            .events()
+            .all()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_record_at_the_byte_limit_writes_and_one_byte_more_is_refused() {
+        let (sessions, journal) = journal_session().await;
+        let base = DispatchRecord {
+            version: RECORD_VERSION,
+            phase: Phase::Completed,
+            decision_invocation_id: "inv-1".to_owned(),
+            call_id: "call-1".to_owned(),
+            result: Some(json!({"pad": ""})),
+        };
+        let used = serde_json::to_string(&base).unwrap().len();
+        let sized = |bytes: usize| DispatchRecord {
+            result: Some(json!({ "pad": "x".repeat(bytes - used) })),
+            ..base.clone()
+        };
+        journal
+            .append(&sized(MAX_DISPATCH_RECORD_BYTES))
+            .await
+            .expect("a record at the limit is written");
+        assert!(
+            journal
+                .append(&sized(MAX_DISPATCH_RECORD_BYTES + 1))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            stored(&sessions).await.len(),
+            1,
+            "the oversized record is not written"
+        );
+    }
+
+    struct Counting {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl Tool for Counting {
+        fn name(&self) -> &'static str {
+            "write_record"
+        }
+        fn description(&self) -> &'static str {
+            "fixture"
+        }
+        async fn execute(
+            &self,
+            _context: Arc<dyn ToolContext>,
+            _arguments: Value,
+        ) -> adk_rust::Result<Value> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            if self.fail {
+                return Err(adk_rust::AdkError::agent("the target refused the write"));
+            }
+            Ok(json!({"written": true}))
+        }
+    }
+
+    async fn journaled_tool(
+        journal: &DispatchJournal,
+        fail: bool,
+        journaled: &[&str],
+    ) -> Arc<dyn Tool> {
+        let inner: Arc<dyn Toolset> = Arc::new(adk_rust::tool::BasicToolset::new(
+            "fixture",
+            vec![Arc::new(Counting {
+                calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                fail,
+            })],
+        ));
+        let wrapped = journal.wrap(
+            vec![inner],
+            "inv-1",
+            journaled.iter().map(|id| (*id).to_owned()).collect(),
+        );
+        let context: Arc<dyn ReadonlyContext> =
+            Arc::new(adk_rust::tool::SimpleToolContext::new("fixture"));
+        wrapped[0].tools(context).await.expect("tools").remove(0)
+    }
+
+    fn call_context(call_id: &str) -> Arc<dyn ToolContext> {
+        Arc::new(adk_rust::tool::SimpleToolContext::new("fixture").with_function_call_id(call_id))
+    }
+
+    /// Performance budget: a journaled call costs exactly two root appends, and
+    /// a call the journal does not own costs none.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_journaled_call_costs_two_appends_and_any_other_call_none() {
+        let (sessions, journal) = journal_session().await;
+        let tool = journaled_tool(&journal, false, &["call-1"]).await;
+        tool.execute(call_context("call-2"), json!({}))
+            .await
+            .expect("unjournaled call");
+        assert_eq!(
+            stored(&sessions).await.len(),
+            0,
+            "no append for a call it does not own"
+        );
+        tool.execute(call_context("call-1"), json!({}))
+            .await
+            .expect("journaled call");
+        let events = stored(&sessions).await;
+        assert_eq!(events.len(), 2, "dispatched + completed");
+        let recorded = recorded_dispatches(&events, "inv-1").unwrap();
+        assert_eq!(
+            recorded.completed.get("call-1"),
+            Some(&json!({"written": true}))
+        );
+    }
+
+    /// A failed call records its outcome, so recovery serves the failure instead
+    /// of "may have started" (#1321 review item 7).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_call_records_the_error_the_model_saw() {
+        let (sessions, journal) = journal_session().await;
+        let tool = journaled_tool(&journal, true, &["call-1"]).await;
+        let error = tool
+            .execute(call_context("call-1"), json!({}))
+            .await
+            .expect_err("the target refused");
+        let recorded = recorded_dispatches(&stored(&sessions).await, "inv-1").unwrap();
+        assert!(recorded.dispatched.is_empty(), "the outcome is known");
+        assert_eq!(
+            recorded.completed.get("call-1"),
+            Some(&json!({ "error": error.to_string() }))
+        );
     }
 
     #[test]

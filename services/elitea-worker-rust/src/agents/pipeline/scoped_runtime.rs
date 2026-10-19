@@ -300,9 +300,18 @@ impl PipelineApplicationNodeRuntime {
         terminal: &mut Option<Event>,
     ) -> Result<Value, GraphError> {
         let mut future = DrivenTask::new(work);
+        let mut may_have_started = false;
         let result = loop {
             tokio::select! {
-                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
+                value = &mut future => break match value {
+                    Ok(Ok(value)) => Ok(value),
+                    // The nested Agent's approved call may have run; it is not repeated.
+                    Ok(Err(error)) if error.code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE => {
+                        may_have_started = true;
+                        Err(failure())
+                    }
+                    _ => Err(failure()),
+                },
                 signal = receiver.recv() => match signal {
                     Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(error); },
                     None => break Err(failure()),
@@ -322,7 +331,28 @@ impl PipelineApplicationNodeRuntime {
                 break;
             }
         }
+        if may_have_started {
+            return Err(self.may_have_started().await);
+        }
         result
+    }
+
+    /// The run ends with the registered recovery-refused reason, as an unscoped
+    /// Agent node does (`graph/application.rs` `child_failure`).
+    async fn may_have_started(&self) -> GraphError {
+        if self
+            .events
+            .send_execution_failure(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE)
+            .await
+            .is_err()
+        {
+            return failure();
+        }
+        GraphError::NodeExecutionFailed {
+            node: self.node_name.clone(),
+            message: "the approved tool call may already have started; it was not repeated"
+                .to_owned(),
+        }
     }
 
     async fn drain(
