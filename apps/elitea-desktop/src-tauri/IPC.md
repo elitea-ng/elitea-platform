@@ -913,6 +913,14 @@ the start is still committed, as a failed answer (`is_error`), and its
 `error` event comes before `status` `committing`. `done` is always the last
 event of a started turn, and the host holds the workspace (`workspace_busy`)
 until it is sent, so the UI is busy until `done`, not until `error`.
+The read-only, concurrency-safe calls of one model step (`read_file`,
+`list_tree`, `search_files`, `read_document`, git reads, the index tools)
+run together, at most 8 at once, before the step's other calls; writes,
+commands and remote toolkit calls then run one at a time in the model's
+order, so at most one tool `approval_request` is open at a time. Their
+`tool_call` and `tool_result` events interleave: match a result to its call
+by `call_id`, never by position. The commit lists the steps in the model's
+call order, whatever order they ran in.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.

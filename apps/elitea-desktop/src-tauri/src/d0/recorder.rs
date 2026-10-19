@@ -33,6 +33,43 @@ const MAX_COMMANDS: usize = 500;
 const MAX_PATHS: usize = 2000;
 const MAX_TOOL_OUTPUT: usize = 64 * 1024;
 
+/// The commit's `tool_calls`: one JSON object whose keys are in the order
+/// held here. A `serde_json::Map` cannot keep it (the desktop links
+/// serde_json without `preserve_order`, ADR-0029 decision 2: its maps are
+/// sorted by key), and the server stores the steps in the object's order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ToolCalls(pub Vec<Step>);
+
+/// One tool step: its run id and its trace entry.
+pub type Step = (String, Map<String, Value>);
+
+#[cfg(test)]
+impl ToolCalls {
+    #[must_use]
+    pub fn get(&self, run_id: &str) -> Option<&Map<String, Value>> {
+        self.0
+            .iter()
+            .find_map(|(id, entry)| (id == run_id).then_some(entry))
+    }
+
+    /// The run ids, in order.
+    #[must_use]
+    pub fn ids(&self) -> Vec<&str> {
+        self.0.iter().map(|(id, _)| id.as_str()).collect()
+    }
+}
+
+impl Serialize for ToolCalls {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (id, entry) in &self.0 {
+            map.serialize_entry(id, entry)?;
+        }
+        map.end()
+    }
+}
+
 /// One changed file, as `turn_changes` answers it.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct FileChange {
@@ -45,7 +82,12 @@ pub struct FileChange {
 
 #[derive(Default)]
 struct State {
-    steps: Vec<(String, Map<String, Value>)>,
+    /// Tool steps as they started (concurrent read-only calls start in any
+    /// order, and adk runs them before the step's other calls).
+    steps: Vec<Step>,
+    /// Every call id the model asked for, in the model's order (step after
+    /// step): the order the commit lists the steps in.
+    planned: Vec<String>,
     hitl: Vec<Value>,
     commands: Vec<Value>,
     paths: Vec<String>,
@@ -85,6 +127,17 @@ fn truncate(text: &str, max: usize) -> String {
 impl Recorder {
     fn with<T>(&self, work: impl FnOnce(&mut State) -> T) -> Option<T> {
         self.state.lock().ok().map(|mut state| work(&mut state))
+    }
+
+    /// The model asked for these calls, in this order (one model step).
+    pub fn calls_planned<'a>(&self, call_ids: impl IntoIterator<Item = &'a str>) {
+        self.with(|state| {
+            for id in call_ids {
+                if !state.planned.iter().any(|known| known == id) {
+                    state.planned.push(id.to_owned());
+                }
+            }
+        });
     }
 
     /// A tool call began.
@@ -198,15 +251,16 @@ impl Recorder {
         self.with(|state| state.renames.push((from.to_owned(), to.to_owned())));
     }
 
-    /// The commit's `tool_calls` map, keyed by run id.
+    /// The commit's `tool_calls` map, keyed by run id, in the model's call
+    /// order (a call the model's answer did not name keeps its start
+    /// order, after the named ones).
     #[must_use]
-    pub fn tool_calls(&self) -> Map<String, Value> {
+    pub fn tool_calls(&self) -> ToolCalls {
         self.with(|state| {
-            state
-                .steps
-                .iter()
-                .map(|(id, entry)| (id.clone(), Value::Object(entry.clone())))
-                .collect()
+            let position = |id: &str| state.planned.iter().position(|known| known == id);
+            let mut steps: Vec<(usize, &Step)> = state.steps.iter().enumerate().collect();
+            steps.sort_by_key(|(started, (id, _))| (position(id).unwrap_or(usize::MAX), *started));
+            ToolCalls(steps.into_iter().map(|(_, step)| step.clone()).collect())
         })
         .unwrap_or_default()
     }
@@ -481,11 +535,37 @@ mod tests {
         recorder.tool_started("call-1", "read_file", &json!({"path": "a"}));
         recorder.tool_finished("call-1", &json!({"status": "error"}), Some("not found"));
         let calls = recorder.tool_calls();
-        let entry = &calls["call-1"];
+        let entry = calls.get("call-1").unwrap();
         assert_eq!(entry["tool_name"], "read_file");
         assert_eq!(entry["error"], "not found");
         assert_eq!(entry["finish_reason"], "error");
         assert!(entry["timestamp_start"].as_str().unwrap().ends_with('Z'));
         assert!(entry["tool_output"].is_string());
+    }
+
+    #[test]
+    fn tool_steps_are_listed_in_the_models_order_whatever_order_they_ran_in() {
+        let recorder = Recorder::default();
+        // The model asked for z, m, a (ids sort the other way); they started
+        // a, z, m and finished in yet another order.
+        recorder.calls_planned(["call-z", "call-m", "call-a"]);
+        for id in ["call-a", "call-z", "call-m"] {
+            recorder.tool_started(id, "read_file", &json!({}));
+        }
+        for id in ["call-m", "call-a", "call-z"] {
+            recorder.tool_finished(id, &json!("ok"), None);
+        }
+        // A call the answer did not name (none today) goes last.
+        recorder.tool_started("call-0", "read_file", &json!({}));
+        let calls = recorder.tool_calls();
+        assert_eq!(calls.ids(), ["call-z", "call-m", "call-a", "call-0"]);
+        let text = serde_json::to_string(&calls).unwrap();
+        let at = |id: &str| text.find(&format!("\"{id}\"")).unwrap();
+        assert!(
+            at("call-z") < at("call-m")
+                && at("call-m") < at("call-a")
+                && at("call-a") < at("call-0"),
+            "{text}"
+        );
     }
 }

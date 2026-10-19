@@ -273,6 +273,29 @@ impl PlatformApi {
         body: Option<&Value>,
         headers: &[(&str, &str)],
     ) -> Result<Answer, ApiError> {
+        let body = match body {
+            Some(value) => Some(serde_json::to_vec(value).map_err(|_| {
+                ApiError::local("invalid_request", "the request could not be encoded")
+            })?),
+            None => None,
+        };
+        self.send_bytes(method, path, body.as_deref(), headers)
+            .await
+    }
+
+    /// [`Self::send`] with a body already encoded as JSON (one whose object
+    /// keys must keep their order, which a `serde_json::Value` cannot).
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived.
+    pub async fn send_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&[u8]>,
+        headers: &[(&str, &str)],
+    ) -> Result<Answer, ApiError> {
         let bearer = self.credentials.bearer().await?;
         let answer = self
             .send_with(&bearer, &method, path, body, headers)
@@ -289,7 +312,7 @@ impl PlatformApi {
         bearer: &Bearer,
         method: &Method,
         path: &str,
-        body: Option<&Value>,
+        body: Option<&[u8]>,
         headers: &[(&str, &str)],
     ) -> Result<Answer, ApiError> {
         let mut request = self
@@ -305,7 +328,9 @@ impl PlatformApi {
             request = request.header(*name, *value);
         }
         if let Some(body) = body {
-            request = request.json(body);
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.to_vec());
         }
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
@@ -569,6 +594,9 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// `body` is the commit's JSON, encoded (its `tool_calls` keys are in
+    /// the model's call order, which the server keeps).
+    ///
     /// # Errors
     ///
     /// Refused (409, 410 …) or failed.
@@ -576,9 +604,9 @@ impl PlatformApi {
         &self,
         project_id: i64,
         execution_id: &str,
-        body: &Value,
+        body: &[u8],
     ) -> Result<Value, ApiError> {
-        self.send(
+        self.send_bytes(
             Method::POST,
             &format!(
                 "/api/v2/elitea_core/local_turn_commit/prompt_lib/{project_id}/{execution_id}"

@@ -25,7 +25,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, Event, Part, RunConfig, StreamingMode, Toolset};
+use adk_core::{
+    Agent, Content, Event, Part, RunConfig, StreamingMode, ToolConcurrencyConfig,
+    ToolExecutionStrategy, Toolset,
+};
 use adk_runner::Runner;
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{
@@ -56,7 +59,7 @@ use super::events::{EventEmitter, Phase, TurnEvents};
 use super::framing;
 use super::mentions;
 use super::model::GatewayTransport;
-use super::recorder::{FileChange, Recorder};
+use super::recorder::{FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
     RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
 };
@@ -73,6 +76,9 @@ const AGENT_NAME: &str = AGENT_AUTHOR;
 const USER_ID: &str = crate::sessions::ADK_USER;
 /// How long one tool call may take (an approval can keep it waiting).
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// At most this many tool calls of one model step run at once (adk's
+/// `Auto` overlaps only read-only, concurrency-safe calls).
+const MAX_CONCURRENT_TOOLS: usize = 8;
 
 /// Where the stored `native_client_policy` comes from.
 pub trait PolicySource: Send + Sync {
@@ -494,6 +500,10 @@ pub struct AgentHost {
     /// Whose history the signed-in session writes: the session's identity
     /// (origin and sign-in) and the owner it resolved to.
     owner: Mutex<Option<(String, Owner)>>,
+    /// Extra toolsets every turn offers (tests: tools that record when they
+    /// run).
+    #[cfg(test)]
+    test_toolsets: Mutex<Vec<Arc<dyn Toolset>>>,
 }
 
 /// The tag one AGENTS.md file is framed in.
@@ -639,7 +649,21 @@ impl AgentHost {
             busy: BusySet::default(),
             turns: Mutex::new(TurnTable::default()),
             owner: Mutex::new(None),
+            #[cfg(test)]
+            test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Offer `toolset` in every later turn, as a local toolset (tests).
+    #[cfg(test)]
+    pub(super) fn add_test_toolset(&self, toolset: Arc<dyn Toolset>) {
+        self.test_toolsets.lock().expect("lock").push(toolset);
+    }
+
+    /// How many approval questions are open, of every turn (tests).
+    #[cfg(test)]
+    pub(super) fn open_approvals(&self) -> usize {
+        self.broker.open()
     }
 
     fn policy(&self) -> Result<LocalWorkPolicy, TurnError> {
@@ -1260,16 +1284,21 @@ impl AgentHost {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
-        let body = json!({
-            "user_message": { "content": request.prompt },
-            "assistant_message": assistant,
-            "tool_calls": recorder.tool_calls(),
-            "hitl_exchanges": recorder.hitl_exchanges(),
-            "local_work": recorder.work_report(sandbox_mode.as_str()),
-        });
-        let committed = api
-            .commit_turn(request.project_id, &started.execution_id, &body)
-            .await;
+        let body = CommitBody {
+            user_message: json!({ "content": request.prompt }),
+            assistant_message: assistant,
+            tool_calls: recorder.tool_calls(),
+            hitl_exchanges: recorder.hitl_exchanges(),
+            local_work: recorder.work_report(sandbox_mode.as_str()),
+        }
+        .encode();
+        let committed = match &body {
+            Ok(body) => {
+                api.commit_turn(request.project_id, &started.execution_id, body)
+                    .await
+            }
+            Err(error) => Err(error.clone()),
+        };
         // The session holds what the server holds, or is marked to be
         // rebuilt from it.
         memory
@@ -1466,7 +1495,12 @@ impl AgentHost {
             .max_iterations(admitted.step_limit)
             .tool_timeout(TOOL_TIMEOUT)
             .disallow_transfer_to_parent(true)
-            .disallow_transfer_to_peers(true);
+            .disallow_transfer_to_peers(true)
+            // The read-only, concurrency-safe calls of one model step (local
+            // reads, the index tools) run together, then the rest (writes,
+            // commands, remote toolkits) one at a time in the model's order.
+            // adk takes it from the agent: RunConfig has no such field.
+            .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
         for toolset in toolsets {
             // The local tools and the index tools run here; only the
@@ -1476,6 +1510,14 @@ impl AgentHost {
                 toolset,
                 observer.clone(),
                 remote,
+            )) as Arc<dyn Toolset>);
+        }
+        #[cfg(test)]
+        for toolset in self.test_toolsets.lock().expect("lock").iter() {
+            builder = builder.toolset(Arc::new(ObservedToolset::new(
+                toolset.clone(),
+                observer.clone(),
+                false,
             )) as Arc<dyn Toolset>);
         }
         for toolset in plan.toolsets() {
@@ -1501,6 +1543,10 @@ impl AgentHost {
         let session_id = memory.session_id.clone();
         let run_config = RunConfig {
             streaming_mode: StreamingMode::None,
+            tool_concurrency: ToolConcurrencyConfig {
+                max_concurrency: Some(MAX_CONCURRENT_TOOLS),
+                ..ToolConcurrencyConfig::default()
+            },
             ..RunConfig::default()
         };
         let runner = Runner::builder()
@@ -1517,7 +1563,7 @@ impl AgentHost {
         let mut budget = StepBudget::new(admitted.step_limit);
         let mut content = Content::new("user").with_text(request.prompt.clone());
         loop {
-            match run_once(&runner, &session_id, content, sink).await? {
+            match run_once(&runner, &session_id, content, sink, recorder).await? {
                 RunEnd::Answered => {
                     return Ok(AgentAnswer {
                         text: bound
@@ -2176,6 +2222,24 @@ struct Prepared {
     folder: String,
 }
 
+/// The body of `local_turn_commit`, encoded with its `tool_calls` in the
+/// model's call order (see [`ToolCalls`]).
+#[derive(serde::Serialize)]
+struct CommitBody {
+    user_message: Value,
+    assistant_message: Value,
+    tool_calls: ToolCalls,
+    hitl_exchanges: Vec<Value>,
+    local_work: Value,
+}
+
+impl CommitBody {
+    fn encode(&self) -> Result<Vec<u8>, ApiError> {
+        serde_json::to_vec(self)
+            .map_err(|_| ApiError::local("invalid_request", "the turn could not be encoded"))
+    }
+}
+
 /// What the agent's runs ended with.
 struct AgentAnswer {
     text: String,
@@ -2193,11 +2257,15 @@ enum RunEnd {
 }
 
 /// One run of `runner` on the session from `content`, its events to `sink`.
+/// The calls each model answer asks for are noted with `recorder` in the
+/// model's order before any of them runs (adk yields the answer first), so
+/// the commit lists the steps in that order however they ran.
 async fn run_once(
     runner: &Runner,
     session_id: &str,
     content: Content,
     sink: &TurnSink,
+    recorder: &Recorder,
 ) -> Result<RunEnd, TurnError> {
     let mut stream = runner
         .run_str(USER_ID, session_id, content)
@@ -2209,6 +2277,15 @@ async fn run_once(
             Err(error) if step_limit::reached(&error) => return Ok(RunEnd::StepLimit),
             Err(error) => return Err(model_failure(&error.to_string())),
         };
+        if !event.llm_response.partial
+            && let Some(content) = &event.llm_response.content
+            && content.role == "model"
+        {
+            recorder.calls_planned(content.parts.iter().filter_map(|part| match part {
+                Part::FunctionCall { id: Some(id), .. } => Some(id.as_str()),
+                _ => None,
+            }));
+        }
         sink.emit(&event)
             .await
             .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;

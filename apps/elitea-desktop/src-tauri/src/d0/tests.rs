@@ -3418,3 +3418,259 @@ async fn the_workspace_step_limit_wins_over_the_agents() {
     assert_eq!(question["title"], "The agent used its 10 steps");
     assert_eq!(llm_bodies(&h.server).len(), 10);
 }
+
+// ---- Parallel read-only tools (#1213 stage 1) ----
+
+/// One model answer asking for several tool calls, in this order.
+fn tool_calls(calls: &[(&str, &str, Value)]) -> Res {
+    let deltas: Vec<Value> = calls
+        .iter()
+        .enumerate()
+        .map(|(index, (id, name, args))| {
+            json!({"index": index, "id": id, "type": "function",
+                "function": {"name": name, "arguments": args.to_string()}})
+        })
+        .collect();
+    sse(&[
+        json!({"choices": [{"delta": {"tool_calls": deltas}}]}),
+        json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    ])
+}
+
+/// When one probe call ran: its call id, start and end.
+type ProbeLog = Arc<Mutex<Vec<(String, std::time::Instant, std::time::Instant)>>>;
+
+/// A tool that sleeps `args.ms` and records when it ran: read-only and
+/// concurrency-safe (`probe_read`), or neither (`probe_write`).
+struct ProbeTool {
+    name: &'static str,
+    read_only: bool,
+    log: ProbeLog,
+}
+
+#[async_trait]
+impl adk_core::Tool for ProbeTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "A probe that records when it runs."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({"type": "object", "properties": {"ms": {"type": "integer"}}}))
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        self.read_only
+    }
+
+    async fn execute(
+        &self,
+        ctx: Arc<dyn adk_core::ToolContext>,
+        args: Value,
+    ) -> adk_core::Result<Value> {
+        let begun = std::time::Instant::now();
+        let ms = args.get("ms").and_then(Value::as_u64).unwrap_or(100);
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+        self.log.lock().unwrap().push((
+            ctx.function_call_id().to_owned(),
+            begun,
+            std::time::Instant::now(),
+        ));
+        Ok(json!({"slept_ms": ms}))
+    }
+}
+
+struct ProbeToolset(Vec<Arc<dyn adk_core::Tool>>);
+
+#[async_trait]
+impl adk_core::Toolset for ProbeToolset {
+    fn name(&self) -> &str {
+        "probes"
+    }
+
+    async fn tools(
+        &self,
+        _ctx: Arc<dyn adk_core::ReadonlyContext>,
+    ) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
+        Ok(self.0.clone())
+    }
+}
+
+fn add_probes(h: &Harness) -> ProbeLog {
+    let log = ProbeLog::default();
+    h.host.add_test_toolset(Arc::new(ProbeToolset(vec![
+        Arc::new(ProbeTool {
+            name: "probe_read",
+            read_only: true,
+            log: log.clone(),
+        }),
+        Arc::new(ProbeTool {
+            name: "probe_write",
+            read_only: false,
+            log: log.clone(),
+        }),
+    ])));
+    log
+}
+
+/// The platform of [`platform`], whose model asks for `first` in its first
+/// answer, then says "Done.".
+async fn one_step_platform(first: Vec<(&'static str, &'static str, Value)>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                tool_calls(&first)
+            } else {
+                say("Done.")
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+/// The positions of `kind` events of `call_id`.
+fn event_at(events: &[AgentEvent], kind: &str, call_id: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e.kind == kind && e.payload["call_id"] == call_id)
+        .unwrap_or_else(|| panic!("no {kind} of {call_id}"))
+}
+
+/// The commit's `tool_calls` keys in the order the body carries them (the
+/// server keeps the object's order; a `Value` would sort them).
+fn committed_call_order(server: &MockServer) -> Vec<String> {
+    let commit = &seen(
+        server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let mut ids: Vec<String> = body["tool_calls"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    ids.sort_by_key(|id| commit.body.find(&format!("\"{id}\":{{")).unwrap());
+    ids
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn read_only_calls_run_concurrently() {
+    std::fs::create_dir_all(std::env::temp_dir()).unwrap();
+    // Three reads that take 400, 250 and 100 ms, and a real read_file, in
+    // one model step. Ids sort the other way round from the model's order.
+    let server = one_step_platform(vec![
+        ("call-z", "probe_read", json!({"ms": 400})),
+        ("call-m", "probe_read", json!({"ms": 250})),
+        ("call-k", "read_file", json!({"path": "a.txt"})),
+        ("call-a", "probe_read", json!({"ms": 100})),
+    ])
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("a.txt"), "hello\n").unwrap();
+    let log = add_probes(&h);
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    let log = log.lock().unwrap().clone();
+    assert_eq!(log.len(), 3, "{log:?}");
+    // They overlapped: every one began before any one ended.
+    let last_start = log.iter().map(|(_, start, _)| *start).max().unwrap();
+    let first_end = log.iter().map(|(_, _, end)| *end).min().unwrap();
+    assert!(
+        last_start < first_end,
+        "the reads ran one after another: {log:?}"
+    );
+    // They finished shortest first, not in the model's order.
+    let finished: Vec<&str> = log.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(finished, ["call-a", "call-m", "call-z"]);
+    // The local read_file is one of the concurrent calls: it started before
+    // the probes ended.
+    assert!(
+        event_at(&events, "tool_call", "call-k") < event_at(&events, "tool_result", "call-a"),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    // Every result reached the UI under its call's id.
+    for id in ["call-z", "call-m", "call-k", "call-a"] {
+        assert!(event_at(&events, "tool_call", id) < event_at(&events, "tool_result", id));
+    }
+    // The commit lists the steps in the model's order.
+    assert_eq!(
+        committed_call_order(&h.server),
+        ["call-z", "call-m", "call-k", "call-a"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writes_stay_sequential_and_ordered() {
+    // Two writes of a probe, a local write_file and two remote toolkit
+    // calls (each asks for confirmation) in one step, in this order.
+    let server = one_step_platform(vec![
+        ("call-5", "probe_write", json!({"ms": 200})),
+        (
+            "call-4",
+            "write_file",
+            json!({"path": "notes.txt", "content": "hi\n"}),
+        ),
+        ("call-3", "Jira_create_issue", json!({"summary": "One"})),
+        ("call-2", "Jira_create_issue", json!({"summary": "Two"})),
+        ("call-1", "probe_write", json!({"ms": 50})),
+    ])
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let log = add_probes(&h);
+    // The UI answers each question; at most one is ever open.
+    let most_open = Arc::new(AtomicUsize::new(0));
+    {
+        let (host, most_open) = (Arc::downgrade(&h.host), most_open.clone());
+        let previous = h.emitter.on_event.lock().unwrap().take().unwrap();
+        h.emitter
+            .on_event
+            .lock()
+            .unwrap()
+            .replace(Box::new(move |event: &AgentEvent| {
+                if event.kind == "approval_request"
+                    && let Some(host) = host.upgrade()
+                {
+                    most_open.fetch_max(host.open_approvals(), Ordering::SeqCst);
+                }
+                previous(event);
+            }));
+    }
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    // One at a time, in the model's order: each call ends before the next
+    // begins.
+    let order = ["call-5", "call-4", "call-3", "call-2", "call-1"];
+    for pair in order.windows(2) {
+        assert!(
+            event_at(&events, "tool_result", pair[0]) < event_at(&events, "tool_call", pair[1]),
+            "{pair:?}: {:?}",
+            h.emitter.kinds()
+        );
+    }
+    let log = log.lock().unwrap().clone();
+    assert_eq!(log.len(), 2);
+    assert!(log[0].2 <= log[1].1, "the probe writes overlapped: {log:?}");
+    // Two confirmations, never both open.
+    assert_eq!(of_kind(&events, "approval_request").len(), 2);
+    assert_eq!(most_open.load(Ordering::SeqCst), 1);
+    let remote: Vec<Value> = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3")
+        .iter()
+        .map(|req| {
+            serde_json::from_str::<Value>(&req.body).unwrap()["arguments"]["summary"].clone()
+        })
+        .collect();
+    assert_eq!(remote, ["One", "One", "Two", "Two"]);
+    assert_eq!(committed_call_order(&h.server), order);
+}

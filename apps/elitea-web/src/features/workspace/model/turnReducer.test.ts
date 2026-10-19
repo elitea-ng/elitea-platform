@@ -57,6 +57,18 @@ describe('turnReducer', () => {
     expect(view.items[0]).toMatchObject({ type: 'tool', callId: 'c1', tool: 'read_file', result: { ok: true } });
   });
 
+  it('matches interleaved results of concurrent calls to their calls by id, not position', () => {
+    // Read-only calls of one model step run together (#1213): their results
+    // come back in completion order, between the other calls' events.
+    const failed: AgentEvent = { turn_id: T, seq: 6, kind: 'tool_result', payload: { call_id: 'c1', ok: false, summary: 'not found', truncated: false } };
+    const view = activeView(run([call(1, 'c1'), call(2, 'c2'), call(3, 'c3'), result(4, 'c3'), result(5, 'c2'), failed]));
+    expect(view.items.map((item) => (item.type === 'tool' ? [item.callId, item.result?.summary] : null))).toEqual([
+      ['c1', 'not found'],
+      ['c2', 'ok'],
+      ['c3', 'ok'],
+    ]);
+  });
+
   it('shows an unmatched tool_result rather than dropping it', () => {
     const view = activeView(run([result(1, 'ghost')]));
     expect(view.items[0]).toMatchObject({ type: 'tool', callId: 'ghost', result: { summary: 'ok' } });
