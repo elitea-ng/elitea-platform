@@ -1,0 +1,222 @@
+# DRAFT fixture: silver_clean, cleanse and validate (ACCEPTANCE-ETL.md §2.2). Map, because batches are independent:
+# one silver_batch child pipeline per row batch (<= 64 items, <= 8 at a time).
+# Task: bronze_ingest's answer (JSON text). Answer (JSON text): {run_id, rows_well_formed, rejected_rows, valid_rows,
+# rejects, cleaning, by_country_before_global_dedupe, silver_files, rejects_file}.
+# Oracles: manifest datasets.<file>.rejects, rejected_rows, valid_rows, cleaning, expected-rejects-<file>.csv
+# (rejects-<run>.csv must equal it). country_totals counts rows BEFORE dedupe_global drops cross-batch duplicates, so
+# it is not the gold_sales_by_country oracle; the loaders' gold tables are.
+state:
+  input: {type: str}
+  messages: {type: list}
+  run_id: {type: str}
+  request: {type: dict}
+  batch_items: {type: list}
+  batch_item: {type: dict}
+  batch_index: {type: int}
+  batch_result: {type: dict}
+  batch_results: {type: list, value: []}
+  silver_totals: {type: list}
+  country_rows: {type: list}
+  country_totals: {type: list}
+  batch_rows: {type: list}
+  routes_summary: {type: list}
+  dedupe: {type: dict}
+  rejects_name: {type: str}
+  rejects_csv: {type: str}
+  rejects_receipt: {type: dict}
+entry_point: parse_bronze
+nodes:
+  - id: parse_bronze
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        bronze = json.loads(elitea_state['input'])
+        items = bronze.pop('batch_items')
+        {'run_id': bronze['run_id'], 'request': bronze, 'batch_items': items}
+    input: [input]
+    output: [run_id, request, batch_items]
+    transition: per_batch
+
+  # TODO(1.3): Map admitted on the fan-out runner (MAP_INTEGRATION_READY, map_compiler.rs:31; destination must be
+  # overwrite today, compiler.rs:2803).
+  # TODO(1.14): a saved pipeline with Code, Router and effectful Toolkit nodes as the Map worker
+  # (map_compiler.rs:181-211 requires map_nonpausing_effectfree; runtime_saved_code_policy.go:511-533).
+  # TODO(1.15): HTTP (5d-3) and node settings (5b-5) inside a fan-out child.
+  - id: per_batch
+    type: map
+    worker: batch_worker
+    source: batch_items
+    item: batch_item
+    index: batch_index
+    outputs: [batch_result]
+    destination: batch_results
+    max_items: 64
+    max_concurrency: 8
+    reduction: ordered_collection
+    transition: merge_batches
+
+  # TODO(1.14): the child's answer (JSON text) projected into the dict batch_result.
+  - id: batch_worker
+    type: agent
+    tool: silver_batch
+    input_mapping:
+      task: {type: variable, value: batch_item}
+    input: [batch_item, batch_index]
+    output: [batch_result]
+
+  # Map-reduce join, Aggregate layout plain without group_by: exact integer sums, min/max, first/last, collect with
+  # merge_lists (the bounded per-batch reject lists) and skip policies for error-output batches (no silver file).
+  - id: merge_batches
+    type: aggregate
+    source: batch_results
+    output: [silver_totals]
+    operations:
+      - {operation: count_rows, output: batches}
+      - {operation: sum_int, field: {path: /rows}, output: rows_well_formed}
+      - {operation: sum_int, field: {path: /valid_rows}, output: valid_rows_before_global}
+      - {operation: sum_int, field: {path: /quarantined_rows}, output: quarantined_rows}
+      - {operation: sum_int, field: {path: /quarantined_lines}, output: quarantined_lines}
+      - {operation: sum_int, field: {path: /rejects/valid_date}, output: valid_date}
+      - {operation: sum_int, field: {path: /rejects/positive_qty}, output: positive_qty}
+      - {operation: sum_int, field: {path: /rejects/known_currency}, output: known_currency}
+      - {operation: sum_int, field: {path: /rejects/unique_order_id}, output: unique_order_id}
+      - {operation: sum_int, field: {path: /cleaning/country_normalized}, output: country_normalized}
+      - {operation: sum_int, field: {path: /cleaning/channel_normalized}, output: channel_normalized}
+      - {operation: sum_int, field: {path: /cleaning/amount_trimmed}, output: amount_trimmed}
+      - {operation: sum_int, field: {path: /cleaning/discount_null}, output: discount_null}
+      - {operation: sum_int, field: {path: /cleaning/ship_date_null}, output: ship_date_null}
+      - {operation: sum_int, field: {path: /cleaning/tags_null}, output: tags_null}
+      - {operation: sum_int, field: {path: /cleaning/note_null}, output: note_null}
+      - {operation: max_int, field: {path: /reject_ppm, null: skip}, output: worst_batch_reject_ppm}
+      - {operation: min_int, field: {path: /reject_ppm, null: skip}, output: best_batch_reject_ppm}
+      - {operation: first, field: {path: /batch_no}, output: first_batch}
+      - {operation: last, field: {path: /batch_no}, output: last_batch}
+      - {operation: collect, field: {path: /reject_list}, merge_lists: true, output: reject_list}
+      - {operation: collect_rows, retain: {mode: only, fields: [{path: /batch_no, output: batch_no},
+                                                                {path: /route, output: route}]}, output: routes}
+      - {operation: collect, field: {path: /silver_file, missing: skip, null: skip}, output: silver_files}
+    transition: batch_split
+
+  # Split Out, mode list (retain none): one envelope row per batch result.
+  - id: batch_split
+    type: split_out
+    source: batch_results
+    output: [batch_rows]
+    split: {mode: list}
+    destination: batch_result
+    transition: route_counts
+
+  # Aggregate, layout split_out: batches and rows per route (continue | error_output). emit reports it; with the
+  # standard data sets every batch continues (manifest batches[].route).
+  - id: route_counts
+    type: aggregate
+    source: batch_rows
+    output: [routes_summary]
+    layout: split_out
+    group_by:
+      - {path: /batch_result/route, output: route}
+    operations:
+      - {operation: count_rows, output: batches}
+      - {operation: sum_int, field: {path: /batch_result/rows}, output: rows}
+      - {operation: sum_int, field: {path: /batch_result/valid_rows}, output: valid_rows}
+    transition: country_split
+
+  # Split Out, mode rows_field: each batch result holds its per-country list; an empty or null list (error-output
+  # batch) produces no rows. Retain except drops the bulky fields.
+  - id: country_split
+    type: split_out
+    source: batch_results
+    output: [country_rows]
+    split: {mode: rows_field, path: /by_country}
+    destination: country_row
+    retain: {mode: except, fields: [reject_list, order_ids, cleaning, rejects, tag_counts]}
+    missing_list: empty
+    null_list: empty
+    remove_source: true
+    transition: country_totals
+
+  # Aggregate, layout split_out with group_by: totals per country across batches (before the global dedupe).
+  - id: country_totals
+    type: aggregate
+    source: country_rows
+    output: [country_totals]
+    layout: split_out
+    group_by:
+      - {path: /country_row/country, output: country}
+    operations:
+      - {operation: sum_int, field: {path: /country_row/orders}, output: orders}
+      - {operation: sum_int, field: {path: /country_row/qty}, output: qty}
+      - {operation: sum_int, field: {path: /country_row/net_cents}, output: net_cents}
+      - {operation: collect, field: {path: /batch_no}, output: batches}
+    transition: dedupe_global
+
+  # The reduce step that needs the whole picture: duplicate order_ids across batches. The first occurrence in file
+  # order (batch_no, then order_seq) wins. The drop list goes to the loaders; rejects-<run>.csv gets every reject.
+  - id: dedupe_global
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        results = sorted(elitea_state['batch_results'], key=lambda r: r['batch_no'])
+        totals = elitea_state['silver_totals'][0]
+        seen, drops, reject_list = set(), [], list(totals['reject_list'])
+        for r in results:
+            for pair in filter(None, r['order_ids'].split(';')):
+                seq, order_id = pair.split(':')
+                seq = int(seq)
+                if order_id in seen:
+                    drops.append({'batch_no': r['batch_no'], 'order_seq': seq, 'order_id': order_id})
+                    reject_list.append([seq, order_id, r['batch_no'], 'unique_order_id_global'])
+                else:
+                    seen.add(order_id)
+        reject_list.sort()
+        run_id = elitea_state['run_id']
+        lines = ''.join(f'{seq},{oid},{batch},{name}\n' for seq, oid, batch, name in reject_list)
+        {'dedupe': {'drops': drops, 'global_duplicates': len(drops)},
+         'rejects_name': f'reports/rejects-{run_id}.csv',
+         'rejects_csv': 'order_seq,order_id,batch_no,expectation\n' + lines}
+    input: [batch_results, silver_totals, run_id]
+    output: [dedupe, rejects_name, rejects_csv]
+    transition: write_rejects
+
+  # Effectful direct toolkit call (journaled, #1159). <= 64 KiB characters per write.
+  - id: write_rejects
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: create_file
+    input_mapping:
+      filename: {type: variable, value: rejects_name}
+      filedata: {type: variable, value: rejects_csv}
+    input: [rejects_name, rejects_csv]
+    output: [rejects_receipt]
+    transition: emit
+
+  - id: emit
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        t, d, request = elitea_state['silver_totals'][0], elitea_state['dedupe'], elitea_state['request']
+        rejects = {k: t[k] for k in ('valid_date', 'positive_qty', 'known_currency', 'unique_order_id')}
+        rejects['unique_order_id_global'] = d['global_duplicates']
+        rejects['well_formed_line'] = t['quarantined_lines']
+        cleaning = {k: t[k] for k in ('country_normalized', 'channel_normalized', 'amount_trimmed', 'discount_null',
+                                      'ship_date_null', 'tags_null', 'note_null')}
+        rejected = sum(v for k, v in rejects.items() if k != 'well_formed_line') + t['quarantined_rows']
+        json.dumps({'run_id': request['run_id'], 'bucket': request['bucket'], 'customers': request['customers'],
+                    'rows_well_formed': t['rows_well_formed'], 'rejected_rows': rejected,
+                    'valid_rows': t['valid_rows_before_global'] - d['global_duplicates'], 'rejects': rejects,
+                    'cleaning': cleaning, 'by_country_before_global_dedupe': elitea_state['country_totals'],
+                    'silver_files': t['silver_files'], 'drops': d['drops'],
+                    'routes': elitea_state['routes_summary'],
+                    'rejects_file': elitea_state['rejects_name']}, sort_keys=True)
+    input: [silver_totals, dedupe, request, country_totals, rejects_name, routes_summary]
+    output: [messages]
+    transition: END

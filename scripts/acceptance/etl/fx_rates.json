@@ -1,0 +1,16 @@
+{
+  "schema": "elitea.acceptance.etl.fx-rates.v1",
+  "base": "USD",
+  "as_of": "2026-10-12",
+  "comment": "Units of USD per one unit of the currency, exact decimal strings. gen_orders.py computes net_amount_usd from this file and etl_mock.py serves it, so the oracle and the reference service cannot drift.",
+  "rates": {
+    "AUD": "0.662400",
+    "CAD": "0.731200",
+    "CHF": "1.118900",
+    "EUR": "1.084300",
+    "GBP": "1.271500",
+    "PLN": "0.251700",
+    "SEK": "0.095310",
+    "USD": "1.000000"
+  }
+}
