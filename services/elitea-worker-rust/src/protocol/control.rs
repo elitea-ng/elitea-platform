@@ -1840,6 +1840,21 @@ pub(crate) fn test_session_authority_for_claim(
     }
 }
 
+/// The session authority of a reclaim of the same execution after a Worker
+/// died: a later claim attempt, lease epoch and claim start, its own fence.
+#[cfg(test)]
+pub(crate) fn test_session_authority_for_reclaim(
+    execution_id: &str,
+    generation: u64,
+    attempt: u8,
+) -> ClaimBoundSessionAuthority {
+    ClaimBoundSessionAuthority {
+        claim_attempt: u64::from(attempt),
+        lease_epoch: u64::from(attempt),
+        ..test_session_authority_for_claim(execution_id, generation, attempt)
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_lease_starting_execution(
     lease_expires_at_unix_millis: i64,
@@ -2525,7 +2540,13 @@ pub fn build_agent_claim_request(
     workload_session_id: &str,
     producer_id: &str,
 ) -> Result<ClaimCommandRequestV1, ControlSemanticError> {
-    build_claim_request(verified, workload_session_id, producer_id)
+    let mut request = build_claim_request(verified, workload_session_id, producer_id)?;
+    // This Worker implements the per-interrupt fan-out decision contract
+    // (fanout-interrupt-decisions-v1.md v1.1 §8.1), so Main may grant it a
+    // fanout_wake continuation. Recovery claims clear it again: Main reads the
+    // opt-in on ordinary claims only.
+    request.fanout_interrupt_decisions = true;
+    Ok(request)
 }
 
 fn build_claim_request(
@@ -2541,7 +2562,7 @@ fn build_claim_request(
     Ok(ClaimCommandRequestV1 {
         agent_model_checkpoint_recovery: false,
         node_recovery: false,
-        // Set by the fan-out decision client (2a-2 task 8); false until then.
+        // Agent claims opt in (`build_agent_claim_request`); toolkit claims never run a wake.
         fanout_interrupt_decisions: false,
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),

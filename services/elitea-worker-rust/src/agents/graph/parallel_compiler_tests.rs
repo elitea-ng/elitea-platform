@@ -387,6 +387,30 @@ fn compiler_refuses_missing_or_different_underlying_parent_authority() {
 }
 
 #[test]
+fn parallel_binds_through_the_fanout_turn_authority() {
+    // The turn boundary must not erase the typed authority: the root graph's
+    // checkpointer and the binding's parent are the same Arc (finding 2).
+    let definition = PipelineDefinition::from_yaml(YAML).unwrap();
+    let inner: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(
+        crate::agents::graph::fanout_turn::FanoutTurnAuthority::new(
+            inner,
+            "root-thread",
+            "execution-1",
+            1,
+            true,
+        )
+        .unwrap(),
+    );
+    let root: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::default().with_parallel(
+        ParallelCompilerBinding::for_tests(authority, tokio::time::Instant::now()),
+    );
+    let (_, bound) = definition.bind_parallel_authority(root, &runtimes).unwrap();
+    assert!(bound.parallel_authority_bound);
+}
+
+#[test]
 fn production_binding_remains_gated_before_composed_restart_acceptance() {
     let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
     assert!(ParallelCompilerBinding::new(authority, tokio::time::Instant::now()).is_err());

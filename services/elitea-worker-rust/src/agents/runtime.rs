@@ -419,6 +419,19 @@ pub(super) fn admit_pipeline_plan<'a>(
 pub(crate) fn pipeline_continuation_start(
     payload: &AgentExecutionPayload,
 ) -> Result<PipelineNativeStart, NativeAgentAssemblyError> {
+    // A wake carries no decision; its marker is checked before any other kind
+    // so a wake can never be read as a text or decision continuation.
+    if let Some(wake) =
+        super::graph::fanout_wake::FanoutWake::from_payload(payload).map_err(|error| {
+            NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::InvalidInput,
+                "the fan-out wake continuation is malformed",
+            )
+            .with_cause(error.code(), None)
+        })?
+    {
+        return Ok(PipelineNativeStart::FanoutWake(wake));
+    }
     Ok(
         if payload
             .meta
@@ -471,6 +484,8 @@ pub(crate) enum PipelineNativeStart {
     McpAuthorization(PipelineMcpAuthorizationContinuation),
     Text(PipelineTextContinuation),
     StaticTools(Vec<super::graph::static_tool_pause::StaticToolDecision>),
+    /// Re-enter a parked fan-out node; it fetches its decided cards itself.
+    FanoutWake(super::graph::fanout_wake::FanoutWake),
 }
 
 impl PipelineNativeStart {
@@ -740,6 +755,9 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
     let payload = &request.payload;
     payload.should_continue
         || payload.hitl_resume
+        || payload
+            .meta
+            .contains_key(super::graph::fanout_wake::FANOUT_WAKE_META_KEY)
         || payload.hitl_action.is_some()
         || payload.hitl_value.is_some()
         || !payload.hitl_decisions.is_empty()
@@ -1145,6 +1163,7 @@ pub(crate) struct NativeAgentInvocation {
     session_id: SessionId,
     user_content: Content,
     run_config: Option<adk_rust::RunConfig>,
+    fanout_stop: Option<Arc<crate::agents::graph::fanout_control::FanoutCancellation>>,
 }
 
 impl NativeAgentInvocation {
@@ -1165,7 +1184,19 @@ impl NativeAgentInvocation {
             session_id,
             user_content,
             run_config: None,
+            fanout_stop: None,
         }
+    }
+
+    /// The fan-out latch of this run's graph: a durable Stop fires it with the
+    /// cooperative ADK stop, so running fan-out children stop at once (FU-064).
+    #[must_use]
+    pub(crate) fn with_fanout_stop(
+        mut self,
+        latch: Arc<crate::agents::graph::fanout_control::FanoutCancellation>,
+    ) -> Self {
+        self.fanout_stop = Some(latch);
+        self
     }
 
     /// Seal a fresh invocation with an explicit bounded ADK run policy.
@@ -1182,6 +1213,7 @@ impl NativeAgentInvocation {
             session_id,
             user_content,
             run_config: Some(run_config),
+            fanout_stop: None,
         }
     }
 
@@ -1199,6 +1231,7 @@ impl NativeAgentInvocation {
             session_id,
             user_content,
             run_config: Some(run_config),
+            fanout_stop: None,
         }
     }
 
@@ -1242,6 +1275,7 @@ impl NativeAgentInvocation {
             user_id,
             session_id,
             complete: false,
+            fanout_stop: self.fanout_stop,
         })
     }
 }
@@ -1259,6 +1293,7 @@ pub(crate) struct NativeAgentRun {
     user_id: String,
     session_id: String,
     complete: bool,
+    fanout_stop: Option<Arc<crate::agents::graph::fanout_control::FanoutCancellation>>,
 }
 
 impl NativeAgentRun {
@@ -1293,10 +1328,16 @@ impl NativeAgentRun {
     /// execution's durable Stop/output winner may do so.
     #[must_use]
     pub(crate) fn request_stop(&self) -> bool {
-        !self.complete
-            && self
-                .runner
-                .interrupt_identity(&self.app_name, &self.user_id, &self.session_id)
+        if self.complete {
+            return false;
+        }
+        // A fan-out stops admitting and cancels its running children; they
+        // settle as cancelled, never as a business outcome.
+        if let Some(latch) = &self.fanout_stop {
+            latch.cancel();
+        }
+        self.runner
+            .interrupt_identity(&self.app_name, &self.user_id, &self.session_id)
     }
 }
 

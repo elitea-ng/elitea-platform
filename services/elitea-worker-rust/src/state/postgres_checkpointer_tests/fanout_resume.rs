@@ -21,13 +21,14 @@ use std::sync::atomic::AtomicBool;
 
 use super::*;
 use crate::agents::graph::fanout_test_ledger::{LedgerSeam, TestLedger};
+use crate::agents::graph::fanout_turn::FanoutTurnAuthority;
 use crate::agents::graph::turn_checkpointer::TurnCheckpointer;
 use crate::agents::graph::{
     AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, ParallelBranchDefinition,
     ParallelBranchExecution, ParallelBranchGraphFactory, ParallelBranchPause,
-    ParallelBranchTerminal, ParallelCheckpointAppender, ParallelChildCheckpoint,
-    ParallelChildOrigin, ParallelChildRequest, ParallelDecision, ParallelOccurrenceCheckpointer,
-    ParallelPauseCard, PreparedChildCheckpoint,
+    ParallelBranchTerminal, ParallelCheckpointAppender, ParallelCheckpointAuthority,
+    ParallelChildCheckpoint, ParallelChildOrigin, ParallelChildRequest, ParallelDecision,
+    ParallelOccurrenceCheckpointer, ParallelPauseCard, PreparedChildCheckpoint,
 };
 use adk_rust::graph::{CompiledGraph, FunctionNode, GraphError, interrupt::Interrupt};
 use async_trait::async_trait;
@@ -443,7 +444,7 @@ transition: post
 
 /// One process: a writer claim, its checkpointer chain and the compiled root.
 struct Process {
-    postgres: Arc<PostgresCheckpointer>,
+    postgres: Arc<dyn Checkpointer>,
     graph: CompiledGraph,
 }
 
@@ -472,13 +473,108 @@ impl Shared {
     }
 }
 
+/// The fenced writer as the one typed authority `FanoutTurnAuthority` wraps
+/// (production holds the same writer behind `ApplicationCheckpointers`).
+struct PostgresHolder(Arc<PostgresCheckpointer>);
+
+#[async_trait]
+impl Checkpointer for PostgresHolder {
+    async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        self.0.save(checkpoint).await
+    }
+    async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.0.load(thread).await
+    }
+    async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.0.load_by_id(id).await
+    }
+    async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+        self.0.list(thread).await
+    }
+    async fn delete(&self, thread: &str) -> Result<(), GraphError> {
+        self.0.delete(thread).await
+    }
+}
+
+#[async_trait]
+impl ParallelCheckpointAppender for PostgresHolder {
+    async fn append_after(
+        &self,
+        expected: Option<&Checkpoint>,
+        candidate: &Checkpoint,
+    ) -> Result<String, GraphError> {
+        self.0.append_after(expected, candidate).await
+    }
+    async fn probe_parent(
+        &self,
+        thread_id: &str,
+        candidate_id: &str,
+    ) -> Result<crate::agents::graph::ParentSaveProbe, GraphError> {
+        self.0.probe_parent(thread_id, candidate_id).await
+    }
+    async fn append_after_head(
+        &self,
+        expected: Option<&crate::agents::graph::ParentHead>,
+        candidate: &Checkpoint,
+    ) -> Result<String, GraphError> {
+        self.0.append_after_head(expected, candidate).await
+    }
+}
+
+#[async_trait]
+impl ParallelChildCheckpointerFactory for PostgresHolder {
+    fn child_origin(
+        &self,
+        activation: &crate::agents::graph::ParallelActivation,
+    ) -> Result<ParallelChildOrigin, GraphError> {
+        self.0.child_origin(activation)
+    }
+    fn branch_thread_id(
+        &self,
+        activation: &crate::agents::graph::ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        self.0
+            .branch_thread_id(activation, branch, ordinal, input_digest, origin)
+    }
+    async fn for_branch(
+        &self,
+        activation: &crate::agents::graph::ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<ParallelChildCheckpoint, GraphError> {
+        self.0
+            .for_branch(activation, branch, ordinal, input_digest, origin)
+            .await
+    }
+    async fn prepare_children(
+        &self,
+        activation: &crate::agents::graph::ParallelActivation,
+        children: &[ParallelChildRequest<'_>],
+        origin: &ParallelChildOrigin,
+    ) -> Result<Vec<PreparedChildCheckpoint>, GraphError> {
+        self.0.prepare_children(activation, children, origin).await
+    }
+}
+
+impl ParallelCheckpointAuthority for PostgresHolder {}
+
 #[derive(Default)]
 struct ProcessSeams {
     holds: Holds,
     child: Option<Arc<Seam>>,
     root: Option<Arc<Seam>>,
+    /// Compose the parent as `bind_parallel_authority` does: occurrence ->
+    /// `FanoutTurnAuthority` -> the production checkpoint holder.
+    turn_authority: bool,
 }
 
+#[allow(clippy::too_many_lines)] // One process owns its writer, chain, runtime and root graph.
 async fn start_process(
     database: &IsolatedPostgres,
     turn: &Turn<'_>,
@@ -514,15 +610,35 @@ async fn start_process(
         .await
         .expect("activate the root checkpoint writer"),
     );
-    let appender: Arc<dyn ParallelCheckpointAppender> = postgres.clone();
-    let occurrence = Arc::new(ParallelOccurrenceCheckpointer::new(appender));
-    let children: Arc<dyn ParallelChildCheckpointerFactory> = match seams.child {
-        Some(seam) => Arc::new(SeamChildren {
-            inner: postgres.clone(),
-            seam,
-        }),
-        None => postgres.clone(),
+    let (postgres, appender, children): (
+        Arc<dyn Checkpointer>,
+        Arc<dyn ParallelCheckpointAppender>,
+        Arc<dyn ParallelChildCheckpointerFactory>,
+    ) = if seams.turn_authority {
+        assert!(seams.child.is_none() && seams.root.is_none());
+        let holder: Arc<dyn ParallelCheckpointAuthority> = Arc::new(PostgresHolder(postgres));
+        let authority = Arc::new(
+            FanoutTurnAuthority::new(
+                Arc::clone(&holder),
+                ROOT,
+                turn.execution_id,
+                turn.generation,
+                turn.resume,
+            )
+            .expect("valid turn authority"),
+        );
+        (holder, authority.clone(), authority)
+    } else {
+        let children: Arc<dyn ParallelChildCheckpointerFactory> = match seams.child {
+            Some(seam) => Arc::new(SeamChildren {
+                inner: postgres.clone(),
+                seam,
+            }),
+            None => postgres.clone(),
+        };
+        (postgres.clone(), postgres, children)
     };
+    let occurrence = Arc::new(ParallelOccurrenceCheckpointer::new(appender));
     let runtime = Arc::new(AdkParallelBranchRuntime::new(
         children,
         Arc::new(Branches {
@@ -531,12 +647,16 @@ async fn start_process(
         }),
         Arc::clone(&occurrence),
     ));
-    let mut root: Arc<dyn Checkpointer> = Arc::new(TurnCheckpointer::new(
-        occurrence,
-        turn.execution_id,
-        turn.generation,
-        turn.resume,
-    ));
+    let mut root: Arc<dyn Checkpointer> = if seams.turn_authority {
+        occurrence.clone()
+    } else {
+        Arc::new(TurnCheckpointer::new(
+            occurrence.clone(),
+            turn.execution_id,
+            turn.generation,
+            turn.resume,
+        ))
+    };
     if let Some(seam) = seams.root {
         root = Arc::new(SeamRoot { inner: root, seam });
     }
@@ -603,7 +723,7 @@ fn expect_park(result: Result<State, GraphError>) -> (usize, String) {
     )
 }
 
-async fn root_frontier(postgres: &PostgresCheckpointer) -> (usize, Vec<String>) {
+async fn root_frontier(postgres: &Arc<dyn Checkpointer>) -> (usize, Vec<String>) {
     let latest = postgres
         .load(ROOT)
         .await
@@ -1210,5 +1330,112 @@ async fn a_zombie_claims_save_is_fenced_after_the_later_claim_applied() {
     assert_eq!(
         foreign_latest, 0,
         "a zombie write became a child's latest row"
+    );
+}
+
+/// The fan-out turn boundary on real `PostgreSQL` (spike finding 2): the
+/// parent chain is `bind_parallel_authority`'s (occurrence ->
+/// `FanoutTurnAuthority` -> the production holder), not `TurnCheckpointer`.
+/// Every root row, the occurrence freeze and join rows included, names the
+/// execution that wrote it; a `fanout_wake` (explicit resume, empty input)
+/// re-enters the parked node through it and nothing completed runs again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_fanout_turn_authority_stamps_every_root_row_across_park_wake_and_answer() {
+    let Some(database_url) = skip_without_postgres() else {
+        return;
+    };
+    let database = fresh_database(&database_url).await;
+    let shared = Shared::new();
+    let seams = || ProcessSeams {
+        turn_authority: true,
+        ..ProcessSeams::default()
+    };
+    let first = Turn {
+        execution_id: "execution-1",
+        generation: 1,
+        claim_attempt: 1,
+        resume: false,
+    };
+    let process = start_process(&database, &first, &shared, 3, seams()).await;
+    let (step, key) = expect_park(
+        process
+            .graph
+            .invoke(fresh_input(), ExecutionConfig::new(ROOT))
+            .await,
+    );
+    assert_eq!(shared.runs.snapshot(), (1, 0, 1, 1, 1, 1));
+    drop(process);
+
+    // The admitted `FanoutWake` start is an explicit resume with empty input.
+    let wake = Turn {
+        execution_id: "execution-2",
+        generation: 1,
+        claim_attempt: 2,
+        resume: true,
+    };
+    let process = start_process(&database, &wake, &shared, 3, seams()).await;
+    let (wake_step, wake_key) = expect_park(
+        process
+            .graph
+            .invoke(State::new(), ExecutionConfig::new(ROOT))
+            .await,
+    );
+    assert_eq!((wake_step, wake_key.as_str()), (step, key.as_str()));
+    assert_eq!(shared.runs.snapshot(), (1, 0, 1, 1, 1, 1));
+    drop(process);
+
+    shared.ledger.decide(&key, "approve", None);
+    let answer = Turn {
+        execution_id: "execution-3",
+        generation: 1,
+        claim_attempt: 3,
+        resume: true,
+    };
+    let process = start_process(&database, &answer, &shared, 3, seams()).await;
+    assert_completed(
+        process
+            .graph
+            .invoke(State::new(), ExecutionConfig::new(ROOT))
+            .await,
+    );
+    assert_eq!(shared.runs.snapshot(), (1, 1, 1, 2, 1, 1));
+    assert_one_card_settled(&database, &shared, &key).await;
+
+    let rows = sqlx::query_as::<_, (String, i64, String)>(
+        "SELECT writer_execution_id, writer_generation, metadata \
+         FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id = $1 ORDER BY save_ordinal",
+    )
+    .bind(ROOT)
+    .fetch_all(&database.pool)
+    .await
+    .expect("read the root rows");
+    let mut writers = BTreeSet::new();
+    let mut occurrence_rows = 0;
+    for (execution, generation, metadata) in &rows {
+        let metadata: Value = serde_json::from_str(metadata).expect("root metadata");
+        assert_eq!(
+            metadata["elitea.pipeline.execution.v1"],
+            json!([execution, generation]),
+            "a root row without its writer's execution stamp: {metadata}"
+        );
+        if metadata
+            .get("elitea.graph.parallel.occurrence.v3")
+            .is_some()
+        {
+            occurrence_rows += 1;
+        }
+        writers.insert(execution.clone());
+    }
+    assert!(
+        occurrence_rows >= 1,
+        "the freeze row is among the stamped rows"
+    );
+    assert_eq!(
+        writers,
+        BTreeSet::from([
+            "execution-1".to_owned(),
+            "execution-2".to_owned(),
+            "execution-3".to_owned()
+        ])
     );
 }

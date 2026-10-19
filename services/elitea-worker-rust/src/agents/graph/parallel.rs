@@ -64,6 +64,9 @@ const BRANCH_INPUT_DIGEST_DOMAIN: &[u8] = b"elitea.graph.parallel.branch-input.v
 pub(crate) const FANOUT_PARKED_SCHEMA: &str = "elitea.pipeline.fanout-parked.v1";
 /// A branch whose Agent denied execution: a typed failure, never success.
 pub(crate) const BRANCH_BLOCKED_CODE: &str = "graph.parallel.branch_blocked";
+/// A branch an earlier process left inside an Agent call that may have started
+/// an effect (D2): it fails typed and is never dispatched again.
+pub(crate) const BRANCH_MAY_HAVE_STARTED_CODE: &str = "graph.fanout.may_have_started";
 /// Earlier checkpoints of one child examined for an already answered pause.
 const MAX_ANSWERED_PAUSE_SCAN: usize = 64;
 
@@ -1793,10 +1796,13 @@ fn invalid_pause() -> GraphError {
 fn branch_failure(code: &str) -> ChildFailure {
     ChildFailure::new(
         code,
-        if code == BRANCH_BLOCKED_CODE {
-            "The branch was blocked."
-        } else {
-            "The branch failed."
+        match code {
+            BRANCH_BLOCKED_CODE => "The branch was blocked.",
+            BRANCH_MAY_HAVE_STARTED_CODE => {
+                "The branch was interrupted while it may have been changing data. \
+                 It was not run again; check the target system."
+            }
+            _ => "The branch failed.",
         },
     )
 }
@@ -2003,6 +2009,14 @@ impl Write for CappedJsonWriter {
 }
 
 fn graph_error_code(error: &GraphError) -> &'static str {
+    // A child refusal that names its own registered cause keeps it.
+    if let GraphError::NodeExecutionFailed { message, .. } = error
+        && message
+            .strip_prefix(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE)
+            .is_some_and(|rest| rest.starts_with(": "))
+    {
+        return BRANCH_MAY_HAVE_STARTED_CODE;
+    }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
         GraphError::NodeNotFound(_) => "graph.node_not_found",
@@ -2044,6 +2058,7 @@ fn valid_failure_code(code: &str) -> bool {
             | "graph.io"
             | "graph.json"
             | "graph.other"
+            | BRANCH_MAY_HAVE_STARTED_CODE
     )
 }
 

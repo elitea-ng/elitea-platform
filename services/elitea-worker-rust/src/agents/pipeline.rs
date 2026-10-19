@@ -376,9 +376,48 @@ pub(crate) struct PipelineNativeAgentAssembler {
     /// A pipeline binds no chat model to a tool, so the Office tools that call
     /// a model refuse here with a sentence; the rest work.
     office_runtime: Option<Arc<crate::transport::office_host::OfficeRuntime>>,
+    /// Test-only: compose fixed Parallel with scoped Agent participants.
+    #[cfg(test)]
+    fixed_parallel_for_tests: bool,
 }
 
 impl PipelineNativeAgentAssembler {
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)] // The test build reads its own flag.
+    const fn fanout_composition(&self) -> super::session::FanoutComposition {
+        super::session::FanoutComposition::Unbound
+    }
+
+    #[cfg(test)]
+    const fn fanout_composition(&self) -> super::session::FanoutComposition {
+        if self.fixed_parallel_for_tests {
+            super::session::FanoutComposition::BoundForTests
+        } else {
+            super::session::FanoutComposition::Unbound
+        }
+    }
+
+    /// Test-only: scoped Agent participants and a bound fixed Parallel, the
+    /// composition the fan-out acceptance needs before it is admitted.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_fixed_parallel_for_tests(mut self) -> Self {
+        self.fixed_parallel_for_tests = true;
+        self
+    }
+
+    /// Whether this run binds saved Agents through the scoped resolver.
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)]
+    const fn force_scoped_applications(&self) -> bool {
+        false
+    }
+
+    #[cfg(test)]
+    const fn force_scoped_applications(&self) -> bool {
+        self.fixed_parallel_for_tests
+    }
+
     pub(crate) fn with_sandbox(
         mut self,
         sandbox: Option<Arc<super::graph::CodeRuntimeFactory>>,
@@ -426,6 +465,8 @@ impl PipelineNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
             office_runtime: None,
+            #[cfg(test)]
+            fixed_parallel_for_tests: false,
         }
     }
 
@@ -448,7 +489,23 @@ impl PipelineNativeAgentAssembler {
             mcp_connector: Arc::new(AdkHttpMcpConnector::new()),
             index_runtime: None,
             office_runtime: None,
+            #[cfg(test)]
+            fixed_parallel_for_tests: false,
         }
+    }
+
+    /// Lend the content client of the claim-fenced fan-out decision routes.
+    #[allow(
+        dead_code,
+        reason = "lent at bootstrap by the fan-out composition (2a-2 commit 10)"
+    )]
+    #[must_use]
+    pub(crate) fn with_fanout_decisions(
+        mut self,
+        client: Arc<crate::transport::InputContentClient>,
+    ) -> Self {
+        self.state = self.state.with_fanout_decisions(client);
+        self
     }
 
     #[cfg(test)]
@@ -1202,7 +1259,9 @@ impl PipelineNativeAgentAssembler {
             } else {
                 start
             };
-            let scoped_applications = if !SCOPED_APPLICATION_CONTINUATION_READY {
+            let scoped_applications = if self.force_scoped_applications() {
+                true
+            } else if !SCOPED_APPLICATION_CONTINUATION_READY {
                 false
             } else if matches!(
                 &start,
@@ -1247,6 +1306,7 @@ impl PipelineNativeAgentAssembler {
                 start,
                 state,
                 node_runtimes,
+                self.fanout_composition(),
             )
             .await?;
             Ok((assembled, evidence))

@@ -10,7 +10,6 @@ mod checkpoint_recovery;
 pub(crate) mod command_delivery;
 mod configuration_validation;
 mod execution_delivery_processor;
-#[allow(dead_code, reason = "wired by the fan-out composition (2a-2 commit 10)")]
 pub(crate) mod fanout_decisions;
 pub mod invocation_admission;
 mod invocation_supervisor;

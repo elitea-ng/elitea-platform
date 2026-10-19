@@ -11,6 +11,7 @@ use crate::agents::graph::application::{
     ApplicationNode, ApplicationNodeDefinition, PipelineApplicationResolver,
 };
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
+use crate::agents::graph::fanout_control::FanoutCancellation;
 use crate::agents::graph::hitl::HITL_RESUME_STATE_KEY;
 use crate::agents::graph::llm::LLM_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::node_events::{
@@ -24,7 +25,8 @@ use crate::agents::graph::parallel::{
 };
 use crate::agents::graph::yaml::ParallelNodeDefinition;
 use adk_rust::graph::{
-    Channel, Checkpointer, CompiledGraph, END, GraphError, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphError, Node, NodeContext,
+    NodeOutput, START, State, StateGraph, StateSchema,
 };
 use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +38,8 @@ pub(crate) struct ParallelCompilerBinding {
     authority: Arc<dyn ParallelCheckpointAuthority>,
     occurrence: Arc<ParallelOccurrenceCheckpointer>,
     deadline: tokio::time::Instant,
+    /// One latch per run, fired by the run's durable Stop.
+    cancellation: Arc<FanoutCancellation>,
 }
 
 impl ParallelCompilerBinding {
@@ -48,18 +52,25 @@ impl ParallelCompilerBinding {
                 "fixed Parallel requires composed continuation and restart acceptance",
             ));
         }
-        Ok(Arc::new(Self::bound(authority, deadline)))
+        Ok(Arc::new(Self::bound(authority, deadline, Arc::default())))
     }
 
     fn bound(
         authority: Arc<dyn ParallelCheckpointAuthority>,
         deadline: tokio::time::Instant,
+        cancellation: Arc<FanoutCancellation>,
     ) -> Self {
         Self {
             occurrence: Arc::new(ParallelOccurrenceCheckpointer::new(authority.clone())),
             authority,
             deadline,
+            cancellation,
         }
+    }
+
+    /// The run's fan-out latch; the run's durable Stop fires it.
+    pub(crate) fn cancellation(&self) -> Arc<FanoutCancellation> {
+        Arc::clone(&self.cancellation)
     }
 
     pub(crate) fn parent_checkpointer(&self) -> Arc<dyn Checkpointer> {
@@ -71,7 +82,7 @@ impl ParallelCompilerBinding {
         authority: Arc<dyn ParallelCheckpointAuthority>,
         deadline: tokio::time::Instant,
     ) -> Arc<Self> {
-        Arc::new(Self::bound(authority, deadline))
+        Arc::new(Self::bound(authority, deadline, Arc::default()))
     }
 }
 
@@ -131,7 +142,11 @@ impl PipelineDefinition {
                 })?,
             None => Arc::clone(&binding.authority),
         };
-        let bound = Arc::new(ParallelCompilerBinding::bound(authority, binding.deadline));
+        let bound = Arc::new(ParallelCompilerBinding::bound(
+            authority,
+            binding.deadline,
+            Arc::clone(&binding.cancellation),
+        ));
         let parent: Arc<dyn Checkpointer> = bound.occurrence.clone();
         runtimes.parallel = Some(bound);
         runtimes.parallel_authority_bound = true;
@@ -191,6 +206,7 @@ impl PipelineDefinition {
         builder = builder.node(
             DurableParallelNode::new(definition.clone(), runtime)
                 .with_deadline(binding.deadline)
+                .with_cancellation(Arc::clone(&binding.cancellation))
                 .with_output_reducer(self.state_reducers.get(definition.output_key()).copied()),
         );
         if let Some(target) = definition.transition() {
@@ -400,6 +416,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 execution.static_after_checkpoints().clone(),
             ))
         };
+        let frontier = Arc::clone(&checkpointer);
         let node = ApplicationNode::new(
             definition.clone(),
             self.state_types.clone(),
@@ -442,7 +459,10 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             .channels
             .insert("messages".to_owned(), Channel::list("messages"));
         StateGraph::new(schema)
-            .add_node(execution.wrap_node(node))
+            .add_node(execution.wrap_node(BranchFrontierNode {
+                node,
+                checkpointer: frontier,
+            }))
             .add_edge(START, definition.id())
             .add_edge(definition.id(), END)
             .compile()
@@ -525,6 +545,52 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             _ => None,
         };
         super::super::parallel_cards::child_resume(pause, catalog, decisions).await
+    }
+}
+
+/// A scoped Agent call proves itself against its own thread's frontier (the
+/// graph-call receipt, `prepare_graph_call`). A fresh branch child has saved
+/// nothing yet, so save the frontier the call is admitted at before the node
+/// runs, as the root graph does for its entry (`with_initial_checkpoint`).
+struct BranchFrontierNode {
+    node: ApplicationNode,
+    checkpointer: Arc<dyn Checkpointer>,
+}
+
+#[async_trait]
+impl Node for BranchFrontierNode {
+    fn name(&self) -> &str {
+        self.node.name()
+    }
+
+    fn description(&self) -> &str {
+        self.node.description()
+    }
+
+    fn capabilities(&self) -> adk_rust::AgentCapabilities {
+        self.node.capabilities()
+    }
+
+    fn validate(&self) -> Result<(), GraphError> {
+        self.node.validate()
+    }
+
+    fn validate_against(&self, parent: &StateSchema) -> Result<(), GraphError> {
+        self.node.validate_against(parent)
+    }
+
+    async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
+        let thread = &context.config.thread_id;
+        if self.checkpointer.load(thread).await?.is_none() {
+            let frontier = Checkpoint::new(
+                thread,
+                context.state.clone(),
+                context.step,
+                vec![self.node.name().to_owned()],
+            );
+            self.checkpointer.save(&frontier).await?;
+        }
+        self.node.execute(context).await
     }
 }
 

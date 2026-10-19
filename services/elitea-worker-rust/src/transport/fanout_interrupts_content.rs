@@ -124,7 +124,13 @@ pub(crate) struct FanoutAckRequest<'a> {
 
 /// What Main did with one ACK.
 pub(crate) enum FanoutAckOutcome {
-    Recorded(FanoutAckReply),
+    Recorded(
+        #[allow(
+            dead_code,
+            reason = "validated on receipt; the runner needs only the outcome"
+        )]
+        FanoutAckReply,
+    ),
     /// 409: the card was already resolved with different ACK bytes.
     AlreadyResolved,
 }

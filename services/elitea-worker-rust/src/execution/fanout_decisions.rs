@@ -28,6 +28,23 @@ impl FanoutDecisionClient {
     pub(crate) fn new(client: Arc<InputContentClient>, authority: FanoutDecisionAuthority) -> Self {
         Self { client, authority }
     }
+
+    /// The decision source of one accepted ordinary claim: its execution,
+    /// generation, claim id and fence, on the node-recovery content client.
+    ///
+    /// # Errors
+    ///
+    /// The claim identity does not fit the private route (contract §7.1).
+    pub(crate) fn for_claim(
+        client: Arc<InputContentClient>,
+        execution_id: &str,
+        generation: u64,
+        claim_id: &str,
+        fence: &[u8],
+    ) -> Result<Self, InputContentError> {
+        FanoutDecisionAuthority::new(execution_id, generation, claim_id, fence)
+            .map(|authority| Self::new(client, authority))
+    }
 }
 
 fn classify(operation: &'static str, error: &InputContentError) -> DecisionError {

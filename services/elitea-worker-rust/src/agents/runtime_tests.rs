@@ -82,12 +82,15 @@ async fn stop_is_scoped_to_one_same_session_native_invocation() {
     let second_started = Arc::new(Notify::new());
     let first_release = Arc::new(Semaphore::new(0));
     let second_release = Arc::new(Semaphore::new(0));
+    let first_fanout = Arc::new(crate::agents::graph::fanout_control::FanoutCancellation::new());
+    let second_fanout = Arc::new(crate::agents::graph::fanout_control::FanoutCancellation::new());
     let mut first = invocation(
         Arc::clone(&sessions),
         Arc::clone(&first_started),
         first_release,
         "first",
     )
+    .with_fanout_stop(Arc::clone(&first_fanout))
     .start()
     .expect("first native invocation");
     let mut second = invocation(
@@ -96,6 +99,7 @@ async fn stop_is_scoped_to_one_same_session_native_invocation() {
         Arc::clone(&second_release),
         "second",
     )
+    .with_fanout_stop(Arc::clone(&second_fanout))
     .start()
     .expect("second native invocation");
 
@@ -115,6 +119,9 @@ async fn stop_is_scoped_to_one_same_session_native_invocation() {
     }
 
     assert!(first.request_stop());
+    // A durable Stop also stops this run's fan-out, and only this run's (FU-064).
+    assert!(first_fanout.is_cancelled());
+    assert!(!second_fanout.is_cancelled());
     assert!(
         tokio::time::timeout(Duration::from_secs(1), first.next_event())
             .await

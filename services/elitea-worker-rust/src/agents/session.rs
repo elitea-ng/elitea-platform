@@ -616,6 +616,9 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     client_stream_id: String,
     client_message_id: String,
     sio_event: String,
+    /// The original command deadline, in Unix milliseconds. Fan-out nodes are
+    /// bounded by it (`OrdinaryNativeAgentPlan::fanout_deadline`).
+    deadline_unix_millis: i64,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -648,6 +651,7 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: agent.client_stream_id.clone(),
             client_message_id: agent.client_message_id.clone(),
             sio_event: agent.sio_event.clone(),
+            deadline_unix_millis: command.deadline_unix_millis,
         }
     }
 
@@ -663,6 +667,7 @@ impl AuthorizedNativeCommandBinding {
             client_stream_id: "conversation-1".to_owned(),
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
+            deadline_unix_millis: 4_102_444_800_000,
         }
     }
 
@@ -671,6 +676,14 @@ impl AuthorizedNativeCommandBinding {
         Self {
             execution_id: execution_id.to_owned(),
             ..Self::fixture()
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_deadline(self, deadline_unix_millis: i64) -> Self {
+        Self {
+            deadline_unix_millis,
+            ..self
         }
     }
 }
@@ -695,9 +708,22 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     generation: u64,
     regenerate: bool,
     instruction_plan: super::instruction_authority::InstructionPlan,
+    deadline_unix_millis: i64,
 }
 
 impl OrdinaryNativeAgentPlan {
+    /// The original command deadline as a monotonic instant for fan-out
+    /// nodes. A deadline already passed is refused: the run lifecycle ends it
+    /// as `DeadlineExceeded` anyway, and a fan-out must never start past it.
+    #[cfg_attr(not(test), allow(dead_code))] // Bound to Parallel when commit 10 composes it.
+    pub(super) fn fanout_deadline(&self) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
+        fanout_deadline_at(
+            self.deadline_unix_millis,
+            chrono::Utc::now().timestamp_millis(),
+            tokio::time::Instant::now(),
+        )
+    }
+
     pub(super) fn model_scope_sessions(
         &self,
         sessions: super::model_scope::ModelScopeBackend,
@@ -869,6 +895,7 @@ impl OrdinaryNativeAgentPlan {
             generation: binding.generation,
             regenerate: request.payload.is_regenerate,
             instruction_plan: profile.instruction_plan().clone(),
+            deadline_unix_millis: binding.deadline_unix_millis,
         })
     }
 
@@ -1120,6 +1147,9 @@ pub(crate) enum NativePipelineStateBackend {
         pool: PgPool,
         session_limits: SessionLimits,
         checkpoint_limits: CheckpointLimits,
+        /// The private content client that carries the claim-fenced fan-out
+        /// decision routes (the node-recovery control transport).
+        fanout_decisions: Option<Arc<crate::transport::InputContentClient>>,
     },
     #[cfg(test)]
     Injected {
@@ -1139,7 +1169,25 @@ impl NativePipelineStateBackend {
             pool,
             session_limits,
             checkpoint_limits,
+            fanout_decisions: None,
         }
+    }
+
+    /// Lend the content client the fan-out decision routes use. Each claim
+    /// then gets its own claim-fenced decision source in its state services.
+    #[must_use]
+    pub(crate) fn with_fanout_decisions(
+        mut self,
+        client: Arc<crate::transport::InputContentClient>,
+    ) -> Self {
+        match &mut self {
+            Self::Postgres {
+                fanout_decisions, ..
+            } => *fanout_decisions = Some(client),
+            #[cfg(test)]
+            Self::Injected { .. } => {}
+        }
+        self
     }
 
     #[cfg(test)]
@@ -1197,11 +1245,12 @@ impl NativePipelineStateBackend {
                 pool,
                 session_limits,
                 checkpoint_limits,
+                fanout_decisions,
             } => {
                 activate_pipeline_postgres(
                     pool,
-                    *session_limits,
-                    *checkpoint_limits,
+                    (*session_limits, *checkpoint_limits),
+                    fanout_decisions.as_ref(),
                     claim,
                     state_writer_lease,
                     plan,
@@ -1222,6 +1271,7 @@ impl NativePipelineStateBackend {
                     checkpointer: Arc::clone(checkpointer),
                     parallel_authority: None,
                     node_recovery_authority: None,
+                    fanout_decisions: None,
                     model_scopes: plan.model_scope_sessions(
                         super::model_scope::ModelScopeBackend::Local(sessions.clone()),
                     ),
@@ -1231,11 +1281,33 @@ impl NativePipelineStateBackend {
     }
 }
 
+/// This claim's fenced decision source. The ledger routes accept only an
+/// ordinary claim of this exact execution; an identity outside the route
+/// grammar leaves the source unavailable, and the fan-out composition refuses
+/// the run instead of fetching.
+fn claim_decision_source(
+    client: Option<&Arc<crate::transport::InputContentClient>>,
+    claim: &SessionWriterClaimBinding,
+    fence_token: &[u8; 32],
+) -> Option<Arc<crate::execution::fanout_decisions::FanoutDecisionClient>> {
+    client.and_then(|client| {
+        crate::execution::fanout_decisions::FanoutDecisionClient::for_claim(
+            Arc::clone(client),
+            &claim.execution_id,
+            claim.generation,
+            &claim.claim_id,
+            fence_token,
+        )
+        .ok()
+        .map(Arc::new)
+    })
+}
+
 #[allow(clippy::too_many_arguments)] // Keep claim, checkpoint, continuation proof, and Runner assembly visibly ordered.
 async fn activate_pipeline_postgres(
     pool: &PgPool,
-    session_limits: SessionLimits,
-    checkpoint_limits: CheckpointLimits,
+    (session_limits, checkpoint_limits): (SessionLimits, CheckpointLimits),
+    fanout_decisions: Option<&Arc<crate::transport::InputContentClient>>,
     claim: SessionWriterClaimBinding,
     state_writer_lease: Arc<dyn StateWriterLease>,
     plan: &OrdinaryNativeAgentPlan,
@@ -1259,6 +1331,7 @@ async fn activate_pipeline_postgres(
         .as_slice()
         .try_into()
         .map_err(|_| invalid_configuration())?;
+    let fanout_decisions = claim_decision_source(fanout_decisions, &claim, &fence_token);
     let session_writer = SessionWriterAuthority::new(
         claim.tenant_id.clone(),
         resource_project_id,
@@ -1332,6 +1405,7 @@ async fn activate_pipeline_postgres(
         checkpointer,
         parallel_authority: Some(authority),
         node_recovery_authority: Some(node_recovery_authority),
+        fanout_decisions,
         model_scopes,
     })
 }
@@ -1342,6 +1416,9 @@ pub(super) struct PipelineStateServices {
     parallel_authority: Option<Arc<dyn super::graph::ParallelCheckpointAuthority>>,
     node_recovery_authority:
         Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// This claim's fenced decision source, when the deployment lends the
+    /// content client. The fan-out composition plugs it into Parallel.
+    fanout_decisions: Option<Arc<crate::execution::fanout_decisions::FanoutDecisionClient>>,
     pub(super) model_scopes: super::model_scope::ModelScopeSessions,
 }
 
@@ -1415,8 +1492,19 @@ impl PipelineStateServices {
     ) -> Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>> {
         self.node_recovery_authority.clone()
     }
+    /// This claim's decision source for the fan-out runner.
+    #[allow(
+        dead_code,
+        reason = "plugged into Parallel by the fan-out composition (2a-2 commit 10)"
+    )]
+    pub(super) fn fanout_decisions(
+        &self,
+    ) -> Option<Arc<crate::execution::fanout_decisions::FanoutDecisionClient>> {
+        self.fanout_decisions.clone()
+    }
+
     /// Preserve the single `PostgreSQL` capability holder before trait erasure.
-    #[allow(dead_code)] // Fixed Parallel admission is still gated.
+    #[cfg_attr(not(test), allow(dead_code))] // Fixed Parallel admission is still gated.
     pub(super) fn parallel_authority(
         &self,
     ) -> Option<Arc<dyn super::graph::ParallelCheckpointAuthority>> {
@@ -1771,7 +1859,105 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
     }
 }
 
+fn fanout_wake_without_park() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidInput,
+        "the fan-out wake has no parked graph to continue",
+    )
+    .with_cause("graph.fanout.wake_without_park", None)
+}
+
+/// Convert the command deadline to a monotonic instant, given one reading
+/// of each clock. The remaining time must be positive.
+fn fanout_deadline_at(
+    deadline_unix_millis: i64,
+    now_unix_millis: i64,
+    now: tokio::time::Instant,
+) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
+    let remaining = deadline_unix_millis
+        .checked_sub(now_unix_millis)
+        .and_then(|millis| u64::try_from(millis).ok())
+        .filter(|millis| *millis > 0)
+        .ok_or_else(fanout_deadline_passed)?;
+    now.checked_add(std::time::Duration::from_millis(remaining))
+        .ok_or_else(invalid_configuration)
+}
+
+fn fanout_deadline_passed() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidConfiguration,
+        "the execution deadline has already passed",
+    )
+    .with_cause("graph.fanout.deadline_passed", None)
+}
+
 const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
+
+/// How a pipeline's fixed Parallel nodes are composed with the turn boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FanoutComposition {
+    /// Production until the fan-out composition lands: Parallel is not bound
+    /// and its compiler refuses typed.
+    Unbound,
+    /// Test-only: bind Parallel through `FanoutTurnAuthority` with the test
+    /// binding, the shape the fan-out composition adopts.
+    #[cfg(test)]
+    BoundForTests,
+}
+
+/// The root checkpointer, the node runtimes it binds, and the run's fan-out
+/// latch when Parallel is bound.
+type PipelineTurn = (
+    Arc<dyn Checkpointer>,
+    super::graph::compiler::PipelineNodeRuntimes,
+    Option<Arc<super::graph::fanout_control::FanoutCancellation>>,
+);
+
+/// The root graph's turn boundary, and the node runtimes it binds.
+#[cfg_attr(not(test), allow(clippy::unnecessary_wraps))] // The test composition can fail.
+fn pipeline_turn(
+    fanout: FanoutComposition,
+    state: &PipelineStateServices,
+    plan: &OrdinaryNativeAgentPlan,
+    is_resume: bool,
+    node_runtimes: super::graph::compiler::PipelineNodeRuntimes,
+) -> Result<PipelineTurn, NativeAgentAssemblyError> {
+    match fanout {
+        FanoutComposition::Unbound => Ok((
+            Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
+                Arc::clone(&state.checkpointer),
+                &plan.execution_id,
+                plan.generation,
+                is_resume,
+            )),
+            node_runtimes,
+            None,
+        )),
+        #[cfg(test)]
+        FanoutComposition::BoundForTests => {
+            // The same Arc is the root checkpointer and the binding's parent,
+            // so `bind_parallel_authority` binds through the turn boundary.
+            let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = Arc::new(
+                super::graph::fanout_turn::FanoutTurnAuthority::new(
+                    state
+                        .parallel_authority()
+                        .ok_or_else(invalid_configuration)?,
+                    plan.session_id(),
+                    &plan.execution_id,
+                    plan.generation,
+                    is_resume,
+                )
+                .map_err(|_| invalid_configuration())?,
+            );
+            let binding = super::graph::compiler::ParallelCompilerBinding::for_tests(
+                Arc::clone(&authority),
+                plan.fanout_deadline()?,
+            );
+            let stop = binding.cancellation();
+            Ok((authority, node_runtimes.with_parallel(binding), Some(stop)))
+        }
+    }
+}
 
 /// Build one admitted graph Runner with activated durable state contracts.
 #[allow(clippy::too_many_lines)] // Preserve the ordered claim, checkpoint, instruction, and Runner composition.
@@ -1781,6 +1967,7 @@ pub(super) async fn assemble_pipeline_native(
     start: PipelineNativeStart,
     state: PipelineStateServices,
     runtime: PipelineRuntimeBindings,
+    fanout: FanoutComposition,
 ) -> Result<AssembledNativeAgentInvocation<PipelineAgentCompletion>, NativeAgentAssemblyError> {
     let PipelineRuntimeBindings {
         nodes: node_runtimes,
@@ -1825,12 +2012,8 @@ pub(super) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
-    let turn_checkpointer = Arc::new(super::graph::turn_checkpointer::TurnCheckpointer::new(
-        Arc::clone(&state.checkpointer),
-        &plan.execution_id,
-        plan.generation,
-        is_resume,
-    ));
+    let (turn_checkpointer, node_runtimes, fanout_stop) =
+        pipeline_turn(fanout, &state, &plan, is_resume, node_runtimes)?;
     let graph = definition
         .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(&error))?;
@@ -1853,6 +2036,7 @@ pub(super) async fn assemble_pipeline_native(
         generation: _,
         regenerate: _,
         instruction_plan,
+        deadline_unix_millis: _,
     } = plan;
     // Node models consume the admitted policy. The Runner never summarizes
     // deterministic graph state or introduces a pipeline-wide summary model.
@@ -1897,8 +2081,12 @@ pub(super) async fn assemble_pipeline_native(
     } else {
         user_content
     };
+    let invocation = NativeAgentInvocation::new(runner, user_id, session_id, input);
     Ok(AssembledNativeAgentInvocation::new(
-        NativeAgentInvocation::new(runner, user_id, session_id, input),
+        match fanout_stop {
+            Some(latch) => invocation.with_fanout_stop(latch),
+            None => invocation,
+        },
         projector,
         PipelineAgentCompletion { thread_id },
     ))
@@ -2033,6 +2221,23 @@ async fn resolve_pipeline_start(
                 }
             }
             Some(resume)
+        }
+        PipelineNativeStart::FanoutWake(_) => {
+            restore_pipeline_session(state, plan).await?;
+            // A wake re-enters the parked fan-out node with unchanged business
+            // state: an explicit resume with an empty resume state, so the
+            // turn boundary reads the parked frontier of the earlier execution.
+            // Without a parked frontier the graph would start from its entry,
+            // which would run the wake as a fresh turn.
+            let parked = state
+                .checkpointer
+                .load(plan.session_id.as_ref())
+                .await
+                .map_err(|_| dependency_unavailable())?;
+            if parked.is_none_or(|checkpoint| checkpoint.pending_nodes.is_empty()) {
+                return Err(fanout_wake_without_park());
+            }
+            Some(super::graph::resume::PipelineResume::empty())
         }
         PipelineNativeStart::McpAuthorization(continuation) => {
             let session = restore_pipeline_session(state, plan).await?;
@@ -2308,6 +2513,7 @@ where
         generation,
         regenerate,
         instruction_plan: _,
+        deadline_unix_millis: _,
     } = plan;
     let durable_context_plan = match (
         &context_management,
@@ -2834,6 +3040,7 @@ where
         generation: _,
         regenerate: _,
         instruction_plan: _,
+        deadline_unix_millis: _,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(model.summarization_model())?;
@@ -3462,5 +3669,175 @@ mod public_application_metadata_tests {
         );
         assert_eq!(original["version_details"]["instructions"], instructions);
         assert_eq!(original["instructions"], instructions);
+    }
+}
+
+#[cfg(test)]
+mod fanout_start_tests {
+    use super::*;
+    use crate::agents::assembly::OrdinaryNoToolProfile;
+    use crate::agents::assembly_tests::ordinary_request;
+    use crate::agents::request::AgentExecutionKind;
+    use crate::agents::runtime::NativeAgentAssemblyCause;
+
+    const NOW_UNIX_MILLIS: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn the_remaining_command_time_becomes_the_fanout_instant() {
+        let now = tokio::time::Instant::now();
+        let deadline = fanout_deadline_at(NOW_UNIX_MILLIS + 1_500, NOW_UNIX_MILLIS, now)
+            .expect("a future deadline is accepted");
+        assert_eq!(deadline - now, std::time::Duration::from_millis(1_500));
+        let last = fanout_deadline_at(NOW_UNIX_MILLIS + 1, NOW_UNIX_MILLIS, now)
+            .expect("one millisecond left is still a deadline");
+        assert_eq!(last - now, std::time::Duration::from_millis(1));
+    }
+
+    #[test]
+    fn a_deadline_that_has_passed_is_refused_typed() {
+        let now = tokio::time::Instant::now();
+        for deadline in [NOW_UNIX_MILLIS, NOW_UNIX_MILLIS - 1, 0, -1, i64::MIN] {
+            let error = fanout_deadline_at(deadline, NOW_UNIX_MILLIS, now)
+                .expect_err("a passed deadline never starts a fan-out");
+            assert_eq!(
+                error.code(),
+                NativeAgentAssemblyErrorCode::InvalidConfiguration
+            );
+            assert_eq!(
+                error.cause().map(NativeAgentAssemblyCause::code),
+                Some("graph.fanout.deadline_passed")
+            );
+        }
+    }
+
+    #[test]
+    fn the_plan_carries_the_command_deadline() {
+        let request = ordinary_request(AgentExecutionKind::Application);
+        let profile = OrdinaryNoToolProfile::validate(&request).expect("profile");
+        let plan = |deadline| {
+            OrdinaryNativeAgentPlan::from_authorized(
+                &request,
+                &profile,
+                &AuthorizedNativeCommandBinding::fixture().with_deadline(deadline),
+                &[],
+            )
+            .expect("plan")
+        };
+        let future = chrono::Utc::now().timestamp_millis() + 60_000;
+        let remaining = plan(future)
+            .fanout_deadline()
+            .expect("a running command has time left")
+            .saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            remaining > std::time::Duration::from_secs(50)
+                && remaining <= std::time::Duration::from_mins(1),
+            "{remaining:?}"
+        );
+        let passed = chrono::Utc::now().timestamp_millis() - 1;
+        assert!(plan(passed).fanout_deadline().is_err());
+    }
+
+    fn wake_start() -> PipelineNativeStart {
+        let mut payload = ordinary_request(AgentExecutionKind::Application).payload;
+        payload.user_input = crate::agents::request::UserInput::Text(String::new());
+        payload.meta.insert(
+            super::super::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+            serde_json::from_str(include_str!(
+                "../../../../libs/jsonschema/runtime/v1/fixtures/fanout-wake-v1.json"
+            ))
+            .expect("wake fixture"),
+        );
+        super::super::runtime::pipeline_continuation_start(&payload).expect("wake start")
+    }
+
+    /// Resolve a wake against a session and a root frontier of `pending` nodes.
+    async fn resolve_wake(
+        pending: Option<Vec<String>>,
+    ) -> Result<Option<super::super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
+        let request = ordinary_request(AgentExecutionKind::Application);
+        let profile = OrdinaryNoToolProfile::validate(&request).expect("profile");
+        let plan = OrdinaryNativeAgentPlan::from_authorized(
+            &request,
+            &profile,
+            &AuthorizedNativeCommandBinding::fixture(),
+            &[],
+        )
+        .expect("plan");
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(adk_rust::session::CreateRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: plan.user_id.to_string(),
+                session_id: Some(plan.session_id.to_string()),
+                state: HashMap::new(),
+            })
+            .await
+            .expect("parked session");
+        let checkpointer: Arc<dyn Checkpointer> =
+            Arc::new(adk_rust::graph::MemoryCheckpointer::new());
+        if let Some(pending) = pending {
+            let mut parked = adk_rust::graph::Checkpoint::new(
+                plan.session_id.as_ref(),
+                HashMap::from([("pre_done".to_owned(), serde_json::json!(true))]),
+                2,
+                pending,
+            );
+            parked.metadata.insert(
+                "elitea.pipeline.execution.v1".to_owned(),
+                serde_json::json!(["execution-parked", 1]),
+            );
+            checkpointer.save(&parked).await.expect("parked frontier");
+        }
+        let state = PipelineStateServices {
+            sessions: Arc::clone(&sessions),
+            checkpointer,
+            parallel_authority: None,
+            node_recovery_authority: None,
+            fanout_decisions: None,
+            model_scopes: plan.model_scope_sessions(
+                super::super::model_scope::ModelScopeBackend::Local(sessions),
+            ),
+        };
+        resolve_pipeline_start(
+            wake_start(),
+            &state,
+            &plan,
+            &super::super::graph::PrinterPauseCatalog::default(),
+            &super::super::graph::static_pause::StaticPauseFamily::new(
+                super::super::graph::static_pause::StaticPauseCatalog::default(),
+                std::collections::BTreeMap::new(),
+            ),
+            &ApplicationToolPresentationCatalog::default(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_wake_resumes_the_parked_frontier_with_an_empty_resume_state() {
+        let resume = resolve_wake(Some(vec!["gather".to_owned()]))
+            .await
+            .expect("a parked frontier admits the wake")
+            .expect("a wake is an explicit resume, so the turn reads the parked frontier");
+        assert!(
+            resume.state().is_empty(),
+            "a wake adds nothing to the business state"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_wake_without_a_parked_frontier_never_runs_as_a_fresh_turn() {
+        for pending in [None, Some(Vec::new())] {
+            let Err(error) = resolve_wake(pending.clone()).await else {
+                panic!("no parked graph to continue: {pending:?}");
+            };
+            assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+            assert_eq!(
+                error.cause().map(NativeAgentAssemblyCause::code),
+                Some("graph.fanout.wake_without_park"),
+                "{pending:?}"
+            );
+        }
     }
 }

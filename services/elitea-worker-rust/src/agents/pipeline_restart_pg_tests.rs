@@ -26,9 +26,9 @@ const PHASE_ENV: &str = "ELITEA_NESTED_RESTART_PG_PHASE";
 const PENDING_ENV: &str = "ELITEA_NESTED_RESTART_PG_PENDING";
 const PENDING_MARKER: &str = "NESTED_RESTART_PENDING=";
 /// One turn takes about a second here; the bound only turns a hang into a failure.
-const PHASE_DEADLINE: std::time::Duration = std::time::Duration::from_mins(2);
+pub(super) const PHASE_DEADLINE: std::time::Duration = std::time::Duration::from_mins(2);
 const GENERATION: u64 = 3;
-const CHECKPOINT_MIGRATION: &str =
+pub(super) const CHECKPOINT_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0001_agent_graph_checkpoints.sql");
 
 const FIRST_CHILD_ANSWER: &str = "first child answer";
@@ -103,7 +103,7 @@ fn authorized_turn<'a>(
     )
 }
 
-async fn connect(database: &str) -> sqlx::PgPool {
+pub(super) async fn connect(database: &str) -> sqlx::PgPool {
     let options = crate::test_pg::connect_options(
         &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
@@ -142,7 +142,7 @@ fn pending_card(interrupts: &[Value]) -> Value {
     interrupts[0]["response_metadata"]["hitl_interrupts"][0].clone()
 }
 
-fn model_requests(captured: &CapturedModelRequests) -> usize {
+pub(super) fn model_requests(captured: &CapturedModelRequests) -> usize {
     captured.lock().expect("captured model requests").len()
 }
 
@@ -199,7 +199,7 @@ async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
 }
 
 /// Runs one phase process under a deadline, so a stuck turn fails the proof instead of hanging it.
-fn run_phase(phase: &str, mut command: std::process::Command) -> std::process::Output {
+pub(super) fn run_phase(phase: &str, mut command: std::process::Command) -> std::process::Output {
     let child = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

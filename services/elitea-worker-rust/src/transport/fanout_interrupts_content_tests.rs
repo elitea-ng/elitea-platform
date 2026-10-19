@@ -197,6 +197,34 @@ async fn fetch_is_claim_fenced_and_bound_to_the_execution() {
 }
 
 #[tokio::test]
+async fn a_claims_decision_source_fetches_under_that_claim_and_fence_only() {
+    use crate::execution::fanout_decisions::FanoutDecisionClient;
+    use elitea_agent_runtime::graph::fanout::runner::DecisionSource;
+    let (client, calls, _) = make_client(200, fixture(), "fetch");
+    let source =
+        FanoutDecisionClient::for_claim(Arc::new(client), EXECUTION, 1, "claim-1", &[b'f'; 32])
+            .expect("an ordinary claim of this execution");
+    let batch = source.fetch().await.expect("fetch");
+    assert_eq!(batch.decision_revision, 2);
+    assert_eq!(batch.decisions.len(), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one bounded attempt");
+    // An identity outside the private route grammar never builds a source.
+    for (execution, generation, claim, fence) in [
+        ("execution-start", 1, "claim-1", [b'f'; 32].as_slice()),
+        (EXECUTION, 0, "claim-1", [b'f'; 32].as_slice()),
+        (EXECUTION, 1, "", [b'f'; 32].as_slice()),
+        (EXECUTION, 1, "claim-1", [b'f'; 31].as_slice()),
+    ] {
+        let (client, calls, _) = make_client(200, fixture(), "fetch");
+        assert!(
+            FanoutDecisionClient::for_claim(Arc::new(client), execution, generation, claim, fence)
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
 async fn fetch_entries_limit_and_limit_plus_one() {
     let entry = fixture()["decisions"][0].clone();
     for (count, valid) in [

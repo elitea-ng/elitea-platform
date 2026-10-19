@@ -4,7 +4,7 @@
 //! must never be recorded as a branch or item outcome, because a later claim
 //! restores the same occurrence and decides again.
 
-#![allow(dead_code)] // The claim lease probe fires the latch in the next slice.
+#![allow(dead_code)] // The run's durable Stop fires the Parallel latch; Map binds it in 2a-3.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

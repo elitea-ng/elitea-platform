@@ -226,7 +226,8 @@ impl PipelineApplicationNodeRuntime {
             }
             GraphCallOutcome::Started if !fresh => {
                 // An interrupted unpaused provider/tool has no graph-level replay authority.
-                return Err(failure());
+                // The child may have started an effect: it is never dispatched again.
+                return Err(may_have_started());
             }
             GraphCallOutcome::Started => {}
         }
@@ -472,6 +473,20 @@ fn numeric_call(call: &str) -> String {
         .map(|digit| char::from(b'0' + *digit))
         .collect()
 }
+/// Code prefix of the refusal for a child call an earlier process started and
+/// never finished. Fan-out maps it to a typed child failure.
+pub(crate) const CALL_MAY_HAVE_STARTED_CODE: &str = "pipeline.agent_call.may_have_started";
+
+fn may_have_started() -> GraphError {
+    GraphError::NodeExecutionFailed {
+        node: "application_scope".to_owned(),
+        message: format!(
+            "{CALL_MAY_HAVE_STARTED_CODE}: an earlier run started this Agent call and may have \
+             started its work; it is not repeated"
+        ),
+    }
+}
+
 fn failure() -> GraphError {
     GraphError::NodeExecutionFailed {
         node: "application_scope".to_owned(),

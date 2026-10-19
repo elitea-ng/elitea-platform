@@ -37,16 +37,13 @@ mod code_workspace_content;
 #[cfg(test)]
 pub(crate) use code_intent_content::actual_original_code_visit_fixture;
 
-#[allow(dead_code, reason = "wired by the fan-out composition (2a-2 commit 10)")]
 #[path = "fanout_interrupts_content.rs"]
 mod fanout_interrupts_content;
 #[path = "node_recovery_content.rs"]
 mod node_recovery_content;
 #[path = "toolkit_discovery_artifact.rs"]
 mod toolkit_discovery_artifact;
-pub(crate) use fanout_interrupts_content::{
-    FanoutAckRequest, FanoutDecisionAuthority,
-};
+pub(crate) use fanout_interrupts_content::{FanoutAckRequest, FanoutDecisionAuthority};
 pub(crate) use node_recovery_content::{
     NodeRecoveryAckReply, receipt_sha256 as node_recovery_receipt_sha256,
 };
