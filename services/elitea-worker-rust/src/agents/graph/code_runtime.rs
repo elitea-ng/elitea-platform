@@ -69,7 +69,10 @@ fn terminal_failure_code(
         | NodeFailureClass::InvalidResult
         | NodeFailureClass::ModelOutputIncomplete
         | NodeFailureClass::Cancelled
-        | NodeFailureClass::Unknown => {
+        | NodeFailureClass::Unknown
+        // Lost-runtime re-runs exhausted or out of time: the same typed Code
+        // failure Main and Web already render (wire-compatible).
+        | NodeFailureClass::RuntimeLost => {
             Some(preparation.map_or("pipeline.code_failed", CodePreparationFailure::code))
         }
     }

@@ -697,7 +697,25 @@ impl CodeJobRuntime for DockerClient {
         self.dispatch_code_job(identity).await
     }
     async fn receipt(&self, identity: &CodeJobIdentity) -> Result<Option<Vec<u8>>, SandboxError> {
-        self.read_code_job_receipt(identity).await
+        let unreadable = match self.read_code_job_receipt(identity).await {
+            Ok(receipt) => return Ok(receipt),
+            Err(error) => error,
+        };
+        // No envelope: only the container runtime's own evidence can say the
+        // runner never finished. Anything short of it keeps the error.
+        match self.observe_code_job_exit(identity).await {
+            Ok(exit) => match synthesized_receipt(exit, identity.runtime_id().is_some()) {
+                Some(receipt) => {
+                    tracing::warn!(
+                        operation = "sandbox.runtime_receipt",
+                        "Docker Code runtime stopped without an envelope; receipt synthesized from container state"
+                    );
+                    Ok(Some(receipt))
+                }
+                None => Err(unreadable),
+            },
+            Err(_) => Err(unreadable),
+        }
     }
     async fn preparation_marker(
         &self,
@@ -819,5 +837,84 @@ mod tests {
                 .with_runtime_id("replacement-container".into())
                 .is_err()
         );
+    }
+}
+
+/// The receipt Docker's own container state proves for a job whose envelope
+/// could not be read, or `None` when it proves nothing (the caller then keeps
+/// the unreadable-receipt error). A missing container counts only after the
+/// runtime was bound to this job.
+fn synthesized_receipt(
+    exit: adk_sandbox::workspace::docker::CodeJobExit,
+    bound: bool,
+) -> Option<Vec<u8>> {
+    use super::runtime_loss::{StoppedRuntime, docker_status, envelope};
+    use adk_sandbox::workspace::docker::CodeJobExit;
+    let (stopped, exit_code) = match exit {
+        CodeJobExit::Absent if bound => (StoppedRuntime::AbsentAfterBinding, None),
+        CodeJobExit::Absent | CodeJobExit::Running => return None,
+        CodeJobExit::Exited {
+            exit_code,
+            oom_killed,
+            wrote_output,
+        } => (
+            StoppedRuntime::Exited {
+                exit_code,
+                oom_killed,
+                wrote_output,
+            },
+            exit_code,
+        ),
+    };
+    envelope(docker_status(stopped)?, exit_code).ok()
+}
+
+#[cfg(test)]
+mod synthesized_receipt_tests {
+    use super::synthesized_receipt;
+    use adk_sandbox::workspace::docker::CodeJobExit;
+
+    fn status(receipt: Option<Vec<u8>>) -> Option<String> {
+        receipt.map(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["status"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+    }
+    fn exited(exit_code: i64, oom_killed: bool, wrote_output: bool) -> CodeJobExit {
+        CodeJobExit::Exited {
+            exit_code: Some(exit_code),
+            oom_killed,
+            wrote_output,
+        }
+    }
+
+    #[test]
+    fn only_container_state_evidence_synthesizes_a_receipt() {
+        // `docker kill` / daemon stop of the runner, and a removed container.
+        assert_eq!(
+            status(synthesized_receipt(exited(137, false, false), true)).as_deref(),
+            Some("runtime_lost")
+        );
+        assert_eq!(
+            status(synthesized_receipt(exited(255, false, false), true)).as_deref(),
+            Some("runtime_lost")
+        );
+        assert_eq!(
+            status(synthesized_receipt(CodeJobExit::Absent, true)).as_deref(),
+            Some("runtime_lost")
+        );
+        assert_eq!(
+            status(synthesized_receipt(exited(137, true, false), true)).as_deref(),
+            Some("memory_limit")
+        );
+        // A container never bound to this job, a running one, a damaged
+        // envelope, or a runner error exit prove nothing: the error stays.
+        assert!(synthesized_receipt(CodeJobExit::Absent, false).is_none());
+        assert!(synthesized_receipt(CodeJobExit::Running, true).is_none());
+        assert!(synthesized_receipt(exited(137, false, true), true).is_none());
+        assert!(synthesized_receipt(exited(1, false, false), true).is_none());
+        assert!(synthesized_receipt(exited(0, false, false), true).is_none());
     }
 }
