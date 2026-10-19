@@ -1,7 +1,6 @@
 package runtimecomposition_test
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,55 +12,8 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 )
 
-func TestWorkerImplementationFromEnv(t *testing.T) {
-	t.Parallel()
-
-	for name, testCase := range map[string]struct {
-		value string
-		want  string
-		fails bool
-	}{
-		"unset defaults to rust": {value: "", want: "rust"},
-		"python":                 {value: "python", want: "python"},
-		"rust":                   {value: "rust", want: "rust"},
-		"a typo is refused":      {value: "Rust", fails: true},
-		"an unknown worker":      {value: "node", fails: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			lookup := func(string) (string, bool) { return testCase.value, testCase.value != "" }
-			got, err := runtimecomposition.WorkerImplementationFromEnv(lookup)
-			if testCase.fails {
-				if err == nil {
-					t.Errorf("value %q was accepted as %q", testCase.value, got)
-				}
-				return
-			}
-			if err != nil || got != testCase.want {
-				t.Errorf("got %q err=%v, want %q", got, err, testCase.want)
-			}
-		})
-	}
-	if _, err := runtimecomposition.WorkerImplementationFromEnv(nil); err == nil {
-		t.Error("a nil lookup was accepted")
-	}
-}
-
 func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 	t.Parallel()
-
-	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
-	if err != nil {
-		t.Fatalf("load python capability: %v", err)
-	}
-	if python.Implementation() != "python" {
-		t.Errorf("implementation=%q", python.Implementation())
-	}
-	if len(python.UnsupportedNames()) == 0 {
-		t.Error("the python image reports no unsupported toolkit; the measured set is 13")
-	}
-	if python.SupportedNames() != nil {
-		t.Error("the python projection is a deny list and reported an allow list")
-	}
 
 	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
 	if err != nil {
@@ -71,40 +23,16 @@ func TestPinnedWorkerToolkitCapabilityLoads(t *testing.T) {
 		t.Errorf("rust implementation=%q supported=%d, want rust and 49",
 			rust.Implementation(), len(rust.SupportedNames()))
 	}
-	if rust.UnsupportedNames() != nil {
-		t.Error("the rust projection is an allow list and reported a deny list")
-	}
-
-	if _, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("node"); err == nil {
-		t.Error("an unknown implementation was accepted")
+	// The Python worker was removed: its name, like any other, is refused.
+	for _, implementation := range []string{"node", "python"} {
+		if _, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(implementation); err == nil {
+			t.Errorf("implementation %q was accepted", implementation)
+		}
 	}
 }
 
 func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	t.Parallel()
-
-	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
-	if err != nil {
-		t.Fatalf("load python capability: %v", err)
-	}
-	// The join runs on the import key, so the type name is irrelevant to the
-	// python answer. kubernetes/k8s is the pair that proves it.
-	if supported, reason := python.SupportsToolkitType("kubernetes", "k8s"); supported ||
-		!strings.Contains(reason, "k8s") {
-		t.Errorf("kubernetes supported=%v reason=%q", supported, reason)
-	}
-	// UI-DC-1: the Python reason is a sentence too, with no internal terms.
-	if _, reason := python.SupportsToolkitType("kubernetes", "k8s"); reason !=
-		"This deployment's agent worker image does not include the dependencies of the k8s toolkit." {
-		t.Errorf("k8s reason = %q", reason)
-	}
-	if supported, _ := python.SupportsToolkitType("github", "github"); !supported {
-		t.Error("github is not supported by the python image")
-	}
-	// A runtime toolkit declares no import key and cannot fail to import.
-	if supported, _ := python.SupportsToolkitType("artifact", ""); !supported {
-		t.Error("a toolkit with no import key was refused")
-	}
 
 	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
 	if err != nil {
@@ -123,16 +51,10 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 		t.Errorf("pptx has a native family and was refused: %s", reason)
 	}
 	// docx and xlsx joined with ADR-0032 P4 and have no SDK counterpart: the
-	// Rust worker serves them, the Python worker cannot, whatever import key
-	// (none) the catalogue gives them.
+	// Rust worker serves them whatever import key (none) the catalogue gives.
 	for _, toolkitType := range []string{"docx", "xlsx"} {
 		if supported, reason := rust.SupportsToolkitType(toolkitType, ""); !supported {
 			t.Errorf("%s has a native family and was refused: %s", toolkitType, reason)
-		}
-		supported, reason := python.SupportsToolkitType(toolkitType, "")
-		if supported || !strings.Contains(reason, toolkitType) ||
-			!strings.Contains(reason, "only the Rust worker serves it") {
-			t.Errorf("%s on python: supported=%v reason=%q", toolkitType, supported, reason)
 		}
 	}
 	if supported, reason := rust.SupportsToolkitType("mcp", ""); !supported {
@@ -154,8 +76,7 @@ func TestWorkerToolkitCapabilityVerdicts(t *testing.T) {
 	if supported, reason := absent.SupportsToolkitType("slack", "slack"); !supported || reason != "" {
 		t.Errorf("a nil projection answered supported=%v reason=%q", supported, reason)
 	}
-	if absent.Implementation() != "" || absent.UnsupportedNames() != nil ||
-		absent.SupportedNames() != nil {
+	if absent.Implementation() != "" || absent.SupportedNames() != nil {
 		t.Error("a nil projection answered with content")
 	}
 }
@@ -190,7 +111,7 @@ func TestWorkerToolkitCapabilityRefusesBadDocuments(t *testing.T) {
 }
 
 // A partial Rust family serves a subset of its SDK type's tools (ADR-0027);
-// a full one, and every Python answer, serves them all.
+// a full one serves them all.
 func TestWorkerToolkitCapabilitySupportsTool(t *testing.T) {
 	t.Parallel()
 	rust, err := runtimecomposition.LoadWorkerToolkitCapability("rust", []byte(
@@ -295,63 +216,6 @@ func TestRustCapabilitySnapshotMatchesTheRustSource(t *testing.T) {
 	}
 }
 
-// The Python snapshot names the SDK revision the toolkit catalogue was
-// projected from. Two different revisions would mean the capability answer
-// describes a registry the catalogue does not hold.
-func TestPythonCapabilitySnapshotNamesTheCataloguedSDKRevision(t *testing.T) {
-	t.Parallel()
-
-	root := repositoryRoot(t)
-	raw, err := os.ReadFile(filepath.Join(
-		root, "services", "elitea-main", "internal", "runtimecomposition",
-		"current_python_worker_toolkit_capability_snapshot.json",
-	))
-	if err != nil {
-		t.Fatalf("read the python capability snapshot: %v", err)
-	}
-	var document struct {
-		SDKRevision string `json:"sdk_revision"`
-	}
-	if err := json.Unmarshal(raw, &document); err != nil {
-		t.Fatalf("decode the python capability snapshot: %v", err)
-	}
-	catalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
-	if err != nil {
-		t.Fatalf("load the toolkit catalogue: %v", err)
-	}
-	if document.SDKRevision != catalogue.SDKRevision() {
-		t.Errorf("capability revision=%q, catalogue revision=%q",
-			document.SDKRevision, catalogue.SDKRevision())
-	}
-}
-
-// Every import key the python snapshot names must be a key the catalogue knows.
-// A key that names nothing is a capability answer about a toolkit that does not
-// exist, and it would silently withhold nothing.
-func TestPythonCapabilityKeysAllNameACataloguedType(t *testing.T) {
-	t.Parallel()
-
-	capability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
-	if err != nil {
-		t.Fatalf("load python capability: %v", err)
-	}
-	catalogue, err := runtimecomposition.LoadPinnedCurrentToolkitCatalogueSnapshot()
-	if err != nil {
-		t.Fatalf("load the toolkit catalogue: %v", err)
-	}
-	known := map[string]string{}
-	for _, toolkitType := range catalogue.ToolkitTypes() {
-		if key, found := catalogue.ToolkitImportKey(toolkitType); found && key != "" {
-			known[key] = toolkitType
-		}
-	}
-	for _, key := range capability.UnsupportedNames() {
-		if _, found := known[key]; !found {
-			t.Errorf("the python image reports import key %q, which no catalogued type declares", key)
-		}
-	}
-}
-
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	directory, err := os.Getwd()
@@ -368,23 +232,14 @@ func repositoryRoot(t *testing.T) string {
 	return ""
 }
 
-// Real pinned data for the two verdict shapes that matter once imagegen is
-// carried by both workers: a type only Python builds (memory: absent from the
-// Rust allow list, absent from the Python deny list), and imagegen itself,
-// which both build.
-func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
+// Real pinned data for memory (served only under the Rust indexing runtime
+// with an operator-chosen model) and imagegen (always served).
+func TestPinnedCapabilityMemoryAndImagegen(t *testing.T) {
 	t.Parallel()
 
-	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
-	if err != nil {
-		t.Fatalf("load python capability: %v", err)
-	}
 	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
 	if err != nil {
 		t.Fatalf("load rust capability: %v", err)
-	}
-	if ok, reason := python.SupportsToolkitType("memory", "memory"); !ok {
-		t.Errorf("memory is built by the Python worker: %q", reason)
 	}
 	if ok, reason := rust.SupportsToolkitType("memory", "memory"); !ok {
 		t.Errorf("memory has a Rust family over elitea-vector (unit M9): %q", reason)
@@ -394,10 +249,7 @@ func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
 	if ok, reason := rust.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); ok || reason == "" {
 		t.Errorf("memory must be withheld from a Rust worker without the Rust indexing runtime, with a reason: ok=%v reason=%q", ok, reason)
 	}
-	rustIndexing := runtimecomposition.Config{
-		Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
-		IndexIngestDispatchEnabled: true,
-	}
+	rustIndexing := runtimecomposition.Config{Enabled: true, IndexIngestDispatchEnabled: true}
 	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); ok ||
 		!strings.Contains(reason, "Memory needs an embedding model configured by the operator") {
 		t.Errorf("memory needs the operator's embedding model: ok=%v reason=%q", ok, reason)
@@ -406,13 +258,8 @@ func TestPinnedCapabilityRealPythonOnlyAndBothWorkerTypes(t *testing.T) {
 	if ok, reason := rust.ForIndexingRuntime(rustIndexing).SupportsToolkitType("memory", "memory"); !ok {
 		t.Errorf("memory is served under the Rust indexing runtime with a model: %q", reason)
 	}
-	if ok, _ := python.ForIndexingRuntime(runtimecomposition.Config{}).SupportsToolkitType("memory", "memory"); !ok {
-		t.Error("the Python worker serves memory whatever the indexing runtime")
-	}
-	for name, worker := range map[string]*runtimecomposition.WorkerToolkitCapability{"python": python, "rust": rust} {
-		if ok, reason := worker.SupportsToolkitType("imagegen", "imagegen"); !ok {
-			t.Errorf("%s must build imagegen: %q", name, reason)
-		}
+	if ok, reason := rust.SupportsToolkitType("imagegen", "imagegen"); !ok {
+		t.Errorf("rust must build imagegen: %q", reason)
 	}
 }
 
@@ -423,10 +270,6 @@ func TestWithoutACapabilityTheRustOnlyTypesAndToolsAreWithheld(t *testing.T) {
 	t.Parallel()
 
 	var absent *runtimecomposition.WorkerToolkitCapability
-	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
-	if err != nil {
-		t.Fatal(err)
-	}
 	rust, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
 	if err != nil {
 		t.Fatal(err)
@@ -436,28 +279,22 @@ func TestWithoutACapabilityTheRustOnlyTypesAndToolsAreWithheld(t *testing.T) {
 		if supported || !strings.Contains(reason, "only the Rust worker serves") {
 			t.Errorf("nil: %s supported=%v reason=%q", toolkitType, supported, reason)
 		}
-		if supported, _ := python.SupportsToolkitType(toolkitType, ""); supported {
-			t.Errorf("python offers %s", toolkitType)
-		}
 		if supported, reason := rust.SupportsToolkitType(toolkitType, ""); !supported {
 			t.Errorf("rust withholds %s: %s", toolkitType, reason)
 		}
 	}
-	// pptx's Rust-only tools: withheld on nil and Python, offered on Rust;
+	// pptx's Rust-only tools: withheld on nil, offered on Rust;
 	// its SDK tools are offered everywhere.
 	for _, tool := range []string{"add_slide", "export_pdf"} {
 		if supported, reason := absent.SupportsTool("pptx", tool); supported || reason == "" {
 			t.Errorf("nil offers pptx/%s", tool)
-		}
-		if supported, _ := python.SupportsTool("pptx", tool); supported {
-			t.Errorf("python offers pptx/%s", tool)
 		}
 		if supported, reason := rust.SupportsTool("pptx", tool); !supported {
 			t.Errorf("rust withholds pptx/%s: %s", tool, reason)
 		}
 	}
 	for _, tool := range []string{"fill_template", "translate_presentation"} {
-		for name, capability := range map[string]*runtimecomposition.WorkerToolkitCapability{"nil": absent, "python": python, "rust": rust} {
+		for name, capability := range map[string]*runtimecomposition.WorkerToolkitCapability{"nil": absent, "rust": rust} {
 			if supported, reason := capability.SupportsTool("pptx", tool); !supported {
 				t.Errorf("%s withholds the SDK tool pptx/%s: %s", name, tool, reason)
 			}

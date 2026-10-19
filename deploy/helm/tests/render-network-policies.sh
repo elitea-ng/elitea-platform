@@ -46,7 +46,7 @@ NS=(--namespace elitea)
 # below renders without it.
 NOEXT=(--set networkPolicies.main.noExternalIngress=true)
 STANDALONE=(-f "$CHART/values-standalone.yaml")
-WORKER=(--set worker.enabled=true --set worker.implementation=python --set worker.indexingRuntime=python)
+WORKER=(--set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
 SUPERVISOR=(--set sandboxKubernetes.enabled=true
   --set sandboxKubernetes.executionNamespace=code-execution
   --set sandboxKubernetes.supervisor.enabled=true

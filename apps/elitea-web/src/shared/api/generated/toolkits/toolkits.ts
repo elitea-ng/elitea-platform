@@ -1641,10 +1641,10 @@ export const getGetRuntimeCapabilitiesUrl = () => {
  * `pyodide` are tracked separately from #866's six and are not listed
  * either.
  *
- * `worker` is empty when the deployment never stated
- * ELITEA_WORKER_IMPLEMENTATION AND no worker-capability snapshot was
- * composed — the honest "this deployment did not say" answer, not a
- * guessed default.
+ * `worker` is "rust" (the only worker since the Python worker was
+ * removed). It is empty only when the composition root wired no worker
+ * name — the honest "this deployment did not say" answer, not a guessed
+ * default.
  * @summary Which worker this deployment runs and what it cannot do (#865,
  */
 export const getRuntimeCapabilities = async (

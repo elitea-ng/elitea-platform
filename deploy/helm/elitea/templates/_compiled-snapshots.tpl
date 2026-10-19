@@ -54,7 +54,7 @@
 {{- range .Values.worker.runtime.sandboxRuntimes }}
 {{- if and .preparation (hasKey .preparation "compiled_snapshot") }}{{ fail "preparation profiles cannot enable compiled snapshots" }}{{ end }}
 {{- if hasKey . "compiled_snapshot" }}
-{{- if or (not $enabled) (not $.Values.worker.enabled) (ne $.Values.worker.implementation "rust") (ne .language "rust") }}{{ fail "compiled_snapshot requires an enabled Rust execution worker" }}{{ end }}
+{{- if or (not $enabled) (not $.Values.worker.enabled) (ne .language "rust") }}{{ fail "compiled_snapshot requires an enabled Rust execution worker" }}{{ end }}
 {{- if or (not (regexMatch "^sha256:[a-f0-9]{64}$" (default "" .image_digest))) (not (regexMatch "^[a-zA-Z0-9_.-]{1,128}$" (default "" .policy_revision))) }}{{ fail "compiled Worker requires an immutable image and exact policy" }}{{ end }}
 {{- include "elitea.compiledSnapshots.object" (dict "config" .compiled_snapshot "path" "/run/elitea-runtime/rust-compiled-profiles.json" "pin" $c.profilesSha256) }}
 {{- if ne .compiled_snapshot.dependency_bundle_sha256 "" }}

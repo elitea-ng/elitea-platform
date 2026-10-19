@@ -13,13 +13,10 @@
 #
 # The rules held here, each read from the RENDERED runtime.json:
 #
-#   * false (the default) writes no key for either implementation: the Rust
-#     worker reads a missing key as false (#[serde(default)] in
-#     services/elitea-worker-rust/src/config.rs), the Python worker refuses
-#     unknown keys, and render-worker.sh requires the default runtime.json to
-#     be the same document for both;
-#   * true reaches the Rust worker, and true with the Python worker fails the
-#     render;
+#   * false (the default) writes no key: the Rust worker reads a missing key
+#     as false (#[serde(default)] in services/elitea-worker-rust/src/config.rs),
+#     and render-worker.sh asserts the default runtime.json field set;
+#   * true reaches the Rust worker;
 #   * anything that is not a boolean is refused, for this key and for
 #     agentModelCheckpointRecovery: a string "false" is truthy in a template
 #     and would turn recovery on without a word;
@@ -73,7 +70,8 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # gateway postures are render-only values (`.invalid` never resolves).
 RENDER=(
   -f "$CHART/values-standalone.yaml"
-  --set worker.enabled=true --set worker.indexingRuntime=python
+  --set worker.enabled=true
+  --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
@@ -126,52 +124,39 @@ refuses() {
 }
 
 echo "== the default: no key, so recovery is off =="
-render rust-default --set worker.implementation=rust \
+render rust-default \
   && ok "rust renders with the default values" \
   || bad "rust with the default values does not render: $(tail -1 "$TMP/rust-default.err")"
 [ "$(node_recovery rust-default)" = "absent" ] \
   && ok "rust, default: agent_node_recovery is absent (the worker reads false)" \
   || bad "rust, default: agent_node_recovery is $(node_recovery rust-default), want absent"
 
-render python-default --set worker.implementation=python \
-  && ok "python renders with the default values" \
-  || bad "python with the default values does not render: $(tail -1 "$TMP/python-default.err")"
-[ "$(node_recovery python-default)" = "absent" ] \
-  && ok "python, default: agent_node_recovery is absent" \
-  || bad "python, default: agent_node_recovery is $(node_recovery python-default); the Python worker refuses unknown keys"
 
 echo "== an explicit value is the operator's =="
-render rust-false --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=false \
+render rust-false --set worker.runtime.agentNodeRecovery=false \
   && [ "$(node_recovery rust-false)" = "absent" ] \
   && ok "rust, false: agent_node_recovery is absent (the worker reads false)" \
   || bad "rust, false: got $(node_recovery rust-false 2>/dev/null || tail -1 "$TMP/rust-false.err")"
-render rust-true --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+render rust-true --set worker.runtime.agentNodeRecovery=true \
   && [ "$(node_recovery rust-true)" = "true" ] && journal_backed rust-true \
   && ok "rust, true: agent_node_recovery is true with its checkpoint connection" \
   || bad "rust, true: got $(node_recovery rust-true 2>/dev/null || tail -1 "$TMP/rust-true.err")"
-render python-false --set worker.implementation=python --set worker.runtime.agentNodeRecovery=false \
-  && [ "$(node_recovery python-false)" = "absent" ] \
-  && ok "python, false: renders, and agent_node_recovery is absent" \
-  || bad "python, false: got $(node_recovery python-false 2>/dev/null || tail -1 "$TMP/python-false.err")"
-refuses 'require the Rust worker' --set worker.implementation=python --set worker.runtime.agentNodeRecovery=true \
-  && ok "python, true: the render is refused (the Python worker has no journal)" \
-  || bad "python, true: the render was not refused with 'require the Rust worker'"
 
 echo "== a value that is not a boolean is refused =="
 refuses 'worker.runtime.agentNodeRecovery must be true or false' \
-  --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=null \
+  --set worker.runtime.agentNodeRecovery=null \
   && ok "rust, null: refused, not read as off" \
   || bad "rust, null: not refused"
 refuses 'worker.runtime.agentNodeRecovery must be true or false' \
-  --set worker.implementation=rust --set-string worker.runtime.agentNodeRecovery=false \
+  --set-string worker.runtime.agentNodeRecovery=false \
   && ok "rust, the string \"false\": refused, not read as truthy" \
   || bad "rust, the string \"false\": not refused"
 refuses 'worker.runtime.agentNodeRecovery must be true or false' \
-  --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=1 \
+  --set worker.runtime.agentNodeRecovery=1 \
   && ok "rust, the number 1: refused" \
   || bad "rust, the number 1: not refused"
 refuses 'worker.runtime.agentModelCheckpointRecovery must be true or false' \
-  --set worker.implementation=rust --set-string worker.runtime.agentModelCheckpointRecovery=false \
+  --set-string worker.runtime.agentModelCheckpointRecovery=false \
   && ok "rust, agentModelCheckpointRecovery as the string \"false\": refused too" \
   || bad "rust, agentModelCheckpointRecovery as the string \"false\": not refused"
 
@@ -220,26 +205,26 @@ main_owner_on() {
     | grep -qF 'ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"'
 }
 
-refuses "$CODE_REFUSAL" --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+refuses "$CODE_REFUSAL" --set worker.runtime.agentNodeRecovery=true \
   -f "$TMP/sandbox.yaml" \
   && ok "rust, journal and sandbox runtimes, owner recovery off: refused" \
   || bad "rust, journal and sandbox runtimes, owner recovery off: not refused with '$CODE_REFUSAL'"
-refuses "$CODE_REFUSAL" --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+refuses "$CODE_REFUSAL" --set worker.runtime.agentNodeRecovery=true \
   -f "$TMP/sandbox.yaml" --set main.runtime.codeOwnerRecovery.enabled=false \
   && ok "rust, journal and sandbox runtimes, owner recovery explicitly false: refused" \
   || bad "rust, journal and sandbox runtimes, owner recovery explicitly false: not refused with '$CODE_REFUSAL'"
-render rust-journal-no-code --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+render rust-journal-no-code --set worker.runtime.agentNodeRecovery=true \
   && [ "$(node_recovery rust-journal-no-code)" = "true" ] \
   && ok "rust, journal without sandbox runtimes, owner recovery off: renders" \
   || bad "rust, journal without sandbox runtimes: got $(node_recovery rust-journal-no-code 2>/dev/null || tail -1 "$TMP/rust-journal-no-code.err")"
-render rust-code-no-journal --set worker.implementation=rust -f "$TMP/sandbox.yaml" \
+render rust-code-no-journal -f "$TMP/sandbox.yaml" \
   && [ "$(node_recovery rust-code-no-journal)" = "absent" ] \
   && ok "rust, sandbox runtimes without the journal, owner recovery off: renders" \
   || bad "rust, sandbox runtimes without the journal: got $(node_recovery rust-code-no-journal 2>/dev/null || tail -1 "$TMP/rust-code-no-journal.err")"
-render rust-journal-code-owner --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+render rust-journal-code-owner --set worker.runtime.agentNodeRecovery=true \
   -f "$TMP/sandbox.yaml" -f "$TMP/owner.yaml" \
   && code_backed rust-journal-code-owner \
-  && main_owner_on --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  && main_owner_on --set worker.runtime.agentNodeRecovery=true \
     -f "$TMP/sandbox.yaml" -f "$TMP/owner.yaml" \
   && ok "rust, journal, sandbox runtimes and owner recovery: renders, and Main gets owner recovery" \
   || bad "rust, journal, sandbox runtimes and owner recovery: $(tail -1 "$TMP/rust-journal-code-owner.err")"
@@ -263,17 +248,13 @@ worker:
         timeout_seconds: 120
 YAML
 refuses 'no main.runtime.codeOwnerRecovery supervisor for audience "dns:sandbox-rust"' \
-  --set worker.implementation=rust --set worker.runtime.agentNodeRecovery=true \
+  --set worker.runtime.agentNodeRecovery=true \
   -f "$TMP/sandbox-two.yaml" -f "$TMP/owner.yaml" \
   && ok "rust, journal, owner recovery for one of two sandbox audiences: refused for the uncovered audience" \
   || bad "rust, journal, owner recovery missing one sandbox audience: not refused for dns:sandbox-rust"
-render rust-code-two-no-journal --set worker.implementation=rust -f "$TMP/sandbox-two.yaml" -f "$TMP/owner.yaml" \
+render rust-code-two-no-journal -f "$TMP/sandbox-two.yaml" -f "$TMP/owner.yaml" \
   && ok "rust, the same audiences without the journal: renders (no original-Code visit)" \
   || bad "rust, the same audiences without the journal: $(tail -1 "$TMP/rust-code-two-no-journal.err")"
-refuses 'require the Rust worker' --set worker.implementation=python --set worker.runtime.agentNodeRecovery=true \
-  -f "$TMP/sandbox.yaml" \
-  && ok "python, journal and sandbox runtimes: refused as Rust-only, not as a Code owner gap" \
-  || bad "python, journal and sandbox runtimes: not refused with 'require the Rust worker'"
 
 echo
 RAN=$((PASS+FAIL))

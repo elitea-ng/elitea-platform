@@ -52,7 +52,7 @@ NS=elitea
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
 # The standalone profile: the runtime plane on, so the command bus's
 # identities (elitea-main-runtime, elitea-worker) render too.
-"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true --set worker.implementation=python --set worker.indexingRuntime=python \
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-runtime.yaml"
 
@@ -647,16 +647,14 @@ code_prefix = hit.group(1) if hit else None
 tos = [i.get("to", "") for i in accts["SCHEDULER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
 check("the SCHEDULER imports use the scheduler code's JetStream API prefix", code_prefix and tos and all(t.startswith(code_prefix + ".") for t in tos), (code_prefix, tos))
 # Likewise the workers (#1081 review S1): natsconn.WorkerRuntimeJSAPIPrefix,
-# the Rust worker's and the Python worker's own constants, and the WORKER
+# the Rust worker's own constant, and the WORKER
 # imports must all name the same prefix, or a secured worker's bind answers
 # "JetStream not enabled" / no responders.
 hit = re.search(r'WorkerRuntimeJSAPIPrefix\s*=\s*"([^"]+)"', (root / "libs/go/natsconn/natsconn.go").read_text())
 wprefix = hit.group(1) if hit else None
 wtos = [i.get("to", "") for i in accts["WORKER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
 check("the WORKER imports use natsconn.WorkerRuntimeJSAPIPrefix", wprefix and wtos and all(t.startswith(wprefix + ".") for t in wtos), (wprefix, wtos))
-py = re.search(r'RUNTIME_API_PREFIX\s*=\s*"([^"]+)"', (root / "services/elitea-worker-python/src/elitea_worker/transport/nats_jetstream.py").read_text())
 rs = re.search(r'RUNTIME_API_PREFIX:\s*&str\s*=\s*"([^"]+)"', (root / "services/elitea-worker-rust/src/transport/command_bus.rs").read_text())
-check("the Python worker's prefix is the chart's", py and py.group(1) == wprefix, py and py.group(1))
 check("the Rust worker's prefix is the chart's", rs and rs.group(1) == wprefix, rs and rs.group(1))
 
 # ── one NATS server version everywhere (R9) ───────────────────────────────

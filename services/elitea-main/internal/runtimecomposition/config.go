@@ -51,6 +51,12 @@ const (
 	// IndexingRuntimeEnv names the deployment-wide indexing implementation.
 	// It is not ELITEA_RUNTIME_*: that prefix belongs to the dispatch plane,
 	// which a default install leaves off, and this choice is not a plane.
+	//
+	// The Rust runtime is the only implementation since the Python worker was
+	// removed: index metadata lives in elitea_runtime.index_registry and the
+	// vectors in elitea-vector whenever index ingest dispatch is composed. The
+	// variable is still read so that a deployment that pinned the retired
+	// value is refused at startup instead of silently switching stores.
 	IndexingRuntimeEnv = "ELITEA_INDEXING_RUNTIME"
 	// MemoryEmbeddingModelEnv is the gateway embedding model the Rust worker's
 	// memory toolkit embeds with (worker unit M9). The chart renders it from
@@ -58,26 +64,26 @@ const (
 	// this process knows whether memory is actually served.
 	MemoryEmbeddingModelEnv = "ELITEA_MEMORY_EMBEDDING_MODEL"
 
-	IndexingRuntimePython = "python"
-	IndexingRuntimeRust   = "rust"
+	IndexingRuntimeRust = "rust"
 )
 
-// IndexingRuntimeFromEnv reads ELITEA_INDEXING_RUNTIME. Unset or empty is
-// python. An unrecognised value is refused at startup: falling back would let
-// a typo silently keep a Rust deployment on the legacy per-project pgvector
-// path, which Rust-written indexes are invisible to.
-func IndexingRuntimeFromEnv(lookup LookupEnv) (string, error) {
+// checkIndexingRuntimeEnv reads ELITEA_INDEXING_RUNTIME. Unset, empty and
+// "rust" are accepted. Anything else, in particular the retired "python"
+// (whose per-project pgvector index_meta store no worker reads any more), is
+// refused at startup: Rust-written indexes are invisible to that store, so a
+// deployment still pinned to it must be told rather than switched silently.
+func checkIndexingRuntimeEnv(lookup LookupEnv) error {
 	if lookup == nil {
-		return "", errors.New("runtime environment lookup is required")
+		return errors.New("runtime environment lookup is required")
 	}
 	value, _ := lookup(IndexingRuntimeEnv)
 	switch value {
-	case "", IndexingRuntimePython:
-		return IndexingRuntimePython, nil
-	case IndexingRuntimeRust:
-		return IndexingRuntimeRust, nil
+	case "", IndexingRuntimeRust:
+		return nil
+	case "python":
+		return fmt.Errorf("%s=python is no longer supported: the Python worker was removed and Rust is the only indexing runtime; unset it or set it to rust (indexes created under python are not migrated and must be created again)", IndexingRuntimeEnv)
 	default:
-		return "", fmt.Errorf("%s must be python or rust", IndexingRuntimeEnv)
+		return fmt.Errorf("%s must be rust or unset", IndexingRuntimeEnv)
 	}
 }
 
@@ -96,14 +102,6 @@ type Config struct {
 	SSEStreamLimits executionapi.SSEStreamLimits
 
 	IndexIngestDispatchEnabled bool
-	// IndexingRuntime is ELITEA_INDEXING_RUNTIME: which implementation indexes
-	// toolkit content for this deployment (ADR-0030 decision 6). "python" (the
-	// default) keeps every index path exactly as it is: index_meta rows in the
-	// project's pgvector database, written by the SDK and Main together. "rust"
-	// runs the index routes and the admission initializer on the
-	// elitea_runtime.index_registry table, which only Main writes. The two are
-	// never mixed per toolkit.
-	IndexingRuntime string
 	// MemoryEmbeddingModel is ELITEA_MEMORY_EMBEDDING_MODEL; empty means the
 	// operator configured none and the Rust worker serves no memory toolkit.
 	MemoryEmbeddingModel          string
@@ -156,15 +154,11 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		return Config{}, errors.New("runtime environment lookup is required")
 	}
 	enabledValue, _ := lookup("ELITEA_RUNTIME_ENABLED")
-	indexingRuntime, err := IndexingRuntimeFromEnv(lookup)
-	if err != nil {
+	if err := checkIndexingRuntimeEnv(lookup); err != nil {
 		return Config{}, err
 	}
 	switch enabledValue {
 	case "", "false":
-		if indexingRuntime == IndexingRuntimeRust {
-			return Config{}, errors.New(IndexingRuntimeEnv + "=rust requires the runtime and index ingest dispatch")
-		}
 		if _, _, _, err := codeConsumerConfigFromEnv(lookup, nil); err != nil {
 			return Config{}, err
 		}
@@ -218,8 +212,8 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	}
 
 	var config Config
+	var err error
 	config.Enabled = true
-	config.IndexingRuntime = indexingRuntime
 	if value, ok := lookup(MemoryEmbeddingModelEnv); ok {
 		config.MemoryEmbeddingModel = strings.TrimSpace(value)
 	}
@@ -244,9 +238,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED must be true or false")
-	}
-	if config.IndexingRuntime == IndexingRuntimeRust && !config.IndexIngestDispatchEnabled {
-		return Config{}, errors.New(IndexingRuntimeEnv + "=rust requires index ingest dispatch")
 	}
 	agentExecutionEnabled, _ := lookup("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED")
 	switch agentExecutionEnabled {
@@ -396,12 +387,12 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	return config, nil
 }
 
-// RustIndexing reports that the deployment indexes natively
-// (ELITEA_INDEXING_RUNTIME=rust with the index dispatch on): the index registry
-// holds the metadata, elitea-vector holds the vectors, and the project pgvector
-// database is never provisioned or read.
+// RustIndexing reports that the deployment indexes at all, which since the
+// Python worker's removal always means natively: index ingest dispatch is on,
+// the index registry holds the metadata, elitea-vector holds the vectors, and
+// the project pgvector database is never provisioned or read.
 func (c Config) RustIndexing() bool {
-	return c.IndexIngestDispatchEnabled && c.IndexingRuntime == IndexingRuntimeRust
+	return c.IndexIngestDispatchEnabled
 }
 
 // ProjectVectorStoreProvisioned reports whether a created project gets a
@@ -435,15 +426,6 @@ func (c Config) Validate() error {
 	}
 	if c.ExecutionInterruptsAPIEnabled && (!c.Enabled || !c.AgentExecutionDispatchEnabled) {
 		return errors.New("execution interrupts API requires active agent execution dispatch")
-	}
-	switch c.IndexingRuntime {
-	case "", IndexingRuntimePython:
-	case IndexingRuntimeRust:
-		if !c.Enabled || !c.IndexIngestDispatchEnabled {
-			return errors.New(IndexingRuntimeEnv + "=rust requires index ingest dispatch")
-		}
-	default:
-		return errors.New("runtime indexing implementation is invalid")
 	}
 	if !c.Enabled {
 		return nil

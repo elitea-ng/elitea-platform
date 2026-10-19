@@ -17,11 +17,6 @@ import (
 
 const (
 	toolkitCallToolCapabilityVersion = "1"
-	// A tool run holds a bounded synchronous slot and effects provider work,
-	// which is what the index worker's classes already describe, so it takes
-	// the same pair rather than inventing a third.
-	toolkitCallToolResourceClass  = indexResourceClass
-	toolkitCallToolIsolationClass = indexIsolationClass
 	// toolkitCallToolDeadlineTTL is the ADMISSION deadline, not the caller's
 	// wait. It is far longer than the HTTP bound on purpose: the bounded wait
 	// giving up does not cancel the run, and a deadline shorter than the run

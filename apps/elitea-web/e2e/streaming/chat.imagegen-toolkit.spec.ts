@@ -53,18 +53,11 @@
  * WHAT THIS FILE STILL PROVES
  * ─────────────────────────────────────────────────────────────────────────────
  * The toolkit (`generate_image`/`edit_image`) has been served since the
- * catalogue entry landed, but a real dispatch on the Python worker answered
- * "cannot be built" until the admitted `elitea-sdk` pin carried the toolkit's
- * module (`services/elitea-worker-python/elitea-sdk.lock.json`). Authoring
- * the credential/model row, the toolkit, the agent, and attaching it through
+ * catalogue entry landed. Authoring the credential/model row, the toolkit, the agent, and attaching it through
  * the picker (steps 1–4 below) all run and assert for real — a `test.skip`
  * sits between that and step 5, so this file still catches a regression in
  * any of that CRUD/wiring; only the real-provider dispatch and its artifact
  * are out of reach here.
- *
- * `services/elitea-worker-python/tests/unit/test_imagegen_toolkit_dispatch.py`
- * already proves the dispatch at the worker level, against the real admitted
- * SDK, with the outbound HTTP calls stubbed.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE TOOLKIT AND ITS MODEL ARE AUTHORED THROUGH THE API, NOT A FORM
@@ -86,17 +79,13 @@
  * OWN model picker would also offer.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WORKER LEGS
+ * THE WORKER
  * ─────────────────────────────────────────────────────────────────────────────
- * `imagegen` is served by both workers: the Python worker through the SDK's
- * `elitea_sdk/tools/imagegen`, the Rust worker through its native family
+ * `imagegen` is served by the Rust worker's native family
  * (`libs/rust/agent-runtime/src/toolkits/families/imagegen`, which calls the
- * same gateway images routes under the turn's credential and writes the same
- * `/{bucket}/{name_prefix}generate-0.png` artifact). Steps 1-4 below (model
- * row, toolkit, agent, picker attach) therefore run on `chat-stream-rust`
- * too, and a Rust deployment no longer hides the tile. The dispatch half
- * (step 5) is skipped on BOTH legs for the gateway reason above; the Rust
- * dispatch is proven by `services/elitea-worker-rust/src/transport/
+ * gateway images routes under the turn's credential and writes the
+ * `/{bucket}/{name_prefix}generate-0.png` artifact). The dispatch half
+ * (step 5) is skipped for the gateway reason above; the dispatch is proven by `services/elitea-worker-rust/src/transport/
  * images_host_tests.rs` against a fake gateway, byte for byte.
  *
  * ─────────────────────────────────────────────────────────────────────────────

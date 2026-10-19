@@ -20,10 +20,13 @@
  * "Show all" collapsing — a fresh agent shows only its first
  * `max(4, selectedCount)` internal tools sorted with enabled ones first, and
  * with none enabled that is exactly 4 of the (at least) 8 in
- * `INTERNAL_TOOLS_LIST`. Two of the three ELITEA-0141 names — Python sandbox
- * (`pyodide`) and Smart Tools Selection (`lazy_tools_mode`) — sort behind
- * that fold on a brand-new agent, so "Show all" has to be clicked before
- * they exist on screen at all.
+ * `INTERNAL_TOOLS_LIST`. Smart Tools Selection (`lazy_tools_mode`) sorts
+ * behind that fold on a brand-new agent, so "Show all" has to be clicked
+ * before it exists on screen at all.
+ *
+ * ELITEA-0141's third name, the Python sandbox (`pyodide`), is no longer
+ * offered: the feature was dropped with the Python worker (the Rust worker
+ * never served it), so that half of the case is retired rather than ported.
  */
 import { test, expect } from '@playwright/test';
 
@@ -36,11 +39,11 @@ function uniqueName(stem: string): string {
 
 /*
  * ELITEA-0141 (Toolkits-section half) — the section is visible with at
- * least the three named switches (Smart Tools Selection, Python sandbox,
- * Data Analysis), each carrying its own real `role="switch"` control.
+ * least the named switches (Smart Tools Selection, Data Analysis), each
+ * carrying its own real `role="switch"` control.
  */
-/* onetest: ELITEA-0141 — the toolkits section shows Smart Tools Selection, Python sandbox and Data Analysis switches */
-test('J14c-tools: the toolkits section shows Smart Tools Selection, Python sandbox and Data Analysis switches', async ({
+/* onetest: ELITEA-0141 — the toolkits section shows Smart Tools Selection and Data Analysis switches */
+test('J14c-tools: the toolkits section shows Smart Tools Selection and Data Analysis switches', async ({
   page,
   request,
 }) => {
@@ -55,8 +58,8 @@ test('J14c-tools: the toolkits section shows Smart Tools Selection, Python sandb
     await expect(toolkitsSection).toBeVisible({ timeout: 20_000 });
 
     // Data Analysis sorts inside the default fold (index 2 of the
-    // `INTERNAL_TOOLS_LIST` order); Python sandbox and Smart Tools Selection
-    // do not — "Show all" must be clicked to reach them, and only if the
+    // `INTERNAL_TOOLS_LIST` order); Smart Tools Selection does
+    // not — "Show all" must be clicked to reach it, and only if the
     // fold control exists at all (a build with fewer than 5 internal tools
     // would never render one).
     const showAll = toolkitsSection.getByRole('button', { name: /show all/i });
@@ -65,16 +68,11 @@ test('J14c-tools: the toolkits section shows Smart Tools Selection, Python sandb
     }
 
     const dataAnalysis = toolkitsSection.getByTestId('internal-tool-data_analysis');
-    const pythonSandbox = toolkitsSection.getByTestId('internal-tool-pyodide');
     const smartToolSelection = toolkitsSection.getByTestId('internal-tool-lazy_tools_mode');
 
     await expect(dataAnalysis, 'Data Analysis switch must be present').toBeVisible({ timeout: 10_000 });
     await expect(dataAnalysis).toContainText('Data Analysis');
     await expect(dataAnalysis.getByRole('switch')).toBeVisible();
-
-    await expect(pythonSandbox, 'Python sandbox switch must be present').toBeVisible({ timeout: 10_000 });
-    await expect(pythonSandbox).toContainText('Python sandbox');
-    await expect(pythonSandbox.getByRole('switch')).toBeVisible();
 
     await expect(smartToolSelection, 'Smart Tools Selection switch must be present').toBeVisible({ timeout: 10_000 });
     await expect(smartToolSelection).toContainText('Smart Tools Selection');

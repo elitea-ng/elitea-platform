@@ -42,9 +42,8 @@ const GITHUB_ROW = {
   registered: true,
   capability: {
     verdict: 'supported',
-    python: true,
     rust: true,
-    reason: 'the admitted Python worker image build-verifies this type import',
+    reason: 'the Rust worker carries a native family for this type',
   },
   project_grants: [],
 };
@@ -62,7 +61,6 @@ const SQL_ROW = {
   registered: true,
   capability: {
     verdict: 'unverified',
-    python: false,
     rust: true,
     reason: 'the Rust worker carries a native family for this type',
   },

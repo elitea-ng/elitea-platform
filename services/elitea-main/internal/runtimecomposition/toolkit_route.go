@@ -7,21 +7,16 @@ import (
 
 type standaloneToolkitRoute struct {
 	enabled                                         bool
-	rust                                            bool
 	stream, consumer, resourceClass, isolationClass string
 }
 
 // A worker consumes one configured command stream. Standalone toolkit commands
-// follow that worker, without activating the separate indexing capability.
-func configuredToolkitRoute(config Config, capability *WorkerToolkitCapability) (standaloneToolkitRoute, error) {
-	route := standaloneToolkitRoute{}
-	if capability != nil && capability.Implementation() == RustWorkerImplementation {
-		route = standaloneToolkitRoute{enabled: config.AgentExecutionDispatchEnabled, rust: true, stream: config.AgentExecutionCommandStream,
-			consumer: consumerFor(config.AgentExecutionCommandStream), resourceClass: agentResourceClass, isolationClass: agentIsolationClass}
-	} else {
-		route = standaloneToolkitRoute{enabled: config.IndexIngestDispatchEnabled, stream: config.IndexIngestCommandStream,
-			consumer: consumerFor(config.IndexIngestCommandStream), resourceClass: toolkitCallToolResourceClass, isolationClass: toolkitCallToolIsolationClass}
-	}
+// follow the Rust worker's agent stream, without activating the separate
+// indexing capability. The capability is accepted for the composition root's
+// symmetry; the route no longer depends on it (the Rust worker is the only one).
+func configuredToolkitRoute(config Config, _ *WorkerToolkitCapability) (standaloneToolkitRoute, error) {
+	route := standaloneToolkitRoute{enabled: config.AgentExecutionDispatchEnabled, stream: config.AgentExecutionCommandStream,
+		consumer: consumerFor(config.AgentExecutionCommandStream), resourceClass: agentResourceClass, isolationClass: agentIsolationClass}
 	if config.ToolkitDiscoveryEnabled && !route.enabled {
 		return standaloneToolkitRoute{}, errors.New("toolkit discovery requires the configured worker command stream")
 	}

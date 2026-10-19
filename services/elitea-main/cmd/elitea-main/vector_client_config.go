@@ -121,7 +121,7 @@ func composeVectorClient(
 			logger.Warn("elitea-vector client is NOT wired: deleted indexes keep their vectors (tombstones stay pending) and deleted projects keep theirs in Qdrant for ever",
 				"set", vectorTargetEnv)
 		} else {
-			logger.Info("elitea-vector client is not wired; the Python indexing runtime holds no toolkit index there",
+			logger.Info("elitea-vector client is not wired; index ingest dispatch is off, so no toolkit index is held there",
 				"set", vectorTargetEnv)
 		}
 		return nil, func() {}, nil

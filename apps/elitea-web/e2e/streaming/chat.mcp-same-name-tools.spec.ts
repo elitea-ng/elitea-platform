@@ -41,11 +41,8 @@
  *     has to reconcile an instruction saying "call echo" with a function
  *     called `<connection>__echo`.
  *
- * NATIVE RUNTIME ONLY. The naming pass lives in the Rust worker
- * (`services/elitea-worker-rust/src/agents/tool_namespacing.rs`). The python
- * leg builds its tool list inside elitea-sdk, which is cloned at image build
- * time and is not part of this repository, so there is nothing here to change
- * for it and nothing here that would prove it — see the skip's own reason.
+ * The naming pass lives in the Rust worker
+ * (`services/elitea-worker-rust/src/agents/tool_namespacing.rs`).
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -63,9 +60,6 @@ import {
   readMockLlmJournal,
   readStoredTranscript,
 } from '../fixtures/api';
-
-/** Which worker the stack under test is running. */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
@@ -118,14 +112,6 @@ async function openAgentChat(page: Page, agentId: string): Promise<string> {
 test('two MCP connections that publish the same tool name are both callable, under their own names', async ({
   page,
 }) => {
-  // The naming pass is the native runtime's. The python leg assembles its tool
-  // list inside elitea-sdk (cloned at image build time, not in this
-  // repository), so this case has nothing to measure there — a `test.fail`
-  // would record an SDK property as a platform gap.
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'tool-name namespacing is implemented in the native runtime; the python leg builds its tool list in elitea-sdk',
-  );
   test.setTimeout(420_000);
 
   const stamp = String(Date.now()).slice(-7);

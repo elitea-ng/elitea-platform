@@ -1,12 +1,13 @@
 {{- if .Values.worker.enabled }}
-# The worker's one configuration document. Its shape is fixed by
-# elitea_worker/config.py — one JSON config, no env-var settings.
+# The worker's configuration document (runtime.json) and its toolkit security
+# file. The shape of runtime.json is fixed by the Rust worker's config struct
+# (services/elitea-worker-rust/src/config.rs, deny_unknown_fields).
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "elitea-worker-python.fullname" . }}-runtime
+  name: {{ include "elitea-worker.fullname" . }}-runtime
   labels:
-    {{- include "elitea-worker-python.labels" . | nindent 4 }}
+    {{- include "elitea-worker.labels" . | nindent 4 }}
 data:
   # WHY consumer_id CARRIES A PLACEHOLDER
   # consumer_id carries a per-POD placeholder, and the init container
@@ -47,14 +48,9 @@ data:
     }}
     {{- /* The deployment's PUBLIC base URL, for links the Rust worker puts in an
     answer (a chart's Markdown image): platformOrigin is the in-cluster edge,
-    which a browser cannot open. Written only when set, and only for the Rust
-    worker (the Python worker's config refuses unknown keys), so the default
-    runtime.json stays identical for both implementations (render-worker.sh).
-    Links are root-relative without it. */}}
+    which a browser cannot open. Written only when set. Links are
+    root-relative without it. */}}
     {{- if $r.publicBaseUrl }}
-    {{- if ne (include "elitea-worker.isRust" .) "true" }}
-    {{- fail "worker.runtime.publicBaseUrl requires the Rust worker" }}
-    {{- end }}
     {{- $_ := set $config "public_base_url" $r.publicBaseUrl }}
     {{- end }}
     {{- if .Values.nats.tls.enabled }}
@@ -69,16 +65,10 @@ data:
     {{- /* The recovery switches are booleans and nothing else: a string
     "false" is truthy in a template and would turn recovery on without a word.
     Each key is written only when true: false is the Rust worker's own default,
-    and leaving it out keeps the default runtime.json identical for both
-    implementations (render-worker.sh). */}}
+    and leaving it out keeps the default runtime.json minimal (render-worker.sh). */}}
     {{- range $key := list "agentModelCheckpointRecovery" "agentNodeRecovery" }}
     {{- if not (kindIs "bool" (get $r $key)) }}
     {{- fail (printf "worker.runtime.%s must be true or false, not %v" $key (get $r $key)) }}
-    {{- end }}
-    {{- end }}
-    {{- if or $r.agentModelCheckpointRecovery $r.agentNodeRecovery (gt (len $r.sandboxRuntimes) 0) }}
-    {{- if ne (include "elitea-worker.isRust" .) "true" }}
-    {{- fail "worker.runtime agentModelCheckpointRecovery, agentNodeRecovery and sandbox profiles require the Rust worker" }}
     {{- end }}
     {{- end }}
     {{- if $r.agentModelCheckpointRecovery }}
@@ -92,14 +82,10 @@ data:
     {{- end }}
     {{- /* The model completions one claim's toolkits may make in total (the
     step-back index tools, the Office prompts, image generation). Written
-    only when set, and only for the Rust worker, so the default runtime.json
-    stays identical for both implementations; unset, the worker's default
-    (200) applies. Validated like indexModelCallCap: 0 is refused. */}}
+    only when set; unset, the worker's default (200) applies. Validated like
+    indexModelCallCap: 0 is refused. */}}
     {{- if and (hasKey $r "toolkitModelCallCap") (not (kindIs "invalid" $r.toolkitModelCallCap)) (ne (toString $r.toolkitModelCallCap) "") }}
     {{- $cap := $r.toolkitModelCallCap }}
-    {{- if ne (include "elitea-worker.isRust" .) "true" }}
-    {{- fail "worker.runtime.toolkitModelCallCap requires the Rust worker" }}
-    {{- end }}
     {{- if not (or (kindIs "float64" $cap) (kindIs "int64" $cap) (kindIs "int" $cap)) }}
     {{- fail (printf "worker.runtime.toolkitModelCallCap must be an integer of at least 1, not %v (%s)" $cap (kindOf $cap)) }}
     {{- end }}
@@ -109,27 +95,28 @@ data:
     {{- end }}
     {{- $_ := set $config "toolkit_model_call_cap" (int64 $cap) }}
     {{- end }}
-    {{- /* The vector store (ADR-0030 I1, ADR-0031): written only under
-    indexingRuntime=rust, so the python-indexing runtime.json stays identical
-    for both implementations (render-worker.sh). The worker reaches
-    elitea-vector with its runtime mTLS identity; nothing else is mounted. The
-    guard in guards.yaml has already refused rust indexing with no target. */}}
-    {{- if eq (include "elitea.indexingRuntime" .) "rust" }}
+    {{- /* The vector store (ADR-0030 I1, ADR-0031): written only while the
+    release indexes (main.runtime.indexIngestDispatch.enabled), so a
+    deployment without indexing keeps the minimal runtime.json
+    (render-worker.sh). The worker reaches elitea-vector with its runtime mTLS
+    identity; nothing else is mounted. The guard in guards.yaml has already
+    refused indexing with no target. */}}
+    {{- if include "elitea.indexingEnabled" . }}
     {{- $target := $r.vectorTarget | default (printf "%s:%v" .Values.vector.service.name .Values.vector.service.port) }}
     {{- $_ := set $config "vector_target" $target }}
     {{- if $r.indexEgressAllowlist }}
     {{- $_ := set $config "index_egress_allowlist" $r.indexEgressAllowlist }}
     {{- end }}
     {{- /* The `memory` toolkit's embedding model (worker unit M9). Written only
-    when set, and only under the Rust indexing runtime (the claim's vector token
+    when set, and only while the release indexes (the claim's vector token
     and the worker's vector_target exist only there; guards.yaml refuses the
     value elsewhere), so the other runtime.json documents are unchanged. */}}
     {{- if $r.memoryEmbeddingModel }}
     {{- $_ := set $config "memory_embedding_model" ($r.memoryEmbeddingModel | toString) }}
     {{- end }}
     {{- /* The model calls one index run may make (ADR-0030 I4). Written only
-    when set, and only under the Rust indexing runtime, so the Python
-    runtime.json stays identical; the worker's default is the chart default. */}}
+    when set, and only while the release indexes; the worker's default is the
+    chart default. */}}
     {{- /* Validated, never defaulted by accident: 0 is falsy in a template and
     would otherwise vanish into the worker's default. */}}
     {{- if hasKey $r "indexModelCallCap" }}
@@ -148,21 +135,18 @@ data:
     {{- /* The document extraction sidecar (ADR-0030 I1): the worker streams
     PDF and Office documents to this socket, in the emptyDir the Deployment
     shares between the two containers. Written only while the sidecar renders
-    (guards.yaml refuses it outside the Rust indexing runtime), so the
+    (guards.yaml refuses it without indexing), so the
     runtime.json of every other deployment is unchanged. */}}
     {{- if (.Values.worker.extractor | default dict).enabled }}
     {{- $_ := set $config "extractor_socket" (printf "%s/extractor.sock" (trimSuffix "/" .Values.worker.extractor.socketDir)) }}
     {{- end }}
     {{- end }}
     {{ toJson $config }}
-  {{- if eq (include "elitea-worker.isRust" .) "true" }}
-  # The Rust worker's second mandatory file. It carries the rule the Python
-  # worker reads from ELITEA_SENSITIVE_TOOLS, so `sensitiveTools` stays the one
-  # place an operator writes it for either implementation.
+  # The Rust worker's second mandatory file. It carries `sensitiveTools`.
   #
-  # `fromJson` is what makes that possible: the value is a JSON STRING because
-  # an environment variable can hold nothing else, and this file needs the
-  # decoded object. A malformed string fails the render here, which is where an
+  # The value is a JSON STRING (it used to be an environment variable for the
+  # retired Python worker) and `fromJson` decodes it into the object this file
+  # needs. A malformed string fails the render here, which is where an
   # operator can still see it — the Rust worker would instead reject the file at
   # startup and CrashLoopBackOff.
   #
@@ -174,5 +158,4 @@ data:
   # writes only what the operator actually set.
   toolkit-security.json: |
     {{ toJson (dict "toolkit_security" (dict "sensitive_tools" (fromJson $r.sensitiveTools))) }}
-  {{- end }}
 {{- end }}

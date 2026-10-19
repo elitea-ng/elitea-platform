@@ -6,8 +6,8 @@ package toolkits_test
 //
 // getCapabilities below reuses catalogueOptions (type_catalogue_test.go),
 // the exact wiring the composition root uses for ListTypeSchemas, so a test
-// here and TestPythonWorkerCapabilityWithholdsTheTypesItCannotImport /
-// TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize read the
+// here and TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize
+// read the
 // SAME pinned snapshots and cannot silently drift apart.
 
 import (
@@ -45,18 +45,16 @@ var (
 	// Served natively since the planner / Smart Tools Selection / attachments
 	// port (libs/rust/agent-runtime planner.rs and lazy_tools.rs, the
 	// worker's attachment_tools.rs).
-	rustServedInternalTools = []string{"planner", "lazy_tools_mode", "attachments", "data_analysis"}
-	// Every toggle the Python worker runs.
-	allInternalTools = []string{
-		"image_generation", "data_analysis", "internal_mcp",
-		"planner", "swarm", "lazy_tools_mode", "attachments",
+	rustServedInternalTools = []string{
+		"planner", "lazy_tools_mode", "attachments", "data_analysis",
+		"skills_builder", "project_context_builder",
 	}
 )
 
 func TestRuntimeCapabilitiesReportsTheConfiguredWorker(t *testing.T) {
 	t.Parallel()
 
-	for _, implementation := range []string{"python", "rust"} {
+	for _, implementation := range []string{"rust"} {
 		implementation := implementation
 		t.Run(implementation, func(t *testing.T) {
 			t.Parallel()
@@ -105,30 +103,8 @@ func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 	}
 }
 
-// On Python every toggle runs for real.
-func TestRuntimeCapabilitiesInternalToolsOnPython(t *testing.T) {
-	t.Parallel()
-
-	body := getCapabilities(t, append(
-		catalogueOptions(t, "python"),
-		toolkits.WithWorkerImplementation("python"),
-	)...)
-
-	for _, name := range allInternalTools {
-		available, found := body.InternalTools[name]
-		if !found {
-			t.Errorf("internal_tools has no entry for %q", name)
-			continue
-		}
-		if !available {
-			t.Errorf("internal_tools[%q]=false on python, want true", name)
-		}
-	}
-}
-
 // ask_user (the Rust worker's clarification tool, not a Modules toggle) and
-// pyodide (a Deno sandbox only the Python worker ships) are deliberately not
-// reported on.
+// pyodide (the retired Python sandbox) are deliberately not reported on.
 func TestRuntimeCapabilitiesInternalToolsExcludesOutOfScopeNames(t *testing.T) {
 	t.Parallel()
 
@@ -188,31 +164,6 @@ func TestRuntimeCapabilitiesHiddenToolkitTypesOnRust(t *testing.T) {
 		if gotSet[served] {
 			t.Errorf("hidden_toolkit_types contains %q, which materialize.rs supports", served)
 		}
-	}
-}
-
-// The Python worker's own gap (9 types, #869's survivors) is a different,
-// smaller set — and the 17 Rust-only-missing types above must NOT appear
-// here, since the Python worker imports every one of them.
-func TestRuntimeCapabilitiesHiddenToolkitTypesOnPython(t *testing.T) {
-	t.Parallel()
-
-	body := getCapabilities(t, append(
-		catalogueOptions(t, "python"),
-		toolkits.WithWorkerImplementation("python"),
-	)...)
-
-	gotSet := make(map[string]bool, len(body.HiddenToolkitTypes))
-	for _, name := range body.HiddenToolkitTypes {
-		gotSet[name] = true
-	}
-	for _, want := range pythonUnsupportedTypes {
-		if !gotSet[want] {
-			t.Errorf("hidden_toolkit_types is missing %q", want)
-		}
-	}
-	if gotSet["jira"] {
-		t.Error(`hidden_toolkit_types contains "jira" on python, which the SDK imports`)
 	}
 }
 

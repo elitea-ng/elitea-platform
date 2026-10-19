@@ -790,8 +790,7 @@ export default defineConfig({
      *                     matches is the runtime's, not the model's
      *   pipeline*         trace must name the LLM node(s); every one of them
      *                     already says "the graph runs a real model, which
-     *                     echoes nothing" — they NEED E2E_WORKER=rust, which
-     *                     is why the job runs on STANDALONE_WORKER=rust
+     *                     echoes nothing"
      *   regenerate        the echo `contains` is relaxed under
      *                     E2E_CHAT_MODEL; the regeneration half polls
      *                     `execution_generation`, never text
@@ -840,7 +839,7 @@ export default defineConfig({
      * OFFER a tool call that the mock never takes and a real model will. On a
      * pull request that is a flake by construction at 0.6B; on a schedule it
      * is the measurement that decides when they can join the PR lane. Run by
-     * .github/workflows/nightly-real-llm.yml on both runtimes.
+     * .github/workflows/nightly-real-llm.yml.
      */
     {
       name: 'chat-stream-real-nightly',

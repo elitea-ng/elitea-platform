@@ -2,16 +2,16 @@ package toolkits
 
 import "net/http"
 
-// WithWorkerImplementation supplies the plain "python"/"rust" name of the
-// worker image this deployment runs, for RuntimeCapabilities to serve as-is.
+// WithWorkerImplementation supplies the plain name ("rust", the only worker
+// since the Python worker's removal) of the worker image this deployment runs, for RuntimeCapabilities to serve as-is.
 //
 // It is a bare string, not the ToolkitCapabilitySource interface
 // WithWorkerCapability takes, because RuntimeCapabilities' job is different:
 // WithWorkerCapability answers "can THIS type run", per type, already folded
 // into ListTypeSchemas' metadata.hidden. RuntimeCapabilities answers "which
 // worker is this", once, so a client that already has a type's metadata can
-// still tell a Python deployment from a Rust one without re-deriving it from
-// which types happen to be hidden — and so it can answer for the internal
+// still tell which worker answers without re-deriving it from which types
+// happen to be hidden — and so it can answer for the internal
 // chat tools below, which the toolkit catalogue does not cover at all.
 //
 // Left unset, the field stays "", and RuntimeCapabilities serves it as-is
@@ -24,64 +24,52 @@ func WithWorkerImplementation(implementation string) Option {
 // internalToolCapability names one of the platform's toggleable internal chat
 // tools and whether the CONFIGURED worker runs it for real.
 type internalToolCapability struct {
-	name            string
-	pythonAvailable bool
-	rustAvailable   bool
+	name          string
+	rustAvailable bool
 }
 
 // platformInternalTools is the source of truth RuntimeCapabilities reports
 // from, restated here rather than imported: the names are the agent-form
 // toggle catalogue apps/elitea-web/src/features/agents/lib/internalTools.ts
-// keys them by, and the Rust availability is what
+// keys them by, and the availability is what
 // services/elitea-worker-rust/src/agents/internal_tools.rs actually serves:
 //
 //   - planner, lazy_tools_mode (Smart Tools Selection) and attachments are
-//     served by BOTH workers (libs/rust/agent-runtime planner.rs and
-//     lazy_tools.rs; the worker's attachment_tools.rs), so the form shows
-//     them enabled on either deployment;
-//   - data_analysis is served by both too, differently (ADR-0033): the Rust
-//     worker serves structured table tools over CSV, JSON and Excel
-//     attachments (and, with a sandbox, free-form code) instead of the SDK's
-//     model-written pandas;
-//   - image_generation, internal_mcp and swarm are still recognized and
-//     SKIPPED there (PLATFORM_INTERNAL_TOOLS, agent_internal_tool_skipped),
-//     so they are rustAvailable: false;
-//   - skills_builder and project_context_builder run the other way round
-//     (native only), below.
+//     served natively (libs/rust/agent-runtime planner.rs and lazy_tools.rs;
+//     the worker's attachment_tools.rs);
+//   - data_analysis is served as structured table tools over CSV, JSON and
+//     Excel attachments (and, with a sandbox, free-form code; ADR-0033);
+//   - skills_builder and project_context_builder (#940 A8) are served by the
+//     native runtime's SkillsBuilderTool/ProjectContextBuilderTool, which
+//     write through the claim-bound content listener;
+//   - image_generation, internal_mcp and swarm are recognized and SKIPPED
+//     (PLATFORM_INTERNAL_TOOLS, agent_internal_tool_skipped), so they are
+//     rustAvailable: false and the toggle renders disabled-with-a-reason
+//     instead of silently doing nothing (#866).
 //
 // ask_user, the Rust worker's clarification tool, is not a user-facing
-// Modules toggle and is intentionally not listed. pyodide runs a real Deno
-// sandbox on the Python worker only and is tracked separately.
+// Modules toggle and is intentionally not listed.
 //
 // A Rust port that lands another of these moves it to rustAvailable: true
 // HERE — the same change internal_tools.rs itself needs, so a partial port
 // cannot silently under-report through this endpoint by one release lagging
 // the other.
 var platformInternalTools = []internalToolCapability{
-	{name: "image_generation", pythonAvailable: true, rustAvailable: false},
-	{name: "data_analysis", pythonAvailable: true, rustAvailable: true},
-	{name: "internal_mcp", pythonAvailable: true, rustAvailable: false},
-	{name: "planner", pythonAvailable: true, rustAvailable: true},
-	{name: "swarm", pythonAvailable: true, rustAvailable: false},
-	{name: "lazy_tools_mode", pythonAvailable: true, rustAvailable: true},
-	{name: "attachments", pythonAvailable: true, rustAvailable: true},
-	// #940 A8's two builder modules run the OTHER way round: they are
-	// implemented in the native runtime (services/elitea-worker-rust/src/
-	// agents/internal_tools.rs's SkillsBuilderTool/ProjectContextBuilderTool,
-	// which write through the claim-bound content listener) and the Python
-	// SDK worker has no port of them at all — that half is deliberately out
-	// of this programme's scope. Reporting them as python-unavailable is
-	// what makes the toggle render disabled-with-a-reason on a Python
-	// deployment instead of silently doing nothing, the exact failure #866
-	// existed to end.
-	{name: "skills_builder", pythonAvailable: false, rustAvailable: true},
-	{name: "project_context_builder", pythonAvailable: false, rustAvailable: true},
+	{name: "image_generation", rustAvailable: false},
+	{name: "data_analysis", rustAvailable: true},
+	{name: "internal_mcp", rustAvailable: false},
+	{name: "planner", rustAvailable: true},
+	{name: "swarm", rustAvailable: false},
+	{name: "lazy_tools_mode", rustAvailable: true},
+	{name: "attachments", rustAvailable: true},
+	{name: "skills_builder", rustAvailable: true},
+	{name: "project_context_builder", rustAvailable: true},
 }
 
 // RuntimeCapabilitiesResponse is RuntimeCapabilities' wire shape.
 type RuntimeCapabilitiesResponse struct {
-	// Worker is the plain worker name this deployment runs: "python" or
-	// "rust", or "" when the deployment never stated one (see
+	// Worker is the plain worker name this deployment runs: "rust", or ""
+	// when the composition root never stated one (see
 	// WithWorkerImplementation).
 	Worker string `json:"worker"`
 	// InternalTools maps each toggleable internal chat tool
@@ -114,15 +102,12 @@ type RuntimeCapabilitiesResponse struct {
 // workerImplementation is "" (WithWorkerImplementation never wired) — the
 // same "unset means most permissive, not most restrictive" rule
 // WithWorkerCapability's own nil case follows (see its doc comment): only
-// "rust", stated explicitly, turns a tool off. In every real deployment
-// main.go always resolves and wires a non-empty implementation
-// (runtimecomposition.WorkerImplementationFromEnv never returns ""), so ""
-// here means the composition root left this Option out, not that an
-// operator configured nothing.
+// "rust", stated explicitly, turns a tool off. main.go always wires "rust",
+// so "" here means the composition root left this Option out.
 func (h *Handler) RuntimeCapabilities(w http.ResponseWriter, r *http.Request) {
 	internalTools := make(map[string]bool, len(platformInternalTools))
 	for _, tool := range platformInternalTools {
-		available := tool.pythonAvailable
+		available := true
 		if h.workerImplementation == "rust" {
 			available = tool.rustAvailable
 		}

@@ -54,9 +54,8 @@
  * mechanic `chat.pipeline-execution.spec.ts` already proves, rather than
  * paying a second pipeline-authoring round trip for a second `test()`.
  *
- * Both runtimes resume the graph. Rust stores a separate continuation row.
- * Python completes the original response row. The admitted resume identifies
- * that exact response, while both runtimes must pass the same route checks.
+ * The runtime resumes the graph and stores a separate continuation row,
+ * stamped with `pipeline_hitl_parent`.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -77,7 +76,6 @@ const CONTINUE_RE = /\/elitea_core\/continue_predict\/prompt_lib\/(\d+)\/[0-9a-f
 /** The two fixed system-prompt tags each downstream `llm` node is pinned with — the one observable the mock's journal carries per route (see header). */
 const APPROVED_TAG = 'ROUTE_TAG_APPROVED';
 const REJECTED_TAG = 'ROUTE_TAG_REJECTED';
-const IS_RUST = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 /**
  * One `hitl` node (`review`) routing Approve/Reject to two distinct `llm`
@@ -227,13 +225,12 @@ async function resumeHitl(page: Page, action: 'Approve' | 'Reject'): Promise<str
   return admitted.response_message_id as string;
 }
 
-/** Require the successful continuation: Rust segments history, while Python retains the admitted response row. */
+/** Require the successful continuation: the runtime stamps the new continuation row with `pipeline_hitl_parent`. */
 async function expectResumedAnswer(
   page: Page,
   projectId: string,
   conversationId: string,
   token: string,
-  responseMessageId: string,
 ): Promise<void> {
   await expect
     .poll(
@@ -250,12 +247,8 @@ async function expectResumedAnswer(
             metadata?: { is_error?: boolean; pipeline_hitl_parent?: unknown };
           }[];
         };
-        // Rust stamps the new continuation with pipeline_hitl_parent.
-        // Python resumes the exact response named by admission.
         const assistant = body.items?.find(
-          (item) => item.role === 'assistant' && (IS_RUST
-            ? item.metadata?.pipeline_hitl_parent !== undefined
-            : item.uid === responseMessageId),
+          (item) => item.role === 'assistant' && item.metadata?.pipeline_hitl_parent !== undefined,
         );
         return {
           completed: assistant?.metadata?.is_error === false,
@@ -308,9 +301,9 @@ test('a pipeline hitl node resumes each decision onto its OWN route — Approve,
     const approveConversation = await openTestChat(page, pipeline);
     const approveToken = marker('approve');
     await sendTurn(page, approveToken);
-    const approveResponse = await resumeHitl(page, 'Approve');
+    await resumeHitl(page, 'Approve');
 
-    await expectResumedAnswer(page, projectId, approveConversation, approveToken, approveResponse);
+    await expectResumedAnswer(page, projectId, approveConversation, approveToken);
 
     // THE branch proof. The mock echoes the SAME token on either route (the
     // `task: {type: variable, value: input}` mapping is identical on both
@@ -334,9 +327,9 @@ test('a pipeline hitl node resumes each decision onto its OWN route — Approve,
 
     const rejectToken = marker('reject');
     await sendTurn(page, rejectToken);
-    const rejectResponse = await resumeHitl(page, 'Reject');
+    await resumeHitl(page, 'Reject');
 
-    await expectResumedAnswer(page, projectId, rejectConversation, rejectToken, rejectResponse);
+    await expectResumedAnswer(page, projectId, rejectConversation, rejectToken);
     await expectTurnRoute(page, projectId, rejectToken, REJECTED_TAG);
   } finally {
     await deletePipeline(page.request, pipeline);
