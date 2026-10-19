@@ -1675,6 +1675,12 @@ main:
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
+    # HTTP action rules (pipeline `type: http` nodes): the outer bound for the
+    # origin a project admin may write into a rule, checked at write time and
+    # again at every dial. HTTPS only. Unset permits public destinations only;
+    # same grammar and split as ELITEA_MCP_EGRESS_ALLOWLIST above. A malformed
+    # entry fails Main's startup.
+    ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST: ""
     # The origin the Inventory provider calls back to for artifacts and models.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
     # Inventory tools that only read an existing graph still work, and the

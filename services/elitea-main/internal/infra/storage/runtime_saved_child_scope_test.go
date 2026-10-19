@@ -16,12 +16,11 @@ entry_point: send
 nodes:
   - id: send
     type: http
-    revision: 1
+    revision: 2
+    operation: items.create
     request:
-      method: POST
-      url: https://api.example.test/items
       body: {kind: json, value: {n: 184467440737095516170000000000000001}}
-      response: {mode: json}
+    response: {mode: json}
     output: [report]
     transition: END
 `
@@ -85,7 +84,7 @@ func TestCapturedChildUsesMainFrozenWireAndExactGeneratedSelectedIDs(t *testing.
 	if json.Unmarshal(child, &version) != nil || len(version.Snapshot.Nodes) != 1 {
 		t.Fatal("Main snapshot missing")
 	}
-	wire, err := base64.StdEncoding.Strict().DecodeString(version.Snapshot.Nodes[0].RequestWireB64)
+	wire, err := base64.StdEncoding.Strict().DecodeString(version.Snapshot.Nodes[0].TemplateWireB64)
 	if err != nil || !bytes.Contains(wire, []byte("184467440737095516170000000000000001")) {
 		t.Fatal("large numeric token lost before child materialization")
 	}

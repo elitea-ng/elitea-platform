@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -18,27 +19,50 @@ import (
 	"unicode/utf8"
 )
 
-const Schema = "elitea.runtime.http-action.v2"
+// Schema is the Worker-to-Main invocation (http-action-invocation.schema.json,
+// v3): canonical inputs only; Main renders the request from the frozen
+// template and the live rule. Revision 1 (request wire from YAML) is deleted
+// (decision D1).
+const Schema = "elitea.runtime.http-action.v3"
 const ReceiptSchema = "elitea.runtime.http-action-receipt.v2"
 const MaxRequest = 384 * 1024
 const MaxInvocation = 768 * 1024
 const MaxResponse = 2 * 1024 * 1024
 const MaxInline = 512 * 1024
 
+// MaxAttempts bounds the attempt index of one activation; it mirrors the
+// Worker's MAX_NODE_ATTEMPTS (libs/rust/agent-runtime graph/node_recovery.rs).
+const MaxAttempts = 16
+
 var ErrInvalid = errors.New("HTTP action input is invalid")
 var ErrUnauthorized = errors.New("HTTP action authority is unavailable")
 var ErrUnavailable = errors.New("HTTP action dependency is unavailable")
 
+// ErrDispatchInFlight: the same attempt is being dispatched under the live
+// claim; the caller retries the same invocation later and never dispatches.
+var ErrDispatchInFlight = errors.New("HTTP action dispatch is in flight")
+
+// ScopeRef names a saved-child scope (fan-out children). Children arrive with
+// 5d-3; until then a scope_ref is refused as policy_denied.
+type ScopeRef struct {
+	ScopeID      string `json:"scope_id"`
+	Revision     uint64 `json:"revision"`
+	DigestSHA256 string `json:"digest_sha256"`
+}
+
 type Invocation struct {
-	SchemaVersion  string          `json:"schema_version"`
-	NodeID         string          `json:"node_id"`
-	ThreadID       string          `json:"thread_id"`
-	Step           uint64          `json:"step"`
-	ActivationID   string          `json:"activation_id"`
-	RequestDigest  string          `json:"request_digest"`
-	BindingDigest  string          `json:"binding_digest"`
-	RequestWireB64 string          `json:"request_wire_b64"`
-	Request        json.RawMessage `json:"-"`
+	SchemaVersion string    `json:"schema_version"`
+	NodeID        string    `json:"node_id"`
+	ThreadID      string    `json:"thread_id"`
+	Step          uint64    `json:"step"`
+	Attempt       uint32    `json:"attempt"`
+	ActivationID  string    `json:"activation_id"`
+	BindingDigest string    `json:"binding_digest"`
+	InputsB64     string    `json:"inputs_b64"`
+	InputsDigest  string    `json:"inputs_digest"`
+	ScopeRef      *ScopeRef `json:"scope_ref,omitempty"`
+	// Inputs holds the decoded canonical inputs after ParseInvocation.
+	Inputs []byte `json:"-"`
 }
 type Header struct {
 	Name  string `json:"name"`
@@ -111,7 +135,7 @@ func Decode(data []byte, target any) error {
 	var required []string
 	switch target.(type) {
 	case *Invocation:
-		required = []string{"schema_version", "node_id", "thread_id", "step", "activation_id", "request_digest", "binding_digest", "request_wire_b64"}
+		required = []string{"schema_version", "node_id", "thread_id", "step", "attempt", "activation_id", "binding_digest", "inputs_b64", "inputs_digest"}
 	case *Request:
 		required = []string{"method", "url", "response"}
 	}
@@ -138,81 +162,45 @@ func Decode(data []byte, target any) error {
 	}
 	return nil
 }
-func (inv Invocation) RequestBytes() ([]byte, error) {
-	if len(inv.RequestWireB64) > base64.StdEncoding.EncodedLen(MaxRequest) {
-		return nil, ErrInvalid
-	}
-	wire, err := base64.StdEncoding.Strict().DecodeString(inv.RequestWireB64)
-	if err != nil || len(wire) == 0 || len(wire) > MaxRequest || base64.StdEncoding.EncodeToString(wire) != inv.RequestWireB64 || inv.Request != nil && !bytes.Equal(inv.Request, wire) {
-		return nil, ErrInvalid
-	}
-	return wire, nil
-}
 func BindingBytes(value string) [32]byte {
 	var result [32]byte
 	raw, _ := hex.DecodeString(value)
 	copy(result[:], raw)
 	return result
 }
-func Parse(inv Invocation) (Request, error) {
-	wire, err := inv.RequestBytes()
-	if err != nil {
-		return Request{}, err
-	}
-	inv.Request = wire
 
-	if inv.SchemaVersion != Schema || inv.NodeID == "" || len(inv.NodeID) > 128 || inv.ThreadID == "" || len(inv.ThreadID) > 512 || !ValidDigest(inv.RequestDigest) || !ValidDigest(inv.ActivationID) || !ValidDigest(inv.BindingDigest) {
-		return Request{}, ErrInvalid
+// ParseInvocation checks a decoded invocation before any database read:
+// identities, the attempt bound, the inputs size (413 inputs_too_large above
+// MaxInputsBytes, checked on the base64 length before decoding), the inputs
+// digest, and that activation_id is VisitID(thread, node, step, binding). It
+// returns the invocation with Inputs set to the canonical inputs bytes.
+func ParseInvocation(inv Invocation) (Invocation, error) {
+	if inv.SchemaVersion != Schema || !validFrozenID(inv.NodeID) || inv.ThreadID == "" || len(inv.ThreadID) > 512 || !utf8.ValidString(inv.ThreadID) || !ValidDigest(inv.ActivationID) || !ValidDigest(inv.BindingDigest) || !ValidDigest(inv.InputsDigest) || inv.Attempt >= MaxAttempts || inv.Step > math.MaxInt64 {
+		return Invocation{}, invalidInput()
 	}
-	digest := sha256.Sum256(inv.Request)
-	if hex.EncodeToString(digest[:]) != inv.RequestDigest || VisitID(inv.ThreadID, inv.NodeID, inv.Step, BindingBytes(inv.BindingDigest)) != inv.ActivationID {
-		return Request{}, ErrInvalid
+	if len(inv.InputsB64) > base64.StdEncoding.EncodedLen(MaxInputsBytes) {
+		return Invocation{}, &Failure{Code: CodeInputsTooBig}
 	}
-	var request Request
-	if Decode(inv.Request, &request) != nil {
-		return Request{}, ErrInvalid
+	inputs, err := base64.StdEncoding.Strict().DecodeString(inv.InputsB64)
+	if err != nil || len(inputs) == 0 || base64.StdEncoding.EncodeToString(inputs) != inv.InputsB64 {
+		return Invocation{}, invalidInput()
 	}
-	var present map[string]json.RawMessage
-	if json.Unmarshal(inv.Request, &present) != nil {
-		return Request{}, ErrInvalid
+	if len(inputs) > MaxInputsBytes {
+		return Invocation{}, &Failure{Code: CodeInputsTooBig}
 	}
-	if value, exists := present["timeout_ms"]; exists && (string(value) == "0" || string(value) == "null") {
-		return Request{}, ErrInvalid
+	if Digest(inputs) != inv.InputsDigest || VisitID(inv.ThreadID, inv.NodeID, inv.Step, BindingBytes(inv.BindingDigest)) != inv.ActivationID {
+		return Invocation{}, invalidInput()
 	}
-	var responsePresent map[string]json.RawMessage
-	if json.Unmarshal(present["response"], &responsePresent) != nil {
-		return Request{}, ErrInvalid
+	if inv.ScopeRef != nil {
+		// HTTP inside Parallel/Map children arrives with 5d-3; never fall
+		// back to root authority for a scoped call.
+		return Invocation{}, policyDenied()
 	}
-	if value, exists := responsePresent["max_bytes"]; exists && (string(value) == "0" || string(value) == "null") {
-		return Request{}, ErrInvalid
+	if _, err := DecodeInputs(inputs); err != nil {
+		return Invocation{}, err
 	}
-	if value, exists := present["idempotency_key"]; exists && string(value) == `""` {
-		return Request{}, ErrInvalid
-	}
-	if value, exists := present["body"]; exists {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(value, &fields) != nil || fields == nil || len(fields["kind"]) == 0 || request.Body.Kind == "" {
-			return Request{}, ErrInvalid
-		}
-	}
-	if value, exists := present["headers"]; exists {
-		var headers []map[string]json.RawMessage
-		if json.Unmarshal(value, &headers) != nil || headers == nil {
-			return Request{}, ErrInvalid
-		}
-		for _, header := range headers {
-			if len(header["name"]) == 0 || len(header["value"]) == 0 || string(header["value"]) == "null" {
-				return Request{}, ErrInvalid
-			}
-		}
-	}
-	if value, exists := responsePresent["accepted_statuses"]; exists && string(value) == "null" {
-		return Request{}, ErrInvalid
-	}
-	if err := request.Validate(); err != nil {
-		return Request{}, err
-	}
-	return request, nil
+	inv.Inputs = inputs
+	return inv, nil
 }
 func VisitID(thread, node string, step uint64, request [32]byte) string {
 	h := sha256.New()
@@ -227,12 +215,18 @@ func VisitID(thread, node string, step uint64, request [32]byte) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// EffectID is one attempt's durable identity (label v3): execution,
+// generation, activation, attempt, binding digest and inputs digest. A replay
+// with other inputs therefore has another effect id and is refused by Lookup
+// and Begin (409), never dispatched.
 func EffectID(execution string, generation uint64, inv Invocation) string {
 	h := sha256.New()
-	h.Write([]byte("elitea.http.effect.v2\x00"))
-	var number [8]byte
+	h.Write([]byte("elitea.http.effect.v3\x00"))
+	var number, attempt [8]byte
 	binary.BigEndian.PutUint64(number[:], generation)
-	for _, part := range [][]byte{[]byte(execution), number[:], []byte(inv.ActivationID), []byte(inv.RequestDigest), []byte(inv.BindingDigest)} {
+	binary.BigEndian.PutUint64(attempt[:], uint64(inv.Attempt))
+	for _, part := range [][]byte{[]byte(execution), number[:], []byte(inv.ActivationID), attempt[:], []byte(inv.BindingDigest), []byte(inv.InputsDigest)} {
 		var length [8]byte
 		binary.BigEndian.PutUint64(length[:], uint64(len(part)))
 		h.Write(length[:])
@@ -458,7 +452,7 @@ func Project(r Request, status uint16, contentType string, body []byte, artifact
 		size = artifact.ByteLength
 	}
 	if size > r.Response.MaxBytes {
-		return nil, "resource_exhausted"
+		return nil, "response_too_large"
 	}
 	if r.Method == http.MethodHead || status == 204 || status == 205 {
 		if size != 0 {
@@ -472,19 +466,24 @@ func Project(r Request, status uint16, contentType string, body []byte, artifact
 		return nil, "invalid_response"
 	}
 	result := &Projection{Status: status, ContentType: &media, ByteLength: size}
-	if r.Response.Mode == "artifact" {
-		if artifact == nil || !ValidArtifact(*artifact, r.Response.MaxBytes) {
+	// A json or text response above MaxInline is kept as an artifact (the
+	// caller spills it to the rule's output bucket); artifact mode always is.
+	if r.Response.Mode == "artifact" || artifact != nil && size > MaxInline {
+		if artifact == nil || !ValidArtifact(*artifact, r.Response.MaxBytes) || !mediaFitsMode(r.Response.Mode, media) {
 			return nil, "invalid_response"
 		}
 		result.Data = Data{Kind: "artifact", Reference: artifact}
 		return result, ""
 	}
 	if artifact != nil || len(body) > MaxInline {
-		return nil, "resource_exhausted"
+		return nil, "response_too_large"
+	}
+	if !mediaFitsMode(r.Response.Mode, media) {
+		return nil, "invalid_response"
 	}
 	switch r.Response.Mode {
 	case "json":
-		if media != "application/json" && !strings.HasSuffix(media, "+json") || !boundedJSON(body) {
+		if !boundedJSON(body) {
 			return nil, "invalid_response"
 		}
 		d := json.NewDecoder(bytes.NewReader(body))
@@ -495,7 +494,7 @@ func Project(r Request, status uint16, contentType string, body []byte, artifact
 		}
 		result.Data = Data{Kind: "json", Value: v}
 	case "text":
-		if !utf8.Valid(body) || (!strings.HasPrefix(media, "text/") && media != "application/json" && media != "application/xml" && !strings.HasSuffix(media, "+json") && !strings.HasSuffix(media, "+xml")) {
+		if !utf8.Valid(body) {
 			return nil, "invalid_response"
 		}
 		result.Data = Data{Kind: "text", Value: string(body)}
@@ -503,6 +502,18 @@ func Project(r Request, status uint16, contentType string, body []byte, artifact
 		return nil, "invalid_response"
 	}
 	return result, ""
+}
+
+// mediaFitsMode is the content-type contract of each response mode.
+func mediaFitsMode(mode, media string) bool {
+	switch mode {
+	case "json":
+		return media == "application/json" || strings.HasSuffix(media, "+json")
+	case "text":
+		return strings.HasPrefix(media, "text/") || media == "application/json" || media == "application/xml" || strings.HasSuffix(media, "+json") || strings.HasSuffix(media, "+xml")
+	default:
+		return true
+	}
 }
 
 // JSON null remains a present typed value.

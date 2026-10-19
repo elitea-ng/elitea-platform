@@ -54,6 +54,7 @@
   "/settings/devices",
   "/settings/edit-configuration/:credential_uid",
   "/settings/environment",
+  "/settings/http-actions",
   "/settings/memory",
   "/settings/model-configuration",
   "/settings/notifications",

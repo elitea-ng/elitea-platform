@@ -96,7 +96,7 @@ package middleware
 //
 // ── PERFORMANCE ───────────────────────────────────────────────────────────
 //
-// A request outside auditedSurfaces pays one prefix scan over a 10-entry list
+// A request outside auditedSurfaces pays one prefix scan over an 11-entry list
 // and nothing else: no wrapper, no allocation, no context value. A request
 // inside pays one ResponseWriter wrapper (the same `statusRecorder` the OTel
 // middleware already installs), one context value, one 24-byte random read and
@@ -149,6 +149,9 @@ var auditedSurfaces = []string{
 	"/api/v2/elitea_core/register_descriptor/",
 	// Scheduled execution: creating one delegates future action to the platform.
 	"/api/v2/scheduling/",
+	// HTTP action rules: which origin, path, method and credential a pipeline
+	// may call out to — an egress grant written by project admins.
+	"/api/v2/httpactions/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

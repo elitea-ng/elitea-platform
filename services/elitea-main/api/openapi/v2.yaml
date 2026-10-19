@@ -111,6 +111,8 @@ tags:
   - name: toolkits
     description: Toolkit (integration) management
   - name: tracing
+  - name: httpactions
+    description: HTTP action rules for the pipeline HTTP Request node
   - name: webhooks
     description: OpenTelemetry trace ingest (collect/otlp proxy) and status
   - name: branding
@@ -12830,6 +12832,82 @@ components:
         with 200 (:392-395) instead of a 404 — every property above is
         therefore genuinely optional (no `required` list); a real author
         response always includes all of them.
+
+    HttpActionRule:
+      type: object
+      description: >
+        One project HTTP action rule (internal/application/httpaction.Rule).
+        `configuration_id` names an `openapi` configuration whose credential
+        Main resolves at call time; 0 means no credential.
+      properties:
+        id: { type: integer, format: int64 }
+        revision: { type: integer, format: int64 }
+        name: { type: string }
+        origin: { type: string }
+        path_template: { type: string }
+        method:
+          type: string
+          enum: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE]
+        query_names:
+          type: array
+          items: { type: string }
+        configuration_id: { type: integer, format: int32 }
+        toolkit: { type: string }
+        tool: { type: string }
+        output_bucket: { type: string }
+        replay:
+          type: string
+          enum: [never, idempotency_key]
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, revision, name, origin, path_template, method, query_names, configuration_id, toolkit, tool, replay, enabled, created_at, updated_at]
+
+    HttpActionRuleWriteRequest:
+      type: object
+      additionalProperties: false
+      description: >
+        Create/update body. `revision` is required on update and ignored on
+        create. `replay` defaults to `never`: an unknown outcome of a
+        non-safe method is reconciled by an operator, never repeated;
+        `idempotency_key` attests the remote honours Idempotency-Key.
+      properties:
+        name:
+          type: string
+          maxLength: 128
+          pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$'
+        origin:
+          type: string
+          maxLength: 262
+          description: https://host or https://host:port, no path.
+        path_template:
+          type: string
+          maxLength: 2048
+          description: /-separated literal segments or whole-segment {name} placeholders.
+        method:
+          type: string
+          enum: [GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE]
+        query_names:
+          type: array
+          maxItems: 32
+          items: { type: string, maxLength: 64 }
+        configuration_id: { type: integer, format: int32, minimum: 0 }
+        toolkit: { type: string, maxLength: 128 }
+        tool: { type: string, maxLength: 128 }
+        output_bucket: { type: string, maxLength: 128 }
+        replay:
+          type: string
+          enum: [never, idempotency_key]
+        enabled: { type: boolean }
+        revision: { type: integer, format: int64 }
+      required: [name, origin, path_template, method, query_names, configuration_id, toolkit, tool, enabled]
+
+    HttpActionRuleName:
+      type: object
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+      required: [name, enabled]
 
     # ---- Secrets (v2/secrets) ---------------------------------------------
     Webhook:
@@ -28381,6 +28459,150 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ==========================================================================
+  # HTTP ACTION RULES — project rules the `type: http` pipeline node names
+  # ==========================================================================
+  #
+  # internal/api/v2/httpactions: project admins (models.http_action_rules.manage)
+  # author rules; origin, path template, method and credential live only here
+  # (never in pipeline YAML). The origin is checked by the egress guard
+  # (ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST is the outer bound for private
+  # networks) when the rule is written and again at every dial. Rules are
+  # disabled, not deleted. The pipeline editor reads rule names only
+  # (models.http_action_rules.list) and never sees origins or credentials.
+  /httpactions/prompt_lib/{projectID}/rules:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listHttpActionRules
+      summary: List a project's HTTP action rules (admin view)
+      description: >
+        Every rule of the project, ordered by name. An empty project is
+        `{"items": []}` with 200.
+      tags: [httpactions]
+      responses:
+        '200':
+          description: The project's rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/HttpActionRule' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+    post:
+      operationId: createHttpActionRule
+      summary: Create an HTTP action rule
+      description: >
+        The body is validated against the rule schema
+        (elitea.runtime.http-action-rule.v1) and the origin against the egress
+        guard before the row is written. A project holds at most 256 rules.
+      tags: [httpactions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HttpActionRuleWriteRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HttpActionRule' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409': { $ref: '#/components/responses/409' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /httpactions/prompt_lib/{projectID}/rules/{ruleID}:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: ruleID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: getHttpActionRule
+      summary: Read one HTTP action rule
+      tags: [httpactions]
+      responses:
+        '200':
+          description: The rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HttpActionRule' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+    put:
+      operationId: updateHttpActionRule
+      summary: Replace an HTTP action rule (edit, enable or disable)
+      description: >
+        Every field is replaced with the body. `revision` must equal the
+        stored revision (409 otherwise), so two admins cannot overwrite each
+        other silently. A disabled rule refuses every action that names it.
+      tags: [httpactions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HttpActionRuleWriteRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HttpActionRule' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+
+  /httpactions/prompt_lib/{projectID}/rule-names:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listHttpActionRuleNames
+      summary: List rule names for the pipeline editor
+      description: >
+        Names and enabled flags only, ordered by name. Origins, paths,
+        methods and credentials are never returned here.
+      tags: [httpactions]
+      responses:
+        '200':
+          description: The project's rule names
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/HttpActionRuleName' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
 
   # ── The stored-credential checks and the revalidation ──────────────────
   #

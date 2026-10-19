@@ -34,6 +34,11 @@ export type { WebhookViewRow } from './ui/webhooks/WebhooksTable';
 // view, say) does not need a second entry point for #876's second half.
 import { WebhookDeliveriesPanel } from './ui/webhooks/WebhookDeliveriesPanel';
 
+import { useHttpActionRulePermissions } from './lib/http-actions/useHttpActionRulePermissions';
+import { HttpActionRuleFormDialog } from './ui/http-actions/HttpActionRuleFormDialog';
+export type { HttpActionRuleFormValues } from './ui/http-actions/HttpActionRuleFormDialog';
+import { HttpActionRulesTable } from './ui/http-actions/HttpActionRulesTable';
+
 
 import { ProjectContextBody, ProjectContextToasts } from './ui/project-context/ProjectContextBody';
 import { AgentPipelineBuilder } from './ui/project-general/AgentPipelineBuilder';
@@ -100,6 +105,9 @@ export const webhooksFeature = {
   WebhooksTable,
   WebhookDeliveriesPanel,
 };
+
+/** HTTP actions tab (`pages/settings/HttpActions.tsx`, T-5D). */
+export const httpActionsFeature = { useHttpActionRulePermissions, HttpActionRuleFormDialog, HttpActionRulesTable };
 
 /** Project-context tab (`pages/settings/ProjectContext.tsx`). */
 export const projectContextFeature = { ProjectContextBody, ProjectContextEmptyState, ProjectContextToasts, ProjectParamsHeader, hasSavedProjectContext, projectContextStyles, readMarkdownImport };

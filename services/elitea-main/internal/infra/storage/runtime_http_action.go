@@ -5,31 +5,30 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	"google.golang.org/protobuf/proto"
-	"io"
-	"net/http"
-	"net/url"
-	"strconv"
-	"time"
 )
 
-// HTTPActionRule is operator-owned authority for one exact operation.
-// YAML cannot provide the policy subject, credential revision, or artifact bucket.
-type HTTPActionRule struct {
-	ProjectID          int64
-	ActorID            int64
-	Origin             string
-	Path               string
-	Method             string
-	Toolkit            string
-	Tool               string
-	ConfigurationID    int32
-	CredentialRevision string
-	OutputBucket       string
-}
+// HTTP action pool (T-5D §3.4, decision D5): a dedicated pool so HTTP calls
+// (up to 30 s each) never hold the shared content slots that token, version
+// and artifact reads use. Per Main replica, in process.
+const (
+	// MaxHTTPActionSlots bounds concurrent HTTP actions on one Main replica.
+	MaxHTTPActionSlots = 32
+	// MaxHTTPActionsPerExecution bounds one execution's concurrent actions;
+	// the 9th gets 503 + Retry-After, which the Worker retries.
+	MaxHTTPActionsPerExecution = 8
+)
+
 type HTTPActionInput struct {
 	Payload             []byte
 	ProjectID           int64
@@ -43,48 +42,85 @@ type HTTPActionInput struct {
 type HTTPActionSource interface {
 	ReadHTTPActionInput(context.Context, ContentClaim) (HTTPActionInput, error)
 }
+
+// RuntimeHTTPActionService serves runtime-context/http-actions. The route is
+// live wherever this service is composed; its Worker caller arrives in 5d-2.
 type RuntimeHTTPActionService struct {
 	source      HTTPActionSource
+	rules       app.Rules
 	effects     app.Effects
 	credentials app.Credentials
 	artifacts   app.Artifacts
 	transport   app.Transport
-	rules       []HTTPActionRule
+	logger      *slog.Logger
+
+	slots       chan struct{}
+	mu          sync.Mutex
+	inExecution map[string]int
 }
 
-func NewRuntimeHTTPActionService(source HTTPActionSource, effects app.Effects, credentials app.Credentials, artifacts app.Artifacts, transport app.Transport, rules []HTTPActionRule) (*RuntimeHTTPActionService, error) {
-	if source == nil || effects == nil || transport == nil || len(rules) == 0 || len(rules) > 128 {
+// NewRuntimeHTTPActionService wires the action path. transport must be the
+// egress guard's RoundTripper (see NewHTTPActionTransport).
+func NewRuntimeHTTPActionService(source HTTPActionSource, rules app.Rules, effects app.Effects, credentials app.Credentials, artifacts app.Artifacts, transport app.Transport, logger *slog.Logger) (*RuntimeHTTPActionService, error) {
+	if source == nil || rules == nil || effects == nil || credentials == nil || transport == nil {
 		return nil, app.ErrUnavailable
 	}
-	for _, rule := range rules {
-		u, e := url.Parse(rule.Origin)
-		if rule.ProjectID <= 0 || rule.ActorID <= 0 || e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || rule.Path == "" || rule.Toolkit == "" || rule.Tool == "" || rule.ConfigurationID < 0 || rule.ConfigurationID > 0 && !app.ValidDigest(rule.CredentialRevision) {
-			return nil, app.ErrInvalid
-		}
+	if logger == nil {
+		logger = slog.Default()
 	}
-	return &RuntimeHTTPActionService{source: source, effects: effects, credentials: credentials, artifacts: artifacts, transport: transport, rules: append([]HTTPActionRule(nil), rules...)}, nil
+	return &RuntimeHTTPActionService{source: source, rules: rules, effects: effects, credentials: credentials, artifacts: artifacts, transport: transport, logger: logger, slots: make(chan struct{}, MaxHTTPActionSlots), inExecution: make(map[string]int, MaxHTTPActionSlots)}, nil
 }
+
 func (s *RuntimeHTTPActionService) Execute(ctx context.Context, claim ContentClaim, inv app.Invocation) (app.Receipt, error) {
-	admitted, err := s.source.ReadHTTPActionInput(ctx, claim)
-	if err != nil {
-		return app.Receipt{}, app.ErrUnauthorized
-	}
-	runner, err := app.New(httpAdmitter{input: admitted, claim: claim, rules: s.rules}, s.effects, s.credentials, s.artifacts, s.transport)
+	runner, err := app.New(httpAdmitter{source: s.source, claim: claim}, s.rules, s.effects, s.credentials, s.artifacts, s.transport)
 	if err != nil {
 		return app.Receipt{}, err
 	}
 	return runner.Execute(ctx, inv)
 }
 
-type httpAdmitter struct {
-	input HTTPActionInput
-	claim ContentClaim
-	rules []HTTPActionRule
+// acquire takes one global and one per-execution slot without blocking.
+func (s *RuntimeHTTPActionService) acquire(executionID string) bool {
+	select {
+	case s.slots <- struct{}{}:
+	default:
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inExecution[executionID] >= MaxHTTPActionsPerExecution {
+		<-s.slots
+		return false
+	}
+	s.inExecution[executionID]++
+	return true
 }
 
-func (a httpAdmitter) Admit(_ context.Context, inv app.Invocation, request app.Request) (app.Admission, error) {
-	var input runtimev1.AgentExecutionInputV1
-	if len(a.input.Payload) > 8*1024*1024 || proto.Unmarshal(a.input.Payload, &input) != nil || len(input.ToolkitGuardrails) == 0 {
+func (s *RuntimeHTTPActionService) release(executionID string) {
+	s.mu.Lock()
+	if s.inExecution[executionID] <= 1 {
+		delete(s.inExecution, executionID)
+	} else {
+		s.inExecution[executionID]--
+	}
+	s.mu.Unlock()
+	<-s.slots
+}
+
+type httpAdmitter struct {
+	source HTTPActionSource
+	claim  ContentClaim
+}
+
+// Admit reads the live claim and the frozen start input. The project, actor
+// and template come only from Main's records, never from the invocation.
+func (a httpAdmitter) Admit(ctx context.Context, inv app.Invocation) (app.Admission, error) {
+	input, err := a.source.ReadHTTPActionInput(ctx, a.claim)
+	if err != nil {
+		return app.Admission{}, app.ErrUnauthorized
+	}
+	var execution runtimev1.AgentExecutionInputV1
+	if len(input.Payload) > 8*1024*1024 || proto.Unmarshal(input.Payload, &execution) != nil || len(execution.ToolkitGuardrails) == 0 {
 		return app.Admission{}, app.ErrUnauthorized
 	}
 	var application struct {
@@ -95,54 +131,36 @@ func (a httpAdmitter) Admit(_ context.Context, inv app.Invocation, request app.R
 			Snapshot     app.FrozenSnapshot `json:"http_action_snapshot"`
 		} `json:"version_details"`
 	}
-	if json.Unmarshal(input.Application, &application) != nil || application.VersionDetails.Snapshot.Verify(application.ID, application.VersionID, application.VersionDetails.Instructions, inv) != nil {
+	if json.Unmarshal(execution.Application, &application) != nil {
 		return app.Admission{}, app.ErrUnauthorized
 	}
-	// The frozen contract admits only the root graph. Child scope contracts remain deferred.
-	if inv.ThreadID != rootGraphThread(a.input.TenantID, a.input.ProjectID, a.input.ProjectionProjectID, input.GetThreadId()) {
-		return app.Admission{}, app.ErrUnauthorized
-	}
-	var frozen guardrails.RuntimePolicy
-	if json.Unmarshal(input.ToolkitGuardrails, &frozen) != nil {
-		return app.Admission{}, app.ErrUnauthorized
-	}
-	policy := guardrails.NewPolicy(guardrails.PolicyInput{BlockedToolkits: frozen.BlockedToolkits, BlockedTools: frozen.BlockedTools, SensitiveTools: frozen.SensitiveTools})
-	u, err := url.Parse(request.URL)
+	template, err := application.VersionDetails.Snapshot.Verify(application.ID, application.VersionID, application.VersionDetails.Instructions, inv)
 	if err != nil {
 		return app.Admission{}, app.ErrUnauthorized
 	}
-	configurationID := int32(0)
-	if request.Credential != nil {
-		configurationID = request.Credential.ConfigurationID
-	}
-	var selected *HTTPActionRule
-	for i := range a.rules {
-		rule := &a.rules[i]
-		if rule.ProjectID == a.input.ProjectID && rule.ActorID == a.input.ActorID && rule.Origin == u.Scheme+"://"+u.Host && rule.Path == u.EscapedPath() && rule.Method == request.Method && rule.ConfigurationID == configurationID {
-			if selected != nil {
-				return app.Admission{}, app.ErrUnauthorized
-			}
-			selected = rule
-		}
-	}
-	if selected == nil || policy.ToolkitBlocked(selected.Toolkit) || policy.ToolBlocked(selected.Toolkit, selected.Tool) {
+	// Root graph only; fan-out children carry a scope_ref (5d-3), refused earlier.
+	if inv.ThreadID != app.RootGraphThread(input.TenantID, input.ProjectID, input.ProjectionProjectID, execution.GetThreadId()) {
 		return app.Admission{}, app.ErrUnauthorized
 	}
-	// No alternate sensitive or delegated decision is invented by the HTTP path.
-	// Until call-bound HTTP approval is integrated, sensitive actions fail closed.
-	if _, sensitive := policy.SensitiveMatch(selected.Tool, selected.Toolkit); sensitive {
+	var frozen guardrails.RuntimePolicy
+	if json.Unmarshal(execution.ToolkitGuardrails, &frozen) != nil {
 		return app.Admission{}, app.ErrUnauthorized
 	}
-	return app.Admission{ExecutionID: a.claim.ExecutionID, Generation: a.claim.Generation, ProjectID: a.input.ProjectID, ActorID: a.input.ActorID, ClaimID: a.input.ClaimID, LeaseEpoch: a.input.LeaseEpoch, Deadline: a.input.Deadline, CredentialRevision: selected.CredentialRevision, OutputBucket: selected.OutputBucket, PolicyDigest: httpRuleDigest(*selected)}, nil
-}
-func rootGraphThread(tenant string, project, projection int64, thread string) string {
-	return app.RootGraphThread(tenant, project, projection, thread)
+	policy := guardrails.NewPolicy(guardrails.PolicyInput{BlockedToolkits: frozen.BlockedToolkits, BlockedTools: frozen.BlockedTools, SensitiveTools: frozen.SensitiveTools})
+	return app.Admission{ExecutionID: a.claim.ExecutionID, Generation: a.claim.Generation, ProjectID: input.ProjectID, ActorID: input.ActorID, ClaimID: input.ClaimID, LeaseEpoch: input.LeaseEpoch, Deadline: input.Deadline, Template: template, Tools: toolPolicy{policy}}, nil
 }
 
-// Main policy ownership is pinned in the durable effect alongside frozen bytes.
-func httpRuleDigest(rule HTTPActionRule) string {
-	raw, _ := json.Marshal(rule)
-	return app.Digest(raw)
+type toolPolicy struct{ policy guardrails.Policy }
+
+// Permits refuses blocked toolkits and tools. No alternate sensitive or
+// delegated decision is invented by the HTTP path: until call-bound HTTP
+// approval exists, a sensitive rule fails closed.
+func (p toolPolicy) Permits(toolkit, tool string) bool {
+	if p.policy.ToolkitBlocked(toolkit) || p.policy.ToolBlocked(toolkit, tool) {
+		return false
+	}
+	_, sensitive := p.policy.SensitiveMatch(tool, toolkit)
+	return !sensitive
 }
 
 func (s *ContentServer) WithRuntimeHTTPActions(actions *RuntimeHTTPActionService) *ContentServer {
@@ -151,45 +169,83 @@ func (s *ContentServer) WithRuntimeHTTPActions(actions *RuntimeHTTPActionService
 	}
 	return s
 }
-func (s *ContentServer) PostHTTPAction(w http.ResponseWriter, r *http.Request) {
-	if !s.acquire(w) {
-		return
+
+// httpActionStatus maps typed failures to the Worker-facing status and code.
+// Unknown errors are 500 "internal" with no detail.
+func httpActionStatus(err error) (int, string) {
+	switch {
+	case app.FailureCode(err) == app.CodeInputsTooBig:
+		return http.StatusRequestEntityTooLarge, app.CodeInputsTooBig
+	case errors.Is(err, app.ErrNonDeterministic):
+		return http.StatusConflict, app.CodeNonDetermined
+	case errors.Is(err, app.ErrInvalid):
+		return http.StatusUnprocessableEntity, app.CodeInvalidInput
+	case errors.Is(err, app.ErrUnauthorized):
+		return http.StatusForbidden, app.CodePolicyDenied
+	case errors.Is(err, app.ErrDispatchInFlight):
+		return http.StatusServiceUnavailable, "dispatch_in_flight"
+	case errors.Is(err, app.ErrUnavailable), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return http.StatusServiceUnavailable, "unavailable"
+	default:
+		return http.StatusInternalServerError, "internal"
 	}
-	defer s.release()
+}
+
+func writeHTTPActionError(w http.ResponseWriter, status int, failure string) {
+	if status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "1")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	setPrivateNoCacheHeaders(w.Header())
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`{"code":"` + failure + `"}`))
+}
+
+func (s *ContentServer) PostHTTPAction(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	claim, err := parseExecutionClaim(r)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		writeHTTPActionError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	if s.runtimeHTTPActions == nil {
+	actions := s.runtimeHTTPActions
+	if actions == nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
+	if !actions.acquire(claim.ExecutionID) {
+		writeHTTPActionError(w, http.StatusServiceUnavailable, "capacity")
+		return
+	}
+	defer actions.release(claim.ExecutionID)
 	data, err := readHTTPActionBody(r)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		writeHTTPActionError(w, http.StatusRequestEntityTooLarge, app.CodeInputsTooBig)
 		return
 	}
 	var request app.Invocation
 	if app.Decode(data, &request) != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		writeHTTPActionError(w, http.StatusUnprocessableEntity, app.CodeInvalidInput)
 		return
 	}
-	receipt, err := s.runtimeHTTPActions.Execute(r.Context(), claim, request)
+	receipt, err := actions.Execute(r.Context(), claim, request)
+	// Safe fields only: never the URL, headers, bodies, inputs or credential.
+	fields := []any{slog.String("execution_id", claim.ExecutionID), slog.Uint64("generation", claim.Generation), slog.String("node_id", boundedLogID(request.NodeID)), slog.Uint64("attempt", uint64(request.Attempt)), slog.Int64("duration_ms", time.Since(started).Milliseconds())}
 	if err != nil {
-		status := http.StatusServiceUnavailable
-		if errors.Is(err, app.ErrInvalid) {
-			status = http.StatusUnprocessableEntity
-		}
-		if errors.Is(err, app.ErrUnauthorized) {
-			status = http.StatusForbidden
-		}
-		http.Error(w, http.StatusText(status), status)
+		status, failure := httpActionStatus(err)
+		actions.logger.WarnContext(r.Context(), "http action refused", append(fields, slog.Int("status", status), slog.String("code", failure))...)
+		writeHTTPActionError(w, status, failure)
 		return
 	}
+	failure := ""
+	if receipt.FailureCode != nil {
+		failure = *receipt.FailureCode
+	}
+	actions.logger.InfoContext(r.Context(), "http action", append(fields, slog.String("state", receipt.State), slog.String("failure_code", failure), slog.String("effect_id", receipt.EffectID))...)
 	body, err := json.Marshal(receipt)
 	if err != nil || len(body) > 3*1024*1024 {
-		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+		writeHTTPActionError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -200,6 +256,13 @@ func (s *ContentServer) PostHTTPAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+func boundedLogID(value string) string {
+	if len(value) > 128 {
+		return value[:128]
+	}
+	return value
 }
 
 func readHTTPActionBody(r *http.Request) ([]byte, error) {

@@ -1,18 +1,34 @@
 # HTTP action node design (Gate 5d, revision 2)
 
-Status: proposed design. No runtime code. Capability-disabled.
+Status: Main side implemented in 5d-1 (2026-10-19, `feat/http-action-main-foundation`); the Worker node arrives in 5d-2 and
+HTTP inside fan-out children in 5d-3. Section "Implementation status (5d-1)" below lists every place where the code
+differs from the original proposal; the source mapping
+`source-mapping/http-action-main-foundation-20261019.md` has the tests and evidence.
 
 | Item | Value |
 | --- | --- |
 | Date | 2026-10-08 |
 | Wave | Wave 1 design (Track D, deliverable D5). Implementation is Wave 2. |
-| Gate | `HTTP_ACTION_INTEGRATION_READY=false` in production builds. Also keep the Web `CompilerAdmittedNodeTypes` entry for `http` off. |
+| Gate | None (PLAN §8.1: no feature flags). `HTTP_ACTION_INTEGRATION_READY` was only ever a proposal and must never be added; the `http` family is admitted in Worker, Main and Web in 5d-2. |
 | Sources | Point 5 Wave 1 handoff: `PLAN.md` section 3 "2c" and section 6 answer 1, `experts/05-main-actions.md`, `experts/02-durability.md` section 4. |
 | Schemas | `libs/jsonschema/runtime/v1/http-action-*.schema.json` and `fixtures/http-action-*`. |
 | Unverified claims | Marked ASSUMPTION. |
 
 Paths are relative to the repository root. `M/` is `services/elitea-main/`. `W/` is `services/elitea-worker-rust/`.
 Line numbers were checked on `origin/main` in this worktree on 2026-10-08.
+
+## Implementation status (5d-1)
+
+| Topic | Code (5d-1) |
+| --- | --- |
+| Revision 1 | Deleted (decision D1): `FreezeSnapshot` accepts `revision: 2` only, snapshot `elitea.runtime.http-action-snapshot.v2`, invocation `elitea.runtime.http-action.v3`; `Parse`/`request_wire_b64` and the v1 frozen fixture are gone. |
+| Egress | The pre-#1149 rows in §3 and §16 are historical. Since #1149 the guard is `M/internal/infra/egress` (`RoundTripper()`, `RequireHTTPS()`, `Proxy=nil`, dial-time re-resolution). HTTP actions build it once with `egress.NewHTTPActionGuard(ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST)` for rule writes, the action dial and the OAuth2 token fetch. The `Transport` port is `http.RoundTripper`, which an `*http.Client` cannot satisfy (FU-073). |
+| Attempts | Invocation v3 carries `attempt` (0-15, mirrors `MAX_NODE_ATTEMPTS`); the effect primary key is `(execution, generation, activation, attempt)` and `effect_id` v3 hashes the attempt. A new attempt is admitted only after an `uncertain` or `failed` one and only for class I rules (decision D2). |
+| Rule pinning | Begin stores the rule exactly as read (`rule_wire`, `rule_id`, `rule_revision`; `policy_digest` is its SHA-256). Recovery re-renders from `inputs_bytes` and `rule_wire` and must reproduce `request_bytes`. |
+| Dispatch deadline | `dispatch_deadline` (call deadline + 5 s commit window): a `dispatching` row of the live claim before it is `503 dispatch_in_flight`; after it, or under another claim, it becomes `uncertain/reconciliation_required`. |
+| Pool | Per Main replica, in the HTTP action service (not the shared content pool): 32 slots, 8 per execution (decision D5). |
+| Failure answers | JSON `{"code": ...}`: 413 `inputs_too_large`, 422 `invalid_input`, 403 `policy_denied`, 409 `nondeterministic_inputs`, 503 `dispatch_in_flight`/`capacity`/`unavailable` (+ `Retry-After`), 500 `internal`. |
+| Responses | Above 512 KiB a json/text response is stored in the rule's `output_bucket` and projected as an artifact; without a bucket, and above `max_bytes`, the receipt is `failed/response_too_large`. |
 
 ## 1. Summary
 
@@ -53,7 +69,7 @@ These are not reopened here.
 | Effects table | `execution_http_effects` (0145), frozen digests and receipt wire (0151), saved-child columns (0152). Primary key `(execution_id, generation, activation_id)`, unique `effect_id`. | `M/migrations/shared/0145_execution_http_effects.sql`, `0151_http_frozen_request_receipts.sql`, `0152_execution_saved_child_scopes.sql` |
 | Recovery owner | Composed. Reads a committed receipt under `FOR SHARE` and builds an owner proof. | `composition.go:519`; `M/internal/infra/db/repos/http_action_recovery.go:31-90` |
 | Results route | `POST …/node-recovery/results/{contentID}/versions/{version}`. | `content_server.go:386` |
-| Egress guard | `webhook.DestinationGuard` re-resolves DNS and dials the IP literal. It clones `http.DefaultTransport`, so it inherits `Proxy: ProxyFromEnvironment`. It does not block CGNAT, `0/8`, `192.0.0/24`, `198.18/15`, `240/4` or NAT64. | `M/internal/api/webhook/ssrf.go:183,316-336`; `libs/go/egresslib/allowlist.go:119-125` |
+| Egress guard | (Historical, before #1149: `webhook.DestinationGuard` inherited the environment proxy and missed several address classes.) Now `M/internal/infra/egress/guard.go`: `Proxy=nil`, `RoundTripper()` never follows a redirect, dial-time re-resolution, all classes incl. CGNAT, `0/8`, `192.0.0/24`, `198.18/15`, `240/4`, NAT64 and IPv4-mapped forms (`libs/go/egresslib/addrcheck/classify.go`). | `M/internal/infra/egress/guard.go`; `M/internal/infra/egress/http_action.go` |
 | Transport port | `Transport` is `Do(*http.Request)`. An `*http.Client` satisfies it and follows redirects. | `service.go` (`Transport` interface) |
 | Content pool | One shared pool of 16 slots. `PostHTTPAction` holds a slot for the whole call (up to 30 s). Attachments already have their own pool. | `content_server.go:25,126-130,1097-1115` |
 | Worker | `http_action.rs` is an error vocabulary only. No node, no client, no gate constant. | `W/src/agents/graph/http_action.rs` (46 lines) |
@@ -67,7 +83,7 @@ Code facts that differ from the plan text:
   the next free shared migration number at implementation time (0154 is taken; check main and #1084).
 - The guard does not set `Proxy` explicitly. It inherits it from `DefaultTransport.Clone()`. The effect is the same as
   expert 05 F5: if an operator sets `HTTPS_PROXY`, the proxy address is dialled, not the target.
-- The Worker gate constant `HTTP_ACTION_INTEGRATION_READY` does not exist yet. Wave 2 adds it.
+- There is no gate constant (PLAN §8.1). The node is admitted unconditionally in 5d-2.
 - The Go invocation `schema_version` string is `elitea.runtime.http-action.v2`. The schema `$id` for the new shape is
   `...invocation.v3`, so the in-body constant for v3 is a proposal (`elitea.runtime.http-action.v3`).
 
@@ -111,9 +127,11 @@ credential or configuration id, any templated URL string.
 Bindings are deliberately simpler than the LLM node `input_mapping` (`type: fixed|variable|fstring`). There is no
 string interpolation.
 
-### Revision 1 stays readable
+### Revision 1 is deleted (decision D1, 5d-1)
 
-- `FreezeSnapshot` keeps accepting `revision: 1` unchanged. It produces snapshot `elitea.runtime.http-action-snapshot.v1`.
+The paragraph below is the original proposal, kept for history. Revision 1 never ran in production and was deleted instead.
+
+- (Proposal) `FreezeSnapshot` keeps accepting `revision: 1` unchanged. It produces snapshot `elitea.runtime.http-action-snapshot.v1`.
 - Revision 2 produces a new snapshot schema `elitea.runtime.http-action-snapshot.v2`. Each node entry keeps `node_id`,
   `output`, `transition` and the binding digest, and adds `operation`, `revision` and the template (the `request`,
   `response` and `timeout_ms` objects as canonical JSON). `Verify` picks the branch by `schema_version`.
@@ -303,8 +321,7 @@ Dedicated pool in `ContentServer`, modelled on `attachmentRequests` (`content_se
   to it.
 - `activation_id` already includes the child thread, so `effect_id` is child-scoped.
 - An HTTP node on an unknown thread without `scope_ref` is refused. It never falls back to root authority.
-- Gate: nothing runs until `HTTP_ACTION_INTEGRATION_READY` and the fan-out gates are flipped (PLAN section 3 2e: HTTP
-  flips last).
+- No gate (PLAN §8.1). Until 5d-3 a `scope_ref` is refused as `policy_denied` (`ParseInvocation`).
 
 ## 13. Crash cases
 
@@ -448,9 +465,9 @@ for 5b. Cases 1, 3, 4, 5, 10 and 16 are proven on real PostgreSQL, case 1 with a
 | Requirement | Enforced by (code mechanism) | Proven by (test) |
 | --- | --- | --- |
 | Authority inside the effect transaction | `Effects.Begin` (Wave 2) opens one Begin transaction: `SELECT ... FROM http_action_rules ... FOR SHARE`, recheck `enabled` and egress allowlist, live RBAC of the original actor on `configuration_id`, live credential revision, then INSERT the effect row; any failed recheck → `ErrUnauthorized`/`policy_denied`, no row (fail closed). Project from trusted execution scope, never YAML | Negative-authz `TestBeginForeignActorRefused` and `TestBeginForeignProjectRuleRefused` (PG, `http_action_effects_postgres_integration_test.go`, Wave 2): 403/`policy_denied`, 0 effect rows, 0 requests; `TestBeginConcurrentRuleDisable` (PG): disable ordered before Begin → denied, after → one dispatch, never both |
-| Rule authoring by project admins; guard at write and dial time | Permission `models.http_action_rules.manage` (proposal) checked in the admin handler (Wave 2, `repos/http_action_rules.go` + API package); `egress.Guard.Validate` at write and in `DialContext` (`ssrf.go:158,191`) | Negative-authz `TestRuleWriteWithoutPermission403` and cross-project write refused; `TestRuleWriteOutsideAllowlistRefused`; `TestDialRefusesRuleAllowedYesterday` (guard test) |
+| Rule authoring by project admins; guard at write and dial time | Permission `models.http_action_rules.manage` (proposal) checked in the admin handler (Wave 2, `repos/http_action_rules.go` + API package); `egress.Guard.Validate` at write and the guard's dial-time check (`M/internal/infra/egress/guard.go`) | Negative-authz `TestRuleWriteWithoutPermission403` and cross-project write refused; `TestRuleWriteOutsideAllowlistRefused`; `TestDialRefusesRuleAllowedYesterday` (guard test) |
 | Strict input handling: no URL/method/credential in YAML; segment-encoding; allowed query names; restricted headers; CR/LF/NUL; `.`/`..` | `deny_unknown_fields`/`additionalProperties: false` in `http-action-node.schema.json`; `Parse`/`Validate` (`contract.go:157,254`); Wave 2 `render.go` typed `ErrRenderRefused` before Lookup | Fixture `http-action-render-vectors-v1.json` (25 vectors: 15 request, 10 error code) run by Go `TestRenderVectors` and Rust `render_vectors_match` ; schema fixtures `TestHTTPActionSchemaFixtures`; every restricted header refused (table test) |
-| Egress guard: no redirects, blocked ranges incl. CGNAT/NAT64/IPv4-mapped, `Proxy = nil`, HTTPS only, TLS verified, resolve-filter-dial IP literal | `M/internal/infra/egress` (Track M1): constructor accepts only `*http.Transport` (cannot wire a redirect-following client); `Proxy = nil`; `MaxResponseHeaderBytes = 64 << 10`; blocked-class list; current guard `DestinationGuard` (`ssrf.go:110,182,225`) | Guard tests `TestBlockedClassesTable` (each class incl. mapped/NAT64/`100.100.100.200`), `TestProxyEnvIgnored` (`HTTPS_PROXY` set → target dialed, 0 proxy hits), `TestHTTPSOnly`, `TestTLSHostMismatchRefused`, `TestRedirectRefusedNoFollow`, `TestResponseHeaders64KiBBoundary` (64 KiB ok, + 1 refused) — `internal/infra/egress/*_test.go` (Wave 2) |
+| Egress guard: no redirects, blocked ranges incl. CGNAT/NAT64/IPv4-mapped, `Proxy = nil`, HTTPS only, TLS verified, resolve-filter-dial IP literal | `M/internal/infra/egress/guard.go` (#1149) and `http_action.go` (`NewHTTPActionGuard`, HTTPS only); the `Transport` port is `http.RoundTripper` (an `*http.Client` cannot be wired); `Proxy = nil`; `MaxResponseHeaderBytes = 64 << 10` | Guard tests `TestBlockedClassesTable` (each class incl. mapped/NAT64/`100.100.100.200`), `TestProxyEnvIgnored` (`HTTPS_PROXY` set → target dialed, 0 proxy hits), `TestHTTPSOnly`, `TestTLSHostMismatchRefused`, `TestRedirectRefusedNoFollow`, `TestResponseHeaders64KiBBoundary` (64 KiB ok, + 1 refused) — `internal/infra/egress/*_test.go` (Wave 2) |
 | Credentials by reference; never in YAML, invocation, receipts, events, logs | `Credentials` port resolves `configuration_id` server-side; receipt type has the eight fixed fields only (`contract.go:92-101`); Wave 2 redaction type `httpActionLogFields{rule, status_class, bytes, duration, digest}`; request, response, header and credential types do not implement the log-fields interface and are never passed to the logger | Log-capture `TestHTTPActionLogsAndEventsNoSensitive` (`storage/runtime_http_action_test.go`, Wave 2): run with sentinel secret, URL with query, header, bodies; captured logs, spans, events and receipt JSON contain none of the sentinels |
 | No secrets or data in logs | Same `httpActionLogFields` is the only logger argument on this path; `Request` and `Receipt.Result` implement `slog.LogValuer` returning only their digest and size (redaction by type), so passing either to a logger cannot emit content (Wave 2) | Same log-capture test, failure paths included (policy_denied, uncertain, panic-free error path) |
 | No external call repeated without a durable receipt | Begin durable before dispatch; `dispatching` never re-dispatched (§8); owner never answers `verified_no_effect` for HTTP (`http_action_recovery.go:30-31`) | Cases 1, 3, 4, 5 above; `TestOwnerNeverVerifiedNoEffectForHTTP` (`repos/http_action_recovery_test.go`, Wave 2) |

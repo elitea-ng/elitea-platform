@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "elitea.runtime.http-action-invocation.v3",
   "title": "HTTP action invocation v3 (Worker to Main)",
-  "description": "Worker sends canonical inputs only. Main renders the request from the frozen template. Replaces request_wire_b64 of schema elitea.runtime.http-action.v2. The schema_version value is a proposal.",
+  "description": "Worker sends canonical inputs only. Main renders the request from the frozen template and the live rule. attempt is the 0-based attempt of this activation (a new attempt follows an uncertain or failed one only for safe methods or replay=idempotency_key rules); it mirrors the Worker's MAX_NODE_ATTEMPTS bound. Revision 1 (request_wire_b64) is deleted.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,6 +10,7 @@
     "node_id",
     "thread_id",
     "step",
+    "attempt",
     "activation_id",
     "binding_digest",
     "inputs_b64",
@@ -34,6 +35,11 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 9223372036854775807
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 15
     },
     "activation_id": {
       "type": "string",

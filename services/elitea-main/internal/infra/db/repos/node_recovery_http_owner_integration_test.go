@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	httpapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/httpaction"
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
@@ -16,7 +15,7 @@ import (
 
 // The HTTP owner fixture is actual frozen request/receipt input, pinned externally.
 func owningHTTPRecordRow(r httpRecoveryRecord) scriptedRow {
-	return scriptedRow{values: []any{r.state, r.activation, r.effect, r.requestDigest, r.bindingDigest, r.policyDigest, r.outputBucket, r.request, r.receiptWire, r.receiptSHA, r.input, r.tenant, r.project, r.projection}}
+	return scriptedRow{values: []any{r.state, r.activation, r.effect, r.requestDigest, r.bindingDigest, r.policyDigest, r.outputBucket, r.request, r.receiptWire, r.receiptSHA, r.input, r.tenant, r.project, r.projection, r.inputs, r.ruleWire, r.inputsDigest, r.attempt}}
 }
 func TestNodeRecoveryMainTransactionUsesActualHTTPCommittedProof(t *testing.T) {
 	execution, generation, journal, record := productionHTTPRecoveryFixture(t)
@@ -84,21 +83,7 @@ func TestNodeRecoveryMainTransactionUsesActualHTTPCommittedProof(t *testing.T) {
 	}
 }
 
-// Preserve original frozen application/request bytes; bind a production-form
-// execution and recompute the owning effect/receipt through real HTTP contracts.
+// The owner fixture is a production-form committed revision-2 effect.
 func productionHTTPRecoveryFixture(t *testing.T) (string, uint64, domain.Receipt, httpRecoveryRecord) {
-	_, generation, journal, record := httpProofFixture(t)
-	execution := "0123456789abcdef0123456789abcdef"
-	invocation := httpapp.Invocation{ActivationID: record.activation, RequestDigest: record.requestDigest, BindingDigest: record.bindingDigest}
-	record.effect = httpapp.EffectID(execution, generation, invocation)
-	journal.ReplaySafety.ReceiptID = record.effect
-	var receipt httpapp.Receipt
-	if json.Unmarshal(record.receiptWire, &receipt) != nil {
-		t.Fatal("owner fixture receipt")
-	}
-	receipt.EffectID = record.effect
-	record.receiptWire, _ = json.Marshal(receipt)
-	digest := httpapp.Digest(record.receiptWire)
-	record.receiptSHA = &digest
-	return execution, generation, journal, record
+	return httpProofFixture(t)
 }

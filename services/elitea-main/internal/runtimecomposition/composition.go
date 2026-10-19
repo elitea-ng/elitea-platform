@@ -2015,6 +2015,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// the honest old behaviour — the native worker skips the toolkit — instead
 	// of gaining a family whose every call answers 503.
 	contentServer = contentServer.WithRuntimeArtifacts(runtimeArtifacts)
+	// HTTP actions (T-5D 5d-1). The runtime-context/http-actions route is live
+	// wherever agent dispatch and the configurations vault are composed, and
+	// absent otherwise; its Worker caller (the `http` node) arrives in 5d-2.
+	if config.AgentExecutionDispatchEnabled && dependencies.CurrentConfigurations != nil {
+		httpActions, err := newRuntimeHTTPActions(config, dependencies)
+		if err != nil {
+			return nil, err
+		}
+		contentServer.WithRuntimeHTTPActions(httpActions)
+	}
 	if originalCodeIntents != nil {
 		contentServer.WithOriginalCodeIntents(originalCodeIntents)
 	}

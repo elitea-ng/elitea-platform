@@ -718,7 +718,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// proxy replica), shared by every Main replica so a turn yields one audit
 	// event and a Main restart loses nothing (ADR-0034 decision 9). A new
 	// table, no data, no permission.
-	require.EqualValues(t, 169, Head(shared))
+	//
+	// 170: shared/0170_http_action_rules_and_effects_v3.sql, the project HTTP
+	// action rules and their write audit (elitea_runtime.http_action_rules,
+	// http_action_rule_audit), the revision-2 identity of
+	// elitea_runtime.execution_http_effects (rule, attempt, dispatch
+	// deadline), and the grants models.http_action_rules.manage (admin) and
+	// models.http_action_rules.list (admin, editor, viewer), including the
+	// per-project override rows. No foreign key to centry.project.
+	require.EqualValues(t, 170, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

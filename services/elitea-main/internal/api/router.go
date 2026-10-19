@@ -41,6 +41,7 @@ import (
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2httpactions "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/httpactions"
 	v2indextypes "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	v2mcp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
@@ -83,6 +84,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/vectorclient"
@@ -375,6 +377,13 @@ type RouterConfig struct {
 	// webhook.Handler's destinationGuard field for why that direction is
 	// fail-closed unlike WebhookDispatcher's own nil-gated degrade above.
 	WebhookDestinationGuard *webhook.DestinationGuard
+	// HTTPActionRules and HTTPActionGuard back /httpactions/prompt_lib/{projectID}
+	// (internal/api/v2/httpactions). The routes are always mounted and gated:
+	// a nil repository answers 503, and a nil guard refuses every write, since
+	// an origin the guard has not checked must never be stored. main.go builds
+	// the guard from ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST.
+	HTTPActionRules v2httpactions.Repository
+	HTTPActionGuard *egress.Guard
 	// MCPAuthorizationEgressGuard is the SSRF guard of the MCP OAuth and DCR
 	// proxies (eliteacore/mcp_oauth_egress.go). main.go builds it from
 	// ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST. Nil does NOT disable the guard: the
@@ -4730,6 +4739,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					webhookOptions...,
 				).Routes())
 			}
+
+			// === HTTP action rules ===
+			//
+			// Project rules the `type: http` pipeline node names. Mounted
+			// unconditionally so the audited surface always matches a route;
+			// the gates (manage for the rules, list for the names) are inside
+			// the package, and the project comes only from this mount pattern.
+			r.Mount("/httpactions/prompt_lib/{projectID}", v2httpactions.NewHandler(
+				cfg.HTTPActionRules, cfg.HTTPActionGuard, coreResolver,
+			).Routes())
 
 			// === Events (SSE) ===
 			//

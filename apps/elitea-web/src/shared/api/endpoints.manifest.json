@@ -3253,6 +3253,66 @@
         "shared/ui/ThemeModeToggle.tsx",
         "app/ThemePreferenceSync.tsx"
       ]
+    },
+    {
+      "id": "httpactions.listHttpActionRules",
+      "method": "GET",
+      "path": "/httpactions/prompt_lib/{projectID}/rules",
+      "operationId": "listHttpActionRules",
+      "source": "generated",
+      "responseSchema": "ListHttpActionRules200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "httpactions.createHttpActionRule",
+      "method": "POST",
+      "path": "/httpactions/prompt_lib/{projectID}/rules",
+      "operationId": "createHttpActionRule",
+      "source": "generated",
+      "responseSchema": "HttpActionRule",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "httpactions.updateHttpActionRule",
+      "method": "PUT",
+      "path": "/httpactions/prompt_lib/{projectID}/rules/{ruleID}",
+      "operationId": "updateHttpActionRule",
+      "source": "generated",
+      "responseSchema": "HttpActionRule",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "httpactions.listHttpActionRuleNames",
+      "method": "GET",
+      "path": "/httpactions/prompt_lib/{projectID}/rule-names",
+      "operationId": "listHttpActionRuleNames",
+      "source": "generated",
+      "responseSchema": "ListHttpActionRuleNames200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "configurations.listConfigurations",
+      "method": "GET",
+      "path": "/configurations/configurations/{project_id}",
+      "operationId": "listConfigurations",
+      "source": "generated",
+      "responseSchema": "ConfigurationListResponse",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/lib/http-actions/useOpenApiCredentialOptions.ts"
+      ]
     }
   ]
 }

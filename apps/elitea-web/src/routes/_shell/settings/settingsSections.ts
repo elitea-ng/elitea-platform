@@ -68,6 +68,7 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
       : []),
     { id: 'secrets', label: 'Secrets' },
     { id: 'webhooks', label: 'Webhooks' },
+    { id: 'http-actions', label: 'HTTP actions' },
     ...(isPersonalProject ? [] : [{ id: 'users', label: 'Users' }]),
     ...(analyticsVisible ? [{ id: 'analytics', label: 'Analytics' }] : []),
     ...(usageVisible ? [{ id: 'usage', label: 'Usage' }] : []),

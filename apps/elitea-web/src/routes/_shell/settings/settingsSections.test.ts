@@ -24,7 +24,7 @@ describe('buildSettingsSections — PROJECT', () => {
     expect(projectTabIds(ALL_OPEN)[0]).toBe('project-general');
   });
 
-  it('matches what a live deployment shows in a personal project, plus the new Webhooks tab', () => {
+  it('matches what a live deployment shows in a personal project, plus the new Webhooks and HTTP actions tabs', () => {
     // Measured read-only on next.elitea.ai, signed in, project "Private":
     // General, AI Providers, Project Context, Secrets, Analytics, Usage.
     // No Service Prompts, no Environment, no Users. `webhooks` is NOT part of
@@ -32,6 +32,7 @@ describe('buildSettingsSections — PROJECT', () => {
     // (the outbound webhook registry is a capability this platform added,
     // see webhook/handler.go's file header) — it is added by #876 right
     // after Secrets, the other project-scoped credential-shaped tab.
+    // `http-actions` (T-5D) is likewise new and sits right after Webhooks.
     expect(
       projectTabIds({ ...ALL_OPEN, isPersonalProject: true }),
     ).toEqual([
@@ -40,6 +41,7 @@ describe('buildSettingsSections — PROJECT', () => {
       'project-params',
       'secrets',
       'webhooks',
+      'http-actions',
       'analytics',
       'usage',
     ]);

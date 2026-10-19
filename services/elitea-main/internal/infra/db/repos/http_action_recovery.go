@@ -3,6 +3,7 @@ package repos
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -24,6 +25,10 @@ type httpRecoveryRecord struct {
 	receiptSHA                                                                          *string
 	tenant                                                                              string
 	project, projection                                                                 int64
+	// Revision 2: the Worker's canonical inputs and the rule as read in Begin.
+	inputs, ruleWire []byte
+	inputsDigest     *string
+	attempt          int32
 }
 
 // Only committed successful projection records justify a result proof.
@@ -68,14 +73,15 @@ func (p *HTTPActionRecoveryProofProvider) readCommitted(ctx context.Context, tx 
 	}
 	var record httpRecoveryRecord
 	err := tx.QueryRow(ctx, `SELECT h.state,h.activation_id,h.effect_id,h.request_digest,h.frozen_binding_digest,h.policy_digest,h.output_bucket,
- h.request_bytes,h.receipt_wire,h.receipt_sha256,e.content_bytes,j.tenant_id,j.resource_project_id,j.projection_project_id
+ h.request_bytes,h.receipt_wire,h.receipt_sha256,e.content_bytes,j.tenant_id,j.resource_project_id,j.projection_project_id,
+ h.inputs_bytes,h.rule_wire,h.inputs_digest,h.attempt
  FROM elitea_runtime.execution_http_effects h
  JOIN elitea_runtime.execution_jobs j USING(execution_id,generation)
  JOIN elitea_runtime.agent_execution_jobs a USING(execution_id,generation)
  JOIN elitea_runtime.input_bundle_entries e ON e.input_bundle_id=a.input_bundle_id AND e.entry_id=a.request_entry_id
  WHERE h.execution_id=$1 AND h.generation=$2 AND h.effect_id=$3
  AND e.semantic_role='agent.execution_request' AND e.content_size<=8388608
- FOR SHARE OF h,e`, executionID, generation, effect).Scan(&record.state, &record.activation, &record.effect, &record.requestDigest, &record.bindingDigest, &record.policyDigest, &record.outputBucket, &record.request, &record.receiptWire, &record.receiptSHA, &record.input, &record.tenant, &record.project, &record.projection)
+ FOR SHARE OF h,e`, executionID, generation, effect).Scan(&record.state, &record.activation, &record.effect, &record.requestDigest, &record.bindingDigest, &record.policyDigest, &record.outputBucket, &record.request, &record.receiptWire, &record.receiptSHA, &record.input, &record.tenant, &record.project, &record.projection, &record.inputs, &record.ruleWire, &record.inputsDigest, &record.attempt)
 	if err != nil {
 		return httpRecoveryRecord{}, recovery.OwnerProof{}, app.ErrUnauthorized
 	}
@@ -86,8 +92,12 @@ func (p *HTTPActionRecoveryProofProvider) readCommitted(ctx context.Context, tx 
 	return record, proof, nil
 }
 
+// committedHTTPRecoveryProof re-renders the request from the stored inputs
+// and the stored rule, and accepts only when it reproduces the recorded
+// request bytes, effect id and receipt: a recovered result is proven to
+// belong to exactly this request.
 func committedHTTPRecoveryProof(executionID string, generation uint64, journal recovery.Receipt, record httpRecoveryRecord) (recovery.OwnerProof, error) {
-	if record.state != "completed" || record.receiptSHA == nil || !app.ValidDigest(*record.receiptSHA) || !app.ValidDigest(record.policyDigest) || len(record.receiptWire) == 0 || len(record.receiptWire) > 1024*1024 || app.Digest(record.receiptWire) != *record.receiptSHA || len(record.input) == 0 || len(record.input) > 8*1024*1024 || record.project <= 0 {
+	if record.state != "completed" || record.receiptSHA == nil || !app.ValidDigest(*record.receiptSHA) || !app.ValidDigest(record.policyDigest) || len(record.receiptWire) == 0 || len(record.receiptWire) > 1024*1024 || app.Digest(record.receiptWire) != *record.receiptSHA || len(record.input) == 0 || len(record.input) > 8*1024*1024 || record.project <= 0 || record.inputsDigest == nil || len(record.ruleWire) == 0 || record.attempt < 0 || record.attempt >= app.MaxAttempts {
 		return recovery.OwnerProof{}, app.ErrUnauthorized
 	}
 	var input runtimev1.AgentExecutionInputV1
@@ -118,21 +128,33 @@ func committedHTTPRecoveryProof(executionID string, generation uint64, journal r
 	if frozen == nil {
 		return recovery.OwnerProof{}, app.ErrUnauthorized
 	}
-	invocation := app.Invocation{SchemaVersion: app.Schema, NodeID: journal.NodeID, ThreadID: journal.GraphThread, Step: journal.Step, RequestDigest: frozen.RequestDigest, BindingDigest: frozen.BindingDigest, RequestWireB64: frozen.RequestWireB64, Request: record.request}
+	invocation := app.Invocation{SchemaVersion: app.Schema, NodeID: journal.NodeID, ThreadID: journal.GraphThread, Step: journal.Step, Attempt: uint32(record.attempt), BindingDigest: frozen.BindingDigest, InputsB64: base64.StdEncoding.EncodeToString(record.inputs), InputsDigest: *record.inputsDigest}
 	invocation.ActivationID = app.VisitID(invocation.ThreadID, invocation.NodeID, invocation.Step, app.BindingBytes(invocation.BindingDigest))
+	invocation, err := app.ParseInvocation(invocation)
+	if err != nil {
+		return recovery.OwnerProof{}, app.ErrUnauthorized
+	}
+	template, err := application.Version.Snapshot.Verify(application.ID, application.VersionID, application.Version.Instructions, invocation)
+	if err != nil {
+		return recovery.OwnerProof{}, app.ErrUnauthorized
+	}
+	rule, err := app.DecodePolicyWire(record.ruleWire)
+	if err != nil || rule.ProjectID != record.project || app.Digest(record.ruleWire) != record.policyDigest || rule.OutputBucket != record.outputBucket {
+		return recovery.OwnerProof{}, app.ErrUnauthorized
+	}
+	rendered, err := app.Render(rule, template, invocation.Inputs)
+	if err != nil || rendered.Digest != record.requestDigest || !bytes.Equal(rendered.Wire, record.request) {
+		return recovery.OwnerProof{}, app.ErrUnauthorized
+	}
 	expectedEffect := journal.ReplaySafety.EffectID
 	if journal.ReplaySafety.Kind == "completed_external_effect" {
 		expectedEffect = journal.ReplaySafety.ReceiptID
 	}
-	if record.activation != invocation.ActivationID || record.effect != expectedEffect || record.effect != app.EffectID(executionID, generation, invocation) || record.requestDigest != invocation.RequestDigest || record.bindingDigest != invocation.BindingDigest || application.Version.Snapshot.Verify(application.ID, application.VersionID, application.Version.Instructions, invocation) != nil {
-		return recovery.OwnerProof{}, app.ErrUnauthorized
-	}
-	request, err := app.Parse(invocation)
-	if err != nil {
+	if record.activation != invocation.ActivationID || record.effect != expectedEffect || record.effect != app.EffectID(executionID, generation, invocation) || record.bindingDigest != invocation.BindingDigest {
 		return recovery.OwnerProof{}, app.ErrUnauthorized
 	}
 	receipt, err := app.DecodeReceipt(record.receiptWire)
-	if err != nil || receipt.State != "completed" || receipt.FailureCode != nil || receipt.Result == nil || receipt.ActivationID != invocation.ActivationID || receipt.EffectID != record.effect || receipt.RequestDigest != record.requestDigest || receipt.BindingDigest != record.bindingDigest || !validCommittedHTTPProjection(request, *receipt.Result, record.outputBucket, record.effect) {
+	if err != nil || receipt.State != "completed" || receipt.FailureCode != nil || receipt.Result == nil || receipt.ActivationID != invocation.ActivationID || receipt.EffectID != record.effect || receipt.RequestDigest != record.requestDigest || receipt.BindingDigest != record.bindingDigest || !validCommittedHTTPProjection(rendered.Request, *receipt.Result, record.outputBucket, record.effect) {
 		return recovery.OwnerProof{}, app.ErrUnauthorized
 	}
 	proof := recovery.OwnerProof{Schema: "elitea.pipeline.node-recovery-owner-proof.v1", Kind: "committed_result", ExecutionID: executionID, Generation: generation, ActivationID: journal.ActivationID, Attempt: journal.Attempt, ExpectedRevision: journal.JournalRevision, EffectID: record.effect, OwnerReceiptSHA256: *record.receiptSHA, ResultRef: &recovery.ResultReference{ContentID: record.effect, ImmutableVersion: *record.receiptSHA, DigestSHA256: *record.receiptSHA, ByteLength: uint64(len(record.receiptWire)), MediaType: "application/json", RequiredGrantAudience: "elitea.runtime.http-action-receipt.v2"}}
@@ -174,7 +196,8 @@ func validCommittedHTTPProjection(request app.Request, result app.Projection, bu
 		body = []byte(value)
 	case "artifact":
 		artifact = result.Data.Reference
-		if request.Response.Mode != "artifact" || result.Data.Value != nil || artifact == nil || bucket == "" || artifact.ByteLength != result.ByteLength || !app.ValidArtifact(*artifact, request.Response.MaxBytes) || artifact.ImmutableVersion != artifact.SHA256 || artifact.Reference != "artifact:"+bucket+":http-effects/"+effect+"/"+artifact.SHA256+".bin" {
+		spilled := request.Response.Mode != "artifact" && result.ByteLength > app.MaxInline
+		if request.Response.Mode != "artifact" && !spilled || result.Data.Value != nil || artifact == nil || bucket == "" || artifact.ByteLength != result.ByteLength || !app.ValidArtifact(*artifact, request.Response.MaxBytes) || artifact.ImmutableVersion != artifact.SHA256 || artifact.Reference != "artifact:"+bucket+":http-effects/"+effect+"/"+artifact.SHA256+".bin" {
 			return false
 		}
 	default:

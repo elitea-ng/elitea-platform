@@ -51,6 +51,7 @@ import { Route as ShellSettingsCreateConfigurationRouteImport } from './routes/_
 import { Route as ShellSettingsCreatePersonalTokenRouteImport } from './routes/_shell/settings/create-personal-token'
 import { Route as ShellSettingsDevicesRouteImport } from './routes/_shell/settings/devices'
 import { Route as ShellSettingsEnvironmentRouteImport } from './routes/_shell/settings/environment'
+import { Route as ShellSettingsHttpActionsRouteImport } from './routes/_shell/settings/http-actions'
 import { Route as ShellSettingsMemoryRouteImport } from './routes/_shell/settings/memory'
 import { Route as ShellSettingsModelConfigurationRouteImport } from './routes/_shell/settings/model-configuration'
 import { Route as ShellSettingsNotificationsRouteImport } from './routes/_shell/settings/notifications'
@@ -312,6 +313,12 @@ const ShellSettingsEnvironmentRoute =
   ShellSettingsEnvironmentRouteImport.update({
     id: '/environment',
     path: '/environment',
+    getParentRoute: () => ShellSettingsRouteRoute,
+  } as any)
+const ShellSettingsHttpActionsRoute =
+  ShellSettingsHttpActionsRouteImport.update({
+    id: '/http-actions',
+    path: '/http-actions',
     getParentRoute: () => ShellSettingsRouteRoute,
   } as any)
 const ShellSettingsMemoryRoute = ShellSettingsMemoryRouteImport.update({
@@ -607,6 +614,7 @@ export interface FileRoutesByFullPath {
   '/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
   '/settings/devices': typeof ShellSettingsDevicesRoute
   '/settings/environment': typeof ShellSettingsEnvironmentRoute
+  '/settings/http-actions': typeof ShellSettingsHttpActionsRoute
   '/settings/memory': typeof ShellSettingsMemoryRoute
   '/settings/model-configuration': typeof ShellSettingsModelConfigurationRoute
   '/settings/notifications': typeof ShellSettingsNotificationsRoute
@@ -696,6 +704,7 @@ export interface FileRoutesByTo {
   '/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
   '/settings/devices': typeof ShellSettingsDevicesRoute
   '/settings/environment': typeof ShellSettingsEnvironmentRoute
+  '/settings/http-actions': typeof ShellSettingsHttpActionsRoute
   '/settings/memory': typeof ShellSettingsMemoryRoute
   '/settings/model-configuration': typeof ShellSettingsModelConfigurationRoute
   '/settings/notifications': typeof ShellSettingsNotificationsRoute
@@ -788,6 +797,7 @@ export interface FileRoutesById {
   '/_shell/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
   '/_shell/settings/devices': typeof ShellSettingsDevicesRoute
   '/_shell/settings/environment': typeof ShellSettingsEnvironmentRoute
+  '/_shell/settings/http-actions': typeof ShellSettingsHttpActionsRoute
   '/_shell/settings/memory': typeof ShellSettingsMemoryRoute
   '/_shell/settings/model-configuration': typeof ShellSettingsModelConfigurationRoute
   '/_shell/settings/notifications': typeof ShellSettingsNotificationsRoute
@@ -880,6 +890,7 @@ export interface FileRouteTypes {
     | '/settings/create-personal-token'
     | '/settings/devices'
     | '/settings/environment'
+    | '/settings/http-actions'
     | '/settings/memory'
     | '/settings/model-configuration'
     | '/settings/notifications'
@@ -969,6 +980,7 @@ export interface FileRouteTypes {
     | '/settings/create-personal-token'
     | '/settings/devices'
     | '/settings/environment'
+    | '/settings/http-actions'
     | '/settings/memory'
     | '/settings/model-configuration'
     | '/settings/notifications'
@@ -1060,6 +1072,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/create-personal-token'
     | '/_shell/settings/devices'
     | '/_shell/settings/environment'
+    | '/_shell/settings/http-actions'
     | '/_shell/settings/memory'
     | '/_shell/settings/model-configuration'
     | '/_shell/settings/notifications'
@@ -1421,6 +1434,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellSettingsEnvironmentRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
+    '/_shell/settings/http-actions': {
+      id: '/_shell/settings/http-actions'
+      path: '/http-actions'
+      fullPath: '/settings/http-actions'
+      preLoaderRoute: typeof ShellSettingsHttpActionsRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
     '/_shell/settings/memory': {
       id: '/_shell/settings/memory'
       path: '/memory'
@@ -1776,6 +1796,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsCreatePersonalTokenRoute: typeof ShellSettingsCreatePersonalTokenRoute
   ShellSettingsDevicesRoute: typeof ShellSettingsDevicesRoute
   ShellSettingsEnvironmentRoute: typeof ShellSettingsEnvironmentRoute
+  ShellSettingsHttpActionsRoute: typeof ShellSettingsHttpActionsRoute
   ShellSettingsMemoryRoute: typeof ShellSettingsMemoryRoute
   ShellSettingsModelConfigurationRoute: typeof ShellSettingsModelConfigurationRoute
   ShellSettingsNotificationsRoute: typeof ShellSettingsNotificationsRoute
@@ -1803,6 +1824,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsCreatePersonalTokenRoute: ShellSettingsCreatePersonalTokenRoute,
   ShellSettingsDevicesRoute: ShellSettingsDevicesRoute,
   ShellSettingsEnvironmentRoute: ShellSettingsEnvironmentRoute,
+  ShellSettingsHttpActionsRoute: ShellSettingsHttpActionsRoute,
   ShellSettingsMemoryRoute: ShellSettingsMemoryRoute,
   ShellSettingsModelConfigurationRoute: ShellSettingsModelConfigurationRoute,
   ShellSettingsNotificationsRoute: ShellSettingsNotificationsRoute,

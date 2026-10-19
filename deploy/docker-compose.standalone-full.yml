@@ -1154,6 +1154,10 @@ services:
       EMAIL_REPLY_TO: "${EMAIL_REPLY_TO:-}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
       ELITEA_EMAIL_SUPPRESS: "${ELITEA_EMAIL_SUPPRESS:-}"
+      # HTTP action rules (pipeline `type: http` nodes): the outer bound for a
+      # rule's origin. Unset permits public HTTPS destinations only; name a
+      # private host or block (egresslib grammar) to let rules reach it.
+      ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST: "${ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST:-}"
       # ELITEA_VAULT_MASTER_KEY_FILE is deliberately NOT set, and the material is
       # still minted so a deployment that wants key wrapping can point at it.
       #
