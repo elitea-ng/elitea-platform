@@ -3,7 +3,7 @@ title: "Run the standalone stack"
 description: "Bring up the full Compose stack locally with deploy/scripts/standalone-stack.sh: certs, seeding, a real model, and the overlays."
 ---
 
-The standalone stack (`deploy/docker-compose.standalone-full.yml`) runs Elitea's whole one-host topology — elitea-web, elitea-main, the LLM gateway, an agent worker, PostgreSQL, NATS (live updates and the runtime command bus), and a mock identity provider — driven by `deploy/scripts/standalone-stack.sh`. [Install Elitea](/getting-started/install) covers the same stack from an operator's perspective; this page covers the local-development path: seeding fixtures, pointing the gateway at a real model, and the overlays that swap in the Rust worker or the DeepWiki real engine.
+The standalone stack (`deploy/docker-compose.standalone-full.yml`) runs Elitea's whole one-host topology — elitea-web, elitea-main, the LLM gateway, an agent worker, PostgreSQL, NATS (live updates and the runtime command bus), and a mock identity provider — driven by `deploy/scripts/standalone-stack.sh`. [Install Elitea](/getting-started/install) covers the same stack from an operator's perspective; this page covers the local-development path: seeding fixtures, pointing the gateway at a real model, and the overlays that swap in the DeepWiki real engine or a staging database.
 
 ## Bring it up
 
@@ -68,7 +68,6 @@ Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via 
 | `GATEWAY_EGRESS_ALLOWLIST` | `llm-mock:8090,llm-real:8090,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | `host:port` allowlist the gateway checks a saved credential's base URL against. Add your own model host before saving a credential that points there. |
 | `GATEWAY_SELF_LLM_ORIGINS` | `http://elitea-main:8080/llm/v1,http://localhost:8080/llm/v1` | The origins the gateway advertises to itself, for the self-referential-origin guard. |
 | `GATEWAY_NATS_URL` | unset | Optional. The stack's NATS serves only elitea-main's live updates (`ELITEA_EVENTS_NATS_URL`: the project SSE stream and canvas presence); the gateway is not pointed at it, so budget enforcement stays disabled with a startup warning — set `GATEWAY_NATS_URL=nats://nats:4222` (and `LLM_BUDGET_REQUIRE_ENFORCEMENT` if you need the cluster's stricter posture) to enforce budgets locally. |
-| `STANDALONE_WORKER` | `python` | Set to `rust` to layer the `docker-compose.standalone-rust-agent.yml` overlay and select the native worker (see [Overlays](#overlays)). |
 
 ## Ports
 
@@ -111,10 +110,9 @@ Output is non-deterministic, so specs needing determinism use `llm-mock`; this p
 
 Set `STANDALONE_OVERLAY` to a space-separated list of compose files after the base stack, or use the shortcuts below.
 
-<CardGroup cols={3}>
-<Card title="Rust agent" icon="wrench">
-`STANDALONE_WORKER=rust deploy/scripts/standalone-stack.sh build && … up` layers `docker-compose.standalone-rust-agent.yml`: it replaces the worker with the native Rust runtime and disables the index-ingest dispatch path (the native worker skips toolkit families it can't build).
-</Card>
+The agent worker is always the native Rust runtime: `standalone-stack.sh` layers `docker-compose.standalone-rust-agent.yml` on every run, so there is no worker to select.
+
+<CardGroup cols={2}>
 <Card title="DeepWiki real engine" icon="git-branch">
 `STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native-real-engine.yml DEEPWIKI_ENGINE_IMAGE=<tag> deploy/scripts/standalone-stack.sh up` switches the DeepWiki native engine from its fixture runner to the real analysis engine, cloning a public repository from github.com, with a deterministic LLM stub at the gateway's allowlisted mock address.
 </Card>

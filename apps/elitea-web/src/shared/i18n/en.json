@@ -4322,7 +4322,6 @@
   "entities.webhook.table.deliveries": "Recent deliveries",
   "entities.webhook.table.deliveriesAria": "Toggle recent deliveries",
   "features.agents.internalTools.notAvailableOnRustWorker": "Not available on the Rust worker",
-  "features.agents.internalTools.notAvailableOnPythonWorker": "Not available on the Python worker",
   "features.agents.internalTools.notAvailableOnThisWorker": "Not available on this worker",
   "features.chatMessages.canvas.editor.saveToArtifacts": "Save to artifacts",
   "features.chatMessages.canvas.saveToArtifacts.bucket": "Bucket",

@@ -18,7 +18,7 @@
  * `search_data` — so CREATING one, and ATTACHING it to an agent, both work.
  *
  * Materialization was the layer that did not, and this file carried a
- * native-leg `test.fail` for it. The measured shape (`STANDALONE_WORKER=rust`)
+ * `test.fail` for it. The measured shape (native runtime)
  * was: the toolkit skipped — `agent_toolkit_skipped
  * reason_code=unsupported_toolkit_family toolkit_type=artifact` — and then,
  * NOT deterministically across otherwise-identical runs, either the whole turn
@@ -35,9 +35,9 @@
  * storage — and main serves its four operations (list/read/write/delete) from
  * the private mTLS content listener (`ContentServer.PostArtifact*`), resolving
  * the bucket INSIDE the claimed project and applying the claim ACTOR'S own
- * per-bucket access list. So every assertion below now runs on both legs.
+ * per-bucket access list. So every assertion below now runs.
  *
- * THE CALL IS SCRIPTED ON BOTH LEGS — the mock never calls a tool on its own,
+ * THE CALL IS SCRIPTED — the mock never calls a tool on its own,
  * marker or not — and it must name the tool the worker actually exposes.
  * `internal/api/v2/toolkits/handler.go`'s `toolkitTypeSchemas["artifact"]` —
  * an earlier draft of this file's `selected_tools` quoted exactly this map —
@@ -58,8 +58,7 @@
  * turn scripts `[[mock:call_tool create_file {...}]]` naming that real tool
  * with its real argument shape (`filename` required, `filedata` the content).
  * The native family mirrors those SDK tool names and argument names
- * deliberately, for exactly this reason: a prompt written against one worker
- * has to port to the other unchanged.
+ * deliberately.
  *
  * WHY THE BUCKET/TOOLKIT/AGENT CLEANUP IS A `finally`, UNLIKE MOST FILES HERE.
  * `expectStoredAssistantAnswer`'s "best-effort, deliberately last" convention
@@ -71,10 +70,9 @@
  * very next file in this alphabetically-sorted, `--workers=1` suite
  * (`chat.canvasDocument.spec.ts`) then failed asserting THAT bucket's name
  * where it expected its own. So the bucket this file creates is deleted in a
- * `finally`, unconditionally — and on the python leg the bucket is genuinely
- * NON-EMPTY (the file above really landed), so the files are deleted first,
- * then the bucket, rather than trusting an empty-bucket assumption that only
- * held on the rust leg.
+ * `finally`, unconditionally — and the bucket is genuinely NON-EMPTY (the
+ * file above really landed), so the files are deleted first, then the bucket,
+ * rather than trusting an empty-bucket assumption.
  *
  * WHY IT LIVES HERE: a toolkit chat turn needs the FULL standalone stack
  * (runtime plane, worker, model) — `journeys/**` has no runtime plane at all,
@@ -195,14 +193,11 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
     ).toBeVisible({ timeout: 30_000 });
     await attachToolkitThroughPicker(page, toolkitName);
 
-    // ── 5. Chat: a scripted call to the REAL SDK tool ────────────────────
-    // `[[mock:call_tool create_file {...}]]` — see the header: on the
-    // rust leg the toolkit is skipped before the model is ever reached, so
-    // the marker is inert there (harmless — the turn fails the same way
-    // either way); on the python leg it is what actually makes the mock
-    // dispatch `create_file` with the real SDK argument shape (`filename`
-    // required, `filedata` the content), rather than merely echoing an
-    // ordinary instruction as text with no tool call at all.
+    // ── 5. Chat: a scripted call to the REAL tool ────────────────────────
+    // `[[mock:call_tool create_file {...}]]` — see the header: it is what
+    // makes the mock dispatch `create_file` with the real argument shape
+    // (`filename` required, `filedata` the content), rather than merely
+    // echoing an ordinary instruction as text with no tool call at all.
     const conversationCreated = page.waitForResponse(
       (r) =>
         /\/elitea_core\/conversations\/prompt_lib\/\d+$/.test(new URL(r.url()).pathname) &&
@@ -241,17 +236,16 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
     // `expectStoredAssistantAnswer`'s own comment on why the key is present
     // ONLY once a terminal projection has run) reads as `false` exactly like a
     // CONFIRMED non-error answer does. Polling on the row merely EXISTING (an
-    // earlier draft of this file did, reasoning that the rust leg's assembly
-    // failure is near-instant so waiting for a NEVER-arriving success would
-    // waste the whole budget) caught the python leg's row the instant it was
-    // created — content `""`, no `is_error` key yet, the model's real
-    // round-trip still in flight — and then read that absence as "finished,
+    // earlier draft of this file did, reasoning that an assembly failure is
+    // near-instant so waiting for a NEVER-arriving success would waste the
+    // whole budget) caught the row the instant it was created — content `""`,
+    // no `is_error` key yet, the model's real round-trip still in flight — and then read that absence as "finished,
     // no error", which is the exact "ABSENT reads as success" trap this
     // suite's other files are full of (see `disclosed-gap-doc-comments`).
     // Polling on the KEY'S PRESENCE (true OR false) rather than on the row's
-    // existence keeps both properties: still fast on the rust leg (is_error
-    // lands near-instantly there too), and it no longer settles early on the
-    // python leg's still-streaming row.
+    // existence keeps both properties: still fast on a failure (is_error
+    // lands near-instantly), and it no longer settles early on a
+    // still-streaming row.
     await expect
       .poll(
         async () => {
@@ -296,9 +290,8 @@ test('an agent with the artifact toolkit writes a file that a real bucket listin
   } finally {
     // Unconditional, and NOT best-effort-and-last like this directory's other
     // cleanups — see the header's note on why a leftover BUCKET here is not
-    // inert. FILES FIRST, then the bucket: on the python leg (see header)
-    // the upload really landed, so the bucket is genuinely non-empty here,
-    // not just on the rust leg's trivially-empty one.
+    // inert. FILES FIRST, then the bucket: the upload really landed, so the
+    // bucket is genuinely non-empty here.
     try {
       const objectsLeft = await page.request.get(`${BASE_URL}/api/v2/artifacts/objects/${projectId}/${bucketName}`);
       if (objectsLeft.ok()) {

@@ -25,11 +25,6 @@ on:
     paths:
       - "services/elitea-llm-gateway/**"
       - ".github/workflows/ci-gateway.yml"
-      # internal/sdkpin/pin_test.go compares sdk-pin.json against this lock
-      # file, so a lock-file-only SDK bump is exactly the change that gate
-      # exists to catch. Without this path the job never starts on it, and the
-      # gate cannot run on its own subject (#518 again).
-      - "services/elitea-worker-python/elitea-sdk.lock.json"
       # The toolchain gate below reads this workflow and the gateway
       # Containerfile. Both subjects are already named above; this line adds
       # the gate's OWN file, so an edit to the checker runs the checker (#518).
@@ -57,7 +52,6 @@ on:
       # arm did not, so a push that edited only the gate could not start the
       # gate it edited (#518).
       - ".github/workflows/ci-gateway.yml"
-      - "services/elitea-worker-python/elitea-sdk.lock.json"
       - "scripts/ci/check-gateway-toolchain.sh"
       - "libs/go/natsconn/**"
       - "deploy/helm/nats/**"

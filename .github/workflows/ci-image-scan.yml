@@ -50,12 +50,9 @@ name: CI — Image scan
 # for a weaker test. The `coverage` job fails when the two matrices disagree
 # about an image, its expected target type, or whether it blocks.
 #
-# ONE IMAGE DOES NOT BLOCK, AND IT SAYS SO
+# EVERY IMAGE BLOCKS
 #
-# `elitea-worker-python` is scanned, reports its full finding count, and does
-# NOT fail the merge. Every other image blocks.
-#
-# Others used to. `pylon-indexer` carried 604 findings, all of them from
+# Some used to. `pylon-indexer` carried 604 findings, all of them from
 # `ghcr.io/eliteaai/pylon:1.2.25`, an image this repository never built. #509
 # recorded them and said the exemption ends when the service goes away rather
 # than by correcting an image we delete. #339 deleted it, so the entry is gone
@@ -64,15 +61,10 @@ name: CI — Image scan
 # Rust engine on distroless replaced it. That is the shape an exemption is
 # supposed to have: a cause, and an end.
 #
-# elitea-worker-python is the MIXED case the register's criterion 1 was widened
-# for: 82 of its 101 lines come from a Debian base with no fix published, and
-# the 19 that remain in site-packages are down from 36 — #554 bumped every
-# package this repository can raise. 17 of the 19 survivors are pinned by
-# elitea-sdk's own dependencies (pillow, fastapi→starlette, httpcore→h11), so
-# they too are owned outside this repository, and the register names them one
-# by one rather than rounding them into "upstream".
+# The Python agent worker was the last non-blocking image; it went with the
+# Python worker. The register stays, for the next exemption that earns one.
 #
-# `.github/image-scan-exempt.txt` records it, with the date each count was
+# `.github/image-scan-exempt.txt` records each exemption, with the date each count was
 # re-measured. A count in a comment goes stale in silence; the guard that does
 # not is the one below — an exempt image reporting ZERO findings FAILS.
 #
@@ -97,7 +89,6 @@ on:
     paths:
       # Sources of the shipped binaries and assets.
       - "services/elitea-main/**"
-      - "services/elitea-worker-python/**"
       - "services/elitea-worker-rust/**"
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
@@ -137,7 +128,6 @@ on:
       - main
     paths:
       - "services/elitea-main/**"
-      - "services/elitea-worker-python/**"
       - "services/elitea-worker-rust/**"
       - "services/elitea-scheduler/**"
       - "services/elitea-subapp-host/**"
@@ -403,25 +393,6 @@ jobs:
             target: ""
             expect_type: alpine
             blocking: true
-          # Exemption recorded in #553 (findings) and #554 (what ends it).
-          # See the header: this is the mixed case, not an upstream-only one.
-          # #554 bumped every package this repository can raise, so the Python
-          # half is 19 lines rather than 36; 17 of those 19 are elitea-sdk's own
-          # pins and end with an SDK release.
-          #
-          # expect_type is MEASURED, not guessed: trivy reports a `debian`
-          # Result for the python:3.12-slim base and a `python-pkg` Result for
-          # site-packages. python-pkg is the application half, so a scan that
-          # reads only the OS layers fails the dormancy guard instead of
-          # reading as clean.
-          - name: elitea-worker-python
-            # context/dockerfile mirror publish.yml exactly — repo root,
-            # because the Containerfile COPYs libs/proto and testdata/proto.
-            context: .
-            dockerfile: ./services/elitea-worker-python/Containerfile
-            target: ""
-            expect_type: python-pkg
-            blocking: false
           # Repo root for the same reason: the Containerfile COPYs libs/proto
           # from outside the service directory. `expect_type: rustbinary` is
           # readable ONLY because that Containerfile builds with

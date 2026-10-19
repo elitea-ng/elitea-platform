@@ -1694,7 +1694,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	// The vector step is recorded on a project delete by every replica that
 	// indexes into the store (Rust indexing), with or without a client; a
-	// Python-indexing replica with a client only drains. No replica closes a
+	// replica without index ingest dispatch only drains. No replica closes a
 	// recorded step on its own configuration: only the operator's abandon
 	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
 	// refused beside a client.
@@ -1712,14 +1712,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
 	}
 	// Which of those types the deployment can actually run depends on the
-	// worker image it starts. The catalogue holds 52 types; the Python image
-	// imports 39 of them and the Rust worker materializes 22 families. A type
-	// the worker cannot run is served hidden, with the reason, so the operator
-	// can see why rather than hunting a tile that is simply absent.
-	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("read worker implementation: %w", err)
-	}
+	// worker: the Rust worker (the only one) materializes a subset of the
+	// catalogue's families. A type the worker cannot run is served hidden,
+	// with the reason, so the operator can see why rather than hunting a tile
+	// that is simply absent.
+	workerImplementation := runtimecomposition.RustWorkerImplementation
 	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
 		workerImplementation,
 	)
@@ -2041,7 +2038,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				return fmt.Errorf("compose current agent-start route: %w", err)
 			}
 		}
-		if workerImplementation == "rust" && publicRoutes.ToolkitExecuteRead != nil {
+		if publicRoutes.ToolkitExecuteRead != nil {
 			mcpToolkitExecute = publicRoutes.ToolkitExecuteRead
 		}
 		if publicRoutes.NodeRecovery != nil {

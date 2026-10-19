@@ -71,36 +71,41 @@
 {{- fail "worker.enabled=true needs main.runtime.enabled=true. The worker dials elitea-main's control, output and content listeners, and those exist only when the runtime plane is composed. Without them every chat turn is admitted over HTTP, never claimed, and durably quarantined by the worker — with nothing logged on either side. Set main.runtime.enabled=true (and its fileConfig.authConfig), or set worker.enabled=false." }}
 {{- end }}
 
-{{- if and .Values.worker.enabled (not (has .Values.worker.implementation (list "python" "rust"))) }}
-{{- fail (printf "worker.implementation must be \"python\" or \"rust\", got %q. It is not a free-form label: it selects the image, the argument list and the environment, and every value other than these two would silently render the Python shape — a Rust image started with the Python argument list exits immediately with worker_serve.invalid_configuration, which reads as a crash-looping worker rather than as a typo in a values file." .Values.worker.implementation) }}
+{{- /*
+  The Python worker was removed: the Rust worker is the only implementation,
+  and Rust the only indexing runtime. A values file that still names the
+  retired choice is refused with what to do, rather than silently rendering a
+  different worker or index store than the one it asks for.
+*/ -}}
+{{- if and (hasKey .Values.worker "implementation") (ne (toString .Values.worker.implementation) "rust") }}
+{{- fail (printf "worker.implementation=%v is no longer supported: the Python worker was removed and the Rust worker is the only one. Remove worker.implementation from your values (or set it to rust)." .Values.worker.implementation) }}
 {{- end }}
-
-{{- if not (has (default "" .Values.worker.indexingRuntime) (list "" "python" "rust")) }}
-{{- fail (printf "worker.indexingRuntime must be \"python\" or \"rust\", got %q (empty means python). It selects where elitea-main keeps index metadata; elitea-main refuses any other value at startup, so a typo here is a crash-looping main, not a silent default." .Values.worker.indexingRuntime) }}
+{{- if not (has (toString (default "" .Values.worker.indexingRuntime)) (list "" "rust")) }}
+{{- fail (printf "worker.indexingRuntime=%v is no longer supported: the Python indexing runtime was removed with the Python worker, and rust (the default) is the only one. Remove the override; indexes created under python are not migrated and are created again (ADR-0030, ADR-0031)." .Values.worker.indexingRuntime) }}
 {{- end }}
 {{- $rustMissing := include "elitea.rustIndexingMissing" . }}
-{{- if and (eq (include "elitea.indexingRuntime" .) "rust") $rustMissing }}
-{{- fail (printf "worker.indexingRuntime=rust is missing: %s. Rust indexing starts with EMPTY indexes (nothing is migrated), so the chart never switches to it by itself; set every value above, or set worker.indexingRuntime=python (the default) to keep the Python indexing (ADR-0030, ADR-0031)." (replace "\n" "; " $rustMissing)) }}
+{{- if and .Values.worker.enabled (include "elitea.indexingEnabled" .) $rustMissing }}
+{{- fail (printf "the worker indexes (main.runtime.indexIngestDispatch.enabled=true) and is missing: %s. Index runs go to the Rust indexing runtime (ADR-0030, ADR-0031); set every value above, or set main.runtime.indexIngestDispatch.enabled=false to run without indexing." (replace "\n" "; " $rustMissing)) }}
 {{- end }}
 {{- $indexingOverride := get (.Values.main.env | default dict) "ELITEA_INDEXING_RUNTIME" }}
 {{- if and $indexingOverride (ne (toString $indexingOverride) (include "elitea.indexingRuntime" .)) }}
 {{- fail (printf "main.env.ELITEA_INDEXING_RUNTIME=%s disagrees with worker.indexingRuntime, which resolves to %s: elitea-main and the worker would index in different places. Set worker.indexingRuntime and remove the override." $indexingOverride (include "elitea.indexingRuntime" .)) }}
 {{- end }}
-{{- if and ((.Values.worker.runtime | default dict).memoryEmbeddingModel) (ne (include "elitea.indexingRuntime" .) "rust") }}
-{{- fail "worker.runtime.memoryEmbeddingModel needs worker.indexingRuntime=rust (which in turn needs the Rust worker, the runtime plane with index ingest dispatch and a vector store). The Rust worker's memory toolkit keeps its memories in elitea-vector and reaches it with the claim's vector token, which exists only under the Rust indexing runtime; the Python worker keeps memories in the toolkit's own pgvector database and reads no such setting (worker unit M9)." }}
+{{- if and ((.Values.worker.runtime | default dict).memoryEmbeddingModel) (not (include "elitea.indexingEnabled" .)) }}
+{{- fail "worker.runtime.memoryEmbeddingModel needs indexing (main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true, with a vector store). The Rust worker's memory toolkit keeps its memories in elitea-vector and reaches it with the claim's vector token, which exists only while the deployment indexes (worker unit M9)." }}
 {{- end }}
-{{- if and ((.Values.worker.extractor | default dict).enabled) (ne (include "elitea.indexingRuntime" .) "rust") }}
-{{- fail "worker.extractor.enabled needs worker.indexingRuntime=rust (which in turn needs the Rust worker, the runtime plane with index ingest dispatch and a vector store). The document extraction sidecar (elitea-doc-extractor, ADR-0030 I1) is dialled by the Rust worker's index runs over a socket in the worker pod and by nothing else; the Python worker extracts documents itself." }}
+{{- if and ((.Values.worker.extractor | default dict).enabled) (not (include "elitea.indexingEnabled" .)) }}
+{{- fail "worker.extractor.enabled needs indexing (main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true, with a vector store). The document extraction sidecar (elitea-doc-extractor, ADR-0030 I1) is dialled by the Rust worker's index runs over a socket in the worker pod and by nothing else." }}
 {{- end }}
 
 {{- /*
   Guarded, and this one is easy to get wrong from a values file that predates
-  the Rust worker: the log levels are only read when `implementation: rust`,
-  and the worker refuses an unrecognised level at startup rather than defaulting.
+  the Rust worker: the worker refuses an unrecognised level at startup rather
+  than defaulting.
   A pod that will not start because of a typo'd log level is the least
   informative failure in this chart.
 */ -}}
-{{- if and .Values.worker.enabled (eq .Values.worker.implementation "rust") }}
+{{- if .Values.worker.enabled }}
 {{- range $key := list "logLevel" "traceLevel" }}
 {{- $level := index $.Values.worker $key }}
 {{- if not (has $level (list "off" "error" "warn" "info" "debug" "trace")) }}

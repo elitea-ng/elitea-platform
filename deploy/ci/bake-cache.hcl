@@ -69,7 +69,7 @@ target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
 target "elitea-worker" {
-  cache-from = ["type=gha,scope=elitea-worker-python-linux-amd64"]
+  cache-from = ["type=gha,scope=elitea-worker-rust-linux-amd64"]
 }
 target "llm-mock" {
   cache-from = ["type=gha,scope=elitea-mock-llm"]

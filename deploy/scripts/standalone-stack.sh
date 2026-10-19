@@ -56,8 +56,7 @@
 #                apps/elitea-web/scripts/deepwiki-real-engine.sh calls it.
 #   check       verify the gateway mTLS hop, the runtime plane and the chat
 #                critical path (delegates the last to chat-smoke.py), plus the
-#                embedding path (embedding-path-check.sh) and a REAL elitea-sdk
-#                EliteAClient (sdk-client-check.sh). It counts
+#                embedding path (embedding-path-check.sh). It counts
 #                passes, failures AND skips, and a skipped assertion exits
 #                non-zero: add --allow-skips to accept an unmeasured
 #                precondition on purpose (#429). It also DERIVES how many
@@ -127,12 +126,11 @@ COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.y
 # absent for `build`, so `build` would rebuild the service the overlay replaced
 # and `up` would run whatever stale tag the overlay names.
 #
-#   deploy/scripts/standalone-stack.sh build                      # native Rust worker (default)
-#   STANDALONE_WORKER=python  deploy/scripts/standalone-stack.sh build
+#   deploy/scripts/standalone-stack.sh build
 #
-# The native Rust worker is the default; STANDALONE_WORKER=python selects the
-# legacy Python worker until it is removed. STANDALONE_OVERLAY takes an
-# explicit space-separated list of paths for anything else.
+# The worker is the native Rust worker (the Python worker was removed);
+# STANDALONE_OVERLAY takes an explicit space-separated list of paths for
+# anything else.
 OVERLAY="${STANDALONE_OVERLAY:-}"
 
 # Shared with apps/elitea-web/scripts/e2e-stack.sh: CI has the docker compose
@@ -145,45 +143,14 @@ OVERLAY="${STANDALONE_OVERLAY:-}"
 . "${REPO_ROOT}/scripts/lib/assertion-floor.sh"
 detect_compose_bin
 
-# Which worker this stack runs. New stacks run the native Rust worker. An
-# EXISTING stack is not switched silently: its choice is recorded on `up`, and
-# an unset STANDALONE_WORKER keeps it (on `up` and `build`, a stack with no
-# record whose worker container is the Python one counts as python, which is what every stack was
-# before the default changed). Switching changes the indexing runtime too, and
-# indexes created under the other runtime are NOT migrated.
-WORKER_STATE_DIR="${REPO_ROOT}/deploy/certs"
-WORKER_STATE="${WORKER_STATE_DIR}/.worker-${PROJECT}"
-recorded_worker=""
-if [ -f "$WORKER_STATE" ]; then
-  recorded_worker="$(tr -d '[:space:]' <"$WORKER_STATE")"
-elif [ "${1:-}" = up ] || [ "${1:-}" = build ]; then
-  # Lazily, and only where a worker is chosen: `ps` costs a compose round trip
-  # that `logs`, `check`, `down` and the seeders do not need.
-  existing_ps="$($COMPOSE_BIN $COMPOSE_F ps -a 2>/dev/null || true)"
-  if printf '%s' "$existing_ps" | grep -q 'worker-rust'; then
-    recorded_worker=rust
-  elif printf '%s' "$existing_ps" | grep -q 'elitea-worker'; then
-    recorded_worker=python
-  fi
-fi
-WORKER_CHOICE="${STANDALONE_WORKER:-}"
-if [ -z "$WORKER_CHOICE" ]; then
-  WORKER_CHOICE="${recorded_worker:-rust}"
-  if [ "$WORKER_CHOICE" = python ] && [ -n "$recorded_worker" ]; then
-    echo "NOTE: the existing '${PROJECT}' stack runs the PYTHON worker, so it stays on it." >&2
-    echo "      New stacks default to the native Rust worker. To switch this one:" >&2
-    echo "        STANDALONE_WORKER=rust ${0} up" >&2
-    echo "      WARNING: that also switches indexing to the Rust runtime, and indexes created" >&2
-    echo "      under the Python worker are NOT migrated (users create their indexes again)." >&2
-  fi
-elif [ -n "$recorded_worker" ] && [ "$recorded_worker" != "$WORKER_CHOICE" ]; then
-  echo "WARNING: the existing '${PROJECT}' stack runs the ${recorded_worker} worker and you selected ${WORKER_CHOICE}." >&2
-  echo "         Indexes created under the ${recorded_worker} runtime are NOT migrated." >&2
-fi
-case "$WORKER_CHOICE" in
-  python) ;;
+# The stack runs the native Rust worker; the Python worker was removed. A
+# leftover STANDALONE_WORKER=python is refused rather than ignored, so a script
+# that still asks for the old worker fails loudly instead of testing Rust while
+# believing it tested Python. A stack created under the Python worker needs
+# `down -v` first: its indexes are not migrated.
+case "${STANDALONE_WORKER:-rust}" in
   rust) OVERLAY="${REPO_ROOT}/deploy/docker-compose.standalone-rust-agent.yml ${OVERLAY}" ;;
-  *) echo "ERROR: STANDALONE_WORKER must be python or rust (got '${WORKER_CHOICE}')." >&2; exit 1 ;;
+  *) echo "ERROR: STANDALONE_WORKER must be rust (got '${STANDALONE_WORKER}'); the Python worker was removed." >&2; exit 1 ;;
 esac
 for overlay_file in $OVERLAY; do
   if [ ! -f "$overlay_file" ]; then
@@ -194,7 +161,7 @@ for overlay_file in $OVERLAY; do
 done
 
 # The one-SQL-string reader `resolve_seeded_driver` calls, in the same shape
-# sdk-client-check.sh and embedding-path-check.sh already define for
+# embedding-path-check.sh already defines for
 # themselves. `|| true` keeps a failing read from aborting the caller under
 # `set -e`: an empty answer is a state those checks report on, not a crash.
 standalone_psql_read() {
@@ -912,9 +879,6 @@ case "${1:-}" in
       echo "ERROR: mTLS material missing. Run: $0 certs" >&2
       exit 1
     fi
-    # Record the worker this stack runs, so a later `up` with no
-    # STANDALONE_WORKER keeps it instead of switching it.
-    printf '%s\n' "$WORKER_CHOICE" >"$WORKER_STATE"
     # Same, for the runtime plane. Without it runtime-material aborts and every
     # dependent service is stuck in `created` with no obvious cause.
     if [ ! -f "${REPO_ROOT}/deploy/certs/runtime/runtime-ca.crt" ]; then
@@ -1018,9 +982,6 @@ case "${1:-}" in
 
   down)
     $COMPOSE_BIN $COMPOSE_F down --remove-orphans "${@:2}"
-    # Volumes gone (`down -v`): the next stack on this project is a new one and
-    # takes the default worker.
-    case " ${*:2} " in *" -v "* | *" --volumes "*) rm -f "$WORKER_STATE" ;; esac
     ;;
 
   seed)
@@ -2455,62 +2416,8 @@ except Exception as error:
         ;;
     esac
 
-    # ── The REAL elitea-sdk client ───────────────────────────────────────────
-    # Every /llm assertion above this line — this script's own probes and the
-    # embedding path check — speaks HTTP the way we BELIEVE elitea-sdk speaks
-    # it. None of them imports the SDK, so none of them can fail when the SDK's
-    # defaults, its client libraries or its error reader disagree with what the
-    # platform serves. That is exactly how the budget refusal defect survived:
-    # a correct-looking body, a correct status, a passing unit test, and an SDK
-    # that still returned None.
-    #
-    # This script drives the real EliteAClient inside the running worker's own
-    # image, so the SDK under test is the SDK the product runs. It makes 15
-    # assertions of its own; read its lines above, not this one alone.
-    #
-    # Its 15 assertions count as ONE assertion here, so a WRAPPER that exits 0
-    # without ever starting the python satisfies this check and the total
-    # below. Replace sdk-client-check.sh with "exit 0" and every count still
-    # adds up (measured). So do not read the exit status alone: require the
-    # completion line the python prints, and require the count in it. The
-    # python refuses a partial run on its own; this catches a run that never
-    # happened.
-    # The check runs the SDK inside the RUNNING worker's image. On the native
-    # Rust runtime that image is a Rust binary with no python and no SDK — the
-    # SDK is not part of that leg's execution path at all, so running it there
-    # can only measure the image's lack of python3 (measured: "exec: python3:
-    # executable file not found"). That gate is the running container's image,
-    # not $STANDALONE_WORKER, so a mislabelled invocation cannot dodge it; the
-    # second gate below is the seeded upstream, read from the database.
-    # SDK conformance still rides every python-worker leg on the mock.
-    SDK_WORKER_IMAGE="$($ENGINE ps --filter "name=${PROJECT}" --format '{{.Names}} {{.Image}}' 2>/dev/null | sed -n 's/^[^ ]*elitea-worker[^ ]* //p' | head -1)"
-    # A second gate, on the upstream: sdk-client-check.py asserts the nonce
-    # echo, llm-mock's request journal and a 1536-wide embedding — the mock's
-    # protocol. Against any other upstream (the `real-llm` profile) those
-    # assertions fail by construction while the SDK itself is fine, so the
-    # check is a named skip there. Read for the SAME chat row this check's
-    # own completion probe used (CHAT_MODEL_TITLE), not an arbitrary one.
-    SDK_CRED_API_BASE="$(linked_credential_api_base "m.section = 'llm' AND m.elitea_title = '${CHAT_MODEL_TITLE:-}'")"
-    if [ -n "$SDK_WORKER_IMAGE" ] && [[ "$SDK_WORKER_IMAGE" == *worker-rust* ]]; then
-      skip "the elitea-sdk client check does not apply: the worker is the native runtime (${SDK_WORKER_IMAGE}), which carries no SDK"
-    elif [ -n "$SDK_CRED_API_BASE" ] && [ "${SDK_CRED_API_BASE%/}" != "$LLM_MOCK_API_BASE" ]; then
-      skip "the elitea-sdk client check does not apply: its nonce, journal and wire-model assertions are written against llm-mock's protocol, and this stack's chat credential points at ${SDK_CRED_API_BASE}"
-    else
-    sdk_check_log="$(mktemp)"
-    if STANDALONE_PROJECT="$PROJECT" "${REPO_ROOT}/deploy/scripts/sdk-client-check.sh" 2>&1 | tee "$sdk_check_log"; then
-      sdk_check_ran="$(sed -n 's/^→ elitea-sdk client: \([0-9][0-9]*\) assertion(s) ran.*/\1/p' "$sdk_check_log" | tail -1)"
-      if [ -z "$sdk_check_ran" ]; then
-        fail "the elitea-sdk client check exited 0 but printed no assertion count — the wrapper did not run the python"
-      elif [ "$sdk_check_ran" -lt 15 ]; then
-        fail "the elitea-sdk client check reported only ${sdk_check_ran} assertion(s), and 15 is its floor"
-      else
-        ok "the elitea-sdk client check passed all ${sdk_check_ran} of its own assertions"
-      fi
-    else
-      fail "the elitea-sdk client check failed — read its assertion lines above"
-    fi
-    rm -f "$sdk_check_log"
-    fi
+    # (The elitea-sdk client check that ran here drove the SDK inside the
+    # Python worker's image; it went with the Python worker.)
 
     echo "→ chat critical path (#284 smoke):"
     # Precondition first, because the failure it produces is a bare HTTP 500

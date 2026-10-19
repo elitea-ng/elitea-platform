@@ -8175,10 +8175,11 @@ components:
       properties:
         worker:
           type: string
-          enum: ['python', 'rust', '']
+          enum: ['rust', '']
           description: >
-            The worker image this deployment runs, or "" when it never said
-            (see the operation description).
+            The worker image this deployment runs (the Rust worker, the only
+            one), or "" when the composition root never said (see the
+            operation description).
         internal_tools:
           type: object
           additionalProperties:
@@ -27084,10 +27085,10 @@ paths:
         `pyodide` are tracked separately from #866's six and are not listed
         either.
 
-        `worker` is empty when the deployment never stated
-        ELITEA_WORKER_IMPLEMENTATION AND no worker-capability snapshot was
-        composed — the honest "this deployment did not say" answer, not a
-        guessed default.
+        `worker` is "rust" (the only worker since the Python worker was
+        removed). It is empty only when the composition root wired no worker
+        name — the honest "this deployment did not say" answer, not a guessed
+        default.
       tags: [toolkits]
       responses:
         '200':

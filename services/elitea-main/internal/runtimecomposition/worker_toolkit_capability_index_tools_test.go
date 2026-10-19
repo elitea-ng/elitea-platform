@@ -53,13 +53,6 @@ func TestWorkerToolkitCapabilityWithRustIndexTools(t *testing.T) {
 	if before != after {
 		t.Errorf("aha/search_index changed from %v to %v", before, after)
 	}
-	python, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("python")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if python.WithRustIndexTools() != python {
-		t.Error("a Python capability is returned unchanged")
-	}
 	var none *runtimecomposition.WorkerToolkitCapability
 	if none.WithRustIndexTools() != nil {
 		t.Error("a nil capability stays nil")
@@ -67,9 +60,8 @@ func TestWorkerToolkitCapabilityWithRustIndexTools(t *testing.T) {
 }
 
 // The catalogue's widening follows the composition root's one indexing
-// decision (Config.RustIndexing), not the environment variable alone: a Config
-// that names the Rust runtime without index dispatch disagrees with itself,
-// and the capability stays as pinned.
+// decision (Config.RustIndexing): without index dispatch the capability stays
+// as pinned.
 func TestWorkerToolkitCapabilityForIndexingRuntimeFollowsTheCompositionDecision(t *testing.T) {
 	t.Parallel()
 	pinned, err := runtimecomposition.LoadPinnedWorkerToolkitCapability("rust")
@@ -80,24 +72,12 @@ func TestWorkerToolkitCapabilityForIndexingRuntimeFollowsTheCompositionDecision(
 		config runtimecomposition.Config
 		served bool
 	}{
-		"rust indexing with dispatch": {
-			config: runtimecomposition.Config{
-				Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
-				IndexIngestDispatchEnabled: true,
-			},
+		"index dispatch on": {
+			config: runtimecomposition.Config{Enabled: true, IndexIngestDispatchEnabled: true},
 			served: true,
 		},
-		"rust named, dispatch off (the disagreeing case)": {
-			config: runtimecomposition.Config{
-				Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
-			},
-			served: false,
-		},
-		"python indexing with dispatch": {
-			config: runtimecomposition.Config{
-				Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimePython,
-				IndexIngestDispatchEnabled: true,
-			},
+		"index dispatch off": {
+			config: runtimecomposition.Config{Enabled: true},
 			served: false,
 		},
 		"runtime off": {config: runtimecomposition.Config{}, served: false},

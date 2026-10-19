@@ -1005,12 +1005,12 @@ refuses "toolkit discovery while the runtime is off" \
   "runtime.enabled" \
   --set main.runtime.toolkitDiscovery.enabled=true
 
-refuses "toolkit discovery without worker dispatch" \
-  "needs an active agentExecutionDispatch or indexIngestDispatch" \
+refuses "toolkit discovery with index dispatch only" \
+  "needs an active agentExecutionDispatch" \
   -f "$CHART/values-standalone.yaml" \
   --set main.runtime.toolkitDiscovery.enabled=true \
   --set main.runtime.agentExecutionDispatch.enabled=false \
-  --set main.runtime.indexIngestDispatch.enabled=false
+  --set main.runtime.indexIngestDispatch.enabled=true
 
 refuses "a Redis-era consumerGroup on a dispatch plane" \
   "consumerGroup is gone" \

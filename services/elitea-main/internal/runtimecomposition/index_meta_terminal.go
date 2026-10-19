@@ -9,9 +9,6 @@ import (
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type currentIndexMetaTerminalProcessor struct {
@@ -50,50 +47,6 @@ type currentIndexMetaTerminalEffectStore interface {
 		indexingapp.CurrentIndexMetaTerminalClaim,
 		string,
 	) error
-}
-
-func newCurrentIndexMetaTerminalProcessor(
-	pool *pgxpool.Pool,
-	configurations *CurrentConfigurationsRuntime,
-	writer indexingapp.CurrentIndexMetaTerminalWriter,
-	reportItemFailure func(error),
-) (*currentIndexMetaTerminalProcessor, error) {
-	if pool == nil || configurations == nil || configurations.unsecreter == nil ||
-		writer == nil || reportItemFailure == nil {
-		return nil, errors.New("current index metadata terminal effect dependencies are required")
-	}
-	bindings, err := repos.NewCurrentIndexMetaTerminalBindingsRepository(pool)
-	if err != nil {
-		return nil, fmt.Errorf("construct current index metadata terminal bindings: %w", err)
-	}
-	materializer, err := storage.NewCurrentConfigurationsMaterializer(configurations.unsecreter)
-	if err != nil {
-		return nil, err
-	}
-	toolkits, err := newCurrentFrozenToolkitConfigurationClaimer(materializer)
-	if err != nil {
-		return nil, err
-	}
-	terminalizer, err := indexingapp.NewCurrentIndexMetaTerminalizer(
-		bindings,
-		toolkits,
-		writer,
-	)
-	if err != nil {
-		return nil, err
-	}
-	concurrency, err := currentIndexMetaTerminalConcurrency(pool.Config().MaxConns)
-	if err != nil {
-		return nil, err
-	}
-	return &currentIndexMetaTerminalProcessor{
-		terminalizer:      terminalizer,
-		store:             bindings,
-		newClaimID:        currentRuntimeID,
-		claimLease:        2 * time.Minute,
-		concurrency:       concurrency,
-		reportItemFailure: reportItemFailure,
-	}, nil
 }
 
 func currentIndexMetaTerminalConcurrency(maxConnections int32) (int, error) {

@@ -206,7 +206,6 @@ All workflows are in `.github/workflows/`:
 |----------|---------|---------|
 | `ci-go.yml` | PR/push to Go paths | Lint, test, build validation |
 | `ci-ui.yml` | PR/push to UI paths | Lint, build SPA |
-| `ci-python.yml` | PR/push to the Python worker, the SDK gates or the gateway | Worker suite, SDK conformance, projection checks |
 | `helm-lint.yml` | PR/push to helm paths | Lint charts, template dry-run |
 | `publish.yml` | Push to main/next | Semantic release → build → publish-image (scan, manifest, sign) → chart |
 

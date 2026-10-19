@@ -249,11 +249,6 @@ services:
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
-      # Which worker this stack runs, stated explicitly: elitea-main's own default
-      # is rust, so a Python-worker base must say so or its toolkit catalogue
-      # would describe a worker that is not there. The Rust overlay
-      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
-      ELITEA_WORKER_IMPLEMENTATION: "python"
 
       # The origin the PROVIDER calls back to for artifacts and models. The
       # engine derives the artifact API base by stripping `/llm/v1` off this,

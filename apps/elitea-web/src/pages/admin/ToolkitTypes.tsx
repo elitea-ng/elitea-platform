@@ -20,8 +20,7 @@
  *
  * ## The worker column is advisory
  *
- * `Unverified` reports that neither the pinned Python worker image nor the Rust
- * worker is KNOWN to carry the type. It is not a claim that the type fails, and
+ * `Unverified` reports that the Rust worker is not KNOWN to carry the type. It is not a claim that the type fails, and
  * nothing on this page filters on it. The server sends a sentence with every
  * verdict, and the table shows it, so the chip cannot be read alone.
  *

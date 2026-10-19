@@ -23,8 +23,6 @@
  * was TOLD TO BE (the system prompt) and what it was OFFERED (the tool
  * names); this is what it was GIVEN. Both assertions below read it, and both
  * are exact rather than circumstantial.
- *
- * RUST leg, like the rest of this directory.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -250,7 +248,7 @@ test('a delegated sub-agent is given the task and not the parent’s chat histor
 
     // ── Now delegate ──────────────────────────────────────────────────────
     const task = marker('task');
-    const childTool = agentAsToolName({ agentId: child.id, versionId: child.versionId, name: child.name });
+    const childTool = agentAsToolName({ agentId: child.id, versionId: child.versionId });
     await sendTurn(
       page,
       callToolWithArgumentsPrompt(childTool, { task: `Handle this: ${task}` }, 'delegate it and quote the answer'),

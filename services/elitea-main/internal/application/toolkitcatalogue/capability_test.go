@@ -1,19 +1,18 @@
 package toolkitcatalogue
 
-// The capability verdicts, and the DRIFT CHECK that keeps the two transcribed
-// lists honest.
+// The capability verdicts, and the DRIFT CHECK that keeps the transcribed list
+// honest.
 //
-// capability.go carries two lists copied out of other trees: the Python
-// worker's pinned SDK lock and the Rust worker's materialiser. A copy with no
-// check is a copy that goes stale silently, and a stale capability verdict is
-// worse than none — it tells an operator a type is carried when it is not.
+// capability.go carries a list copied out of another tree: the Rust worker's
+// materialiser. A copy with no check is a copy that goes stale silently, and a
+// stale capability verdict is worse than none — it tells an operator a type is
+// carried when it is not.
 //
-// Both checks fail LOUDLY when they cannot find their subject. A check that
+// The check fails LOUDLY when it cannot find its subject. A check that
 // reads no file and reports success is the failure mode this repository has
 // shipped before.
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -30,36 +29,6 @@ func repoRelative(t *testing.T, parts ...string) string {
 	t.Helper()
 	root := filepath.Join("..", "..", "..", "..", "..")
 	return filepath.Join(append([]string{root}, parts...)...)
-}
-
-// The Python list must equal the lock file's own
-// `required_sdk_tool_import_keys`. Change the image's extras and this fails,
-// naming the file.
-func TestPythonVerifiedImportKeysMatchTheWorkerLock(t *testing.T) {
-	t.Parallel()
-
-	path := repoRelative(t, "services", "elitea-worker-python", "elitea-sdk.lock.json")
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err,
-		"the pinned worker lock must be readable: capability.go transcribes it, and a "+
-			"transcription nothing checks goes stale without a symptom")
-
-	var lock struct {
-		IndexingCapabilityProfile struct {
-			RequiredSDKToolImportKeys []string `json:"required_sdk_tool_import_keys"`
-		} `json:"indexing_capability_profile"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &lock))
-
-	keys := lock.IndexingCapabilityProfile.RequiredSDKToolImportKeys
-	require.NotEmpty(t, keys, "the lock declared no SDK tool import keys; the premise of this check is gone")
-
-	want := append([]string(nil), keys...)
-	got := append([]string(nil), pythonVerifiedImportKeys...)
-	sort.Strings(want)
-	sort.Strings(got)
-	require.Equal(t, want, got,
-		"pythonVerifiedImportKeys has drifted from %s. Update the list in capability.go.", path)
 }
 
 // The Rust list must equal the tool types `materialize.rs` actually dispatches.
@@ -123,37 +92,17 @@ func TestCapabilityVerdicts(t *testing.T) {
 
 	source := PinnedWorkerCapabilities{}
 
-	both := source.ToolkitCapability("github")
-	require.True(t, both.Python)
-	require.True(t, both.Rust)
-	require.Equal(t, VerdictSupported, both.Verdict)
+	github := source.ToolkitCapability("github")
+	require.True(t, github.Rust)
+	require.Equal(t, VerdictSupported, github.Verdict)
 
-	// jira was the Python-only example until its partial Rust family landed;
-	// it is carried by both workers now.
 	jira := source.ToolkitCapability("jira")
-	require.True(t, jira.Python)
 	require.True(t, jira.Rust)
 	require.Equal(t, VerdictSupported, jira.Verdict)
 
-	// No pinned catalogue type is Python-only today, so the Python-only row
-	// is exercised on the verdict table with a type the Rust worker genuinely
-	// does not dispatch: it must still read as supported, by Python.
-	pythonOnly := capabilityVerdict("python_only_demo", true, false)
-	require.True(t, pythonOnly.Python)
-	require.False(t, pythonOnly.Rust)
-	require.Equal(t, VerdictSupported, pythonOnly.Verdict)
-	require.NotContains(t, pythonOnly.Reason, "Rust")
-	for _, toolkitType := range CapabilityTypes() {
-		capability := source.ToolkitCapability(toolkitType)
-		if capability.Python && !capability.Rust {
-			require.Equal(t, pythonOnly.Reason, capability.Reason, "%s is Python-only", toolkitType)
-		}
-	}
-
-	rustOnly := source.ToolkitCapability("slack")
-	require.False(t, rustOnly.Python)
-	require.True(t, rustOnly.Rust)
-	require.Equal(t, VerdictSupported, rustOnly.Verdict)
+	slack := source.ToolkitCapability("slack")
+	require.True(t, slack.Rust)
+	require.Equal(t, VerdictSupported, slack.Verdict)
 
 	// imagegen (#864) is carried by the Rust worker's native family.
 	imagegen := source.ToolkitCapability("imagegen")
@@ -161,13 +110,12 @@ func TestCapabilityVerdicts(t *testing.T) {
 	require.Equal(t, VerdictSupported, imagegen.Verdict)
 
 	neither := source.ToolkitCapability("unlisted_demo")
-	require.False(t, neither.Python)
 	require.False(t, neither.Rust)
 	require.Equal(t, VerdictUnverified, neither.Verdict)
 
 	// Every verdict carries a sentence naming the runtime fact behind it. A
 	// bare boolean would send the operator to read Go source.
-	for _, capability := range []Capability{both, jira, pythonOnly, rustOnly, neither} {
+	for _, capability := range []Capability{github, jira, slack, neither} {
 		require.NotEmpty(t, capability.Reason)
 	}
 	require.Contains(t, neither.Reason, "not verified",

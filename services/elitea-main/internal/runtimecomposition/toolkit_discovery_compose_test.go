@@ -64,7 +64,6 @@ func TestStandaloneComposeEnablesToolkitDiscoveryByDefault(t *testing.T) {
 
 	for _, files := range [][]string{
 		{"docker-compose.standalone-full.yml"},
-		{"docker-compose.standalone-full.yml", "docker-compose.standalone-rust-agent.yml"},
 	} {
 		require.Equal(t, "true", composeMainEnvironment(t, nil, files...)[discoveryFlag], "%v", files)
 		// An operator can still turn it off.
@@ -77,30 +76,20 @@ func TestStandaloneComposeEnablesToolkitDiscoveryByDefault(t *testing.T) {
 
 // The composed environment must pass the same parser elitea-main starts with,
 // with discovery on, and the toolkit route must land on the stream the
-// deployed worker consumes. Both worker modes are covered: Python follows the
-// index-ingest stream, Rust follows the agent stream.
-func TestStandaloneComposeToolkitDiscoveryComposesForBothWorkers(t *testing.T) {
+// deployed (Rust) worker consumes: the agent stream.
+func TestStandaloneComposeToolkitDiscoveryComposesForTheWorker(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name           string
-		files          []string
-		implementation string
-		workerConfig   string
-		stream         func(Config) string
+		name         string
+		files        []string
+		workerConfig string
+		stream       func(Config) string
 	}{
 		{
-			name:           "python worker",
-			files:          []string{"docker-compose.standalone-full.yml"},
-			implementation: PythonWorkerImplementation,
-			workerConfig:   "worker-runtime.json",
-			stream:         func(c Config) string { return c.IndexIngestCommandStream },
-		},
-		{
-			name:           "rust worker overlay",
-			files:          []string{"docker-compose.standalone-full.yml", "docker-compose.standalone-rust-agent.yml"},
-			implementation: RustWorkerImplementation,
-			workerConfig:   "worker-runtime.rust.json",
-			stream:         func(c Config) string { return c.AgentExecutionCommandStream },
+			name:         "rust worker",
+			files:        []string{"docker-compose.standalone-full.yml"},
+			workerConfig: "worker-runtime.rust.json",
+			stream:       func(c Config) string { return c.AgentExecutionCommandStream },
 		},
 	}
 	for _, tc := range cases {
@@ -115,15 +104,11 @@ func TestStandaloneComposeToolkitDiscoveryComposesForBothWorkers(t *testing.T) {
 			require.True(t, config.Enabled)
 			require.True(t, config.ToolkitDiscoveryEnabled)
 
-			implementation, err := WorkerImplementationFromEnv(mapLookup(env))
-			require.NoError(t, err)
-			require.Equal(t, tc.implementation, implementation)
-			capability, err := LoadPinnedWorkerToolkitCapability(implementation)
+			capability, err := LoadPinnedWorkerToolkitCapability(RustWorkerImplementation)
 			require.NoError(t, err)
 			route, err := configuredToolkitRoute(config, capability)
 			require.NoError(t, err)
 			require.True(t, route.enabled)
-			require.Equal(t, tc.implementation == RustWorkerImplementation, route.rust)
 			require.NotEmpty(t, route.stream)
 			require.Equal(t, tc.stream(config), route.stream)
 			require.NotEmpty(t, route.consumer, "the route stream is not a known command stream")

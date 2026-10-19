@@ -267,12 +267,10 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// gone because the check above turns a kept entry into a failure once a
 		// deployment assigns the flag.
 		//
-		// Keep the snapshot files with it. scripts/contract/
-		// sync_index_types_snapshot.py holds the snapshot to the locked SDK
-		// revision, and ci-python.yml runs that generator with --check against
+		// Keep the snapshot files with it:
 		// internal/runtimecomposition/current_index_types_snapshot.json and
-		// internal/api/v2/indextypes/testdata/current_index_types_ui_response.json.
-		// Deleting either file turns that gate red.
+		// internal/api/v2/indextypes/testdata/current_index_types_ui_response.json
+		// are committed data (their SDK generator went with the Python worker).
 		//
 		// The chart DERIVES the flag now (deploy/helm/elitea/values.yaml ships
 		// it empty, elitea-main.indexTypesEnabled fills it): on where the

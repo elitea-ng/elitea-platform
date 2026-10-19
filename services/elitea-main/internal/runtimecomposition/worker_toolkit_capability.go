@@ -20,47 +20,24 @@ const (
 	maxWorkerToolkitCapabilityBytes = 1 << 14
 	maxWorkerToolkitCapabilityNames = 1024
 
-	// PythonWorkerImplementation and RustWorkerImplementation are the two
-	// worker images this platform deploys. deploy/scripts/standalone-stack.sh
-	// selects between them with STANDALONE_WORKER and the chart with
-	// worker.implementation; neither of those reaches this process, so the
-	// deployment must state it again here. See WorkerImplementation in config.
-	PythonWorkerImplementation = "python"
-	RustWorkerImplementation   = "rust"
+	// RustWorkerImplementation is the one worker image this platform deploys
+	// (the Python worker was removed). The name is still carried through the
+	// API surfaces that report which worker answers (/runtime/capabilities).
+	RustWorkerImplementation = "rust"
 )
 
 var ErrWorkerToolkitCapabilityInvalid = errors.New(
 	"worker toolkit capability snapshot is invalid",
 )
 
-// The two capability files are generated from the two workers, not written by
-// hand:
+// The capability file is generated from the Rust worker, not written by hand:
+// it records the toolkit families libs/rust/agent-runtime/src/toolkits/
+// materialize.rs and the worker's src/toolkits/direct_runtime.rs materialize.
+// Its gate is TestRustCapabilitySnapshotMatchesTheRustSource, which reads both
+// files.
 //
-//   - the Python file records elitea_sdk.tools.FAILED_IMPORTS measured in an
-//     environment that installs the image's own extras. Its gate is
-//     services/elitea-worker-python/tests/unit/test_toolkit_capability_snapshot.py,
-//     which runs in the job that installs exactly those extras.
-//   - the Rust file records the toolkit families libs/rust/agent-runtime/src/
-//     toolkits/materialize.rs and the worker's src/toolkits/direct_runtime.rs
-//     materialize. Its gate is
-//     TestRustCapabilitySnapshotMatchesTheRustSource, which reads both files.
-//
-//go:embed current_python_worker_toolkit_capability_snapshot.json
-var pinnedPythonWorkerToolkitCapabilityJSON []byte
-
 //go:embed current_rust_worker_toolkit_capability_snapshot.json
 var pinnedRustWorkerToolkitCapabilityJSON []byte
-
-type pythonWorkerToolkitCapabilityDocument struct {
-	SchemaVersion  string `json:"schema_version"`
-	Implementation string `json:"implementation"`
-	SDKRevision    string `json:"sdk_revision"`
-	// UnsupportedImportKeys are the SDK registry keys whose import failed in
-	// the admitted image. The image installs a measured subset of
-	// elitea-sdk[all], so a toolkit whose third-party dependency the subset
-	// omits is present in the registry and unusable in the process.
-	UnsupportedImportKeys []string `json:"unsupported_import_keys"`
-}
 
 type rustWorkerToolkitCapabilityDocument struct {
 	SchemaVersion  string `json:"schema_version"`
@@ -86,9 +63,8 @@ type rustWorkerToolkitCapabilityDocument struct {
 // toolkit type, and says why when it cannot.
 //
 // The question has to be asked because the catalogue and the runtime disagree.
-// The pinned SDK snapshot holds 52 types. The Python worker image imports 43 of
-// them; the other 9 raise at import and fail at the first tool call. The Rust
-// worker materializes 42 families (several partial, per supported_tools) and
+// The pinned SDK snapshot holds 52 types. The Rust worker materializes 42
+// families (several partial, per supported_tools) and
 // SKIPS anything else with a warning (agent_toolkit_skipped), so an
 // unsupported toolkit attaches to an agent and then quietly does nothing.
 //
@@ -98,13 +74,8 @@ type rustWorkerToolkitCapabilityDocument struct {
 // missing tile is indistinguishable from a catalogue that never had the type.
 type WorkerToolkitCapability struct {
 	implementation string
-	// unsupportedImportKeys is the Python answer: a deny set keyed on the SDK
-	// import key.
-	unsupportedImportKeys map[string]struct{}
-	// supportedToolTypes is the Rust answer: an allow set keyed on the type.
-	// The two shapes are not interchangeable. The Python image carries the
-	// whole registry and loses parts of it, so its answer is the loss. The Rust
-	// worker implements families one at a time, so its answer is the list.
+	// supportedToolTypes is an allow set keyed on the type: the Rust worker
+	// implements families one at a time, so its answer is the list.
 	supportedToolTypes map[string]struct{}
 	// supportedTools is the per-tool allow list of a partial Rust family,
 	// keyed by type; a type absent from it serves every tool.
@@ -114,54 +85,14 @@ type WorkerToolkitCapability struct {
 	withheldReasons map[string]string
 }
 
-// WorkerImplementationFromEnv reads which worker image this deployment runs.
-//
-// The variable is ELITEA_WORKER_IMPLEMENTATION, and it is deliberately NOT
-// named ELITEA_RUNTIME_*: that prefix belongs to the runtime dispatch plane,
-// which a default install leaves entirely off (deploy/helm/tests/
-// render-capabilities.sh fails a default render that carries any such name).
-// The toolkit catalogue is served whether or not that plane is enabled.
-//
-// The default is rust: the platform's end-state worker, and what
-// deploy/scripts/standalone-stack.sh starts when STANDALONE_WORKER is unset and
-// what deploy/helm/elitea/values.yaml's worker.implementation defaults to. The
-// Python worker is still selectable (set the variable to python) until it is
-// removed. The chart states the value explicitly rather than relying on this
-// default, so elitea-main always agrees with the image actually deployed.
-//
-// An unrecognised value is refused at startup. Falling back to a default would
-// mean a typo silently produces the wrong catalogue for the running worker,
-// which is the failure this projection exists to prevent.
-func WorkerImplementationFromEnv(lookup LookupEnv) (string, error) {
-	if lookup == nil {
-		return "", errors.New("worker environment lookup is required")
-	}
-	value, _ := lookup("ELITEA_WORKER_IMPLEMENTATION")
-	switch value {
-	case "":
-		return RustWorkerImplementation, nil
-	case PythonWorkerImplementation, RustWorkerImplementation:
-		return value, nil
-	default:
-		return "", errors.New(
-			"ELITEA_WORKER_IMPLEMENTATION must be python or rust",
-		)
-	}
-}
-
 // LoadPinnedWorkerToolkitCapability builds the capability projection for one
-// worker implementation. An unknown implementation is an error rather than a
-// permissive default: guessing "python" for a Rust deployment would offer 39
-// types that the running worker skips in silence.
+// worker implementation. Only "rust" exists; anything else (including the
+// retired "python") is an error rather than a permissive default.
 func LoadPinnedWorkerToolkitCapability(implementation string) (*WorkerToolkitCapability, error) {
-	switch implementation {
-	case PythonWorkerImplementation:
-		return LoadWorkerToolkitCapability(implementation, pinnedPythonWorkerToolkitCapabilityJSON)
-	case RustWorkerImplementation:
-		return LoadWorkerToolkitCapability(implementation, pinnedRustWorkerToolkitCapabilityJSON)
-	default:
+	if implementation != RustWorkerImplementation {
 		return nil, ErrWorkerToolkitCapabilityInvalid
 	}
+	return LoadWorkerToolkitCapability(implementation, pinnedRustWorkerToolkitCapabilityJSON)
 }
 
 // LoadWorkerToolkitCapability parses one bounded capability document. It is
@@ -172,35 +103,10 @@ func LoadWorkerToolkitCapability(
 	implementation string,
 	data []byte,
 ) (*WorkerToolkitCapability, error) {
-	switch implementation {
-	case PythonWorkerImplementation:
-		return loadPythonWorkerToolkitCapability(data)
-	case RustWorkerImplementation:
-		return loadRustWorkerToolkitCapability(data)
-	default:
+	if implementation != RustWorkerImplementation {
 		return nil, ErrWorkerToolkitCapabilityInvalid
 	}
-}
-
-func loadPythonWorkerToolkitCapability(data []byte) (*WorkerToolkitCapability, error) {
-	var document pythonWorkerToolkitCapabilityDocument
-	if err := decodeWorkerToolkitCapability(data, &document); err != nil {
-		return nil, err
-	}
-	if document.SchemaVersion != currentWorkerToolkitCapabilityVersion ||
-		document.Implementation != PythonWorkerImplementation ||
-		!validCurrentToolkitSchemaIdentifier(document.SDKRevision) ||
-		len(document.UnsupportedImportKeys) > maxWorkerToolkitCapabilityNames {
-		return nil, ErrWorkerToolkitCapabilityInvalid
-	}
-	keys, err := workerToolkitCapabilityNameSet(document.UnsupportedImportKeys)
-	if err != nil {
-		return nil, err
-	}
-	return &WorkerToolkitCapability{
-		implementation:        PythonWorkerImplementation,
-		unsupportedImportKeys: keys,
-	}, nil
+	return loadRustWorkerToolkitCapability(data)
 }
 
 func loadRustWorkerToolkitCapability(data []byte) (*WorkerToolkitCapability, error) {
@@ -281,8 +187,8 @@ func (c *WorkerToolkitCapability) Implementation() string {
 // SupportsToolkitType reports whether the configured worker can run one type,
 // and gives the reason when it cannot.
 //
-// importKey is the type's SDK registry key, from the toolkit catalogue. An
-// empty key means the SDK imports the toolkit unconditionally.
+// importKey is the type's SDK registry key, from the toolkit catalogue. The
+// Rust worker answers on the type alone, so it is accepted and not read.
 //
 // A nil projection supports every type the SDK has and gives no reason: a
 // deployment that has not stated its worker keeps serving the catalogue it
@@ -293,46 +199,22 @@ func (c *WorkerToolkitCapability) Implementation() string {
 // the failure this projection exists to prevent.
 func (c *WorkerToolkitCapability) SupportsToolkitType(
 	toolkitType string,
-	importKey string,
+	_ string,
 ) (bool, string) {
 	if c == nil {
 		return rustonly.AbsentTypeVerdict(toolkitType)
 	}
-	switch c.implementation {
-	case PythonWorkerImplementation:
-		if _, rustOnly := rustOnlyToolkitTypeNames()[toolkitType]; rustOnly {
-			// A type the SDK does not have (ADR-0032 P4: docx, xlsx): only the
-			// Rust worker serves it, whatever its import key says.
-			return false, "This deployment's agent worker does not support the " +
-				toolkitType + " toolkit; only the Rust worker serves it."
-		}
-		if importKey == "" {
-			// A runtime toolkit: artifact, memory, mcp, sandbox, vectorstore.
-			// The SDK imports these with itself, so no import of them can fail.
-			return true, ""
-		}
-		if _, unsupported := c.unsupportedImportKeys[importKey]; unsupported {
-			// A sentence, like the Rust arm below: the catalogue shows it
-			// verbatim and the run surfaces place it between two sentences.
-			return false, "This deployment's agent worker image does not include the " +
-				"dependencies of the " + importKey + " toolkit."
-		}
-		return true, ""
-	case RustWorkerImplementation:
-		if _, supported := c.supportedToolTypes[toolkitType]; supported {
-			return true, ""
-		}
-		if reason, withheld := c.withheldReasons[toolkitType]; withheld {
-			return false, reason
-		}
-		// A sentence for the person reading it in the UI (the Indexes tab
-		// and the toolkit catalogue show it verbatim). "Native worker" and
-		// "toolkit family" are internal terms (UI-DC-1).
-		return false, "This deployment's agent worker does not support the " +
-			toolkitType + " toolkit."
-	default:
+	if _, supported := c.supportedToolTypes[toolkitType]; supported {
 		return true, ""
 	}
+	if reason, withheld := c.withheldReasons[toolkitType]; withheld {
+		return false, reason
+	}
+	// A sentence for the person reading it in the UI (the Indexes tab and the
+	// toolkit catalogue show it verbatim). "Native worker" and "toolkit
+	// family" are internal terms (UI-DC-1).
+	return false, "This deployment's agent worker does not support the " +
+		toolkitType + " toolkit."
 }
 
 // WithRustIndexTools is the capability of a Rust worker whose deployment
@@ -342,10 +224,10 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 // itself — the same worker image serves them under one setting and not the
 // other — and the SDK conformance gate that generates the snapshot builds the
 // families without them, so the rule lives here, beside the setting that
-// decides it. A Python capability, or a family that is not partial (serves
-// every SDK tool already), is returned unchanged.
+// decides it. A family that is not partial (serves every SDK tool already) is
+// returned unchanged.
 func (c *WorkerToolkitCapability) WithRustIndexTools() *WorkerToolkitCapability {
-	if c == nil || c.implementation != RustWorkerImplementation {
+	if c == nil {
 		return c
 	}
 	tools := make(map[string]map[string]struct{}, len(c.supportedTools))
@@ -362,10 +244,9 @@ func (c *WorkerToolkitCapability) WithRustIndexTools() *WorkerToolkitCapability 
 		tools[toolkitType] = copied
 	}
 	return &WorkerToolkitCapability{
-		implementation:        c.implementation,
-		unsupportedImportKeys: c.unsupportedImportKeys,
-		supportedToolTypes:    c.supportedToolTypes,
-		supportedTools:        tools,
+		implementation:     c.implementation,
+		supportedToolTypes: c.supportedToolTypes,
+		supportedTools:     tools,
 	}
 }
 
@@ -392,10 +273,9 @@ func (c *WorkerToolkitCapability) ForIndexingRuntime(config Config) *WorkerToolk
 // elitea-vector, reached with the claim's vector token (minted only under the
 // Rust indexing runtime) and embeds them with an operator-chosen model; a
 // worker lacking either would skip the toolkit in silence while the catalogue
-// offered the tile. A Python capability is returned unchanged (the SDK serves
-// memory from the toolkit's own pgvector database).
+// offered the tile.
 func (c *WorkerToolkitCapability) withoutMemory(reason string) *WorkerToolkitCapability {
-	if c == nil || c.implementation != RustWorkerImplementation {
+	if c == nil {
 		return c
 	}
 	types := make(map[string]struct{}, len(c.supportedToolTypes))
@@ -409,39 +289,24 @@ func (c *WorkerToolkitCapability) withoutMemory(reason string) *WorkerToolkitCap
 	}
 	reasons["memory"] = reason
 	return &WorkerToolkitCapability{
-		implementation:        c.implementation,
-		unsupportedImportKeys: c.unsupportedImportKeys,
-		supportedToolTypes:    types,
-		supportedTools:        c.supportedTools,
-		withheldReasons:       reasons,
+		implementation:     c.implementation,
+		supportedToolTypes: types,
+		supportedTools:     c.supportedTools,
+		withheldReasons:    reasons,
 	}
 }
 
 // SupportsTool reports whether the configured worker serves one TOOL of a
 // type it supports (SupportsToolkitType answers for the type). It refuses:
-// a tool only the Rust worker serves, on a Python projection and on a nil one
-// (a deployment that has not stated its worker); and a tool a partial Rust
-// family does not serve. Every other answer is yes.
+// a tool only the Rust worker serves, on a nil projection (a deployment that
+// has not stated its worker); and a tool a partial Rust family does not serve.
+// Every other answer is yes.
 func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bool, string) {
-	if c != nil && c.implementation == PythonWorkerImplementation {
-		// The tools only the Rust worker serves (ADR-0032 P3 pptx authoring)
-		// are merged into the pinned argument schemas, so the Python worker's
-		// catalogue would list them. Marked unavailable they stay out of reach
-		// of a selection on a deployment that cannot run them.
-		if _, rustOnly := rustOnlyToolkitToolNames()[toolkitType][toolName]; rustOnly {
-			return false, "This deployment's agent worker does not support the " +
-				toolName + " tool of the " + toolkitType + " toolkit; only the Rust worker serves it."
-		}
-		return true, ""
-	}
 	if c == nil {
 		// The same reading of absence as SupportsToolkitType: the tools only the
 		// Rust worker serves are not offered on a deployment that has not said
 		// it runs one.
 		return rustonly.AbsentToolVerdict(toolkitType, toolName)
-	}
-	if c.implementation != RustWorkerImplementation {
-		return true, ""
 	}
 	tools, partial := c.supportedTools[toolkitType]
 	if !partial {
@@ -454,24 +319,7 @@ func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bo
 		toolName + " tool of the " + toolkitType + " toolkit."
 }
 
-// UnsupportedNames returns the names this projection refuses, sorted. The
-// admin surface reads it to show which half of the catalogue the deployment
-// cannot run; the shape is the projection's own (import keys for Python,
-// nothing for Rust, whose answer is an allow list).
-func (c *WorkerToolkitCapability) UnsupportedNames() []string {
-	if c == nil || len(c.unsupportedImportKeys) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(c.unsupportedImportKeys))
-	for name := range c.unsupportedImportKeys {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// SupportedNames returns the names this projection admits, sorted, for an
-// allow-list projection. Nil for a deny-list projection.
+// SupportedNames returns the toolkit types this projection admits, sorted.
 func (c *WorkerToolkitCapability) SupportedNames() []string {
 	if c == nil || len(c.supportedToolTypes) == 0 {
 		return nil

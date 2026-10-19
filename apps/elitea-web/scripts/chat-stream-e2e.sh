@@ -5,7 +5,6 @@
 #   apps/elitea-web/scripts/chat-stream-e2e.sh            # up + seed + run
 #   apps/elitea-web/scripts/chat-stream-e2e.sh --keep     # leave the stack up
 #   CHAT_STREAM_REPEAT=3 …/chat-stream-e2e.sh            # flake check
-#   STANDALONE_WORKER=rust …/chat-stream-e2e.sh          # native Rust runtime
 #   COMPOSE_PROFILES=real-llm LLM_PROVIDER=vllm LLM_API_BASE=http://llm-real:8090 \
 #     LLM_MODEL=qwen3-0.6b LLM_EMBEDDING_MODEL=vllm/nomic-embed-text-v1.5 \
 #     PLAYWRIGHT_PROJECT=chat-stream-real E2E_CHAT_MODEL=vllm/qwen3-0.6b \
@@ -20,19 +19,16 @@
 # service in deploy/docker-compose.standalone-full.yml for what this lane can
 # and cannot assert.
 #
-# STANDALONE_WORKER is read by deploy/scripts/standalone-stack.sh, not by this
-# script, and reaches it through the environment every `run_stack` call
-# inherits. It is written down here because the journeys are the only thing
-# that can tell the two runtimes apart: the same UI drives both, and a change
-# that admits one and refuses the other passes every unit suite. Use a distinct
-# CHAT_STREAM_PROJECT and CHAT_STREAM_PORT when running both on one host, and a
-# distinct E2E_OIDC_PORT with them: oidc-mock's published port must EQUAL its
-# container port (its issuer comes from the Host header), so the port cannot be
-# remapped — but it can be moved on both sides at once, which is what that
-# variable does. It defaults to 9400, so continuous integration, which sets
-# nothing, is unchanged; the same name is what the E2E stack's compose file,
-# apps/elitea-web/scripts/e2e-stack.sh, e2e/auth.setup.ts and
-# e2e/fixtures/session.ts already read.
+# The worker is always the native Rust runtime: the Python worker was retired,
+# and deploy/scripts/standalone-stack.sh applies the Rust overlay
+# unconditionally. To run two stacks on one host, use a distinct
+# CHAT_STREAM_PROJECT and CHAT_STREAM_PORT, and a distinct E2E_OIDC_PORT with
+# them: oidc-mock's published port must EQUAL its container port (its issuer
+# comes from the Host header), so the port cannot be remapped — but it can be
+# moved on both sides at once, which is what that variable does. It defaults to
+# 9400, so continuous integration, which sets nothing, is unchanged; the same
+# name is what the E2E stack's compose file, apps/elitea-web/scripts/e2e-stack.sh,
+# e2e/auth.setup.ts and e2e/fixtures/session.ts already read.
 #
 # Why not the E2E stack: `docker-compose.e2e-standalone.yml` has no runtime
 # plane, no worker and no model backend, so the journey would fail there for a
@@ -121,7 +117,7 @@ run_stack() {
 echo "→ Runtime PKI + secrets (idempotent)…"
 run_stack certs
 
-echo "→ Bringing up ${PROJECT} on :${PORT} (worker=${STANDALONE_WORKER:-python}, profiles=${COMPOSE_PROFILES:-none}, mock chunk delay ${DELAY_MS}ms)…"
+echo "→ Bringing up ${PROJECT} on :${PORT} (worker=rust, profiles=${COMPOSE_PROFILES:-none}, mock chunk delay ${DELAY_MS}ms)…"
 # `up` reuses an image that already exists, so a source change lands only if
 # the build is asked for explicitly. That is not a nicety here: the whole
 # incremental-render assertion depends on the mock's per-chunk delay actually
@@ -183,7 +179,7 @@ done
 # assertions.
 #
 # KNOW WHAT THAT BUYS AND WHAT IT DOES NOT. The check now starts exactly where
-# the `chat-stream` job in .github/workflows/ci-web-e2e.yml starts: on every
+# the `chat-stream-rust` job in .github/workflows/ci-web-e2e.yml starts: on every
 # pull request that touches deploy/**, services/elitea-main/**,
 # apps/elitea-web/**, tools/uictl/**, docker-bake.hcl or that workflow file.
 # Both edge files live under deploy/, so an edit to either one starts it. A pull
@@ -329,21 +325,8 @@ SHARD_ARGS=""
 # config's `workers: 4` under CI still started all three files at once. The
 # worker count is the only lever that crosses files, it cannot be set
 # per-project in the config, and this script is the single entry point every
-# run goes through — both ci-web-e2e.yml jobs (`chat-stream` and
-# `chat-stream-rust`) invoke it with no Playwright flags of their own. So the
-# pin lives here, once.
-# E2E_WORKER tells the specs WHICH runtime answers the turns. The two legs
-# pin different contracts on purpose — the pipeline/HITL journeys author the
-# native runtime's shapes — so a spec must know its leg, and this script is
-# the one place that knows it authoritatively.
-#
-# `chat.variables.spec.ts` USED to be on that list and no longer is: it proved
-# substitution on the native leg alone while Main's version projection built an
-# empty `variables` list (the SDK reads `meta.variables` only when it is a
-# dict, so the same agent answered on the python leg with its placeholder
-# intact). The projection now carries the version's real list, so that spec
-# runs one assertion on BOTH legs.
-E2E_WORKER="${STANDALONE_WORKER:-python}"
+# run goes through — the ci-web-e2e.yml job (`chat-stream-rust`) invokes it
+# with no Playwright flags of its own. So the pin lives here, once.
 # Which Playwright project to run against the stack. `chat-stream` is the
 # original; `deepwiki-stack` (scripts/deepwiki-e2e.sh) reuses everything
 # above it — the same stack, seeds and assertions — for the provider-backed
@@ -401,7 +384,6 @@ if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
     -v "$WEB_DIR":/work -w /work \
     -e CI="${CI:-}" \
     -e E2E_REUSE_STACK=1 \
-    -e E2E_WORKER="$E2E_WORKER" \
     -e E2E_CHAT_MODEL="${E2E_CHAT_MODEL:-}" \
     -e E2E_OIDC_PORT="${E2E_OIDC_PORT:-9400}" \
     "${LIVE_ENV_ARGS[@]+"${LIVE_ENV_ARGS[@]}"}" \
@@ -412,7 +394,6 @@ if [ -n "${PLAYWRIGHT_CONTAINER_IMAGE:-}" ]; then
 else
   PLAYWRIGHT_BASE_URL="http://localhost:${PORT}" \
   E2E_REUSE_STACK=1 \
-  E2E_WORKER="$E2E_WORKER" \
   E2E_CHAT_MODEL="${E2E_CHAT_MODEL:-}" \
   PWTEST_SHARD_WEIGHTS="${PWTEST_SHARD_WEIGHTS:-}" \
     npx playwright test --project="$PLAYWRIGHT_PROJECT" --workers=1 $SHARD_ARGS $REPEAT_ARGS

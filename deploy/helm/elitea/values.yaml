@@ -3898,7 +3898,7 @@ vector:
   # elitea-main's ConfigMap, and lists dns:<dnsName> in
   # ELITEA_VECTOR_ADMIN_IDENTITIES. Off, nothing deletes vectors: deleted
   # indexes keep theirs (tombstones stay pending), deleted projects keep
-  # theirs. Under worker.indexingRuntime=rust that is refused at render time.
+  # theirs. With the worker indexing that is refused at render time.
   mainClient:
     enabled: true
     # The certificate's only DNS SAN and so the identity elitea-vector
@@ -4057,134 +4057,31 @@ worker:
   # in a terminal failure: Go admits and projects executions but has no
   # agent-token producer of its own.
 
-  # Which worker this release runs: `python` (default) or `rust`.
+  # The worker is the native Rust worker (services/elitea-worker-rust), the
+  # only one: the Python worker was removed. `worker.implementation` is gone;
+  # a values file that still sets it to anything but `rust` fails the render.
   #
-  # NOT named `runtime` — that key is taken, by the deployment configuration
-  # block further down that becomes the worker's runtime.json.
-  #
-  # The two are not interchangeable at the values level, and the chart handles
-  # the differences rather than leaving them to the operator:
-  #
-  #   * The Rust worker REQUIRES `--toolkit-security-config`. Its argument
-  #     parser matches an exact five-token command line and exits
-  #     `worker_serve.invalid_configuration` on anything else, so a Rust image
-  #     started with the Python worker's argument list CrashLoopBackOffs
-  #     immediately. The chart writes that second file and passes the flag.
-  #   * `sensitiveTools` below reaches Python as the ELITEA_SENSITIVE_TOOLS
-  #     environment variable and Rust as `toolkit_security.sensitive_tools`
-  #     inside that file. One value, two carriers.
-  #   * ELITEA_DISABLE_SYSTEM_CA and REQUESTS_CA_BUNDLE are SDK settings with
-  #     no reader in the Rust worker, and are omitted for it.
-  #
-  # runtime.json itself is identical for both: its 21 fields and 21 `limits`
-  # entries are the same set on either side, and the Rust struct is
-  # deny_unknown_fields, so any drift fails at startup rather than silently.
-  #
-  # `rust` is the default (the platform's end-state worker; the Python worker is
-  # being retired), and it matches `deploy/scripts/standalone-stack.sh`'s own
-  # `${STANDALONE_WORKER:-rust}` and elitea-main's own default for
-  # ELITEA_WORKER_IMPLEMENTATION. UPGRADING: an install that enables the worker
-  # and never set `implementation` was on Python and is now on Rust; keep Python
-  # with `implementation: python`. Indexing stays python (see `indexingRuntime`
-  # below), which on the Rust worker means agents cannot search the
-  # python-era indexes until indexing is switched and re-created.
   # elitea-main serves a toolkit type or an internal-tool toggle as
-  # `metadata.hidden`/unavailable whenever the CONFIGURED worker cannot run it
-  # (`internal/runtimecomposition/worker_toolkit_capability.go`,
-  # `ELITEA_WORKER_IMPLEMENTATION`, set from this field just below), so the
-  # choice here is not cosmetic — it decides what a user can turn on.
-  #
-  # NO WORKER IN THIS RELEASE (worker.enabled=false, the default): elitea-main is
-  # still told this value, because it decides which toolkit types the catalogue
-  # offers. A Python worker that you deploy separately therefore needs
-  # `implementation: python` here, or users are offered the Rust worker's
-  # catalogue. templates/NOTES.txt repeats this whenever the worker is off.
-  #
-  # What the
-  # chosen worker cannot serve is also named in the chat: each reply that was
-  # configured with a toolkit, tool or built-in capability this worker cannot
-  # run carries a compact notice listing what was left out and why.
-  #
-  # Choosing `rust`:
-  #   GAINS a memory-safe, lower-footprint worker process with the platform's
-  #   newer native agent runtime (checkpointing, step-limit enforcement) and no
-  #   Python interpreter/dependency surface to patch.
-  #   LOSES, as of this release:
-  #     - whole toolkit types the Rust worker has no family for (checked
-  #       against `current_toolkit_catalogue_snapshot.json` and
-  #       `current_rust_worker_toolkit_capability_snapshot.json`):
-  #       memory, vectorstore, sandbox, delta_lake, aws and localgit (each
-  #       blocked on a platform decision recorded in the worker's
-  #       SOURCE_PARITY.md). #865's other 17 types are now Rust families.
-  #     - single tools inside partial Rust families: the indexing tools
-  #       (index_data, search_index, stepback_*) under indexingRuntime=python
-  #       — under indexingRuntime=rust the Rust worker serves search_index,
-  #       stepback_search_index, stepback_summary_index, list_indexes and
-  #       remove_index inside the I1 families (artifact, github, gitlab,
-  #       bitbucket, ado_repos; ADR-0030 I1), and index_data runs through
-  #       the Indexes tab — tools that need a vision model or LLM (for
-  #       example confluence get_page_with_image_descriptions, figma
-  #       analyze_file) and tools that upload artifact bytes (for example
-  #       aha attach_file, testrail add_file_to_case). The capability
-  #       snapshot's `supported_tools` lists exactly what is served; the
-  #       remaining tools are shown greyed with a reason (#865).
-  #     - three internal chat-agent tools that
-  #       `services/elitea-worker-rust/src/agents/internal_tools.rs` recognizes
-  #       and then skips rather than runs (#866): image_generation (Image
-  #       creation), internal_mcp (Elitea MCP Tools), swarm (Swarm Mode);
-  #       pyodide (Python sandbox) is skipped too. A run that hits one of
-  #       these gets a visible assistant-facing notice instead of the tool
-  #       silently doing nothing. planner (Planner), lazy_tools_mode (Smart
-  #       Tools Selection) and attachments (Attachments) are served natively
-  #       and work as on Python, and so is data_analysis (Data Analysis,
-  #       ADR-0033): structured table tools over CSV, JSON and Excel
-  #       attachments plus the code sandbox, not the SDK's model-written pandas.
-  #   The Rust worker's other toolkit families (45 dispatched types: the
-  #   original azure, azure_search, elastic, gcp, github, gitlab_org,
-  #   google_places, k8s, keycloak, openapi, postman, rally, report_portal,
-  #   salesforce, service_now, sharepoint, slack, sonar, sql, yagmail, zephyr,
-  #   zephyr_squad, artifact, plus ado_*, aha, bigquery, bitbucket, carrier,
-  #   confluence, figma, gitlab, jira, qtest, testio, testrail, xray_cloud and
-  #   zephyr_enterprise/essential/scale, and pptx for direct agents and pipeline nodes: the SDK's
-  #   fill_template and translate_presentation plus 19 Rust-only tools, ADR-0032;
-  #   docx and xlsx, which the SDK does not have and the Python worker cannot
-  #   serve, ADR-0032 P4)
-  #   and its one internal tool
-  #   (ask_user) work as on Python, apart from the per-tool gaps above.
-  #
-  # Choosing `python`: every toolkit type and internal tool
-  # above is available, at the cost of the larger interpreter/dependency
-  # image and process footprint the Rust worker was written to avoid.
-  #
-  # Porting the remaining types and six tools to Rust is tracked as a
-  # multi-sprint programme (umbrella #247); the gaps above are real, and are
-  # shown to the user (greyed in the pickers, named in the chat) rather than
-  # hidden.
-  implementation: rust
+  # `metadata.hidden`/unavailable whenever the worker cannot run it
+  # (`internal/runtimecomposition/worker_toolkit_capability.go`, from the
+  # committed `current_rust_worker_toolkit_capability_snapshot.json`), and each
+  # reply that was configured with a toolkit, tool or built-in capability the
+  # worker cannot run carries a compact notice listing what was left out and
+  # why. Not served, as of this release: localgit, aws, delta_lake, kubernetes
+  # (owner decisions, see the worker's SOURCE_PARITY.md); the internal tools
+  # image_generation, internal_mcp and swarm; and the per-tool gaps the
+  # capability snapshot's `supported_tools` lists (shown greyed with a reason).
 
-  # Which implementation indexes toolkit content (ADR-0030 decision 6,
-  # ADR-0031). Written to elitea-main as ELITEA_INDEXING_RUNTIME. A deployment
-  # runs indexing entirely on one side; there is no per-toolkit routing.
-  #
-  #   python (the default) -- index metadata is the `index_meta` row in the
-  #     project's pgvector database, written by the SDK and by elitea-main. The
-  #     chart NEVER switches to rust by itself, because Rust indexing starts
-  #     with EMPTY indexes. With the Rust worker (the implementation default)
-  #     and python indexing, agents cannot search indexes created before the
-  #     upgrade by the Rust tools' vector store: see the UPGRADE WARNING that
-  #     templates/NOTES.txt prints. The final Python-removal change will make
-  #     rust the default here.
-  #   rust -- opt in, on a fresh install or after the upgrade: set
-  #     vector.enabled=true (with vector.qdrant.apiKeySecret.name),
-  #     main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true
-  #     beside it. NOTHING IS MIGRATED: the index routes read and write
-  #     elitea_runtime.index_registry; indexes created under python are not
-  #     listed and users create them again. Never rewritten: a missing
-  #     prerequisite (the Rust worker, the runtime plane, index ingest dispatch,
-  #     a vector store, the vector client) fails the render and names the value,
-  #     because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust with its runtime
-  #     plane off.
-  indexingRuntime: python
+  # The indexing runtime (ADR-0030 decision 6, ADR-0031): `rust`, the only one.
+  # Written to elitea-main as ELITEA_INDEXING_RUNTIME. Index metadata lives in
+  # elitea_runtime.index_registry and the vectors in elitea-vector, whenever
+  # main.runtime.indexIngestDispatch.enabled is true; with the worker enabled
+  # that needs vector.enabled=true (with vector.qdrant.apiKeySecret.name) or
+  # worker.runtime.vectorTarget, and the render names anything missing.
+  # UPGRADING from a python-indexing release: NOTHING IS MIGRATED — indexes
+  # created under python are not listed and users create them again. Setting
+  # `python` here fails the render.
+  indexingRuntime: rust
 
   image:
     # Built, signed and published by this repository's own release workflow
@@ -4192,21 +4089,17 @@ worker:
     # The tag is stamped to the release version at package time — the default
     # here only applies to a chart installed straight from the working tree.
     #
-    # Empty derives the repository from `implementation` above. Setting it wins
-    # over `implementation`, and is how you pin an image by digest or run the
-    # worker from a mirror. To stay on the Python worker, either set
-    # `implementation: python` or pin this to
-    # `ghcr.io/elitea-ng/elitea-worker-python`.
+    # Empty is ghcr.io/elitea-ng/elitea-worker-rust. Setting it is how you pin
+    # an image by digest or run the worker from a mirror.
     repository: ""
     # tag comes from the single top-level image.tag
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
 
-  # Rust worker only (ELITEA_RUST_LOG / ELITEA_RUST_TRACE). Each must be one of
-  # off, error, warn, info, debug, trace — the worker refuses anything else at
-  # startup rather than falling back to a default. Ignored by the Python worker,
-  # which takes no log level from the environment.
+  # ELITEA_RUST_LOG / ELITEA_RUST_TRACE. Each must be one of off, error, warn,
+  # info, debug, trace — the worker refuses anything else at startup rather
+  # than falling back to a default.
   logLevel: info
   traceLevel: info
 
@@ -4296,7 +4189,7 @@ worker:
   # (templates/natsClient.yaml), mounted at nats.tls.mountPath.
   materialSecretName: elitea-worker-material
 
-  # elitea_worker/config.py applies the same permission contract as the Go side:
+  # The worker applies the same permission contract as the Go side:
   # a private file must be 0600-or-tighter and no file may be group/other
   # writable. A Secret volume cannot satisfy that (root-owned, or a symlink
   # farm), so an init container copies each key into a memory-backed emptyDir at
@@ -4305,7 +4198,8 @@ worker:
   # python:3.12.14-slim-trixie, not debian:trixie-slim: the init script
   # concatenates /etc/ssl/certs/ca-certificates.crt into the trust bundle, and
   # debian:trixie-slim ships no CA bundle. The python slim image is Debian 13
-  # with ca-certificates installed, and it is the worker image's own base.
+  # with ca-certificates installed (an init-container shell only; the worker
+  # itself is the Rust image).
   materialInit:
     image: docker.io/library/python:3.12.14-slim-trixie
     sizeLimit: 8Mi
@@ -4313,8 +4207,8 @@ worker:
   # The document extraction sidecar (ADR-0030 I1): elitea-doc-extractor, a
   # second container in the worker pod that reads the PDF and Office documents
   # an index run fetched and hands the text back over a Unix socket in a
-  # shared emptyDir. Rust worker and indexingRuntime=rust only; the chart
-  # refuses it otherwise.
+  # shared emptyDir. Indexing only (main.runtime.indexIngestDispatch); the
+  # chart refuses it otherwise.
   #
   # WHY A CONTAINER AND NOT A FEATURE OF THE WORKER. The worker's Cargo.lock
   # cannot hold the PDF backend next to its Kubernetes client (one caps
@@ -4534,7 +4428,6 @@ worker:
     # links the Rust worker puts in answers such as a chart's Markdown image.
     # Set it to the same value as main.env.DEPLOYMENT_URL. Empty, links are
     # root-relative and the chat UI resolves them against its own origin.
-    # Rust worker only (the Python worker's config refuses unknown keys).
     # Never platformOrigin: that is the in-cluster edge.
     publicBaseUrl: ""
     spoolRoot: /var/lib/elitea-worker/output-spool
@@ -4556,7 +4449,7 @@ worker:
     # With sandboxRuntimes it also needs main.runtime.codeOwnerRecovery: the
     # journal runs each Code node as an original-Code visit that elitea-main
     # admits only with owner recovery, so the render refuses the pair without it.
-    # A boolean only; true with the Python worker fails the render.
+    # A boolean only.
     agentNodeRecovery: false
     # Rust-only deployment-selected Code backends. These are never YAML node inputs.
     # Entries use SandboxRuntimeConfig fields: language, target, audience,
@@ -4580,7 +4473,7 @@ worker:
     # Separate from the agent's own turns. Empty: the worker default, 200.
     # Written to runtime.json as `toolkit_model_call_cap`; a positive integer.
     toolkitModelCallCap: ""
-    # Rust worker, indexingRuntime=rust only (ADR-0030 I1, ADR-0031): where
+    # Indexing only (main.runtime.indexIngestDispatch; ADR-0030 I1, ADR-0031): where
     # the worker finds elitea-vector, as `host:port`, reached with the
     # worker's own runtime mTLS identity (agent-worker-client.crt, issued by
     # the runtime CA elitea-vector's server certificate chains to). It is
@@ -4588,12 +4481,12 @@ worker:
     # index.ingest.v1 and the index tools inside the indexing families
     # (search_index and the rest). Empty derives
     # `<vector.service.name>:<vector.service.port>` from this chart's own
-    # elitea-vector when vector.enabled is true; indexingRuntime=rust with
-    # neither is refused at render time, because a Rust-indexing deployment
+    # elitea-vector when vector.enabled is true; indexing with neither is
+    # refused at render time, because an indexing deployment
     # whose worker has no vector store refuses every index run and lists no
     # index tools, silently.
     vectorTarget: ""
-    # Rust worker, indexingRuntime=rust only: the egress allowlist of the
+    # Indexing only: the egress allowlist of the
     # indexing connectors (ADR-0030 decision 3), hosts separated by spaces or
     # commas; `*.example.com` admits direct subdomains; `*` disables the
     # control. Written to runtime.json as `index_egress_allowlist`. EMPTY
@@ -4611,7 +4504,7 @@ worker:
     # by this list: the artifact toolkit's source is pinned to exactly that
     # origin (scheme, host and port) and is never subject to it.
     indexEgressAllowlist: "github.com api.github.com gitlab.com api.bitbucket.org dev.azure.com *.visualstudio.com api.zephyrscale.smartbear.com eu.api.zephyrscale.smartbear.com prod-api.zephyr4jiracloud.com xray.cloud.getxray.app us.xray.cloud.getxray.app eu.xray.cloud.getxray.app au.xray.cloud.getxray.app api.figma.com"
-    # Rust worker, indexingRuntime=rust only (worker unit M9): the gateway
+    # Indexing only (worker unit M9): the gateway
     # embedding model the `memory` toolkit embeds its memories and its search
     # queries with (a model name the gateway serves for every project that uses
     # a memory toolkit). Written to runtime.json as `memory_embedding_model`.
@@ -4621,11 +4514,11 @@ worker:
     # existed. Memories live in elitea-vector, in the vector space of this
     # model: changing the model strands the memories written under the old one
     # (they stay stored, are not searched, and `delete_memory` still removes
-    # them). Memories written under the Python worker (the toolkit's pgvector
-    # database) are not carried over. The embedding spaces elitea-vector admits
+    # them). Memories written under the retired Python worker (the toolkit's
+    # pgvector database) are not carried over. The embedding spaces elitea-vector admits
     # (`vector.allowedSpaces`, when set) must include this model's space.
     memoryEmbeddingModel: ""
-    # Rust worker, indexingRuntime=rust only (ADR-0030 I4): the model calls one
+    # Indexing only (ADR-0030 I4): the model calls one
     # index run may make in its model steps, namely every chat call per window
     # of the `proposal` chunker (a retry is a call) and every embeddings
     # request per batch of the `statistical` chunker (not the embedding of the

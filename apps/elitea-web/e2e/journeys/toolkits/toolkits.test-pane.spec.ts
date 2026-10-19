@@ -9,7 +9,7 @@
  * ## What this stack can and cannot prove
  *
  * `deploy/docker-compose.e2e-standalone.yml` runs no worker: no
- * `ELITEA_RUNTIME_ENABLED`, no `elitea-worker-python` service. So
+ * `ELITEA_RUNTIME_ENABLED`, no `elitea-worker` service. So
  * `toolkits.Handler.TestTool` has no use case composed and answers its own
  * `503 indexer service not available` (`internal/api/v2/toolkitrun/response.go`,
  * `WriteUnavailable`) — an HONEST refusal, and the one this deployment should
