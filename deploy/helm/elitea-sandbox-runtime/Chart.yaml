@@ -1,0 +1,14 @@
+apiVersion: v2
+name: elitea-sandbox-runtime
+description: >-
+  Optional node-level installer for the sandbox runtime the EliteA cloud
+  executor's workspace runs need (ADR-0034). A privileged DaemonSet on the
+  labelled sandbox nodes installs a pinned, SHA-512-verified gVisor release
+  (runsc and containerd-shim-runsc-v1), registers the runsc runtime with the
+  node's containerd (k3s or plain containerd, e.g. EKS AL2023), and creates
+  the `gvisor` RuntimeClass. Kept apart from the `elitea` chart, which never
+  touches nodes. GKE Sandbox and AKS Pod Sandboxing provide their own runtime
+  and need no installer.
+type: application
+version: 0.1.0
+appVersion: "20261005.0"

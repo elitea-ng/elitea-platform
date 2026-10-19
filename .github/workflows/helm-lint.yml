@@ -275,6 +275,16 @@ jobs:
           bash deploy/helm/tests/render-workspace-egress.sh
           bash deploy/helm/tests/render-cloud-executor.sh
 
+      # The sandbox runtime installer chart (ADR-0034): the DaemonSet, its
+      # RuntimeClass and guards, then the installer script itself against a
+      # fake host (one restart per change, rollback, checksum refusals).
+      - name: The sandbox runtime installer renders and installs idempotently
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-sandbox-runtime.sh
+          bash deploy/helm/tests/sandbox-runtime-installer-test.sh
+
       # ADR-0030 I1: the document extraction sidecar in the worker pod. The
       # socket path the worker dials and the directory the sidecar binds in
       # are two templates that must agree, and a disagreement is every
@@ -428,7 +438,7 @@ jobs:
       - name: Every chart is published or excluded on purpose
         run: |
           # Charts deliberately not pushed to the OCI registry, with the
-          # reason. Empty today: all three charts are published.
+          # reason. Empty today: every chart is published.
           excluded=""
           published="$(grep -oE '^ +- chart: [a-z0-9-]+' .github/workflows/publish.yml \
                         | awk '{print $3}' | tr '\n' ' ')"
@@ -553,6 +563,10 @@ jobs:
             # and the one whose absence this chart exists to stop shipping
             # silently. Also the non-default branches the pass above skips.
             toggles: -f deploy/helm/elitea/values-standalone.yaml --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' --set-string 'llmGateway.egressPosture=allowlist' --set-string 'llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=ci-render-only.example.invalid:8000' --set main.autoscaling.enabled=false --set main.podDisruptionBudget.enabled=false --set web.autoscaling.enabled=true --set otelCollector.enabled=false
+          # The optional sandbox runtime installer (ADR-0034), both modes.
+          - chart: elitea-sandbox-runtime
+            values: ""
+            toggles: --set mode=containerd --set-string runtimeClass.overhead.cpu=100m
           # nats/ and nats-bootstrap/ are excluded on purpose: nats vendors an
           # upstream subchart, so templating it needs `helm dependency build`
           # and network access to the upstream repo. `helm lint` above still

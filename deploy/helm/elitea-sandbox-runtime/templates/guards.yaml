@@ -1,0 +1,10 @@
+{{- if not (has .Values.mode (list "k3s" "containerd")) }}{{ fail "mode must be k3s or containerd" }}{{ end }}
+{{- if not (regexMatch "^[0-9]{8}(\\.[0-9]+)?$" (toString .Values.gvisor.release)) }}{{ fail "gvisor.release must be a dated release (YYYYMMDD[.N]), never latest" }}{{ end }}
+{{- if not (hasPrefix "https://" .Values.gvisor.baseUrl) }}{{ fail "gvisor.baseUrl must be https" }}{{ end }}
+{{- range $arch := list "x86_64" "aarch64" }}
+{{- if not (regexMatch "^[a-f0-9]{128}$" (toString (get $.Values.gvisor.sha512 $arch))) }}{{ fail (printf "gvisor.sha512.%s must be the published SHA-512 of gvisor.tar.bz2" $arch) }}{{ end }}
+{{- end }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" .Values.image) }}{{ fail "image must use a registry SHA-256 digest" }}{{ end }}
+{{- if not .Values.nodeSelector }}{{ fail "nodeSelector must select the sandbox nodes: the installer is privileged and changes the node's container runtime" }}{{ end }}
+{{- if and (eq .Values.mode "k3s") (not (has .Values.k3s.service (list "" "k3s" "k3s-agent"))) }}{{ fail "k3s.service must be k3s, k3s-agent or empty" }}{{ end }}
+{{- if .Values.kata }}{{ fail "kata is a placeholder: this chart installs gVisor only" }}{{ end }}

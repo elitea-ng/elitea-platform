@@ -792,6 +792,12 @@ jobs:
             image: ""
           - chart: nats-bootstrap
             image: ""
+          # The optional sandbox runtime installer (ADR-0034): a node-level
+          # chart kept apart from `elitea`, which never touches nodes. Its
+          # image is a pinned third-party Debian 13 digest, so nothing is
+          # stamped.
+          - chart: elitea-sandbox-runtime
+            image: ""
 
     steps:
       - name: Checkout
@@ -1093,7 +1099,7 @@ jobs:
           # `elitea` chart, so a rollback warned about six charts that no longer
           # exist and left the one chart this release actually published in
           # place — pointing at images the step above had just deleted.
-          CHARTS=("elitea" "nats" "nats-bootstrap")
+          CHARTS=("elitea" "nats" "nats-bootstrap" "elitea-sandbox-runtime")
           ORG="${{ github.repository_owner }}"
 
           # Report what could not be deleted. Every call here used to end in

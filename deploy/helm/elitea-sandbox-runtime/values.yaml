@@ -1,0 +1,82 @@
+# elitea-sandbox-runtime: install gVisor on the sandbox nodes and create the
+# RuntimeClass the elitea chart's workspace runs use
+# (sandboxKubernetes.runtimeClass.name). Install it in its own namespace with
+# the privileged Pod Security level; it needs hostPID, a privileged container
+# and the host's / mounted, and runs ONLY on nodes matching nodeSelector.
+#
+#   kubectl create namespace elitea-sandbox-runtime
+#   kubectl label namespace elitea-sandbox-runtime pod-security.kubernetes.io/enforce=privileged
+#   helm install sandbox-runtime deploy/helm/elitea-sandbox-runtime -n elitea-sandbox-runtime
+
+# k3s: adds the runtime to k3s's containerd template
+#   (/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl, or
+#   config-v3.toml.tmpl on containerd 2.0), generated from k3s's base
+#   template, then restarts k3s-agent (k3s on server nodes).
+# containerd: plain containerd, e.g. EKS AL2023 or generic nodes: a drop-in in
+#   /etc/containerd/config.d imported by /etc/containerd/config.toml, validated
+#   with `containerd config dump`, then restarts containerd.
+mode: k3s
+
+# The sandbox nodes. The installer runs on these only, and the RuntimeClass's
+# scheduling sends every gvisor Pod to them.
+nodeSelector:
+  elitea.ai/sandbox: "true"
+# The sandbox nodes' taint, tolerated by the installer and by the
+# RuntimeClass's scheduling (so run Pods tolerate it too).
+tolerations:
+  - key: elitea.ai/sandbox
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+gvisor:
+  # A dated release, never `latest`. Releases since 20260831 ship one
+  # gvisor.tar.bz2 per architecture; the installer verifies it against the
+  # pinned SHA-512 below AND the release's published gvisor.tar.bz2.sha512,
+  # then extracts only runsc, containerd-shim-runsc-v1 and the gvisor-bin/
+  # sidecars runsc needs (gvisor_sentry, ...) into /usr/local/bin.
+  # To upgrade: set release and both sha512 values from
+  #   https://storage.googleapis.com/gvisor/releases/release/<release>/<arch>/gvisor.tar.bz2.sha512
+  release: "20261005.0"
+  baseUrl: https://storage.googleapis.com/gvisor/releases/release
+  sha512:
+    x86_64: 79869ae9a589355a46d46fdac068d9a954e741741ffe77c64e38c56ea955498c1cb04e9bce44e1cce5155333e6b76bee72347c6661bb7c78fd2fe3aad198c8fe
+    aarch64: 1bc58be6f881264ced1df8ff61db0205531abedcace005585ac5637c5c987831062b365f99f270ef0939849f130344b84e0f1a663294406f798b8f7c8cd326ac
+
+k3s:
+  # k3s or k3s-agent; empty detects it (k3s-agent when that unit exists).
+  service: ""
+
+containerd:
+  config: /etc/containerd/config.toml
+  dropinDir: /etc/containerd/config.d
+  # Add `imports = ["<dropinDir>/*.toml"]` to a config.toml that has no
+  # imports. A config with an imports list that does not cover the drop-in
+  # is refused, never rewritten.
+  patchImports: true
+
+# The seconds a restarted k3s or containerd may take to come back before
+# the change is rolled back to the saved previous file.
+restartTimeoutSeconds: 180
+
+runtimeClass:
+  create: true
+  name: gvisor
+  # Pod overhead gVisor's sentry adds, for scheduling. Empty: none declared.
+  overhead: {}
+  # Example: {cpu: 100m, memory: 64Mi}
+
+# Debian 13 (python:3.12.14-slim-trixie): bash, coreutils (sha512sum),
+# util-linux (nsenter) and Python (download, tar, TOML validation). By
+# digest; the scripts come from this chart's ConfigMap.
+image: docker.io/library/python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+imagePullSecrets: []
+
+resources:
+  requests: {cpu: 10m, memory: 32Mi}
+  limits: {cpu: 500m, memory: 512Mi}
+
+# Not implemented: Kata Containers / Firecracker. Use a platform that ships
+# Kata (AKS Pod Sandboxing) or install it with kata-deploy; the elitea chart
+# accepts any RuntimeClass whose handler starts with `kata`.
+kata: {}
