@@ -15,7 +15,7 @@ tests. No setting replaces it.
 | Approve a sensitive tool that changes data | The tool runs. | Refused. At the root: "Configuration type is not supported." Inside a pipeline: "The runtime operation failed." | The tool runs exactly once and the Agent continues. |
 | Block / Reject | The tool does not run and the Agent continues. | The same. | The same. A blocked call never dispatches. |
 | A Worker dies after an approved call was sent | The call is replayed ("lost, run again"). | Not reachable (approval refused). | The call is never repeated. With a recorded outcome, the run continues with that outcome. Without one, the run ends with the registered `RECOVERY_REFUSED` reason ("may have started … not repeated"). |
-| Model call after any decision (FU-236) | It works. | The real provider refused the resumed request with 403, shown as "The model service denied access". | The resumed request has the shape of a fresh turn and is accepted. |
+| Model call after any decision, and on later turns (FU-236) | It works. | The upstream refused some resumed and later requests with 403, shown as "The model service denied access". | The request has the shape of a fresh turn and is accepted: no runtime bookkeeping, and stored answers sent as one string. |
 | Settlement row of a failed run | n/a | `execution_settlements.error_code` was always NULL. | It holds the registered runtime error code (for example `RECOVERY_REFUSED`, `UNSUPPORTED_CAPABILITY`). |
 
 Deliberately **not ported**: the current platform's blind replay of an approved call after a crash.
@@ -39,17 +39,39 @@ The only difference in the refused requests was ADK's synthetic model-role text 
 continuation. It is runtime bookkeeping the model never produced. The request bodies were captured in the PG
 harness: the continued request carried the text before the fix and does not after it.
 
+On scoped (with this branch's images), the root continuation then worked, but two other requests still got 403:
+
+- a Reject continuation;
+- any later turn after a decided call.
+
+The gateway refusal log (PR #1320) showed a bare upstream 403 with no type or code: an edge in front of the shared
+model endpoint. The refused bodies were captured with a local-only diagnostic gateway build (not committed) and
+replayed through the stack's authenticated `/llm` route, changing one element at a time.
+
+The edge refuses combinations:
+
+- the fixture tool description contains a backtick-quoted word (`` `echo` ``), and
+- the request also contains either the platform's single-quoted label in the block result
+  (`call to '<toolkit>.<tool>'; it was not executed`) or a stored answer sent as one content block per streamed
+  chunk.
+
+Each element alone passes. Two of the three are the Worker's own encoding, not conversation content. The same pass
+also found the replay marker resent on every later turn.
+
 ## Mechanism
 
 | Concern | Code | Notes |
 |---|---|---|
 | Approved call runs once (gate deleted) | `src/agents/direct_hitl.rs:1309` `into_direct_replay`, `:1335` | An approved call is refused only when an earlier continuation dispatched it without a recorded outcome and it may not re-run (`sensitive_tools.rs:102` `reruns_after_dispatch`: read-only tools, and the workspace command whose own run ledger serves its earlier result, ADR-0034 decision 9). |
-| Root dispatch marker | `src/agents/direct_hitl.rs:2423` `persisted_replay_state_with_confirmation`, `:2491` | The Runner persists the replayed call through the fenced session append before ADK runs the tool. A replayed call with no result means "dispatched". A recorded result keeps the existing `ContinueAfterResult` (served, not re-run). Earlier cards' approved siblings are served from their recorded results. |
+| Root dispatch marker | `src/agents/direct_hitl.rs:2446` `persisted_replay_state_with_confirmation`, `:2514` | The Runner persists the replayed call through the fenced session append before ADK runs the tool. A replayed call with no result means "dispatched". A recorded result keeps the existing `ContinueAfterResult` (served, not re-run). Earlier cards' approved siblings are served from their recorded results. |
 | Nested dispatch journal | `src/agents/dispatch_journal.rs:73,127,144,277`; wiring `src/agents/application_tools.rs:3654`, `src/agents/model_scope.rs:125,131`, `src/agents/session.rs:710` | Before an approved nested call runs, a `dispatched` record is appended to the ROOT session through the same fenced writer; a `completed` record carries the result. The resolver reads them (`direct_hitl.rs:954`). Records carry no content and no state delta. Malformed or forged records fail closed. |
 | Decision after a dead continuation stays answerable | `src/agents/dispatch_journal.rs:127` `continuation_pause`; `src/agents/graph/resume.rs:634`; `src/agents/session.rs:1991` | A pause is answerable behind a later suffix only when that suffix holds dispatch records. An ordinary advance is still stale. |
 | Typed refusal | `src/protocol/output.rs:133,731,800-803`; `src/agents/direct_hitl.rs:108` `assembly_error`; `src/agents/application_tools.rs:5141`; `src/agents/graph/application.rs:448,455`; `src/agents/graph/compiler.rs:1718`; `src/execution/native_agent_lifecycle.rs:1558`; `src/agents/graph/resume.rs:1257,1340`; `src/agents/session.rs:3362` | `RuntimeFailureKind::RecoveryRefused` ↔ proto `RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED = 34` (`libs/proto/elitea/runtime/v1/errors.proto`, Go/Python regenerated). Main policy: `services/elitea-main/internal/transport/runtimegrpc/output/server.go`; `testdata/proto/runtime/v1/model_failure_policies.json`. Typed direct-HITL codes are kept as error codes instead of `invalid_resume`. |
 | Settlement error code | `services/elitea-main/internal/infra/db/repos/settlements.go` `settlementErrorCode` | Main decodes the verified terminal `RuntimeErrorV1` that it already selected inside the settlement transaction and stores only the registered code name. |
-| FU-236 | `src/agents/replay_history.rs:118,130` `is_confirmation_notice` | Only that exact text for a tool the history calls is removed from the provider request. Durable session events are unchanged. |
+| FU-236: ADK confirmation notice | `src/agents/replay_history.rs:118,134` `is_confirmation_notice` | Only that exact text for a tool the history calls is removed from the provider request. Durable session events are unchanged. |
+| FU-236: answered replay marker | `src/agents/replay_history.rs:119,153` `drop_answered_replay_markers`; `src/agents/direct_hitl.rs:2319` `is_replay_marker` | A later turn drops the runtime's replay marker once the replayed call follows it. That matches what the continuation already sent. The block result keeps any reviewer comment (`denial_reason`). A marker no call follows yet stays. Only text that parses exactly as a marker is dropped; a look-alike stays. |
+| FU-236: one string per stored answer | `src/transport/openai_compatible_facade.rs:1054,1092` `openai_assistant_message` | A text-only assistant message is sent as one string instead of one block per streamed chunk. This also saves ~30 bytes per chunk on every later turn. |
+| FU-236: block result wording | `src/agents/direct_hitl.rs:2638` `blocked_tool_result` | The action label is no longer single-quoted. The wording is otherwise unchanged. |
 
 ## Read-only gate inventory
 
@@ -66,7 +88,7 @@ harness: the continued request carried the text before the fix and does not afte
 
 Worker: `cargo test --offline --locked --no-fail-fast --all-targets --all-features` against a disposable `postgres:18`
 (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
-**TEST_COUNTS_PLACEHOLDER**. The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
+**2507 passed, 0 failed, 93 ignored** (no PostgreSQL skips). The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
 separately. `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings` and
 `RUSTDOCFLAGS=-D warnings cargo doc` are clean. Main: `go test` for `internal/infra/db/repos` and
 `internal/transport/runtimegrpc/output` pass; `go vet` is clean.
@@ -82,6 +104,7 @@ Real PostgreSQL. Each phase runs in its own OS process and claim, and the effect
 | Process replaced after dispatch | `postgres_worker_replaced_after_dispatch_refuses_as_may_have_started` | The Worker dies inside the tool; the replacement ends with `RecoveryRefused`, 0 tool calls, 0 model calls. |
 | Process replaced after the recorded outcome | `postgres_worker_replaced_after_the_recorded_outcome_resumes_with_it` | The tool ran and its outcome was recorded, then the Worker died at the next model request; the replacement continues with the recorded outcome, 0 tool calls, and the model sees the stored result (class R). |
 | Root Agent: approve, then repeat | `ordinary_effect_pg_tests.rs` `postgres_root_approved_effectful_call_runs_once_and_a_repeat_runs_nothing` | 1 tool call; the repeat makes 0. |
+| Root: a later user turn after an approval | `postgres_root_later_turn_after_an_approval_sends_one_call_and_result` | The third process sends a new user turn. The provider request is `system, user, assistant(call), tool, assistant, user`: the earlier answer as one string, no replay marker, no confirmation notice. 0 tool calls. |
 | Root: block / foreign decision | `postgres_root_blocked_effectful_call_never_runs`, `postgres_root_decision_for_another_interrupt_is_refused` | 0 tool calls. |
 | Root: process replaced after dispatch | `postgres_root_worker_replaced_after_dispatch_refuses_as_may_have_started` | Refused at assembly with the recovery-refused cause, 0 tool calls. |
 | Root: recorded outcome, two Workers replaced in a row | `postgres_root_recorded_outcome_survives_two_replaced_workers_without_a_rerun` | The tool ran and its result was persisted; the next two Workers die at the model request, and the second one's tool would exit if it were ever called (it is not); the third continues with 0 tool calls. |
@@ -93,7 +116,12 @@ Unit tests:
 - `session_tests.rs` `an_approved_effectful_sensitive_call_runs_once_at_the_root`.
 - `dispatch_journal.rs` record classification, forged and malformed records, and `continuation_pause`.
 - `native_agent_lifecycle.rs` taxonomy tests.
-- `replay_history.rs` `a_continuation_never_sends_the_confirmation_notice_to_the_provider`.
+- `replay_history.rs` `a_continuation_never_sends_the_confirmation_notice_to_the_provider` and
+  `a_later_turn_drops_the_answered_replay_marker_and_keeps_user_text`. A typed look-alike stays, and a marker no call
+  follows yet stays.
+- `openai_compatible_facade_tests.rs` `a_streamed_answer_in_history_reaches_the_provider_as_one_string`.
+  `ordinary_tests.rs` `application_and_adhoc_share_authorized_redemption_model_session_and_projection` now pins the
+  one-string answer; it previously pinned one block per chunk.
 - Main `settlements_test.go` `TestSettlementErrorCodeNamesOnlyARegisteredRuntimeFailureCode`.
 
 The approve PG test was red before the fix with `agent.legacy` → `Internal`, which is the live symptom.
@@ -160,11 +188,53 @@ An opus review of the first version found four defects. Each one is fixed and ha
 
 ## Browser evidence
 
-BROWSER_EVIDENCE_PLACEHOLDER
+Real Chrome (Claude in Chrome), stack `scoped`, signed in through the stack's mock OIDC as `admin@centry.user`.
+The models are real: `gpt-5.4-mini` through the gateway to the shared model endpoint.
+
+Images, with the §3b binary check run on the extracted binary:
+
+- Worker `ghcr.io/elitea-ng/elitea-worker-rust:fu226-f28af19be` (`sha256:7e75a0f21f30…`). It contains
+  `. It was not executed. The block is for THIS`, `drop_answered_replay_markers` and `elitea.direct_hitl.dispatch.v1`,
+  and not `'; it was not executed`.
+- Main `ghcr.io/elitea-ng/elitea-main:fu226-47879f8b4`. Main is unchanged since `47879f8b4`; its binary contains
+  `RECOVERY_REFUSED`.
+- Gateway `gwreason-d5b3e88dd` (PR #1320).
+
+`stack.sh verify-profile --name scoped`: 49 passed, 1 failed. The failure is the shared migration head (ledger 169,
+worktree 166). It is expected: the stack's compose worktree is the 2a-1 branch at `dd0bbc170`, and no migration
+changes here.
+
+Tool runs are counted from the MCP mock's `jsonrpc tools/call` lines. Each case was reloaded, and the answer
+persisted.
+
+| Case | Chat | Executions (settlement) | Tool calls | Result |
+|---|---|---|---|---|
+| Root Agent 157, Approve (image `47879f8b4`) | 903 | `1af4a49ece25…` pause, `691cef5deaf6…` continuation (both SUCCEEDED) | 1 → 2 | "reverse returned ESREVER-1C" |
+| Root, later turn after the approval | 903 | `61235c1a95bc…` (SUCCEEDED, gateway 200) | 2 → 2 | "It returned ESREVER-1C." Before `f28af19be`, the same turn was `d9d2521fcacc…`: FAILED, `error_code = MODEL_ACCESS_DENIED`, upstream 403. |
+| Root Agent 157, Reject | 907 | `7a60048f83dc…`, `4c0770ad830b…` (SUCCEEDED, gateway 200) | 2 → 2 | "The call was declined." Before `f28af19be`, the same flow was chat 906: upstream 403. |
+| Root Agent 157, Approve (image `f28af19be`) | 910 | `2773a11653c7…`, `c2e1db551f0a…` (SUCCEEDED) | 3 → 4 | "reverse returned ESREVER-1C." |
+| Pipeline 158, `agent` node running Agent 157, Approve | 908 | `432e019f4c3e…`, `49858418d319…` (SUCCEEDED; the nested child's continuation model call returned 200) | 2 → 3 | "reverse returned ESREVER-1C." |
+| Pipeline 158, later turn | 908 | `fba0e3ed6997…` (SUCCEEDED, gateway 200) | 3 → 3 | answered without a tool |
+| Pipeline 158, Reject | 909 | `167a03a975ec…`, `a4179dbc0951…` (SUCCEEDED, gateway 200) | 3 → 3 | "The call was declined." |
+
+The gateway logged no `llm_provider_refusal` line during the runs on `f28af19be`.
+
+Fixture state, set through the database (not the UI) and kept from earlier sessions:
+
+- Agent 157 version 183 `llm_settings`: model `gpt-5.4-mini`, `model_project_id 1`.
+- Configuration 18 `api_base`: `http://llm-mock:8090`.
+- Agent 171 version 197: `agent_type` changed from `openai` to `agent`.
+- Platform sensitive tools: `{"mcp": ["reverse"]}`.
+- The coordinator copied the `centry.secrets_data` row so the real model can resolve its credential.
+
+Chats 904 and 905 were diagnostic chats for the 403.
 
 ## Follow-ups
 
 - The toolkit direct-path read-only gates and nested-pipeline direct-tool nodes (inventory above).
 - A nested call whose recorded result exceeds 256 KiB degrades to `RECOVERY_REFUSED` on a crash before the parent
   continues.
-- The gateway does not log an upstream refusal's status/code. A fixed-reason log would have shortened FU-236.
+- Gateway refusal log: PR #1320.
+- The upstream edge in front of the shared model endpoint refuses benign content combinations (for example backticks
+  in a tool description, together with quoted text). That is an environment issue for the endpoint owner. User
+  content can still trip it.
