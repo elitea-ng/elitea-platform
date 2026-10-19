@@ -41,7 +41,7 @@ export interface TurnPrewarmRequest {
 }
 
 /** What a turn to it would find cached on the host now. */
-export interface TurnPrewarmed {
+interface TurnPrewarmed {
   version: boolean;
   participant: boolean;
 }
