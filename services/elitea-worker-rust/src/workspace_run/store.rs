@@ -722,9 +722,14 @@ impl GrpcWorkspaceStore {
     }
 }
 
+/// The status message of Main's `thread_busy` (`runtimegrpc/workspace`
+/// `ThreadBusyMessage`).
+const THREAD_BUSY_MESSAGE: &str = "thread_busy";
+
 fn status_error(status: &tonic::Status) -> StoreCallError {
-    if status.code() == tonic::Code::Aborted {
-        // Main's thread_busy: the only ABORTED it answers.
+    if status.code() == tonic::Code::Aborted && status.message() == THREAD_BUSY_MESSAGE {
+        // Main's thread_busy (a publish that met another holder of the
+        // thread). Any other ABORTED is a transport error.
         return StoreCallError::Busy;
     }
     StoreCallError::Transport {
@@ -1095,6 +1100,11 @@ mod tests {
         assert_eq!(busy.code(), "workspace_store.thread_busy");
         assert!(matches!(
             status_error(&tonic::Status::unavailable("down")),
+            StoreCallError::Transport { retryable: true }
+        ));
+        // Another layer's ABORTED is not thread contention.
+        assert!(matches!(
+            status_error(&tonic::Status::aborted("stream reset by the proxy")),
             StoreCallError::Transport { retryable: true }
         ));
     }

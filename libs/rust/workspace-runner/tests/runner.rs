@@ -7,6 +7,7 @@ use std::fs;
 use elitea_agent_runtime::workspace_archive::{self, ArchiveLimits};
 use elitea_workspace_runner::{RunnerConfig, RunnerPolicy, open_session, pack, serve, unpack};
 use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 const LIMITS: ArchiveLimits = ArchiveLimits {
     max_files: 100,
@@ -19,6 +20,31 @@ fn git_available() -> bool {
         .arg("--version")
         .output()
         .is_ok()
+}
+
+/// The worker's side of `serve`: one request line, then wait for its answer.
+async fn serve_one_by_one(config: &RunnerConfig, requests: &[Value]) -> Vec<Value> {
+    let session = open_session(config).unwrap();
+    let (mut to_runner, runner_in) = tokio::io::duplex(1 << 16);
+    let (runner_out, from_runner) = tokio::io::duplex(1 << 16);
+    let runner = tokio::spawn(serve(
+        session,
+        tokio::io::BufReader::new(runner_in),
+        runner_out,
+    ));
+    let mut answers = tokio::io::BufReader::new(from_runner).lines();
+    let mut out = Vec::new();
+    for request in requests {
+        to_runner
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let line = answers.next_line().await.unwrap().expect("an answer");
+        out.push(serde_json::from_str(&line).unwrap());
+    }
+    drop(to_runner);
+    runner.await.unwrap().unwrap();
+    out
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -38,7 +64,7 @@ async fn unpack_serve_and_pack_a_workspace() {
     let data = tempfile::tempdir().unwrap();
     unpack(&mut archive.as_slice(), workspace.path(), LIMITS).unwrap();
     assert!(workspace.path().join(".git").is_dir());
-    let session = open_session(&RunnerConfig {
+    let config = RunnerConfig {
         root: workspace.path().to_path_buf(),
         data_dir: data.path().to_path_buf(),
         policy: RunnerPolicy {
@@ -47,8 +73,7 @@ async fn unpack_serve_and_pack_a_workspace() {
             ..RunnerPolicy::default()
         },
         env: Vec::new(),
-    })
-    .unwrap();
+    };
     let requests = [
         json!({"tool": "read_file", "call_id": "1", "args": {"path": "README.md"}}),
         json!({"tool": "edit_file", "call_id": "2", "args": {"path": "README.md", "old_string": "hello", "new_string": "hello cloud"}}),
@@ -58,24 +83,7 @@ async fn unpack_serve_and_pack_a_workspace() {
         json!({"tool": "git_commit", "call_id": "6", "args": {"message": "no"}}),
         json!("not a request"),
     ];
-    let mut input = String::new();
-    for request in &requests {
-        input.push_str(&request.to_string());
-        input.push('\n');
-    }
-    let mut output = Vec::new();
-    serve(
-        session,
-        tokio::io::BufReader::new(input.as_bytes()),
-        &mut output,
-    )
-    .await
-    .unwrap();
-    let answers: Vec<Value> = String::from_utf8(output)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let answers = serve_one_by_one(&config, &requests).await;
     assert_eq!(answers.len(), requests.len());
     for answer in &answers[..5] {
         assert_eq!(answer["status"], "ok", "{answer}");
@@ -253,4 +261,57 @@ async fn destructive_commands_are_classified_and_run_only_when_approved() {
     let ran = run(true, "c-2").await;
     assert_eq!(ran["status"], "ok", "{ran}");
     assert!(!workspace.path().join("dir").exists());
+}
+
+/// A take back's wrap-up: the worker stops waiting for a long command and
+/// closes stdin. The command is killed with its whole process group, so it
+/// never writes to the workspace the worker then packs.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_stdin_mid_command_kills_the_command() {
+    if !git_available() {
+        return;
+    }
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let session = open_session(&RunnerConfig {
+        root: workspace.path().to_path_buf(),
+        data_dir: data.path().to_path_buf(),
+        policy: RunnerPolicy {
+            shell: true,
+            network: false,
+            ..RunnerPolicy::default()
+        },
+        env: Vec::new(),
+    })
+    .unwrap();
+    let (mut to_runner, runner_in) = tokio::io::duplex(1 << 16);
+    let (runner_out, _from_runner) = tokio::io::duplex(1 << 16);
+    let runner = tokio::spawn(serve(
+        session,
+        tokio::io::BufReader::new(runner_in),
+        runner_out,
+    ));
+    let request = json!({"tool": "run_command", "call_id": "1", "args": {
+        "command": "sh -c 'sleep 2; echo late > late.txt' & sleep 2; echo late > leader.txt",
+        "sandbox": "workspace-write"}});
+    to_runner
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    drop(to_runner);
+    tokio::time::timeout(std::time::Duration::from_secs(5), runner)
+        .await
+        .expect("serve ends when stdin closes")
+        .unwrap()
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(
+        !workspace.path().join("leader.txt").exists(),
+        "the command was not stopped"
+    );
+    assert!(
+        !workspace.path().join("late.txt").exists(),
+        "a child of the command survived"
+    );
 }

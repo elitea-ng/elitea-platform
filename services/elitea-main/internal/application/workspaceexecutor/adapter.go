@@ -147,7 +147,10 @@ func (a *Adapter) ResolveCloudTurn(ctx context.Context, claim workspaceruntime.T
 		// previous turn ends before the next is admitted. A state change after
 		// this turn's admission is a take back, release or a new send in
 		// between: the turn was asked of a thread that is not this one any more.
-		if handoff.StateChangedAt.After(execution.AdmittedAt) {
+		// admitted_at is stored to the millisecond and state_changed_at to
+		// the microsecond: compare both at the millisecond, so a turn admitted
+		// in the same millisecond as the previous turn's end is not refused.
+		if handoff.StateChangedAt.Truncate(time.Millisecond).After(execution.AdmittedAt.Truncate(time.Millisecond)) {
 			return workspaceruntime.Turn{}, false, workspaceruntime.ErrNotCloudTurn
 		}
 		response = execution.ResponseMessageID

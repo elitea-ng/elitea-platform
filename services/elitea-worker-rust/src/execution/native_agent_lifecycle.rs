@@ -760,6 +760,9 @@ where
                 }
             }, if wrap_requested && !wrap_stopped && failure.is_none() => {
                 wrap_stopped = true;
+                if let Some(wrap) = &wrap_up {
+                    wrap.mark_stopped();
+                }
                 let _requested = native.request_stop();
             }
             event = native.next_event() => {

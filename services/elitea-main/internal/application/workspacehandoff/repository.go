@@ -131,10 +131,10 @@ type Repository interface {
 	DueReclaimGrace(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
 	ForceReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
 	DueAbandonedReclaim(ctx context.Context, before time.Time, limit int) ([]Handoff, error)
-	// DeadCloudTurns answers CLOUD_RUNNING threads whose running execution
-	// was claimed but holds no live lease: no claim whose lease runs, or was
-	// released, within `grace` of now (the database clock). Its worker died
-	// without reporting.
+	// DeadCloudTurns answers CLOUD_RUNNING threads whose worker died without
+	// reporting: the running execution is not terminal and its newest claim
+	// was never released, with a lease that ran out more than `grace` ago (the
+	// database clock). A released claim (retry, requeue) is not a dead worker.
 	DeadCloudTurns(ctx context.Context, grace time.Duration, limit int) ([]Handoff, error)
 	AbandonReclaim(ctx context.Context, transition TimedTransition) (Handoff, error)
 	// DueIdle walks the CLOUD_IDLE rows in (state_changed_at, project,

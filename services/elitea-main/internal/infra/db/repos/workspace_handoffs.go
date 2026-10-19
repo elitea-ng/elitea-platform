@@ -810,15 +810,23 @@ func (r *WorkspaceHandoffsRepository) ForceReclaim(ctx context.Context, t worksp
     reclaim_requested_at = NULL`)
 }
 
+// DeadCloudTurns answers CLOUD_RUNNING threads whose worker died: the
+// execution is not terminal yet (a terminal one is FinishedCloudTurns'), and
+// its newest claim was never released and its lease ran out more than grace
+// ago. A released claim is a worker handing the execution back (retry,
+// requeue): the execution waits for its next claim and is not reaped.
 func (r *WorkspaceHandoffsRepository) DeadCloudTurns(ctx context.Context, grace time.Duration, limit int) ([]workspacehandoff.Handoff, error) {
 	return r.due(ctx, `state = 'CLOUD_RUNNING'
   AND state_changed_at < clock_timestamp() - make_interval(secs => $1)
-  AND EXISTS (SELECT 1 FROM elitea_runtime.execution_claims AS c WHERE c.execution_id = running_execution_id)
-  AND NOT EXISTS (
-      SELECT 1 FROM elitea_runtime.execution_claims AS c
-      WHERE c.execution_id = running_execution_id
-        AND ((c.released_at IS NULL AND c.lease_expires_at > clock_timestamp() - make_interval(secs => $1))
-             OR c.released_at > clock_timestamp() - make_interval(secs => $1)))
+  AND EXISTS (SELECT 1 FROM elitea_runtime.execution_jobs AS j
+              WHERE j.execution_id = running_execution_id
+                AND j.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED'))
+  AND EXISTS (SELECT 1 FROM (SELECT c.released_at, c.lease_expires_at
+                             FROM elitea_runtime.execution_claims AS c
+                             WHERE c.execution_id = running_execution_id
+                             ORDER BY c.claimed_at DESC LIMIT 1) AS latest
+              WHERE latest.released_at IS NULL
+                AND latest.lease_expires_at < clock_timestamp() - make_interval(secs => $1))
 ORDER BY state_changed_at LIMIT $2`, grace.Seconds(), limit)
 }
 

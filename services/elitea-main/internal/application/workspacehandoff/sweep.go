@@ -102,7 +102,8 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 		for _, handoff := range due {
 			finished, err := s.repo.FinishCloudTurn(ctx, threadOf(handoff), handoff.Epoch, handoff.RunningExecutionID, nil)
 			if err != nil {
-				if !errors.Is(err, ErrStaleEpoch) {
+				// Someone else ended the turn or erased the thread first.
+				if !errors.Is(err, ErrStaleEpoch) && !errors.Is(err, ErrNotFound) {
 					errs = append(errs, err)
 				}
 				continue

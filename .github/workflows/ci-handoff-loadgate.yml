@@ -75,6 +75,20 @@ jobs:
             libs/go/*/go.sum
             libs/proto/gen/go/go.sum
 
+      # The shared runner's disk stalls on WAL fsync (LWLock:WALWrite and
+      # IO:WALSync dominate the failed runs, with no lock or pool waits), so
+      # the gate measured the runner, not the code. This container only, never
+      # a production setting: commits stop waiting for the flush; the locks,
+      # the pool and the queries under test are unchanged.
+      - name: Commit without waiting for the WAL flush (this job's database only)
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "SELECT pg_reload_conf()"
+          test "$(psql -h localhost -U postgres -Atc 'SHOW synchronous_commit')" = off
+
       - name: Run the load gate
         working-directory: services/elitea-main
         env:

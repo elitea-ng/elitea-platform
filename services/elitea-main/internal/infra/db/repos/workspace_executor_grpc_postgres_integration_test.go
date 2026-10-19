@@ -951,11 +951,37 @@ WHERE execution_id = 'exec-reap-1'`); err != nil {
 	if report := sweep(); report.DeadTurnsReaped != 0 {
 		t.Fatalf("reaped within the grace: %+v", report)
 	}
-	// The worker died: the lease ended longer ago than the grace.
+	// The lease ended longer ago than the grace from here on.
 	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_claims SET lease_expires_at = clock_timestamp() - make_interval(secs => $1)
 WHERE execution_id = 'exec-reap-1'`, (workspacehandoff.DeadTurnGrace + time.Second).Seconds()); err != nil {
 		t.Fatal(err)
 	}
+	// A worker that handed the execution back (released for a retry, waiting
+	// in the queue for its next claim) is not a dead worker.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_claims
+SET released_at = lease_expires_at - interval '1 second', release_reason = 'retry' WHERE execution_id = 'exec-reap-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if report := sweep(); report.DeadTurnsReaped != 0 || state().State != workspacestore.StateCloudRunning {
+		t.Fatalf("a released, requeued execution was reaped: %+v", report)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_claims SET released_at = NULL, release_reason = NULL
+WHERE execution_id = 'exec-reap-1'`); err != nil {
+		t.Fatal(err)
+	}
+	// A terminal execution is a finished turn whose finish never ran
+	// (FinishedCloudTurns, ReconcileFinished), not a dead worker.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED' WHERE execution_id = 'exec-reap-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if report := sweep(); report.DeadTurnsReaped != 0 || state().State != workspacestore.StateCloudRunning {
+		t.Fatalf("a terminal execution was reaped as a dead worker: %+v", report)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET state = 'RUNNING' WHERE execution_id = 'exec-reap-1'`); err != nil {
+		t.Fatal(err)
+	}
+	// The worker died: the newest claim was never released and its lease
+	// ended longer ago than the grace.
 	if report := sweep(); report.DeadTurnsReaped != 1 {
 		t.Fatalf("the dead turn was not reaped: %+v", report)
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -103,5 +104,18 @@ func TestFinishingIngestorEndsTheCloudTurnOnlyAfterAProjectedResult(t *testing.T
 func TestDeadTurnGraceCoversTheClaimLease(t *testing.T) {
 	if workspacehandoff.DeadTurnGrace < claimLeaseTTL {
 		t.Fatalf("DeadTurnGrace %s < claimLeaseTTL %s", workspacehandoff.DeadTurnGrace, claimLeaseTTL)
+	}
+}
+
+// OUTCOME_UNKNOWN leaves the cloud turn running: recovery may run the
+// execution again under the same id, and the reconciler ends a terminal one.
+func TestOnlyAKnownSettlementOutcomeEndsTheCloudTurn(t *testing.T) {
+	for _, outcome := range []executionapp.SettlementOutcome{executionapp.SettlementSucceeded, executionapp.SettlementFailed, executionapp.SettlementCancelled} {
+		if !endsCloudTurn(outcome) {
+			t.Fatalf("%s did not end the turn", outcome)
+		}
+	}
+	if endsCloudTurn(executionapp.SettlementOutcomeUnknown) {
+		t.Fatal("OUTCOME_UNKNOWN ended the turn")
 	}
 }

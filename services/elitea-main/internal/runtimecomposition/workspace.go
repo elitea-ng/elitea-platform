@@ -78,7 +78,9 @@ func newCurrentAgentStartRepository(pool *pgxpool.Pool, catalogueProjectID int32
 
 // workspaceSettlementHooks ends a cloud turn when its execution settles
 // (completed, paused for input, failed or cancelled). Hooks run after the
-// settlement commits, on their own goroutine.
+// settlement commits, on their own goroutine. OUTCOME_UNKNOWN does not end
+// the turn: runtime recovery may run the execution again under the same id,
+// and a terminal one is ended by the reconciler (ReconcileFinished).
 func workspaceSettlementHooks(workspace WorkspaceDependencies, logger *slog.Logger) []executionapp.SettlementOption {
 	if !workspace.complete() {
 		return nil
@@ -86,8 +88,20 @@ func workspaceSettlementHooks(workspace WorkspaceDependencies, logger *slog.Logg
 	lifecycle := workspace.Lifecycle
 	return []executionapp.SettlementOption{executionapp.WithAfterSettleHooks(
 		func(ctx context.Context, proposal executionapp.SettlementProposal, _ executionapp.SettlementReceipt) {
+			if !endsCloudTurn(proposal.Outcome) {
+				return
+			}
 			finishCloudTurn(ctx, lifecycle, proposal.Fence.ExecutionID, "settlement", logger)
 		})}
+}
+
+func endsCloudTurn(outcome executionapp.SettlementOutcome) bool {
+	switch outcome {
+	case executionapp.SettlementSucceeded, executionapp.SettlementFailed, executionapp.SettlementCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 func finishCloudTurn(ctx context.Context, lifecycle workspaceruntime.TurnLifecycle, executionID, stage string, logger *slog.Logger) {

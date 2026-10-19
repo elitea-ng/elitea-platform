@@ -513,6 +513,16 @@ pub(crate) mod fake {
         pub(crate) env_seen: Mutex<Vec<String>>,
         pub(crate) destroyed: Mutex<Vec<String>>,
         pub(crate) root: Mutex<Option<tempfile::TempDir>>,
+        /// Serve sessions that ended (stdin closed or the exec dropped).
+        pub(crate) serves_ended: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct CountOnDrop(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for CountOnDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     impl FakeBackend {
@@ -600,6 +610,7 @@ pub(crate) mod fake {
                     Ok(ExecExit::default())
                 }
                 "serve" => {
+                    let _ended = CountOnDrop(Arc::clone(&self.serves_ended));
                     let mut lines = tokio::io::BufReader::new(stdin).lines();
                     if let Ok(Some(env)) = lines.next_line().await {
                         self.env_seen.lock().unwrap().push(env);
@@ -611,6 +622,11 @@ pub(crate) mod fake {
                         let answer = if let Some(classify) = request.get("classify") {
                             let command = classify["command"].as_str().unwrap_or_default();
                             serde_json::json!({"ask": command.contains("rm -rf") || command.contains("git push")})
+                        } else if request["tool"] == "hang" {
+                            // A command that never finishes: only the end
+                            // of the session stops it.
+                            let _ = lines.next_line().await;
+                            break;
                         } else if request["tool"] == "run_command" {
                             let command = arguments["command"].as_str().unwrap_or_default();
                             let destructive =

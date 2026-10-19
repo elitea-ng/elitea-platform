@@ -235,16 +235,19 @@ func runWorkspaceHandoffSweeper(ctx context.Context, composition workspaceHandof
 				return
 			case <-ticker.C:
 			}
+			// Finished turns first: a turn whose execution ended but whose
+			// finish hook never ran is ended as finished, not reaped as a
+			// dead worker by the sweep below.
+			if lifecycle != nil {
+				if _, err := lifecycle.ReconcileFinished(ctx); err != nil && ctx.Err() == nil {
+					logger.Warn("cloud turn reconciliation had failures", "err", err)
+				}
+			}
 			if _, err := composition.Handoff.Sweep(ctx); err != nil && ctx.Err() == nil {
 				logger.Warn("workspace handoff sweep had failures", "err", err)
 			}
 			if _, err := composition.Store.SweepObjects(ctx, 100); err != nil && ctx.Err() == nil {
 				logger.Warn("workspace store sweep had failures", "err", err)
-			}
-			if lifecycle != nil {
-				if _, err := lifecycle.ReconcileFinished(ctx); err != nil && ctx.Err() == nil {
-					logger.Warn("cloud turn reconciliation had failures", "err", err)
-				}
 			}
 		}
 	}()

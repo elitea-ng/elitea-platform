@@ -35,6 +35,9 @@ pub(crate) const COMMAND_GRACE: Duration = Duration::from_secs(10);
 #[derive(Debug, Default)]
 pub(crate) struct WrapUp {
     requested: AtomicBool,
+    /// The agent loop was stopped for the wrap-up (not merely asked to wrap
+    /// up after it had already finished on its own).
+    stopped: AtomicBool,
     in_flight: AtomicUsize,
     changed: Notify,
 }
@@ -50,6 +53,18 @@ impl WrapUp {
     #[must_use]
     pub(crate) fn requested(&self) -> bool {
         self.requested.load(Ordering::Acquire)
+    }
+
+    /// Record that the lifecycle stopped the agent loop for the wrap-up.
+    pub(crate) fn mark_stopped(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+
+    /// Whether the turn was cut short by the wrap-up: only then does its
+    /// answer end with [`NOTE`].
+    #[must_use]
+    pub(crate) fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
     }
 
     /// Wait until the wrap-up is requested.

@@ -1698,11 +1698,12 @@ where
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
         // A turn wrapped up for a take back was stopped cooperatively: it may
         // have no final text of its own, and it still completes (its work is
-        // published) with the take-back note.
+        // published) with the take-back note. A turn that finished on its own
+        // before the stop fired keeps its answer as it is.
         let wrapped_up = self
             .workspace
             .as_ref()
-            .is_some_and(|workspace| workspace.wrap_up().requested());
+            .is_some_and(|workspace| workspace.wrap_up().stopped());
         let mut content = match self.model.take_completed_text() {
             Ok(content) => content,
             Err(_) if wrapped_up => String::new(),

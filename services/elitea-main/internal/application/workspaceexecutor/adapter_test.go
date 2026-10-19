@@ -162,6 +162,19 @@ func TestResolveCloudTurnStartsTheTurnAtClaimWithItsAnswer(t *testing.T) {
 	}
 }
 
+// admitted_at is stored to the millisecond: a turn admitted in the same
+// millisecond as the previous turn's end (state_changed_at, microseconds) is
+// this thread's turn, not a stale one.
+func TestResolveCloudTurnAdmitsATurnInTheMillisecondOfThePreviousEnd(t *testing.T) {
+	threads := idleThread()
+	ended := time.Date(2026, 10, 18, 12, 0, 0, 400_000, time.UTC)
+	threads.row.StateChangedAt = ended
+	threads.execution.AdmittedAt = ended.Truncate(time.Millisecond)
+	if _, ok, err := newAdapter(t, &fakeHandoffs{}, fakeObjects{}, threads).ResolveCloudTurn(context.Background(), claim()); err != nil || !ok {
+		t.Fatalf("resolve = %v %v", ok, err)
+	}
+}
+
 func TestResolveCloudTurnRefusesATurnTheThreadIsNotTheCloudsFor(t *testing.T) {
 	for name, mutate := range map[string]func(*fakeThreads, *fakeHandoffs){
 		"another turn runs": func(th *fakeThreads, _ *fakeHandoffs) {
