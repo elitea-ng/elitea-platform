@@ -1,0 +1,133 @@
+# DRAFT fixture: gold_build, load (ACCEPTANCE-ETL.md §2.3). Parallel, because the two warehouses are independent:
+# load_postgres ‖ load_mysql, each a child pipeline with its own write transactions. Then a read-only reconcile on both
+# dialects: the gold tables must match exactly.
+# Task: silver_clean's answer (JSON text). Answer (JSON text): {run_id, drift, mismatches, totals, loads}.
+# A drift does not fail here: etl_job's quality gate sends it to the data steward (ACCEPTANCE §2.4 wins over the
+# "typed error" wording of §2.3; recorded in ../README.md).
+# Oracles: manifest fact_orders, gold_sales_daily, gold_sales_by_country, gold_sales_by_channel.
+state:
+  input: {type: str}
+  messages: {type: list}
+  run_id: {type: str}
+  load_request: {type: str}
+  load_results: {type: list}
+  gold_pg: {type: dict}
+  gold_my: {type: dict}
+  reconcile: {type: dict}
+entry_point: parse_silver
+nodes:
+  - id: parse_silver
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        silver = json.loads(elitea_state['input'])
+        files = sorted(silver['silver_files'])
+        if not files:
+            raise ValueError('etl.no_silver_files: every batch went to the error output')
+        request = {'run_id': silver['run_id'], 'bucket': silver['bucket'], 'customers': silver['customers'],
+                   'silver_files': files, 'drops': silver['drops']}
+        {'run_id': silver['run_id'], 'load_request': json.dumps(request, sort_keys=True)}
+    input: [input]
+    output: [run_id, load_request]
+    transition: load_both
+
+  # TODO(0.8): Parallel admitted. TODO(0.4): saved pipelines as branches (pipeline branches, not only Agent ones:
+  # parallel_compiler.rs:185-200). TODO(1.14): branch pipelines that contain Code, Router, DB and Toolkit nodes.
+  - id: load_both
+    type: parallel
+    branches:
+      - id: postgres
+        node: load_pg
+      - id: mysql
+        node: load_my
+    max_concurrency: 2
+    wait: all
+    error_policy: fail_after_drain
+    output: [load_results]
+    transition: reconcile_pg
+
+  - id: load_pg
+    type: agent
+    tool: load_postgres
+    input_mapping:
+      task: {type: variable, value: load_request}
+    output: [output]
+
+  - id: load_my
+    type: agent
+    tool: load_mysql
+    input_mapping:
+      task: {type: variable, value: load_request}
+    output: [output]
+
+  # Read-only transactions (BEGIN READ ONLY / START TRANSACTION READ ONLY), one statement each.
+  # TODO(1.12): DB node admitted (5e-3). Rules warehouse_pg.read and warehouse_mysql.read: mode read.
+  - id: reconcile_pg
+    type: db
+    operation: warehouse_pg.read
+    mode: read
+    statements:
+      - sql: >-
+          SELECT 'daily' AS t, order_date::text AS k, orders, qty, net_amount_usd::text AS net
+          FROM etl.gold_sales_daily WHERE run_id = $1
+          UNION ALL SELECT 'country', country, orders, qty, net_amount_usd::text
+          FROM etl.gold_sales_by_country WHERE run_id = $1
+          UNION ALL SELECT 'channel', channel, orders, qty, net_amount_usd::text
+          FROM etl.gold_sales_by_channel WHERE run_id = $1
+          ORDER BY 1, 2
+        params:
+          - {from: run_id, type: text}
+    result: {mode: rows, max_rows: 1000}
+    input: [run_id]
+    output: [gold_pg]
+    transition: reconcile_my
+
+  # TODO(1.12): as reconcile_pg, MySQL (TLS VerifyIdentity).
+  - id: reconcile_my
+    type: db
+    operation: warehouse_mysql.read
+    mode: read
+    statements:
+      - sql: >-
+          SELECT 'daily' AS t, CAST(order_date AS CHAR) AS k, orders, qty, CAST(net_amount_usd AS CHAR) AS net
+          FROM gold_sales_daily WHERE run_id = ?
+          UNION ALL SELECT 'country', country, orders, qty, CAST(net_amount_usd AS CHAR)
+          FROM gold_sales_by_country WHERE run_id = ?
+          UNION ALL SELECT 'channel', channel, orders, qty, CAST(net_amount_usd AS CHAR)
+          FROM gold_sales_by_channel WHERE run_id = ?
+          ORDER BY 1, 2
+        params:
+          - {from: run_id, type: text}
+          - {from: run_id, type: text}
+          - {from: run_id, type: text}
+    result: {mode: rows, max_rows: 1000}
+    input: [run_id]
+    output: [gold_my]
+    transition: compare
+
+  # Exact comparison (decimal strings, no floats). Totals come from the daily rows.
+  - id: compare
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        from decimal import Decimal
+        def rows(result):
+            return [(r['t'], r['k'], int(r['orders']), int(r['qty']), str(Decimal(r['net']))) for r in result['rows']]
+        pg, my = rows(elitea_state['gold_pg']), rows(elitea_state['gold_my'])
+        mismatches = [{'pg': list(a), 'mysql': list(b)} for a, b in zip(pg, my) if a != b][:20]
+        drift = len(pg) != len(my) or bool(mismatches) or not pg
+        daily = [r for r in pg if r[0] == 'daily']
+        totals = {'orders': sum(r[2] for r in daily), 'qty': sum(r[3] for r in daily),
+                  'net_amount_usd': str(sum((Decimal(r[4]) for r in daily), Decimal('0.00')))}
+        json.dumps({'run_id': elitea_state['run_id'], 'drift': drift, 'mismatches': mismatches,
+                    'row_counts': {'postgres': len(pg), 'mysql': len(my)}, 'totals': totals,
+                    'loads': elitea_state['load_results']}, sort_keys=True)
+    input: [gold_pg, gold_my, run_id, load_results]
+    output: [messages]
+    transition: END

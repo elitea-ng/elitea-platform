@@ -1,0 +1,242 @@
+# DRAFT fixture: load_postgres, the PostgreSQL branch of gold_build (ACCEPTANCE-ETL.md §2.3).
+# Task: gold_build.load_request (JSON text). Answer (JSON text): {dialect, run_id, fact_rows, sum_qty, net_amount_usd}.
+# load_mysql.yaml is the same flow in MySQL syntax; keep the two in step.
+#
+# Loop: read up to 3 silver files per visit (read_multiple_files stops at 200,000 characters in total; a silver file
+# is < 64 KiB characters), stage them in one write transaction keyed by (run_id, batch_no, order_seq), until done.
+# A repeated visit after a crash re-stages the same keys: ON CONFLICT DO NOTHING plus the effect marker make it a
+# no-op (T-5E §3.3: marker present -> committed, never re-run).
+# Schema: ../warehouse/pg/init/020_schema.sql.
+state:
+  input: {type: str}
+  messages: {type: list}
+  run_id: {type: str}
+  request: {type: dict}
+  customers_path: {type: str}
+  customers_text: {type: str}
+  customers_json: {type: str}
+  current_group: {type: list}
+  group_files: {type: dict}
+  group_index: {type: int}
+  done: {type: bool}
+  stage_rows: {type: str}
+  stage_batches: {type: str}
+  stage_receipt: {type: dict}
+  merge_receipt: {type: dict}
+  gold_receipt: {type: dict}
+  fact_totals: {type: dict}
+entry_point: parse_request
+nodes:
+  - id: parse_request
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        request = json.loads(elitea_state['input'])
+        {'request': request, 'run_id': request['run_id'], 'group_index': 0, 'done': False,
+         'current_group': request['silver_files'][:3],
+         'customers_path': f"/{request['bucket']}/{request['customers']}"}
+    input: [input]
+    output: [request, run_id, group_index, done, current_group, customers_path]
+    transition: read_customers
+
+  - id: read_customers
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: read_file
+    input_mapping:
+      filepath: {type: variable, value: customers_path}
+    input: [customers_path]
+    output: [customers_text]
+    transition: prep_customers
+
+  - id: prep_customers
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import csv, io, json
+        rows = list(csv.reader(io.StringIO(elitea_state['customers_text'])))
+        if rows[0] != ['customer_id', 'name', 'country', 'segment', 'created_at']:
+            raise ValueError('etl.customers_header: unexpected customers.csv header')
+        json.dumps(rows[1:], separators=(',', ':'))
+    input: [customers_text]
+    output: [customers_json]
+    transition: read_group
+
+  # TODO(2.4): pin the read_multiple_files answer shape (a map of path to content) against the live toolkit.
+  - id: read_group
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: read_multiple_files
+    input_mapping:
+      file_paths: {type: variable, value: current_group}
+    input: [current_group]
+    output: [group_files]
+    transition: to_rows
+
+  # Silver CSV -> stage rows (JSON arrays, compact: a Code result is <= 256 KiB); global duplicates dropped.
+  - id: to_rows
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import csv, io, json, re
+        request = elitea_state['request']
+        drops = {(d['batch_no'], d['order_seq']) for d in request['drops']}
+        rows, batches = [], []
+        for path, text in sorted(elitea_state['group_files'].items()):
+            batch_no = int(re.search(r'batch-(\d{4})\.csv$', path).group(1))
+            reader = csv.reader(io.StringIO(text))
+            next(reader)
+            count = 0
+            for f in reader:
+                if (batch_no, int(f[1])) in drops:
+                    continue
+                rows.append([batch_no] + f[:10] + [f[10] or None] + f[11:])
+                count += 1
+            batches.append([batch_no, count])
+        files = request['silver_files']
+        index = elitea_state['group_index'] + 1
+        {'stage_rows': json.dumps(rows, separators=(',', ':')), 'stage_batches': json.dumps(batches),
+         'group_index': index, 'current_group': files[index * 3:index * 3 + 3], 'done': index * 3 >= len(files)}
+    input: [request, group_files, group_index]
+    output: [stage_rows, stage_batches, group_index, current_group, done]
+    transition: stage
+
+  # TODO(1.12): DB node admitted (5e-3); write mode, rule warehouse_pg.load; confirm the json parameter cap.
+  - id: stage
+    type: db
+    operation: warehouse_pg.load
+    mode: write
+    statements:
+      - sql: >-
+          INSERT INTO etl.staging_orders (run_id, batch_no, order_id, order_seq, customer_id, country, currency,
+          amount, discount_pct, net_amount_usd, ordered_at, order_month, ship_date, channel, sku, qty)
+          SELECT $1, (e->>0)::int, e->>1, (e->>2)::int, e->>3, e->>4, e->>5, (e->>6)::numeric, (e->>7)::numeric,
+          (e->>8)::numeric, (e->>9)::timestamptz, e->>10, (e->>11)::date, e->>12, e->>13, (e->>14)::int
+          FROM jsonb_array_elements($2::jsonb) AS e
+          ON CONFLICT (run_id, batch_no, order_seq) DO NOTHING
+        params:
+          - {from: run_id, type: text}
+          - {from: stage_rows, type: json}
+      - sql: >-
+          INSERT INTO etl.staging_batches (run_id, batch_no, rows)
+          SELECT $1, (b->>0)::int, (b->>1)::int FROM jsonb_array_elements($2::jsonb) AS b
+          ON CONFLICT (run_id, batch_no) DO NOTHING
+        params:
+          - {from: run_id, type: text}
+          - {from: stage_batches, type: json}
+    result: {mode: affected_counts}
+    input: [run_id, stage_rows, stage_batches]
+    output: [stage_receipt]
+    transition: more_groups
+
+  - id: more_groups
+    type: router
+    condition: "{% if done %}merge_fact{% else %}read_group{% endif %}"
+    routes: [read_group, merge_fact]
+    default_output: merge_fact
+    input: [done]
+
+  # One transaction: dim_customer SCD1 upsert, staging -> fact_orders upsert, run marker. Commit.
+  # TODO(1.12): as stage.
+  - id: merge_fact
+    type: db
+    operation: warehouse_pg.load
+    mode: write
+    statements:
+      - sql: >-
+          INSERT INTO etl.dim_customer (customer_id, name, country, segment, created_at, updated_run_id)
+          SELECT c->>0, c->>1, c->>2, c->>3, (c->>4)::date, $2 FROM jsonb_array_elements($1::jsonb) AS c
+          ON CONFLICT (customer_id) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.country,
+          segment = EXCLUDED.segment, created_at = EXCLUDED.created_at, updated_run_id = EXCLUDED.updated_run_id
+        params:
+          - {from: customers_json, type: json}
+          - {from: run_id, type: text}
+      - sql: >-
+          INSERT INTO etl.fact_orders (run_id, order_id, order_seq, customer_id, country, currency, amount,
+          discount_pct, net_amount_usd, ordered_at, order_month, ship_date, channel, sku, qty)
+          SELECT run_id, order_id, order_seq, customer_id, country, currency, amount, discount_pct, net_amount_usd,
+          ordered_at, order_month, ship_date, channel, sku, qty FROM etl.staging_orders WHERE run_id = $1
+          ON CONFLICT (run_id, order_id) DO UPDATE SET order_seq = EXCLUDED.order_seq,
+          customer_id = EXCLUDED.customer_id, country = EXCLUDED.country, currency = EXCLUDED.currency,
+          amount = EXCLUDED.amount, discount_pct = EXCLUDED.discount_pct, net_amount_usd = EXCLUDED.net_amount_usd,
+          ordered_at = EXCLUDED.ordered_at, order_month = EXCLUDED.order_month, ship_date = EXCLUDED.ship_date,
+          channel = EXCLUDED.channel, sku = EXCLUDED.sku, qty = EXCLUDED.qty
+        params:
+          - {from: run_id, type: text}
+      - sql: >-
+          INSERT INTO etl.etl_runs (run_id, status) VALUES ($1, 'merged')
+          ON CONFLICT (run_id) DO UPDATE SET status = 'merged'
+        params:
+          - {from: run_id, type: text}
+    result: {mode: affected_counts}
+    input: [customers_json, run_id]
+    output: [merge_receipt]
+    transition: gold_aggregates
+
+  # Gold tables rebuilt for this run inside one transaction.
+  # TODO(1.12): as stage.
+  - id: gold_aggregates
+    type: db
+    operation: warehouse_pg.load
+    mode: write
+    statements:
+      - sql: "DELETE FROM etl.gold_sales_daily WHERE run_id = $1"
+        params: [{from: run_id, type: text}]
+      - sql: >-
+          INSERT INTO etl.gold_sales_daily (run_id, order_date, orders, qty, net_amount_usd)
+          SELECT $1, (ordered_at AT TIME ZONE 'UTC')::date, count(*), sum(qty), sum(net_amount_usd)
+          FROM etl.fact_orders WHERE run_id = $1 GROUP BY 2
+        params: [{from: run_id, type: text}]
+      - sql: "DELETE FROM etl.gold_sales_by_country WHERE run_id = $1"
+        params: [{from: run_id, type: text}]
+      - sql: >-
+          INSERT INTO etl.gold_sales_by_country (run_id, country, orders, qty, net_amount_usd)
+          SELECT $1, country, count(*), sum(qty), sum(net_amount_usd) FROM etl.fact_orders WHERE run_id = $1
+          GROUP BY country
+        params: [{from: run_id, type: text}]
+      - sql: "DELETE FROM etl.gold_sales_by_channel WHERE run_id = $1"
+        params: [{from: run_id, type: text}]
+      - sql: >-
+          INSERT INTO etl.gold_sales_by_channel (run_id, channel, orders, qty, net_amount_usd)
+          SELECT $1, channel, count(*), sum(qty), sum(net_amount_usd) FROM etl.fact_orders WHERE run_id = $1
+          GROUP BY channel
+        params: [{from: run_id, type: text}]
+    result: {mode: affected_counts}
+    input: [run_id]
+    output: [gold_receipt]
+    transition: read_totals
+
+  # TODO(1.12): read mode, rule warehouse_pg.read.
+  - id: read_totals
+    type: db
+    operation: warehouse_pg.read
+    mode: read
+    statements:
+      - sql: >-
+          SELECT count(*) AS fact_rows, sum(qty) AS sum_qty, sum(net_amount_usd)::text AS net_amount_usd
+          FROM etl.fact_orders WHERE run_id = $1
+        params: [{from: run_id, type: text}]
+    result: {mode: first_row}
+    input: [run_id]
+    output: [fact_totals]
+    transition: emit
+
+  - id: emit
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        json.dumps(dict(elitea_state['fact_totals'], dialect='postgres', run_id=elitea_state['run_id']),
+                   sort_keys=True)
+    input: [fact_totals, run_id]
+    output: [messages]
+    transition: END

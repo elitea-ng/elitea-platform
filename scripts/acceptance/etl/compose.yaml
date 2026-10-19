@@ -1,0 +1,123 @@
+# ETL acceptance fixture services (TEST ONLY). Never part of a product image, a Helm chart or a default compose file;
+# scripts/security/check_etl_fixture_isolation.py fails the build if a shipped artifact references them.
+#
+#   warehouse-pg     PostgreSQL 18, TLS only (hostssl + hostnossl reject), scram-sha-256
+#   warehouse-mysql  MySQL 8.4, TLS only (require_secure_transport), users REQUIRE SSL
+#   etl-mocks        FX reference + completion webhook with a request journal (etl_mock.py), TLS only
+#
+# All three present server certificates from the harness's own test CA (etlctl.py material). No ports are published:
+# the platform reaches them only on the `etl` network, through the DB and HTTP egress rules. Run it through
+# etlctl.py, which supplies the local, uncommitted env file:
+#   python3 scripts/acceptance/etl/etlctl.py init && ... material && ... up && ... verify && ... down
+name: elitea-etl-fixtures
+
+services:
+  warehouse-pg:
+    image: docker.io/library/postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+    hostname: warehouse-pg
+    entrypoint: ["/bin/sh", "/etl/warehouse/pg/tls-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/etl-tls/server.crt
+      - -c
+      - ssl_key_file=/run/etl-tls/server.key
+      - -c
+      - ssl_ca_file=/run/etl-tls/ca.crt
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - hba_file=/etl/warehouse/pg/pg_hba.conf
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - timezone=UTC
+    environment:
+      POSTGRES_DB: warehouse
+      POSTGRES_USER: etl_admin
+      POSTGRES_PASSWORD: ${ETL_PG_ADMIN_PASSWORD:?run etlctl.py init}
+      ETL_PG_LOADER_PASSWORD: ${ETL_PG_LOADER_PASSWORD:?run etlctl.py init}
+      ETL_PG_READER_PASSWORD: ${ETL_PG_READER_PASSWORD:?run etlctl.py init}
+    volumes:
+      - ./warehouse:/etl/warehouse:ro
+      - ${ETL_STACK_DIR:?run etlctl.py init}/tls:/etl/tls:ro
+      - etl-pg-data:/var/lib/postgresql
+    healthcheck:
+      # TCP, not the socket: the image's init server listens on the socket only, so this passes after init.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "etl_admin", "-d", "warehouse"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    mem_limit: 512m
+    networks: [etl]
+
+  warehouse-mysql:
+    image: docker.io/library/mysql:8.4.11@sha256:24989179f58856db763f418010c1169fecc944e3ec1ea7e921572d83eb070f70
+    hostname: warehouse-mysql
+    entrypoint: ["/bin/sh", "/etl/warehouse/mysql/tls-entrypoint.sh"]
+    command:
+      - mysqld
+      - --require-secure-transport=ON
+      - --tls-version=TLSv1.2,TLSv1.3
+      - --ssl-ca=/run/etl-tls/ca.crt
+      - --ssl-cert=/run/etl-tls/server.crt
+      - --ssl-key=/run/etl-tls/server.key
+      - --default-time-zone=+00:00
+      - --character-set-server=utf8mb4
+      - --sql-mode=STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,ONLY_FULL_GROUP_BY
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ETL_MYSQL_ROOT_PASSWORD:?run etlctl.py init}
+      MYSQL_DATABASE: warehouse
+      ETL_MYSQL_LOADER_PASSWORD: ${ETL_MYSQL_LOADER_PASSWORD:?run etlctl.py init}
+      ETL_MYSQL_READER_PASSWORD: ${ETL_MYSQL_READER_PASSWORD:?run etlctl.py init}
+    volumes:
+      - ./warehouse:/etl/warehouse:ro
+      - ${ETL_STACK_DIR:?run etlctl.py init}/tls:/etl/tls:ro
+      - etl-mysql-data:/var/lib/mysql
+    healthcheck:
+      # TCP over TLS, not the socket: the init server runs with --skip-networking, so this passes after init.
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin -h 127.0.0.1 --ssl-mode=REQUIRED -uroot ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 90
+    mem_limit: 1g
+    networks: [etl]
+
+  etl-mocks:
+    image: docker.io/library/python:3.12.14-slim-trixie@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+    hostname: etl-mocks
+    command: ["python3", "-I", "/app/etl_mock.py", "serve"]
+    environment:
+      ETL_MOCK_TLS_CERT: /etl/tls/etl-mocks.crt
+      ETL_MOCK_TLS_KEY: /etl/tls/etl-mocks.key
+      ETL_MOCK_JOURNAL: /journal/journal.jsonl
+      ETL_MOCK_FX_RATES: /app/fx_rates.json
+      ETL_MOCK_FX_TOKEN_FILE: /etl/tokens/fx.token
+      ETL_MOCK_WEBHOOK_TOKEN_FILE: /etl/tokens/webhook.token
+    volumes:
+      - ./etl_mock.py:/app/etl_mock.py:ro
+      - ./fx_rates.json:/app/fx_rates.json:ro
+      - ${ETL_STACK_DIR:?run etlctl.py init}/tls:/etl/tls:ro
+      - ${ETL_STACK_DIR:?run etlctl.py init}/tokens:/etl/tokens:ro
+      - etl-journal:/journal
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python3", "-I", "/app/etl_mock.py", "health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    mem_limit: 128m
+    networks: [etl]
+
+networks:
+  etl:
+    name: elitea-etl-fixtures
+
+volumes:
+  etl-pg-data:
+  etl-mysql-data:
+  etl-journal:
