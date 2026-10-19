@@ -147,13 +147,11 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     },
   },
   {
-    // #940 A8. Unlike every entry above, these two are served by the NATIVE
-    // runtime and NOT by the Python SDK worker — `useAvailableInternalTools`
-    // below reads that verdict off `/elitea_core/runtime_capabilities` the
-    // same way it does for the tools the Rust worker skips, so on a Python
-    // deployment they render disabled-with-a-reason rather than silently
-    // doing nothing. Both default to OFF, like every other entry here: a
-    // toggle nobody switched on binds no tool
+    // #940 A8. `useAvailableInternalTools` below reads these two off
+    // `/elitea_core/runtime_capabilities` like every other entry, so a
+    // deployment that does not serve them renders them disabled-with-a-reason
+    // rather than silently doing nothing. Both default to OFF, like every
+    // other entry here: a toggle nobody switched on binds no tool
     // (services/elitea-worker-rust/src/agents/internal_tools.rs).
     name: 'skills_builder',
     title: 'Skills Builder',
@@ -186,24 +184,15 @@ export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
 /**
  * Why a tool this deployment offers is nonetheless unavailable.
  *
- * It names the WORKER the endpoint reported rather than always saying "Rust",
- * which is what this read said before #940. That was true while every entry
- * the endpoint answered for was a Python-only capability; the two builder
- * modules are the opposite case — native-only — so a fixed sentence would
- * have told a Python deployment its Skills Builder was unavailable "on the
- * Rust worker", which is the exact inversion of the truth.
- *
- * The `''` case is the deployment that did not state a worker at all (see
- * `WithWorkerImplementation`'s own doc comment); it cannot be reached with
- * `available: false`, because an unstated worker makes every tool available,
- * but it is answered rather than asserted away.
+ * Names the worker the endpoint reported. The `''` case is the deployment that
+ * did not state a worker at all (see `WithWorkerImplementation`'s own doc
+ * comment); it cannot be reached with `available: false`, because an unstated
+ * worker makes every tool available, but it is answered rather than asserted
+ * away.
  */
 function unavailableReasonFor(worker: string | undefined): string {
   if (worker === 'rust') {
     return t('features.agents.internalTools.notAvailableOnRustWorker', 'Not available on the Rust worker');
-  }
-  if (worker === 'python') {
-    return t('features.agents.internalTools.notAvailableOnPythonWorker', 'Not available on the Python worker');
   }
   return t('features.agents.internalTools.notAvailableOnThisWorker', 'Not available on this worker');
 }
