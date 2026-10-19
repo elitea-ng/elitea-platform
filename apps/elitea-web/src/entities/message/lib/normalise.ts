@@ -3,10 +3,10 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { AssistantMessage, UserMessage } from '../model/types';
 import { buildAuthorizationActions } from './authorizationActions';
+import { assistantHitlFields } from './normaliseHitlInterrupts';
 import { resolveAssistantFailureFields } from './normaliseAssistantFailure';
 import { buildToolActions, resolveAssistantToolInputs } from './toolActions';
 import type {
-  HitlInterruptRawWire,
   MessageAuthorWire,
   MessageGroupWire,
   MessageParticipantWire,
@@ -232,71 +232,6 @@ function assistantStreamingFields(
   return messageGroup.is_streaming !== undefined
     ? { isStreaming: messageGroup.is_streaming, isLoading: messageGroup.is_streaming }
     : {};
-}
-
-/** chat.helpers.js:88-105 `buildHitlInterruptFromRaw`, first half of its fields. */
-function hitlInterruptCoreFields(raw: HitlInterruptRawWire): Record<string, unknown> {
-  return {
-    message: raw.message || 'Please review and take action.',
-    node_name: raw.node_name || '',
-    available_actions: raw.available_actions || ['approve', 'reject'],
-    routes: raw.routes || {},
-    edit_state_key: raw.edit_state_key || '',
-    guardrail_type: raw.guardrail_type || '',
-    tool_name: raw.tool_name || '',
-    toolkit_name: raw.toolkit_name || '',
-  };
-}
-
-/**
- * The clarifying questions of a stored `ask_user` pause, or `[]`.
- *
- * Read through an assertion rather than off `HitlInterruptRawWire`: the field
- * post-dates that wire type (it is the native runtime's `ask_user` payload,
- * `services/elitea-worker-rust/src/agents/internal_tools.rs`), and the
- * assertion is confined here so the rest of the reader keeps its declared
- * shape. Anything that is not an array is dropped — the card iterates this.
- */
-function hitlQuestionsField(raw: HitlInterruptRawWire): readonly unknown[] {
-  const questions = (raw as { readonly questions?: unknown }).questions;
-  return Array.isArray(questions) ? questions : [];
-}
-
-/** chat.helpers.js:88-105 `buildHitlInterruptFromRaw`, ported (remaining fields — split for complexity). */
-function buildHitlInterruptFromRaw(raw: HitlInterruptRawWire): Record<string, unknown> {
-  return {
-    ...hitlInterruptCoreFields(raw),
-    // A pause reloaded from the store must render the same controls the live
-    // stream rendered. Without this the answer card came back after a refetch
-    // with its question and no way to answer it.
-    questions: hitlQuestionsField(raw),
-    interrupt_id: (raw as { readonly interrupt_id?: string }).interrupt_id ?? '',
-    toolkit_type: raw.toolkit_type || '',
-    action_label: raw.action_label || '',
-    tool_args: raw.tool_args ?? null,
-    policy_message: raw.policy_message || '',
-    tool_call_id: raw.tool_call_id || '',
-    child_thread_id: raw.child_thread_id || '',
-    parent_agent_name: raw.parent_agent_name || '',
-    thread_id: raw.thread_id || '',
-  };
-}
-
-/** HITL resume-state reconstruction (lines 271-285) — #4823. */
-function assistantHitlFields(
-  meta: MessageGroupWire['meta'],
-): Partial<Pick<AssistantMessage, 'hitlInterrupt' | 'hitlInterrupts' | 'threadId'>> {
-  const rawInterrupts = meta?.hitl_interrupts;
-  const hitlInterrupts =
-    Array.isArray(rawInterrupts) && rawInterrupts.length > 0
-      ? rawInterrupts.map(buildHitlInterruptFromRaw)
-      : undefined;
-  const hitlInterrupt = meta?.hitl_interrupt ? buildHitlInterruptFromRaw(meta.hitl_interrupt) : hitlInterrupts?.[0];
-  return {
-    ...(hitlInterrupt !== undefined ? { hitlInterrupt } : {}),
-    ...(hitlInterrupts !== undefined ? { hitlInterrupts } : {}),
-    ...(meta?.thread_id !== undefined ? { threadId: meta.thread_id } : {}),
-  };
 }
 
 function assistantContinuationFields(

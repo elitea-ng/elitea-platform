@@ -211,8 +211,10 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
   // THE discriminating assertion: the CONTROLS. A pause that renders its
   // warning and no buttons is a run nothing can resume, and it looks like a
   // rendered card either way.
-  const approve = card.getByRole('button', { name: 'Approve', exact: true });
-  const reject = card.getByRole('button', { name: 'Reject', exact: true });
+  // Reference sensitive-action card (`ChatHitlActions.jsx`): Authorize, Block,
+  // and the Block with Comment control.
+  const approve = card.getByTestId('sensitive-action-authorize-button');
+  const reject = card.getByTestId('sensitive-action-block-button');
   await expect(approve, 'the sensitive pause offered no approve control').toBeVisible({ timeout: 30_000 });
   await expect(reject, 'the sensitive pause offered no reject control').toBeVisible();
 
@@ -246,8 +248,9 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
     (r) => CONTINUE_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  await card.getByPlaceholder('Add a comment (optional)...').fill(denialComment);
-  await reject.click();
+  await card.getByTestId('sensitive-action-block-with-comment-button').click();
+  await card.getByTestId('sensitive-action-block-comment-input').fill(denialComment);
+  await card.getByTestId('sensitive-action-block-comment-submit-button').click();
 
   const rejectResponse = await rejected;
   expect(
@@ -407,7 +410,7 @@ test('a sensitive tool call pauses, a rejection blocks the effect, and a read-on
     (r) => CONTINUE_RE.test(r.url()) && r.request().method() === 'POST',
     { timeout: 60_000 },
   );
-  await readCard.getByRole('button', { name: 'Approve', exact: true }).click();
+  await readCard.getByTestId('sensitive-action-authorize-button').click();
   const approveResponse = await approved;
   expect(
     approveResponse.status(),
