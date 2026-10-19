@@ -53,3 +53,28 @@ func TestCloudExecutorSectionShowsTheEncryptionAnswer(t *testing.T) {
 		}
 	}
 }
+
+// "Default for Projects" sits right after the platform switch, is a boolean
+// that is off by default, and is a key the section's save accepts.
+func TestCloudExecutorSectionOffersTheProjectDefault(t *testing.T) {
+	section, ok := findConfigSection(platformconfig.SectionCloudExecutor)
+	if !ok || len(section.fields) < 2 {
+		t.Fatal("no cloud_executor section")
+	}
+	first, second := section.fields[0], section.fields[1]
+	if first["key"] != platformconfig.KeyCloudExecutorEnabled ||
+		second["key"] != platformconfig.KeyCloudExecutorProjectDefaultEnabled ||
+		second["type"] != "boolean" || second["default"] != false || second["title"] != "Default for Projects" {
+		t.Fatalf("first fields = %v, %v", first, second)
+	}
+	if reason := validateSectionValues(section, map[string]any{
+		platformconfig.KeyCloudExecutorEnabled: true, platformconfig.KeyCloudExecutorProjectDefaultEnabled: true,
+	}); reason != "" {
+		t.Fatalf("saving the project default was refused: %s", reason)
+	}
+	if reason := validateSectionValues(section, map[string]any{
+		platformconfig.KeyCloudExecutorProjectDefaultEnabled: "yes",
+	}); reason == "" {
+		t.Fatal("a non-boolean project default was accepted")
+	}
+}
