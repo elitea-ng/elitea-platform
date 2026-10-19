@@ -44,15 +44,15 @@ function renderCard(onHitlResume: (payload: HitlResumePayload) => void, interrup
 }
 
 describe('declining a sensitive call', () => {
-  it('sends a plain reject when no comment was typed', () => {
+  it('sends a plain reject from Block', () => {
     const onHitlResume = vi.fn();
     renderCard(onHitlResume);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(screen.getByTestId('sensitive-action-block-button'));
 
     expect(onHitlResume).toHaveBeenCalledTimes(1);
     const payload = onHitlResume.mock.calls[0]?.[0] as HitlResumePayload;
-    expect(payload.action, 'an empty comment is a plain reject, not a valueless block_with_comment').toBe('reject');
+    expect(payload.action).toBe('reject');
     expect(payload.value ?? '').toBe('');
     expect(payload.toolCallId).toBe('call_mock_tool_create_1');
   });
@@ -61,23 +61,26 @@ describe('declining a sensitive call', () => {
     const onHitlResume = vi.fn();
     renderCard(onHitlResume);
 
-    fireEvent.change(screen.getByPlaceholderText('Add a comment (optional)...'), {
+    fireEvent.click(screen.getByTestId('sensitive-action-block-with-comment-button'));
+    fireEvent.change(screen.getByTestId('sensitive-action-block-comment-input'), {
       target: { value: '  not in production  ' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(screen.getByTestId('sensitive-action-block-comment-submit-button'));
 
     const payload = onHitlResume.mock.calls[0]?.[0] as HitlResumePayload;
     expect(payload.action).toBe('block_with_comment');
     expect(payload.value, 'the comment must travel unchanged, not trimmed').toBe('  not in production  ');
   });
 
-  it('keeps block_with_comment for a pause that offers no plain reject', () => {
+  it('never submits a blank comment: the comment submit stays disabled', () => {
     const onHitlResume = vi.fn();
-    renderCard(onHitlResume, { ...SENSITIVE_INTERRUPT, available_actions: ['approve', 'block_with_comment'] });
+    renderCard(onHitlResume);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
-
-    const payload = onHitlResume.mock.calls[0]?.[0] as HitlResumePayload;
-    expect(payload.action).toBe('block_with_comment');
+    fireEvent.click(screen.getByTestId('sensitive-action-block-with-comment-button'));
+    fireEvent.change(screen.getByTestId('sensitive-action-block-comment-input'), { target: { value: '   ' } });
+    const submit = screen.getByTestId('sensitive-action-block-comment-submit-button');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(submit);
+    expect(onHitlResume).not.toHaveBeenCalled();
   });
 });

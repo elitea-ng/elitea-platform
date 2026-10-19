@@ -9,9 +9,10 @@
  * persisted thinking steps and already-built UI actions — otherwise a replayed
  * conversation groups its sub-agents differently from a live one.
  *
- * `getActionOwnerPath` and `isDelegationWrapperAction` are NOT ported here:
- * they are rendering-side helpers with no reducer caller yet, and the repo's
- * knip gate fails an export nothing consumes.
+ * `isDelegationWrapperAction`, `getActionOwnerPath`, `getSubAgentName` and
+ * `getSubAgentInstanceKey` (`executionHierarchy.helpers.js:5-17,69-117`) are
+ * the rendering-side half: they decide which sub-agent instance owns an
+ * action, for the thinking panel and the approval buckets alike.
  */
 
 /** Non-empty, trimmed string or `''` — the baseline's `asNonEmptyString`. */
@@ -108,4 +109,79 @@ export function normalizeExecutionHierarchy(...sources: readonly unknown[]): Exe
     parent_agent_call_id: findString('parent_agent_call_id') || lastTier?.call_id || '',
     parent_agent_path: parentAgentPath,
   };
+}
+
+/** Whitespace-free name, for the self-named wrapper test. */
+function compactName(value: unknown): string {
+  return asNonEmptyString(value).replace(/\s/g, '');
+}
+
+interface OwnedAction {
+  readonly type?: unknown;
+  readonly name?: unknown;
+  readonly original_name?: unknown;
+  readonly parent_agent_call_id?: unknown;
+  readonly sibling_ordinal?: unknown;
+  readonly toolMeta?: Readonly<Record<string, unknown>> | undefined;
+  readonly [key: string]: unknown;
+}
+
+/** True only for a tool action that actually delegates to an agent or pipeline. */
+function isDelegationWrapperAction(action: OwnedAction | undefined): boolean {
+  if (!action || action.type !== 'tool') return false;
+  const toolkitType = action.toolMeta?.['toolkit_type'];
+  if (toolkitType === 'application' || toolkitType === 'pipeline') return true;
+  // Older persisted wrappers may carry only agent_type. That field is also
+  // inherited by ordinary LLM/tool actions, so it is not sufficient alone.
+  const selfNamed = compactName(action.name) !== '' && compactName(action.name) === compactName(action.original_name);
+  const stableCallId = asNonEmptyString(action.parent_agent_call_id) || asNonEmptyString(action.toolMeta?.['parent_agent_call_id']);
+  return Boolean(action.toolMeta?.['agent_type'] && selfNamed && stableCallId);
+}
+
+function positiveOrdinal(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * The ancestry path whose final tier owns this action's UI group.
+ *
+ * Root delegation wrappers have no parent path, so their owner tier is
+ * synthesised and the wrapper shares one key with its child's inner events.
+ */
+export function getActionOwnerPath(action: OwnedAction | undefined): readonly AgentPathTier[] {
+  if (!action) return [];
+  const hierarchy = normalizeExecutionHierarchy(action, action.toolMeta);
+  if (hierarchy.parent_agent_path.length) return hierarchy.parent_agent_path;
+  const wrapperName = isDelegationWrapperAction(action) ? asNonEmptyString(action.original_name) : '';
+  const name = wrapperName || hierarchy.parent_agent_name;
+  if (!name) return [];
+  return [
+    {
+      name,
+      call_id: hierarchy.parent_agent_call_id,
+      sibling_ordinal: positiveOrdinal(action.sibling_ordinal ?? action.toolMeta?.['sibling_ordinal']),
+    },
+  ];
+}
+
+/** The display name of the sub-agent that owns an action, or `''` for the coordinator. */
+export function getSubAgentName(action: OwnedAction | undefined): string {
+  if (!action) return '';
+  const owner = getActionOwnerPath(action);
+  if (owner.length) return owner[owner.length - 1]?.name ?? '';
+  const hierarchy = normalizeExecutionHierarchy(action, action.toolMeta);
+  if (hierarchy.parent_agent_name) return hierarchy.parent_agent_name;
+  return isDelegationWrapperAction(action) ? asNonEmptyString(action.original_name) : '';
+}
+
+/**
+ * One key per sub-agent INSTANCE: the owner path's `[name, call_id]` tiers.
+ * `sibling_ordinal` is display metadata, not identity — a resumed child can
+ * be renumbered while its call id stays stable.
+ */
+export function getSubAgentInstanceKey(action: OwnedAction | undefined): string {
+  if (!action) return '';
+  const owner = getActionOwnerPath(action);
+  if (owner.length) return JSON.stringify(owner.map(({ name, call_id }) => [name, call_id]));
+  return getSubAgentName(action);
 }

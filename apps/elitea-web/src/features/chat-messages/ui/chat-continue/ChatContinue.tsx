@@ -16,18 +16,29 @@
  *  - accepts a `renderAuthModal` slot a future page/composition-root fills
  *    with the real `McpAuthModal`, instead of hard-importing it.
  *
- * Behavior this restores vs. the pre-fix version: clicking "Continue
- * (Auth)" only OPENS the auth modal (via the slot) — `onAuthSuccess` fires
+ * Behavior this restores vs. the pre-fix version: clicking "Authorize"
+ * only OPENS the auth modal (via the slot) — `onAuthSuccess` fires
  * exclusively from the modal's own close callback, and only on a real
  * successful login (baseline: `ChatContinue.jsx`'s `handleCloseModal`).
  */
 import type { ReactNode } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import Button from '@mui/material/Button';
-import Stack from '@mui/material/Stack';
+import Box from '@mui/material/Box';
+import Collapse from '@mui/material/Collapse';
+import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
+
+import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { ArrowForwardIcon } from '@/shared/ui/icons/arrow-forward-icon';
+import { CheckedIcon } from '@/shared/ui/icons/checked-icon';
+
+import {
+  buildToolkitAuthorizationMessage,
+  getToolkitAuthorizationContext,
+  type ToolkitAuthorizationContext,
+} from '../../lib/toolkitAuthorizationContext';
 
 /**
  * Loosely-typed source an MCP-auth-required tool action carries its OAuth
@@ -38,6 +49,7 @@ import Typography from '@mui/material/Typography';
  */
 export interface McpAuthRequiredAction {
   readonly id?: string;
+  readonly name?: string;
   readonly authorizationRequestId?: string;
   readonly response_metadata?: {
     readonly resource_metadata?: RawMcpResourceMetadata;
@@ -122,9 +134,9 @@ export interface ChatContinueAuthModalSlotProps {
 
 /** @public Props for `ChatContinue`. */
 export interface ChatContinueProps {
-  /** Whether to continue execution without authentication (skip auth). */
+  /** Skip the authorization for this run (the auth panel's second button). Falls back to `onContinue`. */
   readonly onContinueWithoutAuth?: (() => void) | undefined;
-  /** Called after a real, successful authentication (never on the initial "Continue (Auth)" click). */
+  /** Called after a real, successful authentication (never on the initial "Authorize" click). */
   readonly onAuthSuccess?: (() => void) | undefined;
   /** Called when the user requests to continue. */
   readonly onContinue?: (() => void) | undefined;
@@ -132,17 +144,80 @@ export interface ChatContinueProps {
   readonly authRequired?: boolean;
   /** Whether confirmation is required. */
   readonly requiresConfirmation?: boolean;
-  /** Whether the continue button is disabled. */
+  /** Whether the buttons are disabled. */
   readonly disabled?: boolean;
+  /** The confirmation branch's text, and the auth message when no action context exists. */
+  readonly message?: string | undefined;
+  /** The auth panel's second button label (baseline default `Continue`). */
+  readonly continueLabel?: string | undefined;
   /** The MCP-auth-required tool action/message to extract OAuth metadata from — baseline's `authRequiredAction` prop. */
   readonly authRequiredAction?: McpAuthRequiredAction | undefined;
   /** Renders the real auth modal when open — see module doc for why this is a slot, not a hard import. */
   readonly renderAuthModal?: ((props: ChatContinueAuthModalSlotProps) => ReactNode) | undefined;
 }
 
+/** Configured OAuth requires discovered endpoints; never guess them when discovery failed. */
+function hasUsableAuthDetails(metadata: McpAuthMetadataLocal | null): boolean {
+  if ((metadata?.authServers?.length ?? 0) === 0) return false;
+  if (!metadata?.providedSettings) return true;
+  return (
+    typeof metadata.oauthAuthorizationServer?.['authorization_endpoint'] === 'string' &&
+    typeof metadata.oauthAuthorizationServer?.['token_endpoint'] === 'string'
+  );
+}
+
+/** The collapsible "Authorization details" rows of the auth panel. */
+function AuthorizationDetails({ context }: { readonly context: ToolkitAuthorizationContext | null }): ReactNode {
+  const [showDetails, setShowDetails] = useState(false);
+  const detailsId = useId();
+  if (!context) return null;
+  const rows = [
+    [t('features.chatMessages.toolkitAuthorization.toolkitServer', 'Toolkit server'), context.serverUrl],
+    [t('features.chatMessages.toolkitAuthorization.resourceMetadata', 'Resource metadata'), context.resourceMetadataUrl],
+    [t('features.chatMessages.toolkitAuthorization.authorizationServer', 'Authorization server'), context.authorizationServers.join(', ')],
+    [t('features.chatMessages.toolkitAuthorization.scopes', 'Scopes'), context.scopes.join(', ')],
+  ].filter(([, value]) => value);
+  if (rows.length === 0) return null;
+  const toggle = (): void => setShowDetails((current) => !current);
+
+  return (
+    <Box sx={detailsWrapperSx}>
+      <Box
+        component="button"
+        type="button"
+        aria-expanded={showDetails}
+        aria-controls={detailsId}
+        onClick={toggle}
+        sx={detailsHeaderSx}
+      >
+        <Typography variant="labelSmall" sx={detailsLabelSx}>
+          {t('features.chatMessages.toolkitAuthorization.details', 'Authorization details')} {showDetails ? '▾' : '▸'}
+        </Typography>
+      </Box>
+      <Collapse in={showDetails} id={detailsId}>
+        <Box sx={detailsListSx}>
+          {rows.map(([label, value]) => (
+            <Box key={label} sx={detailsRowSx}>
+              <Typography variant="labelSmall" sx={detailsLabelSx}>
+                {label}:
+              </Typography>
+              <Typography variant="labelSmall" sx={detailsValueSx}>
+                {value}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
 /**
- * `ChatContinue` — renders a continuation button with optional auth
- * confirmation flow for MCP tool execution.
+ * `ChatContinue` — the toolkit-authorization panel (Authorize / skip) or the
+ * plain confirmation panel (Continue) of a paused MCP/agent run.
+ *
+ * Not ported: the baseline's automatic family-token reuse on mount
+ * (`McpAuthHelpers.reuseAuthFamilyToken`), which needs the `mcps` feature.
  */
 export function ChatContinue({
   onContinueWithoutAuth,
@@ -151,6 +226,8 @@ export function ChatContinue({
   authRequired = false,
   requiresConfirmation = false,
   disabled = false,
+  message,
+  continueLabel,
   authRequiredAction,
   renderAuthModal,
 }: ChatContinueProps): ReactNode {
@@ -160,17 +237,11 @@ export function ChatContinue({
     () => (authRequiredAction ? extractLocalMcpAuthMetadata(authRequiredAction) : null),
     [authRequiredAction],
   );
-  const hasAuthServers = (mcpAuthMetadata?.authServers?.length ?? 0) > 0;
-  // Configured OAuth requires discovered endpoints. Do not guess endpoints
-  // when discovery fails; remote MCP retains its existing discovery flow.
-  const hasAuthDetails = hasAuthServers && (!mcpAuthMetadata?.providedSettings || (
-    typeof mcpAuthMetadata.oauthAuthorizationServer?.['authorization_endpoint'] === 'string'
-    && typeof mcpAuthMetadata.oauthAuthorizationServer?.['token_endpoint'] === 'string'
-  ));
-
-  const handleAuthorize = useCallback(() => {
-    setShowAuthModal(true);
-  }, []);
+  const authorizationContext = useMemo(
+    () => (authRequiredAction ? getToolkitAuthorizationContext(authRequiredAction) : null),
+    [authRequiredAction],
+  );
+  const hasAuthDetails = hasUsableAuthDetails(mcpAuthMetadata);
 
   const handleCloseModal = useCallback(
     (success?: boolean) => {
@@ -182,70 +253,122 @@ export function ChatContinue({
     [onAuthSuccess],
   );
 
-  const handleCancelModal = useCallback(() => {
-    setShowAuthModal(false);
-  }, []);
-
-  if (!authRequired && !requiresConfirmation) {
-    return null;
-  }
-
-  return (
-    <>
-      {authRequired && !hasAuthDetails && (
-        <Typography component="output" variant="bodyMedium">
-          Authorization details are unavailable. You can skip this tool.
-        </Typography>
-      )}
-      <Stack
-        direction="row"
-        spacing={1}
-        sx={{ mt: 1, mb: 1 }}
-      >
-        {authRequired ? (
-          <>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<PlayArrowIcon />}
-              onClick={handleAuthorize}
+  if (authRequired) {
+    return (
+      <>
+        <Box
+          data-testid="toolkit-authorization-panel"
+          data-authorization-request-id={authRequiredAction?.authorizationRequestId || undefined}
+          sx={authorizationContainerSx}
+        >
+          <Typography variant="headingSmall" sx={authorizationTitleSx}>
+            {t('features.chatMessages.toolkitAuthorization.title', '⚠️ Toolkit Authorization Required')}
+          </Typography>
+          <Typography variant="bodySmall" sx={secondaryTextSx}>
+            {buildToolkitAuthorizationMessage(authorizationContext, message)}
+          </Typography>
+          {!hasAuthDetails && (
+            <Typography component="output" variant="bodySmall" sx={secondaryTextSx}>
+              {t('features.chatMessages.toolkitAuthorization.detailsUnavailable', 'Authorization details are unavailable. You can skip this tool.')}
+            </Typography>
+          )}
+          <AuthorizationDetails context={authorizationContext} />
+          <Box sx={buttonContainerSx}>
+            <BaseBtn
+              data-testid="toolkit-authorization-authorize-button"
+              variant="positive"
+              startIcon={<CheckedIcon />}
+              onClick={() => setShowAuthModal(true)}
               disabled={disabled || !hasAuthDetails || !renderAuthModal}
             >
-              Authorize
-            </Button>
-            <Button
-              size="small"
-              variant="outlined"
-              onClick={onContinueWithoutAuth}
+              {t('features.chatMessages.toolkitAuthorization.authorize', 'Authorize')}
+            </BaseBtn>
+            <BaseBtn
+              data-testid="toolkit-authorization-skip-button"
+              variant="neutral"
+              startIcon={<ArrowForwardIcon />}
+              onClick={onContinueWithoutAuth ?? onContinue}
               disabled={disabled}
             >
-              Skip Auth
-            </Button>
-          </>
-        ) : (
-          <Button
-            size="small"
-            variant="contained"
-            startIcon={<PlayArrowIcon />}
-            onClick={onContinue}
-            disabled={disabled}
-          >
-            Continue
-          </Button>
-        )}
-      </Stack>
-      {authRequired &&
-        showAuthModal &&
-        renderAuthModal?.({
-          open: showAuthModal,
-          mcpAuthMetadata,
-          serverUrl: authRequiredAction?.toolMeta?.server_url,
-          tokenStorageKey: authRequiredAction?.toolOutputs?.server_url,
-          toolkitId: mcpAuthMetadata?.toolkitId,
-          toolkitType: authRequiredAction?.toolMeta?.toolkit_type,
-          onClose: handleCloseModal,
-          onCancel: handleCancelModal,
-        })}
-    </>
+              {continueLabel ?? t('features.chatMessages.continue', 'Continue')}
+            </BaseBtn>
+          </Box>
+        </Box>
+        {showAuthModal &&
+          renderAuthModal?.({
+            open: showAuthModal,
+            mcpAuthMetadata,
+            serverUrl: authRequiredAction?.toolMeta?.server_url,
+            tokenStorageKey: authRequiredAction?.toolOutputs?.server_url,
+            toolkitId: mcpAuthMetadata?.toolkitId,
+            toolkitType: authRequiredAction?.toolMeta?.toolkit_type,
+            onClose: handleCloseModal,
+            onCancel: () => setShowAuthModal(false),
+          })}
+      </>
+    );
+  }
+
+  if (!requiresConfirmation) return null;
+
+  return (
+    <Box data-testid="chat-continue-panel" sx={confirmationContainerSx}>
+      {message && (
+        <Typography variant="bodyMedium" sx={secondaryTextSx}>
+          {message}
+        </Typography>
+      )}
+      <Box sx={buttonContainerSx}>
+        <BaseBtn variant="neutral" startIcon={<ArrowForwardIcon />} onClick={onContinue} disabled={disabled}>
+          {t('features.chatMessages.continue', 'Continue')}
+        </BaseBtn>
+      </Box>
+    </Box>
   );
 }
+
+const confirmationContainerSx: SxProps<Theme> = (theme) => ({
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  padding: '0.75rem 1rem 1rem 1rem',
+  gap: '0.75rem',
+  borderRadius: theme.vars.shape.radiusMd,
+  backgroundColor: theme.vars.palette.background.chatContinueBackground,
+  alignItems: 'flex-start',
+});
+const authorizationContainerSx: SxProps<Theme> = (theme) => ({
+  width: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  padding: '0.625rem 0.75rem',
+  gap: '0.5rem',
+  borderRadius: theme.vars.shape.radiusMd,
+  background: theme.vars.palette.background.chatContinueBackground,
+  border: `0.0625rem solid ${theme.vars.palette.warning.main}`,
+  alignItems: 'flex-start',
+});
+const authorizationTitleSx: SxProps<Theme> = (theme) => ({ color: theme.vars.palette.warning.main });
+const secondaryTextSx: SxProps<Theme> = (theme) => ({ color: theme.vars.palette.text.secondary });
+const detailsWrapperSx: SxProps<Theme> = (theme) => ({
+  width: '100%',
+  borderRadius: theme.vars.shape.radiusSm,
+  border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+  overflow: 'hidden',
+});
+const detailsHeaderSx: SxProps<Theme> = (theme) => ({
+  display: 'block',
+  width: '100%',
+  border: 'none',
+  textAlign: 'left',
+  font: 'inherit',
+  padding: '0.375rem 0.625rem',
+  cursor: 'pointer',
+  userSelect: 'none',
+  backgroundColor: theme.vars.palette.action.hover,
+});
+const detailsListSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.25rem', padding: '0.5rem 0.625rem' };
+const detailsRowSx: SxProps<Theme> = { display: 'flex', gap: '0.5rem', alignItems: 'flex-start' };
+const detailsLabelSx: SxProps<Theme> = (theme) => ({ fontWeight: 600, color: theme.vars.palette.text.secondary, flexShrink: 0 });
+const detailsValueSx: SxProps<Theme> = (theme) => ({ fontWeight: 400, color: theme.vars.palette.text.primary, overflowWrap: 'anywhere' });
+const buttonContainerSx: SxProps<Theme> = { display: 'flex', gap: '0.5rem', alignItems: 'center' };
