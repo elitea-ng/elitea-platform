@@ -111,9 +111,9 @@ Recovery classes (Web × phase):
 
 | Component × phase | Class | Notes |
 |---|---|---|
-| Web × HITL pause and decision (reload) | R | queued decisions restored; pending cards answerable |
-| Web × HITL decision (two tabs) | I | Main consume-once (409) is the dedupe; Web treats it as answered |
-| Web × output delivery of a pause batch | I (interim) | bounded window; FU-227 makes it exact |
+| Web × HITL pause and decision (reload) | R | queued decisions restored; pending cards answerable — browser-proven (§8.2 g) |
+| Web × HITL decision (two tabs) | I | Main consume-once (409) is the dedupe; Web treats it as answered — browser-proven (§8.2 h) |
+| Web × output delivery of a pause batch | I (interim) | bounded window; FU-227 makes it exact — both parallel cards arrived live (§8.2 c) |
 
 ## 6. Resilience
 
@@ -166,13 +166,44 @@ while the auth card stayed pending. The new Web keeps the same placement and ord
 as in the reference. Whether Main accepts a HITL continuation while authorization requests are still pending on the
 same response is Main's contract (FU-228); the result on pm1084 is recorded in §8.2.
 
-### 8.2 New Web (production-profile stack `pm1084`)
+### 8.2 New Web (production-profile stack `pm1084`, 2026-10-19)
 
-Image for the pass: `elitea-web:trackw-13fcc9719`, Id `sha256:0d017774eb09…`, built from `13fcc9719` (this branch
-merged with `main` `f4e6157aa`); extracted SPA assets contain the branch-only strings `chat-static-pause-panel` and
-`pause_progress`. It supersedes `elitea-web:trackw-00cddc4e2`. The image stays valid for every later head whose
-`git diff --name-only 13fcc9719 <head>` touches no Web build input (`apps/elitea-web/**`); checked: `13fcc9719..a17550ef2` changes only this file. Results: pending (stack not
-yet free).
+- **Stack:** `pm1084`, `http://pm1084.localhost:19100/app/`, worktree `elitea-platform-postmerge-1084`, the other images
+  `pm1084-dd0bbc170`, real models (`gpt-5.4-mini` on the dump's credential). Only the web container was swapped (profile
+  `IMG_WEB`), first to `elitea-web:trackw-13fcc9719` (`sha256:0d017774eb09…`), then — after the ask_user fix below — to
+  `elitea-web:trackw-acaf6cf76` (`sha256:17bdd5dadb86…`, built from `acaf6cf76`; extracted assets contain
+  `chat-static-pause-panel`, `pause_progress` and the new paused-call marker `pause??!0`, absent from the previous
+  image). The page loaded `index-DSGcHNuf.js` from that image. The swapped container is **left in place** (the
+  previous profile is saved as `stacks/pm1084/profile.env.pre-trackw`).
+- **`stack.sh verify-profile --name pm1084`:** `50 passed, 0 failed` (pre-defaults profile, as the worktree predates the
+  defaults PR).
+- **Browser:** the user's Chrome through Claude in Chrome, own tabs (closed afterwards), the stack's existing mock-OIDC
+  session (`admin@centry.user`).
+- **Fixtures** created through the UI in this pass: pipeline `trackw nested sensitive 20261019` (170; agent node →
+  `pm1084 sensitive reverse agent`), agents `trackw parallel parent 20261019` (171), `trackw ask user 20261019` (172),
+  `trackw auth child 20261019` (173, MCP `verifyauthmcp`), `trackw mixed parent 20261019` (174), pipeline
+  `trackw static pause 20261019` (175, `interrupt_before: [answer]`). Reused (created earlier through the UI by other
+  sessions): agent `pm1084 sensitive reverse agent` (166, MCP `c1 mock mcp 20261008`, sensitive `reverse`), MCP
+  `verifyauthmcp`. Nothing was created through the database.
+
+| # | Scenario | Result | Evidence (`evidence/`) |
+|---|---|---|---|
+| a | Root agent, sensitive tool (chat 888) | Plain `Sensitive Action Authorization Required` card below the thinking view, Authorize / Block / Block with Comment; reload keeps it pending; Block accepted (200) and the card retires | `new-a1…`, `new-a2-reload-pending`, `new-a3-tabA-after-block` |
+| b | Pipeline → saved agent → tool guard (pipeline 170, editor test chat) | Card inside the `pm1084 sensitive reverse agent` approval accordion below the thinking view (label is the agent alone: the pipeline is the root, so it is not a tier — the reference behaves the same); Block accepted. The pre-existing pipeline `C1 nested sensitive agent 20261008` could not be used: its child model timed out (backend) | `new-b1…`, `new-b0…` |
+| c | Same sub-agent twice in parallel (agent 171, chat 891) | Thinking view `pm1084 sensitive reverse agent (1)` / `(2)`; both cards arrive live in `(1)` and `(2)` accordions; Block on `(1)` retires only that card and posts nothing; Block on `(2)` posts **one** continuation with both decisions (`hitl_decisions` ×2, 200); the queue is cleared | `new-c1…`, `new-c2…`, `new-c3…`, `new-c4…` |
+| d | ask_user (agent 172, chat 892) | Clarifying card with options; answering sends the structured answer and the run continues. **Defect found and fixed** (`acaf6cf76`): the summary showed the question without its answer (the native runtime persists the answer JSON-encoded) and appeared while the question was still pending (the paused call settles as complete). After the fix the reloaded summary shows `1. Which region do you want?` / `EU` | `new-d1…`, `new-d2…before-fix`, `new-d3…after-fix-reload` |
+| e | Mixed delegated auth + sensitive card (agent 174, chat 893) | Same placement and order as the reference (R4): `trackw auth child` accordion with `Toolkit Authorization Required` (Authorize disabled — the mock exposes no discovery details — / Skip), then `pm1084 sensitive reverse agent` accordion with the sensitive card. Block → `agent.continue.hitl.v1` **200** while the auth card stayed answerable; Skip → `agent.continue.authorization.v1` **200**; the parent answered. **FU-228 record:** Main accepts each kind on its own while the other is pending — the same independent behaviour as the reference | `new-e1…`, `new-e2…`, `new-e3…` |
+| f | HITL / static pause (pipeline 175) | One inline card `Execution paused at answer. Choose the action to proceed.` with `Continue`; no text box, no proof kind, no thread id; Continue accepted and the card retires | `new-f1…`, `new-f2…` |
+| g | Reload with one decided, one pending (chat 891) | After Block on `(1)` and a reload: `(1)` stays hidden, `(2)` is answerable, `el.chat.hitlDecisions` holds the one decision (value-free `reject`); the final submit carried both | `new-g1…` |
+| h | Two tabs (chat 888) | Tab A Block (200). Tab B (no live update — the resolved frame is Wave 2) still showed the card; its Block got **409**, the card closed quietly, no error, composer enabled | `new-h1…`, `new-h2-tabB-409-quiet` |
+
+**Observed outside this PR (main-side, recorded, not fixed here):**
+- After any decision the resumed child's model call fails with `model_gateway.forbidden` ("the model gateway rejected
+  the execution project"): answers show "The model service denied access" / `MODEL_ACCESS_DENIED`. The first turn on
+  the same model works. Same family as FU-226 (continuation runs); Approve of an effectful tool was not exercised.
+- The pipeline editor's `Run 1 details` badge keeps spinning while the run is parked (editor run-status widget, not the
+  chat cards).
+- Model availability on the stack was intermittent (one `model_gateway.unavailable`, one model timeout).
 
 ## 9. Visual gaps (deferred)
 
@@ -184,7 +215,9 @@ card, independent resolution, reload, two tabs, mixed cards). Pixel styling is o
 - actions inside the thinking view are the new-Web `ActionView` preview rows, not the reference toolkit/model chips
   (`renderGroupChips`), for coordinator and sub-agent actions alike;
 - the reference answer block wraps the approval accordions on a slightly lighter surface; the new Web uses the plain
-  answer-block surface.
+  answer-block surface;
+- the approval accordion header shows the generic tool icon where the thinking view shows the agent icon (the
+  interrupt carries no agent type; the reference resolves it from the participant map).
 
 ## 10. Follow-ups
 
@@ -194,4 +227,5 @@ card, independent resolution, reload, two tabs, mixed cards). Pixel styling is o
 - After a 409 the answer stays blank until the next reload (no handler-level refetch/reattach exists); wire
   `reattachStreamedExecution` once the attach target is known after a refusal.
 - Visual gaps of §9 as one styling follow-up.
+- Main: continuation model calls refused by the gateway (`model_gateway.forbidden`) after a HITL decision (see §8.2).
 - Wave 2: replace `decideHitlCard` queue-then-submit with the per-interrupt decision API.
