@@ -641,7 +641,11 @@ impl RemoteCodeRuntime {
                                 });
                         Err(classify(
                             CodeAttemptPhase::Observation,
-                            terminal_failure_class(&code, invocation.platform_client || effect_possible),
+                            terminal_failure_class(
+                                &code,
+                                invocation.platform_client,
+                                effect_possible,
+                            ),
                             invocation.activation,
                             effect_possible,
                         ))
@@ -838,9 +842,17 @@ where
 /// platform client has no network. A platform-client runtime is never re-run,
 /// because Main's journal answers "nothing unresolved" also for calls that
 /// already committed, and a re-run would repeat them under new identities.
+/// A job whose runtime never became ready never ran user code, so it is re-run
+/// also for a platform-client node (unless an effect is somehow possible).
 /// Everything else, including the user's own error, is never re-run.
-fn terminal_failure_class(code: &str, may_have_effects: bool) -> NodeFailureClass {
-    if code == crate::sandbox::runtime_loss::FAILURE_CODE && !may_have_effects {
+fn terminal_failure_class(
+    code: &str,
+    platform_client: bool,
+    effect_possible: bool,
+) -> NodeFailureClass {
+    use crate::sandbox::runtime_loss::{FAILURE_CODE, NEVER_DISPATCHED_FAILURE_CODES};
+    let lost = code == FAILURE_CODE && !platform_client;
+    if (lost || NEVER_DISPATCHED_FAILURE_CODES.contains(&code)) && !effect_possible {
         tracing::warn!(
             event = "code_runtime_lost",
             "the sandbox runtime was lost before it reported a result"

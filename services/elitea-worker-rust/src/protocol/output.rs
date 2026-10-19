@@ -716,6 +716,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
         Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
         Some("pipeline.code_failed") => RuntimeFailureKind::PipelineCodeFailed,
+        Some("pipeline.code_runtime_unavailable") => RuntimeFailureKind::DependencyUnavailable,
         Some("pipeline.code_authorization_failed") => RuntimeFailureKind::AuthorizationFailed,
         Some("pipeline.code_cancelled") => RuntimeFailureKind::Cancelled,
         Some("pipeline.code_preparation_failed") => RuntimeFailureKind::CodePreparationFailed,

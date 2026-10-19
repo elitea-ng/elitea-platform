@@ -1402,6 +1402,11 @@ fn code_journal(factory: &Factory) -> NodeAttemptJournal {
 async fn code_typed_fresh_and_historical_failures_keep_category_without_reexecution() {
     for (class, expected) in [
         (NodeFailureClass::InvalidInput, "pipeline.code_failed"),
+        // The platform failed, not the code (FU-230/FU-234).
+        (
+            NodeFailureClass::DependencyUnavailable,
+            "pipeline.code_runtime_unavailable",
+        ),
         (
             NodeFailureClass::AuthorizationDenied,
             "pipeline.code_authorization_failed",

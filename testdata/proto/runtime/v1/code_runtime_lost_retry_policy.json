@@ -3,5 +3,5 @@
   "supervisor_failure_code": "sandbox.runtime_lost",
   "max_runtime_lost_retries": 2,
   "retry_window_ms": 900000,
-  "terminal_error_code": "PIPELINE_CODE_FAILED"
+  "terminal_error_code": "DEPENDENCY_UNAVAILABLE"
 }

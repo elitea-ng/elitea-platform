@@ -1200,7 +1200,7 @@ async fn lost_runtimes_past_the_allowance_settle_typed() {
     let run = default_run(&h, PURE_YAML);
     let error = run.node.execute(&run.context).await.err().unwrap();
     assert!(error.to_string().contains("pipeline.node_recovery.failed"));
-    assert_eq!(run.events().await, ["pipeline.code_failed"]);
+    assert_eq!(run.events().await, ["pipeline.code_runtime_unavailable"]);
     assert_eq!(h.supervisor.lock().unwrap().submits, attempts);
     assert_eq!(
         h.main.lock().unwrap().visit_attempts,
@@ -1265,4 +1265,65 @@ async fn a_lost_platform_client_runtime_with_a_clean_journal_settles_typed_and_n
     let failure = run.ledger().await.effective_failure().unwrap();
     assert_eq!(failure.class, NodeFailureClass::InvalidResult);
     assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+}
+
+// ------------------- FU-234: a runtime that never became ready (never dispatched)
+
+/// The provisioning of the job died with its owner and the supervisor gave up
+/// before the dispatch fence: user code never started, so even a
+/// platform-client node is re-run (no call can have been made).
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_never_ready_runtime_is_rerun_even_for_a_platform_client_node() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend([terminal("sandbox.preparation_incomplete"), completed()]);
+    let run = default_run(&h, PLATFORM_YAML);
+    let output = run.node.execute(&run.context).await.unwrap();
+    assert_eq!(output.updates["count"], serde_json::json!(41));
+    assert!(run.events().await.is_empty(), "no failure was published");
+    assert_eq!(h.supervisor.lock().unwrap().submits, 2);
+    assert_eq!(h.main.lock().unwrap().visit_attempts, [1, 2]);
+}
+
+/// An effect that may have happened (Main's journal) is never re-run: it reconciles.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn a_never_ready_runtime_with_a_possible_effect_reconciles_and_never_reruns() {
+    let h = harness(
+        MainScript {
+            effects: Effects::Possible,
+            ..QUIET
+        },
+        Duration::ZERO,
+    )
+    .await;
+    h.answers
+        .lock()
+        .unwrap()
+        .push_back(terminal("sandbox.preparation_incomplete"));
+    let run = default_run(&h, PLATFORM_YAML);
+    let output = run.node.execute(&run.context).await.unwrap();
+    assert!(output.interrupt.is_some(), "an operator card, not a re-run");
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
+}
+
+/// Past the allowance a never-ready runtime settles as an infrastructure
+/// failure, never the user-Code text.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn never_ready_runtimes_past_the_allowance_settle_as_infrastructure() {
+    use crate::agents::graph::node_recovery::MAX_RUNTIME_LOST_RETRIES;
+    let h = harness(QUIET, Duration::ZERO).await;
+    let attempts = usize::from(MAX_RUNTIME_LOST_RETRIES) + 1;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend((0..attempts).map(|_| terminal("sandbox.preparation_incomplete")));
+    let run = default_run(&h, PURE_YAML);
+    assert!(run.node.execute(&run.context).await.is_err());
+    assert_eq!(run.events().await, ["pipeline.code_runtime_unavailable"]);
+    assert_eq!(h.supervisor.lock().unwrap().submits, attempts);
 }
