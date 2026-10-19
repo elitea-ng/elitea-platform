@@ -66,7 +66,7 @@ ACTUAL_REVISION="$(git -C "$SDK_SOURCE_ROOT" rev-parse HEAD 2>/dev/null || true)
          ${SDK_SOURCE_ROOT} is at ${ACTUAL_REVISION}
          ${PIN_FILE} names   ${PINNED_REVISION}
        Point ELITEA_SDK_SOURCE_ROOT at the pinned revision, or — if the SDK moved
-       on purpose — update the worker lock file and re-verify both gates before
+       on purpose — update internal/sdkpin/elitea-sdk.lock.json and re-verify both gates before
        you touch the pin."
 
 # The checkout must also HOLD the pinned content. The revision check above

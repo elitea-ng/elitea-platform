@@ -181,23 +181,6 @@ jobs:
   #   gate cannot quietly exempt an image or expect a target type the merge gate
   #   does not.
   #
-  # elitea-worker-python was excluded here until this change, on the grounds
-  # that "the worker plane it belongs to (worker_core / worker_client /
-  # indexer_worker / provider_worker) is marked `pending` in the workspace
-  # repos.yaml". That inference does not hold: those four rows are
-  # `legacy/plugins/` repositories — the code services/elitea-worker-python
-  # REPLACES — and the monorepo it actually lives in carries `status: target`.
-  # repos.yaml has no row for this service at all.
-  #
-  # The contract the note called unsettled is settled here and gated:
-  # `schema_version` is a Literal["elitea.runtime-deploy.v1"] with
-  # extra="forbid" (services/elitea-worker-python/src/elitea_worker/config.py),
-  # the NATS JetStream command bus is implemented on both sides
-  # (services/elitea-main/internal/transport/commandbus, the worker's
-  # transport/nats_jetstream.py; docs/runtime-command-bus.md), and
-  # testdata/proto/runtime/v1 is a shared
-  # conformance corpus both languages run in CI.
-  #
   # Meanwhile compose declares this service mandatory for agent execution —
   # "without this service an admitted run streams nothing and ends in a
   # terminal failure" — so the one service the platform cannot execute an agent
@@ -253,15 +236,8 @@ jobs:
           - name: elitea-llm-gateway
             context: .
             dockerfile: ./services/elitea-llm-gateway/Containerfile
-          # Repo ROOT context, like elitea-main and unlike the two services
-          # above: the Containerfile COPYs libs/proto (:19) and
-          # testdata/proto/runtime/v1 (:85), so the service directory is not a
-          # valid context. No `target:` — its shipping stage is unnamed.
-          - name: elitea-worker-python
-            context: .
-            dockerfile: ./services/elitea-worker-python/Containerfile
           # The native Rust worker, and the chart's DEFAULT worker.runtime.
-          # Repo ROOT context, like the Python worker: the Containerfile COPYs
+          # Repo ROOT context: the Containerfile COPYs
           # libs/proto from outside the service directory.
           #
           # It had a Containerfile, a CI workflow and a compose overlay naming
@@ -476,9 +452,6 @@ jobs:
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
-          - name: elitea-worker-python
-            expect_type: python-pkg
-            blocking: false
           # `rustbinary`, not `debian`: the Containerfile builds with
           # cargo-auditable so trivy can see the crate graph, and this value is
           # what makes a report that only reached the distroless base FAIL
@@ -646,9 +619,6 @@ jobs:
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
-          - name: elitea-worker-python
-            expect_type: python-pkg
-            blocking: false
           # `rustbinary`, not `debian`: the Containerfile builds with
           # cargo-auditable so trivy can see the crate graph, and this value is
           # what makes a report that only reached the distroless base FAIL
@@ -1060,7 +1030,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

@@ -9,13 +9,13 @@ import (
 )
 
 // repoRootRelative is the path from this package directory to the repository
-// root. The lock file the gateway compares itself against lives outside this
-// module, so it cannot be embedded; it is read from disk instead.
+// root. The lock file the gateway compares itself against is named by its
+// repository-relative path in sdk-pin.json, so it is read from disk.
 const repoRootRelative = "../../../.."
 
 // lockFile is the shape this test reads out of
-// services/elitea-worker-python/elitea-sdk.lock.json. Only the source block is
-// needed; the rest of that file describes the worker image.
+// services/elitea-llm-gateway/internal/sdkpin/elitea-sdk.lock.json. Only the source block is
+// needed.
 type lockFile struct {
 	Source struct {
 		Revision       string   `json:"revision"`
@@ -35,11 +35,11 @@ func TestPinParses(t *testing.T) {
 	}
 }
 
-// TestPinMatchesTheWorkerLockFile is the gate this package exists for.
+// TestPinMatchesTheSDKLockFile is the gate this package exists for.
 //
 // The gateway must stay compatible with elitea-sdk, and until this test existed
 // an SDK bump could not fail any gateway gate: the gateway named the SDK
-// nowhere. The lock file at services/elitea-worker-python/elitea-sdk.lock.json
+// nowhere. The lock file at services/elitea-llm-gateway/internal/sdkpin/elitea-sdk.lock.json
 // OWNS the revision; sdk-pin.json states which revision the gateway's
 // compatibility gates (scripts/contract/test_sdk_budget_contract.py and
 // scripts/sdk-conformance/run.sh) were last run against.
@@ -50,7 +50,7 @@ func TestPinParses(t *testing.T) {
 //
 // Prevents: an SDK whose budget reader, base paths or LangChain dialect moved,
 // merged while every gateway test still passed.
-func TestPinMatchesTheWorkerLockFile(t *testing.T) {
+func TestPinMatchesTheSDKLockFile(t *testing.T) {
 	pin, err := Load()
 	if err != nil {
 		t.Fatalf("sdk-pin.json is not usable: %v", err)

@@ -14,7 +14,7 @@
 # added `replace .../libs/go/egresslib => ../../libs/go/egresslib`: the replace
 # target sits OUTSIDE the module directory, so `go mod download` failed with
 # "reading /libs/go/egresslib/go.mod: no such file or directory" before any Go
-# source was read. elitea-scheduler, elitea-worker-python and elitea-worker-rust
+# source was read. elitea-scheduler and elitea-worker-rust
 # already build from the root for the same reason.
 #
 # Nothing about the toolchain changes with the wider context. go.work is NOT

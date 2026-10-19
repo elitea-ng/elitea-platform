@@ -2,6 +2,7 @@ package runtimecomposition
 
 import (
 	"errors"
+
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 

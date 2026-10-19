@@ -3,12 +3,13 @@ package runtimecomposition
 import (
 	"context"
 	"errors"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"testing"
 	"time"
+
+	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type compiledMaintenanceStore struct{ storage.ObjectStore }

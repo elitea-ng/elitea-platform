@@ -526,18 +526,6 @@ func sortedKeys(body map[string]any) []string {
 	return names
 }
 
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for index := range got {
-		if got[index] != want[index] {
-			return false
-		}
-	}
-	return true
-}
-
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (haystack == needle ||
 		len(needle) == 0 ||

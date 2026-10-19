@@ -193,9 +193,9 @@ because each was a real bug found across 3 review rounds.
 - The /llm surface has ONE first-class client, and the gateway is pinned to it.
   `internal/sdkpin/sdk-pin.json` names the elitea-sdk revision the compatibility
   gates were last verified against. The revision itself is owned by
-  `services/elitea-worker-python/elitea-sdk.lock.json`; `internal/sdkpin/
-  pin_test.go` compares the two, so an SDK bump turns this module's test job red
-  with no gateway source change. Do NOT update the pin to make that job green —
+  `internal/sdkpin/elitea-sdk.lock.json`; `internal/sdkpin/pin_test.go`
+  compares the two, so an SDK bump turns this module's test job red. Do NOT
+  update the pin to make that job green —
   re-run the two gates first.
 - The budget refusal contract is: error.TYPE is always `budget_exceeded`, and
   error.CODE carries the SCOPE. The SDK's `budget_exceeded_from` matches on the
@@ -203,22 +203,22 @@ because each was a real bug found across 3 review rounds.
   the type is not recognised as a budget refusal at all: no typed exception is
   raised and the policy rejection reaches the model as message content. That
   shipped, and every Go test passed while it did.
-- THREE tiers guard it, and each sees what the one below cannot:
+- TWO tiers guard it, and each sees what the one below cannot:
   - tier 1 `scripts/contract/test_sdk_budget_contract.py` — reads both sources
     and runs the SDK reader. It reads the CONSTANTS, so it cannot see which
     constant a call site uses.
   - tier 2 `scripts/sdk-conformance/run.sh` — drives the installed SDK against
     `api.NewRouter` over the real handler and produces REAL 402s. This is the
     tier that catches a swapped constant, a 404 route and a lost stream trailer.
-  - tier 3 `deploy/scripts/sdk-client-check.sh` — the SDK against a whole
-    standalone stack. Operator-run; that stack cannot produce a 402.
+  (A former tier 3 ran the SDK inside the Python worker image against a whole
+  stack. It went with the Python worker; tiers 1 and 2 need no worker.)
 - A new /llm route, a change to the refusal body, or a change to
   `internal/api/router.go` MUST be followed by a tier 2 run. `.github/workflows/
   ci-python.yml` starts tiers 1 and 2 on every change under this module.
 - EACH TIER HAS A FLOOR, and the floors are load-bearing. Tier 1 checks that
   its own tests are still collected (`EXPECTED_TESTS`), tier 2 refuses a run
-  reporting fewer than `EXPECTED_ASSERTIONS`, and tier 3 does the same and
-  prints the count its caller reads. Do not lower a floor to make a job green.
+  reporting fewer than `EXPECTED_ASSERTIONS`. Do not lower a floor to make a
+  job green.
   Every one of them was added because the gate reported success while
   measuring less than it claimed: a deleted test file left the file count on
   its old floor, a renamed test silently removed half a gate, and a wrapper

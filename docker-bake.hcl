@@ -58,28 +58,12 @@ target "elitea-web" {
 }
 
 
-# The agent worker. Repo-root context, because the Containerfile COPYs
-# libs/proto and testdata/proto/runtime/v1 from outside its own directory.
+# The agent worker (native Rust). Repo-root context, because the Containerfile
+# COPYs libs/proto and libs/rust from outside its own directory.
 #
-# Deliberately NOT in `group "default"`: this is the only target here that
-# compiles a Python dependency closure from source, so a bare `docker buildx
-# bake` would go from minutes to tens of minutes. Name it to build it.
-target "elitea-worker-python" {
-  context    = "."
-  dockerfile = "services/elitea-worker-python/Containerfile"
-  tags       = ["${REGISTRY}/elitea-worker-python:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-worker-python-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-worker-python-linux-amd64,ignore-error=true"]
-  platforms  = ["linux/amd64", "linux/arm64"]
-}
-
-# The native Rust agent worker, and the chart's default `worker.runtime` since
-# it started shipping. Repo-root context for the same reason as the Python
-# worker: the Containerfile COPYs libs/proto and libs/rust from outside its
-# own directory.
-#
-# Out of `group "default"` on the same grounds as elitea-worker-python, and
-# more so: this compiles 418 crates from source. Name it to build it.
+# Deliberately NOT in `group "default"`: it compiles 418 crates from source, so
+# a bare `docker buildx bake` would go from minutes to tens of minutes. Name it
+# to build it.
 target "elitea-worker-rust" {
   context    = "."
   dockerfile = "services/elitea-worker-rust/Containerfile"

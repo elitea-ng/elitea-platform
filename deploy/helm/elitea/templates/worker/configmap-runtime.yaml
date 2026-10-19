@@ -80,11 +80,8 @@ data:
     {{- if gt (len $r.sandboxRuntimes) 0 }}
     {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
     {{- end }}
-    {{- /* ADR-0034: the cloud executor's workspace runs (Rust worker only). */}}
+    {{- /* ADR-0034: the cloud executor's workspace runs. */}}
     {{- with ($r.workspaceRuns | default dict) }}
-    {{- if ne (include "elitea-worker.isRust" $) "true" }}
-    {{- fail "worker.runtime.workspaceRuns requires the Rust worker" }}
-    {{- end }}
     {{- range $key := list "target" "audience" "scratch_root" "cpu_millis" "memory_bytes" "max_disk_bytes" "turn_wall_seconds" }}
     {{- if not (hasKey $.Values.worker.runtime.workspaceRuns $key) }}
     {{- fail (printf "worker.runtime.workspaceRuns.%s is required" $key) }}

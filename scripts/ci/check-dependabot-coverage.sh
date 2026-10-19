@@ -35,7 +35,6 @@ EXEMPT=$(cat <<'EXEMPTIONS'
 apps/elitea-web/tools/lint-rules/fixtures/knip/bad/package.json  knip lint-rule fixture: its dependencies are deliberately wrong, and bumping them breaks the rule it exercises
 apps/elitea-web/tools/lint-rules/fixtures/knip/good/package.json knip lint-rule fixture, same reason
 conformance/provider/pyproject.toml              test harness: a pytest runner and an HTTP client, shipping in no image, run in CI against a container someone else built
-services/elitea-worker-python/pyproject.toml    frozen runtime capability profile (elitea-sdk.lock.json verifies 80 + 6 distributions at build and at start); pins move by regenerating the profile, never by a scanner — see .github/dependabot.yml
 libs/rust/vendor/adk-agent/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker and the libs/rust workspace: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
 libs/rust/vendor/adk-runner/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker and the libs/rust workspace: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
 libs/rust/vendor/adk-sandbox/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker only (its optional sandbox-supervisor feature; the libs/rust workspace does not link it): the worker Cargo.lock scans its dependency closure; upstream revision and local patches move together

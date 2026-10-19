@@ -34,12 +34,12 @@ same shape, with --from-key set to the old value.
 RUN IT ON A COPY FIRST. Take a dump, load it into another database, convert
 that, and read a secret back through the application. This script has no undo.
 
-The script needs `cryptography` and `psycopg2`. The elitea-worker-python image
-carries both, and it is in every stack that has this table:
+The script needs `cryptography` and `psycopg` (Psycopg 3). Run it from a plain Python
+image on the stack's network:
 
   podman run --rm --network <net> \
-    -v "$PWD/deploy/scripts:/scripts:ro" ghcr.io/elitea-ng/elitea-worker-python:dev \
-    python /scripts/rewrap-centry-vault.py --help
+    -v "$PWD/deploy/scripts:/scripts:ro" docker.io/library/python:3.12-slim \
+    sh -c 'pip install -q cryptography "psycopg[binary]" && python /scripts/rewrap-centry-vault.py --help'
 
 It never prints a key or a secret value.
 """
@@ -51,9 +51,9 @@ import base64
 import sys
 
 try:
-    import psycopg2
+    import psycopg
 except ImportError:  # pragma: no cover - depends on the host
-    sys.exit("rewrap-centry-vault: psycopg2 is not installed.")
+    sys.exit("rewrap-centry-vault: psycopg (Psycopg 3) is not installed.")
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -119,8 +119,9 @@ def main() -> int:
     if from_key == to_key:
         sys.exit("rewrap-centry-vault: --from-key and --to-key are the same.")
 
-    conn = psycopg2.connect(args.database_url)
-    conn.autocommit = False
+    # Psycopg 3 opens a transaction on the first statement (autocommit off);
+    # the dry run rolls it back and --apply commits it.
+    conn = psycopg.connect(args.database_url, autocommit=False)
     cur = conn.cursor()
 
     cur.execute("SELECT id, data FROM centry.secrets_key ORDER BY id")

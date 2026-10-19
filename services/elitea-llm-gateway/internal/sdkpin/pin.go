@@ -6,7 +6,7 @@
 // could not fail a gateway gate — which is how the budget-scope defect shipped.
 //
 // The pinned revision itself belongs to
-// services/elitea-worker-python/elitea-sdk.lock.json. This package holds the
+// internal/sdkpin/elitea-sdk.lock.json. This package holds the
 // SEPARATE statement that the gateway's compatibility gates were run against
 // that revision and passed. pin_test.go compares the two, so moving the SDK
 // turns the gateway test job red with no gateway source change.

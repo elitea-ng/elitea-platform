@@ -24,7 +24,7 @@ def test_current_pylon_sdk_baseline_is_immutable_and_target_independent() -> Non
 
     platform_root = Path(__file__).resolve().parents[5]
     target = json.loads(
-        (platform_root / "services/elitea-worker-python/elitea-sdk.lock.json").read_text()
+        (platform_root / "services/elitea-llm-gateway/internal/sdkpin/elitea-sdk.lock.json").read_text()
     )
     assert target["source"]["revision"] != baseline["source"]["revision"]
     assert re.fullmatch(r"[0-9a-f]{40}", target["source"]["revision"])

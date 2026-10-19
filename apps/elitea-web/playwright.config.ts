@@ -749,8 +749,8 @@ export default defineConfig({
        *
        * WHERE THE SERIALISATION ACTUALLY COMES FROM: `--workers=1`, passed on
        * the `chat-stream` invocation in `scripts/chat-stream-e2e.sh`. That
-       * script is the ONLY entry point — both continuous-integration jobs
-       * (`chat-stream` and `chat-stream-rust` in .github/workflows/ci-web-e2e.yml)
+       * script is the ONLY entry point — the continuous-integration jobs
+       * (`chat-stream-rust` and `chat-stream-real` in .github/workflows/ci-web-e2e.yml)
        * run it, and so does every local run — so the pin lives there once and
        * covers all of them.
        *

@@ -130,7 +130,6 @@ func callerUserID(ctx context.Context) (int64, bool) {
 	return user.OwningUserID()
 }
 
-
 // gateBucket is a bucket route's first step, in one lookup: hidden is the
 // project's workspace bucket (answered 404 before any access answer, as for
 // a missing bucket), allowed is the access list's verdict.

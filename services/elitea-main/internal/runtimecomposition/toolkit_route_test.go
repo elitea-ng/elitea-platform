@@ -1,9 +1,10 @@
 package runtimecomposition
 
 import (
+	"testing"
+
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestStandaloneRustToolkitsUseAgentRuntimeWithoutIndexing(t *testing.T) {

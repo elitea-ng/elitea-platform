@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	"log/slog"
 	"time"
+
+	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"

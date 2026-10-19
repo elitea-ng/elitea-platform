@@ -80,8 +80,8 @@ SDK_ROOT_ENV = "ELITEA_SDK_SOURCE_ROOT"
 # file and services/elitea-llm-gateway/scripts/sdk-conformance/run.sh cannot
 # drift into measuring two different revisions.
 #
-# The revision itself is OWNED by services/elitea-worker-python/
-# elitea-sdk.lock.json; the pin below records what the gateway was verified
+# The revision itself is OWNED by services/elitea-llm-gateway/
+# internal/sdkpin/elitea-sdk.lock.json; the pin below records what the gateway was verified
 # against, and internal/sdkpin/pin_test.go fails when the two disagree.
 GATEWAY_SDK_PIN = GATEWAY_ROOT / "internal" / "sdkpin" / "sdk-pin.json"
 
@@ -326,7 +326,7 @@ def sdk_root() -> Path:
             "  {env} = {root!s} is at {actual}\n"
             "  {pin!s} names {pinned}\n"
             "Point {env} at the pinned revision. If the SDK moved on purpose, "
-            "update services/elitea-worker-python/elitea-sdk.lock.json, re-run "
+            "update services/elitea-llm-gateway/internal/sdkpin/elitea-sdk.lock.json, re-run "
             "this gate and the tier 2 conformance script against the new "
             "revision, and only then update the gateway pin.".format(
                 env=SDK_ROOT_ENV,
