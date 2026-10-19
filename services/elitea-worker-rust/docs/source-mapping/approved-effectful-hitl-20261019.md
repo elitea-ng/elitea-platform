@@ -88,10 +88,17 @@ also found the replay marker resent on every later turn.
 
 Worker: `cargo test --offline --locked --no-fail-fast --all-targets --all-features` against a disposable `postgres:18`
 (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
-**2507 passed, 0 failed, 93 ignored** (no PostgreSQL skips). The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
+**2514 passed, 0 failed, 103 ignored** after merging `origin/main` (2507 / 0 / 93 before the merge), with no PostgreSQL skips. The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
 separately. `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings` and
-`RUSTDOCFLAGS=-D warnings cargo doc` are clean. Main: `go test` for `internal/infra/db/repos` and
-`internal/transport/runtimegrpc/output` pass; `go vet` is clean.
+`RUSTDOCFLAGS=-D warnings cargo doc` are clean. `libs/rust` workspace: 2739 passed, 0 failed, 1 ignored.
+Main: `go test ./...` passes (215 packages). `claims_test.go` `TestExpiredClaimRecoversTerminalOutputAcrossProducerReplacement`
+now scripts the verify query's three columns. `go vet` is clean. Counts are after merging `origin/main` at `ad4988406`.
+
+Audits:
+
+- `cargo deny --all-features check advisories` reports 11 findings (8 vulnerabilities, 3 unmaintained crates). All are
+  pre-existing: this branch changes no `Cargo.lock`, `Cargo.toml`, `go.mod` or `go.sum`.
+- `govulncheck ./...` on Main: no reachable vulnerabilities.
 
 Real PostgreSQL. Each phase runs in its own OS process and claim, and the effectful fixture tool counts its calls:
 

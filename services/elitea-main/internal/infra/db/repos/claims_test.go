@@ -1374,7 +1374,7 @@ func TestExpiredClaimRecoversTerminalOutputAcrossProducerReplacement(t *testing.
 			{values: []any{"command-1"}},
 			{err: pgx.ErrNoRows},
 			{values: []any{"new-claim"}},
-			{values: []any{terminalFrame.EventID}},
+			{values: []any{terminalFrame.EventID, payloadTypeConfigurationValidation, []byte(nil)}},
 		},
 		execTags: []pgconn.CommandTag{
 			pgconn.NewCommandTag("INSERT 0 1"),
