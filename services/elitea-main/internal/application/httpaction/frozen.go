@@ -18,7 +18,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const SnapshotSchema = "elitea.runtime.http-action-snapshot.v1"
+// SnapshotSchema is the start-time freeze of every HTTP node's template
+// (revision 2). The snapshot holds the rule NAME only, never a rule body: the
+// live rule decides at each call.
+const SnapshotSchema = "elitea.runtime.http-action-snapshot.v2"
 
 type FrozenSnapshot struct {
 	SchemaVersion      string       `json:"schema_version"`
@@ -28,19 +31,20 @@ type FrozenSnapshot struct {
 	Nodes              []FrozenNode `json:"nodes"`
 }
 type FrozenNode struct {
-	NodeID         string   `json:"node_id"`
-	RequestDigest  string   `json:"request_digest"`
-	RequestWireB64 string   `json:"request_wire_b64"`
-	BindingDigest  string   `json:"binding_digest"`
-	Output         []string `json:"output"`
-	Transition     *string  `json:"transition"`
+	NodeID          string   `json:"node_id"`
+	Operation       string   `json:"operation"`
+	TemplateDigest  string   `json:"template_digest"`
+	TemplateWireB64 string   `json:"template_wire_b64"`
+	BindingDigest   string   `json:"binding_digest"`
+	Output          []string `json:"output"`
+	Transition      *string  `json:"transition"`
 }
 
 // The pipeline bounds (512 KiB, 128 nodes) live in pipelinelimits, shared with
 // the save path; only the stricter HTTP-bearing cap is local.
 const maxHTTPInstructionsBytes = 64 * 1024
 
-// FreezeSnapshot emits one Main-owned wire image from saved YAML tokens.
+// FreezeSnapshot emits one Main-owned snapshot from saved YAML tokens.
 // Pipelines without a top-level `type: http` node return nil without passing
 // through the HTTP snapshot grammar; the Worker owns their validation.
 func FreezeSnapshot(applicationID, versionID int64, instructions string) (*FrozenSnapshot, error) {
@@ -82,48 +86,17 @@ func FreezeSnapshot(applicationID, versionID int64, instructions string) (*Froze
 		if kind := fields["type"]; kind == nil || kind.Value != "http" {
 			continue
 		}
-		if len(fields) < 5 || len(fields) > 6 {
-			return nil, ErrInvalid
-		}
-		for name := range fields {
-			switch name {
-			case "id", "type", "revision", "request", "output", "transition":
-			default:
-				return nil, ErrInvalid
-			}
-		}
-		if !validFrozenID(id.Value) || fields["type"].Kind != yaml.ScalarNode || fields["type"].Anchor != "" || fields["type"].Tag != "!!str" || fields["revision"] == nil || fields["revision"].Kind != yaml.ScalarNode || fields["revision"].Anchor != "" || fields["revision"].Tag != "!!int" || fields["revision"].Value != "1" {
-			return nil, ErrInvalid
-		}
-		output := fields["output"]
-		if output == nil || output.Kind != yaml.SequenceNode || output.Anchor != "" || len(output.Content) != 1 || output.Content[0].Kind != yaml.ScalarNode || output.Content[0].Anchor != "" || output.Content[0].Tag != "!!str" || !validFrozenOutput(output.Content[0].Value) {
-			return nil, ErrInvalid
-		}
-		var transition *string
-		if target := fields["transition"]; target != nil {
-			if target.Kind != yaml.ScalarNode || target.Anchor != "" || target.Tag != "!!str" || !validFrozenID(target.Value) {
-				return nil, ErrInvalid
-			}
-			value := target.Value
-			transition = &value
-		}
 		count := 0
-		wire, err := yamlJSON(fields["request"], 0, &count)
-		if err != nil || len(wire) > MaxRequest {
+		wire, err := yamlJSON(node, 0, &count)
+		if err != nil {
 			return nil, ErrInvalid
 		}
-		var request Request
-		if Decode(wire, &request) != nil || request.Validate() != nil {
+		parsed, err := ParseNode(wire)
+		if err != nil {
 			return nil, ErrInvalid
 		}
-		frozen := FrozenNode{NodeID: id.Value, RequestDigest: Digest(wire), RequestWireB64: base64.StdEncoding.EncodeToString(wire), Output: []string{output.Content[0].Value}, Transition: transition}
+		frozen := FrozenNode{NodeID: parsed.ID, Operation: parsed.Template.Operation, TemplateDigest: Digest(parsed.TemplateWire), TemplateWireB64: base64.StdEncoding.EncodeToString(parsed.TemplateWire), Output: []string{parsed.Output}, Transition: parsed.Transition}
 		frozen.BindingDigest = FrozenBindingDigest(*snapshot, frozen)
-		// Use the complete typed request parser before publishing the receipt.
-		inv := Invocation{SchemaVersion: Schema, NodeID: frozen.NodeID, ThreadID: "freeze", RequestDigest: frozen.RequestDigest, RequestWireB64: frozen.RequestWireB64, BindingDigest: frozen.BindingDigest}
-		inv.ActivationID = VisitID("freeze", frozen.NodeID, 0, BindingBytes(frozen.BindingDigest))
-		if _, err := Parse(inv); err != nil {
-			return nil, err
-		}
 		snapshot.Nodes = append(snapshot.Nodes, frozen)
 	}
 	if len(snapshot.Nodes) == 0 {
@@ -182,6 +155,7 @@ func yamlAliased(node *yaml.Node) *yaml.Node {
 	return node
 }
 
+// FrozenBindingDigest binds one node's template to the exact saved version.
 func FrozenBindingDigest(snapshot FrozenSnapshot, node FrozenNode) string {
 	transition := ""
 	if node.Transition != nil {
@@ -192,8 +166,8 @@ func FrozenBindingDigest(snapshot FrozenSnapshot, node FrozenNode) string {
 		output = node.Output[0]
 	}
 	h := sha256.New()
-	h.Write([]byte("elitea.runtime.http-frozen-node.v1\x00"))
-	for _, part := range []string{snapshot.ApplicationID, snapshot.VersionID, snapshot.InstructionsDigest, node.NodeID, node.RequestDigest, output, transition} {
+	h.Write([]byte("elitea.runtime.http-frozen-node.v2\x00"))
+	for _, part := range []string{snapshot.ApplicationID, snapshot.VersionID, snapshot.InstructionsDigest, node.NodeID, node.Operation, node.TemplateDigest, output, transition} {
 		var size [8]byte
 		binary.BigEndian.PutUint64(size[:], uint64(len(part)))
 		h.Write(size[:])
@@ -202,35 +176,37 @@ func FrozenBindingDigest(snapshot FrozenSnapshot, node FrozenNode) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Verify checks immutable selected version and exact request receipt bytes.
-func (s FrozenSnapshot) Verify(applicationID, versionID int64, instructions string, inv Invocation) error {
-	if s.SchemaVersion != SnapshotSchema || s.ApplicationID != strconv.FormatInt(applicationID, 10) || s.VersionID != strconv.FormatInt(versionID, 10) || s.InstructionsDigest != Digest([]byte(instructions)) || len(s.Nodes) == 0 || len(s.Nodes) > 128 {
-		return ErrUnauthorized
-	}
-	wire, err := inv.RequestBytes()
-	if err != nil {
-		return ErrUnauthorized
+// Verify checks the snapshot belongs to the immutable selected version and
+// returns the frozen template of the invoked node. The invocation must carry
+// that node's binding digest.
+func (s FrozenSnapshot) Verify(applicationID, versionID int64, instructions string, inv Invocation) (NodeTemplate, error) {
+	if s.SchemaVersion != SnapshotSchema || s.ApplicationID != strconv.FormatInt(applicationID, 10) || s.VersionID != strconv.FormatInt(versionID, 10) || s.InstructionsDigest != Digest([]byte(instructions)) || len(s.Nodes) == 0 || len(s.Nodes) > pipelinelimits.MaxNodes {
+		return NodeTemplate{}, ErrUnauthorized
 	}
 	seen := make(map[string]bool)
-	found := false
-	for _, node := range s.Nodes {
-		if seen[node.NodeID] || !validFrozenID(node.NodeID) || !ValidDigest(node.RequestDigest) || !ValidDigest(node.BindingDigest) || len(node.Output) != 1 || !validFrozenOutput(node.Output[0]) || node.Transition != nil && !validFrozenID(*node.Transition) || node.BindingDigest != FrozenBindingDigest(s, node) {
-			return ErrUnauthorized
+	var selected *FrozenNode
+	for i := range s.Nodes {
+		node := &s.Nodes[i]
+		if seen[node.NodeID] || !validFrozenID(node.NodeID) || !ValidDigest(node.TemplateDigest) || !ValidDigest(node.BindingDigest) || len(node.Output) != 1 || !validFrozenOutput(node.Output[0]) || node.Transition != nil && !validFrozenID(*node.Transition) || node.BindingDigest != FrozenBindingDigest(s, *node) {
+			return NodeTemplate{}, ErrUnauthorized
 		}
 		seen[node.NodeID] = true
-		if node.NodeID != inv.NodeID {
-			continue
+		if node.NodeID == inv.NodeID {
+			selected = node
 		}
-		saved, err := base64.StdEncoding.Strict().DecodeString(node.RequestWireB64)
-		if err != nil || len(saved) > MaxRequest || Digest(saved) != node.RequestDigest || inv.RequestDigest != node.RequestDigest || inv.BindingDigest != node.BindingDigest || inv.RequestWireB64 != node.RequestWireB64 || !bytes.Equal(saved, wire) {
-			return ErrUnauthorized
-		}
-		found = true
 	}
-	if !found {
-		return ErrUnauthorized
+	if selected == nil || inv.BindingDigest != selected.BindingDigest {
+		return NodeTemplate{}, ErrUnauthorized
 	}
-	return nil
+	wire, err := base64.StdEncoding.Strict().DecodeString(selected.TemplateWireB64)
+	if err != nil || len(wire) > MaxTemplateBytes || Digest(wire) != selected.TemplateDigest {
+		return NodeTemplate{}, ErrUnauthorized
+	}
+	template, err := DecodeTemplate(wire)
+	if err != nil || template.Operation != selected.Operation {
+		return NodeTemplate{}, ErrUnauthorized
+	}
+	return template, nil
 }
 
 func yamlFields(node *yaml.Node) (map[string]*yaml.Node, error) {

@@ -1212,7 +1212,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// security_auditor with their grants, and elitea_auth.admin_role_seeds,
 	// the record of which roles are built-in (issue 2496, ADR-0059 R0.7).
 	// Deletes nothing.
-	require.EqualValues(t, 263, Head(shared))
+	//
+	// 264: shared/0264_http_action_rules_and_effects_v3.sql, the project HTTP
+	// action rules and their write audit (elitea_runtime.http_action_rules,
+	// http_action_rule_audit), the revision-2 identity of
+	// elitea_runtime.execution_http_effects (rule, attempt, dispatch
+	// deadline), and the grants models.http_action_rules.manage (admin) and
+	// models.http_action_rules.list (admin, editor, viewer), including the
+	// per-project override rows. No foreign key to centry.project.
+	require.EqualValues(t, 264, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

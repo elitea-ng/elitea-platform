@@ -25,7 +25,7 @@ describe('buildSettingsSections — PROJECT', () => {
     expect(projectTabIds(ALL_OPEN)[0]).toBe('project-general');
   });
 
-  it('matches what a live deployment shows in a personal project, plus the new Webhooks tab', () => {
+  it('matches what a live deployment shows in a personal project, plus the new Webhooks and HTTP actions tabs', () => {
     // Measured read-only on next.elitea.ai, signed in, project "Private":
     // General, AI Providers, Project Context, Secrets, Analytics, Usage.
     // No Service Prompts, no Environment, no Users. `webhooks` is NOT part of
@@ -35,6 +35,7 @@ describe('buildSettingsSections — PROJECT', () => {
     // after Secrets, the other project-scoped credential-shaped tab.
     // `agent-workforce` (issue 1617, the automatic hiring and dismissal
     // policy) is new too and follows Webhooks.
+    // `http-actions` (T-5D) is likewise new and follows Agent workforce.
     expect(
       projectTabIds({ ...ALL_OPEN, isPersonalProject: true }),
     ).toEqual([
@@ -44,6 +45,7 @@ describe('buildSettingsSections — PROJECT', () => {
       'secrets',
       'webhooks',
       'agent-workforce',
+      'http-actions',
       'analytics',
       'usage',
     ]);

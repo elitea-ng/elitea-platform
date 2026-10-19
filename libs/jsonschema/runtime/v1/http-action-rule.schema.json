@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "elitea.runtime.http-action-rule.v1",
   "title": "HTTP action rule",
-  "description": "Project-scoped rule authored by project admins (permission name is a Wave 2 proposal). The project id comes from the route, not the body.",
+  "description": "Project-scoped rule authored by project admins (permission models.http_action_rules.manage). The project id comes from the route, not the body. replay (default never) is the admin's attestation for non-safe methods: never = an unknown outcome is reconciled, never repeated; idempotency_key = the remote honours Idempotency-Key, so a retry re-sends the same key.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -89,6 +89,12 @@
     },
     "enabled": {
       "type": "boolean"
+    },
+    "replay": {
+      "enum": [
+        "never",
+        "idempotency_key"
+      ]
     }
   }
 }

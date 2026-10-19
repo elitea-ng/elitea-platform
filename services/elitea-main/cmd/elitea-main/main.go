@@ -105,6 +105,8 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/vectorintrospection"
+	v2httpactions "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/httpactions"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 func main() {
@@ -513,6 +515,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("parse ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: %w", err)
 	}
 	mcpAuthorizationEgressGuard := webhook.NewDestinationGuard(mcpOAuthAllowlist)
+
+	// HTTP action rules (pipeline `type: http` nodes): the operator's outer
+	// bound for a rule's origin, checked when an admin writes the rule. Unset
+	// permits public HTTPS destinations only; a malformed entry fails startup,
+	// as for the allowlists above.
+	httpActionGuard, err := egress.NewHTTPActionGuard(os.Getenv(egress.HTTPActionAllowlistEnv))
+	if err != nil {
+		return fmt.Errorf("build the HTTP action egress guard: %w", err)
+	}
 
 	webhookDeliveries := webhookDeliveriesRepository(pool)
 	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
@@ -3338,6 +3349,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		WebhookDispatcher:           webhookDispatcher,
 		WebhookDestinationGuard:     webhookDestinationGuard,
 		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
+		HTTPActionRules:             httpActionRulesRepository(pool),
+		HTTPActionGuard:             httpActionGuard,
 	})
 	if deletionReconcilerErr != nil {
 		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
@@ -3547,6 +3560,19 @@ func webhooksRepository(pool *pgxpool.Pool) webhook.Repository {
 		return nil
 	}
 	return dbrepos.NewWebhooksRepo(pool)
+}
+
+// httpActionRulesRepository backs /httpactions; nil without a pool, never a
+// typed nil inside the interface.
+func httpActionRulesRepository(pool *pgxpool.Pool) v2httpactions.Repository {
+	if pool == nil {
+		return nil
+	}
+	repo, err := dbrepos.NewHTTPActionRulesRepo(pool)
+	if err != nil {
+		return nil
+	}
+	return repo
 }
 
 // webhookDeliveriesRepository backs the delivery log (#876's second half) —
