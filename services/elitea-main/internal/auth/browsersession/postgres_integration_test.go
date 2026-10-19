@@ -22,6 +22,7 @@ import (
 
 	migrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 )
 
@@ -96,6 +97,12 @@ func newBrowserSessionPool(t *testing.T) *pgxpool.Pool {
 	}
 	if err := migrate.New(pool, migrations.Files).ApplyShared(ctx); err != nil {
 		t.Fatalf("apply the shared migrations: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

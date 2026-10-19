@@ -96,9 +96,11 @@ func (s *CodeWorkspaceService) requestKey(visit OriginalCodeVisit, job CodePrepa
 	if err := selection.Validate(s.policy); err != nil {
 		return empty, selection, err
 	}
-	// Mutable repository mounts require a durable quota backend. This adapter has none.
-	if selection.Mode != CodeWorkspaceRead {
-		return empty, selection, ErrCodeWorkspaceWritableUnavailable
+	// Mutable repository mounts require a durable quota backend. This adapter
+	// has none: a toolkit Code workspace is never writable (ADR-0034 lifts the
+	// refusal for workspace-store runs only, which never come through here).
+	if err := AdmitCodeWorkspaceMode(CodeWorkspaceToolkit, selection.Mode); err != nil {
+		return empty, selection, err
 	}
 	native, err := sandboxJSON(selection)
 	if err != nil {

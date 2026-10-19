@@ -166,9 +166,10 @@ pub fn resolve(
 /// instructions is the order of authority: the agent's own instructions,
 /// then the skill picked for this turn, then the workspace's AGENTS.md
 /// (`turn::PROJECT_PRECEDENCE` says the same from below).
-pub const SKILLS_PRECEDENCE: &str = "Precedence: the agent's own instructions above outrank \
-     this skill where they disagree; this skill outranks the workspace's project \
-     instructions (AGENTS.md), when a section of them follows.";
+pub const SKILLS_PRECEDENCE: &str = "Precedence: the agent's own instructions and the \
+     environment section above outrank this skill where they disagree; this skill \
+     outranks the workspace's project instructions (AGENTS.md), when a section of \
+     them follows.";
 
 /// The agent's instructions, then the invoked skills as one delimited
 /// section (unchanged without any). Each skill is one [`framing::block`]
@@ -356,7 +357,9 @@ mod tests {
         );
         assert!(text.contains(SKILLS_PRECEDENCE), "{text}");
         assert!(
-            text.contains("the agent's own instructions above outrank this skill"),
+            text.contains(
+                "the agent's own instructions and the environment section above outrank this skill"
+            ),
             "{text}"
         );
         assert!(

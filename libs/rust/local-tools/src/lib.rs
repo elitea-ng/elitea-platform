@@ -22,6 +22,8 @@ pub mod error;
 pub mod files;
 pub mod find;
 pub mod git;
+#[cfg(feature = "handoff")]
+pub mod handoff;
 pub mod ledger;
 pub mod patch;
 pub mod policy;

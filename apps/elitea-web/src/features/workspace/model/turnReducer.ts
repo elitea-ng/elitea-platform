@@ -47,6 +47,8 @@ export interface TurnView {
   done?: TurnDone;
   /** The AGENTS.md files the host applied to this turn (from `status` `running`). */
   projectInstructions?: string[];
+  /** The turn's commit (after `done`) did not land: "Retry" sends it again. */
+  commitFailed?: { executionId: string; code: string; message: string; seq: number };
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -62,6 +64,8 @@ interface TurnRecord {
    * below this seq is already in it.
    */
   floor?: number;
+  /** A retry saved the commit: a `commit_failed` at or below this seq no longer shows. */
+  savedThrough?: number;
 }
 
 export interface TurnsState {
@@ -77,6 +81,11 @@ export type TurnAction =
   | { type: 'begin'; turnId: string }
   | { type: 'event'; event: AgentEvent }
   | { type: 'approval-resolved'; turnId: string; requestId: string }
+  /**
+   * A retried commit was saved, or the host has nothing left to retry
+   * (refused with no new `commit_failed`): the turn no longer offers "Retry".
+   */
+  | { type: 'commit-saved'; turnId: string }
   /** A turn still running that this session did not start (the thread was reopened): its recorded events, then live ones. */
   | { type: 'adopt'; turnId: string; events: readonly AgentEvent[] }
   | { type: 'reset' };
@@ -163,6 +172,10 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
       return { ...view, error: event.payload, approvals: [] };
     case 'done':
       return onDone(view, event);
+    case 'commit_failed': {
+      const { execution_id: executionId, code, message } = event.payload;
+      return { ...view, commitFailed: { executionId, code, message, seq: event.seq } };
+    }
   }
 }
 
@@ -189,6 +202,13 @@ function compact(events: readonly (AgentEvent | StoredEvent)[]): StoredEvent[] {
     else out[out.length - 1] = merged;
   }
   return out;
+}
+
+/** `view` without a commit failure a retry has since saved. */
+function withoutSaved(view: TurnView, savedThrough: number | undefined): TurnView {
+  if (view.commitFailed === undefined || savedThrough === undefined || view.commitFailed.seq > savedThrough) return view;
+  const { commitFailed: _saved, ...rest } = view;
+  return rest;
 }
 
 function withoutResolved(view: TurnView, requestId: string): TurnView {
@@ -239,8 +259,16 @@ function reduceEvent(state: TurnsState, event: AgentEvent): TurnsState {
     const events = compact([...record.events, event].sort((a, b) => a.seq - b.seq));
     next = { ...record, events, view: fold(events, record.resolved) };
   }
+  next = { ...next, view: withoutSaved(next.view, next.savedThrough) };
   const kept = heardUnclaimed(state, event.turn_id);
   return { ...state, unclaimed: kept.unclaimed, turns: { ...kept.turns, [event.turn_id]: next } };
+}
+
+function commitSaved(state: TurnsState, turnId: string): TurnsState {
+  const record = state.turns[turnId];
+  if (record?.view.commitFailed === undefined) return state;
+  const savedThrough = record.view.commitFailed.seq;
+  return { ...state, turns: { ...state.turns, [turnId]: { ...record, savedThrough, view: withoutSaved(record.view, savedThrough) } } };
 }
 
 export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
@@ -267,6 +295,8 @@ export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
     }
     case 'event':
       return reduceEvent(state, action.event);
+    case 'commit-saved':
+      return commitSaved(state, action.turnId);
     case 'approval-resolved': {
       const record = state.turns[action.turnId];
       if (record === undefined) return state;

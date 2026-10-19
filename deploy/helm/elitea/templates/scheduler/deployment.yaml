@@ -38,6 +38,11 @@ spec:
         # running scheduler keeps polling the OLD database while helm and
         # ArgoCD both report success.
         checksum/config: {{ include (print $.Template.BasePath "/scheduler/configmap.yaml") . | sha256sum }}
+        {{- if (dig "metrics" "scrapeAnnotations" false .Values.scheduler) }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.scheduler.healthPort | int64 | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
         {{- with .Values.scheduler.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

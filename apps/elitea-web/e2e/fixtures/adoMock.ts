@@ -34,20 +34,22 @@ export const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL'
 export const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
 /**
- * The python leg, for the reason `chat.qtest-toolkit.spec.ts` gives about its
- * own family: `ado_boards`/`ado_wiki` are SDK toolkits with no counterpart in
- * `services/elitea-worker-rust/src/toolkits/families/`, so a rust-leg run would
- * fail at toolset materialization with `unsupported_toolkit_family` — a fact
- * about the native worker's roadmap, not about these cases. And the image
- * pipeline under test IS the SDK's: `parse_file_content` picks
- * `EliteAImageLoader`, which is what calls the model with the picture.
+ * Why the ADO image cases are parked (`test.fixme`) since the Python worker
+ * was retired. They were written against the SDK's ADO wrappers and their
+ * image pipeline (`parse_file_content` → `EliteAImageLoader`, the vision call
+ * with the picture). The native `ado_boards`/`ado_wiki` families
+ * (`libs/rust/agent-runtime/src/toolkits/families/`) exist, but:
+ *   * they admit an HTTPS `organization_url` only, and `ado-mock` serves plain
+ *     `http://ado-mock:8097` — so the toolkit is refused at materialization;
+ *   * they do not describe images: `process_images` returns the content with
+ *     its image references unchanged ("Image description is not available in
+ *     this runtime"; only `get_image_by_url` calls the vision model).
+ * The cases are KEPT so that closing either gap on the native runtime turns
+ * them on, rather than deleting the only end-to-end statement of the contract.
  */
-export const ADO_LEG_REASON =
-  'the ado_boards/ado_wiki toolkit families are SDK-only — the native worker refuses them at materialization';
-
-export function onPythonLeg(): boolean {
-  return (process.env['E2E_WORKER'] ?? 'rust') === 'python';
-}
+export const ADO_NATIVE_GAP =
+  'native ado_boards/ado_wiki: https-only organization_url (ado-mock is http) and no image description ' +
+  'in process_images — see ADO_NATIVE_GAP in e2e/fixtures/adoMock.ts';
 
 export interface AdoAttachment {
   readonly id: string;

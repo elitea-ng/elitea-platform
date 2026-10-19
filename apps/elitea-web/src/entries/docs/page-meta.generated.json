@@ -602,7 +602,7 @@
   {
     "slug": "menus/internal-tools",
     "title": "Internal tools",
-    "description": "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, Python sandbox, swarm mode, and smart tools selection."
+    "description": "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, swarm mode, and smart tools selection."
   },
   {
     "slug": "menus/overview",
@@ -672,7 +672,7 @@
   {
     "slug": "reference/toolkit-catalogue",
     "title": "Toolkit catalogue",
-    "description": "Every toolkit type Elitea serves, its category, and whether the Python or Rust worker can run it."
+    "description": "Every toolkit type Elitea serves, its category, and whether the agent worker can run it."
   },
   {
     "slug": "support/faqs",

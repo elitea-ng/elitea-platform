@@ -714,7 +714,8 @@ async fn expired_index_retries_original_compiler_and_replays_only_immutable_impo
             )
             .await,
         Err(SandboxCallError::Submission {
-            code: tonic::Code::Aborted
+            code: tonic::Code::Aborted,
+            ..
         })
     ));
     assert!(matches!(
@@ -975,7 +976,8 @@ async fn warm_expired_or_fenced_index_retries_original_execute_with_fresh_three_
             )
             .await,
         Err(SandboxCallError::Submission {
-            code: tonic::Code::Aborted
+            code: tonic::Code::Aborted,
+            ..
         })
     ));
     assert!(matches!(
@@ -1136,7 +1138,8 @@ async fn warm_unknown_dispatch_reconciles_original_receipt_without_reimport_or_r
             )
             .await,
         Err(SandboxCallError::Submission {
-            code: tonic::Code::Unavailable
+            code: tonic::Code::Unavailable,
+            ..
         })
     ));
     let previous = server.content_calls.lock().unwrap().len();

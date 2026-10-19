@@ -5,6 +5,7 @@ pub mod client;
 mod live_tests;
 pub mod runtime;
 mod workspace;
+pub mod workspace_run;
 
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

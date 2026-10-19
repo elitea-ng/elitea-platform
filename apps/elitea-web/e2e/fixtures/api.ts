@@ -2547,30 +2547,16 @@ function markerNestingDepth(text: string): number {
 
 /**
  * The function name a SAVED AGENT is offered to the model under, when it is
- * attached to another agent or sitting in a conversation as a participant.
+ * attached to another agent or sitting in a conversation as a participant:
+ * `elitea_agent_<applicationId>_v_<versionId>` (`application_tool_name`,
+ * services/elitea-worker-rust/src/agents/application_tools.rs).
  *
- * The two runtimes name it differently and both names are derived from the
- * SAME stored reference, so the leg decides which one a scripted call must
- * use:
- *
- *  - the native Rust runtime names it `elitea_agent_<applicationId>_v_<versionId>`
- *    (`application_tool_name`, services/elitea-worker-rust/src/agents/application_tools.rs);
- *  - the SDK worker names it after the agent itself (`ApplicationToolkit.get_toolkit`
- *    passes `app_details['name']`), which reaches the model unchanged for a
- *    name in the `autotest_` alphabet.
- *
- * `E2E_WORKER` is set by `scripts/chat-stream-e2e.sh`, the one entry point that
- * knows which runtime is answering. Every caller asserts the offered tool list
- * actually CONTAINS what this returns, so a naming change fails with the list
- * the runtime really sent rather than with a turn that quietly did nothing.
+ * Every caller asserts the offered tool list actually CONTAINS what this
+ * returns, so a naming change fails with the list the runtime really sent
+ * rather than with a turn that quietly did nothing.
  */
-export function agentAsToolName(agent: {
-  readonly agentId: string;
-  readonly versionId: string;
-  readonly name: string;
-}): string {
-  const worker = process.env['E2E_WORKER'] ?? 'rust';
-  return worker === 'rust' ? `elitea_agent_${agent.agentId}_v_${agent.versionId}` : agent.name;
+export function agentAsToolName(agent: { readonly agentId: string; readonly versionId: string }): string {
+  return `elitea_agent_${agent.agentId}_v_${agent.versionId}`;
 }
 
 /** One entry of the mock's TOOL journal — see `_record_tool` in the mock. */
@@ -3024,7 +3010,7 @@ export async function createMockToolAgent(page: Page, label: string): Promise<Mo
     // BOTH participants, in one call. A conversation POSTed straight to the
     // API carries neither (`Create` writes no participant row at all), and its
     // first send 422s at admission because `ResolveCurrentAdhocTurn` returns
-    // zero rows — see `chat.pyodide-sandbox.spec.ts`'s header.
+    // zero rows.
     const participants = await page.request.post(
       `${API_BASE}/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`,
       {

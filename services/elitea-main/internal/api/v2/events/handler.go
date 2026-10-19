@@ -2,8 +2,10 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -84,12 +86,64 @@ const StreamPermission = "models.project_context.view"
 // layer, so a regression there still never reaches a browser. Adding a type
 // or a family here is a decision that every project viewer may read its
 // payload.
+//
+//   - workspace handoff state changes (ADR-0034): events.WorkspaceChannel →
+//     elitea.events.project.<id>.workspace, MAIN, published by elitea-main
+//     alone. AUDIENCE-SCOPED: a frame carries the user ids that may read the
+//     thread (a Local work thread is its owner's alone), the stream relays it
+//     only to a caller in that list, and strips the list. The payload is the
+//     conversation, its state, epoch and reclaim_pending; never stats or
+//     paths.
 var streamFamilies = []struct {
 	channel   func(projectID string) string
 	eventType string
+	// audience: relay only to a caller named in the frame's `audience`.
+	audience bool
 }{
-	{events.ProjectChannel, events.EventBudgetSoftAlert},
-	{events.PresenceChannel, canvaspresence.EventType},
+	{events.ProjectChannel, events.EventBudgetSoftAlert, false},
+	{events.PresenceChannel, canvaspresence.EventType, false},
+	{events.WorkspaceChannel, WorkspaceHandoffEventType, true},
+}
+
+// WorkspaceHandoffEventType is workspacehandoff.EventType, named here so the
+// relay table does not depend on the handoff application package.
+const WorkspaceHandoffEventType = "workspace.handoff"
+
+// audienceScoped reports whether the family of channel relays only to each
+// frame's audience.
+func audienceScoped(projectID, channel string) bool {
+	for _, f := range streamFamilies {
+		if f.channel(projectID) == channel {
+			return f.audience
+		}
+	}
+	return false
+}
+
+// audienceFrame strips the audience from an audience-scoped payload and
+// answers whether userID is in it. A malformed frame, an empty audience or a
+// caller without an owning user id is never relayed.
+func audienceFrame(payload []byte, userID int64, known bool) ([]byte, bool) {
+	if !known || userID <= 0 {
+		return nil, false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil {
+		return nil, false
+	}
+	var audience []int64
+	if raw, ok := fields["audience"]; !ok || json.Unmarshal(raw, &audience) != nil {
+		return nil, false
+	}
+	if !slices.Contains(audience, userID) {
+		return nil, false
+	}
+	delete(fields, "audience")
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // Forwarded reports whether the stream relays eventType at all (from its own
@@ -223,6 +277,13 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 	heartbeat := time.NewTicker(30 * time.Second)
 	defer heartbeat.Stop()
 
+	// The caller, for the audience-scoped families.
+	var callerID int64
+	callerKnown := false
+	if caller, ok := auth.UserFromContext(ctx); ok {
+		callerID, callerKnown = caller.OwningUserID()
+	}
+
 	_ = sse.Comment("connected")
 
 	for {
@@ -241,7 +302,15 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 					"type", f.event.Type, "source", f.event.Source, "channel", f.channel)
 				continue
 			}
-			_ = sse.Event(f.event.Type, string(f.event.Payload))
+			payload := []byte(f.event.Payload)
+			if audienceScoped(projectID, f.channel) {
+				relayed, ok := audienceFrame(payload, callerID, callerKnown)
+				if !ok {
+					continue
+				}
+				payload = relayed
+			}
+			_ = sse.Event(f.event.Type, string(payload))
 		case <-heartbeat.C:
 			if err := sse.Comment("heartbeat"); err != nil {
 				return

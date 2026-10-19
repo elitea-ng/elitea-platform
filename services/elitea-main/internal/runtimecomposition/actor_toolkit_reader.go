@@ -3,6 +3,7 @@ package runtimecomposition
 import (
 	"context"
 	"errors"
+
 	indexing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	toolkitexecution "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 )

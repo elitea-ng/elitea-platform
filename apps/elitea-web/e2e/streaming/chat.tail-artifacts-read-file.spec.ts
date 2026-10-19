@@ -10,7 +10,7 @@
  * at the wrong threshold, stays invisible.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE NATIVE LEG NOW HAS THE FAMILY (#906) — AND ONE HALF IS STILL BLOCKED
+ * THE NATIVE WORKER HAS THE FAMILY (#906)
  * ─────────────────────────────────────────────────────────────────────────────
  * `artifact` used to be absent from the native worker's `supported_tool_types`:
  * the toolkit was skipped at assembly (`agent_toolkit_skipped
@@ -20,24 +20,21 @@
  * `services/elitea-worker-rust/src/toolkits/families/artifact/`, acts under the
  * live execution claim against main's private content listener, and enforces
  * the SAME 200,000-character agent-path cap with the SAME structured
- * `content_too_large` refusal the SDK produces. So the CAP case below runs on
- * both legs.
+ * `content_too_large` refusal the SDK produced. So the CAP case below runs.
  *
  * THE FULL-READ CASE WAS BLOCKED ONE LAYER DOWN, and #956 closed that too. An
- * 80k-character tool RESULT does not fit one output frame, and both runtimes
- * used to REFUSE it there (python raised `RESOURCE_EXHAUSTED: The agent event
- * exceeds its output limit` at `MAX_CURRENT_NODE_EVENT_JSON_BYTES`; rust
- * refused the same value one layer earlier at `MAX_TOOL_EVENT_VALUE_BYTES`).
+ * 80k-character tool RESULT does not fit one output frame, and the runtime
+ * used to REFUSE it there (at `MAX_TOOL_EVENT_VALUE_BYTES`).
  * The frame bound is unchanged — it is the runtime limits conformance
  * document's `max_output_frame_bytes`, under the bus message bound — and an
  * oversized result is now emitted as an ordered sequence of chunk events that
  * elitea-main reassembles onto the stored tool call
  * (`internal/transport/runtimegrpc/nodeevent/tool_output_chunk.go`). So BOTH
- * cases below now run for real on both legs.
+ * cases below now run for real.
  *
  * The calls below are SCRIPTED with the SDK's own argument shape (`filename`)
  * rather than left for a model to invent; the native family mirrors those
- * names deliberately, so one prompt drives both legs.
+ * names deliberately.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHAT IS PORTED HERE AND WHAT IS NOT
@@ -93,7 +90,8 @@ const ARTIFACT_TOOL_NAMES = [
  *
  * The folder quotes a bare string — `[Content has N lines and exceeds size
  * limit. Use partial read options.]` — and the toolkit has since replaced it
- * with a STRUCTURED refusal, measured on a python-worker stack:
+ * with a STRUCTURED refusal (measured on the retired Python worker; the native
+ * family mirrors it):
  *
  *   {'__result_status__': 'content_too_large', … 'read_limits':
  *    {'max_output_chars': 200000, 'full_read_allowed': False},
@@ -378,7 +376,7 @@ test('an agent reads an 80k-character artifact back in full', async ({ page }) =
     );
 
     // ASSERTED ON THE LIVE TRANSCRIPT, NOT ON THE STORED ROW. Measured twice
-    // on the rust leg with the whole read delivered: the mock quotes a tool
+    // with the whole read delivered: the mock quotes a tool
     // result VERBATIM (`deploy/mock-llm/server.py`, "Resume: quote the tool
     // results verbatim") and this lane streams with a per-chunk delay, so an
     // 80,000-character result becomes an 80,000-character reply arriving at a

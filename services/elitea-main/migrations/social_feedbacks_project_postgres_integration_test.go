@@ -74,7 +74,10 @@ CREATE TABLE centry.social_feedbacks (
     user_agent VARCHAR,
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT now()
 );
-INSERT INTO centry.social_feedbacks (user_id, description, rating) VALUES (41, 'legacy one', 5), (42, 'legacy two', 1);`); err != nil {
+-- created_at is named: the legacy shape under test is the missing project_id,
+-- not the clock, and the column's DEFAULT now() is the session clock.
+INSERT INTO centry.social_feedbacks (user_id, description, rating, created_at) VALUES
+    (41, 'legacy one', 5, now() AT TIME ZONE 'UTC'), (42, 'legacy two', 1, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 

@@ -275,6 +275,33 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .await
     }
 
+    /// Main's grant for one cloud-executor workspace run (ADR-0034): the
+    /// same claim-bound `AuthorizeSandboxJob`, its digest the run spec's and
+    /// its activation the run's name, for the workspace profile's audience.
+    pub(crate) async fn authorize_workspace_run(
+        &self,
+        authority: &ClaimBoundSandboxAuthority,
+        audience: &str,
+        activation_id: &str,
+        digest: &[u8; 32],
+    ) -> Result<
+        crate::protocol::elitea::runtime::v1::SignedSandboxJobGrantV1,
+        crate::sandbox::client::SandboxCallError,
+    > {
+        self.require_sandbox_authority(authority)?;
+        let mut request = authority.request(&[0; 32]);
+        request.activation_id = activation_id.to_owned();
+        request.request_digest = digest.to_vec();
+        request.audience = audience.to_owned();
+        let response = self.control.authorize_sandbox_job(request).await?;
+        if response.rejection.is_some() {
+            return Err(crate::sandbox::client::SandboxCallError::Rejected);
+        }
+        response
+            .grant
+            .ok_or(crate::sandbox::client::SandboxCallError::Rejected)
+    }
+
     /// Release a job this claim reserved and hydrated but never dispatched. This
     /// is the same claim-bound stop as a cancellation: the supervisor terminates
     /// its inert runtime once, and a repeat finds the terminal job.

@@ -35,6 +35,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
@@ -203,6 +204,12 @@ INSERT INTO public.auth_core__user (id, email, name)
 VALUES (3, 'admin@centry.user', 'Admin')
 ON CONFLICT (id) DO NOTHING`); err != nil {
 		t.Fatalf("seed the session's account: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

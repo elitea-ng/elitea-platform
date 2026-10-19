@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -11,8 +10,7 @@ use adk_rust::graph::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::json;
-use sqlx::postgres::PgConnectOptions;
-use sqlx::{ConnectOptions, PgPool};
+use sqlx::PgPool;
 
 use super::TestStateWriterLease;
 use super::postgres_checkpointer::{
@@ -29,14 +27,14 @@ const CHECKPOINT_MIGRATION: &str =
 
 struct IsolatedPostgres {
     pool: PgPool,
-    admin_options: PgConnectOptions,
+    admin_options: crate::test_pg::TestConnectOptions,
     database_name: String,
 }
 
 impl IsolatedPostgres {
     async fn create(database_url: &str) -> Self {
         static DATABASE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
-        let admin_options = PgConnectOptions::from_str(database_url)
+        let admin_options = crate::test_pg::connect_options(database_url)
             .expect("parse PostgreSQL component-test URL")
             .disable_statement_logging();
         let admin_pool = crate::test_pg::pool_options()
@@ -69,6 +67,11 @@ impl IsolatedPostgres {
             .connect_with(admin_options.clone().database(&database_name))
             .await
             .expect("connect isolated checkpoint database");
+        crate::test_pg::assert_test_session(
+            &pool,
+            "postgres_checkpointer_tests::IsolatedPostgres::create",
+        )
+        .await;
         Self {
             pool,
             admin_options,
@@ -110,6 +113,8 @@ impl Drop for IsolatedPostgres {
 }
 
 async fn install_test_schema(pool: &PgPool) {
+    crate::test_pg::assert_test_session(pool, "postgres_checkpointer_tests::install_test_schema")
+        .await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
         .execute(pool)
         .await
@@ -2060,7 +2065,8 @@ async fn sandbox_submission(over_tls: bool) {
         assert!(matches!(
             transport.cancel_granted(grant.clone()).await,
             Err(crate::sandbox::client::SandboxCallError::Submission {
-                code: tonic::Code::PermissionDenied
+                code: tonic::Code::PermissionDenied,
+                ..
             })
         ));
         let mut stop_claims = claims.clone();
@@ -2089,7 +2095,8 @@ async fn sandbox_submission(over_tls: bool) {
         assert!(matches!(
             transport.submit_granted(stop_grant.clone(), &request).await,
             Err(crate::sandbox::client::SandboxCallError::Submission {
-                code: tonic::Code::PermissionDenied
+                code: tonic::Code::PermissionDenied,
+                ..
             })
         ));
         assert_eq!(
@@ -2189,13 +2196,50 @@ async fn sandbox_submission(over_tls: bool) {
                 .unwrap()
                 .unwrap()
                 .unwrap();
-            assert!(matches!(
-                submission,
+            let returned = match &submission {
+                Ok(SandboxOutcome::Pending) => "Ok(Pending)".to_owned(),
+                Ok(SandboxOutcome::Completed(_)) => "Ok(Completed)".to_owned(),
+                Ok(SandboxOutcome::Failed { code }) => format!("Ok(Failed {{ code: {code} }})"),
+                Ok(SandboxOutcome::Cancelled) => "Ok(Cancelled)".to_owned(),
+                Ok(SandboxOutcome::Uncertain { code }) => {
+                    format!("Ok(Uncertain {{ code: {code} }})")
+                }
+                Err(error) => format!("Err({error:?})"),
+            };
+            // The durable outcome is asserted above: the row is Cancelled and
+            // the runtime is gone. The in-flight submission loses the race to
+            // the stop. When its receipt poll meets the container the stop just
+            // removed, the supervisor answers Runtime -> Unavailable with
+            // "Reconcile the same activation" (service.rs service_error), seen
+            // in 2 of 3 CI runs. The worker treats Unavailable and Aborted alike
+            // (graph/code_remote.rs, code_attempt_remote.rs: dispatch possible,
+            // reconcile). Unavailable is accepted ONLY with that supervisor
+            // text: a dropped connection or a handler panic also surfaces as
+            // Unavailable, but carries no such message, and must fail here.
+            let accepted = match &submission {
                 Ok(SandboxOutcome::Cancelled)
-                    | Err(crate::sandbox::client::SandboxCallError::Submission {
-                        code: tonic::Code::Aborted
-                    })
-            ));
+                | Err(crate::sandbox::client::SandboxCallError::Submission {
+                    code: tonic::Code::Aborted,
+                    ..
+                }) => true,
+                Err(
+                    error @ crate::sandbox::client::SandboxCallError::Submission {
+                        code: tonic::Code::Unavailable,
+                        ..
+                    },
+                ) => error
+                    .submission_message()
+                    .contains("Reconcile the same activation"),
+                _ => false,
+            };
+            assert!(
+                accepted,
+                "a submission stopped mid-dispatch returned {returned}: {:?}",
+                submission
+                    .as_ref()
+                    .err()
+                    .map(crate::sandbox::client::SandboxCallError::submission_message)
+            );
         }
         drop(transport);
         stop.send(()).unwrap();

@@ -907,29 +907,58 @@ async fn set_active_branch(client: &GitHubClient, arguments: &Map<String, Value>
 async fn create_branch(client: &GitHubClient, arguments: &Map<String, Value>) -> Outcome {
     let proposed = required_str(arguments, "proposed_branch_name")?;
     branch_name("proposed_branch_name", proposed)?;
+    // ADR-0034 decision 10: the cloud executor's `open_pull_request` branches
+    // from the upstream commit it recorded. Not in the model's schema (the
+    // SDK's has no such argument); the in-process caller passes it.
+    let from_sha = optional_str(arguments, "from_sha")?;
+    if from_sha.is_some_and(|sha| !valid_commit_id(sha)) {
+        return Err(argument("`from_sha` must be a full commit id"));
+    }
     let (owner, repo) = repository(client, arguments)?;
-    let active = client.active_branch();
-    let source = if active.is_empty() {
-        base_branch(client).to_owned()
+    match create_branch_named(client, &owner, &repo, proposed, from_sha).await? {
+        Ok(name) => text(format!(
+            "Branch '{name}' created successfully, and set as current active branch."
+        )),
+        Err(sentence) => text(sentence),
+    }
+}
+
+/// Create `proposed` (or the first free `proposed_vN`) from `from_sha`, or
+/// from the active or base branch's head without it. The created name, or
+/// the sentence of a refusal.
+pub(super) async fn create_branch_named(
+    client: &GitHubClient,
+    owner: &str,
+    repo: &str,
+    proposed: &str,
+    from_sha: Option<&str>,
+) -> Result<Result<String, String>, Fail> {
+    let sha = if let Some(sha) = from_sha {
+        sha.to_owned()
     } else {
-        active
+        let active = client.active_branch();
+        let source = if active.is_empty() {
+            base_branch(client).to_owned()
+        } else {
+            active
+        };
+        let branch = client
+            .read(
+                &["repos", owner, repo, "branches", &source],
+                &[],
+                MAX_RESPONSE_BYTES,
+            )
+            .await?;
+        branch
+            .pointer("/commit/sha")
+            .and_then(Value::as_str)
+            .filter(|sha| valid_commit_id(sha))
+            .ok_or(Fail::Client(
+                error(GitHubClientErrorCode::InvalidResponse),
+                None,
+            ))?
+            .to_owned()
     };
-    let branch = client
-        .read(
-            &["repos", &owner, &repo, "branches", &source],
-            &[],
-            MAX_RESPONSE_BYTES,
-        )
-        .await?;
-    let sha = branch
-        .pointer("/commit/sha")
-        .and_then(Value::as_str)
-        .filter(|sha| valid_commit_id(sha))
-        .ok_or(Fail::Client(
-            error(GitHubClientErrorCode::InvalidResponse),
-            None,
-        ))?
-        .to_owned();
     let mut candidate = proposed.to_owned();
     let mut next_suffix = 1_usize;
     let mut listed_taken = false;
@@ -939,23 +968,21 @@ async fn create_branch(client: &GitHubClient, arguments: &Map<String, Value>) ->
         match client
             .write(
                 Method::POST,
-                &["repos", &owner, &repo, "git", "refs"],
+                &["repos", owner, repo, "git", "refs"],
                 Some(&body),
             )
             .await
         {
             Ok(_) => {
                 client.set_active_branch(&candidate);
-                return text(format!(
-                    "Branch '{candidate}' created successfully, and set as current active branch."
-                ));
+                return Ok(Ok(candidate));
             }
             Err(fail) if reference_exists(&fail) => {
                 if listed_taken {
                     next_suffix += 1;
                 } else {
                     listed_taken = true;
-                    next_suffix = first_free_suffix(client, &owner, &repo, proposed)
+                    next_suffix = first_free_suffix(client, owner, repo, proposed)
                         .await
                         .max(1);
                 }
@@ -964,17 +991,17 @@ async fn create_branch(client: &GitHubClient, arguments: &Map<String, Value>) ->
             Err(Fail::Client(error, reason))
                 if error.code() == GitHubClientErrorCode::InvalidInput =>
             {
-                return text(format!(
+                return Ok(Err(format!(
                     "Unable to create branch due to error: {}",
                     reason.unwrap_or_else(|| "GitHub rejected the branch name".to_owned())
-                ));
+                )));
             }
             Err(fail) => return Err(fail),
         }
     }
-    text(format!(
+    Ok(Err(format!(
         "Unable to create branch. The names derived from `{proposed}` (up to `{candidate}`) are all taken."
-    ))
+    )))
 }
 
 fn reference_exists(fail: &Fail) -> bool {
@@ -2050,5 +2077,171 @@ async fn write_step(
                 })?;
             Ok(format!("Renamed: {old_path} \u{2192} {path}"))
         }
+    }
+}
+
+/// What the cloud executor's `open_pull_request` asks for (ADR-0034
+/// decision 10). The diff comes from Main over the runtime plane, in
+/// process: it is never a model argument.
+pub(in crate::toolkits) struct PullRequestFromDiff<'a> {
+    pub(in crate::toolkits) title: &'a str,
+    pub(in crate::toolkits) body: &'a str,
+    pub(in crate::toolkits) branch: &'a str,
+    pub(in crate::toolkits) base: &'a str,
+    pub(in crate::toolkits) from_sha: &'a str,
+    pub(in crate::toolkits) diff: &'a str,
+}
+
+/// How an `open_pull_request` ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::toolkits) enum PullRequestFromDiffOutcome {
+    Opened {
+        branch: String,
+        number: u64,
+        url: String,
+        files: usize,
+    },
+    /// Refused before any write (binary changes, an empty or oversized
+    /// diff, a refused branch name).
+    Refused { reason: String },
+    /// Some writes happened: the branch stays, no pull request is open.
+    Partial {
+        branch: String,
+        applied: Vec<String>,
+        failed: Vec<String>,
+        reason: String,
+    },
+}
+
+/// Branch from the upstream commit, apply the diff, open the pull request
+/// against the upstream branch.
+///
+/// # Errors
+///
+/// The sentence of a failure that stops the whole tool (credentials, an
+/// outage) before or at the branch.
+pub(in crate::toolkits) async fn open_pull_request_from_diff(
+    client: &GitHubClient,
+    request: &PullRequestFromDiff<'_>,
+) -> Result<PullRequestFromDiffOutcome, String> {
+    open_pull_request_inner(client, request)
+        .await
+        .map_err(|fail| match fail {
+            Fail::Argument(sentence) => sentence,
+            client_fail @ Fail::Client(..) => fail_sentence(&client_fail),
+        })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one ordered flow: refuse, branch, apply, open"
+)]
+async fn open_pull_request_inner(
+    client: &GitHubClient,
+    request: &PullRequestFromDiff<'_>,
+) -> Result<PullRequestFromDiffOutcome, Fail> {
+    let refused = |reason: &str| {
+        Ok(PullRequestFromDiffOutcome::Refused {
+            reason: reason.to_owned(),
+        })
+    };
+    if request.diff.len() > MAX_PATCH_BYTES {
+        return refused("the change is over the 1 MiB a pull request from the cloud carries");
+    }
+    // Binary changes are refused before anything is written.
+    if request
+        .diff
+        .lines()
+        .any(|line| line.starts_with("Binary files ") || line.starts_with("GIT binary patch"))
+    {
+        return refused(
+            "the change has binary files, which a pull request from the cloud cannot carry",
+        );
+    }
+    let changes = parse_patch(request.diff);
+    if changes.is_empty() {
+        return refused("there is no change to open a pull request with");
+    }
+    if changes.len() > MAX_PATCH_FILES {
+        return refused(
+            "the change touches more than the 100 files a pull request from the cloud carries",
+        );
+    }
+    if !valid_commit_id(request.from_sha) {
+        return refused("the recorded upstream commit is not a commit id");
+    }
+    branch_name("branch", request.branch)?;
+    branch_name("base", request.base)?;
+    let (owner, repo) = repository(client, &Map::new())?;
+    let branch = match create_branch_named(
+        client,
+        &owner,
+        &repo,
+        request.branch,
+        Some(request.from_sha),
+    )
+    .await?
+    {
+        Ok(branch) => branch,
+        Err(sentence) => return refused(&sentence),
+    };
+    let message = format!(
+        "{}\n\nOpened from an Elitea cloud executor turn.",
+        request.title
+    );
+    let applied = apply_patch(client, request.diff, &branch, &message, &Map::new()).await?;
+    let list = |key: &str| -> Vec<String> {
+        applied
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (done, failed) = (list("applied_changes"), list("failed_changes"));
+    if applied.get("error").is_some() || !failed.is_empty() || done.is_empty() {
+        let reason = applied
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("the change could not be applied to the new branch")
+            .to_owned();
+        return Ok(PullRequestFromDiffOutcome::Partial {
+            branch,
+            applied: done,
+            failed,
+            reason,
+        });
+    }
+    let pull =
+        json!({"title": request.title, "body": request.body, "head": branch, "base": request.base});
+    let opened = match client
+        .write(
+            Method::POST,
+            &["repos", &owner, &repo, "pulls"],
+            Some(&pull),
+        )
+        .await
+    {
+        Ok(reply) => created(&reply, "number"),
+        Err(fail) => Err(fail),
+    };
+    match opened {
+        Ok((number, url)) => Ok(PullRequestFromDiffOutcome::Opened {
+            branch,
+            number,
+            url,
+            files: done.len(),
+        }),
+        Err(fail) => Ok(PullRequestFromDiffOutcome::Partial {
+            branch,
+            applied: done,
+            failed: Vec::new(),
+            reason: format!("the pull request was not opened: {}", fail_sentence(&fail)),
+        }),
     }
 }

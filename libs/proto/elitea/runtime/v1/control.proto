@@ -189,7 +189,14 @@ message RenewLeaseResponseV1 {
   int64 lease_expires_at_unix_millis = 1;
   DesiredExecutionStateV1 desired_state = 2;
   RuntimeErrorV1 rejection = 3;
-  reserved 4 to 15;
+  // ADR-0034: the execution is a cloud turn whose thread the desktop is
+  // taking back (reclaim_pending). The worker wraps the turn up gracefully:
+  // the tool call in flight finishes (a long run_command is stopped after a
+  // short bound), the work is committed and published, and the turn ends
+  // with a note. The desired state stays RUNNING; Main's 60 s grace and hard
+  // cancel remain the fallback. Rides the same lease poll as cancellation.
+  bool workspace_wrap_up = 4;
+  reserved 5 to 15;
 }
 
 message ObserveDesiredStateRequestV1 {
@@ -201,7 +208,9 @@ message ObserveDesiredStateRequestV1 {
 message ObserveDesiredStateResponseV1 {
   DesiredExecutionStateV1 desired_state = 1;
   RuntimeErrorV1 rejection = 2;
-  reserved 3 to 15;
+  // As RenewLeaseResponseV1.workspace_wrap_up.
+  bool workspace_wrap_up = 3;
+  reserved 4 to 15;
 }
 
 message PrepareSettlementRequestV1 {

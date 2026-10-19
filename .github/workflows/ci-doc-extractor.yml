@@ -19,6 +19,9 @@ name: CI — elitea-doc-extractor
 on:
   pull_request:
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-doc-extractor/**"
       - "libs/proto/elitea/extract/**"
       # The crates it links, and the workspace they inherit package fields
@@ -38,6 +41,9 @@ on:
     branches:
       - main
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-doc-extractor/**"
       - "libs/proto/elitea/extract/**"
       - "libs/rust/doc-extract/**"
@@ -71,10 +77,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Read everywhere, write on main only: a pull request's target
       # directory duplicated per branch would crowd the 10 GB Actions cache.

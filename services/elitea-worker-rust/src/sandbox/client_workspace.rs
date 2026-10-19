@@ -1,5 +1,5 @@
 //! One indexed repository RPC. The caller renews actual owning grants between calls.
-use super::{SandboxCallError, SandboxClient, submission_code};
+use super::{SandboxCallError, SandboxClient};
 use crate::{
     protocol::elitea::runtime::v1::{
         HydrateSandboxWorkspaceRequestV1, HydrateSandboxWorkspaceResponseV1, SandboxJobStatusV1,
@@ -11,7 +11,7 @@ use crate::{
         workspace::WorkspaceManifest,
     },
 };
-use tonic::{Code, Request};
+use tonic::Request;
 
 pub(crate) enum WorkspaceHydrationMode<'a> {
     Plain {
@@ -103,12 +103,8 @@ impl SandboxClient {
             self.rpc.clone().hydrate_sandbox_workspace(request),
         )
         .await
-        .map_err(|_| SandboxCallError::Submission {
-            code: Code::DeadlineExceeded,
-        })?
-        .map_err(|status| SandboxCallError::Submission {
-            code: submission_code(&status),
-        })?
+        .map_err(|_| SandboxCallError::deadline())?
+        .map_err(|status| SandboxCallError::submission(&status))?
         .into_inner();
         decode_workspace_cursor(output, manifest, file_index)
     }

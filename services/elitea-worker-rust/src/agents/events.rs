@@ -160,6 +160,8 @@ pub(crate) enum AgentEventProjectionErrorCode {
     ProviderFailure,
     ResourceExhausted,
     InvalidOutput,
+    /// A reasoning-only output continuation was cut reasoning-only again.
+    OutputContinuationExhausted,
 }
 
 impl AgentEventProjectionErrorCode {
@@ -171,6 +173,7 @@ impl AgentEventProjectionErrorCode {
             Self::ProviderFailure => "agent_event.provider_failure",
             Self::ResourceExhausted => "agent_event.resource_exhausted",
             Self::InvalidOutput => "agent_event.invalid_output",
+            Self::OutputContinuationExhausted => "agent_event.output_continuation_exhausted",
         }
     }
 }
@@ -204,6 +207,18 @@ impl AgentEventProjectionError {
             code: AgentEventProjectionErrorCode::ProviderFailure,
             protocol: None,
         }
+    }
+
+    const fn output_continuation_exhausted() -> Self {
+        Self {
+            code: AgentEventProjectionErrorCode::OutputContinuationExhausted,
+            protocol: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn output_continuation_exhausted_for_tests() -> Self {
+        Self::output_continuation_exhausted()
     }
 
     fn output(error: ProtocolError) -> Self {
@@ -250,6 +265,9 @@ impl fmt::Display for AgentEventProjectionError {
             }
             AgentEventProjectionErrorCode::InvalidOutput => {
                 "the projected agent event is malformed"
+            }
+            AgentEventProjectionErrorCode::OutputContinuationExhausted => {
+                "the output continuation reached its output limit again before visible output"
             }
         })
     }
@@ -2605,7 +2623,15 @@ impl AgentEventProjector {
             });
             self.project_model_steps(&mut batch, event, &step)?;
             self.state = ProjectionState::Complete(CompletedModelTurn { output_limited });
-            if let Some(confirmation) = self.output_limit_confirmation(event, output_limited)? {
+            // A reasoning-only continuation cut reasoning-only AGAIN gets no
+            // second Continue offer: `finish_after_eos` ends it as
+            // OUTPUT_CONTINUATION_EXHAUSTED, which tells the user to raise
+            // the output limit (live 4.45.1, the Continue that never ends).
+            let exhausted =
+                output_limited && next_content.is_empty() && self.is_reasoning_only_continuation();
+            if !exhausted
+                && let Some(confirmation) = self.output_limit_confirmation(event, output_limited)?
+            {
                 batch.push(confirmation)?;
             }
         } else {
@@ -2782,6 +2808,17 @@ impl AgentEventProjector {
             event.timestamp,
         )
         .map(Some)
+    }
+
+    /// This turn continues a turn that produced NO visible output before its
+    /// output limit (Main sends an empty `truncated_content`), on a path whose
+    /// user controls Continue.
+    fn is_reasoning_only_continuation(&self) -> bool {
+        self.context.continuation_prefix.as_deref() == Some("")
+            && matches!(
+                self.context.output_limit_behavior,
+                OutputLimitBehavior::UserControlled
+            )
     }
 
     fn output_limit_confirmation(
@@ -3359,6 +3396,32 @@ impl AgentEventProjector {
         Ok(batch)
     }
 
+    /// Close a turn stopped by a take-back wrap-up (ADR-0034 decision 7) so
+    /// it can complete: the model output so far is kept as an incomplete
+    /// step, interrupted tool calls are dropped, and the projector stands
+    /// where a completed model turn would, ready for [`Self::finish_after_eos`].
+    /// A turn already complete is left as it is.
+    pub(crate) fn close_for_wrap_up(
+        &mut self,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if matches!(
+            self.state,
+            ProjectionState::Complete(_)
+                | ProjectionState::PrinterComplete
+                | ProjectionState::StaticComplete
+        ) && self.active_tools.is_empty()
+        {
+            return Ok(ProjectedAgentEventBatch::new());
+        }
+        let batch = self.preserve_incomplete_output(occurred_at)?;
+        self.active_tools.clear();
+        self.state = ProjectionState::Complete(CompletedModelTurn {
+            output_limited: false,
+        });
+        Ok(batch)
+    }
+
     /// Emit the selected completed result only after ADK reaches EOS.
     #[allow(clippy::too_many_lines)] // Keep event validation, original lineage, and browser projection in one ordered path.
     pub(crate) fn finish_after_eos(
@@ -3397,6 +3460,17 @@ impl AgentEventProjector {
                     "the completed agent content exceeds its approved limit",
                 ),
             ));
+        }
+        // The cap on reasoning-only cuts (live 4.45.1). The original turn spent
+        // its whole output allowance reasoning and was offered Continue; this
+        // turn IS that Continue and was cut reasoning-only again. Offering a
+        // third attempt with the same allowance repeats the same cut for ever
+        // (the continuation cannot carry the hidden reasoning, by design: see
+        // `truncated_content` in agent.proto). The turn ends as
+        // OUTPUT_CONTINUATION_EXHAUSTED instead, and the chat's continuation
+        // notice tells the user to raise the output limit.
+        if content.is_empty() && output_limited && self.is_reasoning_only_continuation() {
+            return Err(AgentEventProjectionError::output_continuation_exhausted());
         }
         // An empty answer is a result only when the turn was cut by its
         // output limit and the user was offered Continue (a reasoning-only

@@ -28,7 +28,15 @@
             }
           ]
         }
-      }
+      },
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -144,7 +152,15 @@
             }
           ]
         }
-      }
+      },
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -259,7 +275,15 @@
             }
           ]
         }
-      }
+      },
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -389,7 +413,15 @@
             }
           ]
         }
-      }
+      },
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -580,7 +612,15 @@
       "has_function_validators": false,
       "icon_url": null,
       "label": "Artifact",
-      "max_length": 50
+      "max_length": 50,
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "properties": {
       "bucket": {
@@ -642,7 +682,7 @@
       "icon_url": null,
       "label": "Cloud AWS",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the aws toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the aws toolkit."
     },
     "name_required": true,
     "properties": {
@@ -694,9 +734,7 @@
       "has_function_validators": false,
       "hidden": true,
       "icon_url": "azure-icon.svg",
-      "label": "Cloud Azure",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the azure toolkit."
+      "label": "Cloud Azure"
     },
     "name_required": true,
     "properties": {
@@ -756,9 +794,7 @@
       "has_function_validators": false,
       "hidden": true,
       "icon_url": null,
-      "label": "Azure Search",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the azure_search toolkit."
+      "label": "Azure Search"
     },
     "name_required": true,
     "properties": {
@@ -853,8 +889,11 @@
           ]
         }
       },
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the bigquery toolkit."
+      "unavailable_tools": [
+        "execute",
+        "similarity_search",
+        "similarity_search_with_score"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -910,7 +949,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "bitbucket-icon.svg",
-      "label": "Bitbucket"
+      "label": "Bitbucket",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -1097,7 +1144,15 @@
       ],
       "has_function_validators": false,
       "icon_url": null,
-      "label": "Confluence"
+      "label": "Confluence",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -1251,7 +1306,9 @@
       "has_function_validators": false,
       "hidden": true,
       "icon_url": "data-analysis.svg",
-      "label": "Data Analysis"
+      "label": "Data Analysis",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the data_analysis toolkit."
     },
     "name_required": true,
     "properties": {
@@ -1381,7 +1438,7 @@
         }
       },
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the delta_lake toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the delta_lake toolkit."
     },
     "name_required": true,
     "properties": {
@@ -1425,11 +1482,8 @@
         "office automation"
       ],
       "has_function_validators": false,
-      "hidden": true,
       "icon_url": null,
-      "label": "DOCX",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker does not support the docx toolkit; only the Rust worker serves it."
+      "label": "DOCX"
     },
     "name_required": true,
     "properties": {
@@ -1543,7 +1597,16 @@
       ],
       "has_function_validators": false,
       "icon_url": "figma-icon.svg",
-      "label": "Figma"
+      "label": "Figma",
+      "unavailable_tools": [
+        "analyze_file",
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -1653,9 +1716,7 @@
       "has_function_validators": false,
       "hidden": true,
       "icon_url": "google.svg",
-      "label": "Cloud GCP",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the gcp toolkit."
+      "label": "Cloud GCP"
     },
     "name_required": true,
     "properties": {
@@ -1694,7 +1755,16 @@
       ],
       "has_function_validators": false,
       "icon_url": null,
-      "label": "GitHub"
+      "label": "GitHub",
+      "unavailable_tools": [
+        "generic_github_api_call",
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -1806,7 +1876,15 @@
       ],
       "has_function_validators": false,
       "icon_url": null,
-      "label": "GitLab"
+      "label": "GitLab",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -2080,7 +2158,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "jira-icon.svg",
-      "label": "Jira"
+      "label": "Jira",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "properties": {
       "jira_configuration": {
@@ -2186,7 +2272,7 @@
       "icon_url": null,
       "label": "Cloud Kubernetes",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the k8s toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the kubernetes toolkit."
     },
     "name_required": true,
     "properties": {
@@ -2239,7 +2325,7 @@
       "icon_url": null,
       "label": "Local GIT",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the localgit toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the localgit toolkit."
     },
     "name_required": true,
     "properties": {
@@ -2616,28 +2702,7 @@
       ],
       "has_function_validators": false,
       "icon_url": "pptx.svg",
-      "label": "PPTX",
-      "unavailable_tools": [
-        "add_bullets",
-        "add_chart",
-        "add_image",
-        "add_slide",
-        "add_table",
-        "apply_theme",
-        "create_presentation",
-        "delete_slide",
-        "design_check",
-        "export_pdf",
-        "list_placeholders",
-        "move_slide",
-        "render_preview",
-        "replace_placeholders",
-        "set_notes",
-        "set_table_cell",
-        "set_text",
-        "set_title",
-        "to_markdown"
-      ]
+      "label": "PPTX"
     },
     "name_required": true,
     "properties": {
@@ -2696,7 +2761,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "qtest.svg",
-      "label": "QTest"
+      "label": "QTest",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -3019,9 +3092,11 @@
         "code execution"
       ],
       "has_function_validators": false,
-      "hidden": false,
+      "hidden": true,
       "icon_url": "sandbox.svg",
-      "label": "Python Sandbox"
+      "label": "Python Sandbox",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the sandbox toolkit."
     },
     "name_required": true,
     "properties": {
@@ -3150,7 +3225,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "sharepoint.svg",
-      "label": "Sharepoint"
+      "label": "Sharepoint",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -3415,7 +3498,11 @@
       ],
       "has_function_validators": false,
       "icon_url": "testio-icon.svg",
-      "label": "TestIO"
+      "label": "TestIO",
+      "unavailable_tools": [
+        "confirm_bug_fix",
+        "create_exploratory_test"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -3480,7 +3567,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "testrail-icon.svg",
-      "label": "Testrail"
+      "label": "Testrail",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -3556,7 +3651,9 @@
       "has_function_validators": false,
       "hidden": true,
       "icon_url": null,
-      "label": "VectorStore"
+      "label": "VectorStore",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the vectorstore toolkit."
     },
     "name_required": true,
     "properties": {
@@ -3625,11 +3722,8 @@
         "office automation"
       ],
       "has_function_validators": false,
-      "hidden": true,
       "icon_url": null,
-      "label": "XLSX",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker does not support the xlsx toolkit; only the Rust worker serves it."
+      "label": "XLSX"
     },
     "name_required": true,
     "properties": {
@@ -3692,7 +3786,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "xray.svg",
-      "label": "XRAY cloud"
+      "label": "XRAY cloud",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -3779,9 +3881,7 @@
       "has_function_validators": false,
       "hidden": true,
       "icon_url": null,
-      "label": "Yet Another Gmail",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the yagmail toolkit."
+      "label": "Yet Another Gmail"
     },
     "name_required": true,
     "properties": {
@@ -3906,7 +4006,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "zephyr.svg",
-      "label": "Zephyr Enterprise"
+      "label": "Zephyr Enterprise",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -3989,7 +4097,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "zephyr.svg",
-      "label": "Zephyr Essential"
+      "label": "Zephyr Essential",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {
@@ -4072,7 +4188,15 @@
       ],
       "has_function_validators": false,
       "icon_url": "zephyr.svg",
-      "label": "Zephyr Scale"
+      "label": "Zephyr Scale",
+      "unavailable_tools": [
+        "index_data",
+        "list_indexes",
+        "remove_index",
+        "search_index",
+        "stepback_search_index",
+        "stepback_summary_index"
+      ]
     },
     "name_required": true,
     "properties": {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,11 +99,39 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 		t.Fatalf("accumulator = %+v, want 3 USD from three deltas", got)
 	}
 
-	// A restarted scheduler binds the existing durable consumer again.
+	// A restarted scheduler binds the existing durable consumer again. The
+	// bootstrap made it MaxDeliver -1 ([human decision] 2026-10-16), so the
+	// bind logs no finite-cap warning.
 	bindCtx, cancelBind = context.WithTimeout(ctx, 5*time.Second)
 	defer cancelBind()
-	if _, err := Bind(bindCtx, js, &tableDB{tbl: newAcctTable()}, Config{BatchSize: 10}, nil); err != nil {
+	var clean capturedLog
+	if _, err := Bind(bindCtx, js, &tableDB{tbl: newAcctTable()}, Config{BatchSize: 10}, clean.logger()); err != nil {
 		t.Fatalf("re-Bind: %v", err)
+	}
+	if clean.contains("finite number of deliveries") {
+		t.Fatalf("Bind warned about a finite cap on the bootstrap's consumer:\n%s", clean.String())
+	}
+
+	// An older bootstrap's consumer, with a finite MaxDeliver: the bind still
+	// succeeds and warns that a deferred delta can be dropped.
+	wb, err := admin.Consumer(ctx, DeltasStream, DurableName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := wb.CachedInfo().Config
+	if stale.MaxDeliver != -1 {
+		t.Fatalf("the bootstrap left max_deliver=%d, want -1", stale.MaxDeliver)
+	}
+	stale.MaxDeliver = 10
+	if _, err := admin.UpdateConsumer(ctx, DeltasStream, stale); err != nil {
+		t.Fatalf("set max_deliver 10 as the bootstrap identity: %v", err)
+	}
+	var warned capturedLog
+	if _, err := Bind(bindCtx, js, &tableDB{tbl: newAcctTable()}, Config{BatchSize: 10}, warned.logger()); err != nil {
+		t.Fatalf("Bind on a finite-cap consumer: %v", err)
+	}
+	if !warned.contains("finite number of deliveries") || !warned.contains("max_deliver=10") {
+		t.Fatalf("Bind did not warn about max_deliver 10:\n%s", warned.String())
 	}
 	s.RequireNoViolations(t, natsconn.IdentityScheduler)
 
@@ -145,6 +175,28 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 	}
 	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", natsconn.SchedulerGatewayJSAPIPrefix+".CONSUMER.DELETE."+DeltasStream+"."+DurableName)
 }
+
+// capturedLog is a goroutine-safe text log a test reads back.
+type capturedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (c *capturedLog) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *capturedLog) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+func (c *capturedLog) contains(s string) bool { return strings.Contains(c.String(), s) }
+
+func (c *capturedLog) logger() *slog.Logger { return slog.New(slog.NewTextHandler(c, nil)) }
 
 // A scheduler that starts before the bootstrap ran cannot bind, says which
 // Job creates the consumer, and does not try to create it.

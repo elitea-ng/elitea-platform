@@ -205,6 +205,15 @@ fn build_final_llm_event(
     event
 }
 
+/// Elitea patch (ADR-0034): whether one concrete tool call must be confirmed
+/// by a person before it runs. Asked only for a call the name-based
+/// [`ToolConfirmationPolicy`] does not confirm.
+#[async_trait]
+pub trait ToolCallConfirmation: Send + Sync {
+    /// `true` when this call (name and arguments) must be confirmed.
+    async fn requires_confirmation(&self, tool_name: &str, args: &serde_json::Value) -> bool;
+}
+
 /// An LLM-powered agent that orchestrates tool calls and sub-agent delegation.
 ///
 /// `LlmAgent` is the primary agent type in ADK. It sends requests to an LLM,
@@ -259,6 +268,9 @@ pub struct LlmAgent {
     /// after this many consecutive failures within a single invocation.
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    /// Elitea patch (ADR-0034): an argument-aware confirmation check, asked
+    /// for calls the name policy does not already confirm.
+    tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
     /// Per-agent tool execution strategy override. When `Some`, overrides the
     /// `RunConfig` strategy for this agent's dispatch loop.
     tool_execution_strategy: Option<ToolExecutionStrategy>,
@@ -706,6 +718,7 @@ pub struct LlmAgentBuilder {
     tool_retry_budgets: std::collections::HashMap<String, RetryBudget>,
     circuit_breaker_threshold: Option<u32>,
     tool_confirmation_policy: ToolConfirmationPolicy,
+    tool_call_confirmation: Option<Arc<dyn ToolCallConfirmation>>,
     tool_execution_strategy: Option<ToolExecutionStrategy>,
     input_guardrails: GuardrailSet,
     output_guardrails: GuardrailSet,
@@ -758,6 +771,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: std::collections::HashMap::new(),
             circuit_breaker_threshold: None,
             tool_confirmation_policy: ToolConfirmationPolicy::Never,
+            tool_call_confirmation: None,
             tool_execution_strategy: None,
             input_guardrails: GuardrailSet::new(),
             output_guardrails: GuardrailSet::new(),
@@ -1130,6 +1144,16 @@ impl LlmAgentBuilder {
         self
     }
 
+    /// Elitea patch (ADR-0034): ask `check` whether one concrete call needs
+    /// confirmation (its name AND arguments), for calls the name policy does
+    /// not already confirm. A call it confirms interrupts exactly as a
+    /// policy-confirmed one does, before any tool runs, and a recorded
+    /// decision for that call (by id and argument fingerprint) answers it.
+    pub fn tool_call_confirmation(mut self, check: Arc<dyn ToolCallConfirmation>) -> Self {
+        self.tool_call_confirmation = Some(check);
+        self
+    }
+
     /// Require confirmation for all tool calls.
     pub fn require_tool_confirmation_for_all(mut self) -> Self {
         self.tool_confirmation_policy = ToolConfirmationPolicy::Always;
@@ -1376,6 +1400,7 @@ impl LlmAgentBuilder {
             tool_retry_budgets: self.tool_retry_budgets,
             circuit_breaker_threshold: self.circuit_breaker_threshold,
             tool_confirmation_policy: self.tool_confirmation_policy,
+            tool_call_confirmation: self.tool_call_confirmation,
             tool_execution_strategy: self.tool_execution_strategy,
             input_guardrails: Arc::new(self.input_guardrails),
             output_guardrails: Arc::new(self.output_guardrails),
@@ -1821,6 +1846,17 @@ struct ToolExecutor<'a> {
 }
 
 impl ToolExecutor<'_> {
+    /// Elitea patch: runs one batch of concurrency-safe calls together; the
+    /// semaphore inside `execute` still enforces each tool's limit.
+    async fn execute_concurrently(&self, calls: Vec<PendingToolCall>) -> Vec<ToolExecutionResult> {
+        use futures::StreamExt as _;
+        let buffer_size = calls.len().max(1);
+        futures::stream::iter(calls.into_iter().map(|call| self.execute(call)))
+            .buffer_unordered(buffer_size)
+            .collect()
+            .await
+    }
+
     async fn execute(&self, call: PendingToolCall) -> ToolExecutionResult {
         let PendingToolCall { index, name, args, id, function_call_id, guardrail_denial } = call;
         let mut tool_actions = EventActions::default();
@@ -2434,6 +2470,7 @@ impl Agent for LlmAgent {
         let tool_retry_budgets = self.tool_retry_budgets.clone();
         let circuit_breaker_threshold = self.circuit_breaker_threshold;
         let tool_confirmation_policy = self.tool_confirmation_policy.clone();
+        let tool_call_confirmation = self.tool_call_confirmation.clone();
         let tool_guardrails = Arc::clone(&self.tool_guardrails);
         let output_guardrails = self.output_guardrails.clone();
         let agent_tool_execution_strategy = self.tool_execution_strategy;
@@ -3135,9 +3172,20 @@ impl Agent for LlmAgent {
                     // so check before parallel dispatch.
                     let mut confirmation_interrupted = false;
                     for call in &fc_parts {
+                        let by_arguments = match tool_call_confirmation.as_ref() {
+                            Some(check)
+                                if call.guardrail_denial.is_none()
+                                    && !tool_confirmation_policy.requires_confirmation(&call.name)
+                                    && !ctx.requires_tool_confirmation(&call.name) =>
+                            {
+                                check.requires_confirmation(&call.name, &call.args).await
+                            }
+                            _ => false,
+                        };
                         if call.guardrail_denial.is_none()
                             && (tool_confirmation_policy.requires_confirmation(&call.name)
-                                || ctx.requires_tool_confirmation(&call.name))
+                                || ctx.requires_tool_confirmation(&call.name)
+                                || by_arguments)
                             && static_confirmation_decision(
                                 &confirmation_decisions,
                                 &confirmation_fingerprints,
@@ -3271,35 +3319,33 @@ impl Agent for LlmAgent {
                                 ToolExecutionStrategy::Auto => {
                                     // A call may overlap another only when its tool is
                                     // read-only *and* declares concurrency safety.
-                                    let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
-                                        fc_parts.into_iter().partition(|call| {
+                                    //
+                                    // Elitea patch: the model's order is kept across
+                                    // writes. Upstream partitions the whole step, so a
+                                    // read listed after a write ran before it and saw
+                                    // the old file. Here only a run of adjacent
+                                    // concurrency-safe calls overlaps; any other call is
+                                    // a barrier that runs alone, in its place.
+                                    let mut all_results = Vec::new();
+                                    let mut batch = Vec::new();
+                                    for call in fc_parts {
+                                        let concurrent =
                                             tool_map.get(&call.name).is_some_and(|tool| {
                                                 tool.is_read_only() && tool.is_concurrency_safe()
-                                            })
-                                        });
-                                    let mut all_results = Vec::new();
-
-                                    // Concurrency enforcement is handled by the semaphore
-                                    // inside ToolExecutor.
-                                    if !concurrent_fcs.is_empty() {
-                                        use futures::StreamExt as _;
-                                        let buffer_size = concurrent_fcs.len().max(1);
+                                            });
+                                        if concurrent {
+                                            batch.push(call);
+                                            continue;
+                                        }
                                         all_results.extend(
-                                            futures::stream::iter(
-                                                concurrent_fcs
-                                                    .into_iter()
-                                                    .map(|call| executor.execute(call)),
-                                            )
-                                            .buffer_unordered(buffer_size)
-                                            .collect::<Vec<_>>()
+                                            executor.execute_concurrently(std::mem::take(&mut batch))
                                             .await,
                                         );
-                                    }
-
-                                    // Everything else runs one at a time.
-                                    for call in sequential_fcs {
                                         all_results.push(executor.execute(call).await);
                                     }
+                                    all_results.extend(
+                                        executor.execute_concurrently(batch).await,
+                                    );
                                     all_results
                                 }
                             };

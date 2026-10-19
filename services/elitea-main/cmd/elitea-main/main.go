@@ -75,6 +75,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -391,10 +392,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// this avoids adding a second storage service or inventing a filesystem
 	// compatibility backend.
 	var objectStore storage.ObjectStore
+	// The workspace store's physical buckets (ADR-0034 decision 3): the
+	// deployment's own, and the optional dedicated one.
+	var workspaceInputs workspaceHandoffInputs
 	if os.Getenv("ELITEA_ARTIFACTS_ENABLED") != "false" {
 		storageCfg, err := storage.ConfigFromEnv(os.LookupEnv)
 		if err != nil {
 			return fmt.Errorf("load storage configuration: %w", err)
+		}
+		workspaceInputs, err = workspaceStorageFromEnv(ctx, storageCfg, os.LookupEnv)
+		if err != nil {
+			return err
 		}
 		objectStore, err = newObjectStore(ctx, storageCfg)
 		if err != nil {
@@ -1401,6 +1409,30 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := validateRuntimeComposition(currentConfigurationsConfig, runtimeConfig); err != nil {
 		return err
 	}
+	// The ONE native policy reader, built here because the /llm edge's
+	// execution verifier and the workspace handoff need it too: it stops
+	// attributing an uncommitted local turn the moment `local_work.allowed`
+	// is turned off, and a save of local_work_cloud_handoff reaches the next
+	// send.
+	nativePolicy := native.policy(pool)
+	// The desktop ⇄ cloud handoff (ADR-0034), composed BEFORE the runtime
+	// plane: the cloud executor's adapters (workspaceExecutor) are runtime
+	// dependencies. Its turn canceller is the runtime's own stop use case,
+	// bound once the runtime is composed (workspaceTurnCanceller.bind).
+	workspaceTurnCanceller := &deferredAgentCanceller{}
+	var workspaceBus events.Bus
+	if liveNATSBus != nil {
+		workspaceBus = liveNATSBus
+	}
+	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
+		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), logger)
+	if err != nil {
+		return fmt.Errorf("compose workspace handoff routes: %w", err)
+	}
+	workspaceExecutor, err := composeWorkspaceExecutor(pool, workspaceHandoff, workspaceInputs.Resources, logger)
+	if err != nil {
+		return fmt.Errorf("compose the cloud executor adapters: %w", err)
+	}
 	var runtimeRoot *runtimecomposition.Runtime
 	var productionRuntime *api.ProductionRuntimeRoutes
 
@@ -1662,7 +1694,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 	// The vector step is recorded on a project delete by every replica that
 	// indexes into the store (Rust indexing), with or without a client; a
-	// Python-indexing replica with a client only drains. No replica closes a
+	// replica without index ingest dispatch only drains. No replica closes a
 	// recorded step on its own configuration: only the operator's abandon
 	// switch does (RouterConfig.ProjectVectorCleanupAbandoned), which is
 	// refused beside a client.
@@ -1680,14 +1712,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load pinned current toolkit catalogue snapshot: %w", err)
 	}
 	// Which of those types the deployment can actually run depends on the
-	// worker image it starts. The catalogue holds 52 types; the Python image
-	// imports 39 of them and the Rust worker materializes 22 families. A type
-	// the worker cannot run is served hidden, with the reason, so the operator
-	// can see why rather than hunting a tile that is simply absent.
-	workerImplementation, err := runtimecomposition.WorkerImplementationFromEnv(os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("read worker implementation: %w", err)
-	}
+	// worker: the Rust worker (the only one) materializes a subset of the
+	// catalogue's families. A type the worker cannot run is served hidden,
+	// with the reason, so the operator can see why rather than hunting a tile
+	// that is simply absent.
+	workerImplementation := runtimecomposition.RustWorkerImplementation
 	workerToolkitCapability, err := runtimecomposition.LoadPinnedWorkerToolkitCapability(
 		workerImplementation,
 	)
@@ -1801,6 +1830,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				return fmt.Errorf("compose current Configurations lifecycle: %w", err)
 			}
 		}
+		workspaceEgress, egressErr := loadWorkspaceEgress(os.Getenv, logger)
+		if egressErr != nil {
+			return fmt.Errorf("compose the workspace egress proxy: %w", egressErr)
+		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
 			AdmissionPool:                    runtimePools.Admission,
 			ControlPool:                      runtimePools.Control,
@@ -1835,6 +1868,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
 			DomainEvents: domainEvents,
+			// The cloud executor (ADR-0034): all four adapters when the
+			// workspace handoff is composed, none otherwise; and how a project
+			// host allowlist is enforced (decision 9, the egress proxy and its
+			// run-token signing key).
+			Workspace: workspaceExecutor.dependencies(workspaceEgress),
+			// The egress proxy's per-turn summaries (ELITEA_EGRESS_AUDIT_CLIENTS)
+			// go to the same audit trail as the API's.
+			AuditRecorder: auditRecorder,
+			// ...and their per-turn summaries live in the database, so every
+			// Main replica merges the same rows and one writes the event.
+			EgressAuditStore: dbrepos.NewEgressRunSummaries(pool),
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -1994,7 +2038,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				return fmt.Errorf("compose current agent-start route: %w", err)
 			}
 		}
-		if workerImplementation == "rust" && publicRoutes.ToolkitExecuteRead != nil {
+		if publicRoutes.ToolkitExecuteRead != nil {
 			mcpToolkitExecute = publicRoutes.ToolkitExecuteRead
 		}
 		if publicRoutes.NodeRecovery != nil {
@@ -2010,6 +2054,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 		}
 		if publicRoutes.AgentCancel != nil {
+			// The cloud turn canceller of the workspace handoff (ADR-0034):
+			// the same stop use case the chat's DELETE route drives.
+			workspaceTurnCanceller.bind(publicRoutes.AgentCancel)
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
 				publicRoutes.AgentCancel,
 				apiGroupAuth,
@@ -2147,10 +2194,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
 	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
 	// the gateway service is reachable.
-	// The ONE native policy reader, built here because the /llm edge's
-	// execution verifier needs it too: it stops attributing an uncommitted
-	// local turn the moment `local_work.allowed` is turned off.
-	nativePolicy := native.policy(pool)
 	var gatewayProxy http.Handler
 	var gatewayProjectResolver apimw.PersonalProjectResolver
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
@@ -2427,6 +2470,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)
 	}
+	// The handoff's sweeper; with the runtime plane composed it also ends
+	// cloud turns whose finish hook never ran.
+	runWorkspaceHandoffSweeper(ctx, workspaceHandoff, workspaceExecutor.lifecycle(runtimeRoot != nil), logger)
 	currentResolvedVersion, err := composeResolvedVersion(pool, clientApplicationVersions, apiGroupAuth)
 	if err != nil {
 		return fmt.Errorf("compose resolved version route: %w", err)
@@ -2541,44 +2587,46 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// second pipeline. A support turn is an ordinary agent run in a hidden
 		// project, and giving it its own executor is how the two would drift
 		// apart on tracing, budgets and cancellation.
-		SupportAssistantStart:      supportAssistantStart,
-		MCPAgentStart:              mcpAgentStart,
-		MCPToolkitExecute:          mcpToolkitExecute,
-		MCPToolkitRun:              mcpToolkitRun,
-		ToolkitToolRun:             toolkitToolRun,
-		ToolkitDiscovery:           toolkitDiscovery,
-		PipelineTriggers:           pipelineTriggers,
-		AuditRecorder:              auditRecorder,
-		SCIMAccessTokenTTL:         scimAccessTokenTTL,
-		SCIMClientAddresses:        scimClientAddresses,
-		CurrentAgentCancel:         currentAgentCancel,
-		CurrentLocalTurns:          currentLocalTurns,
-		CurrentResolvedVersion:     currentResolvedVersion,
-		CurrentRemoteToolkit:       currentRemoteToolkit,
-		CurrentNodeRecovery:        currentNodeRecovery,
-		CurrentExecutionInterrupts: currentExecutionInterrupts,
-		CurrentApplicationTask:     currentApplicationTask,
-		CurrentIndexCancel:         currentIndexCancel,
-		CurrentIndexMeta:           currentIndexMeta,
-		CurrentIndexMetaDelete:     currentIndexMetaDelete,
-		CurrentIndexConfiguration:  currentIndexConfiguration,
-		CurrentIndexScheduleUpdate: currentIndexScheduleUpdate,
-		CurrentIndexScheduleDelete: currentIndexScheduleDelete,
-		CurrentNotifications:       currentNotifications,
-		CurrentNotificationStore:   currentNotificationStore,
-		CurrentNotificationEvents:  currentNotificationEvents,
-		CurrentModelCatalog:        currentModelCatalog,
-		CurrentModelDefault:        currentModelDefault,
-		GatewayProxy:               gatewayProxy,
-		GatewayProjectResolver:     gatewayProjectResolver,
-		ConfigConnectionChecker:    configConnectionChecker,
-		PredictCompleter:           predictCompleter,
-		GatewayStatus:              gatewayStatus,
-		ConfigProviderAdmission:    configProviderAdmission,
-		ConfigStoredResolver:       configStoredResolver,
-		ObjectStore:                objectStore,
-		ProjectVectorStore:         projectVectorStore,
-		PlatformModelDefaults:      platformModelDefaults,
+		SupportAssistantStart:          supportAssistantStart,
+		MCPAgentStart:                  mcpAgentStart,
+		MCPToolkitExecute:              mcpToolkitExecute,
+		MCPToolkitRun:                  mcpToolkitRun,
+		ToolkitToolRun:                 toolkitToolRun,
+		ToolkitDiscovery:               toolkitDiscovery,
+		PipelineTriggers:               pipelineTriggers,
+		AuditRecorder:                  auditRecorder,
+		SCIMAccessTokenTTL:             scimAccessTokenTTL,
+		SCIMClientAddresses:            scimClientAddresses,
+		CurrentAgentCancel:             currentAgentCancel,
+		CurrentLocalTurns:              currentLocalTurns,
+		CurrentWorkspaceHandoff:        workspaceHandoff.Route,
+		CloudExecutorStorageEncryption: workspaceHandoff.Encryption,
+		CurrentResolvedVersion:         currentResolvedVersion,
+		CurrentRemoteToolkit:           currentRemoteToolkit,
+		CurrentNodeRecovery:            currentNodeRecovery,
+		CurrentExecutionInterrupts:     currentExecutionInterrupts,
+		CurrentApplicationTask:         currentApplicationTask,
+		CurrentIndexCancel:             currentIndexCancel,
+		CurrentIndexMeta:               currentIndexMeta,
+		CurrentIndexMetaDelete:         currentIndexMetaDelete,
+		CurrentIndexConfiguration:      currentIndexConfiguration,
+		CurrentIndexScheduleUpdate:     currentIndexScheduleUpdate,
+		CurrentIndexScheduleDelete:     currentIndexScheduleDelete,
+		CurrentNotifications:           currentNotifications,
+		CurrentNotificationStore:       currentNotificationStore,
+		CurrentNotificationEvents:      currentNotificationEvents,
+		CurrentModelCatalog:            currentModelCatalog,
+		CurrentModelDefault:            currentModelDefault,
+		GatewayProxy:                   gatewayProxy,
+		GatewayProjectResolver:         gatewayProjectResolver,
+		ConfigConnectionChecker:        configConnectionChecker,
+		PredictCompleter:               predictCompleter,
+		GatewayStatus:                  gatewayStatus,
+		ConfigProviderAdmission:        configProviderAdmission,
+		ConfigStoredResolver:           configStoredResolver,
+		ObjectStore:                    objectStore,
+		ProjectVectorStore:             projectVectorStore,
+		PlatformModelDefaults:          platformModelDefaults,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*
 		// route, and creating an agent from the UI 404s (#115).

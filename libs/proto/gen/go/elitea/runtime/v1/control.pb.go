@@ -1127,8 +1127,15 @@ type RenewLeaseResponseV1 struct {
 	LeaseExpiresAtUnixMillis int64                   `protobuf:"varint,1,opt,name=lease_expires_at_unix_millis,json=leaseExpiresAtUnixMillis,proto3" json:"lease_expires_at_unix_millis,omitempty"`
 	DesiredState             DesiredExecutionStateV1 `protobuf:"varint,2,opt,name=desired_state,json=desiredState,proto3,enum=elitea.runtime.v1.DesiredExecutionStateV1" json:"desired_state,omitempty"`
 	Rejection                *RuntimeErrorV1         `protobuf:"bytes,3,opt,name=rejection,proto3" json:"rejection,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// ADR-0034: the execution is a cloud turn whose thread the desktop is
+	// taking back (reclaim_pending). The worker wraps the turn up gracefully:
+	// the tool call in flight finishes (a long run_command is stopped after a
+	// short bound), the work is committed and published, and the turn ends
+	// with a note. The desired state stays RUNNING; Main's 60 s grace and hard
+	// cancel remain the fallback. Rides the same lease poll as cancellation.
+	WorkspaceWrapUp bool `protobuf:"varint,4,opt,name=workspace_wrap_up,json=workspaceWrapUp,proto3" json:"workspace_wrap_up,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RenewLeaseResponseV1) Reset() {
@@ -1180,6 +1187,13 @@ func (x *RenewLeaseResponseV1) GetRejection() *RuntimeErrorV1 {
 		return x.Rejection
 	}
 	return nil
+}
+
+func (x *RenewLeaseResponseV1) GetWorkspaceWrapUp() bool {
+	if x != nil {
+		return x.WorkspaceWrapUp
+	}
+	return false
 }
 
 type ObserveDesiredStateRequestV1 struct {
@@ -1235,11 +1249,13 @@ func (x *ObserveDesiredStateRequestV1) GetFence() *ExecutionFenceV1 {
 }
 
 type ObserveDesiredStateResponseV1 struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	DesiredState  DesiredExecutionStateV1 `protobuf:"varint,1,opt,name=desired_state,json=desiredState,proto3,enum=elitea.runtime.v1.DesiredExecutionStateV1" json:"desired_state,omitempty"`
-	Rejection     *RuntimeErrorV1         `protobuf:"bytes,2,opt,name=rejection,proto3" json:"rejection,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState  `protogen:"open.v1"`
+	DesiredState DesiredExecutionStateV1 `protobuf:"varint,1,opt,name=desired_state,json=desiredState,proto3,enum=elitea.runtime.v1.DesiredExecutionStateV1" json:"desired_state,omitempty"`
+	Rejection    *RuntimeErrorV1         `protobuf:"bytes,2,opt,name=rejection,proto3" json:"rejection,omitempty"`
+	// As RenewLeaseResponseV1.workspace_wrap_up.
+	WorkspaceWrapUp bool `protobuf:"varint,3,opt,name=workspace_wrap_up,json=workspaceWrapUp,proto3" json:"workspace_wrap_up,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ObserveDesiredStateResponseV1) Reset() {
@@ -1284,6 +1300,13 @@ func (x *ObserveDesiredStateResponseV1) GetRejection() *RuntimeErrorV1 {
 		return x.Rejection
 	}
 	return nil
+}
+
+func (x *ObserveDesiredStateResponseV1) GetWorkspaceWrapUp() bool {
+	if x != nil {
+		return x.WorkspaceWrapUp
+	}
+	return false
 }
 
 type PrepareSettlementRequestV1 struct {
@@ -1642,17 +1665,19 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x13RenewLeaseRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
 	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12'\n" +
-	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKeyJ\x04\b\x04\x10\x10\"\xee\x01\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKeyJ\x04\b\x04\x10\x10\"\x9a\x02\n" +
 	"\x14RenewLeaseResponseV1\x12>\n" +
 	"\x1clease_expires_at_unix_millis\x18\x01 \x01(\x03R\x18leaseExpiresAtUnixMillis\x12O\n" +
 	"\rdesired_state\x18\x02 \x01(\x0e2*.elitea.runtime.v1.DesiredExecutionStateV1R\fdesiredState\x12?\n" +
-	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x04\x10\x10\"\xa3\x01\n" +
+	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejection\x12*\n" +
+	"\x11workspace_wrap_up\x18\x04 \x01(\bR\x0fworkspaceWrapUpJ\x04\b\x05\x10\x10\"\xa3\x01\n" +
 	"\x1cObserveDesiredStateRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
-	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fenceJ\x04\b\x03\x10\x10\"\xb7\x01\n" +
+	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fenceJ\x04\b\x03\x10\x10\"\xe3\x01\n" +
 	"\x1dObserveDesiredStateResponseV1\x12O\n" +
 	"\rdesired_state\x18\x01 \x01(\x0e2*.elitea.runtime.v1.DesiredExecutionStateV1R\fdesiredState\x12?\n" +
-	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x03\x10\x10\"\xd5\x02\n" +
+	"\trejection\x18\x02 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejection\x12*\n" +
+	"\x11workspace_wrap_up\x18\x03 \x01(\bR\x0fworkspaceWrapUpJ\x04\b\x04\x10\x10\"\xd5\x02\n" +
 	"\x1aPrepareSettlementRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
 	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12C\n" +

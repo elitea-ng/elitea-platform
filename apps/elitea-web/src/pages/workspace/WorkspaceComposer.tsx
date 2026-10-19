@@ -55,6 +55,8 @@ export interface WorkspaceComposerProps {
   ipc: WorkspaceIpc;
   workspaceId: string;
   canSend: boolean;
+  /** The thread runs in the cloud: the input is off and `canSend` is false (its banner says why and offers Take back). */
+  readOnly?: boolean;
   busy: boolean;
   planMode: boolean;
   onPlanModeChange: (planMode: boolean) => void;
@@ -64,6 +66,8 @@ export interface WorkspaceComposerProps {
   onSend: (prompt: string, mentions: string[], skills: string[]) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
+  /** The composer got focus: the page lets the host read ahead for the send (#1213). */
+  onFocus?: () => void;
 }
 
 function sendButtonSx(theme: Theme) {
@@ -83,10 +87,19 @@ function sendButtonSx(theme: Theme) {
   };
 }
 
+/** The input's hint: what to type, or why it is off. */
+function placeholderFor(readOnly: boolean): string {
+  return readOnly
+    ? t('workspace.composer.cloudPlaceholder', 'This thread is running in the cloud. Take it back to continue here.')
+    : t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands and skills');
+}
+
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
   const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, onSend, onStop, onCommand } = props;
+  // The thread runs in the cloud: the input is off, and `canSend` is false.
+  const locked = props.readOnly === true;
   const inputRef = useRef<ComposerHandle>(null);
   const [token, setToken] = useState<Token>(null);
   const [dismissed, setDismissed] = useState<Token>(null);
@@ -203,7 +216,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   };
 
   return (
-    <Box data-testid="workspace-composer" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box data-testid="workspace-composer" onFocus={props.onFocus} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {menuOpen && (
         <SuggestionMenu
           data-testid={open.kind === 'file' ? 'workspace-file-menu' : 'workspace-command-menu'}
@@ -216,9 +229,9 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       )}
       <NewChatInput
         ref={inputRef}
-        state={{ isStreaming: busy, disabledSend: !canSend }}
+        state={{ isStreaming: busy, disabledSend: !canSend, disabledInput: locked }}
         content={{
-          placeholder: t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands and skills'),
+          placeholder: placeholderFor(locked),
           clearInputAfterSubmit: false,
           tooltipOfSendButton: t('workspace.send', 'Send'),
         }}

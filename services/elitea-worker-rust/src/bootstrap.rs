@@ -125,6 +125,9 @@ pub(crate) struct ProductionTransportBundle {
     /// read a document as text (`SharePoint` `read_document`), so both queue
     /// behind one permit pool.
     pub(crate) extractor: Option<Arc<crate::transport::extractor_client::ExtractorClient>>,
+    /// The cloud executor's workspace runs (ADR-0034), when the deployment
+    /// names the supervisor's `workspace` profile.
+    pub(crate) workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
 }
 
 impl ProductionTransportBundle {
@@ -206,6 +209,7 @@ impl ProductionTransportBundle {
             async { command_bus.await.map_err(|error| map_nats_error(&error)) },
         )?;
 
+        let workspace_store_channel = control.clone();
         let control = AgentControlClient::from_channel(control, profiles.control)
             .map_err(|error| map_agent_control_error(&error))?;
         let control = Arc::new(control);
@@ -307,6 +311,24 @@ impl ProductionTransportBundle {
                 factory
             }))
         };
+        let workspace_runs = match &deployment.workspace_runs {
+            None => None,
+            Some(runs) => {
+                let channel = connect_private_grpc(
+                    &runs.target,
+                    profiles.grpc_connect_timeout,
+                    trust.private_ca(),
+                    trust.client_identity(),
+                )
+                .await?;
+                Some(Arc::new(workspace_run_factory(
+                    runs,
+                    workspace_store_channel,
+                    channel,
+                    Arc::clone(&control),
+                )?))
+            }
+        };
         let platform = Arc::new(PlatformClient::new(runtime_context));
         let model_facade = Arc::new(model_facade);
         // PDF and Office documents go to the extraction sidecar when the
@@ -375,8 +397,50 @@ impl ProductionTransportBundle {
             agentstate,
             index_runtime,
             extractor,
+            workspace_runs,
         })
     }
+}
+
+/// The cloud executor's factory (ADR-0034 decision 9): the store over Main's
+/// control channel, the gix codec, the supervisor launcher, and grants bound
+/// to each claim through the same control client.
+fn workspace_run_factory(
+    runs: &crate::config::WorkspaceRunsConfig,
+    store_channel: tonic::transport::Channel,
+    supervisor_channel: tonic::transport::Channel,
+    control: Arc<AgentControlClient<TonicControlRpc>>,
+) -> Result<crate::workspace_run::turn::WorkspaceRunFactory, ProductionBootstrapError> {
+    use crate::workspace_run::{
+        gix_codec::StoreCodec,
+        sandbox::WorkspaceRunDefaults,
+        store::GrpcWorkspaceStore,
+        supervisor::{ClaimWorkspaceGrants, SupervisorWorkspaceLauncher},
+        turn::WorkspaceRunFactory,
+    };
+    std::fs::create_dir_all(&runs.scratch_root)
+        .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+    let turn_wall = Duration::from_secs(runs.turn_wall_seconds);
+    let audience = runs.audience.clone();
+    Ok(WorkspaceRunFactory::new(
+        Arc::new(GrpcWorkspaceStore::new(store_channel, turn_wall)),
+        Arc::new(StoreCodec),
+        Arc::new(SupervisorWorkspaceLauncher::new(supervisor_channel)),
+        WorkspaceRunDefaults {
+            cpu_millis: runs.cpu_millis,
+            memory_bytes: runs.memory_bytes,
+            max_disk_bytes: runs.max_disk_bytes,
+            turn_wall,
+        },
+        runs.scratch_root.clone(),
+    )
+    .with_grant_binder(Arc::new(move |authority| {
+        Arc::new(ClaimWorkspaceGrants {
+            control: Arc::clone(&control),
+            authority,
+            audience: audience.clone(),
+        }) as Arc<dyn crate::workspace_run::sandbox::WorkspaceRunGrants>
+    })))
 }
 
 /// The extraction sidecar's client for the socket a deployment names, if any.
@@ -698,6 +762,7 @@ mod tests {
             spool_root: PathBuf::from("/runtime/spool"),
             spool_key_path: PathBuf::from("/runtime/spool.key"),
             sandbox_runtimes: Vec::new(),
+            workspace_runs: None,
             public_base_url: None,
             vector_target: None,
             index_egress_allowlist: None,

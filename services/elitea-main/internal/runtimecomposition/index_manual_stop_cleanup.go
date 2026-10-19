@@ -9,9 +9,6 @@ import (
 
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type currentIndexManualStopCleanupProcessor struct {
@@ -48,61 +45,6 @@ type currentIndexManualStopCleanupStore interface {
 		indexingapp.CurrentManualStopCleanupClaim,
 		string,
 	) error
-}
-
-func newCurrentIndexManualStopCleanupProcessor(
-	pool *pgxpool.Pool,
-	configurations *CurrentConfigurationsRuntime,
-	writer indexingapp.CurrentManualStopCleanupWriter,
-	reportItemFailure func(error),
-) (*currentIndexManualStopCleanupProcessor, error) {
-	if pool == nil || configurations == nil ||
-		configurations.unsecreter == nil || writer == nil ||
-		reportItemFailure == nil {
-		return nil, errors.New(
-			"current index manual Stop cleanup dependencies are required",
-		)
-	}
-	bindings, err := repos.NewCurrentIndexMetaTerminalBindingsRepository(pool)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"construct current index manual Stop cleanup bindings: %w",
-			err,
-		)
-	}
-	store, err := repos.NewCurrentIndexManualStopCleanupRepository(pool)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"construct current index manual Stop cleanup store: %w",
-			err,
-		)
-	}
-	materializer, err := storage.NewCurrentConfigurationsMaterializer(
-		configurations.unsecreter,
-	)
-	if err != nil {
-		return nil, err
-	}
-	toolkits, err := newCurrentFrozenToolkitConfigurationClaimer(materializer)
-	if err != nil {
-		return nil, err
-	}
-	cleaner, err := indexingapp.NewCurrentManualStopCleaner(
-		bindings,
-		toolkits,
-		writer,
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &currentIndexManualStopCleanupProcessor{
-		cleaner:           cleaner,
-		store:             store,
-		newClaimID:        currentRuntimeID,
-		claimLease:        2 * time.Minute,
-		concurrency:       2,
-		reportItemFailure: reportItemFailure,
-	}, nil
 }
 
 func (p *currentIndexManualStopCleanupProcessor) ReconcilePendingManualStopCleanups(

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -599,12 +600,12 @@ func (s *ContentServer) PostEliteaClientToken(w http.ResponseWriter, r *http.Req
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return
 	}
-	value, err := s.runtimeToken.Resolve(r.Context(), claim)
-	if err == nil && !runtimeContextAccepts(r, runtimeContextFieldSecretsHeader) {
-		// The worker did not say it can read this field, so it does not get it.
-		// See runtimeContextAcceptHeader above for why silence means "no".
-		value.SecretsHeaderValue = ""
-	}
+	// The worker gets only the optional fields it said it can read. See
+	// runtimeContextAcceptHeader above for why silence means "no".
+	value, err := s.runtimeToken.ResolveAccepting(r.Context(), claim, RuntimeContextAccept{
+		SecretsHeaderValue: runtimeContextAccepts(r, runtimeContextFieldSecretsHeader),
+		Workspace:          runtimeContextAccepts(r, workspaceruntime.RuntimeContextField),
+	})
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, ErrContentUnauthorized) {

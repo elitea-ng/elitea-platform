@@ -6,6 +6,7 @@
 //! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories (`path_deny` matches and `.git` entries past the cap are not masked: the result carries [`BWRAP_TRUNCATED_GAPS`] and the session asks for the command), where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`]. A host-given `bwrap` path is probed like the well-known ones |
 //! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/` (so **credentials, the desktop app's data and `path_deny` files are not hidden**), has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`]; when it does, every such command is asked ([`Prepared::hides_denied`] is false) and each result carries [`LANDLOCK_GAPS`] |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
+//! | A container the host set [`SandboxConfig::container`] for (the cloud executor's workspace runner, ADR-0034 decision 9) | none in the process: the container is the confinement boundary (its own file system, no credentials, the network the project allows), so commands run unwrapped | `container` |
 //!
 //! What every confined command gets, whatever the mode:
 //!
@@ -49,6 +50,9 @@ pub enum Enforcement {
     Full,
     Partial,
     None,
+    /// The process runs inside a dedicated container that is itself the
+    /// boundary (ADR-0034 decision 9): nothing is wrapped around the command.
+    Container,
 }
 
 impl Enforcement {
@@ -58,6 +62,7 @@ impl Enforcement {
             Self::Full => "full",
             Self::Partial => "partial",
             Self::None => "none",
+            Self::Container => "container",
         }
     }
 }
@@ -199,6 +204,55 @@ pub struct SandboxConfig {
     /// The session's cache of what bubblewrap masks (see
     /// [`bubblewrap::MaskCache`]); clones share it.
     pub masks: bubblewrap::MaskCache,
+    /// The host runs inside a dedicated sandbox container (the cloud
+    /// executor's workspace runner, ADR-0034): the container is the
+    /// confinement boundary, so commands run unwrapped and report
+    /// [`Enforcement::Container`]. Never set on a desktop: there the process
+    /// shares the machine with the person's credentials.
+    pub container: bool,
+    /// With [`Self::container`]: the handed-off thread's harvested env
+    /// (ADR-0034 decision 5 amendment), added to workspace commands only
+    /// (requests with [`SandboxRequest::git_roots`], which `run_command`
+    /// builds and host git does not). Empty everywhere else.
+    pub container_env: ContainerEnv,
+}
+
+/// Environment values a container host adds to its workspace commands.
+/// `Debug` prints the names only: the values are secrets.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct ContainerEnv(std::sync::Arc<Vec<(String, String)>>);
+
+impl ContainerEnv {
+    /// Names must be `[A-Za-z_][A-Za-z0-9_]*`; others are dropped.
+    #[must_use]
+    pub fn new(vars: Vec<(String, String)>) -> Self {
+        Self(std::sync::Arc::new(
+            vars.into_iter()
+                .filter(|(name, value)| {
+                    let mut bytes = name.bytes();
+                    bytes
+                        .next()
+                        .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+                        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                        && !value.contains('\0')
+                })
+                .collect(),
+        ))
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for ContainerEnv {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_list()
+            .entries(self.0.iter().map(|(name, _)| name))
+            .finish()
+    }
 }
 
 /// A command ready to spawn: the program, its arguments, and what the
@@ -243,6 +297,41 @@ pub fn prepare(
     argv: &[String],
     config: &SandboxConfig,
 ) -> ToolResult<Prepared> {
+    if config.container {
+        // The container holds only the workspace, a scratch directory and
+        // no credential; what a request denies is not there to hide.
+        if argv.is_empty() {
+            return Err(ToolError::invalid("an empty command"));
+        }
+        let mut prepared = if config.container_env.is_empty() || request.git_roots.is_empty() {
+            unwrapped(argv, Enforcement::Container)?
+        } else {
+            // A workspace command gets the thread's env through env(1); the
+            // runner's own process environment never holds it.
+            let mut wrapped: Vec<String> = config
+                .container_env
+                .0
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect();
+            // env(1) reads every leading NAME=value word as an assignment
+            // (BSD env has no `--` after them): a program named like one is
+            // refused rather than run as something else.
+            if argv[0].contains('=') {
+                return Err(ToolError::invalid("a program name cannot contain `=`"));
+            }
+            wrapped.extend(argv.iter().cloned());
+            Prepared {
+                program: PathBuf::from("/usr/bin/env"),
+                args: wrapped,
+                enforcement: Enforcement::Container,
+                note: None,
+                hides_denied: true,
+            }
+        };
+        prepared.hides_denied = true;
+        return Ok(prepared);
+    }
     if request.is_unconfined() {
         // Full access with the network on: nothing is confined.
         return unwrapped(argv, Enforcement::None);
@@ -1701,6 +1790,59 @@ mod tests {
         };
         assert!(config.masks.discover(&other).hide_files.is_empty());
         assert_eq!(config.masks.walks(), 3, "a different request walks");
+    }
+
+    /// ADR-0034: inside the workspace runner's container, every request runs
+    /// unwrapped at the `container` level; a desktop config never does.
+    #[test]
+    fn a_container_host_runs_commands_unwrapped() {
+        let config = SandboxConfig {
+            container: true,
+            ..SandboxConfig::default()
+        };
+        let argv = vec!["cargo".to_owned(), "test".to_owned()];
+        for (mode, network) in [
+            (SandboxMode::ReadOnly, false),
+            (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::WorkspaceWrite, true),
+            (SandboxMode::FullAccess, false),
+        ] {
+            let prepared = prepare(&request(mode, network), &argv, &config).expect("container");
+            assert_eq!(prepared.enforcement, Enforcement::Container);
+            assert_eq!(prepared.program, PathBuf::from("cargo"));
+            assert_eq!(prepared.args, vec!["test".to_owned()]);
+            assert!(prepared.hides_denied);
+        }
+        assert!(!SandboxConfig::default().container);
+        assert_eq!(Enforcement::Container.as_str(), "container");
+    }
+
+    /// The harvested env reaches workspace commands only, through env(1),
+    /// and never prints its values.
+    #[test]
+    fn a_container_env_is_added_to_workspace_commands_only() {
+        let config = SandboxConfig {
+            container: true,
+            container_env: super::ContainerEnv::new(vec![
+                ("DATABASE_URL".to_owned(), "postgres://u:p@db/x".to_owned()),
+                ("bad name".to_owned(), "dropped".to_owned()),
+            ]),
+            ..SandboxConfig::default()
+        };
+        let argv = vec!["make".to_owned(), "test".to_owned()];
+        let mut workspace = request(SandboxMode::WorkspaceWrite, true);
+        workspace.git_roots = vec![PathBuf::from("/workspace")];
+        let prepared = prepare(&workspace, &argv, &config).expect("command");
+        assert_eq!(prepared.program, PathBuf::from("/usr/bin/env"));
+        assert_eq!(
+            prepared.args,
+            vec!["DATABASE_URL=postgres://u:p@db/x", "make", "test"]
+        );
+        // Host git builds its requests without git roots: no env.
+        let host_git = request(SandboxMode::ReadOnly, false);
+        let git = prepare(&host_git, &argv, &config).expect("git");
+        assert_eq!(git.program, PathBuf::from("make"));
+        assert_eq!(format!("{:?}", config.container_env), "[\"DATABASE_URL\"]");
     }
 
     /// H3: Landlock alone is partial and is refused unless the host opts in.

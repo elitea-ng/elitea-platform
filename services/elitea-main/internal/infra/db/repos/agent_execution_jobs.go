@@ -607,6 +607,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	} else if admission.CurrentRegenerateTurn != nil {
 		if err := resetCurrentAgentResponse(
 			ctx,
+			tx,
 			txQueries,
 			admission.Record.Job.ID,
 			*admission.CurrentRegenerateTurn,
@@ -706,6 +707,7 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 
 func resetCurrentAgentResponse(
 	ctx context.Context,
+	tx pgx.Tx,
 	queries *sqlcgen.Queries,
 	executionID string,
 	turn agentexecutionapp.CurrentRegenerateTurn,
@@ -740,6 +742,12 @@ func resetCurrentAgentResponse(
 	if !ok {
 		return executionapp.ErrInvalidAdmission
 	}
+	// Read BEFORE the reset strips the answer's cloud markers: whether this
+	// regenerate rewinds a handed-off thread's cloud ref (decision 7).
+	rewind, err := readCloudRegenerateRewind(ctx, tx, turn.ProjectID, turn.ConversationUUID, turn.ResponseMessageID)
+	if err != nil {
+		return err
+	}
 	row, err := queries.ResetCurrentAgentResponse(
 		ctx,
 		sqlcgen.ResetCurrentAgentResponseParams{
@@ -760,6 +768,9 @@ func resetCurrentAgentResponse(
 	}
 	if row.ResponseMessageGroupID <= 0 || row.ResponseMessageID != responseMessageID {
 		return errors.New("current agent regeneration returned an invalid response binding")
+	}
+	if err := writeCloudRegenerateRewind(ctx, tx, turn.ProjectID, turn.ResponseMessageID, rewind); err != nil {
+		return err
 	}
 	return rewriteCurrentAgentQuestion(ctx, queries, turn, conversationUUID, questionID)
 }

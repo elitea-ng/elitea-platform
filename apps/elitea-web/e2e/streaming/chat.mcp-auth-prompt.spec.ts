@@ -80,9 +80,7 @@
  * It declares one authorization proxy for each toolkit that needs authorization.
  * This fixture calls the declared proxy and checks the exact stored toolkit card.
  *
- * RUST leg: `toolkits/mcp.rs` is the native runtime's family. The gate inside
- * the test says why the python leg is still skipped, and — since the trust
- * bundle landed — why that reason is no longer the one it used to be.
+ * `toolkits/mcp.rs` is the native runtime's family.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -101,9 +99,6 @@ import {
   readMockLlmJournal,
   readStoredTranscript,
 } from '../fixtures/api';
-
-/** Which worker the stack under test is running. */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 
@@ -168,36 +163,6 @@ async function turnText(page: Page, projectId: string, conversationId: string): 
  * re-driven four times.
  */
 test('an MCP server that demands authorization is named by its toolkit in the agent’s message', async ({ page }) => {
-  // STILL NATIVE-ONLY — but for a DIFFERENT reason than the one this gate
-  // originally carried, and the swap is the whole point of writing it down.
-  //
-  // THE OLD REASON (retired). The mcp-mock trust bundle was wired onto the
-  // NATIVE worker only, while the python worker's
-  // `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` held the runtime CA alone — and a
-  // bundle REPLACES the trust store rather than adding to it, so the python
-  // worker could not complete a TLS handshake with mcp-mock at all
-  // (`mcp_adapter.py _preflight_auth_check` → `ClientConnectorCertificateError`).
-  // `docker-compose.standalone-full.yml`'s `worker-trust` one-shot now builds
-  // that worker a runtime-CA + mcp-mock-CA bundle, and the python leg does
-  // reach the server: measured on a python-leg stack, mcp-mock logs
-  // `POST /mcp-auth HTTP/1.1" 401` and `401 authorization required on
-  // /mcp-auth` for this case's own connection. `chat.mcp.spec.ts`'s discovery
-  // case is un-gated as a result and passes on both legs.
-  //
-  // THE REASON IT IS STILL GATED. Reaching the challenge is not answering it.
-  // On the python leg the challenged toolkit contributes NO tools — the SDK
-  // has no equivalent of the native runtime's `McpAuthorizationRequiredTool`
-  // placeholder, so there is nothing for the turn to pause on. MEASURED with
-  // the bundle in place: the turn completes with
-  // `MOCK: tool echo said Tool 'echo' not available`, `is_error:false`, and
-  // names no connection at all. That is the SDK's own contract, not the
-  // product gap #982 closed in the native runtime; asserting it here would
-  // record a runtime-shaped difference as a platform defect. If the SDK grows
-  // the placeholder, delete this skip — the assertions below need no change.
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the SDK leg reaches the 401 but installs no authorization placeholder — see the note above',
-  );
   test.setTimeout(420_000);
 
   const stamp = String(Date.now()).slice(-7);
@@ -272,30 +237,26 @@ test('an MCP server that demands authorization is named by its toolkit in the ag
     ).toEqual(expect.arrayContaining([challengingName, openName]));
 
     const conversationId = await openAgentChat(page, agentId);
-    let operation = MOCK_MCP_TOOL;
-    let argumentsForCall: Record<string, unknown> = { text: 'mcp auth probe' };
-    if (IS_NATIVE_RUNTIME) {
-      // Protected operations stay hidden. A plain catalogue turn records the
-      // model-visible proxy without calling it or pausing discovery.
-      await clearMockLlmJournal(page);
-      const cataloguePrompt = `mcp catalogue probe ${stamp}`;
-      const probe = await fillComposer(page, cataloguePrompt);
-      const admitted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
-        timeout: 60_000,
-      });
-      await probe.click();
-      expect((await admitted).status(), 'the catalogue turn must be admitted').toBe(200);
-      await expectStoredAssistantAnswer(page, projectId, conversationId, { contains: cataloguePrompt });
-      const offered = [...new Set((await readMockLlmJournal(page, projectId))
-        .filter((entry) => entry.history.some((message) => message.role === 'user' && message.text === cataloguePrompt))
-        .flatMap((entry) => entry.tools))];
-      expect(offered, 'the protected operation must remain hidden').not.toContain(MOCK_MCP_TOOL);
-      expect(offered, 'the open connection must remain callable').toContain(MOCK_MCP_OTHER_TOOL);
-      const proxies = offered.filter((name) => /^mcp_authorize_[0-9a-f]{32}$/.test(name));
-      expect(proxies, 'only the challenged connection may declare an authorization proxy').toHaveLength(1);
-      operation = proxies[0] ?? '';
-      argumentsForCall = {};
-    }
+    // Protected operations stay hidden. A plain catalogue turn records the
+    // model-visible proxy without calling it or pausing discovery.
+    await clearMockLlmJournal(page);
+    const cataloguePrompt = `mcp catalogue probe ${stamp}`;
+    const probe = await fillComposer(page, cataloguePrompt);
+    const admitted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+      timeout: 60_000,
+    });
+    await probe.click();
+    expect((await admitted).status(), 'the catalogue turn must be admitted').toBe(200);
+    await expectStoredAssistantAnswer(page, projectId, conversationId, { contains: cataloguePrompt });
+    const offered = [...new Set((await readMockLlmJournal(page, projectId))
+      .filter((entry) => entry.history.some((message) => message.role === 'user' && message.text === cataloguePrompt))
+      .flatMap((entry) => entry.tools))];
+    expect(offered, 'the protected operation must remain hidden').not.toContain(MOCK_MCP_TOOL);
+    expect(offered, 'the open connection must remain callable').toContain(MOCK_MCP_OTHER_TOOL);
+    const proxies = offered.filter((name) => /^mcp_authorize_[0-9a-f]{32}$/.test(name));
+    expect(proxies, 'only the challenged connection may declare an authorization proxy').toHaveLength(1);
+    const operation = proxies[0] ?? '';
+    const argumentsForCall: Record<string, unknown> = {};
 
     const sendButton = await fillComposer(
       page,

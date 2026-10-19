@@ -235,7 +235,7 @@ func TestToolkitTypeListJoinsRegistryPolicyAndCapability(t *testing.T) {
 	capability := byType["unlisted_demo"]["capability"].(map[string]any)
 	require.Equal(t, "unverified", capability["verdict"])
 	require.NotEmpty(t, capability["reason"])
-	require.Equal(t, false, capability["python"])
+	require.NotContains(t, capability, "python")
 	require.Equal(t, false, capability["rust"])
 }
 

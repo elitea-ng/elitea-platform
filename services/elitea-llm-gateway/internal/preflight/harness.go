@@ -76,8 +76,7 @@ type MockRouterConfig struct {
 	// EmbeddingResponse overrides the object returned by EmbeddingRequest. The
 	// default carries Usage and NO Data, which is enough for a billing
 	// assertion but not for a client: openai-python reads data[0].embedding and
-	// raises on an empty list. Set this to drive a real embedding round trip
-	// (internal/preflight/sdkharness uses it for the base64 arm).
+	// raises on an empty list. Set this to drive a real embedding round trip.
 	EmbeddingResponse *schemas.BifrostEmbeddingResponse
 	// InputTokens / OutputTokens are the usage values stamped on the final chunk
 	// and the unary response. Defaults are 100 / 50.

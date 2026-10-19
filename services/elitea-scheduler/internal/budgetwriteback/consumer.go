@@ -27,7 +27,37 @@ type Message interface {
 	Data() []byte
 	Ack() error
 	Nak() error
+	NakWithDelay(delay time.Duration) error
+	InProgress() error
 	Term() error
+	Metadata() (*jetstream.MsgMetadata, error)
+}
+
+// The redelivery backoff for a delta that cannot be applied yet ([human
+// decision] 2026-10-16, "Healthy write", consumer half).
+//
+// A bare Nak redelivers at once. A delta deferred by an outage-owned row (the
+// row stays outage-owned until the gateway's recovery sweep, every 30s) was
+// therefore redelivered back-to-back, and a busy stream spent the consumer's
+// MaxDeliver (10) in about a second and dropped the delta: money lost from the
+// accumulator and the usage ledger. The delay now starts at 5s and doubles per
+// delivery, to a 60s ceiling, so one deferral spans the sweep it waits for. The
+// nats-bootstrap chart sets MaxDeliver to -1 for this consumer: with a delayed
+// retry, the only bound a deferred delta needs is the stream's own MaxAge
+// (72h), and a finite cap only decides when real money is dropped.
+const (
+	redeliverBaseDelay = 5 * time.Second
+	redeliverMaxDelay  = 60 * time.Second
+)
+
+// redeliverDelay is the wait before the next delivery of a message delivered
+// `delivered` times so far (1 on the first delivery).
+func redeliverDelay(delivered uint64) time.Duration {
+	delay := redeliverBaseDelay
+	for i := uint64(1); i < delivered && delay < redeliverMaxDelay; i++ {
+		delay *= 2
+	}
+	return min(delay, redeliverMaxDelay)
 }
 
 // Fetcher pulls the next batch of messages. The real implementation wraps a
@@ -68,6 +98,10 @@ type Consumer struct {
 	// lastPrune is when the usage-ledger retention prune last ran. It is only
 	// ever touched from Run's single goroutine, so it needs no lock.
 	lastPrune time.Time
+	// info reads the bound consumer's server-side figures for the
+	// num_ack_pending / num_redelivered gauges; nil leaves them unset.
+	info     consumerInfoSource
+	lastInfo time.Time
 }
 
 // NewConsumer builds a write-back Consumer over a message Fetcher and a Store.
@@ -86,12 +120,16 @@ func NewConsumer(fetch Fetcher, store *Store, logger *slog.Logger) *Consumer {
 // transient JetStream blip doesn't kill the loop.
 func (c *Consumer) Run(ctx context.Context) {
 	c.logger.Info("budgetwriteback: consumer started")
+	// The gauges describe a bound consumer; withdraw them when this drain
+	// loop stops (the Supervisor re-attaches and refreshes them).
+	defer metrics.clearConsumerInfo()
 	for {
 		if ctx.Err() != nil {
 			c.logger.Info("budgetwriteback: consumer stopping")
 			return
 		}
 		c.pruneUsageEventsIfDue(ctx)
+		c.refreshConsumerInfoIfDue(ctx)
 		msgs, err := c.fetch.Fetch(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -117,6 +155,27 @@ func (c *Consumer) Run(ctx context.Context) {
 		}
 		c.processBatch(ctx, msgs)
 	}
+}
+
+// refreshConsumerInfoIfDue updates the consumer gauges at most every
+// consumerInfoInterval. Best-effort: a failed read keeps the last value.
+func (c *Consumer) refreshConsumerInfoIfDue(ctx context.Context) {
+	if c.info == nil {
+		return
+	}
+	now := time.Now()
+	if !c.lastInfo.IsZero() && now.Sub(c.lastInfo) < consumerInfoInterval {
+		return
+	}
+	c.lastInfo = now
+	info, err := c.info.Info(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.Debug("budgetwriteback: consumer info read failed", "err", err)
+		}
+		return
+	}
+	metrics.setConsumerInfo(info)
 }
 
 // pruneInterval is how often the drain loop prunes the usage ledger. The prune
@@ -229,8 +288,56 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 		deltas[i] = it.delta
 	}
 
-	outcome, err := c.store.Apply(ctx, deltas)
+	// AckWait (30s) runs from the FETCH, for the whole batch of up to 500, and
+	// the groups (and isolated members) apply one after another. So reset each
+	// group's ack timer before its own Apply: a later group then has the full
+	// AckWait for its transaction and is not redelivered mid-apply. The apply
+	// itself is bounded below AckWait. A redelivery that does race an apply
+	// is still SAFE: processed_event_ids dedup in the same transaction makes
+	// the second apply add nothing; resetting only avoids the wasted work.
+	for _, it := range items {
+		if err := it.msg.InProgress(); err != nil {
+			c.logger.Debug("budgetwriteback: in-progress ack failed", "event_id", it.delta.EventID, "err", err)
+		}
+	}
+	applyCtx, cancel := context.WithTimeout(ctx, applyTimeout)
+	outcome, err := c.store.Apply(applyCtx, deltas)
+	cancel()
+	class, permanent := permanentApplyFailure(err)
 	switch {
+	case err != nil && permanent && len(items) > 1:
+		// Isolate ([human decision] 2026-10-16, "Isolate, then drop"): the
+		// group failed on ONE delta's data, so apply each member alone and
+		// only that one is dropped. A redelivery would re-coalesce it with
+		// its neighbours for ever. A transient or environmental group error
+		// is NOT isolated: every member would fail the same way, and a
+		// k-member group would cost k+1 doomed transactions.
+		c.logger.Warn("budgetwriteback: group apply failed on a delta's data; applying each delta alone",
+			"scope", items[0].delta.Scope, "scope_id", items[0].delta.ScopeID,
+			"deltas", len(items), "sqlstate_class", class, "err", err)
+		for _, it := range items {
+			c.applyGroup(ctx, []decoded{it})
+		}
+	case err != nil && permanent:
+		// Drop: this delta fails the same way on every delivery, and with
+		// MaxDeliver -1 it would retry for the stream's whole MaxAge while
+		// holding an ack-pending slot. Its money is lost from the
+		// accumulator; the ERROR line and the counter make that visible.
+		c.logger.Error("budgetwriteback: delta fails permanently; terminating it (its spend is NOT in the accumulator)",
+			"event_id", items[0].delta.EventID, "scope", items[0].delta.Scope,
+			"scope_id", items[0].delta.ScopeID, "delta_nano_usd", items[0].delta.DeltaNanoUSD,
+			"sqlstate_class", class, "err", err)
+		metrics.addDropped(droppedReasonPermanent, class)
+		c.term(items[0].msg)
+	case err != nil && environmentalApplyFailure(err):
+		// Class 42 ([human decision] 2026-10-16, "Drop only 22/23, retry
+		// 42"): the schema or the grants are wrong for every delta, for
+		// example a scheduler started before the migrations. Deferred, never
+		// dropped; ERROR so an operator fixes the environment.
+		c.logger.Error("budgetwriteback: apply fails on the database schema or grants; deferring (fix the environment)",
+			"reason", "environmental", "scope", items[0].delta.Scope, "scope_id", items[0].delta.ScopeID,
+			"deltas", len(items), "sqlstate_class", class, "err", err)
+		c.nakAll(items)
 	case err != nil:
 		// Transient DB failure: NAK for redelivery (§8.6 at-least-once). The
 		// same-transaction dedup guarantees the retry does not double-apply.
@@ -249,6 +356,16 @@ func (c *Consumer) applyGroup(ctx context.Context, items []decoded) {
 	}
 }
 
+// applyTimeout bounds one Apply transaction, so a stalled database cannot hold
+// the drain loop. It is below the consumer's AckWait (30s,
+// deploy/helm/nats-bootstrap deltas.writeback.ackWait), and applyGroup resets
+// the group's ack timer (InProgress) just before the Apply, so a delta is not
+// normally redelivered while it applies. That is an efficiency property, not
+// the money invariant: exactly-once comes from the processed_event_ids claim
+// in the same transaction, which makes any redelivery add nothing. A timed-out
+// Apply rolls back and the group is deferred (transient), never dropped.
+const applyTimeout = 20 * time.Second
+
 func (c *Consumer) ackAll(items []decoded) {
 	for _, it := range items {
 		if err := it.msg.Ack(); err != nil {
@@ -257,9 +374,15 @@ func (c *Consumer) ackAll(items []decoded) {
 	}
 }
 
+// nakAll defers every message of a group with the delivery-count backoff
+// (redeliverDelay), never a bare Nak: see redeliverBaseDelay.
 func (c *Consumer) nakAll(items []decoded) {
 	for _, it := range items {
-		if err := it.msg.Nak(); err != nil {
+		var delivered uint64 = 1
+		if meta, err := it.msg.Metadata(); err == nil && meta != nil && meta.NumDelivered > 0 {
+			delivered = meta.NumDelivered
+		}
+		if err := it.msg.NakWithDelay(redeliverDelay(delivered)); err != nil {
 			c.logger.Warn("budgetwriteback: nak failed", "event_id", it.delta.EventID, "err", err)
 		}
 	}
@@ -346,6 +469,20 @@ func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger
 	if err := verifyConsumer(cons.CachedInfo().Config); err != nil {
 		return nil, fmt.Errorf("consumer %s/%s: %w; it is configured by the nats-bootstrap Job — re-run it", DeltasStream, DurableName, err)
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if maxDeliver := cons.CachedInfo().Config.MaxDeliver; maxDeliver > 0 {
+		// Not a refusal: an older bootstrap left the finite cap, and the next
+		// bootstrap run reconciles it. Until then a delta deferred longer than
+		// the backoff spans is still dropped, so say so.
+		logger.Warn("budgetwriteback: the consumer drops a delta after a finite number of deliveries; "+
+			"re-run the nats-bootstrap Job so a delta deferred by an outage is kept (MaxDeliver -1)",
+			"max_deliver", maxDeliver)
+	}
 	fetcher := &jsFetcher{cons: cons, batch: cfg.BatchSize, wait: cfg.FetchWait}
-	return NewConsumer(fetcher, NewStore(db), logger), nil
+	consumer := NewConsumer(fetcher, NewStore(db), logger)
+	consumer.info = cons
+	metrics.setConsumerInfo(cons.CachedInfo())
+	return consumer, nil
 }

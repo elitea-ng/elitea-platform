@@ -76,7 +76,7 @@ The Indexes tab only appears when the configured worker can run this type's `ind
 </Note>
 
 <Note>
-The tools act as the signed-in person: the credential needs an OAuth discovery endpoint so each person authorizes SharePoint once. A credential without one (app-only access with a client secret) can't be used by agents on a deployment that runs the Rust worker, and the toolkit is reported as not enabled with that reason. Microsoft retired app-only access to the OneNote API, so the OneNote tools need the signed-in access in any case. Text and Office files are read as text, pictures in them aren't described, and a change (an upload, a new list item, an edit in OneNote) is sent once: if SharePoint doesn't confirm it the agent is told the outcome is unknown and checks before repeating it.
+The tools act as the signed-in person: the credential needs an OAuth discovery endpoint so each person authorizes SharePoint once. A credential without one (app-only access with a client secret) can't be used by agents, and the toolkit is reported as not enabled with that reason. Microsoft retired app-only access to the OneNote API, so the OneNote tools need the signed-in access in any case. Text and Office files are read as text, pictures in them aren't described, and a change (an upload, a new list item, an edit in OneNote) is sent once: if SharePoint doesn't confirm it the agent is told the outcome is unknown and checks before repeating it.
 </Note>
 
 <Note>

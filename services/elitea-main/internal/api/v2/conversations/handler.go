@@ -592,6 +592,8 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
+	rows.Close()
+	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 
@@ -680,6 +682,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// absent key read as "public" would withdraw the control from every
 		// conversation.
 		"is_private": conv.IsPrivate == nil || *conv.IsPrivate,
+		// Who runs the thread's turns now (ADR-0034): `local`, `cloud` (the
+		// cloud executor owns a handed-off Local work thread) or `returning`
+		// (a take back is under way).
+		"workspace_executor": h.workspaceExecutor(r.Context(), projectID, conv.UUID),
 	}
 
 	if testRuns != nil {

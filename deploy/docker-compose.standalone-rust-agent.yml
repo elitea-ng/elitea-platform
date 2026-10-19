@@ -22,12 +22,6 @@ services:
       # under the Python path are not visible here, and new projects get no
       # project_pgvector database.
       ELITEA_INDEXING_RUNTIME: "rust"
-      # This overlay is what selects the native worker, so it is also what tells
-      # elitea-main which toolkit types the running worker can build. The native
-      # worker materializes 22 families and SKIPS anything else with a warning,
-      # so without this the create page would offer tiles that attach to an
-      # agent and then quietly do nothing.
-      ELITEA_WORKER_IMPLEMENTATION: "rust"
 
   elitea-worker:
     image: ghcr.io/elitea-ng/elitea-worker-rust:standalone

@@ -100,6 +100,36 @@ type Server struct {
 	// vectorMintFailures counts receipts delivered without a vector token
 	// because minting failed (a store error, not an ineligible execution).
 	vectorMintFailures metric.Int64Counter
+	// wrapUps answers whether a running cloud turn's thread is being taken
+	// back (ADR-0034); nil when the cloud executor is not composed.
+	wrapUps WorkspaceWrapUps
+}
+
+// WorkspaceWrapUps answers whether execution executionID is a running cloud
+// turn whose thread the desktop is taking back (reclaim_pending). The lease
+// poll carries the answer to the worker as workspace_wrap_up.
+type WorkspaceWrapUps interface {
+	WrapUpRequested(ctx context.Context, executionID string) (bool, error)
+}
+
+// WithWorkspaceWrapUps lets the lease poll carry the take-back signal.
+func (s *Server) WithWorkspaceWrapUps(wrapUps WorkspaceWrapUps) *Server {
+	s.wrapUps = wrapUps
+	return s
+}
+
+// wrapUp is best effort: a failed read never fails a renewal (the 60 s
+// grace and the hard cancel remain the fallback).
+func (s *Server) wrapUp(ctx context.Context, executionID string) bool {
+	if s.wrapUps == nil {
+		return false
+	}
+	requested, err := s.wrapUps.WrapUpRequested(ctx, executionID)
+	if err != nil {
+		slog.WarnContext(ctx, "workspace wrap-up signal unreadable", "execution_id", executionID)
+		return false
+	}
+	return requested
 }
 
 func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier CommandVerifier, claims ClaimController, inputs ClaimInputResolver, settlements SettlementController) (*Server, error) {
@@ -382,6 +412,7 @@ func (s *Server) RenewLease(ctx context.Context, request *runtimev1.RenewLeaseRe
 	return &runtimev1.RenewLeaseResponseV1{
 		LeaseExpiresAtUnixMillis: lease.ExpiresAt.UTC().UnixMilli(),
 		DesiredState:             desiredState,
+		WorkspaceWrapUp:          lease.DesiredState == runtimedomain.DesiredRunning && s.wrapUp(ctx, fence.ExecutionID),
 	}, nil
 }
 
@@ -410,7 +441,8 @@ func (s *Server) ObserveDesiredState(ctx context.Context, request *runtimev1.Obs
 		return observeRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The execution desired state is unavailable.", false), nil
 	}
 	return &runtimev1.ObserveDesiredStateResponseV1{
-		DesiredState: desiredState,
+		DesiredState:    desiredState,
+		WorkspaceWrapUp: state == runtimedomain.DesiredRunning && s.wrapUp(ctx, fence.ExecutionID),
 	}, nil
 }
 

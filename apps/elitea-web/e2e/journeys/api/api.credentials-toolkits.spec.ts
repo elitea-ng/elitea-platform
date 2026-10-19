@@ -25,7 +25,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * The toolkit details route reported a `toolkit_name` no runtime path uses. It
  * kept alphanumerics only, while index admission, the tool-run path, the
- * built-in name deriver, the Python worker's SDK adapter and all three web
+ * built-in name deriver, the (retired) Python worker's SDK adapter and all three web
  * helpers keep `_`, `.` and `-` and fold the `.` into `_`. A toolkit called
  * `autotest github-toolkit.v1` was reported as `autotestgithubtoolkitv1` and
  * addressed by the agent as `autotestgithub-toolkit_v1`, so an instruction

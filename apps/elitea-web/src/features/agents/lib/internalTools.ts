@@ -56,10 +56,7 @@ export interface InternalToolDescriptor {
  * `INTERNAL_TOOLS_LIST` below, which describes every deployment the same way.
  *
  * `available` defaults to `true` (see `isInternalToolAvailable`'s own doc
- * comment) for any tool this endpoint has not been taught to answer for yet
- * — currently only `pyodide`, #866's own disclosed scope boundary — so that
- * toggle keeps behaving exactly as before. `planner`, `lazy_tools_mode` and
- * `attachments` are served by BOTH workers and read available on either.
+ * comment) for any tool this endpoint has not been taught to answer for yet.
  */
 export interface AvailableInternalTool extends InternalToolDescriptor {
   readonly available: boolean;
@@ -119,17 +116,10 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     infoTooltip: { text: 'Let the agent ask clarifying questions and wait for your answers before continuing.' },
   },
   {
-    // #872: as of the Python worker's image, this toggle actually executes
-    // (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both
-    // baked in at build time — services/elitea-worker-python/Containerfile).
-    // The Rust worker still skips it. GET /elitea_core/runtime_capabilities
-    // (#865, #866) would answer this the same way it answers for the other
-    // tools `useAvailableInternalTools` checks against it, but its
-    // `internal_tools` map deliberately does not name `pyodide` — see
-    // internal/api/v2/toolkits/capabilities_handler.go's own doc comment for
-    // why it stayed out of #866's scope. So this toggle still cannot be
-    // conditionally disabled the way the others are. See /menus/internal-tools
-    // for the operator-facing note instead.
+    // Only the retired Python worker ran this sandbox. It stays in the list so
+    // stored agents that toggled it still pass the SQL admission gates; the
+    // Rust worker skips it, and GET /elitea_core/runtime_capabilities reports
+    // it false, so the switch renders disabled with a reason.
     name: 'pyodide',
     title: 'Python sandbox',
     icon: 'PythonIcon',
@@ -157,13 +147,11 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     },
   },
   {
-    // #940 A8. Unlike every entry above, these two are served by the NATIVE
-    // runtime and NOT by the Python SDK worker — `useAvailableInternalTools`
-    // below reads that verdict off `/elitea_core/runtime_capabilities` the
-    // same way it does for the tools the Rust worker skips, so on a Python
-    // deployment they render disabled-with-a-reason rather than silently
-    // doing nothing. Both default to OFF, like every other entry here: a
-    // toggle nobody switched on binds no tool
+    // #940 A8. `useAvailableInternalTools` below reads these two off
+    // `/elitea_core/runtime_capabilities` like every other entry, so a
+    // deployment that does not serve them renders them disabled-with-a-reason
+    // rather than silently doing nothing. Both default to OFF, like every
+    // other entry here: a toggle nobody switched on binds no tool
     // (services/elitea-worker-rust/src/agents/internal_tools.rs).
     name: 'skills_builder',
     title: 'Skills Builder',
@@ -196,24 +184,15 @@ export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
 /**
  * Why a tool this deployment offers is nonetheless unavailable.
  *
- * It names the WORKER the endpoint reported rather than always saying "Rust",
- * which is what this read said before #940. That was true while every entry
- * the endpoint answered for was a Python-only capability; the two builder
- * modules are the opposite case — native-only — so a fixed sentence would
- * have told a Python deployment its Skills Builder was unavailable "on the
- * Rust worker", which is the exact inversion of the truth.
- *
- * The `''` case is the deployment that did not state a worker at all (see
- * `WithWorkerImplementation`'s own doc comment); it cannot be reached with
- * `available: false`, because an unstated worker makes every tool available,
- * but it is answered rather than asserted away.
+ * Names the worker the endpoint reported. The `''` case is the deployment that
+ * did not state a worker at all (see `WithWorkerImplementation`'s own doc
+ * comment); it cannot be reached with `available: false`, because an unstated
+ * worker makes every tool available, but it is answered rather than asserted
+ * away.
  */
 function unavailableReasonFor(worker: string | undefined): string {
   if (worker === 'rust') {
     return t('features.agents.internalTools.notAvailableOnRustWorker', 'Not available on the Rust worker');
-  }
-  if (worker === 'python') {
-    return t('features.agents.internalTools.notAvailableOnPythonWorker', 'Not available on the Python worker');
   }
   return t('features.agents.internalTools.notAvailableOnThisWorker', 'Not available on this worker');
 }

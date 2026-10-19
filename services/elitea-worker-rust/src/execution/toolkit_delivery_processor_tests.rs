@@ -222,6 +222,7 @@ impl ControlRpc for CallControl {
         _: tonic::Request<RenewLeaseRequestV1>,
     ) -> Result<tonic::Response<RenewLeaseResponseV1>, Status> {
         Ok(tonic::Response::new(RenewLeaseResponseV1 {
+            workspace_wrap_up: false,
             lease_expires_at_unix_millis: NOW + 600_000,
             desired_state: DesiredExecutionStateV1::Running as i32,
             rejection: None,
@@ -233,6 +234,7 @@ impl ControlRpc for CallControl {
         _: tonic::Request<ObserveDesiredStateRequestV1>,
     ) -> Result<tonic::Response<ObserveDesiredStateResponseV1>, Status> {
         Ok(tonic::Response::new(ObserveDesiredStateResponseV1 {
+            workspace_wrap_up: false,
             desired_state: DesiredExecutionStateV1::Running as i32,
             rejection: None,
         }))

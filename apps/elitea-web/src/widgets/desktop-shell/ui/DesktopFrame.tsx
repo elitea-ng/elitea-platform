@@ -35,6 +35,7 @@ import { useShellLocation } from '../model/useShellLocation';
 import { CommandPalette } from './CommandPalette';
 import { DesktopSidebar } from './DesktopSidebar';
 import { NativeLook } from './NativeLook';
+import { ReclaimRequestToast } from './ReclaimRequestToast';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
 
@@ -120,6 +121,7 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
         </Box>
         <CommandPalette items={items} run={run} />
         <ShellNotice />
+        <ReclaimRequestToast run={run} />
       </Box>
     </NativeLook>
   );
