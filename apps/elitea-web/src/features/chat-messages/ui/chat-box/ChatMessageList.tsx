@@ -127,6 +127,7 @@ export function ChatMessageList({
     onHitlResume,
     hideContinueButton = false,
     hideHitlActions = false,
+    staticPause,
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
@@ -322,6 +323,7 @@ export function ChatMessageList({
                     hitlInterrupt: hideHitlActions ? undefined : message.hitlInterrupt,
                     hitlInterrupts: hideHitlActions ? undefined : message.hitlInterrupts,
                     onHitlResume: !hideHitlActions && isLastMessage ? onHitlResume : undefined,
+                    staticPause: staticPause?.pause.messageId === messageId ? staticPause : undefined,
                   }}
                   tts={{
                     onAutoSpeak,
