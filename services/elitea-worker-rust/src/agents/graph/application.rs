@@ -1034,8 +1034,10 @@ impl Node for ApplicationNode {
                         };
                         arguments.insert(key.clone(), value);
                     }
-                    let (result, call_id) = match &self.participant {
-                        ResolvedApplicationParticipant::ScopedAgent { scope, .. } => {
+                    let (result, call_id) =
+                        if let ResolvedApplicationParticipant::ScopedAgent { scope, .. } =
+                            &self.participant
+                        {
                             scope
                                 .execute(
                                     context,
@@ -1044,18 +1046,18 @@ impl Node for ApplicationNode {
                                     Value::Object(arguments),
                                 )
                                 .await?
-                        }
-                        _ => {
-                            let result = match tool
-                                .execute(Arc::clone(&tool_context), Value::Object(arguments))
-                                .await
+                        } else {
                             {
-                                Ok(result) => result,
-                                Err(error) => return Err(self.child_failure(&error).await),
-                            };
-                            (result, tool_context.function_call_id().to_owned())
-                        }
-                    };
+                                let result = match tool
+                                    .execute(Arc::clone(&tool_context), Value::Object(arguments))
+                                    .await
+                                {
+                                    Ok(result) => result,
+                                    Err(error) => return Err(self.child_failure(&error).await),
+                                };
+                                (result, tool_context.function_call_id().to_owned())
+                            }
+                        };
                     if let Some(interrupt_ids) = nested_application_interrupt_ids(&result) {
                         return Ok(NodeOutput::interrupt_with_data(
                             PIPELINE_APPLICATION_HITL_MESSAGE,

@@ -124,10 +124,10 @@ pub(crate) fn recorded_dispatches(
 /// decision is resolved against its records: a recorded outcome is served and
 /// an unrecorded one is refused. Without a dispatch record the suffix is an
 /// ordinary advance and the decision is stale (`None`).
-pub(crate) fn continuation_pause<'a>(
-    events: &'a [Event],
+pub(crate) fn continuation_pause(
+    events: &[Event],
     is_pause: impl Fn(&Event) -> bool,
-) -> Option<&'a Event> {
+) -> Option<&Event> {
     let last = events.last()?;
     if is_pause(last) {
         return Some(last);

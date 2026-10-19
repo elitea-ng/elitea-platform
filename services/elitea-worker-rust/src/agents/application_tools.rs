@@ -3645,7 +3645,7 @@ impl LazyNestedAgent {
                 } else {
                     (*decision).into_direct_replay(sensitive_tools)
                 }
-                .map_err(direct_hitl_execution_error)?;
+                .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
                 // Every approved call that will really run journals its dispatch
@@ -5138,7 +5138,7 @@ pub(super) fn child_execution_error() -> AdkError {
 /// A nested Agent's decided card cannot continue. The typed direct-HITL code is
 /// kept as the error code, so the parent reports a readable reason: a "may
 /// have started" refusal carries the registered recovery-refused code.
-fn direct_hitl_execution_error(error: super::direct_hitl::DirectHitlError) -> AdkError {
+fn direct_hitl_execution_error(error: &super::direct_hitl::DirectHitlError) -> AdkError {
     match error.code() {
         super::direct_hitl::DirectHitlErrorCode::MayHaveStarted => AdkError::new(
             ErrorComponent::Agent,

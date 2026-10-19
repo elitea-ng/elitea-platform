@@ -104,9 +104,41 @@ pub(super) fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequ
             }
         }
     }
-    request.contents.retain(|content| !content.parts.is_empty());
+    let called: std::collections::HashSet<String> = request
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionCall { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    request
+        .contents
+        .retain(|content| !content.parts.is_empty() && !is_confirmation_notice(content, &called));
     close_abandoned_calls(&mut request.contents, &results);
     Ok(request)
+}
+
+/// ADK records a paused confirmation as a model-role text, "Tool confirmation
+/// required for '<tool>'. Provide approve/deny decision to continue.". It is
+/// runtime bookkeeping the model never produced, not conversation content, so
+/// a continuation's provider request never carries it: the request then has
+/// the shape of the original turn (call, result) and nothing the provider could
+/// read as an instruction. Only that exact text for a tool this history calls
+/// is removed.
+fn is_confirmation_notice(content: &Content, called: &std::collections::HashSet<String>) -> bool {
+    const PREFIX: &str = "Tool confirmation required for '";
+    const SUFFIX: &str = "'. Provide approve/deny decision to continue.";
+    if content.role != "model" && content.role != "assistant" {
+        return false;
+    }
+    let [Part::Text { text }] = content.parts.as_slice() else {
+        return false;
+    };
+    text.strip_prefix(PREFIX)
+        .and_then(|rest| rest.strip_suffix(SUFFIX))
+        .is_some_and(|tool| called.contains(tool))
 }
 
 /// A later user turn can follow a failed child without a recorded tool result.
@@ -230,6 +262,51 @@ mod tests {
             role: role.into(),
             parts,
         }
+    }
+
+    #[test]
+    fn a_continuation_never_sends_the_confirmation_notice_to_the_provider() {
+        let notice = |tool: &str| {
+            content(
+                "model",
+                vec![Part::Text {
+                    text: format!(
+                        "Tool confirmation required for '{tool}'. Provide approve/deny decision to continue."
+                    ),
+                }],
+            )
+        };
+        let request = LlmRequest {
+            contents: vec![
+                content(
+                    "user",
+                    vec![Part::Text {
+                        text: "task".into(),
+                    }],
+                ),
+                notice("read"),
+                content("model", vec![call(1)]),
+                content("user", vec![result(1)]),
+                // Same text for a tool this history never called: ordinary content.
+                notice("other"),
+            ],
+            ..LlmRequest::new("model", Vec::new())
+        };
+        let projected = model_history(request).expect("projected");
+        let roles: Vec<_> = projected
+            .contents
+            .iter()
+            .map(|content| (content.role.as_str(), content.parts.len()))
+            .collect();
+        assert_eq!(
+            roles,
+            [("user", 1), ("model", 1), ("user", 1), ("model", 1)],
+            "the notice for the called tool is dropped, nothing else"
+        );
+        assert!(matches!(
+            &projected.contents[1].parts[0],
+            Part::FunctionCall { .. }
+        ));
     }
 
     #[test]

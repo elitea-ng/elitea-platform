@@ -298,6 +298,7 @@ impl DirectDelegatedAuthorizationContinuation {
         })
     }
 
+    #[allow(clippy::too_many_lines)] // One ordered proof binds the decision to its durable call and dispatch record.
     pub(crate) fn resolve(
         self,
         session: &dyn adk_rust::session::Session,
@@ -715,6 +716,7 @@ impl DirectHitlDecision {
         self.resolve_at(&events, confirmation_index, false)
     }
 
+    #[allow(clippy::too_many_lines)] // One ordered proof binds the decision to its durable call and dispatch record.
     fn resolve_at(
         self,
         events: &[Event],
@@ -1303,6 +1305,7 @@ impl ResolvedDirectHitlDecision {
     /// An approved call runs once whatever its effect class; see the module
     /// documentation for the dispatch rules. A denied call is replaced by a
     /// local structured-result adapter and is never dispatched.
+    #[allow(clippy::too_many_lines)] // One ordered proof binds the decision to its durable call and dispatch record.
     pub(crate) fn into_direct_replay(
         self,
         sensitive_tools: &SensitiveToolCatalog,

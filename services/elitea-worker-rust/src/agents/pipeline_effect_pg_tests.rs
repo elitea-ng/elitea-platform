@@ -335,6 +335,28 @@ async fn postgres_effect_child() {
                 browser.iter().any(|event| event["content"] == DONE),
                 "{phase}: the approved call runs and the Agent finishes: {browser:?}"
             );
+            // FU-236: the continued child's model request has a fresh turn's shape:
+            // the call and its result, and no ADK confirmation bookkeeping text.
+            let body: Value = serde_json::from_slice(&captured.lock().expect("captured")[0].body)
+                .expect("model request JSON");
+            let messages = body["messages"].as_array().expect("messages");
+            assert!(
+                !body.to_string().contains("Tool confirmation required"),
+                "{phase}: the confirmation notice reaches the provider: {body}"
+            );
+            let roles: Vec<&str> = messages
+                .iter()
+                .map(|message| message["role"].as_str().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                roles,
+                ["system", "user", "assistant", "tool"],
+                "{phase}: {body}"
+            );
+            assert_eq!(
+                messages[2]["tool_calls"][0]["function"]["name"], "lookup_release",
+                "{phase}: the approved call is intact"
+            );
             assert_eq!(
                 calls.load(Ordering::Acquire),
                 1,
