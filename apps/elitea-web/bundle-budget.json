@@ -10,6 +10,12 @@
   "targets": {
     "app": {
       "html": "index.html",
+      "budgetNote": [
+        "512: owner decision 2026-10-19 (PR #1319). The 300 KB spec ceiling was",
+        "re-raised by fractions of a KiB on nearly every UI PR (302.1 vs 302 here),",
+        "and the gate cost more than it protected. 512 KiB gzip is the new initial",
+        "ceiling for the app and admin entries; the notes below record the history."
+      ],
       "initialNote": [
         "302, not 301: measured 2026-10-03 on fix/ui-search-showmore-sidebar",
         "(PR #1032, top of the regression stack). CI measured 300.7 KiB gzip on",
@@ -32,11 +38,17 @@
         "into its own preloaded chunk. No route code moved into the initial set;",
         "the growth is the type scale itself."
       ],
-      "initialKB": 302,
+      "initialKB": 512,
       "routeChunkKB": 250
     },
     "admin": {
       "html": "index.html",
+      "budgetNote": [
+        "512: owner decision 2026-10-19 (PR #1319). The 300 KB spec ceiling was",
+        "re-raised by fractions of a KiB on nearly every UI PR (302.1 vs 302 here),",
+        "and the gate cost more than it protected. 512 KiB gzip is the new initial",
+        "ceiling for the app and admin entries; the notes below record the history."
+      ],
       "initialNote": [
         "310, not 300: measured 2026-09-07 on feat/platform-parity-wave (PR #823).",
         "main's admin initial set was 295.3 KiB gzip; the wave's 300.3 KiB is that",
@@ -76,7 +88,7 @@
         "tried (single lazy module, Paper, no brand imports) all landed within",
         "0.2 KiB of each other."
       ],
-      "initialKB": 326,
+      "initialKB": 512,
       "routeChunkKB": 250
     },
     "maintenance": {
