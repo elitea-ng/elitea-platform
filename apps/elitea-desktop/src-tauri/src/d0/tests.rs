@@ -530,7 +530,11 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(first["model"], "gpt-test");
     let system = first["messages"][0]["content"].as_str().unwrap();
     assert!(
-        system.starts_with("Be brief.\n\nMemory: the user likes tea."),
+        system.starts_with("Be brief.\n\n## Environment\n"),
+        "{system}"
+    );
+    assert!(
+        system.find("\n\nMemory: the user likes tea.") > system.find("## Environment"),
         "{system}"
     );
     assert!(system.contains("Available skill: Style."), "{system}");
@@ -1170,6 +1174,92 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
         start_body["user_input"],
         "/style Write notes and file a bug"
     );
+}
+
+/// `git` in `dir`, isolated from the person's configuration.
+fn git_in(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .current_dir(dir)
+        .args([
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+/// The first `/llm` request's system prompt: the agent's instructions, the
+/// host's environment section (folder name, branch, changed files,
+/// enforcement, network; no absolute path), then the untrusted parts
+/// (the picked skill, AGENTS.md, both nonce-framed), then the memory.
+#[tokio::test]
+async fn system_prompt_order_env_before_untrusted() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    git_in(h.folder.path(), &["init", "-q"]);
+    git_in(h.folder.path(), &["add", "-A"]);
+    git_in(h.folder.path(), &["commit", "-q", "-m", "init"]);
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.\n").unwrap();
+    std::fs::write(h.folder.path().join("draft.txt"), "x").unwrap();
+    let mut req = request(&h.workspace_id);
+    req.prompt = "/style Write notes and file a bug".into();
+    req.skills = vec!["style".into()];
+    h.host.start(req).await.unwrap();
+    until_done(&h.emitter).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    let at = |needle: &str| {
+        system
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {system}"))
+    };
+    let order = [
+        at("Be brief."),
+        at("## Environment\n"),
+        at("name=\"Style\">\nWrite tersely."),
+        at("Run task test."),
+        at("Memory: the user likes tea."),
+    ];
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+    let environment = &system[order[1]..];
+    let environment = &environment[..environment.find("\n\n## ").unwrap()];
+    let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
+    assert!(
+        environment.contains(&format!(
+            "- Workspace: {folder} (git: branch main, 2 changed files)"
+        )),
+        "{environment}"
+    );
+    assert!(
+        environment.contains("- Sandbox: workspace-write, "),
+        "{environment}"
+    );
+    assert!(
+        environment.contains("- Network for commands: off (loopback off too)"),
+        "{environment}"
+    );
+    assert!(environment.contains("search_files"), "{environment}");
+    // The host's section is not framed; the untrusted parts are.
+    assert!(!environment.contains("nonce="), "{environment}");
+    // No absolute path, of the folder or of the app's data.
+    for path in [h.folder.path(), h.app.path()] {
+        let canonical = std::fs::canonicalize(path).unwrap();
+        for spelling in [path.to_string_lossy(), canonical.to_string_lossy()] {
+            assert!(!system.contains(spelling.as_ref()), "{spelling}: {system}");
+        }
+    }
 }
 
 #[tokio::test]

@@ -50,6 +50,7 @@ use serde_json::{Map, Value, json};
 use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, PlatformApi};
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::definition::{self, Admitted};
+use super::environment;
 use super::events::{EventEmitter, Phase, TurnEvents};
 use super::framing;
 use super::mentions;
@@ -501,8 +502,8 @@ pub(super) const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instruct
 /// The precedence line of the AGENTS.md section: it ranks last (see
 /// `skills::SKILLS_PRECEDENCE` for the same order from above).
 pub(super) const PROJECT_PRECEDENCE: &str = "Precedence: these files rank last. The \
-     agent's own instructions and any skill picked for this turn, both above, \
-     outrank them where they disagree.";
+     agent's own instructions, the environment section and any skill picked for \
+     this turn, all above, outrank them where they disagree.";
 
 /// The agent's instructions (with any skill picked for this turn already
 /// after them), then the workspace's AGENTS.md files as one delimited
@@ -549,6 +550,30 @@ pub fn with_project_instructions(
     } else {
         format!("{instructions}\n\n{section}")
     }
+}
+
+/// A turn's system prompt, in the order of authority: the agent's
+/// instructions, the host's environment section (trusted: not framed),
+/// the skills picked for the turn and the workspace's AGENTS.md (both
+/// untrusted, framed under `nonce`), then the memory recall.
+#[must_use]
+pub fn system_instruction(
+    agent: &str,
+    environment: &str,
+    invoked: &[InvokedSkill],
+    project: &ProjectInstructions,
+    recall: &str,
+    nonce: &str,
+) -> String {
+    let authored = splice_memory(agent, environment);
+    splice_memory(
+        &with_project_instructions(
+            &skills::with_invoked_skills(&authored, invoked, nonce),
+            project,
+            nonce,
+        ),
+        recall,
+    )
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -1087,6 +1112,11 @@ impl AgentHost {
             claim,
             api,
             memory,
+            folder: environment::folder_name(
+                &workspace.name,
+                Path::new(&workspace.path),
+                std::env::home_dir().as_deref(),
+            ),
         })
     }
 
@@ -1109,6 +1139,7 @@ impl AgentHost {
             claim,
             api,
             mut memory,
+            folder,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -1124,7 +1155,7 @@ impl AgentHost {
         let sink = Arc::new(TurnSink::default());
         let run = self.run_agent(
             &request, &events, &workspace, &admitted, &project, &invoked, &started, &recorder,
-            &sink, &api, &memory,
+            &sink, &api, &memory, &folder,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -1285,11 +1316,41 @@ impl AgentHost {
         sink: &Arc<TurnSink>,
         api: &Arc<PlatformApi>,
         memory: &SessionPlan,
+        folder: &str,
     ) -> Result<String, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
         // closing tag carrying it (d0/framing.rs).
         let nonce = framing::nonce();
+        // The workspace's index tools, when its index is on and built: they
+        // only read, so plan mode keeps them.
+        let index = match &self.deps.index {
+            Some(registry) => registry.for_turn(&request.workspace_id).await,
+            None => None,
+        };
+        // The host's environment section names the tools offered now.
+        let offered: Vec<String> = workspace
+            .session
+            .available_tools()
+            .iter()
+            .map(|tool| tool.name.to_owned())
+            .chain(
+                index
+                    .is_some()
+                    .then_some(INDEX_TOOLS)
+                    .into_iter()
+                    .flatten()
+                    .map(str::to_owned),
+            )
+            .collect();
+        let facts = environment::gather(
+            &workspace.session,
+            folder.to_owned(),
+            &workspace.policy,
+            request.plan_mode,
+            offered,
+        )
+        .await;
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -1302,13 +1363,13 @@ impl AgentHost {
             .bind(ModelRequest {
                 model_project_id: check_project_id(request.project_id)?,
                 model_name: admitted.model.model_name.clone(),
-                system_instruction: splice_memory(
-                    &with_project_instructions(
-                        &skills::with_invoked_skills(&admitted.instructions, invoked, &nonce),
-                        project,
-                        &nonce,
-                    ),
+                system_instruction: system_instruction(
+                    &admitted.instructions,
+                    &environment::preamble(&facts),
+                    invoked,
+                    project,
                     &started.memory_recall.text,
+                    &nonce,
                 ),
                 max_tokens: admitted.model.max_tokens,
                 temperature: admitted.model.temperature,
@@ -1348,12 +1409,6 @@ impl AgentHost {
             Vec::new()
         } else {
             admitted.remote_tools.clone()
-        };
-        // The workspace's index tools, when its index is on and built: they
-        // only read, so plan mode keeps them.
-        let index = match &self.deps.index {
-            Some(registry) => registry.for_turn(&request.workspace_id).await,
-            None => None,
         };
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
@@ -2056,6 +2111,8 @@ struct Prepared {
     api: Arc<PlatformApi>,
     /// The conversation's session, held by this turn.
     memory: SessionPlan,
+    /// The folder's name as the environment section shows it.
+    folder: String,
 }
 
 fn model_failure(text: &str) -> TurnError {
@@ -2304,7 +2361,7 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_then_the_skill_then_agents_md_each_saying_its_rank() {
+    fn the_agent_then_the_environment_then_the_skill_then_agents_md_each_saying_its_rank() {
         use elitea_local_tools::project_instructions::InstructionFile;
         let project = ProjectInstructions {
             files: vec![InstructionFile {
@@ -2318,9 +2375,12 @@ mod tests {
             name: "Style".into(),
             instructions: "Write tersely.".into(),
         }];
-        let assembled = with_project_instructions(
-            &skills::with_invoked_skills("Be brief.", &skill, NONCE),
+        let assembled = system_instruction(
+            "Be brief.",
+            "## Environment\n- Today: 2026-10-10",
+            &skill,
             &project,
+            "Memory: tea.",
             NONCE,
         );
         let at = |needle: &str| {
@@ -2330,6 +2390,7 @@ mod tests {
         };
         let order = [
             at("Be brief."),
+            at("## Environment"),
             at(skills::SKILLS_HEADING),
             at(skills::SKILLS_PRECEDENCE),
             at("Write tersely."),
@@ -2338,20 +2399,23 @@ mod tests {
             at(PROJECT_PRECEDENCE),
             at("Run task test."),
             at(END_OF_PROJECT_INSTRUCTIONS),
+            at("Memory: tea."),
         ];
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{assembled}");
+        // The host's section is trusted: it is not framed under the nonce.
+        assert!(!assembled[..at(skills::SKILLS_HEADING)].contains(NONCE));
         // Each preamble names what outranks it and what it outranks.
-        assert!(
-            skills::SKILLS_PRECEDENCE.contains("agent's own instructions above outrank this skill")
-        );
+        assert!(skills::SKILLS_PRECEDENCE.contains(
+            "agent's own instructions and the environment section above outrank this skill"
+        ));
         assert!(
             skills::SKILLS_PRECEDENCE
                 .contains("this skill outranks the workspace's project instructions (AGENTS.md)")
         );
         assert!(PROJECT_PRECEDENCE.contains("rank last"));
-        assert!(
-            PROJECT_PRECEDENCE.contains("any skill picked for this turn, both above, outrank them")
-        );
+        assert!(PROJECT_PRECEDENCE.contains(
+            "the environment section and any skill picked for this turn, all above, outrank them"
+        ));
     }
 
     #[test]

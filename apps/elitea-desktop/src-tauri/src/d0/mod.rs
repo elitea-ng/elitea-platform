@@ -20,6 +20,7 @@
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
 //! * [`skills`] — a skill picked with "/", applied to one turn;
 //! * [`framing`] — framing text the instructions carry but do not author;
+//! * [`environment`] — the host's `## Environment` section of the prompt;
 //! * [`session`] — a turn's session: reopened from `sessions.sqlite`, seeded
 //!   from the server conversation when it has nothing (the execution
 //!   request's `chat_history` stays empty: the session carries the history);
@@ -28,6 +29,7 @@
 pub mod api;
 pub mod approvals;
 pub mod definition;
+pub mod environment;
 pub mod events;
 pub mod framing;
 pub mod mentions;
