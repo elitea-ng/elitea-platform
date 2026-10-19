@@ -4,6 +4,18 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## elitea-main publishes and reads one more live-update subject
+
+**Affects:** installs that run their own NATS permission table instead of the
+`deploy/helm/nats` chart's. The chart's table already has the change.
+
+elitea-main publishes per-interrupt HITL live events (`agent_hitl_resolved`,
+`agent_fanout_wake_admitted`) on `elitea.events.project.<id>.conversation` in
+the `MAIN` account, and the project SSE route reads it. Add
+`elitea.events.project.*.conversation` to the `elitea-main` user's publish and
+subscribe allow lists. Without it the live events are refused by NATS; open tabs
+then see the change on reload only.
+
 ## Default-deny NetworkPolicies; an ingress decision is required
 
 **Affects:** every install of the `deploy/helm/elitea` chart. A CNI that

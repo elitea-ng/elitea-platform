@@ -289,7 +289,7 @@ type FanoutWakeKicker interface {
 }
 
 // InterruptLiveEvents publishes one event on the project SSE plane's
-// audience-scoped family. The payload carries an "audience" member (the user
+// audience-scoped conversation family (events.ConversationChannel). The payload carries an "audience" member (the user
 // ids allowed to receive it); the SSE relay delivers the frame only to those
 // callers and strips the member.
 type InterruptLiveEvents interface {

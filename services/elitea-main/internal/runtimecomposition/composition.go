@@ -165,7 +165,7 @@ type Dependencies struct {
 	DomainEvents pipelineruns.EventEmitter
 	// InterruptLiveEvents publishes the per-interrupt ledger's live frames
 	// (agent_hitl_resolved, agent_fanout_wake_admitted) on the project SSE
-	// plane's audience-scoped family. Nil without a live-update plane: the
+	// plane's audience-scoped conversation family. Nil without a live-update plane: the
 	// durable replay copy remains.
 	InterruptLiveEvents repos.InterruptLiveEvents
 	// Workspace is the cloud executor's handoff seam (ADR-0034, workspace.go

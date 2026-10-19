@@ -240,6 +240,23 @@ func NewWorkspacePublisher(bus Bus) *Publisher {
 	return &Publisher{bus: bus, channel: WorkspaceChannel}
 }
 
+// ConversationChannel is the logical channel of one project's conversation
+// live events (fanout-interrupt-decisions v1.1 §8.1: agent_hitl_resolved,
+// agent_fanout_wake_admitted): NATS subject
+// elitea.events.project.<id>.conversation, in elitea-main's own NATS account,
+// published by elitea-main alone. Every frame names its audience (the
+// conversation's readers); the SSE stream relays it only to them and strips
+// the audience.
+func ConversationChannel(projectID string) string {
+	return fmt.Sprintf("project:%s:conversation", projectID)
+}
+
+// NewConversationPublisher builds the Publisher conversation live events go
+// through: onto ConversationChannel, and to no sink.
+func NewConversationPublisher(bus Bus) *Publisher {
+	return &Publisher{bus: bus, channel: ConversationChannel}
+}
+
 type DomainEvent struct {
 	ProjectID  string `json:"project_id"`
 	EntityID   string `json:"entity_id"`

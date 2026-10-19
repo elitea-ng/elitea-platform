@@ -416,9 +416,13 @@ the pending fan-out node and fetches.
     job is admitted, so open tabs attach to that execution's stream;
   - also wakes the replay stream of the response's latest execution, and keeps the durable replay-log copy for reload.
 
-  Both project-plane events use the plane's audience-scoped family (subject `elitea.events.project.<id>.workspace`, the
-  workspace handoff's): each frame names the conversation's readers (its author and user participants, computed in the
-  committing transaction, at most 256), the relay delivers it only to a caller in that list and strips the list.
+  Both project-plane events use their own audience-scoped family, the **conversation** family: NATS subject
+  `elitea.events.project.<id>.conversation`, logical channel `project:<id>:conversation`, MAIN account, published by
+  elitea-main only (`deploy/helm/nats/values.yaml`, `deploy/helm/nats/README.md`). The SSE route relays exactly these two
+  types from it. Each frame names the conversation's readers (its author and user participants, computed in the
+  committing transaction, at most 256); the relay delivers it only to a caller in that list and strips the list. Web
+  receives them on the project stream it already holds, as SSE events named `agent_hitl_resolved` and
+  `agent_fanout_wake_admitted`.
   A conversation with more readers gets no live copy. Live delivery is at most once; a lost event costs latency only
   (reload or the next frame reconciles).
 

@@ -103,11 +103,11 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 		t.Fatal("Stream did not return after ctx cancel")
 	}
 
-	if got := strings.Join(src.channels, ","); got != "project:42:events,project:42:presence,project:42:workspace" {
-		t.Errorf("subscribed channels = %q, want the gateway's, the presence and the workspace family of project 42", got)
+	if got := strings.Join(src.channels, ","); got != "project:42:events,project:42:presence,project:42:workspace,project:42:conversation" {
+		t.Errorf("subscribed channels = %q, want the gateway's, the presence, the workspace and the conversation family of project 42", got)
 	}
-	if src.cancelled() != 3 {
-		t.Errorf("cancel funcs called %d times, want 3 (one per family)", src.cancelled())
+	if src.cancelled() != 4 {
+		t.Errorf("cancel funcs called %d times, want 4 (one per family)", src.cancelled())
 	}
 
 	body := rec.Body.String()
@@ -241,11 +241,14 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 	}
 	// The third family (ADR-0034 workspace handoff) is audience-scoped: it
 	// reaches only each frame's readers (TestStream_WorkspaceHandoff...).
-	if len(streamFamilies) != 3 {
-		t.Errorf("streamFamilies has %d entries, want 3; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
+	// The fourth (conversation live events, fanout-interrupt-decisions) is
+	// audience-scoped too (TestStream_InterruptFramesReachOnly...).
+	if len(streamFamilies) != 4 {
+		t.Errorf("streamFamilies has %d entries, want 4; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
 	}
 	for _, f := range streamFamilies {
-		if f.audience != slices.Contains(f.eventTypes, WorkspaceHandoffEventType) {
+		scoped := slices.Contains(f.eventTypes, WorkspaceHandoffEventType) || slices.Contains(f.eventTypes, InterruptResolvedEventType)
+		if f.audience != scoped {
 			t.Errorf("family %v audience scoping = %v", f.eventTypes, f.audience)
 		}
 	}
@@ -264,12 +267,15 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 		{"project:7:presence", "workspace.handoff", false},
 		{"project:7:events", "workspace.handoff", false},
 		{"project:7:workspace", "canvas.editors", false},
-		{"project:7:workspace", "agent_hitl_resolved", true},
-		{"project:7:workspace", "agent_fanout_wake_admitted", true},
+		{"project:7:conversation", "agent_hitl_resolved", true},
+		{"project:7:conversation", "agent_fanout_wake_admitted", true},
+		{"project:7:workspace", "agent_hitl_resolved", false},
+		{"project:7:workspace", "agent_fanout_wake_admitted", false},
+		{"project:7:conversation", "workspace.handoff", false},
 		{"project:7:presence", "agent_hitl_resolved", false},
 		{"project:7:events", "agent_hitl_resolved", false},
 		{"project:7:events", "agent_fanout_wake_admitted", false},
-		{"project:8:workspace", "agent_hitl_resolved", false},
+		{"project:8:conversation", "agent_hitl_resolved", false},
 	} {
 		if got := ForwardedOn("7", c.channel, c.eventType); got != c.want {
 			t.Errorf("ForwardedOn(7, %q, %q) = %v, want %v", c.channel, c.eventType, got, c.want)
@@ -297,8 +303,8 @@ func TestStream_ReturnsWhenSourceChannelCloses(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stream did not return when source channel closed")
 	}
-	if src.cancelled() != 3 {
-		t.Errorf("cancel funcs called %d times, want 3", src.cancelled())
+	if src.cancelled() != 4 {
+		t.Errorf("cancel funcs called %d times, want 4", src.cancelled())
 	}
 }
 
@@ -624,11 +630,12 @@ func TestStream_WorkspaceHandoffReachesOnlyItsAudience(t *testing.T) {
 	}
 }
 
-// The ledger's live frames ride the audience-scoped family: a reader of the
-// conversation gets each one, without the audience; another project viewer,
-// an anonymous caller and a token without an owner get nothing.
+// The ledger's live frames ride the audience-scoped conversation family: a
+// reader of the conversation gets each one, without the audience; another
+// project viewer, an anonymous caller and a token without an owner get
+// nothing; and the same frames on the workspace handoff family are dropped.
 func TestStream_InterruptFramesReachOnlyConversationReaders(t *testing.T) {
-	stream := func(user *auth.User) string {
+	stream := func(user *auth.User, channel string) string {
 		t.Helper()
 		src := newFakeSource()
 		h := NewHandlerFromSource(src)
@@ -649,14 +656,14 @@ func TestStream_InterruptFramesReachOnlyConversationReaders(t *testing.T) {
 			{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"conversation_id":"c-3","root_response_id":"r-3"}`)},
 		}
 		for _, frame := range frames {
-			src.stream("project:7:workspace") <- frame
+			src.stream(channel) <- frame
 		}
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 		<-done
 		return rec.Body.String()
 	}
-	reader := stream(&auth.User{ID: "8", UserID: "8"})
+	reader := stream(&auth.User{ID: "8", UserID: "8"}, "project:7:conversation")
 	if strings.Count(reader, "event: agent_hitl_resolved") != 1 || strings.Count(reader, "event: agent_fanout_wake_admitted") != 1 ||
 		!strings.Contains(reader, `"interrupt_key":"k1"`) || !strings.Contains(reader, `"execution_id":"e-1"`) {
 		t.Fatalf("the reader did not get the conversation's frames: %q", reader)
@@ -671,8 +678,11 @@ func TestStream_InterruptFramesReachOnlyConversationReaders(t *testing.T) {
 		"no user":           nil,
 		"a token, no owner": {ID: "t-1", TokenID: "t-1", AuthType: "token"},
 	} {
-		if body := stream(user); strings.Contains(body, "agent_") {
+		if body := stream(user, "project:7:conversation"); strings.Contains(body, "agent_") {
 			t.Fatalf("%s got an interrupt frame: %q", name, body)
 		}
+	}
+	if body := stream(&auth.User{ID: "8", UserID: "8"}, "project:7:workspace"); strings.Contains(body, "agent_") {
+		t.Fatalf("the workspace handoff family relayed an interrupt frame: %q", body)
 	}
 }

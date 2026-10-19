@@ -366,10 +366,11 @@ mainp = users.get(URI("elitea-main"), {})
 check("elitea-main publishes presence on its own family, never the gateway's",
       "elitea.events.project.*.presence" in mainp.get("publish", {}).get("allow", [])
       and "elitea.events.project.*.workspace" in mainp.get("publish", {}).get("allow", [])
+      and "elitea.events.project.*.conversation" in mainp.get("publish", {}).get("allow", [])
       and not any(p.startswith("gateway.") for p in mainp.get("publish", {}).get("allow", []))
       and "gateway.>" in mainp.get("publish", {}).get("deny", []), mainp.get("publish"))
-check("elitea-main reads exactly the three families the SSE route forwards",
-      sorted(mainp.get("subscribe", {}).get("allow", [])) == sorted(["elitea.events.project.*.presence", "elitea.events.project.*.workspace", ALERTS, "_INBOX_elitea-main.>"]), mainp.get("subscribe"))
+check("elitea-main reads exactly the four families the SSE route forwards",
+      sorted(mainp.get("subscribe", {}).get("allow", [])) == sorted(["elitea.events.project.*.presence", "elitea.events.project.*.workspace", "elitea.events.project.*.conversation", ALERTS, "_INBOX_elitea-main.>"]), mainp.get("subscribe"))
 gwp = users.get(URI("elitea-llm-gateway"), {}).get("publish", {}).get("allow", [])
 check("the gateway cannot publish on elitea-main's presence family", not any(p.startswith("elitea.") for p in gwp), gwp)
 RT_DURABLES = (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))

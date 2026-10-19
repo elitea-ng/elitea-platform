@@ -93,13 +93,15 @@ const StreamPermission = "models.project_context.view"
 //     thread (a Local work thread is its owner's alone), the stream relays it
 //     only to a caller in that list, and strips the list. The payload is the
 //     conversation, its state, epoch and reclaim_pending; never stats or
-//     paths. The same audience-scoped family also carries the per-interrupt
-//     HITL ledger's live frames (fanout-interrupt-decisions v1.1 §9), each
-//     addressed to the conversation's readers (its author and user
-//     participants): agent_hitl_resolved (the fanout-interrupt-resolved
-//     object, never a decision value, plus conversation_id and
-//     root_response_id) and agent_fanout_wake_admitted (conversation_id,
-//     root_response_id, execution_id, generation).
+//     paths.
+//   - conversation live events (fanout-interrupt-decisions v1.1 §8.1):
+//     events.ConversationChannel → elitea.events.project.<id>.conversation,
+//     MAIN, published by elitea-main alone. AUDIENCE-SCOPED like the
+//     workspace family: a frame names the conversation's readers (its author
+//     and user participants). agent_hitl_resolved carries the
+//     fanout-interrupt-resolved object (never a decision value) plus
+//     conversation_id and root_response_id; agent_fanout_wake_admitted
+//     carries conversation_id, root_response_id, execution_id, generation.
 var streamFamilies = []struct {
 	channel    func(projectID string) string
 	eventTypes []string
@@ -108,7 +110,8 @@ var streamFamilies = []struct {
 }{
 	{events.ProjectChannel, []string{events.EventBudgetSoftAlert}, false},
 	{events.PresenceChannel, []string{canvaspresence.EventType}, false},
-	{events.WorkspaceChannel, []string{WorkspaceHandoffEventType, InterruptResolvedEventType, FanoutWakeAdmittedEventType}, true},
+	{events.WorkspaceChannel, []string{WorkspaceHandoffEventType}, true},
+	{events.ConversationChannel, []string{InterruptResolvedEventType, FanoutWakeAdmittedEventType}, true},
 }
 
 // InterruptResolvedEventType and FanoutWakeAdmittedEventType are the

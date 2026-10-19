@@ -83,6 +83,11 @@ const presenceSuffix = ":presence"
 // elitea-main's own account, like presence.
 const workspaceSuffix = ":workspace"
 
+// conversationSuffix marks a channel of the conversation live-event family
+// (fanout-interrupt-decisions v1.1 §8.1): project:<id>:conversation →
+// elitea.events.project.<id>.conversation, elitea-main's own account.
+const conversationSuffix = ":conversation"
+
 // ConnectTimeout bounds the initial dial and every request the client makes so
 // a NATS partition fails fast rather than hanging (design §8.5, matches the
 // gateway NATS client's 1s Timeout).
@@ -169,7 +174,8 @@ func subjectFor(channel string) string {
 	if channel == "" {
 		return SubjectRoot
 	}
-	if (strings.HasSuffix(channel, presenceSuffix) || strings.HasSuffix(channel, workspaceSuffix)) &&
+	if (strings.HasSuffix(channel, presenceSuffix) || strings.HasSuffix(channel, workspaceSuffix) ||
+		strings.HasSuffix(channel, conversationSuffix)) &&
 		!strings.Contains(channel, "*") {
 		return PresenceSubjectRoot + "." + strings.ReplaceAll(channel, ":", ".")
 	}

@@ -324,6 +324,12 @@ nats:
                     # family too; the SSE route relays them only to each
                     # frame's audience (the thread's readers).
                     - "elitea.events.project.*.workspace"
+                    # Conversation live events (fanout-interrupt-decisions
+                    # v1.1 §8.1: agent_hitl_resolved,
+                    # agent_fanout_wake_admitted): its own family; the SSE
+                    # route relays them only to each frame's audience (the
+                    # conversation's readers).
+                    - "elitea.events.project.*.conversation"
                     # Presence Put/Delete.
                     - "$KV.ELITEA_CANVAS_PRESENCE.>"
                     # Bind (js.KeyValue) and the bucket status check.
@@ -349,9 +355,10 @@ nats:
                     - "$JS.API.ACCOUNT.PURGE.>"
                 subscribe:
                   allow:
-                    # The three families the project SSE route reads.
+                    # The four families the project SSE route reads.
                     - "elitea.events.project.*.presence"
                     - "elitea.events.project.*.workspace"
+                    - "elitea.events.project.*.conversation"
                     - "gateway.events.project.*.events"
                     - "_INBOX_elitea-main.>"
 

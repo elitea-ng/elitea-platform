@@ -332,3 +332,52 @@ func waitRoster(t *testing.T, store *v2canvaspresence.NATSStore, key string, wan
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// The conversation live-event family (fanout-interrupt-decisions v1.1 §8.1)
+// runs on the NATS chart's permissions: elitea-main publishes the ledger's
+// frames through its real adapter and reads them back on the subject the SSE
+// route subscribes to, with no violation; the gateway cannot publish there.
+func TestSecuredConversationFamilyRunsOnTheChartsPermissions(t *testing.T) {
+	s := natstest.Start(t)
+	s.Bootstrap(t, nil)
+	ctx := context.Background()
+	env := s.Lookup(eventsNATSPrefix, natsconn.IdentityMain, map[string]string{eventsNATSURLEnv: s.URL()})
+	conn, err := newEventsNATSConn(env, nil)
+	if err != nil || conn == nil {
+		t.Fatalf("newEventsNATSConn as elitea-main = (%v, %v)\nserver log:\n%s", conn, err, s.Log())
+	}
+	t.Cleanup(conn.Close)
+	bus := natsbus.NewFromConn(conn, "elitea-main")
+	events, cancel, err := bus.Raw(ctx, "project:42:conversation")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer cancel()
+	if err := conn.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	newInterruptLiveEvents(bus).PublishInterruptEvent(ctx, 42, "agent_hitl_resolved",
+		map[string]any{"conversation_id": "c-1", "root_response_id": "r-1", "audience": []int64{7}})
+	select {
+	case ev := <-events:
+		if ev.Type != "agent_hitl_resolved" || !strings.Contains(string(ev.Payload), `"audience":[7]`) {
+			t.Errorf("relayed %q %s", ev.Type, ev.Payload)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the published frame never reached the subscriber\nserver log:\n%s", s.Log())
+	}
+	s.RequireNoViolations(t, natsconn.IdentityMain)
+
+	gw, err := nats.Connect(s.URL(),
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(natsconn.IdentityGateway)),
+		nats.Secure(natsconn.BaseTLSConfig()),
+		nats.ClientTLSConfig(s.Material(natsconn.IdentityGateway).ClientCertificate, s.Material(natsconn.IdentityGateway).RootCAs),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(gw.Close)
+	_ = gw.Publish("elitea.events.project.42.conversation", []byte(`{"type":"agent_hitl_resolved"}`))
+	_ = gw.Flush()
+	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "elitea.events.project.42.conversation")
+}
