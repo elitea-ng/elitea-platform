@@ -456,18 +456,12 @@ impl ApplicationNode {
         if error.code != crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
             return node_failure(self.name());
         }
-        if let Some(events) = &self.failure_events
-            && events
-                .send_execution_failure(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE)
-                .await
-                .is_err()
-        {
+        let Some(events) = &self.failure_events else {
             return node_failure(self.name());
-        }
-        GraphError::NodeExecutionFailed {
-            node: self.name().to_owned(),
-            message: "the approved tool call may already have started; it was not repeated"
-                .to_owned(),
+        };
+        match events.recovery_refused(self.name()).await {
+            Some(error) => error,
+            None => node_failure(self.name()),
         }
     }
 

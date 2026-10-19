@@ -113,7 +113,8 @@ FOR UPDATE`,
 		var terminalEventID, payloadType string
 		var payloadBytes []byte
 		err = tx.QueryRow(ctx, `
-SELECT o.event_id, o.payload_type, o.payload_bytes
+SELECT o.event_id, o.payload_type,
+       CASE WHEN o.payload_type = 'RUNTIME_FAILURE' THEN o.payload_bytes END
 FROM elitea_runtime.output_inbox AS o
 JOIN elitea_runtime.execution_claims AS source_claim
   ON source_claim.claim_id = o.claim_id

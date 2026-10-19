@@ -65,6 +65,9 @@ pub(crate) struct SensitiveToolCatalog {
     other_tools: BTreeMap<SensitiveToolIdentity, bool>,
     /// Provider names of read-only `other_tools`, each naming exactly one tool.
     read_only_provider_names: BTreeSet<Box<str>>,
+    /// Test-only: how often the unqualified names were rebuilt (budget test).
+    #[cfg(test)]
+    rebuilds: usize,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -120,16 +123,30 @@ impl SensitiveToolCatalog {
     /// # Errors
     ///
     /// The catalog already holds a `local.run_command` entry.
+    /// The catalog's provider names are kept as they are: it is added after
+    /// `bind_provider_names`, and rebuilding the unqualified names here would
+    /// drop every renamed tool's binding. A provider name already taken by
+    /// another tool is ambiguous and refused.
     pub(crate) fn with_workspace_command(mut self) -> Result<Self, NativeAgentAssemblyError> {
-        self.insert_scoped(
-            "local",
-            "run_command",
-            SensitiveToolEntry {
-                policy: SensitiveToolPolicy::workspace_command(),
-                read_only: false,
-                conditional: true,
-            },
-        )?;
+        const TOOLKIT: &str = "local";
+        const TOOL: &str = "run_command";
+        let entry = SensitiveToolEntry {
+            policy: SensitiveToolPolicy::workspace_command(),
+            read_only: false,
+            conditional: true,
+        };
+        let identity = SensitiveToolIdentity {
+            toolkit_name: TOOLKIT.into(),
+            tool_name: TOOL.into(),
+        };
+        if self.scoped_entries.contains_key(&identity)
+            || self.provider_entries.contains_key(TOOL)
+            || self.read_only_provider_names.contains(TOOL)
+        {
+            return Err(invalid_configuration());
+        }
+        self.scoped_entries.insert(identity, entry.clone());
+        self.provider_entries.insert(TOOL.into(), entry);
         Ok(self)
     }
 
@@ -242,7 +259,6 @@ impl SensitiveToolCatalog {
         if self.other_tools.insert(identity, read_only).is_some() {
             return Err(invalid_configuration());
         }
-        self.rebuild_unqualified_provider_entries();
         Ok(())
     }
 
@@ -262,11 +278,16 @@ impl SensitiveToolCatalog {
         if self.scoped_entries.insert(identity, entry).is_some() {
             return Err(invalid_configuration());
         }
-        self.rebuild_unqualified_provider_entries();
         Ok(())
     }
 
+    /// Derive the unqualified provider names from every scoped and other tool.
+    /// Callers insert first and rebuild once (O(N) per catalog, not per tool).
     fn rebuild_unqualified_provider_entries(&mut self) {
+        #[cfg(test)]
+        {
+            self.rebuilds += 1;
+        }
         let mut counts = BTreeMap::<&str, usize>::new();
         for identity in self.scoped_entries.keys() {
             *counts.entry(&identity.tool_name).or_default() += 1;
@@ -301,6 +322,7 @@ impl SensitiveToolCatalog {
     ) -> Self {
         self.insert_other(toolkit_name, tool_name, read_only)
             .expect("fixture tool identity");
+        self.rebuild_unqualified_provider_entries();
         self
     }
 
@@ -324,6 +346,7 @@ impl SensitiveToolCatalog {
                 conditional: false,
             },
         )?;
+        catalog.rebuild_unqualified_provider_entries();
         Ok(catalog)
     }
 }
@@ -390,6 +413,7 @@ pub(crate) async fn sensitive_tools_for_kind(
     if !toolsets_by_name.is_empty() {
         return Err(invalid_configuration());
     }
+    catalog.rebuild_unqualified_provider_entries();
     Ok(catalog)
 }
 
@@ -572,6 +596,100 @@ mod tests {
             Some("audit intelligence")
         );
         assert!(catalog.policy_for("lookup").is_none());
+    }
+
+    /// #1321 review round 2 item 4: the workspace command joins a catalog that
+    /// is already bound, and must not reset the bound (renamed) provider names.
+    #[tokio::test]
+    async fn the_workspace_command_keeps_bound_aliased_names() {
+        let policy = policy(json!({"sensitive_tools": {"mcp": ["lookup"]}}));
+        let mut catalog = SensitiveToolCatalog::default();
+        let mut toolsets = Vec::new();
+        for toolkit_name in ["release intelligence", "audit intelligence"] {
+            catalog
+                .insert_scoped(
+                    toolkit_name,
+                    "lookup",
+                    SensitiveToolEntry {
+                        policy: policy
+                            .sensitive_tool("mcp", toolkit_name, "lookup")
+                            .expect("sensitive fixture policy"),
+                        read_only: false,
+                        conditional: false,
+                    },
+                )
+                .expect("scoped sensitive tool");
+            catalog
+                .insert_other(toolkit_name, "search", true)
+                .expect("read-only sibling");
+            let tools: Vec<Arc<dyn Tool>> = ["lookup", "search"]
+                .into_iter()
+                .map(|name| {
+                    Arc::new(FunctionTool::new(name, "fixture", |_context, _arguments| async {
+                        Ok(json!({}))
+                    })) as Arc<dyn Tool>
+                })
+                .collect();
+            toolsets.push(Arc::new(BasicToolset::new(toolkit_name, tools)) as Arc<dyn Toolset>);
+        }
+        catalog.rebuild_unqualified_provider_entries();
+        let binding = bind_toolsets(toolsets, &BTreeSet::new(), "sensitive_alias_test")
+            .await
+            .expect("provider binding");
+        let catalog = catalog
+            .bind_provider_names(&binding)
+            .expect("bound sensitive catalog")
+            .with_workspace_command()
+            .expect("workspace command");
+        for aliased in ["release_intelligence__lookup", "audit_intelligence__lookup"] {
+            assert!(catalog.policy_for(aliased).is_some(), "{aliased} stays sensitive");
+            assert_eq!(catalog.reruns_after_dispatch(aliased), Some(false));
+        }
+        for aliased in ["release_intelligence__search", "audit_intelligence__search"] {
+            assert_eq!(
+                catalog.reruns_after_dispatch(aliased),
+                Some(true),
+                "the aliased read-only sibling {aliased} re-runs"
+            );
+        }
+        assert_eq!(catalog.reruns_after_dispatch("run_command"), Some(true));
+        assert!(catalog.policy_for("run_command").is_some());
+        assert!(
+            catalog.with_workspace_command().is_err(),
+            "a second workspace command is refused"
+        );
+    }
+
+    /// #1321 review round 2 item 6 (budget): enumerating N tools derives the
+    /// unqualified names once, not once per tool.
+    #[tokio::test]
+    async fn enumeration_rebuilds_the_unqualified_names_once() {
+        const TOOLS: usize = 256;
+        let policy = policy(json!({"sensitive_tools": {"mcp": ["tool_0"]}}));
+        let version = json!({
+            "tools": [{"id": 1, "type": "mcp", "toolkit_name": "kit", "settings": {}}]
+        });
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version object"))
+                .expect("frozen tools")
+                .apply_policy(policy.as_ref());
+        let tools = (0..TOOLS)
+            .map(|index| {
+                Arc::new(FunctionTool::new(
+                    format!("tool_{index}"),
+                    "fixture",
+                    |_context, _arguments| async { Ok(json!({})) },
+                )) as Arc<dyn Tool>
+            })
+            .collect();
+        let toolsets = vec![Arc::new(BasicToolset::new("kit", tools)) as Arc<dyn Toolset>];
+        let catalog =
+            sensitive_tools_for_kind(&snapshot, FrozenToolKind::Mcp, &toolsets, policy.as_ref())
+                .await
+                .expect("catalog");
+        assert_eq!(catalog.rebuilds, 1);
+        assert!(catalog.policy_for("tool_0").is_some());
+        assert_eq!(catalog.other_tools.len(), TOOLS - 1);
     }
 
     #[tokio::test]

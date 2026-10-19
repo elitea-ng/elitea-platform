@@ -340,19 +340,10 @@ impl PipelineApplicationNodeRuntime {
     /// The run ends with the registered recovery-refused reason, as an unscoped
     /// Agent node does (`graph/application.rs` `child_failure`).
     async fn may_have_started(&self) -> GraphError {
-        if self
-            .events
-            .send_execution_failure(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE)
+        self.events
+            .recovery_refused(&self.node_name)
             .await
-            .is_err()
-        {
-            return failure();
-        }
-        GraphError::NodeExecutionFailed {
-            node: self.node_name.clone(),
-            message: "the approved tool call may already have started; it was not repeated"
-                .to_owned(),
-        }
+            .unwrap_or_else(failure)
     }
 
     async fn drain(

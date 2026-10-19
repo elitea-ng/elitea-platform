@@ -212,6 +212,21 @@ impl PipelineNodeEventSender {
             .map_err(|_| pipeline_node_event_channel_error())
     }
 
+    /// End the run with the registered recovery-refused reason: an approved
+    /// tool call may already have started, so it is not repeated. Returns the
+    /// node's error, or `None` when the failure channel is closed (the caller
+    /// keeps its ordinary node failure).
+    pub(crate) async fn recovery_refused(&self, node: &str) -> Option<adk_rust::graph::GraphError> {
+        self.send_execution_failure(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE)
+            .await
+            .ok()?;
+        Some(adk_rust::graph::GraphError::NodeExecutionFailed {
+            node: node.to_owned(),
+            message: "the approved tool call may already have started; it was not repeated"
+                .to_owned(),
+        })
+    }
+
     /// Preserve safe codes and typed continuation causes, never provider messages.
     pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
         self.inner

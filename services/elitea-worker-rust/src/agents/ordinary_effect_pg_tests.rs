@@ -10,6 +10,15 @@
 //! * `crash_after_dispatch`: the approving Worker dies inside the tool; `recover` refuses with the
 //!   "may have started" cause and never calls the tool.
 //! * `stale`: a decision naming another interrupt is refused; the tool never runs.
+//! * `precheck_crash`: one message calls two sensitive tools. A is approved; the Worker dies after
+//!   the replayed message is persisted and before ADK's pre-check pause on B. Nothing ran, so the
+//!   replacement continues A (B's card again), and after B is approved each call runs once.
+//! * `nested_outcome_crash`: a nested Agent's approved call runs and its outcome is journaled;
+//!   the Worker dies at the child's next model request. The replacement serves the recorded
+//!   outcome (class R) and never calls the tool again.
+//!
+//! A replacement is the same execution re-claimed with a higher claim attempt, as Main does after
+//! a lease expires.
 
 use super::*;
 use crate::agents::pipeline_tests::restart_pg_tests::{
@@ -30,6 +39,9 @@ const PENDING_MARKER: &str = "ROOT_EFFECT_PENDING=";
 const EXIT_AFTER_DISPATCH: i32 = 86;
 const EXIT_AFTER_OUTCOME: i32 = 87;
 const EXIT_IN_BLOCKED_RESULT: i32 = 88;
+const EXIT_BEFORE_SIBLING_PAUSE: i32 = 89;
+/// The execution that approves and dies; its replacement re-claims it.
+const APPROVAL_EXECUTION: &str = "execution-approval";
 const GENERATION: u64 = 3;
 const DONE: &str = "root finished after the approved change";
 const LATER: &str = "root answered the later turn";
@@ -55,6 +67,17 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
             ("outcome_crash", EXIT_AFTER_OUTCOME),
             ("outcome_crash_again", EXIT_AFTER_OUTCOME),
             ("outcome_recover", 0),
+        ],
+        "precheck_crash" => &[
+            ("start_two", 0),
+            ("precheck_crash", EXIT_BEFORE_SIBLING_PAUSE),
+            ("recover_first", 0),
+            ("approve_second", 0),
+        ],
+        "nested_outcome_crash" => &[
+            ("nested_start", 0),
+            ("nested_crash", EXIT_AFTER_OUTCOME),
+            ("nested_recover", 0),
         ],
         other => panic!("unknown scenario {other}"),
     }
@@ -136,6 +159,16 @@ async fn postgres_root_recorded_outcome_survives_two_replaced_workers_without_a_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn postgres_root_replayed_message_before_a_sibling_pause_is_no_dispatch() {
+    run_scenario("precheck_crash").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_root_nested_recorded_outcome_is_served_after_process_replacement() {
+    run_scenario("nested_outcome_crash").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn postgres_root_decision_for_another_interrupt_is_refused() {
     run_scenario("stale").await;
 }
@@ -143,6 +176,7 @@ async fn postgres_root_decision_for_another_interrupt_is_refused() {
 struct EffectConnector {
     exit_in_execute: bool,
     calls: Arc<AtomicUsize>,
+    releases: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 #[async_trait]
@@ -156,6 +190,7 @@ impl McpConnector for EffectConnector {
             vec![Arc::new(EffectTool {
                 exit_in_execute: self.exit_in_execute,
                 calls: Arc::clone(&self.calls),
+                releases: Arc::clone(&self.releases),
             })],
         )))
     }
@@ -164,6 +199,7 @@ impl McpConnector for EffectConnector {
 struct EffectTool {
     exit_in_execute: bool,
     calls: Arc<AtomicUsize>,
+    releases: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 #[async_trait]
@@ -194,6 +230,10 @@ impl Tool for EffectTool {
             std::process::exit(EXIT_AFTER_DISPATCH);
         }
         self.calls.fetch_add(1, Ordering::AcqRel);
+        self.releases
+            .lock()
+            .expect("releases")
+            .push(arguments["release"].as_str().unwrap_or_default().to_owned());
         Ok(serde_json::json!({"recorded": arguments["release"], "effect": "written"}))
     }
 }
@@ -208,9 +248,27 @@ fn worker(
     Arc<AtomicUsize>,
 ) {
     let (runtime_context, _) = runtime_context_client_for_redemptions(2);
+    let (assembler, captured, calls, _) =
+        worker_with(pool, runtime_context, outcomes, exit_in_execute);
+    (assembler, captured, calls)
+}
+
+/// A Worker over `runtime_context`; also returns the releases the tool wrote, in order.
+fn worker_with(
+    pool: &sqlx::PgPool,
+    runtime_context: RuntimeContextClient,
+    outcomes: Vec<TestModelGatewayOutcome>,
+    exit_in_execute: bool,
+) -> (
+    OrdinaryNativeAgentAssembler,
+    crate::transport::openai_compatible_facade::CapturedModelRequests,
+    Arc<AtomicUsize>,
+    Arc<std::sync::Mutex<Vec<String>>>,
+) {
     let (model_gateway, captured) =
         test_model_gateway_client(outcomes, test_model_gateway_config()).expect("model gateway");
     let calls = Arc::new(AtomicUsize::new(0));
+    let releases = Arc::new(std::sync::Mutex::new(Vec::new()));
     let assembler = OrdinaryNativeAgentAssembler::new(
         platform_client(runtime_context),
         Arc::new(ModelFacade::from_gateway(model_gateway)),
@@ -219,9 +277,42 @@ fn worker(
     .with_mcp_connector(Arc::new(EffectConnector {
         exit_in_execute,
         calls: Arc::clone(&calls),
+        releases: Arc::clone(&releases),
     }))
     .with_postgres_sessions(pool.clone(), SessionLimits::default());
-    (assembler, captured, calls)
+    (assembler, captured, calls, releases)
+}
+
+/// One assistant message calling the sensitive tool twice (releases `a` and `b`).
+fn two_sensitive_calls_response() -> Response<Body> {
+    let calls: Vec<_> = [("call_a", "a"), ("call_b", "b")]
+        .iter()
+        .enumerate()
+        .map(|(index, (id, release))| {
+            serde_json::json!({
+                "index": index,
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": "lookup_release",
+                    "arguments": format!("{{\"release\":\"{release}\"}}")
+                }
+            })
+        })
+        .collect();
+    let frame =
+        serde_json::json!({"choices":[{"delta":{"tool_calls":calls},"finish_reason":null}]});
+    let raw = format!(
+        "data: {frame}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n"
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
+fn nested_request(digest: u8) -> super::super::request::AgentExecutionRequest {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    request.binding.request_content_digest = [digest; 32];
+    attach_nested_agent(&mut request);
+    request
 }
 
 fn turn<'a>(
@@ -615,6 +706,152 @@ async fn postgres_root_effect_child() {
                 0,
                 "outcome_recover: never re-run"
             );
+        }
+        "start_two" => {
+            let (assembler, _, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(
+                    two_sensitive_calls_response(),
+                )],
+                false,
+            );
+            let invocation = assembler
+                .assemble(turn(&request(), "execution-start", 1))
+                .await
+                .unwrap_or_else(|error| panic!("start_two: assemble refused: {error}"));
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "start_two: {failure:?}");
+            let card = card_of(&browser);
+            assert_eq!(card["tool_call_id"], "call_a", "start_two: A's card first");
+            assert_eq!(calls.load(Ordering::Acquire), 0);
+            println!("{PENDING_MARKER}{card}");
+        }
+        "precheck_crash" => {
+            crate::agents::session::EXIT_BEFORE_CONFIRMATION_APPEND
+                .store(EXIT_BEFORE_SIBLING_PAUSE, Ordering::Release);
+            let (assembler, _, _) = worker(&pool, Vec::new(), true);
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 50),
+                    APPROVAL_EXECUTION,
+                    2,
+                ))
+                .await
+                .expect("precheck_crash: assembles");
+            let _ = run_turn(invocation).await;
+            panic!("precheck_crash: the Worker did not die before B's pause");
+        }
+        "recover_first" => {
+            // Its tool exits if it is called: nothing may run before B is decided.
+            let (assembler, captured, _) = worker(&pool, Vec::new(), true);
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 50),
+                    APPROVAL_EXECUTION,
+                    3,
+                ))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("recover_first: the replayed message alone is no dispatch: {error}")
+                });
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "recover_first: {failure:?}");
+            let second = card_of(&browser);
+            assert_eq!(second["tool_call_id"], "call_b", "recover_first: B's card");
+            assert_eq!(captured.lock().expect("captured").len(), 0);
+            println!("{PENDING_MARKER}{second}");
+        }
+        "approve_second" => {
+            let (runtime_context, _) = runtime_context_client_for_redemptions(2);
+            let (assembler, _, calls, releases) = worker_with(
+                &pool,
+                runtime_context,
+                vec![TestModelGatewayOutcome::Response(text_response(DONE))],
+                false,
+            );
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 51),
+                    "execution-approve-second",
+                    1,
+                ))
+                .await
+                .unwrap_or_else(|error| panic!("approve_second: assemble refused: {error}"));
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "approve_second: {failure:?}");
+            assert!(said(&browser, DONE), "approve_second: {browser:?}");
+            assert_eq!(calls.load(Ordering::Acquire), 2);
+            let mut releases = releases.lock().expect("releases").clone();
+            releases.sort_unstable();
+            assert_eq!(releases, ["a", "b"], "approve_second: each call runs once");
+        }
+        "nested_start" => {
+            let (runtime_context, _) = runtime_context_with_sensitive_child();
+            let (assembler, _, calls, _) = worker_with(
+                &pool,
+                runtime_context,
+                vec![
+                    TestModelGatewayOutcome::Response(nested_agent_call_response()),
+                    TestModelGatewayOutcome::Response(mcp_tool_call_response()),
+                ],
+                false,
+            );
+            let invocation = assembler
+                .assemble(turn(&nested_request(60), "execution-start", 1))
+                .await
+                .unwrap_or_else(|error| panic!("nested_start: assemble refused: {error}"));
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "nested_start: {failure:?}");
+            assert_eq!(calls.load(Ordering::Acquire), 0);
+            println!("{PENDING_MARKER}{}", card_of(&browser));
+        }
+        "nested_crash" | "nested_recover" => {
+            let recover = phase == "nested_recover";
+            let (runtime_context, _) = runtime_context_with_sensitive_child();
+            // The replacement's tool exits if it is ever called.
+            let (assembler, captured, calls, _) = worker_with(
+                &pool,
+                runtime_context,
+                if recover {
+                    vec![
+                        TestModelGatewayOutcome::Response(text_response(
+                            "child recorded the release",
+                        )),
+                        TestModelGatewayOutcome::Response(text_response(DONE)),
+                    ]
+                } else {
+                    vec![TestModelGatewayOutcome::ExitProcess(EXIT_AFTER_OUTCOME)]
+                },
+                recover,
+            );
+            let mut approve = nested_request(61);
+            admit_approved_resume(
+                &mut approve,
+                card()["interrupt_id"].as_str().expect("interrupt id"),
+            );
+            let invocation = assembler
+                .assemble(turn(&approve, APPROVAL_EXECUTION, if recover { 3 } else { 2 }))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{phase}: assemble refused: {error} {:?}",
+                        error.cause().map(
+                            elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code
+                        )
+                    )
+                });
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(recover, "nested_crash: the Worker did not die at the child's model request");
+            assert!(failure.is_none(), "nested_recover: {failure:?}");
+            assert!(said(&browser, DONE), "nested_recover: {browser:?}");
+            assert_eq!(calls.load(Ordering::Acquire), 0, "nested_recover: never re-run");
+            let captured = captured.lock().expect("captured");
+            let child = String::from_utf8_lossy(&captured[0].body);
+            assert!(
+                child.contains("written"),
+                "nested_recover: the child model sees the recorded outcome: {child}"
+            );
+            println!("{PENDING_MARKER}{}", card());
         }
         "stale" => {
             let (assembler, _, calls) = worker(

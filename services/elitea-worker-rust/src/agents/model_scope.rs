@@ -130,7 +130,14 @@ impl ModelScopeSessions {
     /// The fenced root-session writer for nested dispatch records, when bound.
     pub(super) fn dispatch_journal(&self) -> Option<super::dispatch_journal::DispatchJournal> {
         self.root_identity.clone().map(|identity| {
-            super::dispatch_journal::DispatchJournal::new(self.sessions.root(), identity)
+            super::dispatch_journal::DispatchJournal::new(
+                self.sessions.root(),
+                identity,
+                super::dispatch_journal::DispatchOwner::new(
+                    self.execution_id.clone(),
+                    self.generation,
+                ),
+            )
         })
     }
 

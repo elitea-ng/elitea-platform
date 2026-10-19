@@ -389,6 +389,8 @@ impl DirectDelegatedAuthorizationContinuation {
                 DirectDelegatedAuthorizationAction::Skip => Some(ToolConfirmationDecision::Deny),
             },
             &replay_calls,
+            // An authorization continuation runs no approved effect of its own.
+            &super::dispatch_journal::RecordedDispatches::default(),
         )?;
         Ok(ResolvedDirectHitlDecision {
             invocation_id: confirmation_event.invocation_id.clone(),
@@ -969,6 +971,11 @@ fn resume_state(
             dispatched_siblings: recorded.dispatched,
         });
     }
+    // The root journals each approved call's dispatch before its effect; the
+    // replayed message alone proves none (see `dispatch_journal`).
+    let journal =
+        super::dispatch_journal::recorded_dispatches(later, &confirmation_event.invocation_id)
+            .map_err(|_| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
     persisted_replay_state_with_confirmation(
         later,
         user_content,
@@ -981,6 +988,7 @@ fn resume_state(
             Some(shape.decision)
         },
         replay_calls,
+        &journal,
     )
 }
 
@@ -1238,6 +1246,8 @@ pub(crate) struct DirectHitlReplay {
     blocked: Vec<BlockedToolReplay>,
     /// The invocation of the paused message this replay answers.
     decision_invocation_id: String,
+    /// The card this replay answers.
+    interrupt_id: String,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1273,6 +1283,13 @@ impl ResolvedDirectHitlDecision {
         self.dispatched = dispatched;
         self.dispatched_siblings = dispatched_siblings;
         self
+    }
+
+    /// Whether an earlier continuation dispatched this decision's call, or one
+    /// of its siblings, without a recorded outcome. Only calls that may not run
+    /// again are journaled, so such a call may have run and is never repeated.
+    pub(crate) fn has_unrecorded_dispatch(&self) -> bool {
+        self.dispatched || !self.dispatched_siblings.is_empty()
     }
 
     pub(crate) fn restore_authorization_scope(&self, catalog: &mut DelegatedAuthorizationCatalog) {
@@ -1457,6 +1474,7 @@ impl ResolvedDirectHitlDecision {
         }
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
+            interrupt_id: self.interrupt_id.clone(),
             calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
@@ -1496,6 +1514,7 @@ impl ResolvedDirectHitlDecision {
         }
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
+            interrupt_id: self.interrupt_id.clone(),
             approvals: vec![(self.call_id.clone(), self.fingerprint.clone())],
             blocked: vec![BlockedToolReplay {
                 call_id: self.call_id.clone(),
@@ -1549,6 +1568,7 @@ impl ResolvedDirectHitlDecision {
         }
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
+            interrupt_id: self.interrupt_id.clone(),
             approvals: blocked_result
                 .as_ref()
                 .map(|_| (self.call_id.clone(), self.fingerprint.clone()))
@@ -1590,9 +1610,12 @@ fn authorization_scope(
 }
 
 impl DirectHitlReplay {
-    /// The invocation of the paused message this replay answers.
-    pub(crate) fn decision_invocation_id(&self) -> &str {
-        &self.decision_invocation_id
+    /// What this replay's journaled calls answer: the paused message and card.
+    pub(crate) fn journal_decision(&self) -> super::dispatch_journal::JournalDecision<'_> {
+        super::dispatch_journal::JournalDecision {
+            invocation_id: &self.decision_invocation_id,
+            interrupt_id: &self.interrupt_id,
+        }
     }
 
     /// The calls this replay will really execute: every call of the message
@@ -2482,6 +2505,7 @@ fn settled_decision(
     Ok(settled)
 }
 
+#[allow(clippy::too_many_arguments)] // One ordered proof of the exact replay suffix and its journal.
 fn persisted_replay_state_with_confirmation(
     events: &[Event],
     user_content: &Content,
@@ -2490,7 +2514,10 @@ fn persisted_replay_state_with_confirmation(
     arguments: &Value,
     confirmation_decision: Option<ToolConfirmationDecision>,
     replay_calls: &[ReplayCall],
+    journal: &super::dispatch_journal::RecordedDispatches,
 ) -> Result<PersistedReplayState, DirectHitlError> {
+    let journaled =
+        |id: &str| journal.dispatched.contains(id) || journal.completed.contains_key(id);
     let mut replay_invocation = None;
     let mut call_pending = false;
     let mut result_persisted = None;
@@ -2550,19 +2577,19 @@ fn persisted_replay_state_with_confirmation(
         } else {
             ReplayResumeMode::ExecuteCall
         },
-        // A dispatched call with no result is an effect of unknown outcome, unless
-        // this decision is a Deny: the exact marker proves the earlier continuation
-        // was the same Deny, whose local adapter has no effect, so its blocked result
-        // is served again.
-        dispatched: call_pending
-            && result_persisted.is_none()
-            && confirmation_decision != Some(ToolConfirmationDecision::Deny),
-        // The replayed message dispatched every call it carries together.
+        // A replayed call is a dispatch only when the journal recorded one before
+        // its effect. ADK persists the replayed message and may then pause on an
+        // undecided sensitive sibling without running any tool; and a Deny's local
+        // adapter has no effect and is never journaled, so its blocked result is
+        // served again. A journaled call with no result has an unknown outcome.
+        dispatched: call_pending && result_persisted.is_none() && journaled(call_id),
         dispatched_siblings: if call_pending {
             replay_calls
                 .iter()
                 .filter(|call| {
-                    call.call_id != call_id && !sibling_results.contains_key(&call.call_id)
+                    call.call_id != call_id
+                        && !sibling_results.contains_key(&call.call_id)
+                        && journaled(&call.call_id)
                 })
                 .map(|call| call.call_id.clone())
                 .collect()

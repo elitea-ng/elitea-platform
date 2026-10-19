@@ -804,7 +804,7 @@ async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_afte
         THREAD,
     ))
     .expect("bounded wrong call")
-    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD, &crate::agents::dispatch_journal::DispatchOwner::new("execution-test", 1))
     .await;
     let Err(wrong_call) = wrong_call else {
         panic!("wrong call must be stale");
@@ -818,7 +818,7 @@ async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_afte
         THREAD,
     ))
     .expect("approved Toolkit decision")
-    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD, &crate::agents::dispatch_journal::DispatchOwner::new("execution-test", 1))
     .await
     .expect("checkpoint-bound Toolkit resume")
     .into_parts()
@@ -857,7 +857,7 @@ async fn sensitive_toolkit_graph_resumes_exact_checkpoint_and_executes_once_afte
         THREAD,
     ))
     .expect("same decision")
-    .resolve(completed.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(completed.as_ref(), checkpointer.as_ref(), ROOT, THREAD, &crate::agents::dispatch_journal::DispatchOwner::new("execution-test", 1))
     .await;
     let Err(replay) = replay else {
         panic!("completed call cannot replay");
@@ -1231,7 +1231,7 @@ async fn resolve_routed_continuation(
         .unwrap_or_else(|error| panic!("routing refused the continuation: {error:?}"))
     {
         PipelineNativeStart::Hitl(decision) => decision
-            .resolve(session, checkpointer, root, thread)
+            .resolve(session, checkpointer, root, thread, &crate::agents::dispatch_journal::DispatchOwner::new("execution-test", 1))
             .await
             .map(|resolved| {
                 let (resume, application) = resolved.into_parts();
@@ -1794,7 +1794,7 @@ async fn blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_re
         THREAD,
     ))
     .expect("reject decision")
-    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD)
+    .resolve(session.as_ref(), checkpointer.as_ref(), ROOT, THREAD, &crate::agents::dispatch_journal::DispatchOwner::new("execution-test", 1))
     .await
     .expect("checkpoint-bound reject")
     .into_parts()

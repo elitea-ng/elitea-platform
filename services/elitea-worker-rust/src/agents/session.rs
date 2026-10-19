@@ -1518,6 +1518,23 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     }
 }
 
+/// Test-only: exit the process with this code before the Runner persists a
+/// confirmation (pause) event: a Worker that dies after a replayed message and
+/// before ADK's pre-check pause on an undecided sibling is durable.
+#[cfg(test)]
+pub(crate) static EXIT_BEFORE_CONFIRMATION_APPEND: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+
+#[cfg(test)]
+fn exit_before_confirmation_append(event: &Event) {
+    if event.actions.tool_confirmation.is_some()
+        && let code @ 1.. =
+            EXIT_BEFORE_CONFIRMATION_APPEND.load(std::sync::atomic::Ordering::Acquire)
+    {
+        std::process::exit(code);
+    }
+}
+
 pub(super) struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
     completion: Option<Arc<dyn DurableModelCompletion>>,
@@ -1628,6 +1645,8 @@ impl SessionService for RunnerSessionService {
         if self.omit_resume_input(&event) {
             return Ok(());
         }
+        #[cfg(test)]
+        exit_before_confirmation_append(&event);
         self.inner
             .append_event(session_id, self.durable_event(event)?)
             .await
@@ -1637,6 +1656,8 @@ impl SessionService for RunnerSessionService {
         if self.omit_resume_input(&req.event) {
             return Ok(());
         }
+        #[cfg(test)]
+        exit_before_confirmation_append(&req.event);
         self.inner
             .append_event_for_identity(AppendEventRequest {
                 identity: req.identity,
@@ -1976,23 +1997,39 @@ async fn resolve_pipeline_start(
         }
         PipelineNativeStart::Hitl(decision) => {
             let session = restore_pipeline_session(state, plan).await?;
+            let owner = super::dispatch_journal::DispatchOwner::new(
+                plan.execution_id.clone(),
+                plan.generation,
+            );
             let resolved = decision
                 .resolve(
                     session.as_ref(),
                     state.checkpointer.as_ref(),
                     ROOT_AGENT_NAME,
                     plan.session_id.as_ref(),
+                    &owner,
                 )
                 .await
                 .map_err(|error| pipeline_resume_error(&error))?;
             let (resume, application_decisions) = resolved.into_parts();
             if let Some(decisions) = application_decisions {
                 let events = session.events().all();
-                let interrupt = super::dispatch_journal::continuation_pause(&events, |event| {
-                    event
-                        .provider_metadata
-                        .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
-                })
+                let interrupt = super::dispatch_journal::continuation_pause(
+                    &events,
+                    |event| {
+                        event
+                            .provider_metadata
+                            .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
+                    },
+                    &owner,
+                    |pause| {
+                        super::graph::resume::pause_interrupt_ids(
+                            pause,
+                            ROOT_AGENT_NAME,
+                            plan.session_id.as_ref(),
+                        )
+                    },
+                )
                 .ok_or_else(invalid_configuration)?;
                 let binding = super::events::pipeline_application_event_binding(
                     interrupt,
@@ -2698,9 +2735,10 @@ async fn prepare_direct_resume(
     stored: &dyn Session,
     runtime: OrdinaryRuntimeBindings,
     start: DirectResumeStart,
+    journal: &super::dispatch_journal::DispatchJournal,
 ) -> Result<PreparedDirectResume, NativeAgentAssemblyError> {
     let OrdinaryRuntimeBindings {
-        toolsets,
+        mut toolsets,
         sensitive_tools,
         mut delegated_authorization,
         internal_tools,
@@ -2744,9 +2782,20 @@ async fn prepare_direct_resume(
                     .into_clarifying_question_replay()
                     .map_err(|error| direct_hitl_error(&error))?
             } else {
-                (*decision)
+                let replay = (*decision)
                     .into_direct_replay(&sensitive_tools)
-                    .map_err(|error| direct_hitl_error(&error))?
+                    .map_err(|error| direct_hitl_error(&error))?;
+                // Each approved call that may not simply run again journals its
+                // dispatch before its effect (one root append; the Runner
+                // persists the outcome). Read-only calls re-run and cost none.
+                let journaled = replay.journaled_call_ids(&sensitive_tools);
+                toolsets = journal.wrap(
+                    toolsets,
+                    &replay.journal_decision(),
+                    journaled,
+                    super::dispatch_journal::JournalOutcomes::ByRunner,
+                );
+                replay
             };
             let prepared = replay.bind(model);
             let (replay_model, run_input, toolsets) = prepared.into_parts(toolsets);
@@ -2778,6 +2827,7 @@ async fn prepare_direct_resume(
                 &application_tools,
                 coordinator,
                 model,
+                journal.owner(),
             )
             .await?;
             let (replay_model, user_content, run_config) = prepared.into_parts();
@@ -2820,6 +2870,11 @@ async fn assemble_direct_resume_with_sessions_and_applications<M>(
 where
     M: BoundOrdinaryAgentModel,
 {
+    let journal = super::dispatch_journal::DispatchJournal::new(
+        Arc::clone(&sessions),
+        plan.session_identity()?,
+        super::dispatch_journal::DispatchOwner::new(plan.execution_id.clone(), plan.generation),
+    );
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -2853,7 +2908,14 @@ where
         .await
         .map_err(|_| dependency_unavailable())?;
     let prepared =
-        prepare_direct_resume(model.provider_model(), stored.as_ref(), runtime, start).await?;
+        prepare_direct_resume(
+            model.provider_model(),
+            stored.as_ref(),
+            runtime,
+            start,
+            &journal,
+        )
+        .await?;
     let (agent, projector) = build_runtime_agent(
         prepared.model,
         generation_config,

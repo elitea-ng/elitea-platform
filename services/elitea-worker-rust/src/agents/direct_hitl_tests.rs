@@ -408,6 +408,21 @@ fn an_approved_effectful_call_runs_once_and_is_refused_after_its_dispatch() {
         }],
     });
     events.push(call);
+    // The persisted replayed message alone is no dispatch: ADK's confirmation
+    // pre-check may persist it and pause without running any tool (#1321 review
+    // round 2 item 2).
+    approve()
+        .resolve(&session(events.clone()))
+        .expect("exact call suffix")
+        .into_direct_replay(&sensitive_catalog(false))
+        .expect("a replayed message without a journaled dispatch runs once");
+    // The journal records the dispatch before the effect: it may have run.
+    events.push(crate::agents::dispatch_journal::test_dispatched_record(
+        "invocation-1",
+        &interrupt_id,
+        "call-1",
+        crate::agents::dispatch_journal::DispatchOwner::new("execution-1", 1),
+    ));
     let Err(error) = approve()
         .resolve(&session(events.clone()))
         .expect("exact call suffix")
@@ -2000,6 +2015,14 @@ fn a_dispatched_non_sensitive_sibling_reruns_only_when_read_only() {
             .collect(),
     });
     events.push(replayed);
+    for call_id in ["call-1", "call-2"] {
+        events.push(crate::agents::dispatch_journal::test_dispatched_record(
+            "invocation-1",
+            &interrupt_id,
+            call_id,
+            crate::agents::dispatch_journal::DispatchOwner::new("execution-1", 1),
+        ));
+    }
     let replay = |catalog: SensitiveToolCatalog| {
         DirectHitlDecision::from_payload(&multi_call_payload(
             "approve",

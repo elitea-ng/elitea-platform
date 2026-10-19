@@ -5831,6 +5831,8 @@ mod internal_tools_graph {
 struct StalledEffectConnector {
     tool_calls: Arc<AtomicUsize>,
     started: Arc<tokio::sync::Notify>,
+    /// The tool returns its result instead of stalling.
+    completes: bool,
 }
 
 #[async_trait]
@@ -5844,6 +5846,7 @@ impl McpConnector for StalledEffectConnector {
             vec![Arc::new(StalledEffectTool {
                 calls: Arc::clone(&self.tool_calls),
                 started: Arc::clone(&self.started),
+                completes: self.completes,
             })],
         )))
     }
@@ -5852,6 +5855,7 @@ impl McpConnector for StalledEffectConnector {
 struct StalledEffectTool {
     calls: Arc<AtomicUsize>,
     started: Arc<tokio::sync::Notify>,
+    completes: bool,
 }
 
 #[async_trait]
@@ -5880,6 +5884,9 @@ impl Tool for StalledEffectTool {
     ) -> adk_rust::Result<serde_json::Value> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         self.started.notify_one();
+        if self.completes {
+            return Ok(serde_json::json!({"release": "4.2", "effect": "written"}));
+        }
         std::future::pending().await
     }
 }
@@ -5915,6 +5922,7 @@ async fn a_nested_approved_call_that_may_have_started_ends_the_root_run_with_its
     .with_mcp_connector(Arc::new(StalledEffectConnector {
         tool_calls: Arc::clone(&tool_calls),
         started: Arc::clone(&started),
+        completes: false,
     }))
     .with_sessions(sessions);
 
@@ -5989,4 +5997,140 @@ async fn a_nested_approved_call_that_may_have_started_ends_the_root_run_with_its
         model_calls_at_pause,
         "the parent model never sees the refusal as data"
     );
+}
+
+/// #1321 review round 2 item 1 (class R): under an ordinary root Agent, a
+/// nested Agent's approved call whose outcome WAS recorded is served after the
+/// Worker stops, never run again. The approving Worker stops at the child's
+/// next model request, after the tool returned; the replacement (the same
+/// execution's next claim) continues with the recorded result.
+#[tokio::test(flavor = "current_thread")]
+async fn a_nested_approved_call_with_a_recorded_outcome_is_served_after_the_worker_stops() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let (runtime_context, _) = runtime_context_with_sensitive_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
+            // The approving Worker stops at the child's next model request.
+            TestModelGatewayOutcome::Pending,
+            TestModelGatewayOutcome::Response(text_response("child recorded the release")),
+            TestModelGatewayOutcome::Response(text_response("parent finished")),
+        ],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        sensitive_mcp_policy(),
+    )
+    .with_mcp_connector(Arc::new(StalledEffectConnector {
+        tool_calls: Arc::clone(&tool_calls),
+        started: Arc::clone(&started),
+        completes: true,
+    }))
+    .with_sessions(Arc::clone(&sessions));
+
+    let cards = drain_nested_pause(&assembler, request).await;
+    assert_eq!(cards.len(), 1);
+    let interrupt_id = cards[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+        .as_str()
+        .expect("nested interrupt id")
+        .to_owned();
+    let model_calls_at_pause = captured.lock().expect("captured").len();
+
+    let mut approve = ordinary_request(AgentExecutionKind::Application);
+    approve.binding.request_content_digest = [63; 32];
+    attach_nested_agent(&mut approve);
+    admit_approved_resume(&mut approve, &interrupt_id);
+    {
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &approve,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("approving continuation assembles");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("approving start");
+        let (mut native, _projector, _completion) = invocation.start().expect("native start");
+        let stalled = async {
+            while captured.lock().expect("captured").len() <= model_calls_at_pause {
+                tokio::task::yield_now().await;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        };
+        tokio::select! {
+            () = stalled => {}
+            event = async {
+                loop {
+                    if native.next_event().await.expect("approving event").is_none() {
+                        break;
+                    }
+                }
+            } => panic!("the approving Worker finished instead of stopping: {event:?}"),
+        }
+    }
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1, "the approved call ran");
+    // The replacement continues the same decision and serves the recorded result.
+    let invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &approve,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "the replacement must serve the recorded outcome: {error} {:?}",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let browser = drain_browser(invocation).await;
+    assert!(
+        browser
+            .iter()
+            .any(|event| serde_json::to_string(event).is_ok_and(|raw| raw.contains("parent finished"))),
+        "the root run finishes: {browser:?}"
+    );
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1, "never repeated");
+    let captured = captured.lock().expect("captured");
+    let child = String::from_utf8_lossy(&captured[captured.len() - 2].body);
+    assert!(
+        child.contains("written"),
+        "the child model sees the recorded result: {child}"
+    );
+}
+
+/// Run one assembled turn to its end and return its browser events.
+async fn drain_browser(
+    mut invocation: crate::agents::runtime::AssembledNativeAgentInvocation<
+        impl crate::agents::runtime::NativeAgentCompletionSelector,
+    >,
+) -> Vec<serde_json::Value> {
+    invocation
+        .project_start(chrono::Utc::now())
+        .expect("browser start");
+    let (mut native, mut projector, _completion) = invocation.start().expect("native start");
+    let mut browser = Vec::new();
+    while let Some(event) = native.next_event().await.expect("turn event") {
+        for projected in projector.project(&event).expect("projection") {
+            browser.push(
+                serde_json::from_slice(
+                    &encode_current_node_event_json(&projected).expect("browser event"),
+                )
+                .expect("browser JSON"),
+            );
+        }
+    }
+    browser
 }

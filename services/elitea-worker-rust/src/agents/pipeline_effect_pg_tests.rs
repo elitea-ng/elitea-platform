@@ -15,6 +15,12 @@
 //! * `crash_after_outcome`: the tool runs and its outcome is recorded, then the Worker dies at the
 //!   child's next model request; `recover` serves the recorded outcome and finishes without
 //!   calling the tool again.
+//! * `late_duplicate`: as `crash_after_outcome`, but first a different execution submits the
+//!   same approval (a duplicate or late submission). Nothing moved the checkpoint, yet it is
+//!   refused as stale and runs nothing; the dead execution's own replacement then finishes.
+//!
+//! A replacement is the same execution re-claimed with a higher claim attempt, as Main does after
+//! a lease expires; every other submission is another execution.
 
 use super::restart_pg_tests::{
     CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, run_phase,
@@ -33,6 +39,8 @@ const EXIT_BEFORE_DISPATCH: i32 = 85;
 const EXIT_AFTER_DISPATCH: i32 = 86;
 const EXIT_AFTER_OUTCOME: i32 = 87;
 const DONE: &str = "child finished after the approved change";
+/// The execution that approves and dies; its replacement re-claims it.
+const APPROVAL_EXECUTION: &str = "execution-approval";
 
 /// The phases a scenario runs, each with the exit code its process must end with.
 fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
@@ -46,6 +54,12 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
         ],
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
         "crash_after_outcome" => &[("start", 0), ("crash", EXIT_AFTER_OUTCOME), ("recover", 0)],
+        "late_duplicate" => &[
+            ("start", 0),
+            ("crash", EXIT_AFTER_OUTCOME),
+            ("late", 0),
+            ("recover", 0),
+        ],
         "stale" => &[("start", 0), ("stale", 0)],
         "block_after_dispatch" => &[
             ("start", 0),
@@ -129,6 +143,11 @@ async fn postgres_worker_replaced_before_dispatch_runs_the_approved_call_once() 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_worker_replaced_after_dispatch_refuses_as_may_have_started() {
     run_scenario("crash_after_dispatch").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale() {
+    run_scenario("late_duplicate").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -332,11 +351,16 @@ async fn postgres_effect_child() {
                 ))],
                 ToolMode::Normal,
             );
+            let (execution, attempt) = if phase == "recover" {
+                (APPROVAL_EXECUTION, 3)
+            } else {
+                ("execution-approve", 2)
+            };
             let invocation = assembler
                 .assemble(authorized_turn(
                     &decision(&card(), "approve", "", 41),
-                    &format!("execution-{phase}"),
-                    2,
+                    execution,
+                    attempt,
                 ))
                 .await
                 .expect("approve: the replacement Worker assembles");
@@ -438,7 +462,7 @@ async fn postgres_effect_child() {
                 }
                 // The tool runs and its outcome is recorded; the Worker dies at the
                 // child's next model request, before the parent continues.
-                "crash_after_outcome" => (
+                "crash_after_outcome" | "late_duplicate" => (
                     vec![TestModelGatewayOutcome::ExitProcess(EXIT_AFTER_OUTCOME)],
                     ToolMode::Normal,
                 ),
@@ -448,7 +472,7 @@ async fn postgres_effect_child() {
             let invocation = assembler
                 .assemble(authorized_turn(
                     &decision(&card(), "approve", "", 44),
-                    "execution-crash",
+                    APPROVAL_EXECUTION,
                     2,
                 ))
                 .await
@@ -469,7 +493,7 @@ async fn postgres_effect_child() {
             let invocation = assembler
                 .assemble(authorized_turn(
                     &decision(&card(), "approve", "", 44),
-                    "execution-recover",
+                    APPROVAL_EXECUTION,
                     3,
                 ))
                 .await
@@ -483,7 +507,7 @@ async fn postgres_effect_child() {
             assert_eq!(calls.load(Ordering::Acquire), 0, "recover: never repeated");
             assert_eq!(model_requests(&captured), 0, "recover: no model call");
         }
-        "recover" if scenario == "crash_after_outcome" => {
+        "recover" if matches!(scenario.as_str(), "crash_after_outcome" | "late_duplicate") => {
             let (assembler, captured, calls) = worker(
                 &pool,
                 vec![TestModelGatewayOutcome::Response(pipeline_text_response(
@@ -494,7 +518,7 @@ async fn postgres_effect_child() {
             let invocation = assembler
                 .assemble(authorized_turn(
                     &decision(&card(), "approve", "", 44),
-                    "execution-recover",
+                    APPROVAL_EXECUTION,
                     3,
                 ))
                 .await
@@ -527,6 +551,38 @@ async fn postgres_effect_child() {
                 request.contains("written"),
                 "recover: the model sees the recorded outcome: {request}"
             );
+        }
+        "late" => {
+            let (assembler, captured, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "unexpected duplicate continuation",
+                ))],
+                ToolMode::Normal,
+            );
+            // Another execution submits the same approval. Nothing moved the
+            // checkpoint, but the records behind the pause are the dead
+            // execution's: this one is a duplicate and is stale.
+            match assembler
+                .assemble(authorized_turn(
+                    &decision(&card(), "approve", "", 44),
+                    "execution-late",
+                    1,
+                ))
+                .await
+            {
+                Err(error) => assert_eq!(
+                    error.code(),
+                    crate::agents::runtime::NativeAgentAssemblyErrorCode::InvalidInput,
+                    "late: refused as stale, got {error}"
+                ),
+                Ok(invocation) => panic!(
+                    "late: a duplicate approval was assembled (failure {:?})",
+                    failure_code(invocation).await
+                ),
+            }
+            assert_eq!(calls.load(Ordering::Acquire), 0, "late: never runs");
+            assert_eq!(model_requests(&captured), 0, "late: no model call");
         }
         "block_late" => {
             let (assembler, captured, calls) = worker(
