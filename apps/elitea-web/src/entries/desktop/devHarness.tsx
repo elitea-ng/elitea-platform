@@ -20,6 +20,7 @@ import Typography from '@mui/material/Typography';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
+import { HandoffIpcProvider } from '@/features/workspace-handoff';
 import { IndexIpcProvider } from '@/features/workspace-index';
 import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import WorkspacesPage from '@/pages/workspace/WorkspacesPage';
@@ -28,6 +29,7 @@ import { BROWSER_PLATFORM } from '@/shared/desktop/appEvents';
 import { createFakeAppIpc, MACOS_PLATFORM } from '@/shared/desktop/appEvents.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
+import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
 import { AppIpcProvider, DesktopFrame } from '@/widgets/desktop-shell';
@@ -106,6 +108,11 @@ export function mountDesktopHarness(container: HTMLElement): void {
   const indexIpc = createFakeIndexIpc({
     policyAllowed: !params.has('indexOff'),
     statuses: { w1: { state: 'ready', files: 214, entities: 12_400, relations: 30_100, last_run: '2026-10-10T08:00:00Z' } },
+  });
+  // `&cloud`: threads start in the cloud; `&handoffOff`: the policy turns Send to cloud off.
+  const handoffIpc = createFakeHandoffIpc({
+    allowed: !params.has('handoffOff'),
+    ...(params.has('cloud') ? { status: { state: 'CLOUD_IDLE', executor: 'cloud' as const, read_only: true, sent_from_here: true, epoch: 2 } } : {}),
   });
   const vibrancy = params.has('vibrancy');
   if (vibrancy) {
@@ -212,7 +219,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
         <AppIpcProvider ipc={appIpc}>
           <WorkspaceIpcProvider ipc={ipc}>
             <IndexIpcProvider ipc={indexIpc}>
-              <RouterProvider router={router} />
+              <HandoffIpcProvider ipc={handoffIpc}>
+                <RouterProvider router={router} />
+              </HandoffIpcProvider>
             </IndexIpcProvider>
           </WorkspaceIpcProvider>
         </AppIpcProvider>

@@ -189,6 +189,28 @@ describe('AdminConfiguration — the unavailable sections', () => {
   });
 });
 
+describe('AdminConfiguration — the server notice', () => {
+  it("shows the section's notice above the form, as the server states it", async () => {
+    const notice = 'Storage encryption at rest: attested by operator.';
+    server.use(
+      http.get('*/admin/plugin_config_schemas/administration', () =>
+        HttpResponse.json({
+          sections: SECTIONS.map((section) => (section.id === 'resources' ? { ...section, notice } : section)),
+        }),
+      ),
+    );
+    renderAdminRoute(<AdminConfiguration />);
+    await waitForResources();
+    expect(screen.getByTestId('admin-configuration-notice')).toHaveTextContent(notice);
+  });
+
+  it('shows no notice when the server states none', async () => {
+    renderAdminRoute(<AdminConfiguration />);
+    await waitForResources();
+    expect(screen.queryByTestId('admin-configuration-notice')).toBeNull();
+  });
+});
+
 describe('AdminConfiguration — the save', () => {
   it('sends ONLY the fields the operator changed', async () => {
     renderAdminRoute(<AdminConfiguration />);

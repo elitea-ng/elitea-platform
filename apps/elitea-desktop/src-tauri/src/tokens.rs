@@ -323,6 +323,7 @@ mod tests {
             status: 307,
             headers: vec![("Location", to.clone())],
             body: String::new(),
+            raw: Vec::new(),
         })
         .await;
         let endpoint = TokenEndpoint::new("0.1.0").unwrap();

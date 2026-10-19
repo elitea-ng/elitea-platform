@@ -6,11 +6,14 @@ package desktopops
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -176,10 +179,44 @@ func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http
 		desktopwire.WriteError(writer, http.StatusInternalServerError, "resolved_version_failed", "The version could not be encoded.")
 		return
 	}
-	writer.Header().Set("Content-Type", "application/json")
+	// The tag is the answer's own digest: everything above (the gate's
+	// permission check, the resolve under the caller, the project context
+	// only for its readers) has run, so a 304 is the 200 this caller would
+	// get, without its body.
+	etag := responseETag(encoded)
 	writer.Header().Set("Cache-Control", "private, no-store")
-	writer.Header().Set("ETag", `"`+resolved.DefinitionSHA256+`"`)
+	writer.Header().Set("ETag", etag)
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	if ifNoneMatch(request.Header.Values("If-None-Match"), etag) {
+		writer.WriteHeader(http.StatusNotModified)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(encoded)
+}
+
+// responseETag tags one encoded answer: a strong tag over its bytes. Not
+// definition_sha256: that digest covers the ids and version_details only,
+// while the answer also carries withheld_secrets and
+// project_context_withheld, which can change while version_details does not
+// (an authored "[secret withheld]" literal and a replaced {{secret.*}}
+// reference read the same in version_details).
+func responseETag(encoded []byte) string {
+	digest := sha256.Sum256(encoded)
+	return `"` + hex.EncodeToString(digest[:]) + `"`
+}
+
+// ifNoneMatch reports whether an If-None-Match header (RFC 9110 13.1.2: a
+// list of tags, `*`, weak tags compared weakly) matches etag.
+func ifNoneMatch(headers []string, etag string) bool {
+	for _, header := range headers {
+		for _, candidate := range strings.Split(header, ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "*" || strings.TrimPrefix(candidate, "W/") == etag {
+				return true
+			}
+		}
+	}
+	return false
 }

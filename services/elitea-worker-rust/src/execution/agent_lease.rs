@@ -252,6 +252,9 @@ pub enum ClaimLeaseActivation {
 pub struct ClaimLeaseMonitor {
     commands: mpsc::Sender<MonitorCommand>,
     state: watch::Receiver<MonitorState>,
+    /// ADR-0034 take back: latched true once a renewal says
+    /// `workspace_wrap_up`.
+    wrap_up: watch::Receiver<bool>,
     shutdown: watch::Sender<bool>,
     actor: Option<JoinHandle<()>>,
     activation: Option<PendingLeaseActivation>,
@@ -272,6 +275,7 @@ pub struct ClaimLeaseMonitor {
 #[allow(dead_code)] // Consumed by the capability-disabled native invocation lifecycle.
 pub(crate) struct ClaimLeaseStateProbe {
     state: watch::Receiver<MonitorState>,
+    wrap_up: watch::Receiver<bool>,
     clock: Arc<dyn UnixMillisClock>,
     margin_millis: i64,
     supervision_live: Arc<AtomicBool>,
@@ -282,6 +286,7 @@ impl Clone for ClaimLeaseStateProbe {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
+            wrap_up: self.wrap_up.clone(),
             clock: Arc::clone(&self.clock),
             margin_millis: self.margin_millis,
             supervision_live: Arc::clone(&self.supervision_live),
@@ -298,6 +303,14 @@ impl ClaimLeaseStateProbe {
     /// Returns the latched durable Stop or fatal lease cause.
     pub(crate) fn ensure_running(&self) -> Result<(), ClaimLeaseError> {
         self.ensure_live_margin()
+    }
+
+    /// The take-back signal (ADR-0034): a receiver that turns true, and stays
+    /// true, once Main's lease poll says `workspace_wrap_up`. Separate from
+    /// the lease state, so waiting on it never consumes a lease revision.
+    #[must_use]
+    pub(crate) fn wrap_up_signal(&self) -> watch::Receiver<bool> {
+        self.wrap_up.clone()
     }
 
     /// Wait for and consume the next authoritative state transition.
@@ -488,6 +501,7 @@ impl ClaimLeaseMonitor {
             lease_expires_at_unix_millis: initial_expiry,
         });
         let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+        let (wrap_up_sender, wrap_up_receiver) = watch::channel(false);
         let supervision_live = Arc::new(AtomicBool::new(true));
         let actor = tokio::spawn(run_lease_actor(
             control,
@@ -497,6 +511,7 @@ impl ClaimLeaseMonitor {
             LeaseActorChannels {
                 commands: command_receiver,
                 state: state_sender,
+                wrap_up: wrap_up_sender,
                 shutdown: shutdown_receiver,
                 supervision_live: Arc::clone(&supervision_live),
             },
@@ -504,6 +519,7 @@ impl ClaimLeaseMonitor {
         Self {
             commands: command_sender,
             state: state_receiver,
+            wrap_up: wrap_up_receiver,
             shutdown: shutdown_sender,
             actor: Some(actor),
             activation,
@@ -567,6 +583,7 @@ impl ClaimLeaseMonitor {
     pub(crate) fn state_probe(&self) -> ClaimLeaseStateProbe {
         ClaimLeaseStateProbe {
             state: self.state.clone(),
+            wrap_up: self.wrap_up.clone(),
             clock: Arc::clone(&self.clock),
             margin_millis: self.margin_millis,
             supervision_live: Arc::clone(&self.supervision_live),
@@ -707,6 +724,7 @@ impl Drop for LeaseActorLifetime {
 struct LeaseActorChannels {
     commands: mpsc::Receiver<MonitorCommand>,
     state: watch::Sender<MonitorState>,
+    wrap_up: watch::Sender<bool>,
     shutdown: watch::Receiver<bool>,
     supervision_live: Arc<AtomicBool>,
 }
@@ -724,6 +742,7 @@ async fn run_lease_actor<R, K>(
     let LeaseActorChannels {
         mut commands,
         state,
+        wrap_up,
         mut shutdown,
         supervision_live,
     } = channels;
@@ -757,8 +776,9 @@ async fn run_lease_actor<R, K>(
                     let _ = reply.send(Err(ClaimLeaseError::closed()));
                     return;
                 };
+                record_wrap_up(&result, &wrap_up);
                 let (reply_result, keep_running) = record_poll_result(
-                    result,
+                    result.map(|(expiry, _)| expiry),
                     &mut cancellation_latched,
                     &state,
                 );
@@ -777,8 +797,9 @@ async fn run_lease_actor<R, K>(
                 ).await else {
                     return;
                 };
+                record_wrap_up(&result, &wrap_up);
                 let (_, keep_running) = record_poll_result(
-                    result,
+                    result.map(|(expiry, _)| expiry),
                     &mut cancellation_latched,
                     &state,
                 );
@@ -796,7 +817,7 @@ async fn poll_or_shutdown<R, K>(
     clock: &K,
     config: ValidatedLeaseConfig,
     shutdown: &mut watch::Receiver<bool>,
-) -> Option<Result<i64, ClaimLeaseError>>
+) -> Option<Result<(i64, bool), ClaimLeaseError>>
 where
     R: ControlRpc,
     K: UnixMillisClock,
@@ -819,7 +840,7 @@ async fn poll_once<R, K>(
     lease: &mut ClaimLeaseHandle,
     clock: &K,
     config: ValidatedLeaseConfig,
-) -> Result<i64, ClaimLeaseError>
+) -> Result<(i64, bool), ClaimLeaseError>
 where
     R: ControlRpc,
     K: UnixMillisClock,
@@ -853,7 +874,17 @@ where
     lease.commit_renewal(renewal);
     require_running(renewal.desired_state)?;
     require_running(observed)?;
-    Ok(renewal.lease_expires_at_unix_millis)
+    Ok((
+        renewal.lease_expires_at_unix_millis,
+        renewal.workspace_wrap_up,
+    ))
+}
+
+/// Latch the take-back signal (it never turns back off for this claim).
+fn record_wrap_up(result: &Result<(i64, bool), ClaimLeaseError>, wrap_up: &watch::Sender<bool>) {
+    if matches!(result, Ok((_, true))) && !*wrap_up.borrow() {
+        wrap_up.send_replace(true);
+    }
 }
 
 fn require_running(state: DesiredExecutionState) -> Result<(), ClaimLeaseError> {

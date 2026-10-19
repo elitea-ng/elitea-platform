@@ -10,13 +10,10 @@
  *     matched `meta.internal_tools` against literal arrays, so toggling ANY
  *     internal tool made the resolver return zero rows and every send answer
  *     422 — a message naming neither the toggle nor the runtime. The gates
- *     now admit the platform catalogue, and BOTH runtimes skip what they
- *     cannot serve with a logged `agent_internal_tool_skipped`. The Python
- *     worker was believed to serve the whole set and did not: `planner` died
- *     on a plan directory it could not create and `pyodide` on a Deno runtime
- *     its image does not ship, and either one killed the turn — POST 200,
- *     then a stored assistant row flagged `is_error` with EMPTY content, which
- *     is exactly what step 5 below rules out. The observable contract asserted
+ *     now admit the platform catalogue, and the runtime skips what it
+ *     cannot serve with a logged `agent_internal_tool_skipped`. A toggle that
+ *     killed the turn — POST 200, then a stored assistant row flagged
+ *     `is_error` with EMPTY content — is exactly what step 5 below rules out. The observable contract asserted
  *     here: every toggle ON, saved, and the agent STILL ANSWERS.
  *
  *  2. THE AGENT-AS-TOOL ATTACH WAS A SILENT 200 NO-OP. The router bound
@@ -67,7 +64,6 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const INTERNAL_TOOL_NAMES = [
   'attachments',
   'internal_mcp',
-  'pyodide',
   'data_analysis',
   'planner',
   'swarm',
@@ -89,7 +85,7 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   // The grid folds to four rows behind "Show all"; the other three switches
   // do not exist in the DOM until it is expanded.
   await page.getByText('Show all', { exact: true }).click();
-  await expect(page.getByTestId(testIdFor('pyodide'))).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId(testIdFor('lazy_tools_mode'))).toBeVisible({ timeout: 10_000 });
 
   // ── 2. Every internal tool ON, then Save ───────────────────────────────
   for (const toolName of INTERNAL_TOOL_NAMES) {

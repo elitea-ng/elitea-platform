@@ -40,6 +40,7 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/mcp"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -935,6 +936,12 @@ func newMCPPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, string(registry)); err != nil {
 		t.Fatalf("apply %s: %v", mcpRegistryMigration, err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

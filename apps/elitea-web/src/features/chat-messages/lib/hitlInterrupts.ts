@@ -7,9 +7,9 @@
  * `reconcileHitlInterrupts`). The reducer's interrupt slice needs all three: a pause can arrive as one
  * legacy top-level blob, or as N entries in `hitl_interrupts`, and the same
  * child can re-announce a pause it already reported. Everything downstream —
- * `ChatBox.helpers.ts`'s `deriveHitlChildThreadId` routes resume by
- * `tool_call_id` → `thread_id`/`child_thread_id` — reads the normalised shape,
- * so a raw interrupt must never reach state.
+ * the approval buckets and `decideHitlCard`, which routes a decision by
+ * `getInterruptIdentity` — reads the normalised shape, so a raw interrupt must
+ * never reach state.
  *
  * `getPendingHitlMessage` and `getHitlResumeGroup` are NOT ported here: the
  * chat surface already derives the pending message itself

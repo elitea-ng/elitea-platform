@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 type publishedAgentVersionBody struct {
@@ -88,25 +89,36 @@ func newPublishedAgentsEnvironment(t *testing.T) chi.Router {
 
 	for _, statement := range []string{
 		// The public project's catalogue.
-		`INSERT INTO p_1.applications (id, name, description, owner_id, shared_owner_id, meta) VALUES
+		// The naive created_at/updated_at columns are named with the UTC wall
+		// clock: their DEFAULT now() is the session clock, which the naive-clock
+		// probe refuses.
+		`INSERT INTO p_1.applications (id, name, description, owner_id, shared_owner_id, meta, created_at, updated_at)
+		SELECT id, name, description, owner_id, shared_owner_id, meta::jsonb,
+		       now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC'
+		FROM (VALUES
 			(1, 'Adopted Agent', 'two published versions', 1, 7, '{"adoption":{"conversation_count":12,"project_count":3}}'),
 			(2, 'Quiet Agent',   'published, unmeasured', 1, 8, '{}'),
-			(3, 'Draft Agent',   'never published',       1, 9, '{}')`,
-		`INSERT INTO p_1.application_versions (application_id, name, status, author_id, meta) VALUES
+			(3, 'Draft Agent',   'never published',       1, 9, '{}')
+		) AS seed (id, name, description, owner_id, shared_owner_id, meta)`,
+		`INSERT INTO p_1.application_versions (application_id, name, status, author_id, meta, created_at)
+		SELECT application_id, name, status, author_id, meta::jsonb, now() AT TIME ZONE 'UTC'
+		FROM (VALUES
 			(1, 'v1', 'published', 1, '{"published_by": 42}'),
 			(1, 'v2', 'published', 1, '{}'),
 			(1, 'wip', 'draft',    1, '{}'),
 			(2, 'v1', 'published', 1, '{}'),
-			(3, 'wip', 'draft',    1, '{}')`,
+			(3, 'wip', 'draft',    1, '{}')
+		) AS seed (application_id, name, status, author_id, meta)`,
 		// Another project's schema, holding a published agent of its own. The
 		// listing reads the PUBLIC project; a handler that walked every `p_%`
 		// schema — which the dead code this endpoint replaces did — would
 		// include it.
 		`SELECT create_tenant_schema('p_2')`,
-		`INSERT INTO p_2.applications (id, name, description, owner_id) VALUES
-			(1, 'Tenant Agent', 'not in the public catalogue', 1)`,
-		`INSERT INTO p_2.application_versions (application_id, name, status, author_id) VALUES
-			(1, 'v1', 'published', 1)`,
+		`INSERT INTO p_2.applications (id, name, description, owner_id, created_at, updated_at) VALUES
+			(1, 'Tenant Agent', 'not in the public catalogue', 1,
+			 now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`,
+		`INSERT INTO p_2.application_versions (application_id, name, status, author_id, created_at) VALUES
+			(1, 'v1', 'published', 1, now() AT TIME ZONE 'UTC')`,
 	} {
 		if _, err := pool.Exec(ctx, statement); err != nil {
 			t.Fatalf("seed %q: %v", statement, err)
@@ -268,6 +280,12 @@ func newPublishedAgentsPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply 001_initial.sql: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

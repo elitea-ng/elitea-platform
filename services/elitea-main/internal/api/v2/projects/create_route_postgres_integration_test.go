@@ -51,6 +51,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/centrysecrets"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -638,6 +639,12 @@ FROM public.auth_core__role AS role
 WHERE role.mode = 'administration' AND role.name = 'admin'
 ON CONFLICT (user_id, role_id) DO NOTHING`, onboardingMakerID); err != nil {
 		t.Fatalf("grant the project maker its administration role: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

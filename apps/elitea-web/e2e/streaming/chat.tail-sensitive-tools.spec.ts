@@ -34,16 +34,11 @@
  * resumes past each marker's own close rather than at the next `[[`.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE LEG CONTRACT: BOTH (rust and python)
+ * THE APPROVED EFFECTFUL REPLAY IS NEVER DRIVEN
  * ─────────────────────────────────────────────────────────────────────────────
- * Same reasoning as `chat.toolkit-hitl.spec.ts`: the Rust `direct_hitl.rs` is
- * a port of the SDK's `sensitive_tool_guard.py`, elitea-main feeds ONE policy
- * to both, and the card is the same card. The one field the two runtimes
- * genuinely disagree about (`tool_call_id`) is not asserted anywhere in this
- * file. What IS leg-shaped is the approved EFFECTFUL replay — the native
- * runtime refuses it (`UnsupportedCapability`) while the SDK would execute it
- * — so nothing here ever approves an effectful call: every approval below is
- * taken on the READ-ONLY operation, which both runtimes admit.
+ * The native runtime refuses it (`UnsupportedCapability`), so nothing here ever
+ * approves an effectful call: every approval below is taken on the READ-ONLY
+ * operation.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * WHY THE FIXTURE IS BUILT OVER THE API AND THE DECISION IS TAKEN IN THE BROWSER
@@ -72,8 +67,8 @@ import {
   MOCK_TOOL_CREATE_SENTINEL,
   MOCK_TOOL_EFFECTFUL_OPERATION,
   MOCK_TOOL_READ_OPERATION,
-  callToolPrompt as mockToolPrompt,
-  callToolWithArgumentsPrompt as mockToolWithArgumentsPrompt,
+  callToolPrompt,
+  callToolWithArgumentsPrompt,
   clearMockToolJournal,
   createMockToolAgent,
   expectStoredAssistantAnswer,
@@ -95,33 +90,6 @@ const CONTINUE_RE = /\/elitea_core\/continue_predict\/prompt_lib\/(\d+)\/[0-9a-f
 
 /** The structured result a denied call is replaced by (`BLOCKED_TOOL_RESULT_TYPE`). */
 const BLOCKED_RESULT_TYPE = 'sensitive_tool_blocked';
-
-/**
- * Which runtime is answering the turns — `scripts/chat-stream-e2e.sh` is the
- * one place that knows, and it exports this. The scripted argument shape and
- * the ELITEA-1003 expectation depend on this leg.
- */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
-
-/**
- * The SDK adds `headers: {}` when the model omits that optional argument.
- * Its checkpoint matcher then loses the original call identity. Explicit
- * null stays aligned across schema parsing and checkpoint matching.
- * This fixture does not repair the SDK's omitted-default behavior.
- */
-function callToolWithArgumentsPrompt(
-  operation: string,
-  args: Readonly<Record<string, unknown>>,
-  tail: string,
-): string {
-  return mockToolWithArgumentsPrompt(operation, IS_NATIVE_RUNTIME ? args : { ...args, headers: null }, tail);
-}
-
-function callToolPrompt(operation: string, tail: string): string {
-  return IS_NATIVE_RUNTIME
-    ? mockToolPrompt(operation, tail)
-    : callToolWithArgumentsPrompt(operation, {}, tail);
-}
 
 /** The card's own title, verbatim — `SensitiveToolCard` in `ChatHitlActions.tsx`. */
 const CARD_TITLE = '⚠️ Sensitive Action Authorization Required';
@@ -297,11 +265,6 @@ test('the authorization card names the action, its parameters and the company po
       JSON.stringify(interrupt.tool_args ?? {}),
       'the stored pause must carry the arguments the card displayed',
     ).toContain(marker);
-    if (!IS_NATIVE_RUNTIME) {
-      expect(interrupt.tool_args, 'the SDK checkpoint must retain the explicit nullable header argument').toMatchObject({
-        headers: null,
-      });
-    }
 
     // Declined: the effectful operation must never run for a content assertion.
     await decide(page, card, 'Reject');
@@ -318,28 +281,13 @@ test('the authorization card names the action, its parameters and the company po
     await expect(bareCard).toContainText(CARD_TITLE);
 
     // THE RULE, asserted against what the pause ACTUALLY carries: the section
-    // is rendered if and only if there is something to show. Written this way
-    // because the two runtimes disagree about what an argument-less call
-    // carries, and only one of them can reach the case's own state.
-    //
-    //  - the native runtime sends the model's arguments through unchanged, so
-    //    the `{}` the short marker form sends arrives as `{}` and the section
-    //    must be ABSENT — which is ELITEA-1000 exactly;
-    //  - the SDK worker materialises schema defaults. Its marker supplies
-    //    explicit nullable headers to retain the call identity, so it arrives
-    //    carrying `{regexp: null, headers: null}` and the section must be
-    //    PRESENT and show them.
-    //
-    // A card that always rendered the section fails the first branch; one that
-    // never rendered it fails the second. The onetest case's state is the
-    // first, and it is reachable on the native leg.
+    // is rendered if and only if there is something to show. The native
+    // runtime sends the model's arguments through unchanged, so the `{}` the
+    // short marker form sends arrives as `{}` and the section must be ABSENT —
+    // which is ELITEA-1000 exactly. A card that always rendered the section
+    // fails that branch; one that never rendered it fails the other.
     const bareInterrupt = await readStoredHitlInterrupt(page, fixture.projectId, bare);
     const bareArgs = bareInterrupt.tool_args;
-    if (!IS_NATIVE_RUNTIME) {
-      expect(bareArgs, 'schema defaults must not replace nullable headers in the SDK checkpoint').toMatchObject({
-        headers: null,
-      });
-    }
     const bareArgKeys =
       typeof bareArgs === 'object' && bareArgs !== null ? Object.keys(bareArgs as Record<string, unknown>) : [];
     if (bareArgKeys.length === 0) {
@@ -416,10 +364,8 @@ test('a message typed during a pending authorization is queued, not submitted', 
   page,
 }) => {
   // Two paused turns, a 30-second wait, two decisions and two follow-up turns.
-  // Budgeted for the SLOWER leg: measured 6.4 minutes end to end on a
-  // python-worker stack, where each turn costs several times what it does
-  // natively. A 9-minute cap left no headroom and the reject leg's
-  // continuation poll timed out once under load.
+  // A 9-minute cap once left no headroom under load (measured on the retired
+  // Python worker, which was several times slower); kept generous.
   test.setTimeout(900_000);
 
   let fixture: MockToolAgentFixture | undefined;
@@ -528,8 +474,7 @@ test('a message typed during a pending authorization is queued, not submitted', 
 
     await decide(page, declinedCard, 'Reject');
     await expectStoredAssistantAnswer(page, fixture.projectId, declined, {
-      // 240s, not 180s: measured to time out once on the python leg under
-      // load, and pass on its own there in 2.3 minutes.
+      // 240s, not 180s: measured to time out once under load.
       timeout: 240_000,
       message: 'the rejection was accepted but no reply quoting the block was stored',
       contains: MOCK_CALL_TOOL_SENTINEL,
@@ -627,14 +572,11 @@ test('a tool the policy does not name runs with no authorization dialog', async 
 test('a blocked sensitive call does not discard the non-sensitive call beside it', async ({ page }) => {
   test.setTimeout(420_000);
 
-  // WAS a native-only gap (#949), and the two legs were measured separately
-  // rather than assumed equal. ADK's confirmation pre-check breaks out of its
-  // scan at the FIRST call that needs a decision and returns before ANY tool of
-  // the message is dispatched, so a pause abandons the whole assistant message
-  // — and `direct_hitl.rs` used to replay only the one decided call out of it,
-  // dropping every sibling. It now replays the whole message, which is what the
-  // SDK's `sensitive_tool_guard.py` (its `_PENDING_TOOL_MESSAGES` capture) has
-  // always done, so both legs assert the same thing here.
+  // WAS a native-runtime gap (#949). ADK's confirmation pre-check breaks out of
+  // its scan at the FIRST call that needs a decision and returns before ANY tool
+  // of the message is dispatched, so a pause abandons the whole assistant
+  // message — and `direct_hitl.rs` used to replay only the one decided call out
+  // of it, dropping every sibling. It now replays the whole message.
 
   let fixture: MockToolAgentFixture | undefined;
   try {
@@ -727,9 +669,6 @@ test('two sensitive tools in one turn each raise their own authorization', async
   // decisions already taken attached, so ADK's pre-check stops again at the
   // still-undecided sensitive call and raises its own card for it
   // (`direct_hitl.rs`: `replay_calls_for` / `settled_decision`).
-  //
-  // The Python fixture now preserves both call identities with explicit
-  // nullable headers. Both runtimes must offer and finish both decisions.
 
   let fixture: MockToolAgentFixture | undefined;
   try {
@@ -803,14 +742,14 @@ test('two sensitive tools in one turn each raise their own authorization', async
 });
 
 /* onetest: ELITEA-1002 — each sensitive invocation requires its own approval, including two
- * calls to the same tool. This follows the current SDK policy (#5245). */
+ * calls to the same tool (#5245). */
 test('the same sensitive tool called twice requires two distinct approvals', async ({ page }) => {
   test.setTimeout(420_000);
 
   let fixture: MockToolAgentFixture | undefined;
   try {
     await clearMockToolJournal(page);
-    // The receipts are a stack property, not a contract: the native leg's
+    // The receipts are a stack property, not a contract: the native worker's
     // https-only client cannot complete a call to the mock's `https://` base
     // URL, so there a dispatched call comes back as `tool.unavailable` and the
     // journal stays empty (`MockToolSpec.reachable`).
@@ -840,9 +779,6 @@ test('the same sensitive tool called twice requires two distinct approvals', asy
     ).toBe(1);
     const firstInterrupt = interrupts[0];
     expect(firstInterrupt?.interrupt_id, 'the first approval must identify its own pause').toBeTruthy();
-    if (!IS_NATIVE_RUNTIME) {
-      expect(firstInterrupt?.tool_args).toMatchObject({ headers: null });
-    }
     expect(
       await readMockToolJournal(page),
       'neither sensitive invocation may run before the first approval',
@@ -862,16 +798,12 @@ test('the same sensitive tool called twice requires two distinct approvals', asy
       secondInterrupt.interrupt_id,
       'the second approval must not reuse the first pause identity',
     ).not.toBe(firstInterrupt?.interrupt_id);
-    if (!IS_NATIVE_RUNTIME) {
-      expect(secondInterrupt.tool_args).toMatchObject({ headers: null });
-    }
     const receipt = { method: 'GET', path: '/tool/status', operation: MOCK_TOOL_READ_OPERATION };
-    // Native pre-checks the whole batch before dispatch. Python executes the
-    // first approved call before it pauses on the second invocation.
+    // The runtime pre-checks the whole batch before dispatch.
     expect(
       (await readMockToolJournal(page)).map(({ method, path, operation }) => ({ method, path, operation })),
       'the second invocation must not run before its approval',
-    ).toEqual(reachable && !IS_NATIVE_RUNTIME ? [receipt] : []);
+    ).toEqual([]);
 
     await decide(page, second, 'Approve');
     await expectStoredAssistantAnswer(page, fixture.projectId, fixture.conversationId, {

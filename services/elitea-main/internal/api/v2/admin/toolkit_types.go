@@ -124,7 +124,6 @@ type toolkitTypeGrantView struct {
 
 type toolkitTypeCapabilityView struct {
 	Verdict string `json:"verdict"`
-	Python  bool   `json:"python"`
 	Rust    bool   `json:"rust"`
 	Reason  string `json:"reason"`
 }
@@ -295,7 +294,6 @@ func toolkitTypeViewFor(
 		Registered:   registered,
 		Capability: toolkitTypeCapabilityView{
 			Verdict: string(capability.Verdict),
-			Python:  capability.Python,
 			Rust:    capability.Rust,
 			Reason:  capability.Reason,
 		},

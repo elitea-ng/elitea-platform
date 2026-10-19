@@ -44,6 +44,8 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"zephyr_essential", "figma", "rally", "sonar", "sql", "google_places", "salesforce",
 		"sharepoint", "carrier", "report_portal", "testio", "openapi", "langfuse",
 		"aha",
+		// Registered in Go: the cloud executor project setting (ADR-0034).
+		"cloud_executor",
 	}
 	gotTypes := make([]string, len(entries))
 	for index, entry := range entries {

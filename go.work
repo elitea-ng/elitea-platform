@@ -10,6 +10,7 @@ use (
 	./libs/go/observability
 	./libs/go/rpclib
 	./libs/proto/gen/go
+	./services/elitea-egress-proxy
 	./services/elitea-main
 	./services/elitea-scheduler
 	./services/elitea-subapp-host

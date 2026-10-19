@@ -2,14 +2,15 @@ package runtimecomposition
 
 import (
 	"bytes"
-	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
 func compiledTestConfig() CompiledSnapshotConfig {

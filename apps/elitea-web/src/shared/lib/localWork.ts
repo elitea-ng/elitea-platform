@@ -29,3 +29,30 @@ export function localWorkFolderName(meta: Readonly<Record<string, unknown>> | un
   const name = (localWork as Record<string, unknown>)['folder_name'];
   return typeof name === 'string' && name.trim() !== '' ? name : undefined;
 }
+
+/**
+ * Where a Local work thread runs once it can be handed to the cloud
+ * (ADR-0034): the conversation response's `workspace_executor`. Absent means
+ * `local`.
+ */
+export type WorkspaceExecutorName = 'local' | 'cloud' | 'returning';
+
+export function workspaceExecutorOf(conversation: Readonly<Record<string, unknown>> | undefined): WorkspaceExecutorName {
+  const value = conversation?.workspace_executor;
+  return value === 'cloud' || value === 'returning' ? value : 'local';
+}
+
+/**
+ * The newest answer in the list was produced on a desktop (`meta.executed_by
+ * === 'desktop'`). The server refuses to regenerate such an answer
+ * (409 `local_work_turn`): the chat does not offer it.
+ */
+export function lastAnswerRanOnDesktop(rows: readonly unknown[]): boolean {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index] as { readonly role?: unknown; readonly meta?: unknown; readonly metadata?: unknown } | null;
+    if (row?.role !== 'assistant') continue;
+    const meta = (row.meta ?? row.metadata) as { readonly executed_by?: unknown } | undefined;
+    return meta?.executed_by === 'desktop';
+  }
+  return false;
+}

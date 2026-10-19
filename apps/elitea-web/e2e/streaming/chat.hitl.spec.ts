@@ -52,11 +52,7 @@
  * and runs against the full standalone stack via `scripts/chat-stream-e2e.sh`,
  * serially (`--workers=1`).
  *
- * WORKER: BOTH — the native Rust runtime (`STANDALONE_WORKER=rust`) and the
- * SDK worker (`=python`). It is a two-runtime journey on purpose: the same UI
- * drives both, so a change that admits one and refuses the other passes every
- * unit suite, and the assertions below are the only thing that can tell them
- * apart. See "THE PYTHON LEG" on the test itself for what it took to get here.
+ * WORKER: the native Rust runtime, the only worker the platform runs.
  *
  * A RACE THIS SPEC USED TO LOSE: the stored assistant row is readable while
  * the continuation is still streaming, and the first draft polled only for
@@ -113,44 +109,8 @@ const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
 
 /** The runtime-owned internal tool that produces the pause. */
 const ASK_USER_TOOL = 'ask_user';
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 test('an ask_user pause renders answerable controls, and the answer finishes the run', async ({ page }) => {
-  // ── THE PYTHON LEG, AND WHY IT IS NO LONGER SKIPPED ─────────────────────
-  //
-  // This ran on the native runtime alone for a long time, under a sentence
-  // that was false on both halves: "the Python worker has no equivalent
-  // internal tool … the agent never pauses". `ask_user` is not native-only —
-  // it is `elitea_sdk/runtime/tools/ask_user.py`'s `AskUserTool`, registered
-  // by `runtime/toolkits/tools.py` from the same `meta.internal_tools` name —
-  // and the SDK worker DOES pause on it. Everything through step 5 already
-  // passed there: the card rendered, `Staging` was offered, the submit armed.
-  //
-  // What failed was the ANSWER, in two places, both in
-  // services/elitea-worker-python/src/elitea_worker/agents/sdk_adapter.py:
-  //
-  //  1. `_require_in_process_hitl_resume` admitted {approve, reject, edit,
-  //     block_with_comment} for a decision carrying no `guardrail_type`, and
-  //     elitea-main omits that field for every root pause (`continue.go`'s
-  //     `omitempty`) — so `answer` matched nothing and the worker refused with
-  //     `{"code":"UNSUPPORTED_CAPABILITY"}`. The SDK's own handler for it
-  //     (`langraph_agent.py`, `guardrail_type == 'clarifying_question'`) was
-  //     never reached, the run never finished, and the conversation was left
-  //     holding a stale interrupt that refused every later turn. It admits
-  //     `answer` with its value now, and hands the SDK the DECODED answer map
-  //     so the model reads the question it asked rather than the wire format.
-  //  2. `_normalize_questions` re-keyed the questions `q1`, `q2`… and dropped
-  //     the `id` the model sent, so the same model output produced
-  //     `{q1: 'Staging'}` here against `{environment: 'Staging'}` there. The
-  //     adapter installs an `ask_user` argument schema that carries the id
-  //     now, so both runtimes advertise the ids the MODEL chose — which is
-  //     what lets step 6 below assert one payload for both legs instead of
-  //     going leg-aware the way `chat.toolkit-hitl.spec.ts` does for
-  //     `tool_call_id`.
-  //
-  // Both runtimes receive the same answer value. The native pause also
-  // supplies a call identity, which selects a bound continuation decision.
-
   // Two model round trips with a human decision between them: create, save,
   // chat, admission, the pause, the resume and a second dispatch. Every wait
   // below is bounded well under this, so a real hang fails on its own step
@@ -303,34 +263,24 @@ test('an ask_user pause renders answerable controls, and the answer finishes the
   };
   expect(resumeBody.hitl_resume, 'the body must declare itself a HITL resume').toBe(true);
   // STRUCTURED, keyed by the question id the model chose — the shape
-  // `currentHITLValue` canonicalises and both runtimes read back
-  // (`AskUserRequest::format_answer`; `_hitl_resume_value` into the SDK's
-  // `AskUserTool._format_answer`). A body carrying the card's encoded JSON as
-  // a plain string would also be accepted, and would reach the model as a
-  // quoted blob. `environment` is the MODEL's own id, not a positional `q1`,
-  // Both runtimes must receive the same selected answer value.
-  if (IS_NATIVE_RUNTIME) {
-    const interruptId = interrupt.interrupt_id ?? '';
-    const toolCallId = interrupt.tool_call_id ?? '';
-    expect(interruptId, 'the native pause must identify its interrupt').not.toBe('');
-    expect(toolCallId, 'the native pause must identify the paused call').not.toBe('');
-    expect(resumeBody.hitl_decisions, 'the answer must bind the exact paused call').toEqual([
-      {
-        interrupt_id: interruptId,
-        tool_call_id: toolCallId,
-        action: 'answer',
-        value: { environment: OPTION_LABEL },
-      },
-    ]);
-    expect(resumeBody.hitl_action, 'a bound decision must not also send a root action').toBeUndefined();
-    expect(resumeBody.hitl_value, 'the structured answer belongs to the bound decision').toBeUndefined();
-  } else {
-    expect(resumeBody.hitl_action, 'the clarification is answered with the `answer` action').toBe('answer');
-    expect(
-      resumeBody.hitl_value,
-      'the answer must reach the route as a structured value, not as an encoded string',
-    ).toEqual({ environment: OPTION_LABEL });
-  }
+  // `currentHITLValue` canonicalises and the runtime reads back
+  // (`AskUserRequest::format_answer`). A body carrying the card's encoded JSON
+  // as a plain string would also be accepted, and would reach the model as a
+  // quoted blob. `environment` is the MODEL's own id, not a positional `q1`.
+  const interruptId = interrupt.interrupt_id ?? '';
+  const toolCallId = interrupt.tool_call_id ?? '';
+  expect(interruptId, 'the native pause must identify its interrupt').not.toBe('');
+  expect(toolCallId, 'the native pause must identify the paused call').not.toBe('');
+  expect(resumeBody.hitl_decisions, 'the answer must bind the exact paused call').toEqual([
+    {
+      interrupt_id: interruptId,
+      tool_call_id: toolCallId,
+      action: 'answer',
+      value: { environment: OPTION_LABEL },
+    },
+  ]);
+  expect(resumeBody.hitl_action, 'a bound decision must not also send a root action').toBeUndefined();
+  expect(resumeBody.hitl_value, 'the structured answer belongs to the bound decision').toBeUndefined();
 
   // ── 7. The composer is released — and the NEXT turn must be admitted ───
   //

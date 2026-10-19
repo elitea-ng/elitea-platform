@@ -103,6 +103,7 @@ func TestUseCaseErrorsMapToTypedAnswers(t *testing.T) {
 		{localturn.ErrConflict, http.StatusConflict, "local_turn_conflict"},
 		{localturn.ErrAlreadyCommitted, http.StatusConflict, "local_turn_already_committed"},
 		{localturn.ErrExpired, http.StatusGone, "local_turn_expired"},
+		{localturn.ErrThreadExecutorIsCloud, http.StatusConflict, "thread_executor_is_cloud"},
 		{localturn.ErrUnavailable, http.StatusServiceUnavailable, "local_turn_unavailable"},
 	} {
 		h := &handler{useCase: &fakeUseCase{startErr: tc.err, commitErr: tc.err}}

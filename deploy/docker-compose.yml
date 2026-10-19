@@ -249,11 +249,6 @@ services:
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
-      # Which worker this stack runs, stated explicitly: elitea-main's own default
-      # is rust, so a Python-worker base must say so or its toolkit catalogue
-      # would describe a worker that is not there. The Rust overlay
-      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
-      ELITEA_WORKER_IMPLEMENTATION: "python"
 
       # The origin the PROVIDER calls back to for artifacts and models. The
       # engine derives the artifact API base by stripping `/llm/v1` off this,
@@ -466,6 +461,13 @@ services:
       AUDIT_RETENTION_MAX_BATCHES: "50"
       # ADR-0025 WP6: sync tombstone retention; 97 days is the floor.
       SYNC_TOMBSTONE_RETENTION_DAYS: "97"
+    # No migrate dependency here: this stack runs elitea-main with
+    # SKIP_MIGRATIONS=1 and has no elitea-migrate service (the schema is applied
+    # outside it), and it does not enable the budget write-back. The stack that
+    # does, docker-compose.standalone-full.yml, starts the scheduler only after
+    # elitea-migrate completes. A write-back that starts before its tables exist
+    # gets SQLSTATE class 42, which is deferred and never dropped ([human
+    # decision] 2026-10-16, "Drop only 22/23, retry 42").
     depends_on:
       postgres:
         condition: service_healthy

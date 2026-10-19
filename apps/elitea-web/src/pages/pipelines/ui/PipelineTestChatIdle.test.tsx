@@ -361,7 +361,11 @@ describe("idle editor Test context", () => {
     await waitFor(() =>
       expect(screen.getByTestId("chat-message-input")).toBeEnabled(),
     );
-    await user.type(screen.getByTestId("chat-message-input"), "clear this draft");
+    // One real keystroke, bulk text as a paste — this file's standing trade
+    // for the per-character renderer cost under a loaded CI shard.
+    await user.click(screen.getByTestId("chat-message-input"));
+    await user.keyboard("c");
+    await user.paste("lear this draft");
     await user.click(screen.getByTestId("editor-test-clear"));
     await waitFor(() =>
       expect(screen.getByTestId("editor-test-clear")).toBeDisabled(),
@@ -377,10 +381,10 @@ describe("idle editor Test context", () => {
     await waitFor(() =>
       expect(screen.getByTestId("chat-message-input")).toBeEnabled(),
     );
-    await user.type(
-      screen.getByTestId("chat-message-input"),
-      "run after Clear{Enter}",
-    );
+    // The draft arrives as a paste; the Enter is the real key press that sends.
+    await user.keyboard("r");
+    await user.paste("un after Clear");
+    await user.keyboard("{Enter}");
     await waitFor(() => expect(routes.admitted).toHaveLength(1));
     expect(routes.admitted[0]?.body).toMatchObject({
       conversation_uuid: context(2)["uuid"],

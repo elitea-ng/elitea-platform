@@ -111,6 +111,15 @@ impl Credentials for PinnedCredentials {
     }
 }
 
+impl PinnedCredentials {
+    /// The identity these credentials are pinned to (whose caches a turn
+    /// may use).
+    #[must_use]
+    pub fn pinned_identity(&self) -> &str {
+        &self.identity
+    }
+}
+
 /// A refused or failed platform call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiError {
@@ -143,6 +152,8 @@ impl std::fmt::Display for ApiError {
 pub struct Answer {
     pub status: u16,
     pub body: Value,
+    /// The `ETag` header, when the platform sent one.
+    pub etag: Option<String>,
 }
 
 impl Answer {
@@ -182,6 +193,18 @@ pub struct ResolvedVersion {
     #[serde(default)]
     pub project_context_withheld: bool,
     pub version_details: Map<String, Value>,
+}
+
+/// What a (conditional) `resolved_version` read answered.
+#[derive(Clone, Debug)]
+pub enum Revalidated {
+    /// The copy the caller holds is current (304, or 200 with its tag).
+    NotModified,
+    /// The document, and its tag when the platform sent one.
+    Fresh {
+        resolved: ResolvedVersion,
+        etag: Option<String>,
+    },
 }
 
 /// `startLocalTurn` (decision 5c).
@@ -273,6 +296,29 @@ impl PlatformApi {
         body: Option<&Value>,
         headers: &[(&str, &str)],
     ) -> Result<Answer, ApiError> {
+        let body = match body {
+            Some(value) => Some(serde_json::to_vec(value).map_err(|_| {
+                ApiError::local("invalid_request", "the request could not be encoded")
+            })?),
+            None => None,
+        };
+        self.send_bytes(method, path, body.as_deref(), headers)
+            .await
+    }
+
+    /// [`Self::send`] with a body already encoded as JSON (one whose object
+    /// keys must keep their order, which a `serde_json::Value` cannot).
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived.
+    pub async fn send_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&[u8]>,
+        headers: &[(&str, &str)],
+    ) -> Result<Answer, ApiError> {
         let bearer = self.credentials.bearer().await?;
         let answer = self
             .send_with(&bearer, &method, path, body, headers)
@@ -289,7 +335,7 @@ impl PlatformApi {
         bearer: &Bearer,
         method: &Method,
         path: &str,
-        body: Option<&Value>,
+        body: Option<&[u8]>,
         headers: &[(&str, &str)],
     ) -> Result<Answer, ApiError> {
         let mut request = self
@@ -305,7 +351,9 @@ impl PlatformApi {
             request = request.header(*name, *value);
         }
         if let Some(body) = body {
-            request = request.json(body);
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.to_vec());
         }
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
@@ -315,6 +363,11 @@ impl PlatformApi {
             }
         })?;
         let status = response.status().as_u16();
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let bytes = response
             .bytes()
             .await
@@ -324,28 +377,50 @@ impl PlatformApi {
         } else {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         };
-        Ok(Answer { status, body })
+        Ok(Answer { status, body, etag })
     }
 
+    /// The agent version resolved for execution, revalidated against
+    /// `if_none_match` (the `ETag` of a copy the caller holds) when given.
+    /// Every call is the platform's full read under the caller's
+    /// permissions; only the body is spared when nothing changed.
+    ///
     /// # Errors
     ///
-    /// Refused (404, 422 …) or failed.
+    /// Refused (403, 404, 422 …) or failed.
     pub async fn resolved_version(
         &self,
         project_id: i64,
         application_id: i64,
         version_id: i64,
-    ) -> Result<ResolvedVersion, ApiError> {
-        self.send(
-            Method::GET,
-            &format!(
-                "/api/v2/elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}"
-            ),
-            None,
-            &[],
-        )
-        .await?
-        .into_ok()
+        if_none_match: Option<&str>,
+    ) -> Result<Revalidated, ApiError> {
+        let headers: Vec<(&str, &str)> = if_none_match
+            .map(|etag| ("If-None-Match", etag))
+            .into_iter()
+            .collect();
+        let answer = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}"
+                ),
+                None,
+                &headers,
+            )
+            .await?;
+        if answer.status == StatusCode::NOT_MODIFIED.as_u16() && if_none_match.is_some() {
+            return Ok(Revalidated::NotModified);
+        }
+        // A server that ignores If-None-Match answers 200 with the same tag.
+        if if_none_match.is_some() && answer.etag.as_deref() == if_none_match {
+            return Ok(Revalidated::NotModified);
+        }
+        let etag = answer.etag.clone();
+        Ok(Revalidated::Fresh {
+            resolved: answer.into_ok()?,
+            etag,
+        })
     }
 
     /// The conversation's participant that answers with this agent version,
@@ -382,7 +457,169 @@ impl PlatformApi {
         Ok(AnsweringParticipant {
             id,
             conversation_uuid,
+            numeric_id: number_of(detail.get("id")),
+            message_count: number_of(detail.get("message_count")),
         })
+    }
+
+    /// The conversation's newest `limit` message groups, oldest first
+    /// (`messages_limit`, the route `answering_participant` reads), and the
+    /// tool steps of their answers: the transcript a desktop session is
+    /// rebuilt from (`seed.rs`).
+    ///
+    /// The tool steps come from the trace routes (`message_traces` lists them,
+    /// `message_trace` gives a step's input and output); a deployment
+    /// without them, or a step that cannot be read, leaves its call out and
+    /// the turn keeps its messages. Only the newest
+    /// [`crate::seed::SEED_TOOL_STEPS`] steps are fetched.
+    ///
+    /// # Errors
+    ///
+    /// The conversation cannot be read.
+    pub async fn server_transcript(
+        &self,
+        project_id: i64,
+        conversation_uuid: &str,
+        numeric_id: Option<i64>,
+        limit: u32,
+    ) -> Result<
+        (
+            Vec<Value>,
+            std::collections::HashMap<i64, Vec<crate::seed::ToolStep>>,
+        ),
+        ApiError,
+    > {
+        use futures::StreamExt as _;
+        let detail: Value = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/conversation/prompt_lib/{project_id}/{}?messages_limit={limit}",
+                    path_segment(conversation_uuid)?
+                ),
+                None,
+                &[],
+            )
+            .await?
+            .into_ok()?;
+        let mut groups: Vec<Value> = detail
+            .get("message_groups")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        // Newest first by default; the id is the creation order.
+        groups.sort_by_key(|group| group.get("id").and_then(Value::as_i64).unwrap_or(i64::MAX));
+        let mut steps = std::collections::HashMap::new();
+        let numeric = numeric_id.or_else(|| number_of(detail.get("id")));
+        let answers: Vec<i64> = groups
+            .iter()
+            .filter(|group| group.get("reply_to_id").is_some_and(|v| !v.is_null()))
+            .filter_map(|group| group.get("id").and_then(Value::as_i64))
+            .collect();
+        let (Some(numeric), false) = (numeric, answers.is_empty()) else {
+            return Ok((groups, steps));
+        };
+        let ids = answers
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        // The route answers oldest-first and clamps `limit` at its own page
+        // (2000): one page is the OLDEST steps, so ask for the total and,
+        // past one page, take the newest [`crate::seed::SEED_TOOL_STEPS`]
+        // steps by offset.
+        let base = format!(
+            "/api/v2/elitea_core/message_traces/prompt_lib/{project_id}/{numeric}?kind=tool_call&message_group_ids={ids}&include_total=true"
+        );
+        let listing = self
+            .send(Method::GET, &format!("{base}&limit=2000"), None, &[])
+            .await;
+        let (rows, total): (Vec<Value>, Option<u64>) = match listing {
+            Ok(answer) if (200..300).contains(&answer.status) => (
+                answer
+                    .body
+                    .get("rows")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                answer.body.get("total").and_then(Value::as_u64),
+            ),
+            Ok(_) | Err(_) => {
+                log::warn!(
+                    "the conversation's tool steps could not be listed; seeding messages only"
+                );
+                return Ok((groups, steps));
+            }
+        };
+        let rows = if total.is_some_and(|total| total > rows.len() as u64) {
+            let offset = total
+                .unwrap()
+                .saturating_sub(crate::seed::SEED_TOOL_STEPS as u64);
+            match self
+                .send(
+                    Method::GET,
+                    &format!(
+                        "{base}&limit={}&offset={offset}",
+                        crate::seed::SEED_TOOL_STEPS
+                    ),
+                    None,
+                    &[],
+                )
+                .await
+            {
+                Ok(answer) if (200..300).contains(&answer.status) => answer
+                    .body
+                    .get("rows")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                Ok(_) | Err(_) => {
+                    log::warn!(
+                        "the conversation's newest tool steps could not be listed; seeding with the older page"
+                    );
+                    rows
+                }
+            }
+        } else {
+            rows
+        };
+        // The newest steps only, fetched a few at a time.
+        let skip = rows.len().saturating_sub(crate::seed::SEED_TOOL_STEPS);
+        let wanted: Vec<(i64, i64)> = rows
+            .iter()
+            .skip(skip)
+            .filter_map(|row| {
+                Some((
+                    row.get("id")?.as_i64()?,
+                    row.get("message_group_id")?.as_i64()?,
+                ))
+            })
+            .collect();
+        let fetched: Vec<Option<crate::seed::ToolStep>> = futures::stream::iter(wanted)
+            .map(|(step, group)| async move {
+                let answer = self
+                    .send(
+                        Method::GET,
+                        &format!(
+                            "/api/v2/elitea_core/message_trace/prompt_lib/{project_id}/{step}?message_group_id={group}"
+                        ),
+                        None,
+                        &[],
+                    )
+                    .await
+                    .ok()?;
+                if !(200..300).contains(&answer.status) {
+                    return None;
+                }
+                crate::seed::ToolStep::from_trace(&answer.body)
+            })
+            .buffered(8)
+            .collect()
+            .await;
+        for step in fetched.into_iter().flatten() {
+            steps.entry(step.message_group_id).or_default().push(step);
+        }
+        Ok((groups, steps))
     }
 
     /// # Errors
@@ -407,6 +644,9 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// `body` is the commit's JSON, encoded (its `tool_calls` keys are in
+    /// the model's call order, which the server keeps).
+    ///
     /// # Errors
     ///
     /// Refused (409, 410 …) or failed.
@@ -414,9 +654,9 @@ impl PlatformApi {
         &self,
         project_id: i64,
         execution_id: &str,
-        body: &Value,
+        body: &[u8],
     ) -> Result<Value, ApiError> {
-        self.send(
+        self.send_bytes(
             Method::POST,
             &format!(
                 "/api/v2/elitea_core/local_turn_commit/prompt_lib/{project_id}/{execution_id}"
@@ -499,6 +739,12 @@ pub struct AnsweringParticipant {
     pub id: i64,
     /// Lowercase canonical form, the only one the local turn route accepts.
     pub conversation_uuid: String,
+    /// The conversation's numeric id (the traces routes take only it).
+    pub numeric_id: Option<i64>,
+    /// How many message groups the conversation holds (`message_count`):
+    /// what a desktop session compares its cursor with. A number, or a
+    /// numeric string, as `id` above.
+    pub message_count: Option<i64>,
 }
 
 fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {
@@ -513,6 +759,14 @@ fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {
                 "the platform did not return this conversation's UUID",
             )
         })
+}
+
+fn number_of(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(n) => n.as_i64(),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
 }
 
 fn author_id(author: &Value) -> Result<i64, ApiError> {

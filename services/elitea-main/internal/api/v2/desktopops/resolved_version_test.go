@@ -70,7 +70,7 @@ func TestResolvedVersionServesTheCallersDocument(t *testing.T) {
 	if resolver.project != 3 || resolver.actor != 7 || resolver.application != 11 || resolver.versionCalled != 12 {
 		t.Fatalf("resolver called with %+v", resolver)
 	}
-	if response.Header().Get("ETag") != `"`+strings.Repeat("a", 64)+`"` || response.Header().Get("Cache-Control") != "private, no-store" {
+	if response.Header().Get("ETag") != responseETag(response.Body.Bytes()) || response.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("headers = %v", response.Header())
 	}
 	var body map[string]any
@@ -175,7 +175,7 @@ func TestResolvedVersionCarriesProjectContextOnlyForItsReaders(t *testing.T) {
 		!document.ProjectContextWithheld {
 		t.Fatalf("a non-reader: status = %d, body %s", response.Code, response.Body)
 	}
-	if document.DefinitionSHA256 == strings.Repeat("b", 64) || response.Header().Get("ETag") != `"`+document.DefinitionSHA256+`"` {
+	if document.DefinitionSHA256 == strings.Repeat("b", 64) || response.Header().Get("ETag") != responseETag(response.Body.Bytes()) {
 		t.Fatalf("the digest must describe the document served: %s / %s", document.DefinitionSHA256, response.Header().Get("ETag"))
 	}
 	if len(document.WithheldSecrets) != 1 || document.WithheldSecrets[0] != "/instructions" {
@@ -231,6 +231,88 @@ func TestResolvedVersionResolvesPermissionsOnce(t *testing.T) {
 		}
 		if reader := len(granted) == 2; strings.Contains(recorder.Body.String(), "PROJECT-CONTEXT-CANARY") != reader {
 			t.Fatalf("granted %v: project context served = %v", granted, !reader)
+		}
+	}
+}
+
+// gated serves one request through the real route (Auth, then the project
+// permission gate), with If-None-Match when given.
+func gated(t *testing.T, resolver ResolvedVersionUseCase, granted []string, ifNoneMatch string) *httptest.ResponseRecorder {
+	t.Helper()
+	route, err := NewResolvedVersionRoute(resolver,
+		apimw.AuthConfig{Validator: tokenOnly{}, PrincipalValidator: passPrincipal{}}, fixedPermissions{granted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, resolvedURL, nil)
+	request.Header.Set("Authorization", "Bearer token")
+	if ifNoneMatch != "" {
+		request.Header.Set("If-None-Match", ifNoneMatch)
+	}
+	recorder := httptest.NewRecorder()
+	route.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// A desktop that holds the current document revalidates it for nothing: the
+// same tag answers 304 with no body; any other tag gets the document.
+func TestResolvedVersionNotModified(t *testing.T) {
+	const details = `{"tools":[],"project_context":{"content":"PROJECT-CONTEXT-CANARY"}}`
+	granted := []string{ResolvedVersionPermission, ProjectContextViewPermission}
+	resolver := projectContextResolver{details}
+	first := gated(t, resolver, granted, "")
+	etag := first.Header().Get("ETag")
+	if first.Code != http.StatusOK || etag == "" {
+		t.Fatalf("status = %d, etag %q", first.Code, etag)
+	}
+	for _, header := range []string{etag, "W/" + etag, `"other", ` + etag, "*"} {
+		response := gated(t, resolver, granted, header)
+		if response.Code != http.StatusNotModified || response.Body.Len() != 0 {
+			t.Fatalf("If-None-Match %s: status = %d, body %q", header, response.Code, response.Body)
+		}
+		if response.Header().Get("ETag") != etag || response.Header().Get("Cache-Control") != "private, no-store" {
+			t.Fatalf("If-None-Match %s: headers = %v", header, response.Header())
+		}
+	}
+	// The document changed (here: the caller lost the project context, so
+	// it is served without it): the old tag no longer matches.
+	changed := gated(t, resolver, []string{ResolvedVersionPermission}, etag)
+	if changed.Code != http.StatusOK || changed.Header().Get("ETag") == etag ||
+		strings.Contains(changed.Body.String(), "PROJECT-CONTEXT-CANARY") {
+		t.Fatalf("status = %d, etag %q, body %s", changed.Code, changed.Header().Get("ETag"), changed.Body)
+	}
+	// withheld_secrets is not in definition_sha256 but is in the tag.
+	same := storage.ClientApplicationVersion{VersionDetails: json.RawMessage(`{}`), DefinitionSHA256: "c"}
+	withheld := same
+	withheld.WithheldSecrets = []string{"/instructions"}
+	a, _ := json.Marshal(same)
+	b, _ := json.Marshal(withheld)
+	if responseETag(a) == responseETag(b) {
+		t.Fatal("a change of withheld_secrets alone must change the tag")
+	}
+}
+
+// A 304 is never a way around the permission check: without the version
+// read the caller gets 403, and a version that is not there 404, whatever
+// tag it sends.
+func TestResolvedVersionNotModifiedStillChecksPermission(t *testing.T) {
+	granted := []string{ResolvedVersionPermission}
+	first := gated(t, &fakeResolver{}, granted, "")
+	etag := first.Header().Get("ETag")
+	if first.Code != http.StatusOK || etag == "" {
+		t.Fatalf("status = %d, etag %q", first.Code, etag)
+	}
+	for _, header := range []string{etag, "*"} {
+		resolver := &fakeResolver{}
+		if response := gated(t, resolver, nil, header); response.Code != http.StatusForbidden {
+			t.Fatalf("no permission, If-None-Match %s: status = %d", header, response.Code)
+		}
+		if resolver.project != 0 {
+			t.Fatal("the version was resolved for a caller without the permission")
+		}
+		gone := gated(t, &fakeResolver{err: storage.ErrContentNotFound}, granted, header)
+		if gone.Code != http.StatusNotFound || gone.Header().Get("ETag") != "" {
+			t.Fatalf("no version, If-None-Match %s: status = %d, etag %q", header, gone.Code, gone.Header().Get("ETag"))
 		}
 	}
 }

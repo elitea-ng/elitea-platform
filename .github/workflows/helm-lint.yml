@@ -256,6 +256,15 @@ jobs:
       - name: The elitea-vector component renders, and its guards refuse
         run: bash deploy/helm/tests/render-vector.sh
 
+      # ADR-0034 decision 9: elitea-egress-proxy. Off by default; on, the
+      # Deployment, its key Secret and its NetworkPolicy must agree, and the
+      # half-configured shapes are refused.
+      - name: The egress proxy renders, and its guards refuse
+        run: |
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-egress-proxy.sh
+
       - name: The agent worker renders for both implementations
         run: |
           python3 -c 'import yaml' 2>/dev/null \
@@ -263,6 +272,7 @@ jobs:
           bash deploy/helm/tests/render-worker.sh
           bash deploy/helm/tests/render-worker-sandbox.sh
           bash deploy/helm/tests/render-sandbox-kubernetes.sh
+          bash deploy/helm/tests/render-workspace-egress.sh
 
       # ADR-0030 I1: the document extraction sidecar in the worker pod. The
       # socket path the worker dials and the directory the sidecar binds in
@@ -340,6 +350,26 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-nats-security.sh
+
+      # The budget write-back alerts FIRE (fourth review of #1296): promtool
+      # unit tests over the rule the elitea chart renders. The drop alert must
+      # page on the first drop (0 -> 1) and on a series that appears late; the
+      # ack-pending alert at 80% of MaxAckPending. Pinned Prometheus release,
+      # verified by SHA-256; SCHEDULER_ALERTS_REQUIRE_PROMTOOL makes a missing
+      # binary fail instead of skip.
+      - name: Scheduler alerts — promtool proves the budget write-back rules fire
+        env:
+          PROMETHEUS_VERSION: "3.15.0"
+          PROMETHEUS_SHA256: "2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0"
+          SCHEDULER_ALERTS_REQUIRE_PROMTOOL: "1"
+        run: |
+          tarball="${RUNNER_TEMP}/prometheus.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" -C "${RUNNER_TEMP}"
+          PROMTOOL="${RUNNER_TEMP}/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" \
+            bash deploy/helm/tests/render-scheduler-alerts.sh
 
       # `helm lint` covers every chart. The `template` job below covers only the
       # charts its matrix names, and a chart in neither list is never rendered
@@ -488,6 +518,7 @@ jobs:
           fi
 
           # Compare as sorted sets: order in either list is not a defect.
+          # shellcheck disable=SC2086 # intentional word splitting: $1 is a space-separated list
           normalise() { printf '%s\n' $1 | sort -u | tr '\n' ' '; }
           dirs="$(normalise "$dirs")"
           published="$(normalise "$published")"
@@ -590,6 +621,8 @@ jobs:
       # vector.enabled adds elitea-vector's introspection pool (8 connections
       # per Main replica), so the profile's own guidance applies: 3 replicas
       # fit postgresql.maxConnections 200, 4 do not (values-standalone.yaml).
+      # The egress-proxy fixture renders the proxy objects (ADR-0034), which
+      # no other pass renders, because egressProxy is off by default.
       - name: helm template + kubeconform (standalone capability values)
         if: matrix.chart == 'elitea'
         run: |
@@ -600,6 +633,7 @@ jobs:
             --set vector.enabled=true \
             --set-string vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \
             --set main.autoscaling.maxReplicas=3 \
+            -f deploy/helm/tests/fixtures/egress-proxy-values.yaml \
             > /tmp/elitea-main-standalone.yaml
           kubeconform -strict -summary -verbose \
             -kubernetes-version 1.30.0 \

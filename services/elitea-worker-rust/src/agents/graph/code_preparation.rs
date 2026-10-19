@@ -438,6 +438,7 @@ impl RemoteCodeRuntime {
                 // refusal can be an expired grant; a persistent one is real.
                 Ok(Err(SandboxCallError::Submission {
                     code: tonic::Code::FailedPrecondition,
+                    ..
                 })) if preconditions < HYDRATION_PRECONDITION_RETRIES => preconditions += 1,
                 Ok(Err(error)) => {
                     return Err(hydration_failure(hydration_reason(&error), index));
@@ -479,7 +480,7 @@ fn hydration_reason(error: &SandboxCallError) -> &'static str {
         SandboxCallError::Invalid => "request_invalid",
         SandboxCallError::Authorization(_) | SandboxCallError::Rejected => "authorization_refused",
         SandboxCallError::InvalidReceipt => "invalid_receipt",
-        SandboxCallError::Submission { code } => match code {
+        SandboxCallError::Submission { code, .. } => match code {
             tonic::Code::FailedPrecondition => "supervisor_failed_precondition",
             tonic::Code::InvalidArgument => "supervisor_invalid_argument",
             tonic::Code::NotFound => "supervisor_not_found",
@@ -623,7 +624,8 @@ pub(super) fn retryable(error: &SandboxCallError) -> bool {
             code: tonic::Code::Unavailable
                 | tonic::Code::DeadlineExceeded
                 | tonic::Code::Aborted
-                | tonic::Code::ResourceExhausted
+                | tonic::Code::ResourceExhausted,
+            ..
         }
     )
 }
@@ -736,7 +738,7 @@ mod tests {
             tonic::Code::Aborted,
             tonic::Code::ResourceExhausted,
         ] {
-            assert!(retryable(&SandboxCallError::Submission { code }));
+            assert!(retryable(&SandboxCallError::coded(code)));
         }
         for code in [
             tonic::Code::NotFound,
@@ -744,7 +746,7 @@ mod tests {
             tonic::Code::PermissionDenied,
             tonic::Code::FailedPrecondition,
         ] {
-            assert!(!retryable(&SandboxCallError::Submission { code }));
+            assert!(!retryable(&SandboxCallError::coded(code)));
         }
         assert!(!retryable(&SandboxCallError::InvalidReceipt));
     }
@@ -1047,23 +1049,14 @@ mod hydration_reason_tests {
             (SandboxCallError::Rejected, "authorization_refused"),
             (SandboxCallError::InvalidReceipt, "invalid_receipt"),
             (
-                SandboxCallError::Submission {
-                    code: Code::FailedPrecondition,
-                },
+                SandboxCallError::coded(Code::FailedPrecondition),
                 "supervisor_failed_precondition",
             ),
             (
-                SandboxCallError::Submission {
-                    code: Code::DataLoss,
-                },
+                SandboxCallError::coded(Code::DataLoss),
                 "supervisor_data_loss",
             ),
-            (
-                SandboxCallError::Submission {
-                    code: Code::Unknown,
-                },
-                "supervisor_refused",
-            ),
+            (SandboxCallError::coded(Code::Unknown), "supervisor_refused"),
         ] {
             assert_eq!(hydration_reason(&error), reason);
         }

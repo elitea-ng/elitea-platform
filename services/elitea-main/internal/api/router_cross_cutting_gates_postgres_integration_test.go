@@ -25,6 +25,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -40,6 +41,9 @@ func TestEveryAPIRouteIsClosedDuringAMaintenanceWindow(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply %s: %v", source, err)
+	}
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO centry.platform_config (section, key, value, updated_at)

@@ -105,11 +105,13 @@ impl Default for TestControlState {
             }),
             authorize_unavailable: AtomicBool::new(false),
             renew: Mutex::new(RenewLeaseResponseV1 {
+                workspace_wrap_up: false,
                 lease_expires_at_unix_millis: NOW + 60_000,
                 desired_state: DesiredExecutionStateV1::Running as i32,
                 rejection: None,
             }),
             observe: Mutex::new(ObserveDesiredStateResponseV1 {
+                workspace_wrap_up: false,
                 desired_state: DesiredExecutionStateV1::Running as i32,
                 rejection: None,
             }),
@@ -898,10 +900,12 @@ async fn periodic_stop_cancels_and_drops_an_inflight_input_future() {
     let (control, state) = control();
     state.observe_queue.lock().expect("observe queue").extend([
         ObserveDesiredStateResponseV1 {
+            workspace_wrap_up: false,
             desired_state: DesiredExecutionStateV1::Running as i32,
             rejection: None,
         },
         ObserveDesiredStateResponseV1 {
+            workspace_wrap_up: false,
             desired_state: DesiredExecutionStateV1::Cancelled as i32,
             rejection: None,
         },

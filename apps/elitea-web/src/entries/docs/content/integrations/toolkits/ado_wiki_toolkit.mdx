@@ -59,10 +59,6 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 ## Common issues
 
 <Note>
-On the Rust worker, this tile shows greyed out with a reason — the Rust worker does not materialise `ADO wiki` (tracked in #865). Helm now defaults to the Python worker, matching compose (#865, #866); a deployment that opts into the Rust worker still needs the Python worker to connect ADO wiki.
-</Note>
-
-<Note>
 The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.
 </Note>
 

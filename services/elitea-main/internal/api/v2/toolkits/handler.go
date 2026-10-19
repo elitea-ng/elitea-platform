@@ -1253,7 +1253,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// file-store toolkit is judged as if it sent empty settings. An update
 	// without settings is a rename and stays unjudged.
 	if _, hasSettings := body["settings"].(map[string]any); !hasSettings &&
-		h.refuseMissingToolkitBucket(w, "create_toolkit", createdType, map[string]any{}) {
+		h.refuseMissingToolkitBucket(w, r, newToolkitSave(r, "create_toolkit", body), createdType, map[string]any{}) {
 		return
 	}
 	// The credential gate, between the type refusal and the write, so a refused
@@ -1265,7 +1265,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		// stored: a defaulted key is part of the saved settings, not an
 		// afterthought applied behind the check (#978).
 		h.applyCatalogueSettingsDefaults(r, "create_toolkit", createdType, settings)
-		if h.refuseUnresolvableToolkitSettings(w, r, "create_toolkit", projectID, createdType, settings) {
+		if h.refuseUnresolvableToolkitSettings(w, r, newToolkitSave(r, "create_toolkit", body), createdType, settings) {
 			return
 		}
 	}
@@ -1374,7 +1374,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			if storedSettings == nil {
 				storedSettings = map[string]any{}
 			}
-			if h.refuseMissingToolkitBucket(w, "update_toolkit", updatedType, storedSettings) {
+			if h.refuseMissingToolkitBucket(w, r, newToolkitSave(r, "update_toolkit", body), updatedType, storedSettings) {
 				return
 			}
 		}
@@ -1396,7 +1396,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		// that dies at materialization on create (#978). Defaulted here for
 		// that reason, and only for keys the body does not mention at all.
 		h.applyCatalogueSettingsDefaults(r, "update_toolkit", updatedType, settings)
-		if h.refuseUnresolvableToolkitSettings(w, r, "update_toolkit", projectID, updatedType, settings) {
+		if h.refuseUnresolvableToolkitSettings(w, r, newToolkitSave(r, "update_toolkit", body), updatedType, settings) {
 			return
 		}
 	}

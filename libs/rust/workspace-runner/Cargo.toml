@@ -1,0 +1,26 @@
+[package]
+name = "elitea-workspace-runner"
+description = "The cloud executor's workspace runner (ADR-0034 decision 9): the desktop's local tools, run inside the turn's sandbox container at the `container` enforcement level, driven by the worker over the sandbox helper protocol (JSON lines on stdin and stdout, the tree moved in and out as a workspace archive)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "elitea-workspace-runner"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1.92"
+elitea-agent-runtime = { path = "../agent-runtime" }
+elitea-local-tools = { path = "../local-tools" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["io-std", "io-util", "macros", "process", "rt", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["io-std", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

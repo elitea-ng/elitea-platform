@@ -1,0 +1,29 @@
+{{- if include "elitea-egress-proxy.auditEnabled" . }}
+# The egress proxy's client certificate for elitea-main's EgressAuditService
+# (ADR-0034 decision 9), from egressProxy.audit.issuerRef, which must be
+# backed by the RUNTIME CA. elitea-main admits it as
+# dns:{{ lower .Values.egressProxy.audit.clientDnsName }} (ELITEA_EGRESS_AUDIT_CLIENTS).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-egress-proxy.fullname" . }}-audit-client
+  labels:
+    {{- include "elitea-egress-proxy.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.egressProxy.audit.clientSecretName }}
+  duration: {{ .Values.egressProxy.audit.duration }}
+  renewBefore: {{ .Values.egressProxy.audit.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  dnsNames:
+    - {{ .Values.egressProxy.audit.clientDnsName }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Values.egressProxy.audit.issuerRef.name }}
+    kind: {{ .Values.egressProxy.audit.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}

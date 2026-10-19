@@ -34,10 +34,9 @@ import { expect, test } from '@playwright/test';
 
 import { clearMockLlmJournal, readMockLlmJournal } from '../fixtures/api';
 import {
-  ADO_LEG_REASON,
+  ADO_NATIVE_GAP,
   ADO_WIKI,
   createAdoAgent,
-  onPythonLeg,
   readAdoJournal,
   readAdoState,
   resetAdo,
@@ -45,7 +44,7 @@ import {
   shownImages,
 } from '../fixtures/adoMock';
 
-test.skip(!onPythonLeg(), ADO_LEG_REASON);
+test.fixme(true, ADO_NATIVE_GAP);
 
 const SHORT_PROMPT = 'short caption';
 const WIKI_SETTINGS = { default_wiki_identifier: ADO_WIKI } as const;

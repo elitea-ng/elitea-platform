@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -206,6 +207,10 @@ type EliteaClientTokenContext struct {
 	//     turn on that project down for a fault that costs it sub-agent calls
 	//     alone.
 	SecretsHeaderValue string `json:"secrets_header_value,omitempty"`
+	// Workspace is the cloud executor's field (ADR-0034 decision 9), served
+	// only to a worker that lists it in the accept header and only for a
+	// cloud turn of a handed-off thread (runtime_workspace_context.go).
+	Workspace *workspaceruntime.RuntimeContext `json:"workspace,omitempty"`
 }
 
 // ProjectSecretsHeaderReader reads one project's `secrets_header_value` — the
@@ -229,6 +234,7 @@ type EliteaClientTokenService struct {
 	projectIssuer ProjectSystemTokenIssuer
 	validator     ProjectTokenValidator
 	secretsHeader ProjectSecretsHeaderReader
+	workspace     WorkspaceContextResolver
 }
 
 func NewEliteaClientTokenService(
@@ -276,6 +282,27 @@ func (s *EliteaClientTokenService) Resolve(
 	ctx context.Context,
 	claim ContentClaim,
 ) (EliteaClientTokenContext, error) {
+	value, _, err := s.resolve(ctx, claim)
+	return value, err
+}
+
+func (s *EliteaClientTokenService) resolve(
+	ctx context.Context,
+	claim ContentClaim,
+) (EliteaClientTokenContext, RuntimeContextAuthorization, error) {
+	var authorization RuntimeContextAuthorization
+	value, err := s.resolveTokenValue(ctx, claim, &authorization)
+	if err != nil {
+		return EliteaClientTokenContext{}, RuntimeContextAuthorization{}, err
+	}
+	return value, authorization, nil
+}
+
+func (s *EliteaClientTokenService) resolveTokenValue(
+	ctx context.Context,
+	claim ContentClaim,
+	authorized *RuntimeContextAuthorization,
+) (EliteaClientTokenContext, error) {
 	if err := ctx.Err(); err != nil {
 		return EliteaClientTokenContext{}, err
 	}
@@ -292,6 +319,7 @@ func (s *EliteaClientTokenService) Resolve(
 	if authorization.ResourceProjectID <= 0 {
 		return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageProjectIdentity)
 	}
+	*authorized = authorization
 	actorID, err := strconv.ParseInt(authorization.ActorID, 10, 64)
 	if err != nil || actorID <= 0 || strconv.FormatInt(actorID, 10) != authorization.ActorID {
 		return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageExecutionActor)

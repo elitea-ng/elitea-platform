@@ -15,6 +15,8 @@ pub struct Req {
     /// Header names lowercased.
     pub headers: HashMap<String, String>,
     pub body: String,
+    /// The body's bytes (a binary upload).
+    pub raw: Vec<u8>,
 }
 
 impl Req {
@@ -30,6 +32,8 @@ pub struct Res {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,
     pub body: String,
+    /// Sent instead of `body` when not empty (a binary download).
+    pub raw: Vec<u8>,
 }
 
 impl Res {
@@ -38,6 +42,16 @@ impl Res {
             status,
             headers: vec![("Content-Type", "application/json".into())],
             body: body.to_string(),
+            raw: Vec::new(),
+        }
+    }
+
+    pub fn bytes(status: u16, raw: Vec<u8>) -> Self {
+        Self {
+            status,
+            headers: vec![("Content-Type", "application/octet-stream".into())],
+            body: String::new(),
+            raw,
         }
     }
 }
@@ -92,17 +106,23 @@ where
                 if lose {
                     return;
                 }
+                let payload = if res.raw.is_empty() {
+                    res.body.into_bytes()
+                } else {
+                    res.raw
+                };
                 let mut out = format!(
                     "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n",
                     res.status,
-                    res.body.len()
+                    payload.len()
                 );
                 for (name, value) in res.headers {
                     out.push_str(&format!("{name}: {value}\r\n"));
                 }
                 out.push_str("\r\n");
-                out.push_str(&res.body);
-                let _ = stream.write_all(out.as_bytes()).await;
+                let mut out = out.into_bytes();
+                out.extend_from_slice(&payload);
+                let _ = stream.write_all(&out).await;
                 let _ = stream.shutdown().await;
             });
         }
@@ -145,11 +165,13 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> Option<Req> {
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    let body = String::from_utf8_lossy(&buf[head_end..]).into_owned();
+    let raw = buf[head_end..].to_vec();
+    let body = String::from_utf8_lossy(&raw).into_owned();
     Some(Req {
         method,
         path,
         headers,
         body,
+        raw,
     })
 }

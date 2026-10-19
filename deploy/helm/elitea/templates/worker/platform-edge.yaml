@@ -5,7 +5,7 @@
 # elitea-main. Transcribed from deploy/runtime/platform-edge.yml and
 # platform-edge-dynamic.yml in the platform repository.
 #
-# Why it exists: elitea-worker-python refuses a plaintext platform origin
+# Why it exists: the worker refuses a plaintext platform origin
 # (config.py:187) and elitea-main has no TLS listener for its ordinary
 # /api/v2 + /llm surface — its three mTLS listeners serve the private
 # control/output/content protocols, not the product API.
@@ -14,7 +14,7 @@ kind: ConfigMap
 metadata:
   name: {{ $edge.serviceName }}
   labels:
-    {{- include "elitea-worker-python.labels" . | nindent 4 }}
+    {{- include "elitea-worker.labels" . | nindent 4 }}
     app.kubernetes.io/component: platform-edge
 data:
   traefik.yml: |
@@ -119,7 +119,7 @@ kind: Service
 metadata:
   name: {{ $edge.serviceName }}
   labels:
-    {{- include "elitea-worker-python.labels" . | nindent 4 }}
+    {{- include "elitea-worker.labels" . | nindent 4 }}
     app.kubernetes.io/component: platform-edge
 spec:
   type: ClusterIP
@@ -129,7 +129,7 @@ spec:
       targetPort: platform
       protocol: TCP
   selector:
-    {{- include "elitea-worker-python.selectorLabels" . | nindent 4 }}
+    {{- include "elitea-worker.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: platform-edge
 ---
 apiVersion: apps/v1
@@ -137,18 +137,18 @@ kind: Deployment
 metadata:
   name: {{ $edge.serviceName }}
   labels:
-    {{- include "elitea-worker-python.labels" . | nindent 4 }}
+    {{- include "elitea-worker.labels" . | nindent 4 }}
     app.kubernetes.io/component: platform-edge
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "elitea-worker-python.selectorLabels" . | nindent 6 }}
+      {{- include "elitea-worker.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: platform-edge
   template:
     metadata:
       labels:
-        {{- include "elitea-worker-python.selectorLabels" . | nindent 8 }}
+        {{- include "elitea-worker.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: platform-edge
       annotations:
         # Over the values rather than the rendered file: the ConfigMap lives in

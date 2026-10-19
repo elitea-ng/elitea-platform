@@ -32,9 +32,8 @@ import { expect, test } from '@playwright/test';
 
 import { API_BASE, clearMockLlmJournal, readMockLlmJournal } from '../fixtures/api';
 import {
-  ADO_LEG_REASON,
+  ADO_NATIVE_GAP,
   createAdoAgent,
-  onPythonLeg,
   readAdoJournal,
   readAdoState,
   resetAdo,
@@ -42,7 +41,7 @@ import {
   shownImages,
 } from '../fixtures/adoMock';
 
-test.skip(!onPythonLeg(), ADO_LEG_REASON);
+test.fixme(true, ADO_NATIVE_GAP);
 
 /** The seeded work items, by what each one is FOR (`deploy/ado-mock/server.py`). */
 const REPEATED = 101;

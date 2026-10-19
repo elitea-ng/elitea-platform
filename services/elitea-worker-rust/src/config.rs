@@ -146,7 +146,48 @@ pub struct RuntimeDeployConfig {
     pub agent_node_recovery: bool,
     #[serde(default)]
     pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
+    /// The cloud executor (ADR-0034 decision 9): the sandbox supervisor's
+    /// `workspace` profile and this worker's ceilings. Absent, a handed-off
+    /// thread's cloud turn fails with `workspace_run.unavailable`.
+    #[serde(default)]
+    pub workspace_runs: Option<WorkspaceRunsConfig>,
     pub limits: RuntimeLimits,
+}
+
+/// Where workspace runs start, and this worker's ceilings for them.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRunsConfig {
+    /// `host:port` of the supervisor's workspace profile (mTLS).
+    pub target: String,
+    /// That profile's grant audience.
+    pub audience: String,
+    /// The worker's own disk for segments and checkouts (an absolute,
+    /// private directory).
+    pub scratch_root: PathBuf,
+    pub cpu_millis: u64,
+    pub memory_bytes: u64,
+    pub max_disk_bytes: u64,
+    pub turn_wall_seconds: u64,
+}
+
+impl WorkspaceRunsConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        if self.target.is_empty()
+            || self.target.len() > 512
+            || self.audience.is_empty()
+            || self.audience.len() > 256
+            || self.audience.chars().any(char::is_whitespace)
+            || !self.scratch_root.is_absolute()
+            || !(1..=256_000).contains(&self.cpu_millis)
+            || self.memory_bytes < 64 * 1024 * 1024
+            || self.max_disk_bytes < 256 * 1024 * 1024
+            || !(1..=86_400).contains(&self.turn_wall_seconds)
+        {
+            return Err(invalid_config());
+        }
+        Ok(())
+    }
 }
 
 /// Deployment-selected Code backend; never supplied by YAML or model output.
@@ -369,6 +410,9 @@ impl RuntimeDeployConfig {
         }
         if self.index_model_call_cap == Some(0) || self.toolkit_model_call_cap == Some(0) {
             return Err(invalid_config());
+        }
+        if let Some(runs) = &self.workspace_runs {
+            runs.validate()?;
         }
         if self.sandbox_runtimes.len() > 4 {
             return Err(invalid_config());

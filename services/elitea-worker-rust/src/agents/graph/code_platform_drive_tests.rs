@@ -36,9 +36,7 @@ async fn fast_pending_and_busy_preserve_one_multistage_step_across_backoff() {
         // transport reconciliation of one original job, not another run.
         for (index, outcome) in [
             Ok(SandboxOutcome::Pending),
-            Err(SandboxCallError::Submission {
-                code: tonic::Code::ResourceExhausted,
-            }),
+            Err(SandboxCallError::coded(tonic::Code::ResourceExhausted)),
             Ok(SandboxOutcome::Pending),
         ]
         .into_iter()
@@ -50,7 +48,8 @@ async fn fast_pending_and_busy_preserve_one_multistage_step_across_backoff() {
                 outcome,
                 Ok(SandboxOutcome::Pending)
                     | Err(SandboxCallError::Submission {
-                        code: tonic::Code::ResourceExhausted
+                        code: tonic::Code::ResourceExhausted,
+                        ..
                     })
             ));
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;

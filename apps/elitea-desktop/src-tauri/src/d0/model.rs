@@ -165,6 +165,7 @@ impl Llm for GatewayModel {
                     "the model stream was cut off",
                 )
             })?;
+            self.events.first_token();
             if reader.push(&chunk)? {
                 break;
             }
