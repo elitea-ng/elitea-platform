@@ -109,6 +109,24 @@ target "elitea-egress-proxy" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# The cloud executor's sandbox supervisor (ADR-0034): the `supervisor` stage of
+# the worker Containerfile, built with `--features sandbox-supervisor`. It runs
+# the workspace sandboxes (Kubernetes pods under a gVisor/Kata RuntimeClass)
+# and is the only process that may create them. The same distroless
+# base-nossl-debian13 runtime and cargo-auditable build as the worker; the
+# default worker image keeps no sandbox feature.
+#
+# Not in `group "default"`, like the worker: it compiles from source.
+target "elitea-sandbox-supervisor" {
+  context    = "."
+  dockerfile = "services/elitea-worker-rust/Containerfile"
+  target     = "supervisor"
+  tags       = ["${REGISTRY}/elitea-sandbox-supervisor:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-sandbox-supervisor-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-sandbox-supervisor-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 # The Rust-native DeepWiki engine (ADR-0026), the only engine sidecar the
 # chart runs (`deepwiki.engine.runner: native` or `fixture`). One binary on
 # distroless base-nossl-debian13 plus libgcc_s, built with cargo-auditable.

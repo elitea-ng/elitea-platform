@@ -403,6 +403,16 @@ jobs:
             target: ""
             expect_type: rustbinary
             blocking: true
+          # The cloud executor's sandbox supervisor (ADR-0034): the worker
+          # Containerfile's `supervisor` stage (`--features
+          # sandbox-supervisor`). Same distroless base and cargo-auditable
+          # build, so `rustbinary` and blocking.
+          - name: elitea-sandbox-supervisor
+            context: .
+            dockerfile: ./services/elitea-worker-rust/Containerfile
+            target: supervisor
+            expect_type: rustbinary
+            blocking: true
           # The Rust-native Inventory engine (ADR-0027). Repo ROOT context:
           # the Containerfile COPYs services/elitea-inventory-engine and the
           # shared libs/rust crates from there. `rustbinary` and blocking for

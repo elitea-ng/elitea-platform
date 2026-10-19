@@ -249,6 +249,14 @@ jobs:
           - name: elitea-worker-rust
             context: .
             dockerfile: ./services/elitea-worker-rust/Containerfile
+          # The cloud executor's sandbox supervisor (ADR-0034): the
+          # `supervisor` stage of the worker Containerfile, built with
+          # `--features sandbox-supervisor`. The chart pins it by digest
+          # (sandboxKubernetes.supervisor.image), so it must be pullable.
+          - name: elitea-sandbox-supervisor
+            context: .
+            dockerfile: ./services/elitea-worker-rust/Containerfile
+            target: supervisor
           # The Rust-native Inventory engine (ADR-0027): the only Inventory
           # engine sidecar. It replaced the Python elitea-inventory image,
           # which is no longer published. Repo ROOT context: the
@@ -464,6 +472,12 @@ jobs:
           - name: elitea-worker-rust
             expect_type: rustbinary
             blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
+            expect_type: rustbinary
+            blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
@@ -629,6 +643,12 @@ jobs:
           # itself reports zero. There is nothing here to exempt, so it is held
           # to the same threshold as the Go images.
           - name: elitea-worker-rust
+            expect_type: rustbinary
+            blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
             expect_type: rustbinary
             blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
@@ -1030,7 +1050,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 
