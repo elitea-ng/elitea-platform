@@ -1008,12 +1008,10 @@ impl RecoverableNode {
                 attempt,
                 recovering_started,
             );
-            if self.legacy_first_attempt {
-                if attempt != 1 {
-                    return Err(recovery_error(
-                        "pipeline.node_recovery.invalid_legacy_attempt",
-                    ));
-                }
+            // A default-policy node keeps its pre-existing first identity. A later
+            // attempt exists only as a platform re-run after a lost runtime and
+            // uses the ordinal identity Main derives the same way.
+            if self.legacy_first_attempt && attempt == 1 {
                 authority.dispatch_activation = self
                     .body
                     .legacy_dispatch_identity(context)?

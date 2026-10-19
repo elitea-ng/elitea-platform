@@ -12,6 +12,35 @@ pub const MAX_RECOVERY_EVENTS: usize = 64;
 pub const MAX_NODE_RECOVERY_BYTES: usize = 128 * 1024;
 const SCHEMA: &str = "elitea.pipeline.node-recovery.v1";
 const SCHEMA_V2: &str = "elitea.pipeline.node-recovery.v2";
+/// A ledger that recorded a lost sandbox runtime. Earlier Workers do not know
+/// the class, so they refuse the record by its schema instead of guessing.
+const SCHEMA_V3: &str = "elitea.pipeline.node-recovery.v3";
+
+/// The oldest schema that can express every event in `ledger`.
+fn schema_for(ledger: &NodeAttemptLedger) -> &'static str {
+    if ledger.events.iter().any(|event| {
+        matches!(
+            event,
+            NodeRecoveryEvent::Failure {
+                failure: NodeFailure {
+                    class: NodeFailureClass::RuntimeLost,
+                    ..
+                },
+                ..
+            }
+        )
+    }) {
+        SCHEMA_V3
+    } else if ledger
+        .events
+        .iter()
+        .any(|event| matches!(event, NodeRecoveryEvent::NoEffectReconciled { .. }))
+    {
+        SCHEMA_V2
+    } else {
+        SCHEMA
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -64,16 +93,7 @@ struct StoredLedger {
 pub fn encode(ledger: &NodeAttemptLedger) -> Result<Value, NodeRecoveryError> {
     validate(ledger)?;
     let value = serde_json::to_value(StoredLedger {
-        schema: if ledger
-            .events
-            .iter()
-            .any(|event| matches!(event, NodeRecoveryEvent::NoEffectReconciled { .. }))
-        {
-            SCHEMA_V2
-        } else {
-            SCHEMA
-        }
-        .to_owned(),
+        schema: schema_for(ledger).to_owned(),
         ledger: ledger.clone(),
     })
     .map_err(|_| NodeRecoveryError::InvalidHistory)?;
@@ -101,12 +121,7 @@ pub fn decode(
     }
     let stored: StoredLedger =
         serde_json::from_value(value.clone()).map_err(|_| NodeRecoveryError::InvalidHistory)?;
-    let requires_v2 = stored
-        .ledger
-        .events
-        .iter()
-        .any(|event| matches!(event, NodeRecoveryEvent::NoEffectReconciled { .. }));
-    if stored.schema != (if requires_v2 { SCHEMA_V2 } else { SCHEMA })
+    if stored.schema != schema_for(&stored.ledger)
         || stored.ledger.activation_id != expected_activation
         || stored.ledger.policy != *expected_policy
     {

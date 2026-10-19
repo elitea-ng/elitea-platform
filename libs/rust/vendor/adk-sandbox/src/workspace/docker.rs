@@ -1368,4 +1368,4 @@ mod live_tests;
 mod code_jobs;
 #[path = "docker_code_platform.rs"]
 mod code_platform;
-pub use code_jobs::{CodeJobIdentity, CodeJobObservation};
+pub use code_jobs::{CodeJobExit, CodeJobIdentity, CodeJobObservation};
