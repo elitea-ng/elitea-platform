@@ -6898,6 +6898,11 @@
     "GET /elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}": {
       "operation_id": "resolveApplicationVersion",
       "parameters": {
+        "header:if-none-match": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "header:x-client-version": {
           "schema": {
             "type": "string"
@@ -7072,6 +7077,13 @@
               }
             }
           },
+          "headers": {
+            "etag": {
+              "type": "string"
+            }
+          }
+        },
+        "304": {
           "headers": {
             "etag": {
               "type": "string"

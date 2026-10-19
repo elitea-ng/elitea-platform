@@ -3681,6 +3681,11 @@ export type resolveApplicationVersionResponse200 = {
   status: 200;
 };
 
+export type resolveApplicationVersionResponse304 = {
+  data: void;
+  status: 304;
+};
+
 export type resolveApplicationVersionResponse400 = {
   data: DesktopOperationError | InvalidClientVersionError;
   status: 400;
@@ -3731,6 +3736,7 @@ export type resolveApplicationVersionResponseSuccess =
     headers: Headers;
   };
 export type resolveApplicationVersionResponseError = (
+  | resolveApplicationVersionResponse304
   | resolveApplicationVersionResponse400
   | resolveApplicationVersionResponse401
   | resolveApplicationVersionResponse403
@@ -3783,8 +3789,15 @@ export const getResolveApplicationVersionUrl = (
  * `project_context_withheld` is true (the digest describes the document
  * served).
  *
- * CACHING. `definition_sha256` (also the `ETag`) changes whenever the
- * resolved document does. The document is resolved on every call.
+ * CACHING. `definition_sha256` changes whenever the resolved
+ * `version_details` (or the ids) do. The `ETag` is a digest of the
+ * whole answer, so it also changes with `withheld_secrets` and
+ * `project_context_withheld`, which `definition_sha256` does not cover.
+ * The document is resolved on every call, under the caller's
+ * permissions; a request whose `If-None-Match` names the current `ETag`
+ * then gets `304` with that `ETag` and no body. A caller who may not
+ * read the version gets the same `403`/`404` as without the header,
+ * never a `304`.
  * @summary An agent or pipeline version resolved for execution, without secrets
  */
 export const resolveApplicationVersion = async (
@@ -3815,6 +3828,7 @@ export const getResolveApplicationVersionQueryKey = (
 export const getResolveApplicationVersionQueryOptions = <
   TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
   TError =
+    | void
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
@@ -3871,6 +3885,7 @@ export type ResolveApplicationVersionQueryResult = NonNullable<
   Awaited<ReturnType<typeof resolveApplicationVersion>>
 >;
 export type ResolveApplicationVersionQueryError =
+  | void
   | DesktopOperationError
   | InvalidClientVersionError
   | N401Response
@@ -3880,6 +3895,7 @@ export type ResolveApplicationVersionQueryError =
 export function useResolveApplicationVersion<
   TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
   TError =
+    | void
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
@@ -3914,6 +3930,7 @@ export function useResolveApplicationVersion<
 export function useResolveApplicationVersion<
   TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
   TError =
+    | void
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
@@ -3948,6 +3965,7 @@ export function useResolveApplicationVersion<
 export function useResolveApplicationVersion<
   TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
   TError =
+    | void
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response
@@ -3978,6 +3996,7 @@ export function useResolveApplicationVersion<
 export function useResolveApplicationVersion<
   TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
   TError =
+    | void
     | DesktopOperationError
     | InvalidClientVersionError
     | N401Response

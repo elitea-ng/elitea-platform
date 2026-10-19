@@ -4020,7 +4020,7 @@ components:
         version_id: { type: integer, format: int64 }
         definition_sha256:
           type: string
-          description: SHA-256 (hex) of `version_details` and the three ids; also the ETag.
+          description: SHA-256 (hex) of `version_details` and the three ids. Not the ETag, which digests the whole answer (withheld_secrets and project_context_withheld included).
         withheld_secrets:
           type: array
           items: { type: string }
@@ -18880,11 +18880,23 @@ paths:
         `project_context_withheld` is true (the digest describes the document
         served).
 
-        CACHING. `definition_sha256` (also the `ETag`) changes whenever the
-        resolved document does. The document is resolved on every call.
+        CACHING. `definition_sha256` changes whenever the resolved
+        `version_details` (or the ids) do. The `ETag` is a digest of the
+        whole answer, so it also changes with `withheld_secrets` and
+        `project_context_withheld`, which `definition_sha256` does not cover.
+        The document is resolved on every call, under the caller's
+        permissions; a request whose `If-None-Match` names the current `ETag`
+        then gets `304` with that `ETag` and no body. A caller who may not
+        read the version gets the same `403`/`404` as without the header,
+        never a `304`.
       tags: [applications, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string }
+          description: The `ETag` of a copy the caller holds (a list, weak tags and `*` are accepted).
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
@@ -18896,6 +18908,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ResolvedApplicationVersion'
+        '304':
+          description: >-
+            The copy named by `If-None-Match` is current: the same `ETag`, no
+            body. Answered only after the permission checks of a `200`.
+          headers:
+            ETag:
+              schema: { type: string }
         '400':
           description: >-
             An id that is not a positive integer
