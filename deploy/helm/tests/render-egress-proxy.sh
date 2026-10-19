@@ -97,6 +97,12 @@ assert volumes["public-keys"]["secret"]["secretName"] == "elitea-egress-proxy-ke
 for name in ["RUN_MAX_CONNECTIONS", "RUN_MAX_BYTES", "IDLE_TIMEOUT", "MAX_CONNECTION_LIFETIME",
              "MAX_CONNECTIONS", "MAX_HEADER_BYTES", "SUMMARY_INTERVAL", "DRAIN_DELAY", "SHUTDOWN_TIMEOUT"]:
     assert env.get("ELITEA_EGRESS_PROXY_" + name), name
+# The integer limits must reach the proxy as plain integers: Helm reads a
+# values-file number as a float, and a bare toString rendered the default
+# 2147483648 as "2.147483648e+09", which crash-looped the proxy on 4.56.1.
+for name, want in [("MAX_CONNECTIONS", "4096"), ("MAX_HEADER_BYTES", "32768"),
+                   ("RUN_MAX_CONNECTIONS", "64"), ("RUN_MAX_BYTES", "2147483648")]:
+    assert env["ELITEA_EGRESS_PROXY_" + name] == want, (name, env["ELITEA_EGRESS_PROXY_" + name])
 assert pod["terminationGracePeriodSeconds"] >= 5 + 60 + 5
 deny_env = set(env["ELITEA_EGRESS_PROXY_DENY_CIDRS"].split(","))
 for cidr in ["10.244.0.0/16", "fd00:10:244::/56", "10.96.0.0/12", "169.254.0.0/16", "10.0.0.0/8", "fc00::/7"]:
