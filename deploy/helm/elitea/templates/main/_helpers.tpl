@@ -1112,8 +1112,8 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 {{- end -}}
 
-{{- if and $discovery.enabled (not (or $agent.enabled $ingest.enabled)) -}}
-{{- fail "runtime.toolkitDiscovery.enabled=true needs an active agentExecutionDispatch or indexIngestDispatch." -}}
+{{- if and $discovery.enabled (not $agent.enabled) -}}
+{{- fail "runtime.toolkitDiscovery.enabled=true needs an active agentExecutionDispatch: discovery goes over the agent command stream." -}}
 {{- end -}}
 
 {{- range $block := list (list "agentExecutionDispatch" $agent) (list "indexIngestDispatch" $ingest) -}}

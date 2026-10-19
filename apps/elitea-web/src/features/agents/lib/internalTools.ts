@@ -56,10 +56,7 @@ export interface InternalToolDescriptor {
  * `INTERNAL_TOOLS_LIST` below, which describes every deployment the same way.
  *
  * `available` defaults to `true` (see `isInternalToolAvailable`'s own doc
- * comment) for any tool this endpoint has not been taught to answer for yet
- * — currently only `pyodide`, #866's own disclosed scope boundary — so that
- * toggle keeps behaving exactly as before. `planner`, `lazy_tools_mode` and
- * `attachments` are served by BOTH workers and read available on either.
+ * comment) for any tool this endpoint has not been taught to answer for yet.
  */
 export interface AvailableInternalTool extends InternalToolDescriptor {
   readonly available: boolean;
@@ -119,17 +116,10 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     infoTooltip: { text: 'Let the agent ask clarifying questions and wait for your answers before continuing.' },
   },
   {
-    // #872: as of the Python worker's image, this toggle actually executes
-    // (a pinned `deno` binary plus the SDK's own sandbox entrypoint, both
-    // baked in at build time — services/elitea-worker-python/Containerfile).
-    // The Rust worker still skips it. GET /elitea_core/runtime_capabilities
-    // (#865, #866) would answer this the same way it answers for the other
-    // tools `useAvailableInternalTools` checks against it, but its
-    // `internal_tools` map deliberately does not name `pyodide` — see
-    // internal/api/v2/toolkits/capabilities_handler.go's own doc comment for
-    // why it stayed out of #866's scope. So this toggle still cannot be
-    // conditionally disabled the way the others are. See /menus/internal-tools
-    // for the operator-facing note instead.
+    // Only the retired Python worker ran this sandbox. It stays in the list so
+    // stored agents that toggled it still pass the SQL admission gates; the
+    // Rust worker skips it, and GET /elitea_core/runtime_capabilities reports
+    // it false, so the switch renders disabled with a reason.
     name: 'pyodide',
     title: 'Python sandbox',
     icon: 'PythonIcon',

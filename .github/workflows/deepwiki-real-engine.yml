@@ -239,9 +239,7 @@ jobs:
         env:
           COMPOSE_BIN: docker compose
           CI: "true"
-          # Explicit: standalone-stack.sh defaults to the Rust worker; the
-          # real-engine overlay was proven against the Python-worker stack.
-          STANDALONE_WORKER: python
+          STANDALONE_WORKER: rust
           DEEPWIKI_REAL_PROJECT: elitea-deepwiki-real-ci
           # NOT 8087: that is `deepwiki-stack`'s port in ci-web-e2e.yml. They run
           # on separate runners today; keeping the numbers distinct means that

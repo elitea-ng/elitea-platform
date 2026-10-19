@@ -103,8 +103,8 @@ func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 	}
 }
 
-// ask_user (the Rust worker's clarification tool, not a Modules toggle) and
-// pyodide (the retired Python sandbox) are deliberately not reported on.
+// ask_user (the Rust worker's clarification tool, not a Modules toggle) is
+// deliberately not reported on.
 func TestRuntimeCapabilitiesInternalToolsExcludesOutOfScopeNames(t *testing.T) {
 	t.Parallel()
 
@@ -113,7 +113,7 @@ func TestRuntimeCapabilitiesInternalToolsExcludesOutOfScopeNames(t *testing.T) {
 		toolkits.WithWorkerImplementation("rust"),
 	)...)
 
-	for _, name := range []string{"ask_user", "pyodide"} {
+	for _, name := range []string{"ask_user"} {
 		if _, found := body.InternalTools[name]; found {
 			t.Errorf("internal_tools unexpectedly reports on %q", name)
 		}

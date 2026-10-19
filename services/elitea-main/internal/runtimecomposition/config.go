@@ -440,8 +440,8 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
-	if c.ToolkitDiscoveryEnabled && (!c.Enabled || (!c.IndexIngestDispatchEnabled && !c.AgentExecutionDispatchEnabled)) {
-		return errors.New("toolkit discovery requires an active worker runtime")
+	if c.ToolkitDiscoveryEnabled && (!c.Enabled || !c.AgentExecutionDispatchEnabled) {
+		return errors.New("toolkit discovery requires active agent execution dispatch")
 	}
 	if c.ExecutionInterruptsAPIEnabled && (!c.Enabled || !c.AgentExecutionDispatchEnabled) {
 		return errors.New("execution interrupts API requires active agent execution dispatch")

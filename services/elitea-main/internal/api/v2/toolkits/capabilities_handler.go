@@ -42,7 +42,8 @@ type internalToolCapability struct {
 //   - skills_builder and project_context_builder (#940 A8) are served by the
 //     native runtime's SkillsBuilderTool/ProjectContextBuilderTool, which
 //     write through the claim-bound content listener;
-//   - image_generation, internal_mcp and swarm are recognized and SKIPPED
+//   - image_generation, internal_mcp, swarm and pyodide (the Python sandbox,
+//     which only the retired Python worker ran) are recognized and SKIPPED
 //     (PLATFORM_INTERNAL_TOOLS, agent_internal_tool_skipped), so they are
 //     rustAvailable: false and the toggle renders disabled-with-a-reason
 //     instead of silently doing nothing (#866).
@@ -64,6 +65,7 @@ var platformInternalTools = []internalToolCapability{
 	{name: "attachments", rustAvailable: true},
 	{name: "skills_builder", rustAvailable: true},
 	{name: "project_context_builder", rustAvailable: true},
+	{name: "pyodide", rustAvailable: false},
 }
 
 // RuntimeCapabilitiesResponse is RuntimeCapabilities' wire shape.
