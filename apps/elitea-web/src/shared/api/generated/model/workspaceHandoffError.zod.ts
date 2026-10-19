@@ -49,7 +49,7 @@ export const WorkspaceHandoffError = zod
     details: WorkspaceHandoffErrorDetails.optional(),
   })
   .describe(
-    "A refused handoff or store call. `error` is a machine code (the operations name theirs); `details` is set for `ref_conflict` only. NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).",
+    "A refused handoff or store call. `error` is a machine code (the operations name theirs); `details` is set for `ref_conflict`, `env_name_denied`, `path_denied` and `cloud_handoff_disabled`. NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).",
   );
 
 export type WorkspaceHandoffError = zod.input<typeof WorkspaceHandoffError>;

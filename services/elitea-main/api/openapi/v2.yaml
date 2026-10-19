@@ -3405,7 +3405,8 @@ components:
       type: object
       description: >-
         A refused handoff or store call. `error` is a machine code (the
-        operations name theirs); `details` is set for `ref_conflict` only.
+        operations name theirs); `details` is set for `ref_conflict`,
+        `env_name_denied`, `path_denied` and `cloud_handoff_disabled`.
         NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).
       required: [error]
       properties:
@@ -3418,7 +3419,7 @@ components:
       description: >-
         `current` for `ref_conflict` (the stored value, null when absent, of
         every ref the publish named), `names` for `env_name_denied`, `paths`
-        for `path_denied`.
+        for `path_denied`, `reason` for `cloud_handoff_disabled`.
       properties:
         current:
           $ref: '#/components/schemas/WorkspaceNullableRefMap'
@@ -3428,6 +3429,11 @@ components:
         paths:
           type: array
           items: { type: string }
+        reason:
+          type: string
+          description: >-
+            `cloud_handoff_disabled`: one of `platform_off`, `project_off`,
+            `device_off`, `no_executor`, `storage_encryption_unconfirmed`.
     WorkspaceRefMap:
       type: object
       description: Ref name to commit sha (40 lowercase hex characters).
@@ -3488,10 +3494,21 @@ components:
     WorkspaceHandoffPolicy:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:680 (`policy`).'
-      required: [enabled, shell, network, history_modes, exclusions, exclusions_platform, exclusions_project,
+      required: [enabled, disabled_reason, shell, network, history_modes, exclusions, exclusions_platform, exclusions_project,
                  path_deny, allow_user_include, env_harvest, env_deny, env_allow, limits, env_limits]
       properties:
         enabled: { type: boolean }
+        disabled_reason:
+          type: string
+          nullable: true
+          description: >-
+            Null while enabled. Otherwise why the cloud executor is off, the
+            first that applies: `platform_off` (the platform cloud_executor
+            section), `project_off` (the project setting), `device_off` (the
+            native client policy's local_work switches), `no_executor` (the
+            deployment runs no workspace-run supervisor) or
+            `storage_encryption_unconfirmed` (the object store's default
+            encryption at rest was not confirmed at startup).
         shell: { type: boolean }
         network: { type: boolean }
         history_modes:
@@ -17816,8 +17833,10 @@ paths:
 
         POLICY. The effective policy (the platform `cloud_executor` section,
         narrowed by the project setting and the native client policy's
-        `local_work.cloud_handoff`) must allow the cloud executor: 403
-        `cloud_handoff_disabled` otherwise.
+        `local_work.cloud_handoff`) must allow the cloud executor, the
+        deployment must run one, and its storage encryption must be
+        confirmed: 403 `cloud_handoff_disabled` otherwise, with
+        `details.reason` as in the policy's `disabled_reason`.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'

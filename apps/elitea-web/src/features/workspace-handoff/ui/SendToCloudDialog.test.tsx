@@ -196,6 +196,24 @@ describe('SendToCloudDialog send', () => {
   });
 
   it.each([
+    ['platform_off', 'turned off for this deployment'],
+    ['project_off', 'turned off for this project'],
+    ['device_off', 'policy for the desktop app'],
+    ['no_executor', 'no cloud executor set up'],
+    ['storage_encryption_unconfirmed', 'could not confirm that its storage is encrypted'],
+  ])('says why sending is off: %s', async (reason, text) => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    ipc.failNext('send', 'cloud_handoff_disabled', 'raw', { reason });
+    mount(ipc);
+    await waitFor(() => expect(sendButton()).toBeEnabled());
+    await user.click(sendButton());
+    const error = await screen.findByTestId('handoff-send-error');
+    expect(error).toHaveTextContent(text);
+    expect(error).not.toHaveTextContent('raw');
+  });
+
+  it.each([
     ['local_turn_in_progress', 'has not been committed yet'],
     ['cloud_handoff_disabled', 'turned off by your organisation'],
     ['history_mode_not_allowed', 'does not allow sending the git history'],

@@ -41,8 +41,38 @@ const MESSAGES: Readonly<Record<string, () => string>> = {
   not_signed_in: () => t('workspace.error.notSignedIn', 'Sign in again to run agents on this computer.'),
 };
 
+/**
+ * `cloud_handoff_disabled` by its `details.reason` (the server's 403 and
+ * policy, or the desktop's own `device_off`): each cause says who can change
+ * it. A refusal without a reason (an older server) keeps the general line.
+ */
+const DISABLED: Readonly<Record<string, () => string>> = {
+  platform_off: () =>
+    t('workspace.handoff.error.disabledPlatform', 'Sending threads to the cloud is turned off for this deployment. An administrator can turn it on in the cloud executor settings.'),
+  project_off: () => t('workspace.handoff.error.disabledProject', 'Sending threads to the cloud is turned off for this project. A project admin can turn it on.'),
+  device_off: () => t('workspace.handoff.error.disabledDevice', 'Your organisation’s policy for the desktop app does not allow sending threads to the cloud.'),
+  no_executor: () =>
+    t('workspace.handoff.error.disabledNoExecutor', 'This deployment has no cloud executor set up, so threads cannot run in the cloud. Ask your administrator.'),
+  storage_encryption_unconfirmed: () =>
+    t(
+      'workspace.handoff.error.disabledEncryption',
+      'Sending to the cloud is paused: the platform could not confirm that its storage is encrypted. Ask your administrator.',
+    ),
+};
+
+function disabledReason(details: unknown): string | undefined {
+  if (typeof details !== 'object' || details === null) return undefined;
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 export function describeHandoffError(error: unknown): string {
-  const { code, message } = toHandoffIpcError(error);
+  const { code, message, details } = toHandoffIpcError(error);
+  if (code === 'cloud_handoff_disabled') {
+    const reason = disabledReason(details);
+    const text = reason === undefined ? undefined : DISABLED[reason];
+    if (text !== undefined) return text();
+  }
   const known = MESSAGES[code];
   if (known !== undefined) return known();
   return message === '' ? t('workspace.failed', 'That did not work. Try again.') : message;

@@ -79,3 +79,24 @@ func TestWorkspaceStorageFromEnvReadsTheAttestation(t *testing.T) {
 		t.Fatalf("an invalid value = %v, want a startup error naming the variable", err)
 	}
 }
+
+func TestWorkspaceStorageFromEnvReadsTheExecutorFlag(t *testing.T) {
+	lookup := func(values map[string]string) func(string) (string, bool) {
+		return func(key string) (string, bool) { value, ok := values[key]; return value, ok }
+	}
+	cfg := storage.Config{Container: "elitea"}
+	for raw, want := range map[string]*bool{"": nil, "true": boolRef(true), "false": boolRef(false)} {
+		inputs, err := workspaceStorageFromEnv(context.Background(), cfg, lookup(map[string]string{workspaceExecutorConfiguredEnv: raw}))
+		if err != nil || (want == nil) != (inputs.ExecutorConfigured == nil) ||
+			(want != nil && *want != *inputs.ExecutorConfigured) {
+			t.Fatalf("%q = %+v, %v; want %v", raw, inputs.ExecutorConfigured, err, want)
+		}
+	}
+	if _, err := workspaceStorageFromEnv(context.Background(), cfg,
+		lookup(map[string]string{workspaceExecutorConfiguredEnv: "maybe"})); err == nil ||
+		!strings.Contains(err.Error(), workspaceExecutorConfiguredEnv) {
+		t.Fatalf("an invalid value = %v, want a startup error naming the variable", err)
+	}
+}
+
+func boolRef(value bool) *bool { return &value }

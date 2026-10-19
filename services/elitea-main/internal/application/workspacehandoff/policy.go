@@ -62,20 +62,39 @@ type PolicyService struct {
 	device    DevicePolicyReader
 	encrypted bool
 	resources platformconfig.CloudExecutorResources
+	// noExecutor: the deployment says it runs no cloud executor
+	// (WithExecutorConfigured(false)). Unknown is not "none".
+	noExecutor bool
+}
+
+// PolicyOption configures a PolicyService.
+type PolicyOption func(*PolicyService)
+
+// WithExecutorConfigured states whether the deployment runs a cloud executor
+// (the chart sets ELITEA_CLOUD_EXECUTOR_CONFIGURED from its workspace-run
+// and supervisor values). false turns the policy off with
+// DisabledNoExecutor; without this option Main does not know, and claims
+// nothing.
+func WithExecutorConfigured(configured bool) PolicyOption {
+	return func(p *PolicyService) { p.noExecutor = !configured }
 }
 
 // NewPolicyService builds the policy. encryptionConfirmed is the startup
 // check's answer; resources are the chart's sandbox limits.
 func NewPolicyService(
 	platform PlatformReader, project ProjectSettingReader, device DevicePolicyReader,
-	encryptionConfirmed bool, resources platformconfig.CloudExecutorResources,
+	encryptionConfirmed bool, resources platformconfig.CloudExecutorResources, options ...PolicyOption,
 ) (*PolicyService, error) {
 	if platform == nil || project == nil || device == nil {
 		return nil, errors.New("workspace handoff policy dependencies are required")
 	}
-	return &PolicyService{
+	service := &PolicyService{
 		platform: platform, project: project, device: device, encrypted: encryptionConfirmed, resources: resources,
-	}, nil
+	}
+	for _, option := range options {
+		option(service)
+	}
+	return service, nil
 }
 
 var _ PolicySource = (*PolicyService)(nil)
@@ -99,6 +118,11 @@ func (p *PolicyService) Effective(ctx context.Context, projectID int64) (Policy,
 		return Policy{}, err
 	}
 	policy := Narrow(ceiling, setting, device.LocalWork.CloudHandoff, p.encrypted)
+	// No executor outranks only the storage check: a deliberate switch that
+	// is off stays the reason the caller reads.
+	if p.noExecutor && (policy.Enabled || policy.DisabledReason == DisabledStorageEncryptionUnconfirmed) {
+		policy.Enabled, policy.DisabledReason = false, DisabledNoExecutor
+	}
 	policy.PathDeny = append([]string{}, device.LocalWork.PathDeny...)
 	return policy, nil
 }
@@ -129,6 +153,7 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 	}
 	policy := Policy{
 		Enabled:            and(ceiling.Enabled, project.Enabled) && device && encrypted,
+		DisabledReason:     disabledReason(ceiling.Enabled, project.Enabled, device, encrypted),
 		Shell:              and(ceiling.Shell, project.Shell),
 		Network:            and(ceiling.Network, project.Network),
 		HistoryFullAllowed: ceiling.HistoryFullAllowed && (project.History == nil || *project.History == HistoryFull),
@@ -184,6 +209,22 @@ func Narrow(ceiling platformconfig.CloudExecutorSettings, project ProjectSetting
 		}
 	}
 	return policy
+}
+
+// disabledReason answers why the executor is off, the first that applies,
+// or "" when it is on.
+func disabledReason(platform bool, project *bool, device, encrypted bool) string {
+	switch {
+	case !platform:
+		return DisabledPlatformOff
+	case project != nil && !*project:
+		return DisabledProjectOff
+	case !device:
+		return DisabledDeviceOff
+	case !encrypted:
+		return DisabledStorageEncryptionUnconfirmed
+	}
+	return ""
 }
 
 func mergePatterns(platform []string, added *[]string) []string {

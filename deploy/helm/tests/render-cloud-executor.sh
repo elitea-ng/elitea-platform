@@ -16,6 +16,12 @@ boundary=(--set sandboxKubernetes.enabled=true --set sandboxKubernetes.execution
 
 # The whole cloud executor on a k3s cluster with one tainted sandbox node.
 cp deploy/helm/tests/fixtures/cloud-executor-values.yaml "$work/k3s.yaml"
+# Without workspace runs Main is told there is no executor; a stated value wins.
+helm template sandbox "$chart" "${base[@]}" --show-only templates/main/configmap.yaml > "$work/main-off.yaml"
+grep -q 'ELITEA_CLOUD_EXECUTOR_CONFIGURED: "false"' "$work/main-off.yaml"
+helm template sandbox "$chart" "${base[@]}" --set-string main.env.ELITEA_CLOUD_EXECUTOR_CONFIGURED=true \
+  --show-only templates/main/configmap.yaml > "$work/main-stated.yaml"
+grep -q 'ELITEA_CLOUD_EXECUTOR_CONFIGURED: "true"' "$work/main-stated.yaml"
 # Without workspace runs: no ClusterRole.
 helm template sandbox "$chart" "${base[@]}" "${boundary[@]}" \
   --show-only templates/sandbox/kubernetes-boundary.yaml > "$work/off.yaml"
@@ -91,6 +97,9 @@ mounts = {m['name']: m for m in spec['containers'][0]['volumeMounts']}
 assert mounts['workspace-scratch']['mountPath'] == '/var/lib/elitea-worker/workspace-scratch'
 volumes = {v['name']: v for v in spec['volumes']}
 assert volumes['workspace-scratch'] == dict(name='workspace-scratch', emptyDir=dict(sizeLimit='30Gi'))
+# Main knows an executor runs (Send to cloud never reports no_executor here).
+main_env = next(d for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'] == 'elitea-main-config')['data']
+assert main_env['ELITEA_CLOUD_EXECUTOR_CONFIGURED'] == 'true', main_env.get('ELITEA_CLOUD_EXECUTOR_CONFIGURED')
 PY
 
 # Beside Code profiles the workspace profile takes the next index.

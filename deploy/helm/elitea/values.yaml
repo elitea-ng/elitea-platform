@@ -1389,6 +1389,12 @@ main:
     # it to the audit trail once, and the admin form shows "attested by
     # operator". Empty or "false" keeps the default: refuse.
     ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED: ""
+    # Whether this deployment runs a cloud executor (a workspace-run
+    # supervisor the worker reaches). Empty: DERIVED, "true" when
+    # sandboxKubernetes.workspaceRuns and its supervisor are on, "false"
+    # otherwise, so Send to cloud reports `no_executor` instead of "turned
+    # off". Set "true" for a supervisor outside this chart.
+    ELITEA_CLOUD_EXECUTOR_CONFIGURED: ""
     # S3-only. Leave S3_ENDPOINT_URL empty for real AWS S3; set it for an
     # S3-compatible endpoint (RustFS, MinIO, etc.). S3_ACCESS_KEY/S3_SECRET_KEY
     # are NOT here — see the secrets: block below.

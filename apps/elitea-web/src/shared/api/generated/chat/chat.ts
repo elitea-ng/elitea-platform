@@ -6373,8 +6373,10 @@ export const getBeginWorkspaceHandoffUrl = (
  *
  * POLICY. The effective policy (the platform `cloud_executor` section,
  * narrowed by the project setting and the native client policy's
- * `local_work.cloud_handoff`) must allow the cloud executor: 403
- * `cloud_handoff_disabled` otherwise.
+ * `local_work.cloud_handoff`) must allow the cloud executor, the
+ * deployment must run one, and its storage encryption must be
+ * confirmed: 403 `cloud_handoff_disabled` otherwise, with
+ * `details.reason` as in the policy's `disabled_reason`.
  * @summary Send a Local work thread to the cloud executor
  */
 export const beginWorkspaceHandoff = async (

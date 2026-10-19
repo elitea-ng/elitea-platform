@@ -145,7 +145,7 @@ func (s *Service) Begin(ctx context.Context, request BeginRequest) (BeginOutcome
 		return BeginOutcome{}, err
 	}
 	if !policy.Enabled {
-		return BeginOutcome{}, ErrDisabled
+		return BeginOutcome{}, disabled(policy)
 	}
 	if mode == HistoryFull && !policy.HistoryFullAllowed {
 		return BeginOutcome{}, ErrHistoryModeNotAllowed
@@ -478,7 +478,7 @@ func (s *Service) StartCloudTurn(
 		return Handoff{}, Policy{}, err
 	}
 	if !policy.Enabled {
-		return Handoff{}, Policy{}, ErrDisabled
+		return Handoff{}, Policy{}, disabled(policy)
 	}
 	handoff, err := s.repo.StartCloudTurn(ctx, thread, epoch, executionID, responseMessageID)
 	if err != nil {

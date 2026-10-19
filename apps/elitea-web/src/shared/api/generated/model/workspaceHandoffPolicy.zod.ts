@@ -46,6 +46,12 @@ import { WorkspaceHandoffLimits } from "./workspaceHandoffLimits.zod";
 export const WorkspaceHandoffPolicy = zod
   .object({
     enabled: zod.boolean(),
+    disabled_reason: zod
+      .string()
+      .nullable()
+      .describe(
+        "Null while enabled. Otherwise why the cloud executor is off, the first that applies: `platform_off` (the platform cloud_executor section), `project_off` (the project setting), `device_off` (the native client policy's local_work switches), `no_executor` (the deployment runs no workspace-run supervisor) or `storage_encryption_unconfirmed` (the object store's default encryption at rest was not confirmed at startup).",
+      ),
     shell: zod.boolean(),
     network: zod.boolean(),
     history_modes: zod.array(zod.string()),

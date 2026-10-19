@@ -869,6 +869,10 @@ export const getGetWorkspaceHandoffPolicyResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceHandoffPolicy, object>> = {},
 ): WorkspaceHandoffPolicy => ({
   enabled: faker.datatype.boolean(),
+  disabled_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
   shell: faker.datatype.boolean(),
   network: faker.datatype.boolean(),
   history_modes: Array.from(
