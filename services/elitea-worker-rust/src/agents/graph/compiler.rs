@@ -1226,6 +1226,13 @@ impl PipelineDefinition {
     }
 
     #[must_use]
+    pub(crate) fn has_code_nodes(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| matches!(node, PipelineNodeDefinition::Code(_)))
+    }
+
+    #[must_use]
     pub(crate) fn has_application_nodes(&self) -> bool {
         self.nodes
             .iter()
@@ -3159,6 +3166,42 @@ pub(crate) enum PipelineConfigurationError {
     Unsupported(&'static str),
     #[error("the stored pipeline graph could not be compiled")]
     Graph(#[source] GraphError),
+    /// A fan-out child (Parallel branch or Map worker) of a kind that is not
+    /// admitted yet. Names the node (a validated identifier, never data) so
+    /// each kind can be lifted on its own (Wave 3).
+    #[error("the fan-out child node {node} is not supported yet: {refusal}")]
+    FanoutChildUnsupported {
+        node: String,
+        refusal: FanoutChildRefusal,
+    },
+}
+
+/// Why a fan-out child is refused before Wave 3.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FanoutChildRefusal {
+    /// The child node kind is not admitted as a fan-out child.
+    Kind,
+    /// The child is a saved pipeline that contains a Code node.
+    ContainsCode,
+}
+
+impl FanoutChildRefusal {
+    #[must_use]
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Kind => "graph.fanout.child_kind_unsupported",
+            Self::ContainsCode => "graph.fanout.child_contains_code",
+        }
+    }
+}
+
+impl std::fmt::Display for FanoutChildRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Kind => "this node kind cannot run as a Parallel branch or Map worker",
+            Self::ContainsCode => "a saved pipeline with a Code node cannot run as a fan-out child",
+        })
+    }
 }
 
 impl PipelineConfigurationError {
@@ -3177,6 +3220,7 @@ impl PipelineConfigurationError {
             Self::Invalid(_) => "graph.pipeline.invalid_configuration",
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
             Self::Graph(_) => "graph.pipeline.compile_failed",
+            Self::FanoutChildUnsupported { refusal, .. } => refusal.code(),
         }
     }
 
@@ -3191,6 +3235,10 @@ impl PipelineConfigurationError {
             | Self::Invalid(_)
             | Self::Unsupported(_)
             | Self::Graph(_) => None,
+            Self::FanoutChildUnsupported { refusal, .. } => Some(match refusal {
+                FanoutChildRefusal::Kind => "fanout_child_kind",
+                FanoutChildRefusal::ContainsCode => "fanout_child_code",
+            }),
         }
     }
 }

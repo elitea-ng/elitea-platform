@@ -2893,7 +2893,7 @@ async fn join_append_keyed_and_merge_land_through_the_node() {
     assert!(
         error
             .to_string()
-            .contains("graph.fanout_join_merge_conflict"),
+            .contains("graph.fanout.join_merge_conflict"),
         "{error}"
     );
 }

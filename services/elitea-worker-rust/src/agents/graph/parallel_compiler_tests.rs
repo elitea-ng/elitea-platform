@@ -417,3 +417,53 @@ fn frozen_agent_mapping_and_keyed_projection_reject_deep_values_before_cloning()
             .is_err()
     );
 }
+
+/// A branch that names a node kind not admitted as a fan-out child yet is
+/// refused by name with a typed code, not a generic string.
+#[test]
+fn a_branch_of_an_unadmitted_kind_is_refused_typed_by_name() {
+    let yaml = YAML.replace(
+        "  - id: workerB\n    type: agent\n    tool: Research Agent\n    input: [topic]\n    input_mapping:\n      task: {type: fixed, value: Compare sources}\n    output: [detail]\n",
+        "  - id: workerB\n    type: state_modifier\n    input: [topic]\n    output: [detail]\n    template: '{{ topic }}'\n",
+    );
+    assert_ne!(yaml, YAML, "fixture replacement applied");
+    match PipelineDefinition::from_yaml(&yaml) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.child_kind_unsupported");
+            assert!(error.to_string().contains("workerB"), "{error}");
+        }
+        Err(other) => panic!("expected a typed child-kind refusal, got {other:?}"),
+        Ok(_) => panic!("an unadmitted child kind compiled"),
+    }
+}
+
+/// A branch whose saved pipeline contains a Code node is refused by name
+/// until Wave 3 (Map refuses the same through its effect-free cohort).
+#[test]
+fn a_branch_whose_saved_pipeline_contains_code_is_refused_typed() {
+    let definition = PipelineDefinition::from_yaml(YAML).unwrap();
+    let child = PipelineDefinition::from_yaml(
+        "entry_point: execute\nstate:\n  messages: list\nnodes:\n  - id: execute\n    type: code\n    code: {type: fixed, value: 'result = 1'}\n    input: [messages]\n    output: [messages]\n    structured_output: false\n    transition: END\n",
+    )
+    .expect("saved child pipeline with Code");
+    assert!(child.has_code_nodes());
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(TestAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(UnavailableResolver)))
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+        ))
+        .with_composition_definitions(std::collections::BTreeMap::from([(
+            "workerB".to_owned(),
+            child,
+        )]));
+    match definition.compile_subgraph_with_runtime(checkpointer, &runtimes) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.child_contains_code");
+            assert!(error.to_string().contains("workerB"), "{error}");
+        }
+        Err(other) => panic!("expected a typed Code refusal, got {other:?}"),
+        Ok(_) => panic!("a branch with Code compiled"),
+    }
+}

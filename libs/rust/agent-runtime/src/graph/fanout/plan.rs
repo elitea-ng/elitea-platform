@@ -164,7 +164,7 @@ pub enum FanoutPlanError {
     ReducerMismatch,
     #[error("graph.fanout.join_merge_needs_stop")]
     MergeNeedsStop,
-    #[error("graph.fanout_join_merge_conflict")]
+    #[error("graph.fanout.join_merge_conflict")]
     JoinConflict,
     #[error("graph.fanout.join_type_mismatch")]
     JoinTypeMismatch,
@@ -280,7 +280,11 @@ const SUPPORT_REF_DOMAIN: &[u8] = b"elitea.graph.fanout-support-ref.v1\0";
 pub fn support_ref_for(child_thread: &str) -> String {
     let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
     hash.update(SUPPORT_REF_DOMAIN);
-    hash.update(&u32::try_from(child_thread.len()).unwrap_or(u32::MAX).to_be_bytes());
+    hash.update(
+        &u32::try_from(child_thread.len())
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
     hash.update(child_thread.as_bytes());
     hash.finish().as_ref()[..16]
         .iter()
@@ -291,12 +295,16 @@ pub fn support_ref_for(child_thread: &str) -> String {
         })
 }
 
-fn valid_code(code: &str) -> bool {
+pub(crate) fn valid_code(code: &str) -> bool {
     let mut parts = code.split('.');
     (3..=64).contains(&code.len())
         && parts.next().is_some_and(|head| {
-            head.bytes().next().is_some_and(|first| first.is_ascii_lowercase())
-                && head.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            head.bytes()
+                .next()
+                .is_some_and(|first| first.is_ascii_lowercase())
+                && head
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
         })
         && code.contains('.')
         && parts.all(|part| {

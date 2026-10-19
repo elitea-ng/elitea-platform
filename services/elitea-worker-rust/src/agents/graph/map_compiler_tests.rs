@@ -630,3 +630,21 @@ async fn map_fresh_turn_keeps_exact_physical_parent_cas_and_old_receipts() {
     let stale_none = Checkpoint::new("root", State::new(), 1, vec!["map".to_owned()]);
     assert!(next.append_after(None, &stale_none).await.is_err());
 }
+
+/// A Map worker of a kind not admitted yet is refused by name with a typed
+/// code (Wave 3 lifts kinds one by one).
+#[test]
+fn map_worker_kind_refusal_is_typed_and_names_the_node() {
+    let yaml = document().replace(
+        "type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}'",
+        "type: router, condition: 'END', routes: [END], default_output: END, input: [entity, item_index]",
+    );
+    match PipelineDefinition::from_yaml(&yaml) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(error.code(), "graph.fanout.child_kind_unsupported");
+            assert!(error.to_string().contains("render"), "{error}");
+        }
+        Err(other) => panic!("expected a typed child-kind refusal, got {other:?}"),
+        Ok(_) => panic!("an unadmitted child kind compiled"),
+    }
+}

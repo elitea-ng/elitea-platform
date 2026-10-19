@@ -268,7 +268,10 @@ fn error_objects_never_exceed_512_bytes_and_follow_the_contract_grammar() {
         assert!(bytes <= MAX_JOIN_ERROR_ENTRY_BYTES, "{bytes} bytes");
         let text = error["message_safe"].as_str().expect("message");
         assert!(!text.is_empty() && text.len() <= 370);
-        assert!(text.bytes().all(|b| (0x20..=0x7e).contains(&b) && b != b'"' && b != b'\\'));
+        assert!(
+            text.bytes()
+                .all(|b| (0x20..=0x7e).contains(&b) && b != b'"' && b != b'\\')
+        );
         assert!(super::valid_code(error["code"].as_str().expect("code")));
         assert_eq!(error["support_ref"].as_str().expect("ref").len(), 32);
     }

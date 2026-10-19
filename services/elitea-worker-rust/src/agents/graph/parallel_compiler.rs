@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 
 use super::{
-    PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder, PipelineNodeDefinition,
-    PipelineNodeRuntimes, state_value_matches,
+    FanoutChildRefusal, PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder,
+    PipelineNodeDefinition, PipelineNodeRuntimes, state_value_matches,
 };
 use crate::agents::graph::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
@@ -212,6 +212,24 @@ fn reject_nested_parallel(
                 format!("{}/{}", runtimes.application_scope_path, node.id())
             };
             let descendants = format!("{path}/");
+            // Code inside a fan-out child needs the Wave 3 Code-slot and
+            // receipt work; refuse it by name until then, as Map does.
+            if definitions.iter().any(|(key, definition)| {
+                (key == &path || key.starts_with(&descendants)) && definition.has_code_nodes()
+            }) {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: node.id().to_owned(),
+                    refusal: FanoutChildRefusal::ContainsCode,
+                });
+            }
+        }
+        for node in owned.values() {
+            let path = if runtimes.application_scope_path.is_empty() {
+                node.id().to_owned()
+            } else {
+                format!("{}/{}", runtimes.application_scope_path, node.id())
+            };
+            let descendants = format!("{path}/");
             if definitions.iter().any(|(key, definition)| {
                 (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
             }) {
@@ -236,12 +254,21 @@ pub(super) fn validate_parallel_ownership(
         _ => None,
     }) {
         for branch in parallel.branches() {
-            let Some(PipelineNodeDefinition::Application(node)) =
-                nodes.iter().find(|node| node.id() == branch.node())
-            else {
-                return Err(PipelineConfigurationError::Invalid(
-                    "fixed Parallel branches must own declared Agent nodes",
-                ));
+            let node = match nodes.iter().find(|node| node.id() == branch.node()) {
+                Some(PipelineNodeDefinition::Application(node)) => node,
+                // Only saved Agent and saved Pipeline children run as branches
+                // until Wave 3 admits the other kinds one by one.
+                Some(other) => {
+                    return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                        node: other.id().to_owned(),
+                        refusal: FanoutChildRefusal::Kind,
+                    });
+                }
+                None => {
+                    return Err(PipelineConfigurationError::Invalid(
+                        "fixed Parallel branches must own declared Agent nodes",
+                    ));
+                }
             };
             if node.transition().is_some()
                 || node.id() == entry

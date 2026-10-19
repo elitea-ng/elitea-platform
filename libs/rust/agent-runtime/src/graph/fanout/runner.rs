@@ -115,10 +115,10 @@ pub enum AckResult {
 pub enum DecisionError {
     /// One bounded attempt failed (network, Main busy). Retried by the next
     /// tick or the next fetch; never fatal on its own.
-    #[error("fanout.decisions.unavailable")]
+    #[error("graph.fanout.decisions_unavailable")]
     Unavailable,
     /// Main refused the claim or fence: this execution lost its lease.
-    #[error("fanout.decisions.lease_lost")]
+    #[error("graph.fanout.decisions_lease_lost")]
     LeaseLost,
 }
 

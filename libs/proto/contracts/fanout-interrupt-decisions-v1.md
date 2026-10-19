@@ -422,7 +422,7 @@ the pending fan-out node and fetches.
 - keyed: the key receives an object keyed by `fanout_v1.member` (Parallel branch id, Map decimal index), each value the
   entry.
 - `merge`: the `outputs` objects of succeeded entries are merged; a key written by two members is a typed readable
-  failure (`graph.fanout_join_merge_conflict`), never last-write-wins. Failed entries are not merged.
+  failure (`graph.fanout.join_merge_conflict`), never last-write-wins. Failed entries are not merged.
 
 ## 9. Stream frames
 

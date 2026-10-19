@@ -956,3 +956,37 @@ async fn delegated_auth_applies_only_at_the_park_boundary() {
     assert_eq!(joined.len(), 2);
     assert_eq!(harness.children.received(0)[1], vec!["ik-0-1-auth"]);
 }
+
+/// Every typed fan-out code follows the dotted `graph.fanout.*` grammar the
+/// join-entry schema and Main expect (`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$`).
+#[test]
+fn every_fanout_code_is_in_the_dotted_graph_fanout_grammar() {
+    use crate::graph::fanout::plan::FanoutPlanError as Plan;
+    let codes = [
+        Plan::InvalidOnError.code(),
+        Plan::InvalidJoin.code(),
+        Plan::ReducerMismatch.code(),
+        Plan::MergeNeedsStop.code(),
+        Plan::JoinConflict.code(),
+        Plan::JoinTypeMismatch.code(),
+        Plan::ChildResultTooLarge.code(),
+        Plan::JoinedResultTooLarge.code(),
+        Plan::TooManyChildren.code(),
+        Plan::InvalidChild.code(),
+        FanoutRunError::LeaseLost.to_string(),
+        FanoutRunError::Cancelled.to_string(),
+        FanoutRunError::CancelCleanupExceeded.to_string(),
+        FanoutRunError::DeadlineExceeded.to_string(),
+        FanoutRunError::TooManyOpenInterrupts.to_string(),
+        FanoutRunError::InvalidConfiguration.to_string(),
+        FanoutRunError::CorruptChild.to_string(),
+        DecisionError::Unavailable.to_string(),
+        DecisionError::LeaseLost.to_string(),
+    ];
+    for code in codes {
+        assert!(
+            code.starts_with("graph.fanout.") && crate::graph::fanout::plan::valid_code(&code),
+            "{code}"
+        );
+    }
+}
