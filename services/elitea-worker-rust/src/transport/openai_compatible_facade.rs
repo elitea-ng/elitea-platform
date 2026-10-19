@@ -1911,6 +1911,9 @@ pub(crate) enum TestModelGatewayOutcome {
     },
     Unavailable,
     Pending,
+    /// End the test process at this model request: a Worker that dies after
+    /// everything before the request is durable (process-replacement proofs).
+    ExitProcess(i32),
 }
 
 #[cfg(test)]
@@ -1981,6 +1984,7 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             | TestModelGatewayOutcome::ResponseForModel { response, .. } => Ok(response),
             TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
             TestModelGatewayOutcome::Pending => std::future::pending().await,
+            TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
         }
     }
 }

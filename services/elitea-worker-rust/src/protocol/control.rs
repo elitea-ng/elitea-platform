@@ -3783,7 +3783,9 @@ fn runtime_rejection(error: &RuntimeErrorV1) -> ControlSemanticError {
             | RuntimeErrorCodeV1::ModelUnavailable
             | RuntimeErrorCodeV1::ModelProviderFailure
             // An output-plane refusal; the control plane never sends it.
-            | RuntimeErrorCodeV1::ResultRefused,
+            | RuntimeErrorCodeV1::ResultRefused
+            // A terminal of one run; the control plane never sends it.
+            | RuntimeErrorCodeV1::RecoveryRefused,
         )
         | None => {
             return ControlSemanticError::InvalidInput(

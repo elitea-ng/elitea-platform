@@ -68,6 +68,14 @@ pub(super) enum ModelScopeBackend {
 }
 
 impl ModelScopeBackend {
+    /// The root session service every scope derives from.
+    fn root(&self) -> Arc<dyn SessionService> {
+        match self {
+            Self::Local(service) => service.clone(),
+            Self::Postgres(root) => root.clone(),
+        }
+    }
+
     async fn open(&self, identity: &AdkIdentity) -> adk_rust::Result<Arc<dyn SessionService>> {
         match self {
             Self::Local(service) => Ok(service.clone()),
@@ -90,6 +98,8 @@ pub(super) struct ModelScopeSessions {
     node_scope: Option<String>,
     recover_pending_models: bool,
     application_tools: Arc<HashSet<String>>,
+    /// The root session's identity, where nested approved calls journal their dispatch.
+    root_identity: Option<AdkIdentity>,
 }
 
 impl ModelScopeSessions {
@@ -107,7 +117,21 @@ impl ModelScopeSessions {
             node_scope: None,
             recover_pending_models: false,
             application_tools: Arc::default(),
+            root_identity: None,
         }
+    }
+
+    /// Bind the root session a nested approved call journals its dispatch to.
+    pub(super) fn with_root_identity(mut self, identity: Option<AdkIdentity>) -> Self {
+        self.root_identity = identity;
+        self
+    }
+
+    /// The fenced root-session writer for nested dispatch records, when bound.
+    pub(super) fn dispatch_journal(&self) -> Option<super::dispatch_journal::DispatchJournal> {
+        self.root_identity.clone().map(|identity| {
+            super::dispatch_journal::DispatchJournal::new(self.sessions.root(), identity)
+        })
     }
 
     /// Enable restoration only after root checkpoint recovery is authorized.

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"strings"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
@@ -109,9 +110,10 @@ FOR UPDATE`,
 			return fmt.Errorf("verify settlement claim: %w", err)
 		}
 
-		var terminalEventID string
+		var terminalEventID, payloadType string
+		var payloadBytes []byte
 		err = tx.QueryRow(ctx, `
-SELECT o.event_id
+SELECT o.event_id, o.payload_type, o.payload_bytes
 FROM elitea_runtime.output_inbox AS o
 JOIN elitea_runtime.execution_claims AS source_claim
   ON source_claim.claim_id = o.claim_id
@@ -162,7 +164,7 @@ WHERE o.execution_id = $1
 			proposalBytes,
 			proposal.ProposalDigest[:],
 			proposal.IdempotencyKey,
-		).Scan(&terminalEventID)
+		).Scan(&terminalEventID, &payloadType, &payloadBytes)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return executionapp.ErrTerminalOutputNotReady
 		}
@@ -180,10 +182,10 @@ INSERT INTO elitea_runtime.execution_settlements (
     workload_session_id, producer_id, claim_attempt, lease_epoch, settlement_receipt_id,
     proposal_id, proposal_bytes, proposal_digest, idempotency_key,
     disposition, final_logical_output_id, terminal_event_id,
-    terminal_sequence, terminal_payload_digest, committed_at
+    terminal_sequence, terminal_payload_digest, error_code, committed_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-    $15, $16, $17, $18, $19, clock_timestamp()
+    $15, $16, $17, $18, $19, $20, clock_timestamp()
 )`,
 			proposal.Fence.ExecutionID,
 			int64(proposal.Fence.Generation),
@@ -204,6 +206,7 @@ INSERT INTO elitea_runtime.execution_settlements (
 			terminalEventID,
 			int64(proposal.TerminalSequence),
 			proposal.TerminalPayloadDigest[:],
+			settlementErrorCode(payloadType, payloadBytes),
 		); err != nil {
 			return fmt.Errorf("insert execution settlement: %w", err)
 		}
@@ -391,3 +394,24 @@ func settlementJobState(outcome executionapp.SettlementOutcome) string {
 }
 
 var _ executionapp.SettlementRepository = (*SettlementsRepository)(nil)
+
+// settlementErrorCode is the registered runtime error code a FAILED terminal
+// carries ("RECOVERY_REFUSED", "PIPELINE_TOOL_FAILED", ...), so a settlement row
+// names why the run failed. It reads only the typed code, never the message,
+// and is nil for any other terminal or an unregistered code.
+func settlementErrorCode(payloadType string, payloadBytes []byte) *string {
+	if payloadType != payloadTypeRuntimeFailure || len(payloadBytes) == 0 {
+		return nil
+	}
+	var failure runtimev1.RuntimeErrorV1
+	if proto.Unmarshal(payloadBytes, &failure) != nil {
+		return nil
+	}
+	code := failure.GetCode()
+	name, registered := runtimev1.RuntimeErrorCodeV1_name[int32(code)]
+	if !registered || code == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSPECIFIED {
+		return nil
+	}
+	short := strings.TrimPrefix(name, "RUNTIME_ERROR_CODE_V1_")
+	return &short
+}

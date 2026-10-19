@@ -1,0 +1,414 @@
+//! Durable dispatch records for approved sensitive-tool calls of NESTED agents.
+//!
+//! A root Agent's approved call is replayed by the root Runner, which persists
+//! the replayed call event through the fenced session append before ADK runs the
+//! tool; that event is the root's dispatch marker. A nested Agent's events reach
+//! the root session only through the parent's asynchronous forwarding, so they
+//! prove nothing about a dispatch. This journal closes that gap: before an
+//! approved call of a nested continuation runs, a `dispatched` record is
+//! appended to the ROOT session through the same fenced writer, and after it
+//! returns a `completed` record carries its result.
+//!
+//! The next continuation of the same decision reads them:
+//! * no record: the call never started, so it runs (once);
+//! * `completed`: the stored result is served, the tool is not called again;
+//! * `dispatched` only: the outcome is unknown; a call that changes data is
+//!   refused as "may have started", never repeated.
+//!
+//! Records carry no content and no state delta, so ADK history, the replay
+//! proofs and the browser projection ignore them.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use adk_rust::session::{AppendEventRequest, SessionService};
+use adk_rust::{AdkIdentity, Event, ReadonlyContext, Tool, ToolContext, Toolset};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Provider-metadata key of one dispatch record.
+pub(crate) const DISPATCH_METADATA_KEY: &str = "elitea.direct_hitl.dispatch.v1";
+const DISPATCH_AUTHOR: &str = "elitea-dispatch-journal";
+const RECORD_VERSION: u8 = 1;
+/// Largest encoded record. A larger result is returned to the model but not
+/// stored; a crash before the parent continues then ends as "may have started".
+pub(crate) const MAX_DISPATCH_RECORD_BYTES: usize = 256 * 1024;
+/// Records one decision may own (one per call of the paused message).
+pub(crate) const MAX_DISPATCH_RECORDS: usize = 64;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Phase {
+    Dispatched,
+    Completed,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DispatchRecord {
+    version: u8,
+    phase: Phase,
+    /// The invocation of the paused assistant message the decision answered.
+    decision_invocation_id: String,
+    call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+}
+
+/// What earlier continuations recorded for the calls of one paused message.
+#[derive(Default)]
+pub(crate) struct RecordedDispatches {
+    /// Calls dispatched without a recorded outcome.
+    pub(crate) dispatched: BTreeSet<String>,
+    /// Calls whose outcome was recorded, with their result.
+    pub(crate) completed: BTreeMap<String, Value>,
+}
+
+/// Malformed or excessive records fail closed: the decision is not resumed.
+#[derive(Debug)]
+pub(crate) struct InvalidDispatchRecord;
+
+/// Read the records of one paused message from the root session's events.
+pub(crate) fn recorded_dispatches(
+    events: &[Event],
+    decision_invocation_id: &str,
+) -> Result<RecordedDispatches, InvalidDispatchRecord> {
+    let mut recorded = RecordedDispatches::default();
+    let mut count = 0_usize;
+    for event in events {
+        let Some(raw) = event.provider_metadata.get(DISPATCH_METADATA_KEY) else {
+            continue;
+        };
+        if event.author != DISPATCH_AUTHOR
+            || raw.len() > MAX_DISPATCH_RECORD_BYTES
+            || event.llm_response.content.is_some()
+            || !event.actions.state_delta.is_empty()
+        {
+            return Err(InvalidDispatchRecord);
+        }
+        let record: DispatchRecord =
+            serde_json::from_str(raw).map_err(|_| InvalidDispatchRecord)?;
+        if record.version != RECORD_VERSION || record.call_id.is_empty() {
+            return Err(InvalidDispatchRecord);
+        }
+        if record.decision_invocation_id != decision_invocation_id {
+            continue;
+        }
+        count += 1;
+        if count > MAX_DISPATCH_RECORDS * 2 {
+            return Err(InvalidDispatchRecord);
+        }
+        match (record.phase, record.result) {
+            (Phase::Dispatched, None) => {
+                if !recorded.completed.contains_key(&record.call_id) {
+                    recorded.dispatched.insert(record.call_id);
+                }
+            }
+            (Phase::Completed, Some(result)) => {
+                recorded.dispatched.remove(&record.call_id);
+                recorded.completed.insert(record.call_id, result);
+            }
+            _ => return Err(InvalidDispatchRecord),
+        }
+    }
+    Ok(recorded)
+}
+
+/// The pause a pipeline continuation answers.
+///
+/// Normally the pause is the session's last event. A continuation that died
+/// after it dispatched an approved call left its own suffix behind it (its
+/// marker, the replayed child events and its dispatch records). That suffix
+/// belongs to the same decision, so the pause stays answerable and the
+/// decision is resolved against its records: a recorded outcome is served and
+/// an unrecorded one is refused. Without a dispatch record the suffix is an
+/// ordinary advance and the decision is stale (`None`).
+pub(crate) fn continuation_pause<'a>(
+    events: &'a [Event],
+    is_pause: impl Fn(&Event) -> bool,
+) -> Option<&'a Event> {
+    let last = events.last()?;
+    if is_pause(last) {
+        return Some(last);
+    }
+    let index = events.iter().rposition(&is_pause)?;
+    events[index + 1..]
+        .iter()
+        .any(|event| event.provider_metadata.contains_key(DISPATCH_METADATA_KEY))
+        .then_some(&events[index])
+}
+
+/// The fenced root-session writer for dispatch records.
+#[derive(Clone)]
+pub(crate) struct DispatchJournal {
+    sessions: Arc<dyn SessionService>,
+    identity: AdkIdentity,
+}
+
+impl DispatchJournal {
+    pub(crate) fn new(sessions: Arc<dyn SessionService>, identity: AdkIdentity) -> Self {
+        Self { sessions, identity }
+    }
+
+    /// Wrap toolsets so each listed call id is recorded around its execution.
+    pub(crate) fn wrap(
+        &self,
+        toolsets: Vec<Arc<dyn Toolset>>,
+        decision_invocation_id: &str,
+        call_ids: BTreeSet<String>,
+    ) -> Vec<Arc<dyn Toolset>> {
+        if call_ids.is_empty() {
+            return toolsets;
+        }
+        let scope = Arc::new(JournalScope {
+            journal: self.clone(),
+            decision_invocation_id: decision_invocation_id.to_owned(),
+            call_ids,
+        });
+        toolsets
+            .into_iter()
+            .map(|inner| {
+                Arc::new(JournalToolset {
+                    name: format!("{}-journaled", inner.name()),
+                    inner,
+                    scope: Arc::clone(&scope),
+                }) as Arc<dyn Toolset>
+            })
+            .collect()
+    }
+
+    async fn append(&self, record: &DispatchRecord) -> adk_rust::Result<()> {
+        let encoded = serde_json::to_string(record).map_err(|_| journal_error())?;
+        if encoded.len() > MAX_DISPATCH_RECORD_BYTES {
+            return Err(journal_error());
+        }
+        let mut event = Event::new(&record.decision_invocation_id);
+        DISPATCH_AUTHOR.clone_into(&mut event.author);
+        event
+            .provider_metadata
+            .insert(DISPATCH_METADATA_KEY.to_owned(), encoded);
+        self.sessions
+            .append_event_for_identity(AppendEventRequest {
+                identity: self.identity.clone(),
+                event,
+            })
+            .await
+    }
+}
+
+struct JournalScope {
+    journal: DispatchJournal,
+    decision_invocation_id: String,
+    call_ids: BTreeSet<String>,
+}
+
+struct JournalToolset {
+    name: String,
+    inner: Arc<dyn Toolset>,
+    scope: Arc<JournalScope>,
+}
+
+#[async_trait]
+impl Toolset for JournalToolset {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn tools(
+        &self,
+        context: Arc<dyn ReadonlyContext>,
+    ) -> adk_rust::Result<Vec<Arc<dyn Tool>>> {
+        self.inner.tools(context).await.map(|tools| {
+            tools
+                .into_iter()
+                .map(|inner| {
+                    Arc::new(JournalTool {
+                        inner,
+                        scope: Arc::clone(&self.scope),
+                    }) as Arc<dyn Tool>
+                })
+                .collect()
+        })
+    }
+}
+
+struct JournalTool {
+    inner: Arc<dyn Tool>,
+    scope: Arc<JournalScope>,
+}
+
+#[async_trait]
+impl Tool for JournalTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+    fn declaration(&self) -> Value {
+        self.inner.declaration()
+    }
+    fn enhanced_description(&self) -> String {
+        self.inner.enhanced_description()
+    }
+    fn is_long_running(&self) -> bool {
+        self.inner.is_long_running()
+    }
+    fn is_builtin(&self) -> bool {
+        self.inner.is_builtin()
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        self.inner.parameters_schema()
+    }
+    fn response_schema(&self) -> Option<Value> {
+        self.inner.response_schema()
+    }
+    fn required_scopes(&self) -> &[&str] {
+        self.inner.required_scopes()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+    fn is_concurrency_safe(&self) -> bool {
+        self.inner.is_concurrency_safe()
+    }
+
+    async fn execute(
+        &self,
+        context: Arc<dyn ToolContext>,
+        arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        let call_id = context.function_call_id().to_owned();
+        if !self.scope.call_ids.contains(&call_id) {
+            return self.inner.execute(context, arguments).await;
+        }
+        // The dispatch is durable before the effect, or the effect never starts.
+        self.scope
+            .journal
+            .append(&DispatchRecord {
+                version: RECORD_VERSION,
+                phase: Phase::Dispatched,
+                decision_invocation_id: self.scope.decision_invocation_id.clone(),
+                call_id: call_id.clone(),
+                result: None,
+            })
+            .await?;
+        let result = self.inner.execute(context, arguments).await?;
+        if let Err(error) = self
+            .scope
+            .journal
+            .append(&DispatchRecord {
+                version: RECORD_VERSION,
+                phase: Phase::Completed,
+                decision_invocation_id: self.scope.decision_invocation_id.clone(),
+                call_id,
+                result: Some(result.clone()),
+            })
+            .await
+        {
+            // The effect happened; the model must still see its result. Only a
+            // crash before the parent continues degrades to "may have started".
+            tracing::warn!(
+                event = "direct_hitl_dispatch_outcome_unrecorded",
+                error_code = error.code,
+                "approved nested call ran but its outcome was not recorded"
+            );
+        }
+        Ok(result)
+    }
+}
+
+fn journal_error() -> adk_rust::AdkError {
+    adk_rust::AdkError::new(
+        adk_rust::ErrorComponent::Session,
+        adk_rust::ErrorCategory::InvalidInput,
+        "direct_hitl.dispatch_record_invalid",
+        "the approved call's dispatch record could not be written",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn record(invocation: &str, call: &str, phase: Phase, result: Option<Value>) -> Event {
+        let mut event = Event::new(invocation);
+        DISPATCH_AUTHOR.clone_into(&mut event.author);
+        event.provider_metadata.insert(
+            DISPATCH_METADATA_KEY.to_owned(),
+            serde_json::to_string(&DispatchRecord {
+                version: RECORD_VERSION,
+                phase,
+                decision_invocation_id: invocation.to_owned(),
+                call_id: call.to_owned(),
+                result,
+            })
+            .unwrap(),
+        );
+        event
+    }
+
+    #[test]
+    fn records_classify_never_started_dispatched_and_completed_calls() {
+        let events = vec![
+            record("inv-1", "call-1", Phase::Dispatched, None),
+            record("inv-1", "call-1", Phase::Completed, Some(json!({"ok": 1}))),
+            record("inv-1", "call-2", Phase::Dispatched, None),
+            record("inv-other", "call-3", Phase::Dispatched, None),
+        ];
+        let recorded = recorded_dispatches(&events, "inv-1").unwrap();
+        assert_eq!(recorded.completed.get("call-1"), Some(&json!({"ok": 1})));
+        assert!(recorded.dispatched.contains("call-2"));
+        assert!(!recorded.dispatched.contains("call-1"));
+        assert!(!recorded.dispatched.contains("call-3"));
+        assert!(
+            recorded_dispatches(&events, "inv-none")
+                .unwrap()
+                .dispatched
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_pause_stays_answerable_only_behind_a_dispatched_continuation() {
+        let mut pause = Event::new("root-1");
+        pause
+            .provider_metadata
+            .insert("pause".to_owned(), "yes".to_owned());
+        let is_pause = |event: &Event| event.provider_metadata.contains_key("pause");
+        let mut later = Event::new("root-2");
+        later.llm_response.content = Some(adk_rust::Content::new("model").with_text("advanced"));
+        assert!(continuation_pause(&[pause.clone()], is_pause).is_some());
+        // An ordinary advance makes the pause stale.
+        assert!(continuation_pause(&[pause.clone(), later.clone()], is_pause).is_none());
+        // A continuation that dispatched an approved call keeps it answerable.
+        let record = record("child-1", "call-1", Phase::Dispatched, None);
+        let events = [pause.clone(), later, record];
+        assert_eq!(
+            continuation_pause(&events, is_pause).map(|event| event.id.clone()),
+            Some(pause.id)
+        );
+        assert!(continuation_pause(&[], is_pause).is_none());
+    }
+
+    #[test]
+    fn forged_or_malformed_records_fail_closed() {
+        let mut foreign = record("inv-1", "call-1", Phase::Dispatched, None);
+        foreign.author = "user".to_owned();
+        assert!(recorded_dispatches(&[foreign], "inv-1").is_err());
+        let mut content = record("inv-1", "call-1", Phase::Dispatched, None);
+        content.llm_response.content = Some(adk_rust::Content::new("user").with_text("x"));
+        assert!(recorded_dispatches(&[content], "inv-1").is_err());
+        let completed_without_result = record("inv-1", "call-1", Phase::Completed, None);
+        assert!(recorded_dispatches(&[completed_without_result], "inv-1").is_err());
+        let mut garbage = Event::new("inv-1");
+        DISPATCH_AUTHOR.clone_into(&mut garbage.author);
+        garbage.provider_metadata.insert(
+            DISPATCH_METADATA_KEY.to_owned(),
+            "{\"version\":1}".to_owned(),
+        );
+        assert!(recorded_dispatches(&[garbage], "inv-1").is_err());
+    }
+}

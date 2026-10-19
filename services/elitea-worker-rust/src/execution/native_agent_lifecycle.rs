@@ -1552,6 +1552,14 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable
         }
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+            if error.cause().is_some_and(|cause| {
+                // An approved call that may have run; never repeated.
+                cause.code() == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE
+            }) =>
+        {
+            RuntimeFailureKind::RecoveryRefused
+        }
         NativeAgentAssemblyErrorCode::UnsupportedCapability => {
             RuntimeFailureKind::UnsupportedCapability
         }
@@ -1804,6 +1812,34 @@ mod taxonomy_tests {
             error.cause().map(NativeAgentAssemblyCause::code),
             Some("graph.pipeline.invalid_identifier")
         );
+    }
+
+    #[test]
+    fn an_approved_call_that_may_have_started_fails_with_the_recovery_refused_reason() {
+        let error = crate::agents::direct_hitl::assembly_error(
+            &crate::agents::direct_hitl::DirectHitlError::new(
+                crate::agents::direct_hitl::DirectHitlErrorCode::MayHaveStarted,
+            ),
+            "fixture",
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::RecoveryRefused);
+        assert!(kind.safe_message().contains("may have started"));
+        assert!(kind.safe_message().contains("not repeated"));
+        assert_eq!(
+            crate::protocol::output::model_failure(Some(
+                crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE
+            )),
+            RuntimeFailureKind::RecoveryRefused
+        );
+        // Other direct-HITL refusals keep their own kind and a typed cause.
+        let stale = crate::agents::direct_hitl::assembly_error(
+            &crate::agents::direct_hitl::DirectHitlError::new(
+                crate::agents::direct_hitl::DirectHitlErrorCode::StaleDecision,
+            ),
+            "fixture",
+        );
+        assert_eq!(assembly_failure(&stale), RuntimeFailureKind::InvalidInput);
     }
 
     #[test]

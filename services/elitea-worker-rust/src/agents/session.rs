@@ -43,8 +43,7 @@ use super::attachments;
 use super::context_management::ContextManagementPlan;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecision, DirectHitlDecisionSet,
-    DirectHitlError, DirectHitlErrorCode, DirectHitlRunInput, ResolvedDirectHitlDecision,
-    ResolvedDirectHitlStart,
+    DirectHitlError, DirectHitlRunInput, ResolvedDirectHitlDecision, ResolvedDirectHitlStart,
 };
 use super::events::{
     AgentEventProjectionContext, AgentEventProjectionError, AgentEventProjectionErrorCode,
@@ -708,6 +707,7 @@ impl OrdinaryNativeAgentPlan {
             self.generation,
             self.definition_digest,
         )
+        .with_root_identity(self.session_identity().ok())
     }
 
     /// The durable conversation thread this turn belongs to.
@@ -1988,7 +1988,12 @@ async fn resolve_pipeline_start(
             let (resume, application_decisions) = resolved.into_parts();
             if let Some(decisions) = application_decisions {
                 let events = session.events().all();
-                let interrupt = events.last().ok_or_else(invalid_configuration)?;
+                let interrupt = super::dispatch_journal::continuation_pause(&events, |event| {
+                    event
+                        .provider_metadata
+                        .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
+                })
+                .ok_or_else(invalid_configuration)?;
                 let binding = super::events::pipeline_application_event_binding(
                     interrupt,
                     ROOT_AGENT_NAME,
@@ -2883,16 +2888,7 @@ where
 }
 
 fn direct_hitl_error(error: &DirectHitlError) -> NativeAgentAssemblyError {
-    let code = match error.code() {
-        DirectHitlErrorCode::InvalidInput
-        | DirectHitlErrorCode::StaleDecision
-        | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
-    };
-    NativeAgentAssemblyError::new(code, "the direct tool continuation replay was rejected")
+    super::direct_hitl::assembly_error(error, "the direct tool continuation replay was rejected")
 }
 
 async fn restore_or_create_session(
@@ -3361,6 +3357,17 @@ fn pipeline_resume_error(error: &PipelineResumeError) -> NativeAgentAssemblyErro
         | PipelineResumeErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
         PipelineResumeErrorCode::UnsupportedCapability => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        // An approved call may have run; the run ends with that registered reason.
+        PipelineResumeErrorCode::MayHaveStarted => {
+            return NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                "the approved tool call may already have started",
+            )
+            .with_cause(
+                crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                None,
+            );
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable

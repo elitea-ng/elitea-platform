@@ -128,6 +128,9 @@ pub enum RuntimeFailureKind {
     /// (`RESULT_REFUSED`, ADR-0030 I1): the worker answers with this FAILED
     /// terminal instead of its result.
     ResultRefused,
+    /// An approved tool call was dispatched before the run stopped and its
+    /// outcome was never recorded. It may have run; it is never repeated.
+    RecoveryRefused,
     Internal,
 }
 
@@ -725,6 +728,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         }
 
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
+        Some(RECOVERY_REFUSED_UPSTREAM_CODE) => RuntimeFailureKind::RecoveryRefused,
         Some(
             "model_gateway.response_header_timeout"
             | "model_gateway.stream_idle_timeout"
@@ -790,6 +794,13 @@ impl RuntimeFailureKind {
 /// Data-free: the node is named by Main's start check and by the editor; Main
 /// registers this exact text.
 pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.";
+
+/// The upstream code a typed "may have started" refusal carries through the
+/// runtime (nested agents, pipeline nodes, root assembly causes).
+pub(crate) const RECOVERY_REFUSED_UPSTREAM_CODE: &str = "agent.recovery_refused";
+
+/// Registered text of [`RuntimeFailureKind::RecoveryRefused`]; Main holds the same text.
+pub(crate) const RECOVERY_REFUSED_MESSAGE: &str = "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.";
 
 // Keep every registered code/message/retry tuple in one exhaustive policy table.
 #[allow(clippy::too_many_lines)]
@@ -922,6 +933,11 @@ pub(crate) fn runtime_error_policy(
             "The index result was refused by the platform.",
             false,
         ),
+        RuntimeFailureKind::RecoveryRefused => (
+            RuntimeErrorCodeV1::RecoveryRefused,
+            RECOVERY_REFUSED_MESSAGE,
+            false,
+        ),
         RuntimeFailureKind::OutputContinuationExhausted => (
             RuntimeErrorCodeV1::OutputContinuationExhausted,
             "Continuation could not finish. The model response is incomplete.",
@@ -1036,6 +1052,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::ToolkitRunAuthorizationFailed,
         RuntimeFailureKind::Cancelled,
         RuntimeFailureKind::ResultRefused,
+        RuntimeFailureKind::RecoveryRefused,
         RuntimeFailureKind::OutputContinuationExhausted,
         RuntimeFailureKind::ModelTimeout,
         RuntimeFailureKind::ModelRateLimited,

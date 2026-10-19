@@ -751,8 +751,15 @@ fn direct_hitl_admission_error(error: &DirectHitlError) -> NativeAgentAssemblyEr
         DirectHitlErrorCode::InvalidInput
         | DirectHitlErrorCode::StaleDecision
         | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
+        DirectHitlErrorCode::UnsupportedCapability => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        // Admission never resolves a dispatch; keep the typed cause regardless.
+        DirectHitlErrorCode::MayHaveStarted => {
+            return super::direct_hitl::assembly_error(
+                error,
+                "the direct sensitive-tool continuation is malformed",
+            );
         }
         DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
     };
@@ -764,7 +771,9 @@ fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAsse
         PipelineResumeErrorCode::InvalidInput
         | PipelineResumeErrorCode::StaleDecision
         | PipelineResumeErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        PipelineResumeErrorCode::UnsupportedCapability => {
+        // Admission parses a payload; it never resolves a dispatch.
+        PipelineResumeErrorCode::UnsupportedCapability
+        | PipelineResumeErrorCode::MayHaveStarted => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
@@ -1184,7 +1193,7 @@ impl NativeAgentInvocation {
         }
     }
 
-    /// Seal a read-only direct-HITL replay prepared from one persisted call.
+    /// Seal a direct-HITL replay prepared from one persisted call.
     pub(crate) fn new_direct_hitl(
         runner: Runner,
         user_id: UserId,

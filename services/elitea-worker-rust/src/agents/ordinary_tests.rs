@@ -44,6 +44,8 @@ const TOKEN: &str = "ephemeral-ordinary-fixture-token";
 #[path = "ordinary_scope_tests.rs"]
 mod model_scope_tests;
 
+#[path = "ordinary_effect_pg_tests.rs"]
+mod effect_pg_tests;
 #[path = "image_turn_tests.rs"]
 mod image_turn_tests;
 

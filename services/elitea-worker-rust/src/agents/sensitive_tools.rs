@@ -93,6 +93,18 @@ impl SensitiveToolCatalog {
             .map(|(name, _)| name.as_ref())
     }
 
+    /// Whether an approved call of this tool that an earlier continuation
+    /// dispatched without a recorded outcome may run again: a read-only tool
+    /// has no effect to repeat, and the workspace command's own run ledger
+    /// (ADR-0034 decision 9) serves its earlier result instead of re-running.
+    /// Every other tool is refused as "may have started".
+    #[must_use]
+    pub(crate) fn reruns_after_dispatch(&self, tool_name: &str) -> Option<bool> {
+        self.provider_entries
+            .get(tool_name)
+            .map(|entry| entry.read_only || entry.conditional)
+    }
+
     /// Add the cloud workspace's conditional `run_command` (ADR-0034).
     ///
     /// # Errors
@@ -133,9 +145,7 @@ impl SensitiveToolCatalog {
 
     /// Return whether one exact sensitive tool was admitted as read-only.
     ///
-    /// This is execution metadata, not authorization. It only permits the
-    /// capability-disabled direct-HITL replay seam to exclude effects while
-    /// the durable effect owner is still absent.
+    /// This is execution metadata, not authorization.
     #[must_use]
     pub(crate) fn is_read_only(&self, tool_name: &str) -> Option<bool> {
         self.provider_entries

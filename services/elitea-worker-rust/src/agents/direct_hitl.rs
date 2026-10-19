@@ -9,10 +9,13 @@
 //!
 //! ADK-Rust 2.0.0's direct `LlmAgent` confirmation event does not preserve a
 //! restart-safe suspended execution frame. This module therefore reconstructs
-//! the exact call from durable session events: an approved read may execute
-//! once, while a denied call is replaced by a local adapter that emits the
-//! structured blocked result under the original call ID. Approved effects
-//! remain closed until they have an owned durable effect receipt.
+//! the exact call from durable session events: an approved call executes once,
+//! whatever its effect class, while a denied call is replaced by a local
+//! adapter that emits the structured blocked result under the original call ID.
+//! The dispatch marker of an approved call is durable before its effect: the
+//! root Runner's persisted replayed call, or a nested agent's dispatch-journal
+//! record (`dispatch_journal`). A recorded outcome is served, never re-run; a
+//! dispatch without one is refused as "may have started".
 
 #![allow(dead_code)] // Resume execution remains capability-gated.
 
@@ -41,6 +44,7 @@ use super::events::{DESCENDANT_CONTAINER_INVOCATION_KEY, DESCENDANT_PARENT_CALL_
 use super::graph::resume::pipeline_hitl_graph_action;
 use super::internal_tools::{ASK_USER_METADATA_KEY, AskUserRequest, decode_ask_user_request};
 use super::request::AgentExecutionPayload;
+use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use super::sensitive_tools::SensitiveToolCatalog;
 use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
@@ -96,6 +100,32 @@ impl DirectHitlErrorCode {
             Self::MayHaveStarted => "direct_hitl.may_have_started",
         }
     }
+}
+
+/// The assembly error of a direct-HITL refusal, keeping its typed cause. A
+/// "may have started" refusal carries the registered recovery-refused cause, so
+/// the run ends with that reason instead of a configuration failure.
+pub(crate) fn assembly_error(
+    error: &DirectHitlError,
+    message: &'static str,
+) -> NativeAgentAssemblyError {
+    let code = match error.code() {
+        DirectHitlErrorCode::InvalidInput
+        | DirectHitlErrorCode::StaleDecision
+        | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
+        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
+    };
+    let assembly = NativeAgentAssemblyError::new(code, message);
+    if error.code() == DirectHitlErrorCode::MayHaveStarted {
+        return assembly.with_cause(
+            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+            None,
+        );
+    }
+    assembly.with_cause(error.code().as_str(), None)
 }
 
 /// Data-free direct-HITL error.
@@ -369,6 +399,8 @@ impl DirectDelegatedAuthorizationContinuation {
             persisted_result: persisted.result,
             dispatched: persisted.dispatched,
             sibling_results: persisted.sibling_results,
+            decided_result: persisted.decided_result,
+            dispatched_siblings: persisted.dispatched_siblings,
             replay_calls,
             application_route: None,
             delegated_authorization: Some(requirement),
@@ -783,6 +815,8 @@ impl DirectHitlDecision {
             persisted_result: persisted.result,
             dispatched: persisted.dispatched,
             sibling_results: persisted.sibling_results,
+            decided_result: persisted.decided_result,
+            dispatched_siblings: persisted.dispatched_siblings,
             replay_calls,
             application_route,
             delegated_authorization,
@@ -870,6 +904,8 @@ impl DirectHitlDecision {
             persisted_result: None,
             dispatched: false,
             sibling_results: BTreeMap::new(),
+            decided_result: None,
+            dispatched_siblings: BTreeSet::new(),
             replay_calls: Vec::new(),
             application_route: Some(route),
             delegated_authorization: None,
@@ -910,11 +946,20 @@ fn resume_state(
     let later = &events[confirmation_index + 1..];
     if shape.nested {
         validate_unadvanced_nested_confirmation(later, confirmation_event)?;
+        // A nested continuation's forwarded events prove no dispatch; its own
+        // root-session dispatch journal does (see `dispatch_journal`).
+        let mut recorded =
+            super::dispatch_journal::recorded_dispatches(later, &confirmation_event.invocation_id)
+                .map_err(|_| DirectHitlError::new(DirectHitlErrorCode::CorruptSession))?;
+        let decided_result = recorded.completed.remove(call_id);
+        let dispatched = recorded.dispatched.remove(call_id);
         return Ok(PersistedReplayState {
             mode: ReplayResumeMode::ExecuteCall,
             result: None,
-            dispatched: false,
-            sibling_results: BTreeMap::new(),
+            dispatched,
+            sibling_results: recorded.completed,
+            decided_result,
+            dispatched_siblings: recorded.dispatched,
         });
     }
     persisted_replay_state_with_confirmation(
@@ -1136,6 +1181,10 @@ pub(crate) struct ResolvedDirectHitlDecision {
     dispatched: bool,
     /// See [`PersistedReplayState::sibling_results`].
     sibling_results: BTreeMap<String, Value>,
+    /// See [`PersistedReplayState::decided_result`].
+    decided_result: Option<Value>,
+    /// See [`PersistedReplayState::dispatched_siblings`].
+    dispatched_siblings: BTreeSet<String>,
     /// Every call of the paused assistant message, in the order the model
     /// emitted them — see [`ReplayCall`].
     replay_calls: Vec<ReplayCall>,
@@ -1180,6 +1229,8 @@ pub(crate) struct DirectHitlReplay {
     approvals: Vec<(String, String)>,
     /// The locally served results that replace a declined call's dispatch.
     blocked: Vec<BlockedToolReplay>,
+    /// The invocation of the paused message this replay answers.
+    decision_invocation_id: String,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1198,6 +1249,10 @@ struct PersistedReplayState {
     /// Results the dispatched replay already recorded for the decided call's
     /// siblings, by call id. A recorded outcome is replayed, never re-run.
     sibling_results: BTreeMap<String, Value>,
+    /// The decided call's own recorded outcome (nested dispatch journal).
+    decided_result: Option<Value>,
+    /// Siblings dispatched without a recorded outcome (nested dispatch journal).
+    dispatched_siblings: BTreeSet<String>,
 }
 
 impl ResolvedDirectHitlDecision {
@@ -1245,8 +1300,8 @@ impl ResolvedDirectHitlDecision {
 
     /// Narrow one resolved decision to the safe direct replay boundary.
     ///
-    /// Approved calls must be read-only until durable effect ownership exists.
-    /// A denied call may be effectful because the real tool is replaced by a
+    /// An approved call runs once whatever its effect class; see the module
+    /// documentation for the dispatch rules. A denied call is replaced by a
     /// local structured-result adapter and is never dispatched.
     pub(crate) fn into_direct_replay(
         self,
@@ -1274,9 +1329,15 @@ impl ResolvedDirectHitlDecision {
         // continuation that finds that dispatch without a result cannot know the
         // outcome: a call that changes data is refused rather than repeated. A
         // read-only call has no effect to repeat and runs again.
+        let served_result = if blocked_result.is_none() {
+            self.decided_result.clone()
+        } else {
+            None
+        };
         if blocked_result.is_none()
+            && served_result.is_none()
             && self.dispatched
-            && sensitive_tools.is_read_only(&self.tool_name) != Some(true)
+            && sensitive_tools.reruns_after_dispatch(&self.tool_name) != Some(true)
         {
             tracing::debug!(
                 tool.name = %self.tool_name,
@@ -1293,6 +1354,16 @@ impl ResolvedDirectHitlDecision {
         }
         let mut approvals = vec![(self.call_id.clone(), self.fingerprint.clone())];
         let mut blocked = Vec::with_capacity(1 + self.replay_calls.len());
+        // The decided call already ran and its outcome was recorded: serve it.
+        if let Some(response) = served_result {
+            blocked.push(BlockedToolReplay {
+                call_id: self.call_id.clone(),
+                tool_name: self.tool_name.clone(),
+                arguments: self.arguments.clone(),
+                response,
+                confirmation_decision: ToolConfirmationDecision::Approve,
+            });
+        }
         if let Some(response) = blocked_result {
             blocked.push(BlockedToolReplay {
                 call_id: self.call_id.clone(),
@@ -1331,8 +1402,8 @@ impl ResolvedDirectHitlDecision {
                             response: response.clone(),
                             confirmation_decision: ToolConfirmationDecision::Approve,
                         });
-                    } else if self.dispatched
-                        && sensitive_tools.is_read_only(&call.tool_name) != Some(true)
+                    } else if (self.dispatched || self.dispatched_siblings.contains(&call.call_id))
+                        && sensitive_tools.reruns_after_dispatch(&call.tool_name) != Some(true)
                     {
                         return Err(DirectHitlError::new(DirectHitlErrorCode::MayHaveStarted));
                     }
@@ -1353,6 +1424,7 @@ impl ResolvedDirectHitlDecision {
             }
         }
         Ok(DirectHitlReplay {
+            decision_invocation_id: self.invocation_id.clone(),
             calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
@@ -1391,6 +1463,7 @@ impl ResolvedDirectHitlDecision {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
         }
         Ok(DirectHitlReplay {
+            decision_invocation_id: self.invocation_id.clone(),
             approvals: vec![(self.call_id.clone(), self.fingerprint.clone())],
             blocked: vec![BlockedToolReplay {
                 call_id: self.call_id.clone(),
@@ -1443,6 +1516,7 @@ impl ResolvedDirectHitlDecision {
             return Err(DirectHitlError::new(DirectHitlErrorCode::StaleDecision));
         }
         Ok(DirectHitlReplay {
+            decision_invocation_id: self.invocation_id.clone(),
             approvals: blocked_result
                 .as_ref()
                 .map(|_| (self.call_id.clone(), self.fingerprint.clone()))
@@ -1484,6 +1558,27 @@ fn authorization_scope(
 }
 
 impl DirectHitlReplay {
+    /// The invocation of the paused message this replay answers.
+    pub(crate) fn decision_invocation_id(&self) -> &str {
+        &self.decision_invocation_id
+    }
+
+    /// The approved calls this replay will really execute: every decided
+    /// approval that is not served from a local or recorded result.
+    pub(crate) fn executed_approved_call_ids(&self) -> BTreeSet<String> {
+        self.approvals
+            .iter()
+            .map(|(call_id, _)| call_id)
+            .filter(|call_id| {
+                !self
+                    .blocked
+                    .iter()
+                    .any(|blocked| &blocked.call_id == *call_id)
+            })
+            .cloned()
+            .collect()
+    }
+
     pub(super) fn emits_pending_call(&self) -> bool {
         matches!(self.resume_mode, ReplayResumeMode::ExecuteCall)
     }
@@ -2393,6 +2488,8 @@ fn persisted_replay_state_with_confirmation(
         dispatched: call_pending && result_persisted.is_none(),
         result: result_persisted,
         sibling_results,
+        decided_result: None,
+        dispatched_siblings: BTreeSet::new(),
     })
 }
 

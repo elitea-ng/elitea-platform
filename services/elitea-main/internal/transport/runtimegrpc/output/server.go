@@ -1199,6 +1199,8 @@ func runtimeFailurePolicyFor(code runtimev1.RuntimeErrorCodeV1) (runtimeFailureP
 		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_UNAVAILABLE", SafeMessage: "The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED:
 		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_FAILED", SafeMessage: "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work."}, true
+	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED:
+		return runtimeFailurePolicy{Code: "RECOVERY_REFUSED", SafeMessage: "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID:
 		return runtimeFailurePolicy{Code: "PIPELINE_RESULT_INVALID", SafeMessage: "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run."}, true
 	case runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED:

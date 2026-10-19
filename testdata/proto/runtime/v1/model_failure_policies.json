@@ -82,6 +82,11 @@
     "retryable": false
   },
   {
+    "code": "RECOVERY_REFUSED",
+    "message": "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.",
+    "retryable": false
+  },
+  {
     "code": "PIPELINE_TOOL_FAILED",
     "message": "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
     "retryable": false

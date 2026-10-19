@@ -3648,8 +3648,25 @@ impl LazyNestedAgent {
                 .map_err(direct_hitl_execution_error)?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
+                // Every approved call that will really run journals its dispatch
+                // in the root session first, so a later continuation never runs
+                // it twice and serves its recorded outcome instead.
+                let executed = replay.executed_approved_call_ids();
+                let toolsets = if executed.is_empty() {
+                    self.toolsets.clone()
+                } else {
+                    self.model_scopes
+                        .as_ref()
+                        .and_then(ModelScopeSessions::dispatch_journal)
+                        .ok_or_else(agent_configuration_error)?
+                        .wrap(
+                            self.toolsets.clone(),
+                            replay.decision_invocation_id(),
+                            executed,
+                        )
+                };
                 let prepared = replay.bind(bound.provider_model());
-                let (model, run_input, toolsets) = prepared.into_parts(self.toolsets.clone());
+                let (model, run_input, toolsets) = prepared.into_parts(toolsets);
                 let (user_content, run_config) = run_input.into_parts();
                 let checkpoint = self
                     .context_checkpoint(&bound, Some(user_content.clone()))?
@@ -5118,13 +5135,24 @@ pub(super) fn child_execution_error() -> AdkError {
     )
 }
 
-fn direct_hitl_execution_error(_error: super::direct_hitl::DirectHitlError) -> AdkError {
-    AdkError::new(
-        ErrorComponent::Agent,
-        ErrorCategory::InvalidInput,
-        "elitea_nested_agent.invalid_resume",
-        "the nested agent continuation is invalid",
-    )
+/// A nested Agent's decided card cannot continue. The typed direct-HITL code is
+/// kept as the error code, so the parent reports a readable reason: a "may
+/// have started" refusal carries the registered recovery-refused code.
+fn direct_hitl_execution_error(error: super::direct_hitl::DirectHitlError) -> AdkError {
+    match error.code() {
+        super::direct_hitl::DirectHitlErrorCode::MayHaveStarted => AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::Unsupported,
+            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+            "the approved nested agent tool call may already have started",
+        ),
+        code => AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::InvalidInput,
+            code.as_str(),
+            "the nested agent continuation is invalid",
+        ),
+    }
 }
 
 fn nested_resume_execution_error(_error: NativeAgentAssemblyError) -> AdkError {
