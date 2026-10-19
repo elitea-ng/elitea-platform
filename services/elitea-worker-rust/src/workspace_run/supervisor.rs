@@ -225,6 +225,21 @@ impl SupervisorSandbox {
     }
 }
 
+/// The serve session for one request: dropped out of step (an error, or a
+/// caller that stopped waiting), it ends the session.
+struct ServeSession<'a> {
+    serve: &'a mut Option<(Exec, Vec<u8>)>,
+    in_step: bool,
+}
+
+impl Drop for ServeSession<'_> {
+    fn drop(&mut self) {
+        if !self.in_step {
+            *self.serve = None;
+        }
+    }
+}
+
 #[async_trait]
 impl WorkspaceSandbox for SupervisorSandbox {
     async fn push_tree(&self, worktree: &Path) -> Result<(), SandboxRunError> {
@@ -310,7 +325,15 @@ impl SupervisorSandbox {
     /// the turn's wall.
     async fn request(&self, request: Value) -> Result<Value, SandboxRunError> {
         let mut guard = self.serve.lock().await;
-        let (exec, pending) = guard.as_mut().ok_or(SandboxRunError::Unavailable)?;
+        // A caller that stops waiting (a take back's wrap-up drops a long
+        // call after its grace) leaves the stream out of step: the session
+        // ends, which closes the runner's stdin, and the runner kills the
+        // call's command before the turn packs the workspace.
+        let mut session = ServeSession {
+            serve: &mut guard,
+            in_step: false,
+        };
+        let (exec, pending) = session.serve.as_mut().ok_or(SandboxRunError::Unavailable)?;
         let mut line = serde_json::to_vec(&request).map_err(|_| SandboxRunError::Protocol)?;
         line.push(b'\n');
         for chunk in line.chunks(CHUNK_BYTES) {
@@ -338,10 +361,8 @@ impl SupervisorSandbox {
         let answer = tokio::time::timeout(self.spec.turn_wall, read)
             .await
             .unwrap_or(Err(SandboxRunError::Timeout));
-        if answer.is_err() {
-            // The serve stream is no longer in step.
-            *guard = None;
-        }
+        // An error leaves the serve stream out of step too.
+        session.in_step = answer.is_ok();
         answer
     }
 

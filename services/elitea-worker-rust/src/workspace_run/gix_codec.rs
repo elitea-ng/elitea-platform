@@ -151,16 +151,14 @@ impl WorkspaceCodec for StoreCodec {
         git_dir: &Path,
         expect: &SegmentExpectation,
         cloud: &str,
+        to: Option<&str>,
         worktree: &Path,
         max_segment_bytes: u64,
         out: &Path,
     ) -> Result<(String, BuiltSegment), CodecError> {
         let objects = git_dir.join("objects");
         let db = ObjectDb::open_objects(&objects).map_err(|error| verify_error(&error))?;
-        let info = db
-            .commit(&oid(cloud).map_err(|_| CodecError::Integrity)?)
-            .map_err(|error| verify_error(&error))?;
-        let parent = *info.parents.first().ok_or(CodecError::Integrity)?;
+        let parent = rewind_target(&db, cloud, to)?;
         let parent_hex = parent.to_string();
         checkout_into(&db, &parent_hex, expect, worktree)?;
         let mut tips = Vec::with_capacity(expect.refs.len());
@@ -184,6 +182,35 @@ impl WorkspaceCodec for StoreCodec {
             },
         ))
     }
+}
+
+/// How far back a rewind target may be on the first-parent chain: one turn
+/// publishes once per pause for input, never this many times.
+const MAX_REWIND_DEPTH: usize = 256;
+
+/// The commit a rewind moves the cloud ref to: `to`, which must be on
+/// `cloud`'s first-parent chain (and not `cloud` itself), else `cloud`'s first
+/// parent.
+fn rewind_target(
+    db: &ObjectDb,
+    cloud: &str,
+    to: Option<&str>,
+) -> Result<gix_hash::ObjectId, CodecError> {
+    let cloud = oid(cloud).map_err(|_| CodecError::Integrity)?;
+    let target = to
+        .map(|sha| oid(sha).map_err(|_| CodecError::Integrity))
+        .transpose()?;
+    let mut current = cloud;
+    for _ in 0..MAX_REWIND_DEPTH {
+        let info = db.commit(&current).map_err(|error| verify_error(&error))?;
+        let parent = *info.parents.first().ok_or(CodecError::Integrity)?;
+        match target {
+            None => return Ok(parent),
+            Some(target) if target == parent => return Ok(parent),
+            Some(_) => current = parent,
+        }
+    }
+    Err(CodecError::Integrity)
 }
 
 impl StoreCodec {
@@ -785,6 +812,132 @@ mod tests {
         assert_eq!(info.parents, vec![handoff]);
         assert!(info.message.contains("Elitea-Epoch: 2"));
         assert_real_git_accepts(scratch.path(), &built_bytes, &built.commit);
+    }
+
+    /// A regenerate rewinds to the commit Main names: a turn that paused for
+    /// input published twice (C1, then C2 on C1), and the rewind goes back
+    /// past both to the commit the turn started from; with no target it is
+    /// the first parent; a commit off the first-parent chain is refused.
+    #[test]
+    #[allow(clippy::too_many_lines, reason = "one end-to-end rewind")]
+    fn a_rewind_moves_back_to_the_named_ancestor() {
+        let scratch = tempfile::tempdir().expect("scratch");
+        let desktop = scratch.path().join("desktop.git");
+        bundle::init_quarantine(&desktop).expect("init");
+        let source = scratch.path().join("src-tree");
+        fs::create_dir_all(&source).expect("mkdir");
+        fs::write(source.join("README.md"), "hello\n").expect("w");
+        let loose = gix_odb::loose::Store::at(desktop.join("objects"), gix_hash::Kind::Sha1);
+        let tree = write_tree(&loose, &source, 0)
+            .expect("tree")
+            .expect("files");
+        let handoff = loose
+            .write_buf(
+                gix_object::Kind::Commit,
+                format!(
+                    "tree {tree}\nauthor a <a@x> 2 +0000\ncommitter a <a@x> 2 +0000\n\nsnapshot\n"
+                )
+                .as_bytes(),
+            )
+            .expect("handoff");
+        let db = ObjectDb::open_objects(&desktop.join("objects")).expect("db");
+        let first =
+            bundle::write_compact(&db, &[(HANDOFF_REF.to_owned(), handoff)], Limits::default())
+                .expect("segment");
+        let mut refs: BTreeMap<String, String> =
+            [(HANDOFF_REF.to_owned(), handoff.to_string())].into();
+        let git_dir = scratch.path().join("q.git");
+        let worktree = scratch.path().join("in");
+        fs::create_dir_all(&worktree).expect("in");
+        let first_file = scratch.path().join("first.bundle");
+        fs::write(&first_file, &first.bytes).expect("segment file");
+        StoreCodec
+            .hydrate(
+                &first_file,
+                &expectation(&first.bytes, &refs),
+                &handoff.to_string(),
+                &git_dir,
+                &worktree,
+            )
+            .expect("hydrated");
+        fs::write(worktree.join("README.md"), "paused\n").expect("w");
+        let c1 = StoreCodec
+            .commit_and_bundle(
+                &git_dir,
+                &worktree,
+                &turn_commit(&handoff.to_string(), 3),
+                &refs,
+                1 << 30,
+                &scratch.path().join("c1.segment"),
+            )
+            .expect("c1");
+        refs.insert(REF_CLOUD.to_owned(), c1.commit.clone());
+        fs::write(worktree.join("README.md"), "resumed\n").expect("w");
+        let c2 = StoreCodec
+            .commit_and_bundle(
+                &git_dir,
+                &worktree,
+                &turn_commit(&c1.commit, 4),
+                &refs,
+                1 << 30,
+                &scratch.path().join("c2.segment"),
+            )
+            .expect("c2");
+        refs.insert(REF_CLOUD.to_owned(), c2.commit.clone());
+        let expect = SegmentExpectation {
+            refs: refs.clone(),
+            ..expectation(b"", &refs)
+        };
+
+        let rewound = scratch.path().join("rewound");
+        fs::create_dir_all(&rewound).expect("dir");
+        let (target, built) = StoreCodec
+            .rewind(
+                &git_dir,
+                &expect,
+                &c2.commit,
+                Some(&handoff.to_string()),
+                &rewound,
+                1 << 30,
+                &scratch.path().join("rewind.segment"),
+            )
+            .expect("rewound to the named ancestor");
+        assert_eq!(target, handoff.to_string());
+        assert_eq!(built.commit, handoff.to_string());
+        assert_eq!(
+            fs::read_to_string(rewound.join("README.md")).expect("r"),
+            "hello\n"
+        );
+
+        let parent_tree = scratch.path().join("parent");
+        fs::create_dir_all(&parent_tree).expect("dir");
+        let (parent, _) = StoreCodec
+            .rewind(
+                &git_dir,
+                &expect,
+                &c2.commit,
+                None,
+                &parent_tree,
+                1 << 30,
+                &scratch.path().join("p.segment"),
+            )
+            .expect("first parent");
+        assert_eq!(parent, c1.commit);
+
+        let off = scratch.path().join("off");
+        fs::create_dir_all(&off).expect("dir");
+        assert!(matches!(
+            StoreCodec.rewind(
+                &git_dir,
+                &expect,
+                &c1.commit,
+                Some(&c2.commit),
+                &off,
+                1 << 30,
+                &scratch.path().join("off.segment")
+            ),
+            Err(CodecError::Integrity)
+        ));
     }
 
     /// The segment is a real git bundle: git clones it and `fsck --strict`

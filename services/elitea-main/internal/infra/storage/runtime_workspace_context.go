@@ -16,6 +16,9 @@ const runtimeContextStageWorkspace = "workspace_context"
 // no error for an execution that is not a cloud turn of a handed-off thread.
 type WorkspaceContextResolver interface {
 	ResolveWorkspaceContext(ctx context.Context, claim workspaceruntime.TurnClaim) (*workspaceruntime.RuntimeContext, error)
+	// RefusesUnaccepted: the claim is a turn of a handed-off thread, which a
+	// worker that cannot read the `workspace` field must not run.
+	RefusesUnaccepted(ctx context.Context, claim workspaceruntime.TurnClaim) (bool, error)
 }
 
 // WithWorkspaceContext lets the service serve the `workspace` field. A nil
@@ -41,13 +44,17 @@ type RuntimeContextAccept struct {
 // ResolveAccepting resolves the runtime context with only the optional
 // fields the worker accepted.
 //
-// The `workspace` field is resolved only when accepted, so an older worker
-// never causes the handoff lookup. For a cloud turn the field is part of the
-// turn's authority: when it cannot be built (the store is down, or the
-// policy recomputed at this claim disables the cloud executor) the whole
-// redemption fails, and the turn fails before any tool runs. A worker that
-// did not accept the field cannot run a workspace turn either; that is the
-// rolling-deploy case and Main does not change what it serves for it.
+// The `workspace` field is resolved only when accepted. For a cloud turn the
+// field is part of the turn's authority: when it cannot be built (the store
+// is down, the policy recomputed at this claim disables the cloud executor,
+// or the thread is not the cloud's for this turn) the whole redemption
+// fails, and the turn fails before any tool runs. Resolving it STARTS the
+// cloud turn (workspaceruntime.TurnResolver).
+//
+// A worker that did not accept the field cannot run a workspace turn, so a
+// turn of a handed-off thread is refused to it (the rolling-deploy case): it
+// would otherwise run without the files and be recorded as a cloud turn
+// with no commit. That read changes nothing.
 func (s *EliteaClientTokenService) ResolveAccepting(
 	ctx context.Context,
 	claim ContentClaim,
@@ -60,22 +67,43 @@ func (s *EliteaClientTokenService) ResolveAccepting(
 	if !accept.SecretsHeaderValue {
 		value.SecretsHeaderValue = ""
 	}
-	if !accept.Workspace || s.workspace == nil {
+	if s.workspace == nil {
 		return value, nil
 	}
-	workspace, err := s.workspace.ResolveWorkspaceContext(ctx, workspaceruntime.TurnClaim{
+	turnClaim := workspaceruntime.TurnClaim{
 		ExecutionID:      claim.ExecutionID,
 		Generation:       claim.Generation,
 		ProjectID:        authorization.ResourceProjectID,
 		ActorID:          authorization.ActorID,
 		ConversationUUID: authorization.ConversationID,
-	})
+	}
+	if !accept.Workspace {
+		refused, err := s.workspace.RefusesUnaccepted(ctx, turnClaim)
+		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return EliteaClientTokenContext{}, contextErr
+			}
+			return EliteaClientTokenContext{}, runtimeContextUnavailable(runtimeContextStageWorkspace)
+		}
+		if refused {
+			slog.WarnContext(ctx, "a worker without workspace runs claimed a turn of a handed-off thread; refused",
+				"execution_id", claim.ExecutionID, "project_id", authorization.ResourceProjectID)
+			return EliteaClientTokenContext{}, ErrContentUnauthorized
+		}
+		return value, nil
+	}
+	workspace, err := s.workspace.ResolveWorkspaceContext(ctx, turnClaim)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return EliteaClientTokenContext{}, contextErr
 		}
 		if errors.Is(err, workspaceruntime.ErrCloudExecutorDisabled) {
 			slog.WarnContext(ctx, "the cloud executor is disabled for this project; the cloud turn is refused",
+				"execution_id", claim.ExecutionID, "project_id", authorization.ResourceProjectID)
+			return EliteaClientTokenContext{}, ErrContentUnauthorized
+		}
+		if errors.Is(err, workspaceruntime.ErrNotCloudTurn) {
+			slog.WarnContext(ctx, "the thread is not the cloud executor's for this turn; the cloud turn is refused",
 				"execution_id", claim.ExecutionID, "project_id", authorization.ResourceProjectID)
 			return EliteaClientTokenContext{}, ErrContentUnauthorized
 		}

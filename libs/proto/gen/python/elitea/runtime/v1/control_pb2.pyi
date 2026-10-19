@@ -217,14 +217,16 @@ class RenewLeaseRequestV1(_message.Message):
     def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., idempotency_key: _Optional[str] = ...) -> None: ...
 
 class RenewLeaseResponseV1(_message.Message):
-    __slots__ = ("lease_expires_at_unix_millis", "desired_state", "rejection")
+    __slots__ = ("lease_expires_at_unix_millis", "desired_state", "rejection", "workspace_wrap_up")
     LEASE_EXPIRES_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
     DESIRED_STATE_FIELD_NUMBER: _ClassVar[int]
     REJECTION_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_WRAP_UP_FIELD_NUMBER: _ClassVar[int]
     lease_expires_at_unix_millis: int
     desired_state: _common_pb2.DesiredExecutionStateV1
     rejection: _errors_pb2.RuntimeErrorV1
-    def __init__(self, lease_expires_at_unix_millis: _Optional[int] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+    workspace_wrap_up: bool
+    def __init__(self, lease_expires_at_unix_millis: _Optional[int] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., workspace_wrap_up: bool = ...) -> None: ...
 
 class ObserveDesiredStateRequestV1(_message.Message):
     __slots__ = ("identity", "fence")
@@ -235,12 +237,14 @@ class ObserveDesiredStateRequestV1(_message.Message):
     def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ...) -> None: ...
 
 class ObserveDesiredStateResponseV1(_message.Message):
-    __slots__ = ("desired_state", "rejection")
+    __slots__ = ("desired_state", "rejection", "workspace_wrap_up")
     DESIRED_STATE_FIELD_NUMBER: _ClassVar[int]
     REJECTION_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_WRAP_UP_FIELD_NUMBER: _ClassVar[int]
     desired_state: _common_pb2.DesiredExecutionStateV1
     rejection: _errors_pb2.RuntimeErrorV1
-    def __init__(self, desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+    workspace_wrap_up: bool
+    def __init__(self, desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., workspace_wrap_up: bool = ...) -> None: ...
 
 class PrepareSettlementRequestV1(_message.Message):
     __slots__ = ("identity", "fence", "proposal", "proposal_digest", "idempotency_key")

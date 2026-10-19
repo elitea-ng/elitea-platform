@@ -11,6 +11,7 @@ use elitea_workspace_runner::{
     workspace_usage,
 };
 use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 const LIMITS: ArchiveLimits = ArchiveLimits {
     max_files: 100,
@@ -42,25 +43,27 @@ async fn over_the_cap_growth_is_refused_and_nothing_is_packed() {
         json!({"tool": "write_file", "call_id": "3", "args": {"path": "more.txt", "content": "more\n"}}),
         json!({"tool": "read_file", "call_id": "4", "args": {"path": "README.md"}}),
     ];
-    let mut input = String::new();
-    for request in &requests {
-        input.push_str(&request.to_string());
-        input.push('\n');
-    }
-    let mut output = Vec::new();
-    serve_capped(
+    // The worker's side: one request line, then wait for its answer.
+    let (mut to_runner, runner_in) = tokio::io::duplex(1 << 16);
+    let (runner_out, from_runner) = tokio::io::duplex(1 << 16);
+    let runner = tokio::spawn(serve_capped(
         session,
         Some(cap.clone()),
-        tokio::io::BufReader::new(input.as_bytes()),
-        &mut output,
-    )
-    .await
-    .unwrap();
-    let answers: Vec<Value> = String::from_utf8(output)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+        tokio::io::BufReader::new(runner_in),
+        runner_out,
+    ));
+    let mut lines = tokio::io::BufReader::new(from_runner).lines();
+    let mut answers: Vec<Value> = Vec::new();
+    for request in &requests {
+        to_runner
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let line = lines.next_line().await.unwrap().expect("an answer");
+        answers.push(serde_json::from_str(&line).unwrap());
+    }
+    drop(to_runner);
+    runner.await.unwrap().unwrap();
     assert!(
         answers[0].get("workspace_over_cap").is_none(),
         "{}",

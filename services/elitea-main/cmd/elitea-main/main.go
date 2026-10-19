@@ -75,6 +75,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -1408,6 +1409,30 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := validateRuntimeComposition(currentConfigurationsConfig, runtimeConfig); err != nil {
 		return err
 	}
+	// The ONE native policy reader, built here because the /llm edge's
+	// execution verifier and the workspace handoff need it too: it stops
+	// attributing an uncommitted local turn the moment `local_work.allowed`
+	// is turned off, and a save of local_work_cloud_handoff reaches the next
+	// send.
+	nativePolicy := native.policy(pool)
+	// The desktop ⇄ cloud handoff (ADR-0034), composed BEFORE the runtime
+	// plane: the cloud executor's adapters (workspaceExecutor) are runtime
+	// dependencies. Its turn canceller is the runtime's own stop use case,
+	// bound once the runtime is composed (workspaceTurnCanceller.bind).
+	workspaceTurnCanceller := &deferredAgentCanceller{}
+	var workspaceBus events.Bus
+	if liveNATSBus != nil {
+		workspaceBus = liveNATSBus
+	}
+	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
+		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), logger)
+	if err != nil {
+		return fmt.Errorf("compose workspace handoff routes: %w", err)
+	}
+	workspaceExecutor, err := composeWorkspaceExecutor(pool, workspaceHandoff, workspaceInputs.Resources, logger)
+	if err != nil {
+		return fmt.Errorf("compose the cloud executor adapters: %w", err)
+	}
 	var runtimeRoot *runtimecomposition.Runtime
 	var productionRuntime *api.ProductionRuntimeRoutes
 
@@ -1758,9 +1783,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNodeRecovery http.Handler
 	var currentExecutionInterrupts http.Handler
 	var currentAgentCancel http.Handler
-	// The cloud turn canceller of the workspace handoff (ADR-0034): the same
-	// stop use case the chat's DELETE route drives.
-	var workspaceTurnCanceller agentexecutionapi.CurrentAgentCanceller
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
 	var currentIndexMeta http.Handler
@@ -1849,9 +1871,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// runtimecomposition.Dependencies.PipelineRuns' own doc comment.
 			PipelineRuns: pipelineRunsRepo,
 			DomainEvents: domainEvents,
-			// ADR-0034 decision 9: how a project host allowlist is enforced
-			// (the egress proxy and its run-token signing key).
-			Workspace: runtimecomposition.WorkspaceDependencies{Egress: workspaceEgress},
+			// The cloud executor (ADR-0034): all four adapters when the
+			// workspace handoff is composed, none otherwise; and how a project
+			// host allowlist is enforced (decision 9, the egress proxy and its
+			// run-token signing key).
+			Workspace: workspaceExecutor.dependencies(workspaceEgress),
 			// The egress proxy's per-turn summaries (ELITEA_EGRESS_AUDIT_CLIENTS)
 			// go to the same audit trail as the API's.
 			AuditRecorder: auditRecorder,
@@ -2033,7 +2057,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 		}
 		if publicRoutes.AgentCancel != nil {
-			workspaceTurnCanceller = publicRoutes.AgentCancel
+			// The cloud turn canceller of the workspace handoff (ADR-0034):
+			// the same stop use case the chat's DELETE route drives.
+			workspaceTurnCanceller.bind(publicRoutes.AgentCancel)
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
 				publicRoutes.AgentCancel,
 				apiGroupAuth,
@@ -2171,10 +2197,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
 	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
 	// the gateway service is reachable.
-	// The ONE native policy reader, built here because the /llm edge's
-	// execution verifier needs it too: it stops attributing an uncommitted
-	// local turn the moment `local_work.allowed` is turned off.
-	nativePolicy := native.policy(pool)
 	var gatewayProxy http.Handler
 	var gatewayProjectResolver apimw.PersonalProjectResolver
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
@@ -2451,14 +2473,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)
 	}
-	// The desktop ⇄ cloud handoff (ADR-0034). The native policy reader is the
-	// router's own, so a save of local_work_cloud_handoff reaches the next send.
-	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
-		workspaceTurnCanceller, auditRecorder, apiGroupAuth, logger)
-	if err != nil {
-		return fmt.Errorf("compose workspace handoff routes: %w", err)
-	}
-	runWorkspaceHandoffSweeper(ctx, workspaceHandoff, logger)
+	// The handoff's sweeper; with the runtime plane composed it also ends
+	// cloud turns whose finish hook never ran.
+	runWorkspaceHandoffSweeper(ctx, workspaceHandoff, workspaceExecutor.lifecycle(runtimeRoot != nil), logger)
 	currentResolvedVersion, err := composeResolvedVersion(pool, clientApplicationVersions, apiGroupAuth)
 	if err != nil {
 		return fmt.Errorf("compose resolved version route: %w", err)

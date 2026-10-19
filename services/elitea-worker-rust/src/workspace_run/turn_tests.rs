@@ -46,6 +46,10 @@ struct StoreState {
     upload_fails: bool,
     env: Vec<(String, String)>,
     env_reads: u32,
+    /// Executor audit events Main recorded.
+    events: Vec<super::audit::ExecutorEvent>,
+    /// Answer this many record-event calls with a non-retryable refusal.
+    events_refused: u32,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -158,6 +162,23 @@ impl WorkspaceStore for FakeStore {
         let mut state = self.state();
         state.env_reads += 1;
         Ok(SecretEnv::new(state.env.clone()))
+    }
+
+    async fn record_event(
+        &self,
+        _claim: &WorkspaceClaimV1,
+        event: &super::audit::ExecutorEvent,
+    ) -> Result<(), StoreCallError> {
+        let mut state = self.state();
+        if state.events_refused > 0 {
+            state.events_refused -= 1;
+            return Err(StoreCallError::Refused {
+                code: super::store::RefusalCode::StaleEpoch,
+                current: BTreeMap::new(),
+            });
+        }
+        state.events.push(event.clone());
+        Ok(())
     }
 }
 
@@ -283,6 +304,7 @@ impl WorkspaceCodec for FakeCodec {
         _git_dir: &Path,
         expect: &SegmentExpectation,
         cloud: &str,
+        to: Option<&str>,
         worktree: &Path,
         _max: u64,
         out: &Path,
@@ -292,10 +314,11 @@ impl WorkspaceCodec for FakeCodec {
         write_tree(worktree, &self.hydrated.lock().expect("hydrated"));
         let bytes = format!("rewind {cloud}").into_bytes();
         std::fs::write(out, &bytes).map_err(|_| CodecError::Io)?;
+        let target = to.unwrap_or(PARENT).to_owned();
         Ok((
-            PARENT.to_owned(),
+            target.clone(),
             BuiltSegment {
-                commit: PARENT.to_owned(),
+                commit: target,
                 path: out.to_path_buf(),
                 sha256: sha256_hex(&bytes),
                 bytes: bytes.len() as u64,
@@ -653,6 +676,65 @@ async fn a_secret_in_the_tree_fails_the_turn_before_any_sandbox_starts() {
         .expect("refused");
     assert_eq!(error, WorkspaceRunError::SecretFound { findings: 1 });
     assert!(harness.launcher.launched.lock().expect("l").is_empty());
+    // Decision 12: Main recorded handoff.scan_blocked before the turn failed,
+    // with the count and the rule ids, never the path.
+    let events = harness.store.state().events.clone();
+    assert_eq!(events.len(), 1);
+    let super::audit::ExecutorEvent::ScanBlocked { findings, rules } = &events[0] else {
+        panic!("scan_blocked expected: {events:?}");
+    };
+    assert_eq!(*findings, 1);
+    assert!(!rules.is_empty());
+    assert!(
+        rules
+            .iter()
+            .all(|rule| !rule.contains('/') && !rule.contains("app.env"))
+    );
+}
+
+/// `pull_request.opened` reaches Main before the turn ends, with the file
+/// count; an audit refusal is logged and never fails the turn.
+#[tokio::test]
+async fn executor_audit_events_reach_main_and_never_fail_the_turn() {
+    use elitea_agent_runtime::toolkits::workspace_pull_request::{
+        PullRequestAudit, PullRequestOpened,
+    };
+    let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
+    let turn = harness
+        .factory
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    let audit = super::tools::LogPullRequestAudit::new("execution-1").with_audit(turn.audit());
+    let opened = PullRequestOpened {
+        toolkit: "github".to_owned(),
+        repository: "o/r".to_owned(),
+        branch: "elitea/cloud-1".to_owned(),
+        base: "main".to_owned(),
+        number: 42,
+        files: 3,
+        upstream_sha: "u".repeat(40),
+    };
+    harness.store.state().events_refused = 1;
+    audit.opened(&opened); // refused: logged, not retried, the turn goes on
+    audit.opened(&opened);
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 1, "the turn published");
+    assert_eq!(state.events.len(), 1, "flushed before the turn ended");
+    assert!(matches!(
+        &state.events[0],
+        super::audit::ExecutorEvent::PullRequestOpened {
+            files: 3,
+            number: 42,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
@@ -1038,4 +1120,37 @@ async fn the_proxy_name_is_resolved_to_an_address_literal() {
         super::turn::proxy_env_url("http://run:x@p:3128", TEST_TOKEN).await,
         Err(SandboxRunError::EgressProxyUnavailable)
     );
+}
+
+/// Main names the rewind target (the commit the regenerated turn started
+/// from, past a pause's commit): the rewind publishes exactly that move.
+#[tokio::test]
+async fn a_regenerate_rewinds_to_the_target_main_names() {
+    const STARTED_FROM: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let harness = harness(CLOUD_REFS, &[("a.txt", "a\n")]);
+    let context = WorkspaceRuntimeContext {
+        rewind: true,
+        rewind_to: Some(STARTED_FROM.to_owned()),
+        ..later_turn()
+    };
+    let turn = harness
+        .factory
+        .begin(
+            &context,
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("rewound");
+    {
+        let state = harness.store.state();
+        assert_eq!(state.publishes.len(), 1);
+        assert_eq!(state.publishes[0].old_cloud.as_deref(), Some(CLOUD));
+        assert_eq!(state.publishes[0].new_cloud, STARTED_FROM);
+    }
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 2);
+    assert_eq!(state.publishes[1].old_cloud.as_deref(), Some(STARTED_FROM));
 }

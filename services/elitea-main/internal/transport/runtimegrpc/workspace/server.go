@@ -19,8 +19,12 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
@@ -33,6 +37,9 @@ const (
 	ChunkBytes = 32 << 10
 	// maxClaimTextBytes bounds the claim id.
 	maxClaimTextBytes = 256
+	// ThreadBusyMessage is the ABORTED status message of a publish that met
+	// another change of the thread (workspaceruntime.ErrThreadBusy).
+	ThreadBusyMessage = "thread_busy"
 )
 
 // WorkloadAuthorizer is control.WorkloadAuthorizer: the peer identity from
@@ -304,6 +311,13 @@ func (s *Server) WorkspacePublish(ctx context.Context, request *runtimev1.Worksp
 		return &runtimev1.WorkspacePublishResponseV1{Rejection: reject}, nil
 	}
 	result, err := s.store.Publish(ctx, claim, publish)
+	if errors.Is(err, workspaceruntime.ErrThreadBusy) {
+		// Not a refusal and not a ref conflict: another change to the thread
+		// is being saved. ABORTED is the retryable status the worker answers
+		// with a backoff and the SAME publish (an identical replay is
+		// answered with the original result).
+		return nil, status.Error(codes.Aborted, ThreadBusyMessage)
+	}
 	if err != nil {
 		if refusal, ok := refusalProto(err); ok {
 			return &runtimev1.WorkspacePublishResponseV1{Refusal: refusal}, nil
@@ -370,6 +384,71 @@ func (s *Server) WorkspaceEnvSecret(request *runtimev1.WorkspaceEnvSecretRequest
 	return stream.Send(&runtimev1.WorkspaceEnvSecretFrameV1{Frame: &runtimev1.WorkspaceEnvSecretFrameV1_EndCount{EndCount: uint32(len(names))}})
 }
 
+// Bounds of an executor audit event's attributes.
+const (
+	maxEventRules       = 32
+	maxEventRuleBytes   = 64
+	maxEventStringBytes = 512
+)
+
+// WorkspaceRecordEvent records the running turn's executor audit event
+// (decision 12). The request has no field that could carry a path; Main's
+// RecordExecutorEvent re-checks every value's shape and drops the rest.
+func (s *Server) WorkspaceRecordEvent(ctx context.Context, request *runtimev1.WorkspaceRecordEventRequestV1) (*runtimev1.WorkspaceRecordEventResponseV1, error) {
+	if request == nil {
+		return &runtimev1.WorkspaceRecordEventResponseV1{Rejection: malformed()}, nil
+	}
+	event, ok := executorEvent(request)
+	if !ok {
+		return &runtimev1.WorkspaceRecordEventResponseV1{Rejection: malformed()}, nil
+	}
+	claim, reject := s.authorize(ctx, request.GetClaim())
+	if reject != nil {
+		return &runtimev1.WorkspaceRecordEventResponseV1{Rejection: reject}, nil
+	}
+	if err := s.store.RecordEvent(ctx, claim, event); err != nil {
+		if refusal, ok := refusalProto(err); ok {
+			return &runtimev1.WorkspaceRecordEventResponseV1{Refusal: refusal}, nil
+		}
+		return &runtimev1.WorkspaceRecordEventResponseV1{Rejection: s.storeRejection(ctx, "record_event", err)}, nil
+	}
+	return &runtimev1.WorkspaceRecordEventResponseV1{Recorded: true}, nil
+}
+
+func executorEvent(request *runtimev1.WorkspaceRecordEventRequestV1) (workspaceruntime.ExecutorEvent, bool) {
+	switch request.GetKind() {
+	case runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED:
+		rules := request.GetRules()
+		if request.GetFindings() == 0 || len(rules) == 0 || len(rules) > maxEventRules {
+			return workspaceruntime.ExecutorEvent{}, false
+		}
+		for _, rule := range rules {
+			if !boundedText(rule, maxEventRuleBytes) || strings.ContainsAny(rule, ",/. ") {
+				return workspaceruntime.ExecutorEvent{}, false
+			}
+		}
+		return workspaceruntime.ExecutorEvent{Kind: workspaceruntime.EventScanBlocked, Attrs: map[string]string{
+			"findings": strconv.FormatUint(uint64(request.GetFindings()), 10),
+			"rules":    strings.Join(rules, ","),
+		}}, true
+	case runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED:
+		if request.GetNumber() == 0 || !boundedText(request.GetToolkit(), maxEventStringBytes) ||
+			!boundedText(request.GetBranch(), maxEventStringBytes) || !boundedText(request.GetBase(), maxEventStringBytes) ||
+			(request.GetUrl() != "" && !boundedText(request.GetUrl(), maxEventStringBytes)) {
+			return workspaceruntime.ExecutorEvent{}, false
+		}
+		attrs := map[string]string{
+			"toolkit": request.GetToolkit(), "branch": request.GetBranch(), "base": request.GetBase(),
+			"number": strconv.FormatUint(request.GetNumber(), 10), "files": strconv.FormatUint(uint64(request.GetFiles()), 10),
+		}
+		if request.GetUrl() != "" {
+			attrs["url"] = request.GetUrl()
+		}
+		return workspaceruntime.ExecutorEvent{Kind: workspaceruntime.EventPullRequestOpened, Attrs: attrs}, true
+	}
+	return workspaceruntime.ExecutorEvent{}, false
+}
+
 func (s *Server) storeRejection(ctx context.Context, stage string, err error) *runtimev1.RuntimeErrorV1 {
 	switch {
 	case errors.Is(err, workspaceruntime.ErrClaimUnauthorized):
@@ -380,7 +459,8 @@ func (s *Server) storeRejection(ctx context.Context, stage string, err error) *r
 		return rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE, "The execution fence is no longer current.", false)
 	case errors.Is(err, context.Canceled):
 		return rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED, "The workspace operation was cancelled.", false)
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, workspaceruntime.ErrUnavailable):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, workspaceruntime.ErrUnavailable),
+		errors.Is(err, workspaceruntime.ErrThreadBusy):
 		s.logger.WarnContext(ctx, "workspace store unavailable", "stage", stage)
 		return rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The workspace store is temporarily unavailable.", true)
 	case errors.Is(err, errUnavailableFeature):

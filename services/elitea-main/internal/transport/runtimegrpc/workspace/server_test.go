@@ -18,7 +18,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/workspace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -51,6 +53,9 @@ type fakeStore struct {
 	claims    []workspaceruntime.ClaimRef
 	cloud     string
 	env       map[string]string
+	// busy answers ErrThreadBusy to this many publishes first.
+	busy   int
+	events []workspaceruntime.ExecutorEvent
 }
 
 func (f *fakeStore) check(claim workspaceruntime.ClaimRef) error {
@@ -120,6 +125,10 @@ func (f *fakeStore) Publish(_ context.Context, claim workspaceruntime.ClaimRef, 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.busy > 0 {
+		f.busy--
+		return workspaceruntime.PublishResult{}, workspaceruntime.ErrThreadBusy
+	}
 	if _, ok := f.uploaded[request.SegmentSHA256]; !ok {
 		return workspaceruntime.PublishResult{}, workspaceruntime.Refuse(workspaceruntime.RefusalSegmentMissing)
 	}
@@ -137,6 +146,16 @@ func (f *fakeStore) EnvSecret(_ context.Context, claim workspaceruntime.ClaimRef
 		return nil, err
 	}
 	return f.env, nil
+}
+
+func (f *fakeStore) RecordEvent(_ context.Context, claim workspaceruntime.ClaimRef, event workspaceruntime.ExecutorEvent) error {
+	if err := f.check(claim); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, event)
+	return nil
 }
 
 func newStore() *fakeStore {
@@ -434,5 +453,66 @@ func TestEnvSecretStreamsTheThreadEnvWithinTheResponseBound(t *testing.T) {
 	store.env = map[string]string{"bad name": "x"}
 	if frames := envFrames(t, client, 2); frames[0].GetRejection() == nil {
 		t.Fatalf("invalid: %v", frames)
+	}
+}
+
+// A publish that meets another change of the thread (workspacestore's
+// thread_busy) is a retryable ABORTED status, not a ref-conflict refusal: the
+// worker resends the same publish, which then applies once.
+func TestPublishAnswersThreadBusyAsARetryableStatusNotAConflict(t *testing.T) {
+	store := newStore()
+	store.busy = 1
+	client := dial(t, store, verifier{})
+	store.uploaded[digest([]byte("segment"))] = []byte("segment")
+	old := cloudSHA
+	response, err := client.WorkspacePublish(context.Background(), publishRequest(2, &old))
+	if status.Code(err) != codes.Aborted || response != nil {
+		t.Fatalf("busy publish = %v %v, want ABORTED", response, err)
+	}
+	if got := status.Convert(err).Message(); got != workspace.ThreadBusyMessage {
+		t.Fatalf("busy message = %q", got)
+	}
+	response, err = client.WorkspacePublish(context.Background(), publishRequest(2, &old))
+	if err != nil || response.GetRefusal() != nil || response.GetSeq() != 4 || len(store.publishes) != 1 {
+		t.Fatalf("retried publish = %v %v", response, err)
+	}
+}
+
+// The executor audit events ride the claim like every workspace call: a
+// stale claim is refused, a rule that could be a path is malformed, and the
+// recorded attributes are the allowlisted ones only.
+func TestRecordEventIsClaimBoundAndCarriesNoPath(t *testing.T) {
+	store := newStore()
+	client := dial(t, store, verifier{})
+	scan := func(epoch uint64, rules ...string) *runtimev1.WorkspaceRecordEventResponseV1 {
+		t.Helper()
+		response, err := client.WorkspaceRecordEvent(context.Background(), &runtimev1.WorkspaceRecordEventRequestV1{
+			Claim: claim(epoch), Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED,
+			Findings: 2, Rules: rules,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	if response := scan(2, "aws-access-key", "private-key"); !response.GetRecorded() {
+		t.Fatalf("scan_blocked = %v", response)
+	}
+	if response := scan(2, "./secrets/prod.env"); response.GetRejection().GetCode() != runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION {
+		t.Fatalf("a path as a rule = %v", response)
+	}
+	if response := scan(1, "aws-access-key"); response.GetRefusal().GetCode() != runtimev1.WorkspaceRefusalCodeV1_WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH {
+		t.Fatalf("a stale claim = %v", response)
+	}
+	opened, err := client.WorkspaceRecordEvent(context.Background(), &runtimev1.WorkspaceRecordEventRequestV1{
+		Claim: claim(2), Kind: runtimev1.WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED,
+		Toolkit: "github", Branch: "elitea/cloud-1", Base: "main", Number: 42, Files: 3,
+	})
+	if err != nil || !opened.GetRecorded() {
+		t.Fatalf("pull_request.opened = %v %v", opened, err)
+	}
+	if len(store.events) != 2 || store.events[0].Attrs["rules"] != "aws-access-key,private-key" || store.events[0].Attrs["findings"] != "2" ||
+		store.events[1].Attrs["files"] != "3" || store.events[1].Attrs["number"] != "42" || len(store.events[1].Attrs) != 5 {
+		t.Fatalf("recorded = %+v", store.events)
 	}
 }

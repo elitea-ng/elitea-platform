@@ -661,7 +661,15 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 		}
 		if current.State == workspacestore.StateCloudRunning && current.Epoch == epoch &&
 			current.RunningExecutionID == executionID {
-			out = current.Handoff // a retried start of the same turn
+			// A retried start of the same turn (a repeated redemption). The
+			// rewind is answered again only while the ref still holds the
+			// commit to rewind from, so a rewind is never applied twice.
+			rewind, err := startCloudTurnMarks(ctx, tx, thread.ProjectID, responseMessageID, current.CloudSHA, current.HandoffSHA)
+			if err != nil {
+				return err
+			}
+			out = current.Handoff
+			out.RewindTo = rewind
 			return nil
 		}
 		if current.State == workspacestore.StateCloudRunning && current.Epoch == epoch {
@@ -682,7 +690,12 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 		if err := StampCloudTurnAnswer(ctx, tx, thread.ProjectID, responseMessageID, epoch, cloud); err != nil {
 			return err
 		}
+		rewind, err := startCloudTurnMarks(ctx, tx, thread.ProjectID, responseMessageID, row.CloudSHA, row.HandoffSHA)
+		if err != nil {
+			return err
+		}
 		out = row.Handoff
+		out.RewindTo = rewind
 		return nil
 	})
 	return out, err
@@ -795,6 +808,26 @@ func (r *WorkspaceHandoffsRepository) ForceReclaim(ctx context.Context, t worksp
 	return r.timed(ctx, t, []workspacestore.State{workspacestore.StateCloudRunning}, workspacestore.StateReclaiming,
 		`, running_execution_id = NULL, running_response_message_id = NULL, reclaim_pending = FALSE,
     reclaim_requested_at = NULL`)
+}
+
+// DeadCloudTurns answers CLOUD_RUNNING threads whose worker died: the
+// execution is not terminal yet (a terminal one is FinishedCloudTurns'), and
+// its newest claim was never released and its lease ran out more than grace
+// ago. A released claim is a worker handing the execution back (retry,
+// requeue): the execution waits for its next claim and is not reaped.
+func (r *WorkspaceHandoffsRepository) DeadCloudTurns(ctx context.Context, grace time.Duration, limit int) ([]workspacehandoff.Handoff, error) {
+	return r.due(ctx, `state = 'CLOUD_RUNNING'
+  AND state_changed_at < clock_timestamp() - make_interval(secs => $1)
+  AND EXISTS (SELECT 1 FROM elitea_runtime.execution_jobs AS j
+              WHERE j.execution_id = running_execution_id
+                AND j.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED'))
+  AND EXISTS (SELECT 1 FROM (SELECT c.released_at, c.lease_expires_at
+                             FROM elitea_runtime.execution_claims AS c
+                             WHERE c.execution_id = running_execution_id
+                             ORDER BY c.claimed_at DESC LIMIT 1) AS latest
+              WHERE latest.released_at IS NULL
+                AND latest.lease_expires_at < clock_timestamp() - make_interval(secs => $1))
+ORDER BY state_changed_at LIMIT $2`, grace.Seconds(), limit)
 }
 
 func (r *WorkspaceHandoffsRepository) DueAbandonedReclaim(ctx context.Context, before time.Time, limit int) ([]workspacehandoff.Handoff, error) {
@@ -1039,4 +1072,190 @@ FROM elitea_runtime.workspace_handoffs WHERE running_execution_id = $1 ORDER BY 
 		return workspacehandoff.Handoff{}, false, fmt.Errorf("workspace handoff: read by execution: %w", err)
 	}
 	return row.Handoff, true, nil
+}
+
+// startCloudTurnMarks runs at a cloud turn's claim, in its transaction. It
+// answers the commit to rewind refs/elitea/cloud to when the answer is a
+// regenerate of the newest cloud turn (MetaRewindFrom/MetaRewindTo, written
+// by the regenerate) and the ref still holds the commit to rewind from. It
+// stamps MetaWorkspaceBase, the commit the turn starts from, only when the
+// answer has none: the rewind target, else the cloud ref, else the handoff
+// snapshot. A continuation of a paused turn keeps the base of its first claim.
+func startCloudTurnMarks(ctx context.Context, tx pgx.Tx, projectID int64, responseMessageID string, cloud, handoffSHA *string) (*string, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return nil, nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, schema+".chat_message_group").Scan(&present); err != nil {
+		return nil, fmt.Errorf("workspace store: tenant schema: %w", err)
+	}
+	if !present {
+		return nil, nil
+	}
+	var from, to *string
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT meta ->> '%s', meta ->> '%s' FROM %s.chat_message_group WHERE uuid = $1::uuid`,
+		workspacehandoff.MetaRewindFrom, workspacehandoff.MetaRewindTo, schema), responseMessageID).Scan(&from, &to)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("workspace store: read the answer's rewind: %w", err)
+	}
+	var rewind *string
+	if from != nil && to != nil && cloud != nil && *from == *cloud &&
+		workspacestore.ValidSHA1(*to) && *to != *cloud {
+		value := *to
+		rewind = &value
+	}
+	base := rewind
+	if base == nil {
+		base = cloud
+	}
+	if base == nil {
+		base = handoffSHA
+	}
+	if base == nil {
+		return rewind, nil
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_message_group SET meta = jsonb_build_object('%s', $2::text) || meta WHERE uuid = $1::uuid`,
+		schema, workspacehandoff.MetaWorkspaceBase), responseMessageID, *base); err != nil {
+		return nil, fmt.Errorf("workspace store: stamp the turn's base commit: %w", err)
+	}
+	return rewind, nil
+}
+
+// CloudTurnExecution is what a cloud turn's claim needs from the execution:
+// its chat answer, its conversation and when it was admitted.
+type CloudTurnExecution struct {
+	ResponseMessageID string
+	ConversationUUID  string
+	AdmittedAt        time.Time
+}
+
+// CloudTurnExecution reads the agent execution's chat binding. false when the
+// execution is not an agent execution of a conversation.
+func (r *WorkspaceHandoffsRepository) CloudTurnExecution(ctx context.Context, executionID string, generation uint64) (CloudTurnExecution, bool, error) {
+	if generation == 0 || generation > 1<<62 {
+		return CloudTurnExecution{}, false, nil
+	}
+	var out CloudTurnExecution
+	err := r.pool.QueryRow(ctx, `
+SELECT a.client_message_id, a.client_stream_id, j.admitted_at
+FROM elitea_runtime.agent_execution_jobs AS a
+JOIN elitea_runtime.execution_jobs AS j ON j.execution_id = a.execution_id AND j.generation = a.generation
+WHERE a.execution_id = $1 AND a.generation = $2`, executionID, int64(generation)).
+		Scan(&out.ResponseMessageID, &out.ConversationUUID, &out.AdmittedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CloudTurnExecution{}, false, nil
+	}
+	if err != nil {
+		return CloudTurnExecution{}, false, fmt.Errorf("workspace handoff: read the cloud turn's execution: %w", err)
+	}
+	return out, true, nil
+}
+
+// ReclaimPending answers whether executionID is the running cloud turn of a
+// thread with a take back pending (the partial running_execution_id index).
+func (r *WorkspaceHandoffsRepository) ReclaimPending(ctx context.Context, executionID string) (bool, error) {
+	var pending bool
+	err := r.pool.QueryRow(ctx, `
+SELECT reclaim_pending FROM elitea_runtime.workspace_handoffs
+WHERE running_execution_id = $1 AND state = 'CLOUD_RUNNING'`, executionID).Scan(&pending)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("workspace handoff: read the take-back signal: %w", err)
+	}
+	return pending, nil
+}
+
+// FinishedCloudTurns answers CLOUD_RUNNING threads whose running execution has
+// no generation left that is not terminal (SUCCEEDED, FAILED, CANCELLED or
+// QUARANTINED): the turn ended but its finish never ran.
+func (r *WorkspaceHandoffsRepository) FinishedCloudTurns(ctx context.Context, limit int) ([]workspacehandoff.Handoff, error) {
+	return r.due(ctx, `state = 'CLOUD_RUNNING'
+  AND EXISTS (SELECT 1 FROM elitea_runtime.execution_jobs AS j WHERE j.execution_id = running_execution_id)
+  AND NOT EXISTS (SELECT 1 FROM elitea_runtime.execution_jobs AS j
+                  WHERE j.execution_id = running_execution_id
+                    AND j.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED'))
+ORDER BY state_changed_at LIMIT $1`, limit)
+}
+
+// cloudRegenerateRewind is what a regenerate of a handed-off thread's answer
+// carries to its claim (decision 7). present: the conversation has a handoff
+// row, so the answer's base and rewind marks are reset; from/to: the rewind,
+// when the answer is the newest cloud turn and it published the commit the
+// cloud ref holds now.
+type cloudRegenerateRewind struct {
+	present  bool
+	from, to string
+}
+
+// readCloudRegenerateRewind reads, inside the admission transaction and
+// before the reset strips them, the answer's cloud markers and the thread's
+// cloud ref. A rewind is due only when the answer is a cloud turn
+// (executed_by), the thread is CLOUD_IDLE, the answer's workspace_commit is
+// the cloud ref now, and it differs from the commit the turn started from
+// (workspace_base_commit): the turn published. A turn that failed before it
+// published keeps workspace_commit == base and rewinds nothing, so a
+// regenerate never undoes an earlier turn's work.
+func readCloudRegenerateRewind(ctx context.Context, tx pgx.Tx, projectID int64, conversationUUID, responseMessageID string) (cloudRegenerateRewind, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return cloudRegenerateRewind{}, nil
+	}
+	var (
+		executedBy          string
+		commit, base, cloud *string
+		state               *string
+	)
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+SELECT COALESCE(g.meta ->> '%s', ''), g.meta ->> '%s', g.meta ->> '%s', h.state, h.cloud_sha
+FROM %s.chat_message_group AS g
+LEFT JOIN elitea_runtime.workspace_handoffs AS h ON h.project_id = $2 AND h.conversation_uuid = $3::uuid
+WHERE g.uuid = $1::uuid`, workspacehandoff.MetaExecutedBy, workspacehandoff.MetaWorkspaceCommit,
+		workspacehandoff.MetaWorkspaceBase, schema), responseMessageID, projectID, conversationUUID).
+		Scan(&executedBy, &commit, &base, &state, &cloud)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return cloudRegenerateRewind{}, nil
+	}
+	if err != nil {
+		return cloudRegenerateRewind{}, fmt.Errorf("read the regenerated answer's cloud markers: %w", err)
+	}
+	if state == nil {
+		return cloudRegenerateRewind{}, nil
+	}
+	out := cloudRegenerateRewind{present: true}
+	if executedBy == workspacehandoff.ExecutedByCloud && *state == string(workspacestore.StateCloudIdle) &&
+		commit != nil && base != nil && cloud != nil && *commit == *cloud && *base != *commit &&
+		workspacestore.ValidSHA1(*commit) && workspacestore.ValidSHA1(*base) {
+		out.from, out.to = *commit, *base
+	}
+	return out, nil
+}
+
+// writeCloudRegenerateRewind resets the answer's base and rewind marks (the
+// regenerated answer is a new cloud turn) and writes the rewind, if any, for
+// the claim to read (startCloudTurnMarks).
+func writeCloudRegenerateRewind(ctx context.Context, tx pgx.Tx, projectID int64, responseMessageID string, rewind cloudRegenerateRewind) error {
+	if !rewind.present {
+		return nil
+	}
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return nil
+	}
+	marks := map[string]string{}
+	if rewind.from != "" {
+		marks[workspacehandoff.MetaRewindFrom], marks[workspacehandoff.MetaRewindTo] = rewind.from, rewind.to
+	}
+	encoded, _ := json.Marshal(marks)
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_message_group SET meta = (meta - '%s' - '%s' - '%s') || $2::jsonb WHERE uuid = $1::uuid`,
+		schema, workspacehandoff.MetaWorkspaceBase, workspacehandoff.MetaRewindFrom, workspacehandoff.MetaRewindTo),
+		responseMessageID, string(encoded)); err != nil {
+		return fmt.Errorf("mark the regenerated answer's rewind: %w", err)
+	}
+	return nil
 }

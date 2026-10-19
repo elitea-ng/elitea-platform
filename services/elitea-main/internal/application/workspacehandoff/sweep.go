@@ -16,6 +16,13 @@ const SweepBatch = 50
 // warned (ADR-0034 decision 12).
 const IdleWarningBefore = 3 * 24 * time.Hour
 
+// DeadTurnGrace is how long past the end of its last lease a running cloud
+// turn's execution must be without a live claim before the sweeper ends the
+// turn: the claim lease TTL (runtimecomposition claimLeaseTTL, 30 s), so a
+// worker that renews on time is never reaped, and a dead one within a lease
+// and a sweep (30 s) more.
+const DeadTurnGrace = 30 * time.Second
+
 // idleSweepPages caps the CLOUD_IDLE pages one sweep walks. The walk goes on
 // from the same place at the next sweep.
 const idleSweepPages = 20
@@ -25,6 +32,7 @@ type SweepReport struct {
 	Expired          int
 	ForcedReclaims   int
 	AbandonedReclaim int
+	DeadTurnsReaped  int
 	IdleErased       int
 	IdleWarned       int
 	OrphansErased    int
@@ -80,6 +88,31 @@ func (s *Service) Sweep(ctx context.Context) (SweepReport, error) {
 			report.ForcedReclaims++
 			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
 				fmt.Sprintf("handoff.reclaim: turn cancelled after the grace, epoch %d", handoff.Epoch+1), true)
+		}
+	}
+
+	// A cloud turn whose worker died without reporting: its execution holds
+	// no live lease past the grace. The turn ends as failed (nothing is
+	// published: the publish is the worker's, and a late one is refused) and
+	// the thread goes back to CLOUD_IDLE, or to RECLAIMING when a take back
+	// waits; the chat answer is stopped the way the stop control does.
+	if due, err := s.repo.DeadCloudTurns(ctx, DeadTurnGrace, SweepBatch); err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, handoff := range due {
+			finished, err := s.repo.FinishCloudTurn(ctx, threadOf(handoff), handoff.Epoch, handoff.RunningExecutionID, nil)
+			if err != nil {
+				// Someone else ended the turn or erased the thread first.
+				if !errors.Is(err, ErrStaleEpoch) && !errors.Is(err, ErrNotFound) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			s.cancelRunning(ctx, handoff)
+			report.DeadTurnsReaped++
+			s.record(ctx, threadOf(handoff), handoff.OwnerUserID, "", "", now,
+				fmt.Sprintf("handoff.turn_reaped: execution %s held no live lease, %s, epoch %d",
+					truncate(handoff.RunningExecutionID, 64), finished.State, finished.Epoch), true)
 		}
 	}
 

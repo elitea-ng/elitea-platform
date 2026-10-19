@@ -21,6 +21,12 @@ class WorkspaceRefusalCodeV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT: _ClassVar[WorkspaceRefusalCodeV1]
     WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE: _ClassVar[WorkspaceRefusalCodeV1]
     WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: _ClassVar[WorkspaceRefusalCodeV1]
+
+class WorkspaceExecutorEventKindV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED: _ClassVar[WorkspaceExecutorEventKindV1]
+    WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED: _ClassVar[WorkspaceExecutorEventKindV1]
+    WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED: _ClassVar[WorkspaceExecutorEventKindV1]
 WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH: WorkspaceRefusalCodeV1
@@ -31,6 +37,9 @@ WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE: WorkspaceRefusalCodeV1
 WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED: WorkspaceRefusalCodeV1
+WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED: WorkspaceExecutorEventKindV1
+WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED: WorkspaceExecutorEventKindV1
+WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED: WorkspaceExecutorEventKindV1
 
 class WorkspaceClaimV1(_message.Message):
     __slots__ = ("identity", "fence", "claim_id", "thread_uuid", "epoch")
@@ -217,3 +226,37 @@ class WorkspaceEnvVarsV1(_message.Message):
     VARS_FIELD_NUMBER: _ClassVar[int]
     vars: _containers.RepeatedCompositeFieldContainer[WorkspaceEnvVarV1]
     def __init__(self, vars: _Optional[_Iterable[_Union[WorkspaceEnvVarV1, _Mapping]]] = ...) -> None: ...
+
+class WorkspaceRecordEventRequestV1(_message.Message):
+    __slots__ = ("claim", "kind", "findings", "rules", "toolkit", "branch", "base", "number", "url", "files")
+    CLAIM_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    FINDINGS_FIELD_NUMBER: _ClassVar[int]
+    RULES_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_FIELD_NUMBER: _ClassVar[int]
+    BRANCH_FIELD_NUMBER: _ClassVar[int]
+    BASE_FIELD_NUMBER: _ClassVar[int]
+    NUMBER_FIELD_NUMBER: _ClassVar[int]
+    URL_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
+    claim: WorkspaceClaimV1
+    kind: WorkspaceExecutorEventKindV1
+    findings: int
+    rules: _containers.RepeatedScalarFieldContainer[str]
+    toolkit: str
+    branch: str
+    base: str
+    number: int
+    url: str
+    files: int
+    def __init__(self, claim: _Optional[_Union[WorkspaceClaimV1, _Mapping]] = ..., kind: _Optional[_Union[WorkspaceExecutorEventKindV1, str]] = ..., findings: _Optional[int] = ..., rules: _Optional[_Iterable[str]] = ..., toolkit: _Optional[str] = ..., branch: _Optional[str] = ..., base: _Optional[str] = ..., number: _Optional[int] = ..., url: _Optional[str] = ..., files: _Optional[int] = ...) -> None: ...
+
+class WorkspaceRecordEventResponseV1(_message.Message):
+    __slots__ = ("recorded", "refusal", "rejection")
+    RECORDED_FIELD_NUMBER: _ClassVar[int]
+    REFUSAL_FIELD_NUMBER: _ClassVar[int]
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    recorded: bool
+    refusal: WorkspaceRefusalV1
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, recorded: bool = ..., refusal: _Optional[_Union[WorkspaceRefusalV1, _Mapping]] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

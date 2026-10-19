@@ -491,6 +491,7 @@ where
 
     let mut probe = run.lease_state_probe();
     let mut pauses = AgentPauseAccumulator::default();
+    let wrap_up = completion_selector.wrap_up();
     tracing::info!(event = "agent_event_stream_started");
     let stream = Box::pin(drive_native_stream(
         &mut run,
@@ -498,6 +499,7 @@ where
         &mut projector,
         &mut pauses,
         &mut probe,
+        wrap_up,
         clock.as_ref(),
     ))
     .await;
@@ -706,6 +708,7 @@ async fn drive_native_stream<C, K>(
     projector: &mut AgentEventProjector,
     pauses: &mut AgentPauseAccumulator,
     probe: &mut ClaimLeaseStateProbe,
+    wrap_up: Option<std::sync::Arc<crate::workspace_run::wrap_up::WrapUp>>,
     clock: &K,
 ) -> NativeStreamOutcome
 where
@@ -713,7 +716,14 @@ where
     K: UnixMillisClock,
 {
     let mut failure = None;
+    // ADR-0034 take back: the lease poll's `workspace_wrap_up` asks the turn
+    // to wrap up; once no workspace tool call is in flight the run is
+    // stopped cooperatively and ends as a completed turn (never a failure).
+    let mut wrap_signal = probe.wrap_up_signal();
+    let mut wrap_stopped = false;
+    let mut wrap_signal_closed = false;
     loop {
+        let wrap_requested = wrap_up.as_ref().is_some_and(|wrap| wrap.requested());
         tokio::select! {
             biased;
             lease = probe.wait_for_change() => {
@@ -729,6 +739,32 @@ where
                     Ok(()) => {}
                 }
             }
+            signalled = async { wrap_signal.wait_for(|requested| *requested).await.is_ok() },
+                if wrap_up.is_some() && !wrap_requested && !wrap_signal_closed && failure.is_none() => {
+                if !signalled {
+                    // The monitor is gone: the lease arm reports it.
+                    wrap_signal_closed = true;
+                } else if let Some(wrap) = &wrap_up
+                    && wrap.request()
+                {
+                    tracing::info!(
+                        event = "workspace.wrap_up_requested",
+                        execution_id = %run.trace_execution_id(),
+                        "the thread is being taken back; the turn wraps up"
+                    );
+                }
+            }
+            () = async {
+                if let Some(wrap) = &wrap_up {
+                    wrap.idle().await;
+                }
+            }, if wrap_requested && !wrap_stopped && failure.is_none() => {
+                wrap_stopped = true;
+                if let Some(wrap) = &wrap_up {
+                    wrap.mark_stopped();
+                }
+                let _requested = native.request_stop();
+            }
             event = native.next_event() => {
                 let event = match event {
                     Ok(Some(event)) => event,
@@ -740,8 +776,19 @@ where
                             NativeStreamOutcome::NodeRecoverySuspended
                         } else if projector.is_paused() {
                             NativeStreamOutcome::Paused
+                        } else if wrap_stopped {
+                            close_wrapped_up_turn(run, projector, pauses, clock).await
                         } else {
                             NativeStreamOutcome::Eos
+                        };
+                    }
+                    Err(_) if wrap_stopped && failure.is_none() => {
+                        // The cooperative stop of a wrap-up: the turn ends
+                        // as it stands, and completes.
+                        return if projector.is_paused() {
+                            NativeStreamOutcome::Paused
+                        } else {
+                            close_wrapped_up_turn(run, projector, pauses, clock).await
                         };
                     }
                     Err(error) => {
@@ -825,6 +872,39 @@ where
                     }
                 }
             }
+        }
+    }
+}
+
+/// A run stopped by a take-back wrap-up (ADR-0034): publish what the model
+/// had produced as an incomplete step and stand the projector where a
+/// completed turn would, so the turn COMPLETES (its work published, the
+/// answer with the take-back note) instead of failing.
+async fn close_wrapped_up_turn<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    projector: &mut AgentEventProjector,
+    pauses: &mut AgentPauseAccumulator,
+    clock: &K,
+) -> NativeStreamOutcome
+where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    let Some(occurred_at) = chrono::DateTime::from_timestamp_millis(clock.now_unix_millis()) else {
+        return NativeStreamOutcome::RecoveryRequired {
+            code: "agent_lifecycle.invalid_clock",
+            retryable: false,
+        };
+    };
+    let batch = match projector.close_for_wrap_up(occurred_at) {
+        Ok(batch) => batch,
+        Err(error) => return NativeStreamOutcome::Failure(projection_failure(&error)),
+    };
+    match Box::pin(publish_batch(run, batch, pauses, clock)).await {
+        BatchPublication::Acknowledged => NativeStreamOutcome::Eos,
+        BatchPublication::Rejected => NativeStreamOutcome::Failure(RuntimeFailureKind::Cancelled),
+        BatchPublication::RecoveryRequired { code, retryable } => {
+            NativeStreamOutcome::RecoveryRequired { code, retryable }
         }
     }
 }

@@ -225,6 +225,7 @@ ONE event type from each:
 | Family | Subject | Account | Publisher | Accepted type |
 |---|---|---|---|---|
 | presence | `elitea.events.project.<id>.presence` | MAIN | elitea-main only | `canvas.editors` |
+| workspace | `elitea.events.project.<id>.workspace` | MAIN | elitea-main only | `workspace.handoff` (relayed only to each frame's audience) |
 | gateway | `gateway.events.project.<id>.events` | GATEWAY, imported into MAIN | elitea-llm-gateway only | `budget.soft_alert` |
 
 So the gateway cannot forge a `canvas.editors` roster into a project's stream
@@ -248,7 +249,7 @@ subject), and the gateway holds no consumer grant at all.
 
 | Account | Identity | May publish | May subscribe |
 |---|---|---|---|
-| MAIN | `elitea-main` | `elitea.events.project.*.presence` (its presence family); `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: `gateway.>` (it never speaks for the gateway), stream admin | `elitea.events.project.*.presence`, `gateway.events.project.*.events` (imported), `_INBOX_elitea-main.>` |
+| MAIN | `elitea-main` | `elitea.events.project.*.presence` (its presence family); `elitea.events.project.*.workspace` (its workspace handoff family); `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: `gateway.>` (it never speaks for the gateway), stream admin | `elitea.events.project.*.presence`, `elitea.events.project.*.workspace`, `gateway.events.project.*.events` (imported), `_INBOX_elitea-main.>` |
 | MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_ELITEA_CANVAS_PRESENCE` | `_INBOX_elitea-nats-bootstrap-main.>` |
 | GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
 | GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.{CREATE,INFO}` on `GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |

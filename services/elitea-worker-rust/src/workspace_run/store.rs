@@ -4,8 +4,11 @@
 //!
 //! [`WorkspaceStore`] is what the turn orchestrator uses; [`GrpcWorkspaceStore`]
 //! is the production implementation over the control channel. Every call is
-//! one attempt: a lost publish is retried by the orchestrator only as the
-//! same request, which Main answers with the original result.
+//! one attempt, but for one answer: a publish Main answers `ABORTED`
+//! (`thread_busy`: another change to the thread was being saved, nothing was
+//! compared) is resent, the SAME request, with a bounded backoff. A lost
+//! publish is retried by the orchestrator only as the same request too, which
+//! Main answers with the original result.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -19,11 +22,13 @@ use tonic::transport::Channel;
 
 use crate::protocol::elitea::runtime::v1::{
     RuntimeErrorCodeV1, RuntimeErrorV1, WorkspaceClaimV1, WorkspaceEnvSecretFrameV1,
-    WorkspaceEnvSecretRequestV1, WorkspaceFetchFrameV1, WorkspaceFetchPlanRequestV1,
-    WorkspacePublishRequestV1, WorkspacePublishResponseV1, WorkspaceRefUpdateV1, WorkspaceRefV1,
-    WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1, WorkspaceUploadHeaderV1,
-    WorkspaceUploadResponseV1, workspace_env_secret_frame_v1, workspace_fetch_frame_v1,
-    workspace_store_service_client::WorkspaceStoreServiceClient, workspace_upload_frame_v1,
+    WorkspaceEnvSecretRequestV1, WorkspaceExecutorEventKindV1, WorkspaceFetchFrameV1,
+    WorkspaceFetchPlanRequestV1, WorkspacePublishRequestV1, WorkspacePublishResponseV1,
+    WorkspaceRecordEventRequestV1, WorkspaceRecordEventResponseV1, WorkspaceRefUpdateV1,
+    WorkspaceRefV1, WorkspaceRefusalCodeV1, WorkspaceRefusalV1, WorkspaceUploadFrameV1,
+    WorkspaceUploadHeaderV1, WorkspaceUploadResponseV1, workspace_env_secret_frame_v1,
+    workspace_fetch_frame_v1, workspace_store_service_client::WorkspaceStoreServiceClient,
+    workspace_upload_frame_v1,
 };
 
 use super::context::sha1_hex;
@@ -102,6 +107,9 @@ pub(crate) enum StoreCallError {
     Rejected { code: i32, retryable: bool },
     /// The call did not complete (connection, deadline).
     Transport { retryable: bool },
+    /// Main answered `ABORTED` (`thread_busy`): another change to the thread
+    /// was being saved. Not a ref conflict; the same publish is resent.
+    Busy,
     /// Main answered something this worker cannot accept.
     Malformed(&'static str),
 }
@@ -113,6 +121,7 @@ impl StoreCallError {
             Self::Refused { code, .. } => code.as_str(),
             Self::Rejected { .. } => "workspace_store.rejected",
             Self::Transport { .. } => "workspace_store.unavailable",
+            Self::Busy => "workspace_store.thread_busy",
             Self::Malformed(_) => "workspace_store.malformed_response",
         }
     }
@@ -121,6 +130,7 @@ impl StoreCallError {
     pub(crate) const fn retryable(&self) -> bool {
         match self {
             Self::Rejected { retryable, .. } | Self::Transport { retryable } => *retryable,
+            Self::Busy => true,
             Self::Refused { .. } | Self::Malformed(_) => false,
         }
     }
@@ -191,6 +201,69 @@ pub(crate) trait WorkspaceStore: Send + Sync {
 
     /// The thread's harvested env (contract 6.4); empty when it has none.
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError>;
+
+    /// Record one executor audit event of the running turn (decision 12).
+    async fn record_event(
+        &self,
+        claim: &WorkspaceClaimV1,
+        event: &super::audit::ExecutorEvent,
+    ) -> Result<(), StoreCallError>;
+}
+
+/// The wire request of an executor audit event: counts, rule ids, the file
+/// count; no path field exists.
+#[must_use]
+pub(crate) fn record_event_request(
+    claim: &WorkspaceClaimV1,
+    event: &super::audit::ExecutorEvent,
+) -> WorkspaceRecordEventRequestV1 {
+    use super::audit::ExecutorEvent;
+    let mut request = WorkspaceRecordEventRequestV1 {
+        claim: Some(claim.clone()),
+        ..WorkspaceRecordEventRequestV1::default()
+    };
+    match event {
+        ExecutorEvent::ScanBlocked { findings, rules } => {
+            request.kind = WorkspaceExecutorEventKindV1::ScanBlocked as i32;
+            request.findings = *findings;
+            request.rules.clone_from(rules);
+        }
+        ExecutorEvent::PullRequestOpened {
+            toolkit,
+            branch,
+            base,
+            number,
+            url,
+            files,
+        } => {
+            request.kind = WorkspaceExecutorEventKindV1::PullRequestOpened as i32;
+            request.toolkit.clone_from(toolkit);
+            request.branch.clone_from(branch);
+            request.base.clone_from(base);
+            request.number = *number;
+            request.url = url.clone().unwrap_or_default();
+            request.files = *files;
+        }
+    }
+    request
+}
+
+/// Read a record-event response.
+///
+/// # Errors
+///
+/// A refusal or rejection, or a response that records nothing.
+pub(crate) fn read_record_event(
+    response: &WorkspaceRecordEventResponseV1,
+) -> Result<(), StoreCallError> {
+    match (&response.refusal, &response.rejection, response.recorded) {
+        (Some(refusal), None, false) => Err(refused(refusal)),
+        (None, Some(rejection), false) => Err(rejected(rejection)),
+        (None, None, true) => Ok(()),
+        _ => Err(StoreCallError::Malformed(
+            "the record-event response is ambiguous",
+        )),
+    }
 }
 
 /// The contract's env limits.
@@ -572,10 +645,58 @@ pub(crate) fn read_publish(
     })
 }
 
+/// How a publish that met `thread_busy` is resent: the first wait, the cap
+/// of the doubling wait, and the number of attempts in all.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BusyRetry {
+    pub(crate) first: Duration,
+    pub(crate) cap: Duration,
+    pub(crate) attempts: u32,
+}
+
+impl Default for BusyRetry {
+    /// Main's thread lock wait is 50 ms and a busy publish holds no
+    /// connection, so short waits converge; nine attempts span about 8 s.
+    fn default() -> Self {
+        Self {
+            first: Duration::from_millis(100),
+            cap: Duration::from_secs(2),
+            attempts: 9,
+        }
+    }
+}
+
+/// Resend `call` while it answers [`StoreCallError::Busy`], waiting `retry`'s
+/// doubling backoff between attempts. Any other answer is returned as it is.
+pub(crate) async fn retry_busy<T, F, Fut>(retry: BusyRetry, call: F) -> Result<T, StoreCallError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, StoreCallError>>,
+{
+    let mut wait = retry.first;
+    let mut attempt = 1;
+    loop {
+        match call().await {
+            Err(StoreCallError::Busy) if attempt < retry.attempts.max(1) => {
+                tracing::debug!(
+                    event = "workspace.publish_busy",
+                    attempt,
+                    "the thread was busy; the same publish is resent"
+                );
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(retry.cap);
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The production store over the control channel.
 pub(crate) struct GrpcWorkspaceStore {
     client: WorkspaceStoreServiceClient<Channel>,
     deadline: Duration,
+    busy: BusyRetry,
 }
 
 impl GrpcWorkspaceStore {
@@ -585,11 +706,32 @@ impl GrpcWorkspaceStore {
         let client = WorkspaceStoreServiceClient::new(channel)
             .max_encoding_message_size(MAX_REQUEST_BYTES)
             .max_decoding_message_size(MAX_RESPONSE_BYTES);
-        Self { client, deadline }
+        Self {
+            client,
+            deadline,
+            busy: BusyRetry::default(),
+        }
+    }
+
+    /// Replace the `thread_busy` backoff (tests).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn with_busy_retry(mut self, busy: BusyRetry) -> Self {
+        self.busy = busy;
+        self
     }
 }
 
+/// The status message of Main's `thread_busy` (`runtimegrpc/workspace`
+/// `ThreadBusyMessage`).
+const THREAD_BUSY_MESSAGE: &str = "thread_busy";
+
 fn status_error(status: &tonic::Status) -> StoreCallError {
+    if status.code() == tonic::Code::Aborted && status.message() == THREAD_BUSY_MESSAGE {
+        // Main's thread_busy (a publish that met another holder of the
+        // thread). Any other ABORTED is a transport error.
+        return StoreCallError::Busy;
+    }
     StoreCallError::Transport {
         retryable: matches!(
             status.code(),
@@ -661,14 +803,20 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         claim: &WorkspaceClaimV1,
         request: &PublishSegment,
     ) -> Result<PublishedSegment, StoreCallError> {
-        let mut client = self.client.clone();
         let wire = publish_request(claim, request);
-        let response = timeout(self.deadline, client.workspace_publish(wire))
-            .await
-            .map_err(|_| StoreCallError::Transport { retryable: true })?
-            .map_err(|status| status_error(&status))?
-            .into_inner();
-        read_publish(&response, request)
+        retry_busy(self.busy, || {
+            let mut client = self.client.clone();
+            let wire = wire.clone();
+            async move {
+                let response = timeout(self.deadline, client.workspace_publish(wire))
+                    .await
+                    .map_err(|_| StoreCallError::Transport { retryable: true })?
+                    .map_err(|status| status_error(&status))?
+                    .into_inner();
+                read_publish(&response, request)
+            }
+        })
+        .await
     }
 
     async fn env_secret(&self, claim: &WorkspaceClaimV1) -> Result<SecretEnv, StoreCallError> {
@@ -694,6 +842,23 @@ impl WorkspaceStore for GrpcWorkspaceStore {
         timeout(self.deadline, operation)
             .await
             .map_err(|_| StoreCallError::Transport { retryable: true })?
+    }
+
+    async fn record_event(
+        &self,
+        claim: &WorkspaceClaimV1,
+        event: &super::audit::ExecutorEvent,
+    ) -> Result<(), StoreCallError> {
+        let mut client = self.client.clone();
+        let response = timeout(
+            self.deadline,
+            client.workspace_record_event(record_event_request(claim, event)),
+        )
+        .await
+        .map_err(|_| StoreCallError::Transport { retryable: true })?
+        .map_err(|status| status_error(&status))?
+        .into_inner();
+        read_record_event(&response)
     }
 }
 
@@ -920,4 +1085,71 @@ mod tests {
         assert!(read_env_frames([vars(&[("A", "1"), ("A", "2")]), end(2)]).is_err());
         assert!(read_env_frames([vars(&[("A", "1")])]).is_err());
     }
+
+    const QUICK: BusyRetry = BusyRetry {
+        first: Duration::from_millis(1),
+        cap: Duration::from_millis(4),
+        attempts: 5,
+    };
+
+    #[test]
+    fn aborted_is_thread_busy_and_retryable_never_a_conflict() {
+        let busy = status_error(&tonic::Status::aborted("thread_busy"));
+        assert_eq!(busy, StoreCallError::Busy);
+        assert!(busy.retryable());
+        assert_eq!(busy.code(), "workspace_store.thread_busy");
+        assert!(matches!(
+            status_error(&tonic::Status::unavailable("down")),
+            StoreCallError::Transport { retryable: true }
+        ));
+        // Another layer's ABORTED is not thread contention.
+        assert!(matches!(
+            status_error(&tonic::Status::aborted("stream reset by the proxy")),
+            StoreCallError::Transport { retryable: true }
+        ));
+    }
+
+    #[tokio::test]
+    async fn busy_then_success_resends_the_same_call_until_it_applies() {
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let result = retry_busy(QUICK, || async {
+            match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 | 1 => Err(StoreCallError::Busy),
+                _ => Ok(7_u64),
+            }
+        })
+        .await;
+        assert_eq!(result, Ok(7));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        // A conflict is answered at once, never resent.
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let conflict = retry_busy(QUICK, || async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err::<u64, _>(StoreCallError::Refused {
+                code: RefusalCode::RefConflict,
+                current: BTreeMap::new(),
+            })
+        })
+        .await;
+        assert!(matches!(conflict, Err(StoreCallError::Refused { .. })));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A thread busy past the budget gives up with Busy.
+        let calls = std::sync::atomic::AtomicU32::new(0);
+        let exhausted = retry_busy(QUICK, || async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err::<u64, _>(StoreCallError::Busy)
+        })
+        .await;
+        assert_eq!(exhausted, Err(StoreCallError::Busy));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            QUICK.attempts
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "store_busy_tests.rs"]
+mod busy_tests;

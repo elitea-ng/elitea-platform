@@ -385,7 +385,8 @@ pub async fn handle_line_capped(
     answer
 }
 
-/// Serve tool calls until stdin closes.
+/// Serve tool calls, one request line then its answer line, until stdin
+/// closes.
 ///
 /// # Errors
 ///
@@ -420,7 +421,18 @@ where
         let answer = if line.len() > MAX_REQUEST_LINE_BYTES {
             json!({"status": "error", "code": "runner.request_too_large", "message": "the request is too large"})
         } else {
-            handle_line_capped(&session, cap.as_ref(), &line).await
+            // One request, then its answer. stdin closing while a call runs
+            // (the worker stopped waiting for it: a take back's wrap-up)
+            // cancels the call, and dropping it kills the command's process
+            // group, so nothing writes to the workspace after the worker
+            // packs it. A line before the answer is not the worker either.
+            let call = handle_line_capped(&session, cap.as_ref(), &line);
+            tokio::pin!(call);
+            tokio::select! {
+                biased;
+                answer = &mut call => answer,
+                _ = lines.next_line() => return Ok(()),
+            }
         };
         let mut encoded = serde_json::to_vec(&answer).unwrap_or_else(|_| b"{}".to_vec());
         encoded.push(b'\n');

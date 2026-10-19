@@ -192,6 +192,12 @@ impl WorkspaceRunFactory {
             .tempdir_in(&self.scratch_root)
             .map_err(|_| WorkspaceRunError::Internal)?;
         let segment_file = scratch.path().join("fetched.bundle");
+        // The turn's executor audit events (decision 12), claim-bound.
+        let audit = super::audit::ExecutorAudit::spawn(
+            Arc::clone(&self.store),
+            claim.clone(),
+            execution_id,
+        );
         let fetched = self
             .store
             .fetch(&claim, 0, limits.max_segment_bytes, &segment_file)
@@ -241,17 +247,26 @@ impl WorkspaceRunFactory {
             let rewound = scratch.path().join("rewound");
             std::fs::create_dir_all(&rewound).map_err(|_| WorkspaceRunError::Internal)?;
             let out = scratch.path().join("rewind.bundle");
-            let (codec, git, tree, file, rewind_expect, from) = (
+            let (codec, git, tree, file, rewind_expect, from, to) = (
                 Arc::clone(&self.codec),
                 git_dir.clone(),
                 rewound.clone(),
                 out.clone(),
                 expect.clone(),
                 cloud.clone(),
+                context.rewind_to.clone(),
             );
             let max = limits.max_segment_bytes;
             let (parent, built) = tokio::task::spawn_blocking(move || {
-                codec.rewind(&git, &rewind_expect, &from, &tree, max, &file)
+                codec.rewind(
+                    &git,
+                    &rewind_expect,
+                    &from,
+                    to.as_deref(),
+                    &tree,
+                    max,
+                    &file,
+                )
             })
             .await
             .map_err(|_| WorkspaceRunError::Internal)?
@@ -317,6 +332,13 @@ impl WorkspaceRunFactory {
                 rules = rules.join(","),
                 "the handed-off tree holds credential-shaped content; the cloud turn is refused"
             );
+            // Recorded while the claim still owns the thread: the turn
+            // fails right after, and Main then finishes it.
+            audit.record(super::audit::ExecutorEvent::ScanBlocked {
+                findings: u32::try_from(findings.len()).unwrap_or(u32::MAX),
+                rules: rules.iter().map(|rule| (*rule).to_owned()).collect(),
+            });
+            audit.flush(super::audit::FLUSH_TIMEOUT).await;
             return Err(WorkspaceRunError::SecretFound {
                 findings: findings.len(),
             });
@@ -388,6 +410,8 @@ impl WorkspaceRunFactory {
             max_segment_bytes: limits.max_segment_bytes,
             file_redactor,
             outcome: Mutex::new(None),
+            wrap_up: Arc::default(),
+            audit,
         }))
     }
 }
@@ -480,6 +504,10 @@ pub(crate) struct WorkspaceTurn {
     /// The harvested values, for the end-of-turn file scan.
     file_redactor: Arc<super::file_redact::FileRedactor>,
     outcome: Mutex<Option<Result<Option<WorkspaceStamp>, WorkspaceRunError>>>,
+    /// The take-back wrap-up (ADR-0034 decision 7).
+    wrap_up: Arc<super::wrap_up::WrapUp>,
+    /// The turn's executor audit events (decision 12).
+    audit: Arc<super::audit::ExecutorAudit>,
 }
 
 impl WorkspaceTurn {
@@ -487,6 +515,18 @@ impl WorkspaceTurn {
     #[must_use]
     pub(crate) fn sandbox(&self) -> Arc<dyn WorkspaceSandbox> {
         Arc::clone(&self.sandbox)
+    }
+
+    /// The turn's executor audit queue (decision 12).
+    #[must_use]
+    pub(crate) fn audit(&self) -> Arc<super::audit::ExecutorAudit> {
+        Arc::clone(&self.audit)
+    }
+
+    /// The turn's take-back wrap-up, shared by its tools and its lifecycle.
+    #[must_use]
+    pub(crate) fn wrap_up(&self) -> Arc<super::wrap_up::WrapUp> {
+        Arc::clone(&self.wrap_up)
     }
 
     /// The pull-request diff (ADR-0034 decision 10), computed here from the
@@ -562,6 +602,8 @@ impl WorkspaceTurn {
         if let Some(previous) = outcome.as_ref() {
             return previous.clone();
         }
+        // The turn's audit events land while its claim still owns the thread.
+        self.audit.flush(super::audit::FLUSH_TIMEOUT).await;
         let result = self.finish_once(end).await;
         *outcome = Some(result.clone());
         result

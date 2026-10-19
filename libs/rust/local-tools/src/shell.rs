@@ -455,6 +455,10 @@ pub async fn run_checked(
         .id()
         .and_then(|id| i32::try_from(id).ok())
         .and_then(rustix::process::Pid::from_raw);
+    // A caller that stops waiting (the future is dropped, e.g. a cloud
+    // turn's take back) kills the whole group: `kill_on_drop` alone reaches
+    // only the leader, and a build's children would keep writing.
+    let mut group_guard = GroupKillOnDrop(group);
     let stdout = child
         .stdout
         .take()
@@ -480,9 +484,7 @@ pub async fn run_checked(
     };
     // Children left in the group may still hold the pipes: kill the group
     // after the leader exits too, then give the readers a bounded drain.
-    if let Some(group) = group {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-    }
+    group_guard.kill_now();
     if spec.mode != SandboxMode::ReadOnly {
         // It may have created a `.git` or a denied file.
         config.sandbox.masks.invalidate();
@@ -645,6 +647,24 @@ pub async fn login_environment(shell: &std::path::Path, timeout: Duration) -> Lo
         })
         .collect();
     LoginEnvironment { vars, notice: None }
+}
+
+/// Kills a command's process group when dropped.
+struct GroupKillOnDrop(Option<rustix::process::Pid>);
+
+impl GroupKillOnDrop {
+    /// Kill the group now, once: a later drop must not signal a reused id.
+    fn kill_now(&mut self) {
+        if let Some(group) = self.0.take() {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+    }
+}
+
+impl Drop for GroupKillOnDrop {
+    fn drop(&mut self) {
+        self.kill_now();
+    }
 }
 
 #[cfg(test)]

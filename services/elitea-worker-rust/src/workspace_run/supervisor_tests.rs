@@ -406,3 +406,42 @@ async fn no_grant_no_run() {
     );
     let _ = Mutex::new(());
 }
+
+/// A take back's wrap-up drops a long call after its grace: the serve
+/// session ends (the runner's stdin closes, so the runner kills the
+/// command), and the out-of-step session is never used again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_the_worker_stops_waiting_for_ends_the_serve_session() {
+    let harness = harness(4).await;
+    let grants = TestGrants::new("execution-1");
+    let spec = spec("0123456789abcdef0123456a");
+    let sandbox = harness
+        .launcher
+        .launch(
+            &spec,
+            &SecretEnv::new(Vec::new()),
+            Arc::clone(&grants) as Arc<dyn WorkspaceRunGrants>,
+        )
+        .await
+        .expect("launched");
+    let dropped = tokio::time::timeout(
+        Duration::from_millis(200),
+        sandbox.call_tool("hang", "call-1", json!({})),
+    )
+    .await;
+    assert!(dropped.is_err(), "the call never answers");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while harness.backend.serves_ended.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the serve session ended");
+    assert_eq!(
+        sandbox
+            .call_tool("read_file", "call-2", json!({"path": "x"}))
+            .await
+            .err(),
+        Some(SandboxRunError::Unavailable)
+    );
+}

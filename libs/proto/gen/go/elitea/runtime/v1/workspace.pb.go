@@ -97,6 +97,60 @@ func (WorkspaceRefusalCodeV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{0}
 }
 
+// The audit events only the executor observes (ADR-0034 decision 12). The
+// fields are the ones Main records and nothing else: no field can carry a
+// path or file content.
+type WorkspaceExecutorEventKindV1 int32
+
+const (
+	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED WorkspaceExecutorEventKindV1 = 0
+	// handoff.scan_blocked: the hydrated tree held credential-shaped content.
+	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED WorkspaceExecutorEventKindV1 = 1
+	// pull_request.opened: open_pull_request opened one.
+	WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED WorkspaceExecutorEventKindV1 = 2
+)
+
+// Enum value maps for WorkspaceExecutorEventKindV1.
+var (
+	WorkspaceExecutorEventKindV1_name = map[int32]string{
+		0: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED",
+		1: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED",
+		2: "WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED",
+	}
+	WorkspaceExecutorEventKindV1_value = map[string]int32{
+		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED":         0,
+		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED":        1,
+		"WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED": 2,
+	}
+)
+
+func (x WorkspaceExecutorEventKindV1) Enum() *WorkspaceExecutorEventKindV1 {
+	p := new(WorkspaceExecutorEventKindV1)
+	*p = x
+	return p
+}
+
+func (x WorkspaceExecutorEventKindV1) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (WorkspaceExecutorEventKindV1) Descriptor() protoreflect.EnumDescriptor {
+	return file_elitea_runtime_v1_workspace_proto_enumTypes[1].Descriptor()
+}
+
+func (WorkspaceExecutorEventKindV1) Type() protoreflect.EnumType {
+	return &file_elitea_runtime_v1_workspace_proto_enumTypes[1]
+}
+
+func (x WorkspaceExecutorEventKindV1) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use WorkspaceExecutorEventKindV1.Descriptor instead.
+func (WorkspaceExecutorEventKindV1) EnumDescriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{1}
+}
+
 // WorkspaceClaimV1 binds one request to the live claim of a cloud turn.
 type WorkspaceClaimV1 struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -1367,6 +1421,185 @@ func (x *WorkspaceEnvVarsV1) GetVars() []*WorkspaceEnvVarV1 {
 	return nil
 }
 
+type WorkspaceRecordEventRequestV1 struct {
+	state protoimpl.MessageState       `protogen:"open.v1"`
+	Claim *WorkspaceClaimV1            `protobuf:"bytes,1,opt,name=claim,proto3" json:"claim,omitempty"`
+	Kind  WorkspaceExecutorEventKindV1 `protobuf:"varint,2,opt,name=kind,proto3,enum=elitea.runtime.v1.WorkspaceExecutorEventKindV1" json:"kind,omitempty"`
+	// scan_blocked: how many findings, and the distinct rule ids.
+	Findings uint32   `protobuf:"varint,3,opt,name=findings,proto3" json:"findings,omitempty"`
+	Rules    []string `protobuf:"bytes,4,rep,name=rules,proto3" json:"rules,omitempty"`
+	// pull_request.opened: the toolkit, the branches, the number, its URL and
+	// how many files it changes.
+	Toolkit       string `protobuf:"bytes,5,opt,name=toolkit,proto3" json:"toolkit,omitempty"`
+	Branch        string `protobuf:"bytes,6,opt,name=branch,proto3" json:"branch,omitempty"`
+	Base          string `protobuf:"bytes,7,opt,name=base,proto3" json:"base,omitempty"`
+	Number        uint64 `protobuf:"varint,8,opt,name=number,proto3" json:"number,omitempty"`
+	Url           string `protobuf:"bytes,9,opt,name=url,proto3" json:"url,omitempty"`
+	Files         uint32 `protobuf:"varint,10,opt,name=files,proto3" json:"files,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceRecordEventRequestV1) Reset() {
+	*x = WorkspaceRecordEventRequestV1{}
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceRecordEventRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceRecordEventRequestV1) ProtoMessage() {}
+
+func (x *WorkspaceRecordEventRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceRecordEventRequestV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceRecordEventRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetClaim() *WorkspaceClaimV1 {
+	if x != nil {
+		return x.Claim
+	}
+	return nil
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetKind() WorkspaceExecutorEventKindV1 {
+	if x != nil {
+		return x.Kind
+	}
+	return WorkspaceExecutorEventKindV1_WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetFindings() uint32 {
+	if x != nil {
+		return x.Findings
+	}
+	return 0
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetRules() []string {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetToolkit() string {
+	if x != nil {
+		return x.Toolkit
+	}
+	return ""
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetBranch() string {
+	if x != nil {
+		return x.Branch
+	}
+	return ""
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetBase() string {
+	if x != nil {
+		return x.Base
+	}
+	return ""
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetNumber() uint64 {
+	if x != nil {
+		return x.Number
+	}
+	return 0
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *WorkspaceRecordEventRequestV1) GetFiles() uint32 {
+	if x != nil {
+		return x.Files
+	}
+	return 0
+}
+
+type WorkspaceRecordEventResponseV1 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Recorded      bool                   `protobuf:"varint,1,opt,name=recorded,proto3" json:"recorded,omitempty"`
+	Refusal       *WorkspaceRefusalV1    `protobuf:"bytes,2,opt,name=refusal,proto3" json:"refusal,omitempty"`
+	Rejection     *RuntimeErrorV1        `protobuf:"bytes,3,opt,name=rejection,proto3" json:"rejection,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkspaceRecordEventResponseV1) Reset() {
+	*x = WorkspaceRecordEventResponseV1{}
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkspaceRecordEventResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceRecordEventResponseV1) ProtoMessage() {}
+
+func (x *WorkspaceRecordEventResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_workspace_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceRecordEventResponseV1.ProtoReflect.Descriptor instead.
+func (*WorkspaceRecordEventResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_workspace_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *WorkspaceRecordEventResponseV1) GetRecorded() bool {
+	if x != nil {
+		return x.Recorded
+	}
+	return false
+}
+
+func (x *WorkspaceRecordEventResponseV1) GetRefusal() *WorkspaceRefusalV1 {
+	if x != nil {
+		return x.Refusal
+	}
+	return nil
+}
+
+func (x *WorkspaceRecordEventResponseV1) GetRejection() *RuntimeErrorV1 {
+	if x != nil {
+		return x.Rejection
+	}
+	return nil
+}
+
 var File_elitea_runtime_v1_workspace_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
@@ -1452,7 +1685,23 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"\trejection\x18\x04 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1H\x00R\trejectionB\a\n" +
 	"\x05frameJ\x04\b\x05\x10\x10\"T\n" +
 	"\x12WorkspaceEnvVarsV1\x128\n" +
-	"\x04vars\x18\x01 \x03(\v2$.elitea.runtime.v1.WorkspaceEnvVarV1R\x04varsJ\x04\b\x02\x10\x10*\x99\x05\n" +
+	"\x04vars\x18\x01 \x03(\v2$.elitea.runtime.v1.WorkspaceEnvVarV1R\x04varsJ\x04\b\x02\x10\x10\"\xdd\x02\n" +
+	"\x1dWorkspaceRecordEventRequestV1\x129\n" +
+	"\x05claim\x18\x01 \x01(\v2#.elitea.runtime.v1.WorkspaceClaimV1R\x05claim\x12C\n" +
+	"\x04kind\x18\x02 \x01(\x0e2/.elitea.runtime.v1.WorkspaceExecutorEventKindV1R\x04kind\x12\x1a\n" +
+	"\bfindings\x18\x03 \x01(\rR\bfindings\x12\x14\n" +
+	"\x05rules\x18\x04 \x03(\tR\x05rules\x12\x18\n" +
+	"\atoolkit\x18\x05 \x01(\tR\atoolkit\x12\x16\n" +
+	"\x06branch\x18\x06 \x01(\tR\x06branch\x12\x12\n" +
+	"\x04base\x18\a \x01(\tR\x04base\x12\x16\n" +
+	"\x06number\x18\b \x01(\x04R\x06number\x12\x10\n" +
+	"\x03url\x18\t \x01(\tR\x03url\x12\x14\n" +
+	"\x05files\x18\n" +
+	" \x01(\rR\x05filesJ\x04\b\v\x10\x10\"\xc4\x01\n" +
+	"\x1eWorkspaceRecordEventResponseV1\x12\x1a\n" +
+	"\brecorded\x18\x01 \x01(\bR\brecorded\x12?\n" +
+	"\arefusal\x18\x02 \x01(\v2%.elitea.runtime.v1.WorkspaceRefusalV1R\arefusal\x12?\n" +
+	"\trejection\x18\x03 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x04\x10\x10*\x99\x05\n" +
 	"\x16WorkspaceRefusalCodeV1\x12)\n" +
 	"%WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED\x10\x00\x122\n" +
 	".WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN\x10\x01\x12)\n" +
@@ -1464,12 +1713,17 @@ const file_elitea_runtime_v1_workspace_proto_rawDesc = "" +
 	"3WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT\x10\a\x12/\n" +
 	"+WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE\x10\b\x12,\n" +
 	"(WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED\x10\t\"\x04\b\n" +
-	"\x10\r*%WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM*(WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE*%WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY*$WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY2\xde\x03\n" +
+	"\x10\r*%WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM*(WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE*%WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY*$WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY*\xbd\x01\n" +
+	"\x1cWorkspaceExecutorEventKindV1\x120\n" +
+	",WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED\x10\x00\x121\n" +
+	"-WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED\x10\x01\x128\n" +
+	"4WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED\x10\x022\xdb\x04\n" +
 	"\x15WorkspaceStoreService\x12p\n" +
 	"\x12WorkspaceFetchPlan\x12..elitea.runtime.v1.WorkspaceFetchPlanRequestV1\x1a(.elitea.runtime.v1.WorkspaceFetchFrameV10\x01\x12l\n" +
 	"\x0fWorkspaceUpload\x12).elitea.runtime.v1.WorkspaceUploadFrameV1\x1a,.elitea.runtime.v1.WorkspaceUploadResponseV1(\x01\x12o\n" +
 	"\x10WorkspacePublish\x12,.elitea.runtime.v1.WorkspacePublishRequestV1\x1a-.elitea.runtime.v1.WorkspacePublishResponseV1\x12t\n" +
-	"\x12WorkspaceEnvSecret\x12..elitea.runtime.v1.WorkspaceEnvSecretRequestV1\x1a,.elitea.runtime.v1.WorkspaceEnvSecretFrameV10\x01BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x12WorkspaceEnvSecret\x12..elitea.runtime.v1.WorkspaceEnvSecretRequestV1\x1a,.elitea.runtime.v1.WorkspaceEnvSecretFrameV10\x01\x12{\n" +
+	"\x14WorkspaceRecordEvent\x120.elitea.runtime.v1.WorkspaceRecordEventRequestV1\x1a1.elitea.runtime.v1.WorkspaceRecordEventResponseV1BSZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_workspace_proto_rawDescOnce sync.Once
@@ -1483,72 +1737,81 @@ func file_elitea_runtime_v1_workspace_proto_rawDescGZIP() []byte {
 	return file_elitea_runtime_v1_workspace_proto_rawDescData
 }
 
-var file_elitea_runtime_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_elitea_runtime_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_elitea_runtime_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_elitea_runtime_v1_workspace_proto_goTypes = []any{
-	(WorkspaceRefusalCodeV1)(0),         // 0: elitea.runtime.v1.WorkspaceRefusalCodeV1
-	(*WorkspaceClaimV1)(nil),            // 1: elitea.runtime.v1.WorkspaceClaimV1
-	(*WorkspaceRefV1)(nil),              // 2: elitea.runtime.v1.WorkspaceRefV1
-	(*WorkspaceRefUpdateV1)(nil),        // 3: elitea.runtime.v1.WorkspaceRefUpdateV1
-	(*WorkspaceRefusalV1)(nil),          // 4: elitea.runtime.v1.WorkspaceRefusalV1
-	(*WorkspaceSegmentV1)(nil),          // 5: elitea.runtime.v1.WorkspaceSegmentV1
-	(*WorkspaceFetchPlanRequestV1)(nil), // 6: elitea.runtime.v1.WorkspaceFetchPlanRequestV1
-	(*WorkspaceFetchPlanV1)(nil),        // 7: elitea.runtime.v1.WorkspaceFetchPlanV1
-	(*WorkspaceSegmentEndV1)(nil),       // 8: elitea.runtime.v1.WorkspaceSegmentEndV1
-	(*WorkspaceFetchFrameV1)(nil),       // 9: elitea.runtime.v1.WorkspaceFetchFrameV1
-	(*WorkspaceUploadHeaderV1)(nil),     // 10: elitea.runtime.v1.WorkspaceUploadHeaderV1
-	(*WorkspaceUploadFrameV1)(nil),      // 11: elitea.runtime.v1.WorkspaceUploadFrameV1
-	(*WorkspaceUploadResponseV1)(nil),   // 12: elitea.runtime.v1.WorkspaceUploadResponseV1
-	(*WorkspacePublishRequestV1)(nil),   // 13: elitea.runtime.v1.WorkspacePublishRequestV1
-	(*WorkspacePublishResponseV1)(nil),  // 14: elitea.runtime.v1.WorkspacePublishResponseV1
-	(*WorkspaceEnvSecretRequestV1)(nil), // 15: elitea.runtime.v1.WorkspaceEnvSecretRequestV1
-	(*WorkspaceEnvVarV1)(nil),           // 16: elitea.runtime.v1.WorkspaceEnvVarV1
-	(*WorkspaceEnvSecretFrameV1)(nil),   // 17: elitea.runtime.v1.WorkspaceEnvSecretFrameV1
-	(*WorkspaceEnvVarsV1)(nil),          // 18: elitea.runtime.v1.WorkspaceEnvVarsV1
-	(*ExecutionIdentityV1)(nil),         // 19: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),            // 20: elitea.runtime.v1.ExecutionFenceV1
-	(*RuntimeErrorV1)(nil),              // 21: elitea.runtime.v1.RuntimeErrorV1
+	(WorkspaceRefusalCodeV1)(0),            // 0: elitea.runtime.v1.WorkspaceRefusalCodeV1
+	(WorkspaceExecutorEventKindV1)(0),      // 1: elitea.runtime.v1.WorkspaceExecutorEventKindV1
+	(*WorkspaceClaimV1)(nil),               // 2: elitea.runtime.v1.WorkspaceClaimV1
+	(*WorkspaceRefV1)(nil),                 // 3: elitea.runtime.v1.WorkspaceRefV1
+	(*WorkspaceRefUpdateV1)(nil),           // 4: elitea.runtime.v1.WorkspaceRefUpdateV1
+	(*WorkspaceRefusalV1)(nil),             // 5: elitea.runtime.v1.WorkspaceRefusalV1
+	(*WorkspaceSegmentV1)(nil),             // 6: elitea.runtime.v1.WorkspaceSegmentV1
+	(*WorkspaceFetchPlanRequestV1)(nil),    // 7: elitea.runtime.v1.WorkspaceFetchPlanRequestV1
+	(*WorkspaceFetchPlanV1)(nil),           // 8: elitea.runtime.v1.WorkspaceFetchPlanV1
+	(*WorkspaceSegmentEndV1)(nil),          // 9: elitea.runtime.v1.WorkspaceSegmentEndV1
+	(*WorkspaceFetchFrameV1)(nil),          // 10: elitea.runtime.v1.WorkspaceFetchFrameV1
+	(*WorkspaceUploadHeaderV1)(nil),        // 11: elitea.runtime.v1.WorkspaceUploadHeaderV1
+	(*WorkspaceUploadFrameV1)(nil),         // 12: elitea.runtime.v1.WorkspaceUploadFrameV1
+	(*WorkspaceUploadResponseV1)(nil),      // 13: elitea.runtime.v1.WorkspaceUploadResponseV1
+	(*WorkspacePublishRequestV1)(nil),      // 14: elitea.runtime.v1.WorkspacePublishRequestV1
+	(*WorkspacePublishResponseV1)(nil),     // 15: elitea.runtime.v1.WorkspacePublishResponseV1
+	(*WorkspaceEnvSecretRequestV1)(nil),    // 16: elitea.runtime.v1.WorkspaceEnvSecretRequestV1
+	(*WorkspaceEnvVarV1)(nil),              // 17: elitea.runtime.v1.WorkspaceEnvVarV1
+	(*WorkspaceEnvSecretFrameV1)(nil),      // 18: elitea.runtime.v1.WorkspaceEnvSecretFrameV1
+	(*WorkspaceEnvVarsV1)(nil),             // 19: elitea.runtime.v1.WorkspaceEnvVarsV1
+	(*WorkspaceRecordEventRequestV1)(nil),  // 20: elitea.runtime.v1.WorkspaceRecordEventRequestV1
+	(*WorkspaceRecordEventResponseV1)(nil), // 21: elitea.runtime.v1.WorkspaceRecordEventResponseV1
+	(*ExecutionIdentityV1)(nil),            // 22: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),               // 23: elitea.runtime.v1.ExecutionFenceV1
+	(*RuntimeErrorV1)(nil),                 // 24: elitea.runtime.v1.RuntimeErrorV1
 }
 var file_elitea_runtime_v1_workspace_proto_depIdxs = []int32{
-	19, // 0: elitea.runtime.v1.WorkspaceClaimV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	20, // 1: elitea.runtime.v1.WorkspaceClaimV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	22, // 0: elitea.runtime.v1.WorkspaceClaimV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	23, // 1: elitea.runtime.v1.WorkspaceClaimV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	0,  // 2: elitea.runtime.v1.WorkspaceRefusalV1.code:type_name -> elitea.runtime.v1.WorkspaceRefusalCodeV1
-	2,  // 3: elitea.runtime.v1.WorkspaceRefusalV1.current:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	2,  // 4: elitea.runtime.v1.WorkspaceSegmentV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	1,  // 5: elitea.runtime.v1.WorkspaceFetchPlanRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	2,  // 6: elitea.runtime.v1.WorkspaceFetchPlanV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	5,  // 7: elitea.runtime.v1.WorkspaceFetchPlanV1.segments:type_name -> elitea.runtime.v1.WorkspaceSegmentV1
-	7,  // 8: elitea.runtime.v1.WorkspaceFetchFrameV1.plan:type_name -> elitea.runtime.v1.WorkspaceFetchPlanV1
-	8,  // 9: elitea.runtime.v1.WorkspaceFetchFrameV1.segment_end:type_name -> elitea.runtime.v1.WorkspaceSegmentEndV1
-	4,  // 10: elitea.runtime.v1.WorkspaceFetchFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	21, // 11: elitea.runtime.v1.WorkspaceFetchFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	1,  // 12: elitea.runtime.v1.WorkspaceUploadHeaderV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	10, // 13: elitea.runtime.v1.WorkspaceUploadFrameV1.header:type_name -> elitea.runtime.v1.WorkspaceUploadHeaderV1
-	4,  // 14: elitea.runtime.v1.WorkspaceUploadResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	21, // 15: elitea.runtime.v1.WorkspaceUploadResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	1,  // 16: elitea.runtime.v1.WorkspacePublishRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	3,  // 17: elitea.runtime.v1.WorkspacePublishRequestV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefUpdateV1
-	2,  // 18: elitea.runtime.v1.WorkspacePublishResponseV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
-	4,  // 19: elitea.runtime.v1.WorkspacePublishResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	21, // 20: elitea.runtime.v1.WorkspacePublishResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	1,  // 21: elitea.runtime.v1.WorkspaceEnvSecretRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
-	18, // 22: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarsV1
-	4,  // 23: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
-	21, // 24: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	16, // 25: elitea.runtime.v1.WorkspaceEnvVarsV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarV1
-	6,  // 26: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:input_type -> elitea.runtime.v1.WorkspaceFetchPlanRequestV1
-	11, // 27: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:input_type -> elitea.runtime.v1.WorkspaceUploadFrameV1
-	13, // 28: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:input_type -> elitea.runtime.v1.WorkspacePublishRequestV1
-	15, // 29: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:input_type -> elitea.runtime.v1.WorkspaceEnvSecretRequestV1
-	9,  // 30: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:output_type -> elitea.runtime.v1.WorkspaceFetchFrameV1
-	12, // 31: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:output_type -> elitea.runtime.v1.WorkspaceUploadResponseV1
-	14, // 32: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:output_type -> elitea.runtime.v1.WorkspacePublishResponseV1
-	17, // 33: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:output_type -> elitea.runtime.v1.WorkspaceEnvSecretFrameV1
-	30, // [30:34] is the sub-list for method output_type
-	26, // [26:30] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	3,  // 3: elitea.runtime.v1.WorkspaceRefusalV1.current:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	3,  // 4: elitea.runtime.v1.WorkspaceSegmentV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	2,  // 5: elitea.runtime.v1.WorkspaceFetchPlanRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	3,  // 6: elitea.runtime.v1.WorkspaceFetchPlanV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	6,  // 7: elitea.runtime.v1.WorkspaceFetchPlanV1.segments:type_name -> elitea.runtime.v1.WorkspaceSegmentV1
+	8,  // 8: elitea.runtime.v1.WorkspaceFetchFrameV1.plan:type_name -> elitea.runtime.v1.WorkspaceFetchPlanV1
+	9,  // 9: elitea.runtime.v1.WorkspaceFetchFrameV1.segment_end:type_name -> elitea.runtime.v1.WorkspaceSegmentEndV1
+	5,  // 10: elitea.runtime.v1.WorkspaceFetchFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	24, // 11: elitea.runtime.v1.WorkspaceFetchFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	2,  // 12: elitea.runtime.v1.WorkspaceUploadHeaderV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	11, // 13: elitea.runtime.v1.WorkspaceUploadFrameV1.header:type_name -> elitea.runtime.v1.WorkspaceUploadHeaderV1
+	5,  // 14: elitea.runtime.v1.WorkspaceUploadResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	24, // 15: elitea.runtime.v1.WorkspaceUploadResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	2,  // 16: elitea.runtime.v1.WorkspacePublishRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	4,  // 17: elitea.runtime.v1.WorkspacePublishRequestV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefUpdateV1
+	3,  // 18: elitea.runtime.v1.WorkspacePublishResponseV1.refs:type_name -> elitea.runtime.v1.WorkspaceRefV1
+	5,  // 19: elitea.runtime.v1.WorkspacePublishResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	24, // 20: elitea.runtime.v1.WorkspacePublishResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	2,  // 21: elitea.runtime.v1.WorkspaceEnvSecretRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	19, // 22: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarsV1
+	5,  // 23: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	24, // 24: elitea.runtime.v1.WorkspaceEnvSecretFrameV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	17, // 25: elitea.runtime.v1.WorkspaceEnvVarsV1.vars:type_name -> elitea.runtime.v1.WorkspaceEnvVarV1
+	2,  // 26: elitea.runtime.v1.WorkspaceRecordEventRequestV1.claim:type_name -> elitea.runtime.v1.WorkspaceClaimV1
+	1,  // 27: elitea.runtime.v1.WorkspaceRecordEventRequestV1.kind:type_name -> elitea.runtime.v1.WorkspaceExecutorEventKindV1
+	5,  // 28: elitea.runtime.v1.WorkspaceRecordEventResponseV1.refusal:type_name -> elitea.runtime.v1.WorkspaceRefusalV1
+	24, // 29: elitea.runtime.v1.WorkspaceRecordEventResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	7,  // 30: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:input_type -> elitea.runtime.v1.WorkspaceFetchPlanRequestV1
+	12, // 31: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:input_type -> elitea.runtime.v1.WorkspaceUploadFrameV1
+	14, // 32: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:input_type -> elitea.runtime.v1.WorkspacePublishRequestV1
+	16, // 33: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:input_type -> elitea.runtime.v1.WorkspaceEnvSecretRequestV1
+	20, // 34: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordEvent:input_type -> elitea.runtime.v1.WorkspaceRecordEventRequestV1
+	10, // 35: elitea.runtime.v1.WorkspaceStoreService.WorkspaceFetchPlan:output_type -> elitea.runtime.v1.WorkspaceFetchFrameV1
+	13, // 36: elitea.runtime.v1.WorkspaceStoreService.WorkspaceUpload:output_type -> elitea.runtime.v1.WorkspaceUploadResponseV1
+	15, // 37: elitea.runtime.v1.WorkspaceStoreService.WorkspacePublish:output_type -> elitea.runtime.v1.WorkspacePublishResponseV1
+	18, // 38: elitea.runtime.v1.WorkspaceStoreService.WorkspaceEnvSecret:output_type -> elitea.runtime.v1.WorkspaceEnvSecretFrameV1
+	21, // 39: elitea.runtime.v1.WorkspaceStoreService.WorkspaceRecordEvent:output_type -> elitea.runtime.v1.WorkspaceRecordEventResponseV1
+	35, // [35:40] is the sub-list for method output_type
+	30, // [30:35] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_workspace_proto_init() }
@@ -1581,8 +1844,8 @@ func file_elitea_runtime_v1_workspace_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_workspace_proto_rawDesc), len(file_elitea_runtime_v1_workspace_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   18,
+			NumEnums:      2,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
