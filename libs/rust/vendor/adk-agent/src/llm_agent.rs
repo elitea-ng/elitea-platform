@@ -1846,6 +1846,17 @@ struct ToolExecutor<'a> {
 }
 
 impl ToolExecutor<'_> {
+    /// Elitea patch: runs one batch of concurrency-safe calls together; the
+    /// semaphore inside `execute` still enforces each tool's limit.
+    async fn execute_concurrently(&self, calls: Vec<PendingToolCall>) -> Vec<ToolExecutionResult> {
+        use futures::StreamExt as _;
+        let buffer_size = calls.len().max(1);
+        futures::stream::iter(calls.into_iter().map(|call| self.execute(call)))
+            .buffer_unordered(buffer_size)
+            .collect()
+            .await
+    }
+
     async fn execute(&self, call: PendingToolCall) -> ToolExecutionResult {
         let PendingToolCall { index, name, args, id, function_call_id, guardrail_denial } = call;
         let mut tool_actions = EventActions::default();
@@ -3308,35 +3319,33 @@ impl Agent for LlmAgent {
                                 ToolExecutionStrategy::Auto => {
                                     // A call may overlap another only when its tool is
                                     // read-only *and* declares concurrency safety.
-                                    let (concurrent_fcs, sequential_fcs): (Vec<_>, Vec<_>) =
-                                        fc_parts.into_iter().partition(|call| {
+                                    //
+                                    // Elitea patch: the model's order is kept across
+                                    // writes. Upstream partitions the whole step, so a
+                                    // read listed after a write ran before it and saw
+                                    // the old file. Here only a run of adjacent
+                                    // concurrency-safe calls overlaps; any other call is
+                                    // a barrier that runs alone, in its place.
+                                    let mut all_results = Vec::new();
+                                    let mut batch = Vec::new();
+                                    for call in fc_parts {
+                                        let concurrent =
                                             tool_map.get(&call.name).is_some_and(|tool| {
                                                 tool.is_read_only() && tool.is_concurrency_safe()
-                                            })
-                                        });
-                                    let mut all_results = Vec::new();
-
-                                    // Concurrency enforcement is handled by the semaphore
-                                    // inside ToolExecutor.
-                                    if !concurrent_fcs.is_empty() {
-                                        use futures::StreamExt as _;
-                                        let buffer_size = concurrent_fcs.len().max(1);
+                                            });
+                                        if concurrent {
+                                            batch.push(call);
+                                            continue;
+                                        }
                                         all_results.extend(
-                                            futures::stream::iter(
-                                                concurrent_fcs
-                                                    .into_iter()
-                                                    .map(|call| executor.execute(call)),
-                                            )
-                                            .buffer_unordered(buffer_size)
-                                            .collect::<Vec<_>>()
+                                            executor.execute_concurrently(std::mem::take(&mut batch))
                                             .await,
                                         );
-                                    }
-
-                                    // Everything else runs one at a time.
-                                    for call in sequential_fcs {
                                         all_results.push(executor.execute(call).await);
                                     }
+                                    all_results.extend(
+                                        executor.execute_concurrently(batch).await,
+                                    );
                                     all_results
                                 }
                             };

@@ -400,6 +400,7 @@ struct MixedDispatchState {
     unsafe_started: AtomicUsize,
     unsafe_max_active: AtomicUsize,
     unsafe_started_while_safe_active: AtomicBool,
+    started: Mutex<Vec<String>>,
 }
 
 struct MixedDispatchTool {
@@ -426,7 +427,10 @@ impl Tool for MixedDispatchTool {
         self.concurrency_safe
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        if let Some(tag) = args.get("tag").and_then(Value::as_str) {
+            self.state.started.lock().unwrap_or_else(|e| e.into_inner()).push(tag.to_string());
+        }
         if self.concurrency_safe {
             self.state.safe_started.fetch_add(1, Ordering::SeqCst);
             let active = self.state.safe_active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -647,30 +651,30 @@ async fn test_auto_parallelizes_read_only_concurrency_safe_tool() {
 }
 
 #[tokio::test]
-async fn test_auto_runs_safe_subset_before_sequential_unsafe_subset() {
+async fn test_auto_overlaps_adjacent_safe_calls_and_keeps_order_across_unsafe_ones() {
     let model = Arc::new(RecordingModel::new(vec![
         RecordingModel::function_calls(vec![
             Part::FunctionCall {
                 name: "unsafe_probe".to_string(),
-                args: json!({}),
+                args: json!({ "tag": "unsafe-a" }),
                 id: Some("unsafe-a".to_string()),
                 thought_signature: None,
             },
             Part::FunctionCall {
                 name: "safe_probe".to_string(),
-                args: json!({}),
+                args: json!({ "tag": "safe-a" }),
                 id: Some("safe-a".to_string()),
                 thought_signature: None,
             },
             Part::FunctionCall {
                 name: "safe_probe".to_string(),
-                args: json!({}),
+                args: json!({ "tag": "safe-b" }),
                 id: Some("safe-b".to_string()),
                 thought_signature: None,
             },
             Part::FunctionCall {
                 name: "unsafe_probe".to_string(),
-                args: json!({}),
+                args: json!({ "tag": "unsafe-b" }),
                 id: Some("unsafe-b".to_string()),
                 thought_signature: None,
             },
@@ -707,6 +711,11 @@ async fn test_auto_runs_safe_subset_before_sequential_unsafe_subset() {
     assert_eq!(state.unsafe_started.load(Ordering::SeqCst), 2);
     assert_eq!(state.unsafe_max_active.load(Ordering::SeqCst), 1);
     assert!(!state.unsafe_started_while_safe_active.load(Ordering::SeqCst));
+    // Elitea patch: an unsafe call is a barrier in the model's order, so a
+    // read listed after a write never runs before it.
+    let started = state.started.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(started.first().map(String::as_str), Some("unsafe-a"));
+    assert_eq!(started.last().map(String::as_str), Some("unsafe-b"));
 }
 
 #[tokio::test]

@@ -3719,6 +3719,43 @@ async fn writes_stay_sequential_and_ordered() {
     assert_eq!(committed_call_order(&h.server), order);
 }
 
+#[tokio::test]
+async fn a_read_after_a_write_in_one_step_runs_after_it() {
+    // read, write, read: the second read must see the write, so the write
+    // is a barrier in the model's order (the vendored adk-agent patch; the
+    // published Auto ran both reads first).
+    let server = one_step_platform(vec![
+        ("call-1", "probe_read", json!({"ms": 100})),
+        ("call-2", "probe_write", json!({"ms": 50})),
+        ("call-3", "probe_read", json!({"ms": 100})),
+    ])
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let log = add_probes(&h);
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let log = log.lock().unwrap().clone();
+    let span = |id: &str| {
+        log.iter()
+            .find(|(call, _, _)| call == id)
+            .map(|(_, start, end)| (*start, *end))
+            .unwrap_or_else(|| panic!("{id} did not run: {log:?}"))
+    };
+    let (read_1, write, read_2) = (span("call-1"), span("call-2"), span("call-3"));
+    assert!(
+        read_1.1 <= write.0,
+        "the write began before the read before it ended: {log:?}"
+    );
+    assert!(
+        write.1 <= read_2.0,
+        "the read after the write ran before it: {log:?}"
+    );
+    assert_eq!(
+        committed_call_order(&h.server),
+        ["call-1", "call-2", "call-3"]
+    );
+}
+
 // ---- Turn timings (#1213 stage 2) ----
 
 const PHASE_ORDER: [&str; 6] = [
