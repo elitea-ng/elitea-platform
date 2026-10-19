@@ -42,7 +42,8 @@ def code_runtime_running(ctx, params):
     sleep_s = params.get('sleep_s', 50)
     min_age, remaining = params.get('min_age_s', 3), params.get('remaining_s', 20)
     for job in _jobs(ctx):
-        if is_preparation_audience(job.get('audience')):
+        # P10 is the user's Code executing: neither a preparer nor a compiled-snapshot compile job (that is P11).
+        if is_preparation_audience(job.get('audience')) or job.get('compiled_purpose') == 'compile':
             continue
         if job.get('phase') != 'dispatched' or job.get('has_result') or not job.get('runtime_id'):
             continue

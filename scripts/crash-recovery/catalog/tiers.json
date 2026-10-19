@@ -52,7 +52,8 @@
     "CR-MK-P10-prep",
     "CR-WPK-P09",
     "BASE-rust-compiled",
-    "CR-MK-P11"
+    "CR-MK-P11",
+    "CR-SK-P11"
   ],
   "T0b-preparation": [
     "BASE-python-prepared",
@@ -69,7 +70,8 @@
   ],
   "T0b-compiled": [
     "BASE-rust-compiled",
-    "CR-MK-P11"
+    "CR-MK-P11",
+    "CR-SK-P11"
   ],
   "T0b-gap": [
     "CR-WSP-P09-lease",
