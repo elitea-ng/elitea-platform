@@ -297,7 +297,7 @@ func TestOutputServerAcceptsCanonicalInternalFailureWithoutLeakingCause(t *testi
 func TestOutputServerAcceptsIncompleteContinuationFailure(t *testing.T) {
 	frame := proto.Clone(readCorpusFrame(t, "unsupported")).(*runtimev1.ExecutionOutputFrameV1)
 	frame.GetRuntimeError().Code = runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED
-	frame.GetRuntimeError().SafeMessage = "Automatic continuation could not finish. The model response is incomplete."
+	frame.GetRuntimeError().SafeMessage = "Continuation could not finish. The model response is incomplete."
 	frame.GetRuntimeError().Retryable = false
 	rebindFramePayload(t, frame, frame.GetRuntimeError())
 	validations := &validationIngestorStub{}
@@ -307,7 +307,7 @@ func TestOutputServerAcceptsIncompleteContinuationFailure(t *testing.T) {
 	if err := server.Publish(stream); err != nil {
 		t.Fatal(err)
 	}
-	if len(stream.acks) != 2 || stream.acks[1].GetRejection() != nil || len(failures.frames) != 1 || failures.frames[0].Failure.Code != "OUTPUT_CONTINUATION_EXHAUSTED" || failures.frames[0].Failure.SafeMessage != "Automatic continuation could not finish. The model response is incomplete." {
+	if len(stream.acks) != 2 || stream.acks[1].GetRejection() != nil || len(failures.frames) != 1 || failures.frames[0].Failure.Code != "OUTPUT_CONTINUATION_EXHAUSTED" || failures.frames[0].Failure.SafeMessage != "Continuation could not finish. The model response is incomplete." {
 		t.Fatalf("incomplete continuation failure was rejected or leaked detail: acks=%v failures=%v", stream.acks, failures.frames)
 	}
 }

@@ -384,7 +384,7 @@ test('a pipeline runs from a webhook, from its schedule and from chat, and each 
  * effect — an ordinary product setting, injected into every turn in the
  * project since #946.
  *
- * IT DID NOT, ON EITHER RUNTIME, AND #971 IS WHY. A pipeline's `instructions`
+ * IT DID NOT, AND #971 IS WHY. A pipeline's `instructions`
  * field is not prose: it is the YAML graph the runtime compiles
  * (`PipelineDefinition::from_yaml(shell.instructions())`,
  * services/elitea-worker-rust/src/agents/pipeline.rs). #946's injection spliced
@@ -393,8 +393,7 @@ test('a pipeline runs from a webhook, from its schedule and from chat, and each 
  * `native_agent.invalid_input` — after admission, so the turn was stored as an
  * assistant row flagged `is_error` with EMPTY content and the user saw a failed
  * run with nothing to read. Measured four consecutive failures with a context
- * set and two consecutive passes with it emptied, same fixture, on the native
- * leg, and the same failure on the python leg.
+ * set and two consecutive passes with it emptied, same fixture.
  *
  * The fix is in `appendCurrentApplicationMemories`
  * (services/elitea-main/internal/application/agentexecution/memories.go), the

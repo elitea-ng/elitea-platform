@@ -10,7 +10,9 @@ export function buildMessageActions(readOnly: boolean, actions: {
   readonly onDeleteAnswer: ChatMessageListMessageActions['onDeleteAnswer'];
   readonly onRegenerateAnswer: ChatMessageListMessageActions['onRegenerateAnswer'];
   readonly onSubmitEditedMessage: ChatMessageListMessageActions['onSubmitEditedMessage'];
-}): ChatMessageListMessageActions {
-  if (!readOnly) return actions;
-  return { onCopyToClipboard: actions.onCopyToClipboard, onDeleteAnswer: actions.onDeleteAnswer };
+}, noRegenerate = false): ChatMessageListMessageActions {
+  if (readOnly) return { onCopyToClipboard: actions.onCopyToClipboard, onDeleteAnswer: actions.onDeleteAnswer };
+  // Regenerate is dropped (edit-and-resend stays) while the newest answer ran on a desktop.
+  if (noRegenerate) return { onCopyToClipboard: actions.onCopyToClipboard, onDeleteAnswer: actions.onDeleteAnswer, onSubmitEditedMessage: actions.onSubmitEditedMessage };
+  return actions;
 }

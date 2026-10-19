@@ -22,13 +22,15 @@
  * from the fake backend, and uses the stored transcript only for the claims
  * that really are about what the user is shown — the error messages.
  *
- * ── The python leg ─────────────────────────────────────────────────────────
- * `qtest` is an SDK toolkit family: it exists in the pinned
- * `current_toolkit_schema_snapshot.json` and has no counterpart in
- * `services/elitea-worker-rust/src/toolkits/families/`. A rust-leg run would
- * fail at toolset materialization with `unsupported_toolkit_family`, which is
- * a fact about the native worker's roadmap, not about these cases — so the
- * file requires the python leg rather than asserting that fact nine times.
+ * ── Why the cases are parked ──────────────────────────────────────────────
+ * The cases were written against the retired Python worker's SDK `qtest`
+ * wrapper. The native family (`libs/rust/agent-runtime/src/toolkits/families/
+ * qtest/`) now serves `update_test_run_status` and
+ * `upload_attachment_to_test_run`, but it admits an HTTPS base URL only
+ * (`https_base_url::parse`), and `qtest-mock` serves plain
+ * `http://qtest-mock:8096` — so the toolkit is refused at materialization on
+ * this stack. The cases are KEPT (`test.fixme`) so that serving the mock over
+ * TLS turns them on; delete the fixme then, the assertions need no leg.
  */
 import { createHash } from 'node:crypto';
 
@@ -60,9 +62,9 @@ const QTEST_PROJECT_ID = 1;
 const SEEDED_RUN = 'TR-1';
 const ABSENT_RUN = 'TR-999999';
 
-test.skip(
-  (process.env['E2E_WORKER'] ?? 'rust') !== 'python',
-  'the qtest toolkit family is SDK-only — the native worker refuses it at materialization (unsupported_toolkit_family)',
+test.fixme(
+  true,
+  'native qtest admits an https base URL only and qtest-mock serves plain http — see the header',
 );
 
 interface QtestLog {

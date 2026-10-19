@@ -34,7 +34,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { checkFloors } from './lib/gate-floor.mjs';
-import { extractCallSites, planBackfill, planCatalogueSplit, routeNewKeys } from './lib/i18n-backfill-core.mjs';
+import { ROUTE_CATALOGUES, extractCallSites, planBackfill, planCatalogueSplit, planRouteCatalogues, routeNewKeys } from './lib/i18n-backfill-core.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, '..');
@@ -166,8 +166,12 @@ function main() {
   const desktopPath = join(appRoot, 'src/entries/desktop/i18n/en.desktop.json');
   const sharedEn = JSON.parse(readFileSync(enPath, 'utf8'));
   const desktopEn = JSON.parse(readFileSync(desktopPath, 'utf8'));
-  // Every call site resolves against both: which one a key sits in is the split check's question.
-  const existingEn = { ...sharedEn, ...desktopEn };
+  const routeCatalogues = ROUTE_CATALOGUES.map((route) => ({
+    ...route,
+    keys: JSON.parse(readFileSync(join(appRoot, route.file), 'utf8')),
+  }));
+  // Every call site resolves against all of them: which one a key sits in is the split checks' question.
+  const existingEn = { ...sharedEn, ...desktopEn, ...Object.assign({}, ...routeCatalogues.map((route) => route.keys)) };
 
   const allEntries = [];
   const allFlagged = [];
@@ -216,7 +220,9 @@ function main() {
   for (const key of split.duplicated) {
     console.log(`DUPLICATE "${key}" — in both en.json and en.desktop.json`);
   }
-  const misplaced = split.toDesktop.length + split.toShared.length + split.duplicated.length;
+  const routeProblems = planRouteCatalogues(sharedEn, desktopEn, routeCatalogues);
+  for (const { key, problem } of routeProblems) console.log(`MISPLACED "${key}" — ${problem}`);
+  const misplaced = split.toDesktop.length + split.toShared.length + split.duplicated.length + routeProblems.length;
 
   if (opts.check) {
     if (addedKeys.length > 0) {

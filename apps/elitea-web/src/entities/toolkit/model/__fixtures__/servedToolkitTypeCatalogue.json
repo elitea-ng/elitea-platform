@@ -105,16 +105,14 @@
       "icon_url": null,
       "label": "Cloud AWS",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the aws toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the aws toolkit."
     }
   },
   "azure": {
     "metadata": {
       "hidden": true,
       "icon_url": "azure-icon.svg",
-      "label": "Cloud Azure",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the azure toolkit."
+      "label": "Cloud Azure"
     }
   },
   "azure_search": {
@@ -129,18 +127,14 @@
       ],
       "hidden": true,
       "icon_url": null,
-      "label": "Azure Search",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the azure_search toolkit."
+      "label": "Azure Search"
     }
   },
   "bigquery": {
     "metadata": {
       "hidden": true,
       "icon_url": "google.svg",
-      "label": "Cloud GCP",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the bigquery toolkit."
+      "label": "Cloud GCP"
     }
   },
   "bitbucket": {
@@ -207,7 +201,9 @@
       ],
       "hidden": true,
       "icon_url": "data-analysis.svg",
-      "label": "Data Analysis"
+      "label": "Data Analysis",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the data_analysis toolkit."
     }
   },
   "database": {
@@ -226,7 +222,7 @@
       "icon_url": "delta-lake.svg",
       "label": "AWS Delta Lake",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the delta_lake toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the delta_lake toolkit."
     }
   },
   "docx": {
@@ -239,11 +235,8 @@
         "word",
         "office automation"
       ],
-      "hidden": true,
       "icon_url": null,
-      "label": "DOCX",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker does not support the docx toolkit; only the Rust worker serves it."
+      "label": "DOCX"
     }
   },
   "elastic": {
@@ -273,9 +266,7 @@
     "metadata": {
       "hidden": true,
       "icon_url": "google.svg",
-      "label": "Cloud GCP",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the gcp toolkit."
+      "label": "Cloud GCP"
     }
   },
   "github": {
@@ -344,11 +335,18 @@
   },
   "imagegen": {
     "metadata": {
-      "label": "ImageGen",
       "categories": [
         "media"
       ],
-      "hidden": false
+      "extra_categories": [
+        "image",
+        "generation",
+        "dall-e",
+        "art"
+      ],
+      "hidden": false,
+      "icon_url": null,
+      "label": "ImageGen"
     }
   },
   "jira": {
@@ -384,7 +382,7 @@
       "icon_url": null,
       "label": "Cloud Kubernetes",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the k8s toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the kubernetes toolkit."
     }
   },
   "localgit": {
@@ -393,7 +391,7 @@
       "icon_url": null,
       "label": "Local GIT",
       "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the localgit toolkit."
+      "unavailable_reason": "This deployment's agent worker does not support the localgit toolkit."
     }
   },
   "mcp": {
@@ -535,9 +533,11 @@
         "sandbox",
         "code execution"
       ],
-      "hidden": false,
+      "hidden": true,
       "icon_url": "sandbox.svg",
-      "label": "Python Sandbox"
+      "label": "Python Sandbox",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the sandbox toolkit."
     }
   },
   "service_now": {
@@ -648,7 +648,9 @@
     "metadata": {
       "hidden": true,
       "icon_url": null,
-      "label": "VectorStore"
+      "label": "VectorStore",
+      "unavailable": true,
+      "unavailable_reason": "This deployment's agent worker does not support the vectorstore toolkit."
     }
   },
   "xlsx": {
@@ -661,11 +663,8 @@
         "excel",
         "office automation"
       ],
-      "hidden": true,
       "icon_url": null,
-      "label": "XLSX",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker does not support the xlsx toolkit; only the Rust worker serves it."
+      "label": "XLSX"
     }
   },
   "xray_cloud": {
@@ -686,9 +685,7 @@
     "metadata": {
       "hidden": true,
       "icon_url": null,
-      "label": "Yet Another Gmail",
-      "unavailable": true,
-      "unavailable_reason": "This deployment's agent worker image does not include the dependencies of the yagmail toolkit."
+      "label": "Yet Another Gmail"
     }
   },
   "zephyr": {

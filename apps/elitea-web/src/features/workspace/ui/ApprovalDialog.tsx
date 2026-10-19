@@ -5,6 +5,10 @@
  * Deny is the focused button and Escape denies: the safe answer is the one
  * the keyboard reaches without thought. The backdrop does not dismiss, since
  * an accidental click must not answer for the user.
+ *
+ * The `continue` kind (the run used its steps: go on?) is not a modal: it is
+ * a compact card the page puts in the transcript, under what the agent did.
+ * It is asked every time and never remembered, so it offers no "always".
  */
 import { useEffect, useRef } from 'react';
 
@@ -44,6 +48,44 @@ function quoteArg(arg: string): string {
   return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`;
 }
 
+/** "The agent used its N steps": continue for N more, or stop here. */
+function ContinueCard({ request, respond }: { request: ApprovalRequestPayload; respond: (decision: ApprovalDecision) => void }): React.JSX.Element {
+  const steps = request.steps ?? 0;
+  const titleId = `workspace-continue-${request.request_id}`;
+  return (
+    <Box
+      component="section"
+      aria-labelledby={titleId}
+      data-testid="approval-continue-card"
+      sx={(theme: Theme) => ({
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        padding: 1.5,
+        border: `1px solid ${theme.vars.palette.divider}`,
+        borderRadius: theme.vars.shape.radiusMd,
+      })}
+    >
+      <Typography id={titleId} variant="labelMedium">
+        {t('workspace.continue.title', 'The agent used its {{n}} steps', { n: steps })}
+      </Typography>
+      {request.detail !== '' && (
+        <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' }}>
+          {request.detail}
+        </Typography>
+      )}
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Button size="small" variant="contained" onClick={() => respond('allow_once')}>
+          {t('workspace.continue.more', 'Continue for {{n}} more steps', { n: steps })}
+        </Button>
+        <Button size="small" onClick={() => respond('deny')}>
+          {t('workspace.continue.stop', 'Stop here')}
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
 export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogProps): React.JSX.Element | null {
   const denyRef = useRef<HTMLButtonElement>(null);
   const requestId = request?.request_id;
@@ -53,6 +95,7 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
   }, [requestId]);
   if (request === undefined) return null;
   const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
+  if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
   return (
     <Dialog
       open

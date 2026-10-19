@@ -3,6 +3,8 @@ package runtimecomposition
 import (
 	"context"
 	"fmt"
+	"time"
+
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
@@ -10,7 +12,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"time"
 )
 
 func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator, catalogue *CurrentToolkitCatalogueSnapshot, capability *WorkerToolkitCapability, producer *commandbus.ToolkitAvailableToolsProducer, policy repos.ToolkitAvailableToolsDispatchPolicy, artifacts *repos.ToolkitDiscoveryArtifactRepository) (*currentToolkitDiscoveryRuntime, error) {

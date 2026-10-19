@@ -132,6 +132,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
@@ -142,12 +144,31 @@ inside the folder.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
+| `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
-| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
+| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
+| `turn_commit_retry` | `{execution_id}` | `null` once the turn's failed commit (`commit_failed`) is saved: sent again with the same execution id and body, in its conversation's order. Rejects `commit_unknown` when the host keeps no failed commit of that execution (it was saved, the app restarted, or the session signed out), or with the commit's refusal, which is also sent as another `commit_failed`. |
+
+**One round trip before the first token.** The host keeps, for the app's
+session only (never on disk; dropped on sign-out, a new sign-in or another
+deployment), the last resolved agent version per project, agent and
+version, with its `ETag`, and each conversation's answering participant and
+UUID per agent version. A cold turn reads the version and the conversation
+together. A warm one admits the cached version at once and sends the
+local turn's start right away, on the cached participant, with the
+version's revalidation (`If-None-Match`; a `304` costs nothing) and the
+conversation's re-read (its message count decides the session's seed)
+beside it. A changed version is admitted again before the model's first
+request; a refused or unreadable one (`403`, `404`, a local refusal) stops
+the turn with its code before any model request, and its execution
+expires on the server. A participant that changed, or a start the platform
+refuses for it (`404`, `422`), is started again on the fresh one, once.
+The start itself is never cached: its memory recall is computed fresh at
+every turn.
 
 `agent_turn_start` resolves the agent version, checks it, and starts the
 local turn on the platform before it resolves; the run then continues in
@@ -315,7 +336,7 @@ never ran with `turn_unknown`.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `thread_history` | `{workspace_id, conversation_id}` | `{turns: StoredTurn[]}` — the turns of that thread the host recorded for the signed-in account, oldest first. `[]` when it has none (the thread ran on the web or another machine, or before this version) or runs without a store. `conversation_id` is the id the turns started with or the conversation's UUID. Rejects `invalid_request`, `not_signed_in`, `storage`, or the platform's code when the user lookup fails. |
-| `thread_history_delete` | `{workspace_id, conversation_id}` | `{deleted: number}` — forgets that thread's stored turns (the signed-in account's only). The conversation on the server is untouched. |
+| `thread_history_delete` | `{workspace_id, conversation_id}` | `{deleted: number}` — forgets that thread's stored turns (the signed-in account's only) and the agent's session of that conversation (below). The conversation on the server is untouched. |
 
 ```ts
 type StoredTurn = {
@@ -331,6 +352,7 @@ type StoredTurn = {
   events_truncated: boolean;        // the turn outgrew the per-turn cap
   state: "done" | "running" | "interrupted"; // interrupted: never ended (the app quit)
   live: boolean;                    // turn_changes / checkpoint_restore still answer for it
+  origin: "local" | "cloud";        // cloud: imported when the thread came back (ADR-0034)
 };
 ```
 
@@ -360,6 +382,48 @@ and the conversation: another account or deployment never reads them.
 **Sign-out keeps the history** (it is keyed by user, so the next sign-in of
 the same account sees it again, and another account does not);
 `workspace_remove` deletes the workspace's rows for every account.
+
+## Agent session memory (`src/sessions.rs`, `src/seed.rs`)
+
+Every turn of a Local work thread sees the earlier ones: the model is sent
+the thread's user and assistant messages, tool calls and tool results, in
+order. The host keeps them as one adk **session** per conversation in
+`sessions.sqlite` in the app data directory (the runtime's `StateStore`;
+owner-only like `threads.sqlite`: `0700` directory, `0600` file created before
+SQLite opens it, no symlink followed, a symlinked, foreign or group/world
+accessible file refused, WAL). Nothing in this section is an agent-facing
+command except `session_info`.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `session_info` | `{conversation_uuid}` | `{turns, bytes, seeded_from_server} \| null` — the signed-in account's session of that conversation: how many turns it holds, its size in bytes, and whether it agrees with the server conversation. `null` without one (or without a store). Rejects `invalid_request`, `not_signed_in`, `storage`. For the Doctor and the context meter. |
+
+* **The server conversation is canonical; the session is a cache.** Keyed by
+  `sha256(deployment origin, user id, conversation UUID)`, never by workspace
+  or numeric id: another account or deployment never reads another's session.
+  Rows are adk `Event` JSON (plain `serde_json`) tagged with the turn's
+  execution id and `executed_by` (`desktop` | `cloud_executor`).
+* **Seeding.** A session that is missing, empty, marked for re-seeding, or
+  whose `server_cursor` (the conversation's message-group count when it last
+  agreed) differs from the conversation detail every turn already reads, is
+  rebuilt from the server before the turn: `GET conversation?messages_limit=200`
+  (a conversation with no messages costs no request), the answers' tool steps
+  from `message_traces` / `message_trace` (the newest 128), folded into events
+  (`seed.rs`). Answers whose meta says `executed_by: cloud_executor` keep that
+  tag. A take-back (`handoff_apply`, or a re-sent release) marks the thread's
+  session for re-seeding so the next local turn folds the cloud's turns in.
+* **Bounds.** A tool response is stored cut at 64 KiB (`…[truncated N bytes;
+  re-run or re-read]`); a session holds 32 MiB, past which the oldest whole
+  turns go (never half a call/response pair) and it re-seeds next time.
+* **A cancelled turn leaves nothing in the session; a turn the server refused
+  to save marks it for re-seeding.** A different `path_deny` drops the stored
+  tool responses' bodies and re-seeds without them.
+* **Lifecycle.** Deleted with the thread (`thread_history_delete`), with the
+  workspace (`workspace_remove`) and on a wipe (`host_wipe`); kept on a plain
+  sign-out. If the file is refused the turn still runs, seeded from the server
+  each time, and a warning is logged. The Doctor check `sessions` reports an
+  untrusted, loose, damaged or newer-schema file; `sessions.tighten` and
+  `sessions.move_aside` (moved aside, never deleted) repair it.
 
 ## Local index (`src/index.rs`, `libs/rust/local-index`)
 
@@ -459,6 +523,230 @@ without approval and in plan mode too. An answer from a build that may be
 out of date starts with a one-line `Note:`. A toolkit tool never takes one
 of these names (it gets a `_2` suffix), whether or not the index is on.
 
+## Cloud handoff (`src/handoff.rs`, ADR-0034)
+
+Send a Local work thread to the cloud executor and take it back. The
+folder work is `elitea-local-tools`' `handoff` module (every git call
+through its hardened git); the bytes move through `elitea-workspace-store`
+on the app's one HTTP client with the native token. Rejections are
+`HandoffError = { code, message, details }` (`details` is `null` unless
+noted). `conversation_uuid` is the server conversation's UUID.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `handoff_preview` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `Preview` — what a send would transfer under the effective policy and the folder's settings; sends nothing |
+| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean}` | `{handoff_id, state, epoch, files, excluded, included, env_vars}` — progress on `handoff://event` |
+| `handoff_cancel` | `{conversation_uuid}` | `{cancelled: boolean}` — stops a running send; after begin the host cancels the handoff on the server (`DELETE workspace_handoff`), so the thread is `LOCAL` again; the send rejects `handoff_cancelled` |
+| `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean` |
+| `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
+| `handoff_reclaim` | `{conversation_uuid}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs |
+| `handoff_preflight` | `{conversation_uuid}` | `{preflight_id, outcome: "fast_path" \| "conflicts", changed_paths, conflict_paths, skipped_paths, cloud_turns, modes, files: ChangedFile[], diffs_truncated: boolean}` |
+| `handoff_apply` | `{preflight_id, mode: "apply" \| "worktree" \| "discard"}` | `{applied, outcome: "applied" \| "worktree" \| "discarded", checkpoint_id, worktree_path, branch, imported_turns, released, release_refused: string \| null, copied: string[]}` |
+| `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
+| `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
+| `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[], env_notice: string \| null}` |
+| `handoff_settings_set` | `{workspace_id, settings: FolderHandoffSettings}` | as `handoff_settings_get`; `invalid_request` for a bad pattern, an include that escapes the folder, or an env name that is not a variable name |
+
+```ts
+type ExcludeReason = "platform" | "project" | "user" | "eliteaignore" | "path_deny" | "leave_on_laptop" | "not_a_file";
+type Finding = { path: string; line: number; rule: string }; // never the matched text
+type Preview = {
+  files: number; bytes: number; unpacked_bytes: number;
+  // includable: the policy allows including it and it is not path_deny, left on the laptop or not a file
+  excluded: { path: string; reason: ExcludeReason; tracked: boolean; includable: boolean }[];
+  included: { path: string; reason: ExcludeReason }[];  // sent because the folder's settings include them
+  findings: Finding[];          // outside included files: they block the send
+  include_findings: Finding[];  // in included files: warnings; the send needs confirm_includes
+  has_upstream: boolean;
+  project_workspace_bytes_left: number | null; // from the policy route; null when the server has none
+  caps: { violations: { cap: string; limit: number; actual: number; path: string | null }[];
+          largest: { path: string; bytes: number }[] };
+  shadow: boolean; // the folder is not a repository: a shadow git directory in the app data is used
+  policy: HandoffPolicy;
+  // null when the policy has no env harvest
+  // notice: the login shell could not be read (failed, timed out); nothing is offered then
+  env: { offered: EnvVar[]; selected: string[]; missing: string[]; vars: number; bytes: number; over_limit: boolean;
+         notice: string | null } | null;
+};
+type HandoffPolicy = {
+  source: "server" | "defaults"; // "defaults": the server has no policy route (404, an older server); the ADR's defaults are shown
+  exclusions: { platform: string[]; project: string[]; user: string[]; path_deny: string[] };
+  allow_user_include: boolean;
+  env_harvest: boolean;
+  env_limits: { max_vars: number; max_bytes: number };
+  limits: { max_segment_bytes: number; max_file_bytes: number; max_files: number; max_unpacked_bytes: number;
+            project_workspace_bytes_left: number | null };
+};
+type EnvVar = { name: string; length: number }; // the value is never sent to the UI
+type FolderHandoffSettings = { exclude_patterns: string[]; include: string[]; env_names: string[] };
+type ChangedFile = { path: string; status: "added" | "modified" | "deleted"; added: number; removed: number; diff: string };
+type HandoffEvent = { conversation_uuid: string;
+  phase: "snapshot" | "scan" | "bundle" | "begin" | "upload" | "publish" | "complete" | "cancelled" | "error";
+  done: number; total: number; message: string | null };
+```
+
+- **Effective policy before begin.** Preview, send and the settings read
+  `GET workspace_handoff_policy/prompt_lib/{project}` (contract §6.1): the
+  caps, the quota left, the exclusions, `allow_user_include`, `path_deny`
+  and the env policy. A 404 (an older server) falls back to the ADR's
+  defaults (`policy.source: "defaults"`); any other failure rejects. The
+  server's `exclusions` are one merged list; patterns of the ADR's default
+  list are shown as platform, the rest as project, unless the server sends
+  `exclusions_platform` / `exclusions_project`. `enabled: false` rejects
+  `cloud_handoff_disabled`. The begin answer's `limits` stay authoritative.
+- **Folder settings.** Per workspace, in the app data
+  (`handoff/settings/<workspace id>.json`, owner-only), never in the folder:
+  the person's exclusion patterns (matched at any depth; a leading `/`
+  anchors at the top), explicit includes (an exact path, or a pattern
+  anchored at the top) and the selected env variable NAMES (values are read
+  again at send and never stored, logged, emitted or recorded).
+- **Explicit include.** Only when `allow_user_include`; `path_deny` is never
+  includable. Included files are scanned: their findings
+  (`include_findings`) do not block, but `handoff_send` rejects
+  `include_confirm_required` (`details.findings`) unless
+  `confirm_includes: true`, which the UI passes only after the person
+  confirmed for this send. The begin call sends `included_excluded`; the
+  handoff commit carries one `Elitea-Included: ./<path>` trailer per file.
+- **Env harvest.** Only when `env_harvest`. The source is the person's
+  login-shell environment, read once per preview, settings read or send the
+  way editors read it (`$SHELL -l -i -c` printing `env -0` between markers,
+  from the home directory, no stdin, 10 s timeout; `/bin/zsh` on macOS or
+  `/bin/bash` when `$SHELL` is unset) and merged over the desktop process's
+  environment. A shell that fails or times out offers nothing and sets
+  `notice`; it is not an error. Local `run_command` is unchanged. The names
+  are filtered by `env_deny` (patterns, `*` wildcard) and, when set,
+  `env_allow`; nothing is preselected. At most `env_limits.max_vars`
+  variables and `max_bytes` (names plus values); over that the send rejects
+  `env_too_large`. The values go only into the begin call's `env`.
+- **Policy.** Preview and send need the device policy's `local_work.allowed`
+  and `local_work.cloud_handoff` (`cloud_handoff_disabled`). The server
+  checks the platform ceiling and the project setting at begin.
+- **Cancel.** A failure after begin (the begin answer's caps, an upload or
+  publish failure, `handoff_cancel`) cancels the handoff on the server
+  (`DELETE workspace_handoff`, accepted in `HANDING_OFF`, contract §6.3), so
+  the thread is `LOCAL` again at once.
+- **Send.** The snapshot is the checkpoint set (tracked plus untracked,
+  not ignored) built in a temporary index: the folder's index, `HEAD`,
+  stash and working tree are not changed. The mandatory exclusions,
+  `path_deny`, `.eliteaignore` and `leave_on_laptop` apply to tracked files
+  too. History mode `none`: an orphan base, an orphan upstream (the remote
+  URL without credentials), the snapshot. A secret finding rejects with
+  `secret_found` (`details.findings`), before any request; there is no
+  override: leave the file on the laptop or edit it. A cap rejects with
+  `handoff_too_large` (`details` = `caps`), checked against the defaults
+  before begin and against the begin response's `limits` before upload.
+  When the project's remaining cloud storage (`project_workspace_bytes_left`)
+  is the ONLY cap over, the code is the server's `workspace_quota_exceeded`
+  instead, with the same `caps` plus `details.bytes_left` and
+  `details.bytes_needed`; any other cap, alone or with the quota, stays
+  `handoff_too_large`. A publish that meets a busy thread (`409
+  thread_busy`) is sent again unchanged by the store client for up to 30 s
+  (it is never a conflict); after that the error code is `thread_busy`.
+  The workspace is held (`workspace_busy`) while a send runs. Server codes
+  pass through (`local_turn_in_progress`, `handoff_in_progress`,
+  `thread_executor_is_cloud`, `workspace_quota_exceeded`,
+  `history_mode_not_allowed`, …). A folder inside a repository but not its
+  top level is refused (`handoff_unsupported`), so is a sha256 repository
+  (`unsupported_object_format`).
+- **Read-only.** While a thread is not `LOCAL`, `agent_turn_start` with its
+  UUID rejects `thread_executor_is_cloud` and `handoff_status` answers
+  `read_only: true`; the UI shows the transcript read-only.
+- **Take back.** `handoff_reclaim`, then `handoff_preflight` once the state
+  is `RECLAIMING` (else `handoff_not_reclaimed`). The preflight verifies the
+  segment (`integrity_failed` for a tampered one) and writes nothing to the
+  folder or any ref. `fast_path`: the folder and `HEAD` are as at send;
+  `apply` writes the cloud's changed paths as uncommitted changes (`HEAD`
+  and the index untouched), keeps the cloud commits on
+  `elitea/cloud/<first 8 of the UUID>` and takes a checkpoint first
+  (`checkpoint_id`, for `handoff_undo`). `conflicts`: only `worktree` (the
+  cloud tip beside the folder, `<folder>-elitea-cloud-<short>`) and
+  `discard` are offered (`modes`); the worktree gets the folder's excluded
+  files (`.env`, keys; `copied`) and opens as a workspace (host git trusts a
+  linked worktree of an open workspace). `files` are the per-file diffs of
+  what the take-back writes (256 KiB of diff text at most, text files only;
+  `diffs_truncated`). `handoff_apply` refuses with
+  `folder_changed_since_preflight` when the folder moved after the
+  preflight. Excluded paths, symlinks and submodule entries are never
+  deleted or overwritten (`skipped_paths`); a file the cloud created that
+  the exclusions match is written only where no local file exists.
+- **Release and history.** `handoff_apply` releases the thread and imports
+  its cloud turns into the thread history (`StoredTurn.origin: "cloud"`,
+  changed files from the cloud commits' diffs). A release the server did
+  not acknowledge (`released: false`) is kept and sent again by the next
+  `handoff_status`; until then the thread stays read-only. A release the
+  server refuses for good (`release_refused`: `handoff_erased` when the
+  cloud copy was erased meanwhile, `stale_epoch`, `handoff_not_found`) is
+  not kept: the thread follows the server's state (`LOCAL` after an erase,
+  so `released` is `true` and the cloud turns are still imported). The
+  release carries the epoch the preflight read, so a take-back asked while
+  a cloud turn ran (202 `reclaim_pending`, `RECLAIMING` one epoch later)
+  releases with the later epoch.
+- **Records.** What take-back needs is kept in the app data
+  (`handoff/threads/<uuid>.json`, owner-only); a shadow repository in
+  `handoff/shadow/`. Nothing is written into the folder but the take-back's
+  own files.
+- **Store URLs.** The upload grant's `put.headers` are all sent (on S3 and
+  RustFS they bind `x-amz-checksum-sha256`, so the store refuses a PUT
+  without it or with other bytes). Main answers its streaming facade and
+  the multipart completion as origin-relative paths (`/api/v2/…`); they
+  are resolved against the deployment and carry the bearer. A presigned URL
+  on another host never does.
+
+### Cloud handoff: live run
+
+`src/handoff_live_tests.rs` runs this host against a real elitea-main
+(ignored by default). It covers policy → preview → send of a repository
+with staged, unstaged, untracked, ignored, excluded (`.env`, a project
+pattern) and explicitly included files and a harvested env variable; the
+state and the web's take-back request (its notification row); a cloud turn;
+take-back (reclaim, preflight with diffs, apply, release, import into the
+thread history, undo); take-back while a cloud turn runs; cancel during
+`HANDING_OFF`; erase in `CLOUD_IDLE`; an erase that beats the release; a
+stale epoch; and the quota. It needs:
+
+- elitea-main with a database (migrations applied) and an S3-compatible
+  store whose bucket reports default encryption (or the operator
+  attestation for a store that cannot report it); the platform
+  `cloud_executor` section enabled with `env_harvest` and
+  `allow_user_include`, the native client policy's `local_work_allowed` and
+  `local_work_cloud_handoff`, and a project `cloud_executor` setting with
+  `{"enabled": true, "env_harvest": true, "exclusions_add": ["secrets/**"]}`;
+- a native access token (`elnat_…`) of a project member with
+  `models.chat.messages.create`, and optionally a second member's;
+- `ELITEA_HANDOFF_LIVE_SIM`: the cloud-turn simulator, a program that plays
+  the cloud executor until the worker serves workspace turns. Its source is
+  `services/elitea-main/cmd/handoff-live-cloudturn/main.go`: it drives Main's
+  `workspacehandoff` and `workspacestore` services, which are `internal`
+  packages, so it has to sit inside the elitea-main module (as the other
+  `cmd/` tools do). It is behind the `handoff_live` build tag, so
+  `go build ./...`, vet, lint and CI never compile it. Build it from a tree
+  that has the handoff server (PR #1294, or main once it merged):
+
+  ```sh
+  cd services/elitea-main && go build -tags handoff_live -o /tmp/cloudturn-sim ./cmd/handoff-live-cloudturn
+  ```
+
+  (Without the server packages the tagged build fails on the imports; that
+  is why the tag exists on this branch.) `-project P -conversation UUID
+  -bundle FILE -commit SHA [-hold FILE]` writes a question and an answer,
+  starts the cloud turn on the answer, uploads and publishes
+  `refs/elitea/cloud` as `cloud_executor` and ends the turn (after FILE
+  exists, with `-hold`), printing `{state, epoch, cloud_sha, seq,
+  execution_id, answer_uuid, answer_meta}`; `-sql QUERY` prints rows as a
+  JSON array of arrays of strings. It runs with Main's `DATABASE_URL` and
+  S3 storage environment (`STORAGE_BACKEND=s3`, `STORAGE_CONTAINER`,
+  `S3_*`).
+
+```sh
+ELITEA_HANDOFF_LIVE_URL=http://127.0.0.1:39880 ELITEA_HANDOFF_LIVE_PROJECT=1 \
+ELITEA_HANDOFF_LIVE_TOKEN=elnat_… ELITEA_HANDOFF_LIVE_OTHER_TOKEN=elnat_… \
+ELITEA_HANDOFF_LIVE_SIM=/path/to/cloudturn-sim \
+cargo test --lib handoff::tests::live -- --ignored --test-threads=1
+```
+
+The quota case narrows the project setting to `max_project_workspace_gb: 0`
+for one send and restores it.
+
 ## App and native shell (`src/platform.rs`, `src/local_commands.rs`)
 
 | Command | Arguments | Result |
@@ -472,14 +760,15 @@ of these names (it gets a `_2` suffix), whether or not the index is on.
 
 ```ts
 type Check = {
-  id: string;            // credentials, dir.config, dir.data, dir.logs, history, workspaces,
+  id: string;            // credentials, dir.config, dir.data, dir.logs, history, sessions, workspaces,
                          // index.<workspace id> (one per workspace with a local index),
                          // deployment, session, local_work, pending_revokes
   title: string;
   status: "ok" | "warn" | "fail";
   message: string;       // for a person; never a secret
   fix_id?: string;       // credentials.tighten | credentials.move_aside | dir.tighten.{config,data,logs}
-                         // | history.tighten | history.move_aside | workspaces.drop_missing
+                         // | history.tighten | history.move_aside | sessions.tighten
+                         // | sessions.move_aside | workspaces.drop_missing
                          // | workspaces.move_aside | revokes.retry
                          // | index.tighten:<workspace id> | index.move_aside:<workspace id>
                          // | index.rebuild:<workspace id>
@@ -592,8 +881,9 @@ for them.
 
 ## Events
 
-Three event names, all emitted to the `main` window only: `app://command`
-(above), `agent://event` and `index://event`. The webview may listen
+Four event names, all emitted to the `main` window only: `app://command`
+(above), `agent://event`, `index://event` and `handoff://event` (Cloud
+handoff, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:
@@ -625,29 +915,93 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[]}` — `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `approval_request` | `{request_id, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` |
+| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
 | `error` | `{code, message}` |
-| `done` | `{committed: boolean, conversation_id, message_ids: string[], changed_files: number}` |
+| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
+| `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`)* →
-`status` `committing` → `status` `done` | `error` → `done`. A cancelled turn
-ends `status` `cancelled` → `done` with `committed: false`; nothing is
+`status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
+ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its
-`error` event comes before `status` `committing`. `done` is always the last
-event of a started turn, and the host holds the workspace (`workspace_busy`)
-until it is sent, so the UI is busy until `done`, not until `error`.
+`error` event comes before `status` `error`. `done` ends the turn for the
+UI, and the host holds the workspace (`workspace_busy`) until it is sent,
+so the UI is busy until `done`, not until `error`.
+
+**The commit after `done`.** `done` is sent as soon as the run ends; the
+turn's commit then runs in its conversation's lane (one at a time per
+conversation, in order). The next turn of that conversation starts (its
+`local_turn` start, whose memory recall reads the committed conversation)
+only once the previous commit settled, so it waits in `status` `starting`
+while one is still being saved. A commit that fails is retried with backoff
+on the same execution id and body (`409 local_turn_already_committed`
+counts as saved); after the last attempt (or at once for a refusal a retry
+cannot change, such as `410` or `403`) the host sends `commit_failed`
+(the turn's last event) and keeps the body in memory until the app quits.
+`agent_turn_status` answers the settled state: its `done` payload carries
+`committed: true, commit: "committed"`, or `commit: "failed"`. A quit with a
+commit still running or failed is logged; that execution expires on the
+server, as before.
+The read-only, concurrency-safe calls of one model step (`read_file`,
+`list_tree`, `search_files`, `read_document`, git reads, the index tools)
+run together, at most 8 at once, before the step's other calls; writes,
+commands and remote toolkit calls then run one at a time in the model's
+order, so at most one tool `approval_request` is open at a time. Their
+`tool_call` and `tool_result` events interleave: match a result to its call
+by `call_id`, never by position. The commit lists the steps in the model's
+call order, whatever order they ran in.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.
 
+**Timings.** A `status` event carries, as `timings`, every phase of the
+turn measured since the previous `status` (absent when none was):
+
+```ts
+type Timing = { phase: "resolving" | "participant" | "starting" | "first_token" | "tools" | "committing"; ms_since_turn_start: number; phase_ms: number };
+```
+
+`resolving` is the agent version's read (`resolved_version`; on a warm
+turn its revalidation, beside the start), `participant` the conversation
+lookup (the answering participant and UUID; on a warm turn its re-read,
+beside the start), `starting` from `status` `starting` until the local turn
+is started and its session ready (a seed included), `first_token` from `status` `running` to the model's first
+streamed chunk, `tools` the wall time any tool call ran (overlapping calls
+counted once), `committing` the commit with its retries (it runs after
+`done`, so it is in the log line only, never on a `status`). `ms_since_turn_start` is
+when the phase ended, from `agent_turn_start`. A phase before the first
+token that takes longer than 2 s is logged as a warning, and each turn
+logs one line with all of them (`local turn timings: resolving=…ms …`):
+what to compare before and after a change.
+
+**Step limit.** Each run of the agent takes at most its step limit of
+model steps: the workspace's own setting (`workspace_agent_settings_set`)
+when the person set one, else the agent's `meta.step_limit`, else 100; never
+more than 200. The workspace setting wins because it is the person's choice
+on this machine, while an agent's value is often the platform's default
+(an agent created without one is stamped 25).
+When a run ends because it used them (adk's own end of the run, not a
+count), the host asks `approval_request {kind: "continue", title: "The agent
+used its N steps", detail: <the start of the agent's last text>, steps: N,
+can_remember: false}`. It is asked through the prompt only: no workspace
+rule or remembered choice answers it, and `allow_always` answers once.
+`allow_once` / `allow_always` continue: the same agent runs again on the same
+session, within the same execution, from the host's prompt "Continue from
+where you stopped." (`status` `running` with `continued`), at most 3 times a
+turn. `deny`, no answer within 10 minutes, or a fourth limit end the turn
+normally: what happened is committed as one turn (its `hitl_exchanges` hold
+each question as kind `continue`), and `status` `done` carries
+`note: "step_limit_reached"`. Cancelling while the question is open cancels
+the turn.
+
 `message_ids` are the question's and the answer's message UUIDs, in that
-order, when committed. `approval_request.can_remember` is true when
+order: the messages the commit writes. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
 file change); otherwise `allow_always` answers once and the UI does not
 offer it. It is false for a `run_command` that would run unconfined,

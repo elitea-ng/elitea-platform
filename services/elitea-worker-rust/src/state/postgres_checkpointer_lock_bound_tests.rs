@@ -2,14 +2,11 @@
 //! within the shared lock bound instead of waiting forever.
 
 use std::collections::HashMap;
-use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use adk_rust::graph::Checkpoint;
 use chrono::Utc;
-use sqlx::ConnectOptions as _;
-use sqlx::postgres::PgConnectOptions;
 
 use super::{
     APPLICATION_CAPABILITY_ID, CheckpointLimits, CheckpointWriterAuthority,
@@ -18,6 +15,10 @@ use super::{
 use crate::state::TestStateWriterLease;
 use crate::state::postgres_session::WRITER_LOCK_TIMEOUT;
 use crate::state::postgres_session_tests::IsolatedPostgres;
+
+/// The client may start timing after the server's lock wait began (see the
+/// lock-timeout assertions below).
+const LOCK_WAIT_CLOCK_SKEW: Duration = Duration::from_millis(50);
 
 const CHECKPOINT_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0001_agent_graph_checkpoints.sql");
@@ -75,7 +76,7 @@ async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bo
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(
-            PgConnectOptions::from_str(&url)
+            crate::test_pg::connect_options(&url)
                 .expect("parse test URL")
                 .disable_statement_logging()
                 .database(&database.database_name),
@@ -117,7 +118,17 @@ async fn checkpoint_write_behind_a_stalled_writer_fails_typed_within_the_lock_bo
         matches!(source, sqlx::Error::Database(database) if database.code().as_deref() == Some("55P03")),
         "the failure is PostgreSQL's lock timeout, not another storage error"
     );
-    assert!(waited >= WRITER_LOCK_TIMEOUT, "{waited:?}");
+    // PostgreSQL's lock_timeout runs on the SERVER, from when the statement
+    // starts waiting for the lock; this Instant starts on the client a little
+    // later (the request still has to reach the server). So the client can
+    // measure a few microseconds UNDER the timeout while the server waited
+    // all of it (seen in CI: 9.9992 s against 10 s). The 55P03 check above is
+    // what proves the lock timeout fired; this bound only checks the write
+    // was not refused early, so it allows the client/server clock skew.
+    assert!(
+        waited + LOCK_WAIT_CLOCK_SKEW >= WRITER_LOCK_TIMEOUT,
+        "refused early: waited {waited:?}, lock timeout {WRITER_LOCK_TIMEOUT:?}"
+    );
     holder.rollback().await.expect("release holder");
 
     checkpointer

@@ -28,7 +28,7 @@
  * That clause is gone from all four, and the content is INJECTED instead. The
  * start path reads the project's row and splices it onto the turn's
  * `instructions` as a delimited `<project_context>` block — the same field
- * recalled memories ride, which both workers already fold into the system
+ * recalled memories ride, which the worker already folds into the system
  * prompt (`internal/application/agentexecution/projectcontext.go`, and the
  * native runtime's `assembly.rs`). The per-agent "Ignore Project Context"
  * toggle is consulted there, off the frozen version's own `meta`. A delegated
@@ -44,13 +44,6 @@
  * carried, which is the only server-side, model-independent evidence of what
  * the runtime assembled. Same technique as `chat.longTermMemory.spec.ts` and
  * `chat.variables.spec.ts`.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * THE LEG CONTRACT: BOTH (rust and python)
- * ─────────────────────────────────────────────────────────────────────────────
- * Nothing here is worker-shaped. The gate is in elitea-main's admission SQL,
- * upstream of either runtime, and the assertion past it reads the system
- * prompt out of the shared `application` field both workers decode.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE ROW IS PROJECT-WIDE, AND IT IS RESTORED IN A `finally`
@@ -178,7 +171,7 @@ async function openConversation(
 
   // BOTH participant kinds. A conversation POSTed straight to the API carries
   // none, and its first send 422s at admission because the resolver joins on
-  // them — see `chat.pyodide-sandbox.spec.ts`'s header for the measurement.
+  // them (`ResolveCurrentAdhocTurn` returns zero rows).
   const participants = await page.request.post(
     `${API}/elitea_core/participants/prompt_lib/${projectId}/${conversationId}`,
     {
@@ -464,21 +457,19 @@ test('Project Context is omitted for a sub-agent with Ignore enabled', async ({ 
     await clearMockLlmJournal(page);
     // THE DELEGATION IS SCRIPTED, NOT HOPED FOR. The offline mock echoes the
     // last user message and chooses nothing, so a plain question produces one
-    // hop and no child turn — which is exactly how this test failed on BOTH
-    // legs (python AND rust, run 35321502745: "the delegation never produced a
-    // second model hop"). `[[mock:call_tool …]]` is the repository's existing
+    // hop and no child turn — which is exactly how this test once failed
+    // (run 35321502745: "the delegation never produced a second model hop"). `[[mock:call_tool …]]` is the repository's existing
     // answer to that (`chat.delegation.spec.ts`'s header carries the full
     // argument): the marker scripts the call the model emits and the runtime
     // then does the delegating for real — resolve, compile, run the child as a
     // turn of its own against the same mock, feed the result back. Only the
     // parent model's DECISION is faked; the hop, and therefore the child's own
-    // system prompt, is real. The tool name is leg-aware — the native runtime
-    // binds `elitea_agent_<id>_v_<version>` and the SDK worker the agent's
-    // name — which `agentAsToolName` resolves from `E2E_WORKER`.
+    // system prompt, is real. The runtime binds the child as
+    // `elitea_agent_<id>_v_<version>` (`agentAsToolName`).
     await sendTurn(
       page,
       callToolWithArgumentsPrompt(
-        agentAsToolName({ agentId: child.agentId, versionId: child.versionId, name: child.name }),
+        agentAsToolName({ agentId: child.agentId, versionId: child.versionId }),
         { task: `${AUTOTEST_PREFIX}What is the QA-TEST-PHRASE?` },
         `${AUTOTEST_PREFIX}What is the QA-TEST-PHRASE? Delegate and quote the answer.`,
       ),

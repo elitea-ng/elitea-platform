@@ -80,7 +80,7 @@ describe('ApplicationTools', () => {
     );
     // Only the first 4 internal tools show until "Show all" is clicked
     // (`ApplicationTools`'s own `minToolsToShow` logic) — "Data Analysis"
-    // is inside that default-visible set; "Python sandbox" is not.
+    // is inside that default-visible set.
     const dataAnalysisLabel = await screen.findByText('Data Analysis');
     const row = dataAnalysisLabel.closest('div')?.parentElement;
     const switchInput = row?.querySelector('input[type="checkbox"]');
@@ -101,6 +101,6 @@ describe('ApplicationTools', () => {
       'proj-1',
     );
     await waitFor(() => expect(screen.getByText('Attachments')).toBeInTheDocument());
-    expect(screen.queryByText('Python sandbox')).not.toBeInTheDocument();
+    expect(screen.queryByText('Swarm Mode')).not.toBeInTheDocument();
   });
 });

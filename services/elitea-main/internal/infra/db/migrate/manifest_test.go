@@ -703,7 +703,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// source; execution_jobs and vector_claim_tokens get memory_toolkit_ids,
 	// and elitea_runtime.memory_conversation_taints is created (worker unit
 	// M9). No data, no permission.
-	require.EqualValues(t, 166, Head(shared))
+	//
+	// 167: shared/0167_workspace_handoffs.sql, the ownership row of a desktop
+	// to cloud handoff (elitea_runtime.workspace_handoffs, ADR-0034 decision
+	// 7). No foreign key, no permission, no data.
+	//
+	// 168: shared/0168_workspace_store.sql, the workspace store's refs and
+	// segment log (elitea_runtime.workspace_refs, workspace_segments) and the
+	// `workspace` bucket type (ADR-0034 decisions 2 and 3). No foreign key, no
+	// permission, no data.
+	//
+	// 169: shared/0169_egress_run_summaries.sql, elitea_runtime.egress_run_summaries,
+	// the egress proxy's per-turn audit summaries (one row per execution and
+	// proxy replica), shared by every Main replica so a turn yields one audit
+	// event and a Main restart loses nothing (ADR-0034 decision 9). A new
+	// table, no data, no permission.
+	require.EqualValues(t, 169, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

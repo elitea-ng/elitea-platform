@@ -29,3 +29,10 @@ func WriteJSON(writer http.ResponseWriter, status int, value any) {
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
 }
+
+// WriteErrorDetails answers {"error": code, "message": message, "details":
+// details}: the flat error shape with a machine-readable object beside it (the
+// workspace store's ref conflict names the current refs there).
+func WriteErrorDetails(writer http.ResponseWriter, status int, code, message string, details any) {
+	WriteJSON(writer, status, map[string]any{"error": code, "message": message, "details": details})
+}

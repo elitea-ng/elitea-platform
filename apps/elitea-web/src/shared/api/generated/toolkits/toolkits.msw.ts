@@ -388,7 +388,7 @@ export const getUpdateToolkitResponseMock = (
 export const getGetRuntimeCapabilitiesResponseMock = (
   overrideResponse: Partial<Extract<RuntimeCapabilities, object>> = {},
 ): RuntimeCapabilities => ({
-  worker: faker.helpers.arrayElement(["python", "rust", ""] as const),
+  worker: faker.helpers.arrayElement(["rust", ""] as const),
   internal_tools: {
     [faker.string.alphanumeric(5)]: faker.datatype.boolean(),
   },

@@ -52,10 +52,7 @@
  *     discriminator is the execution trace: a pipeline LLM node publishes its
  *     step under the NODE ID (`attrs.response_metadata.tool_name`), and a
  *     direct agent's thinking step carries `attrs: {}`. Measured on this stack
- *     against the native runtime, which is the only leg this file runs on —
- *     see the skip. (The SDK worker writes the same key for a DIRECT agent but
- *     fills it with the langgraph node name `"agent"`, and writes no trace step
- *     at all for a pipeline; that measurement is in the skip's note.) Hence the
+ *     against the native runtime. Hence the
  *     deliberately distinctive node id below — `answer` would have been
  *     indistinguishable from a coincidence.
  *
@@ -142,56 +139,6 @@ nodes:
 `;
 
 test('a pipeline authored on the pipelines create page runs its graph and answers in chat', async ({ page }) => {
-  // ── WHY THE PYTHON LEG IS SKIPPED, AND THE HALF THAT WAS WRONG ──────────
-  //
-  // The old reason said "the SDK worker uses the flow-editor format". It does
-  // not, and believing that would send anyone porting this journey to the
-  // wrong field. `pipeline_settings` appears NOWHERE in the pinned elitea-sdk;
-  // `client.py` reads `data['agent_type']`, `assistant.py`'s `runnable()`
-  // branches to `pipeline()` on it, and `pipeline()` hands
-  // `self.prompt` — which is `data['instructions']` — to `create_graph` as
-  // `yaml_schema`. That is the SAME field, parsed as the SAME YAML, as
-  // `PipelineDefinition::from_yaml(shell.instructions())`. The "IS_ERROR"
-  // half of the old note was real; its explanation was not.
-  //
-  // RE-MEASURED against a python-worker standalone stack, twice, and the two
-  // compilers disagree in two places instead:
-  //
-  //  1. THE `state` BLOCK'S SCHEMA. The document below declares `answer: str`.
-  //     The native compiler admits that (`RawStateType::Name`) and equally
-  //     admits `answer: {type: str}` (`RawStateType::Descriptor`,
-  //     services/elitea-worker-rust/src/agents/graph/compiler.rs). The SDK's
-  //     `set_defaults` (`langraph_agent.py`) assumes the descriptor form
-  //     unconditionally — it does `v['value'] = …` on every entry — so a bare
-  //     type NAME raises `TypeError` before any node runs. Observed:
-  //     `{"event":"agent_execution_internal_failure","exception_name":
-  //     "TypeError",…"function":"set_defaults"}` and an empty `is_error` row.
-  //  2. THE TRACE, WHICH IS THIS SPEC'S ONLY PROOF THE GRAPH RAN. Rewritten to
-  //     `answer: {type: str}` — the one form BOTH compilers accept — the
-  //     python leg compiles the graph and STORES A REAL ANSWER (step 5 green).
-  //     It then fails step 6 with an empty array: the SDK's pipeline run
-  //     publishes no execution-trace step at all. Measured directly:
-  //     `p_<project>.chat_message_trace_step` held zero rows for either
-  //     pipeline turn, while every SDK DIRECT-agent turn in the same project
-  //     wrote `thinking_step` rows carrying `response_metadata.tool_name:
-  //     "agent"` — the langgraph node name, never the pipeline node id.
-  //
-  // Point 4 in the header is why that matters: without a step naming the node,
-  // a python-leg run of this file could not tell a compiled graph from a
-  // fall-through to the direct-agent assembler, which answers this YAML as
-  // prose. A spec that cannot make that distinction is not this spec.
-  //
-  // So a python leg needs BOTH: the descriptor `state` form here (harmless on
-  // the native leg, which accepts it), and a discriminator the SDK actually
-  // emits. It is its own journey, not a flag on this one.
-  //
-  // E2E_WORKER comes from chat-stream-e2e.sh; local default = the
-  // long-lived native-runtime dev stack.
-  test.skip(
-    (process.env['E2E_WORKER'] ?? 'rust') !== 'rust',
-    "the SDK compiles the same `instructions` YAML but rejects a bare `state` type name, and its " +
-      'pipeline run emits no trace step naming the node this spec reads',
-  );
   // A whole pipeline turn — create, graph, admission, graph compile, a model
   // call and the stream back. Every wait below is bounded well under this, so
   // a real hang fails on its own step rather than on the clock.

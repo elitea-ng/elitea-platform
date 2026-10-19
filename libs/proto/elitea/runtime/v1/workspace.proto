@@ -1,0 +1,263 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/errors.proto";
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// The cloud executor's workspace-store calls (ADR-0034 decisions 9 and 14).
+//
+// The worker, never the sandbox, moves a handed-off thread's segments. It
+// calls these on Main's private control listener, which already requires a
+// verified client certificate. Every request carries the live claim: Main
+// authenticates the workload, verifies the fence, and only then resolves the
+// claim to its handoff thread. The thread and the project are the CLAIM's,
+// never the request's: thread_uuid and epoch only state what the worker
+// believes, and Main refuses a request whose belief is stale.
+//
+// No presigned URL, storage key or token crosses this service. Segment bytes
+// ride the streams below in bounded chunks, so the per-message bounds of the
+// control listener (64 KiB request, 80 KiB response) are not raised.
+
+// WorkspaceClaimV1 binds one request to the live claim of a cloud turn.
+message WorkspaceClaimV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // The accepted claim's id, which the context authorizer requires beside
+  // the fence.
+  string claim_id = 3;
+  // The handed-off thread (conversation uuid) the runtime context named.
+  string thread_uuid = 4;
+  // The handoff epoch the runtime context named. A stale epoch is refused
+  // with WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH.
+  uint64 epoch = 5;
+  reserved 6 to 15;
+}
+
+// WorkspaceRefV1 is one store ref and its commit (40 lowercase hex).
+message WorkspaceRefV1 {
+  string name = 1;
+  string sha = 2;
+  reserved 3 to 15;
+}
+
+// WorkspaceRefUpdateV1 is one compare-and-set: the ref moves from old to new
+// or nothing moves. An absent old means the ref must not exist yet.
+message WorkspaceRefUpdateV1 {
+  string name = 1;
+  optional string old = 2;
+  string new = 3;
+  reserved 4 to 15;
+}
+
+enum WorkspaceRefusalCodeV1 {
+  WORKSPACE_REFUSAL_CODE_V1_UNSPECIFIED = 0;
+  // The claim's execution is not a cloud turn of a handed-off thread.
+  WORKSPACE_REFUSAL_CODE_V1_NOT_A_WORKSPACE_TURN = 1;
+  // The thread moved on: another epoch owns it now (take back, erase).
+  WORKSPACE_REFUSAL_CODE_V1_STALE_EPOCH = 2;
+  // A ref's expected old value is not its current value.
+  WORKSPACE_REFUSAL_CODE_V1_REF_CONFLICT = 3;
+  // The executor may write only refs/elitea/cloud.
+  WORKSPACE_REFUSAL_CODE_V1_REF_NOT_ALLOWED = 4;
+  // Publish named a segment that was never uploaded.
+  WORKSPACE_REFUSAL_CODE_V1_SEGMENT_MISSING = 5;
+  // The stored object's size or SHA-256 is not the declared one.
+  WORKSPACE_REFUSAL_CODE_V1_CHECKSUM_MISMATCH = 6;
+  WORKSPACE_REFUSAL_CODE_V1_UNSUPPORTED_OBJECT_FORMAT = 7;
+  WORKSPACE_REFUSAL_CODE_V1_SEGMENT_TOO_LARGE = 8;
+  WORKSPACE_REFUSAL_CODE_V1_QUOTA_EXCEEDED = 9;
+  // 10-13 were the pull-request diff's refusals: the worker computes that
+  // diff from its own unpacked repository now (Main reads no git pack).
+  reserved 10 to 13;
+  reserved "WORKSPACE_REFUSAL_CODE_V1_NO_UPSTREAM", "WORKSPACE_REFUSAL_CODE_V1_DIFF_TOO_LARGE", "WORKSPACE_REFUSAL_CODE_V1_DIFF_BINARY", "WORKSPACE_REFUSAL_CODE_V1_DIFF_EMPTY";
+}
+
+// WorkspaceRefusalV1 is a typed business refusal; rejection (RuntimeErrorV1)
+// stays for transport, authentication and fence failures.
+message WorkspaceRefusalV1 {
+  WorkspaceRefusalCodeV1 code = 1;
+  // REF_CONFLICT: the refs as they are now.
+  repeated WorkspaceRefV1 current = 2;
+  reserved 3 to 15;
+}
+
+// WorkspaceSegmentV1 describes one stored segment of a fetch plan.
+message WorkspaceSegmentV1 {
+  uint64 seq = 1;
+  // "COMPACT" in Phase 1.
+  string kind = 2;
+  // The content address: lowercase hex SHA-256 of the file bytes.
+  string sha256 = 3;
+  uint64 bytes = 4;
+  repeated string prerequisites = 5;
+  // The refs the segment carries, exactly.
+  repeated WorkspaceRefV1 refs = 6;
+  reserved 7 to 15;
+}
+
+message WorkspaceFetchPlanRequestV1 {
+  WorkspaceClaimV1 claim = 1;
+  uint64 since_seq = 2;
+  reserved 3 to 15;
+}
+
+message WorkspaceFetchPlanV1 {
+  uint64 head_seq = 1;
+  // The thread's live refs.
+  repeated WorkspaceRefV1 refs = 2;
+  // Phase 1: the newest COMPACT only.
+  repeated WorkspaceSegmentV1 segments = 3;
+  reserved 4 to 15;
+}
+
+// WorkspaceSegmentEndV1 closes one segment's chunks: the worker compares the
+// received bytes with the plan before it reads them.
+message WorkspaceSegmentEndV1 {
+  string sha256 = 1;
+  uint64 bytes = 2;
+  reserved 3 to 15;
+}
+
+// The fetch stream: one plan frame first, then for each planned segment its
+// chunks (at most 32 KiB each) and one end frame. A refusal or rejection is
+// the only frame of a refused stream.
+message WorkspaceFetchFrameV1 {
+  oneof frame {
+    WorkspaceFetchPlanV1 plan = 1;
+    bytes segment_chunk = 2;
+    WorkspaceSegmentEndV1 segment_end = 3;
+    WorkspaceRefusalV1 refusal = 4;
+    RuntimeErrorV1 rejection = 5;
+  }
+  reserved 6 to 15;
+}
+
+message WorkspaceUploadHeaderV1 {
+  WorkspaceClaimV1 claim = 1;
+  string sha256 = 2;
+  uint64 bytes = 3;
+  reserved 4 to 15;
+}
+
+// The upload stream: one header frame, then the segment's chunks (at most
+// 32 KiB each). Main stores the object only when the received bytes match the
+// header's size and SHA-256.
+message WorkspaceUploadFrameV1 {
+  oneof frame {
+    WorkspaceUploadHeaderV1 header = 1;
+    bytes chunk = 2;
+  }
+  reserved 3 to 15;
+}
+
+message WorkspaceUploadResponseV1 {
+  // True when that digest was already stored for this thread; the chunks
+  // were read and discarded.
+  bool exists = 1;
+  WorkspaceRefusalV1 refusal = 2;
+  RuntimeErrorV1 rejection = 3;
+  reserved 4 to 15;
+}
+
+message WorkspacePublishRequestV1 {
+  WorkspaceClaimV1 claim = 1;
+  string kind = 2;
+  string segment_sha256 = 3;
+  uint64 bytes = 4;
+  repeated string prerequisites = 5;
+  repeated WorkspaceRefUpdateV1 refs = 6;
+  string object_format = 7;
+  reserved 8 to 15;
+}
+
+message WorkspacePublishResponseV1 {
+  uint64 seq = 1;
+  repeated WorkspaceRefV1 refs = 2;
+  WorkspaceRefusalV1 refusal = 3;
+  RuntimeErrorV1 rejection = 4;
+  reserved 5 to 15;
+}
+
+message WorkspaceEnvSecretRequestV1 {
+  WorkspaceClaimV1 claim = 1;
+  reserved 2 to 15;
+}
+
+// One harvested environment variable (ADR-0034 decision 5 amendment). The
+// worker keeps the value in memory only, injects it into the run_command
+// environment of the sandbox and nothing else, and redacts it from every
+// tool result, transcript and trace frame.
+message WorkspaceEnvVarV1 {
+  string name = 1;
+  string value = 2;
+  reserved 3 to 15;
+}
+
+// The env stream: frames of variables (each frame under the control
+// listener's 80 KiB response bound), then one end frame with the count. A
+// refusal or rejection is the only frame of a refused stream. A thread with
+// no stored env answers an end frame with count 0.
+message WorkspaceEnvSecretFrameV1 {
+  oneof frame {
+    WorkspaceEnvVarsV1 vars = 1;
+    uint32 end_count = 2;
+    WorkspaceRefusalV1 refusal = 3;
+    RuntimeErrorV1 rejection = 4;
+  }
+  reserved 5 to 15;
+}
+
+message WorkspaceEnvVarsV1 {
+  repeated WorkspaceEnvVarV1 vars = 1;
+  reserved 2 to 15;
+}
+
+// The audit events only the executor observes (ADR-0034 decision 12). The
+// fields are the ones Main records and nothing else: no field can carry a
+// path or file content.
+enum WorkspaceExecutorEventKindV1 {
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED = 0;
+  // handoff.scan_blocked: the hydrated tree held credential-shaped content.
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED = 1;
+  // pull_request.opened: open_pull_request opened one.
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED = 2;
+}
+
+message WorkspaceRecordEventRequestV1 {
+  WorkspaceClaimV1 claim = 1;
+  WorkspaceExecutorEventKindV1 kind = 2;
+  // scan_blocked: how many findings, and the distinct rule ids.
+  uint32 findings = 3;
+  repeated string rules = 4;
+  // pull_request.opened: the toolkit, the branches, the number, its URL and
+  // how many files it changes.
+  string toolkit = 5;
+  string branch = 6;
+  string base = 7;
+  uint64 number = 8;
+  string url = 9;
+  uint32 files = 10;
+  reserved 11 to 15;
+}
+
+message WorkspaceRecordEventResponseV1 {
+  bool recorded = 1;
+  WorkspaceRefusalV1 refusal = 2;
+  RuntimeErrorV1 rejection = 3;
+  reserved 4 to 15;
+}
+
+service WorkspaceStoreService {
+  rpc WorkspaceFetchPlan(WorkspaceFetchPlanRequestV1) returns (stream WorkspaceFetchFrameV1);
+  rpc WorkspaceUpload(stream WorkspaceUploadFrameV1) returns (WorkspaceUploadResponseV1);
+  rpc WorkspacePublish(WorkspacePublishRequestV1) returns (WorkspacePublishResponseV1);
+  // The thread's harvested env, as a claim-bound runtime secret: only when the
+  // runtime context's `workspace.env_secret` is true.
+  rpc WorkspaceEnvSecret(WorkspaceEnvSecretRequestV1) returns (stream WorkspaceEnvSecretFrameV1);
+  // An executor audit event of the running turn, bound to its claim and
+  // fence like every call here.
+  rpc WorkspaceRecordEvent(WorkspaceRecordEventRequestV1) returns (WorkspaceRecordEventResponseV1);
+}

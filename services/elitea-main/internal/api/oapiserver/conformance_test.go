@@ -246,6 +246,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// Client contract 1.5: startLocalTurn and commitLocalTurn, registered
 		// only when the local turn route is composed (production_router.go).
 		CurrentLocalTurns: http.NotFoundHandler(),
+		// Client contract 1.8: the desktop ⇄ cloud handoff routes (ADR-0034),
+		// registered on the same condition.
+		CurrentWorkspaceHandoff: http.NotFoundHandler(),
 		// Client contract 1.6: resolveApplicationVersion, registered only
 		// when the route is composed (production_router.go).
 		CurrentResolvedVersion: http.NotFoundHandler(),

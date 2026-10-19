@@ -302,6 +302,7 @@ func main() {
 		logger.Error("READINESS GATED: budget enforcement is configured but was not wired; /readyz will report not_ready",
 			"reason", budgetDisabledReason(cfg, nc, pool))
 	}
+	budgetOpts = append(budgetOpts, budgetPendingOpts(cfg, plane, nc, pool, logger)...)
 
 	// The authored-governance plane (issue #218). It is a SEPARATE wiring from
 	// the budget engine above and has different preconditions:
@@ -836,6 +837,57 @@ func buildGovernance(
 // that already produced a /readyz panic once.
 func budgetEnforcementUnwired(cfg config.Config, govStore *governance.GovernanceStore) bool {
 	return cfg.NATSURL != "" && govStore == nil
+}
+
+// budgetPendingOpts is the composition root's boot-window decision ([human
+// decision] DECISIONS.md 2026-10-16). It returns the handler option that
+// refuses every /llm spend route with 503 nats_unavailable, or nothing.
+//
+// Readiness alone never kept traffic out of this window: /llm shares the
+// listener, the default chart probes the mTLS gateway with tcpSocket and never
+// reads /readyz, and a direct caller ignores readiness. So the handler refuses
+// spend while enforcement is configured and unwired, unless the operator chose
+// LLM_BUDGET_REQUIRE_ENFORCEMENT=off (serve unmetered on purpose). A wired
+// gateway, and one with no GATEWAY_NATS_URL, get no option.
+//
+// The log says how long the refusal lasts. With a database pool the recovery
+// loop installs the gate when NATS answers. With NO pool the loop cannot run
+// (startBudgetRecovery returns at once: governance needs the pool), so the
+// refusal lasts until the process restarts with a working DATABASE_URL. It
+// stays fail-closed in that case on purpose.
+func budgetPendingOpts(
+	cfg config.Config,
+	plane *enforcementPlane,
+	nc server.NATSClient,
+	pool *pgxpool.Pool,
+	logger *slog.Logger,
+) []llmproxy.HandlerOption {
+	if !plane.unwired() {
+		return nil
+	}
+	reason := budgetDisabledReason(cfg, nc, pool)
+	if !pendingRefusesSpend(cfg) {
+		logger.Warn("BUDGET ENFORCEMENT PENDING, NOT REFUSED: LLM_BUDGET_REQUIRE_ENFORCEMENT=off, "+
+			"so /llm requests are served with no budget check and no billing until the gate is installed",
+			"reason", reason)
+		return nil
+	}
+	until := "until NATS is reachable and the recovery loop installs the gate"
+	if pool == nil {
+		until = "until the gateway restarts with a working DATABASE_URL: the governance engine needs the " +
+			"database, so the recovery loop cannot install the gate"
+	}
+	logger.Error("BUDGET ENFORCEMENT PENDING: /llm spend routes answer 503 nats_unavailable "+until+
+		"; no request is served unmetered", "reason", reason)
+	return []llmproxy.HandlerOption{llmproxy.WithBudgetEnforcementPending()}
+}
+
+// pendingRefusesSpend reports whether an unwired gateway refuses /llm spend
+// routes until the recovery loop installs the gate (live 4.45.1). Only the
+// documented opt-out, LLM_BUDGET_REQUIRE_ENFORCEMENT=off, serves them unmetered.
+// ("on" never gets here: the startup gate refuses to start an unwired process.)
+func pendingRefusesSpend(cfg config.Config) bool {
+	return cfg.RequireBudgetEnforcement != config.RequireEnforcementOff
 }
 
 // budgetDisabledReason returns a human-readable explanation for why enforcement

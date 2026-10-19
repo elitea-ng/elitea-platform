@@ -861,7 +861,6 @@ async fn postgres_summary_checkpoint_survives_process_replacement() {
 #[tokio::test]
 async fn postgres_summary_child() {
     use crate::state::{PostgresSessionService, SessionLimits, TestStateWriterLease};
-    use std::str::FromStr as _;
     let Ok(database) = std::env::var("ELITEA_COMPACTION_TEST_DATABASE") else {
         return;
     };
@@ -872,7 +871,7 @@ async fn postgres_summary_child() {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     );
     let phase = std::env::var("ELITEA_COMPACTION_TEST_PHASE").unwrap();
-    let options = sqlx::postgres::PgConnectOptions::from_str(
+    let options = crate::test_pg::connect_options(
         &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").unwrap(),
     )
     .unwrap()

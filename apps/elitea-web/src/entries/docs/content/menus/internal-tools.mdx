@@ -1,12 +1,12 @@
 ---
 title: "Internal tools"
-description: "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, Python sandbox, swarm mode, and smart tools selection."
+description: "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, swarm mode, and smart tools selection."
 ---
 
 Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
 
 <Note title="Which worker runs which module">
-**Planner**, **Attachments** and **Smart tools selection** run on both the Python worker (Helm's default since #865/#866) and the Rust worker. **Image creation**, **Data analysis**, **Elitea MCP tools** and **Swarm mode** run only on the Python worker; on a deployment that opts into the Rust worker they show disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866). **Python sandbox** is Python-worker only as well. Ask your administrator which worker your deployment runs.
+**Planner**, **Attachments**, **Data analysis** and **Smart tools selection** run on the platform's agent worker. **Image creation**, **Elitea MCP tools** and **Swarm mode** are not run by the platform's worker: they show disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866).
 </Note>
 
 <Screenshot id="internal-tools-menu" alt="The Modules panel listing internal tools with toggles" />
@@ -46,14 +46,6 @@ Lets the agent list, read and search the files attached to the conversation — 
 
 Lets an agent write a plan for a multi-step task and tick it off as it works: a title and numbered steps that move from pending to in progress to completed (`update_plan`, `start_step`, `complete_step`, `get_plan_status`, `delete_plan`). The plan belongs to the conversation: it is kept between messages and survives long conversations being summarised, and deleting the conversation removes it. The agent is also given short planning guidance in its instructions while the module is on.
 
-## Python sandbox
-
-Runs Python code the model writes in an isolated [Pyodide](https://pyodide.org/en/stable/usage/packages-in-pyodide.html) sandbox — useful for calculations, quick data transforms, or testing a snippet mid-conversation without a full toolkit. The sandbox has no access to the host filesystem or your other toolkit credentials; code that imports a package Pyodide does not bundle installs it over the network the first time, so results can take longer for those imports.
-
-<Note>
-On the Python worker (Helm's default since #865/#866), this toggle executes for real: the image ships a pinned `deno` runtime and the sandbox's own entrypoint, both baked in at build time. On a deployment that opts into the Rust worker, the run gets a visible notice instead — tracked in [#866](https://github.com/elitea-ng/elitea-platform/issues/866) along with the other internal tools it does not implement.
-</Note>
-
 ## Swarm mode
 
 Turns a set of agents into peers that can hand off control to one another mid-conversation, all sharing the same conversation history. The agent the user addresses is simply the default entry point; any peer can transfer to any other with a `transfer_to_<agent_name>` tool, and each hand-off's task argument must be fully self-contained — the receiving agent gets no other context. Swarm-enabled agents cannot themselves be added as a child of another swarm agent.
@@ -63,13 +55,13 @@ Turns a set of agents into peers that can hand off control to one another mid-co
 Reduces token usage when an agent has many toolkits configured by binding only two meta-tools (`get_tool_schema`, `invoke_tool`) instead of every individual tool definition, loading real tool schemas on demand, and adding a compact index of the available toolkits and tools to the agent's instructions. Turn it on once a conversation or agent uses five or more toolkits — the more toolkits, the larger the savings. With fewer than 20 tools the module switches itself off for that message, since the meta-tools would cost more than they save.
 
 <Note>
-On the Rust worker, a tool that needs your confirmation (a sensitive action) or a sign-in to the service stays directly available to the agent instead of going through `invoke_tool`, so approvals keep working exactly as without the module. The Planner, Attachments and this module apply to the agent you chat with; agents it calls as tools, and pipeline steps, do not get them.
+A tool that needs your confirmation (a sensitive action) or a sign-in to the service stays directly available to the agent instead of going through `invoke_tool`, so approvals keep working exactly as without the module. The Planner, Attachments and this module apply to the agent you chat with; agents it calls as tools, and pipeline steps, do not get them.
 </Note>
 
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="A module toggle has no effect">Check the worker note under [Internal tools](/menus/internal-tools): Image creation, Data analysis, Elitea MCP tools, Swarm mode and the Python sandbox need the Python worker — a deployment running the Rust worker surfaces a visible notice in the conversation rather than running them.</Accordion>
+  <Accordion title="A module toggle has no effect">Check the worker note under [Internal tools](/menus/internal-tools): Image creation, Elitea MCP tools and Swarm mode are not run by the platform's worker — the conversation shows a visible notice rather than running them.</Accordion>
   <Accordion title="Image creation is missing from the list">No image-generation model is configured for the project yet — add one in [AI Providers](/menus/settings/ai-providers).</Accordion>
   <Accordion title="Modules are missing from the chat toolbar entirely">No module is available for the project at all — ask your administrator to configure at least one provider or toolkit.</Accordion>
 </AccordionGroup>

@@ -102,6 +102,9 @@ var (
 	ErrAlreadyCommitted = errors.New("local turn is already committed")
 	// ErrExpired: the execution passed its deadline before the commit.
 	ErrExpired = errors.New("local turn has expired")
+	// ErrThreadExecutorIsCloud: the thread is handed off (ADR-0034 decision
+	// 7): a local turn starts and commits only while the desktop owns it.
+	ErrThreadExecutorIsCloud = errors.New("thread executor is the cloud")
 )
 
 // PolicyReader is the native client policy (*nativepolicy.Service).

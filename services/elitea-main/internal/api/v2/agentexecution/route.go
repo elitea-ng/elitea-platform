@@ -607,6 +607,25 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"message":   "The previous agent response is still being finalized. Please retry shortly.",
 			"retryable": true,
 		})
+	case errors.Is(err, agentexecutionapp.ErrLocalWorkTurn):
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error":     "local_work_turn",
+			"message":   "This answer ran on the desktop. Only answers of the cloud executor can be regenerated here.",
+			"retryable": false,
+		})
+	case errors.Is(err, agentexecutionapp.ErrCloudTurnNotNewest):
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error":     "cloud_turn_not_newest",
+			"message":   "Only the newest answer of the cloud executor can be regenerated.",
+			"retryable": false,
+		})
+	case errors.Is(err, agentexecutionapp.ErrCloudTurnRunning):
+		writer.Header().Set("Retry-After", "5")
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error":     "cloud_turn_running",
+			"message":   "The cloud executor is still working in this thread. Wait for its answer, then send again.",
+			"retryable": true,
+		})
 	case errors.Is(err, agentexecutionapp.ErrLocalWorkThread):
 		writeJSON(writer, http.StatusConflict, map[string]any{
 			"error":     "local_work_thread",

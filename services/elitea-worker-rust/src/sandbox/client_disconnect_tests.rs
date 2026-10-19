@@ -167,10 +167,15 @@ async fn connection_loss_after_submission_is_reconcilable() {
     connection.await.unwrap();
     server.abort();
     let _ = server.await;
-    let Err(SandboxCallError::Submission { code }) = result else {
+    let Err(SandboxCallError::Submission { code, message }) = result else {
         panic!("expected interrupted transport");
     };
     assert_eq!(code, Code::Unavailable);
+    // A broken connection carries no supervisor instruction.
+    assert_eq!(
+        message, "",
+        "a local transport failure reported a server message"
+    );
 }
 
 /// A peer that stops answering without closing (a force-deleted Pod) is found by
@@ -281,10 +286,15 @@ async fn black_holed_peer_fails_within_the_keepalive_bound_and_the_channel_recon
         .expect("the black-holed call must end by keepalive, not by its 30 s deadline")
         .unwrap();
     let elapsed = started.elapsed();
-    let Err(SandboxCallError::Submission { code }) = result else {
+    let Err(SandboxCallError::Submission { code, message }) = result else {
         panic!("expected a transport failure");
     };
     assert_eq!(code, Code::Unavailable);
+    // A broken connection carries no supervisor instruction.
+    assert_eq!(
+        message, "",
+        "a local transport failure reported a server message"
+    );
     assert!(
         elapsed < schedule.detection_bound() * 4,
         "detected after {elapsed:?}"

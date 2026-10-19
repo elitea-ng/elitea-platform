@@ -148,11 +148,27 @@ test.afterEach(async ({ page }) => {
  * backend assigned. Everything here is a hard assertion — there is no
  * "the route may still be a placeholder" branch, because a placeholder is
  * precisely the failure this journey exists to catch.
+ *
+ * `proveFormContract` (default on) additionally walks acceptance (2) — clear
+ * the name, see the save refused with a reason, refill — and runs the two axe
+ * scans on the list and the create form. That leg is OWNED by "create a
+ * pipeline through the real form" and "the pipeline editor screen is
+ * accessible" below. A journey whose subject is what happens AFTER create
+ * (save + reload) passes `false`: on webkit the leg costs ~10 s of the 30 s
+ * test budget (each `AxeBuilder.analyze()` opens a helper page), which is
+ * exactly what starved J16's post-reload editor mount — the test timeout fired
+ * while the reloaded editor's lazy route chunk was still in flight, and
+ * Playwright reported it as "END not found" (CI run 38903096044, all three
+ * attempts).
  */
-async function createPipelineThroughUi(page: Page, name: string): Promise<string> {
+async function createPipelineThroughUi(
+  page: Page,
+  name: string,
+  { proveFormContract = true }: { readonly proveFormContract?: boolean } = {},
+): Promise<string> {
   await page.goto(BASE_URL + '/app/pipelines/my');
   await page.waitForURL('**/pipelines**', { timeout: 15_000 });
-  await checkA11y(page);
+  if (proveFormContract) await checkA11y(page);
 
   await clickCreateButton(page);
   await page.waitForURL('**/app/pipelines/create**', { timeout: 15_000 });
@@ -176,15 +192,17 @@ async function createPipelineThroughUi(page: Page, name: string): Promise<string
   await descriptionInput.fill(`${AUTOTEST_PREFIX}JRNY-016 pipeline`);
   await expect(saveButton).toBeEnabled();
 
-  await nameInput.fill('');
-  await expect(saveButton).toBeDisabled();
-  await expect(panel.getByText('Name is required')).toBeVisible();
+  if (proveFormContract) {
+    await nameInput.fill('');
+    await expect(saveButton).toBeDisabled();
+    await expect(panel.getByText('Name is required')).toBeVisible();
 
-  await nameInput.fill(name);
-  await expect(panel.getByText('Name is required')).toHaveCount(0);
-  await expect(saveButton).toBeEnabled();
+    await nameInput.fill(name);
+    await expect(panel.getByText('Name is required')).toHaveCount(0);
+    await expect(saveButton).toBeEnabled();
 
-  await checkA11y(page);
+    await checkA11y(page);
+  }
   await saveButton.click();
 
   // A SERIAL id minted by POST /elitea_core/applications — nothing the
@@ -263,7 +281,9 @@ test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
    * YAML) back on save.
    */
   const name = `${AUTOTEST_PREFIX}graph-${Date.now() % 1e9}`;
-  const id = await createPipelineThroughUi(page, name);
+  // The create form's validation + a11y contract is proved by the two tests
+  // above; re-running it here only spent the budget the reload needs.
+  const id = await createPipelineThroughUi(page, name, { proveFormContract: false });
 
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });
 
@@ -311,7 +331,16 @@ test('J16: an edited flow graph survives a save + reload', async ({ page }) => {
     expect(storedIds, 'the starter graph must survive the save').toContain(nodeId);
   }
 
+  // Wait on what the canvas is actually seeded from — the application-detail
+  // GET that carries the version graph — not on a longer timeout.
+  const reloadedDetail = page.waitForResponse(
+    response =>
+      response.request().method() === 'GET' &&
+      response.url().endsWith(`/elitea_core/application/prompt_lib/${DEFAULT_PROJECT_ID}/${id}`) &&
+      response.ok(),
+  );
   await page.goto(BASE_URL + `/app/pipelines/latest/${id}`);
+  await reloadedDetail;
   // The reload really did re-fetch this pipeline (backend-derived name).
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.react-flow__node[data-id="END"]')).toBeVisible({ timeout: 15_000 });

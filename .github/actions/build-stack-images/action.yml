@@ -51,11 +51,13 @@ inputs:
   cache-write:
     description: >-
       Whether this run may WRITE caches: export every layer (mode=max) and save
-      the cargo/Go/pip mounts. Defaults to "on main"; a caller that runs on the
-      main ref without being a push to main (a scheduled workflow) passes
-      "false" so intent lives with the caller, not with the ref.
+      the cargo/Go/pip mounts. Defaults to "a push to main"; every other run
+      (a pull request, a schedule or a dispatch on the main ref) reads main's
+      caches and writes none. A caller may pass "false" to state that intent
+      itself; scripts/ci/check_workflow_cache_writes.py fails a caller that
+      passes anything else.
     required: false
-    default: ${{ github.ref == 'refs/heads/main' }}
+    default: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
 runs:
   using: composite
   steps:
@@ -144,13 +146,18 @@ runs:
     # entries but its own writes are copies main never uses. One pull request
     # held a 1.15 GB cargo target directory of its own.
     #
-    # So: every run READS everything (main's layers, main's mounts). Main
-    # WRITES everything — every layer (mode=max) and the cargo/Go/pip mounts.
-    # A pull request writes only what its second push can profit from and
-    # nothing that duplicates main: the final image layers (mode=min), never
-    # the mounts. A pull request that changes the Rust worker therefore
-    # compiles it cold on its first push and again on its second; that is the
-    # trade for keeping the cache under the cap, and main pays it once.
+    # So: every run READS everything (main's layers, main's mounts). A push
+    # to main WRITES everything — every layer (mode=max) and the cargo/Go/pip
+    # mounts. Every other run writes NOTHING: no layers, no mounts.
+    #
+    # Pull requests used to export their final layers (mode=min) "so the
+    # second push is warm". Measured 2026-10-16 that bought nothing: the cache
+    # held 10.7 GB against the 10 GB cap, 2.9 GB of it pull-request BuildKit
+    # blobs, and GitHub evicted entries within minutes — a layer one push
+    # wrote was gone by the next, and `ignore-error=true` made every miss
+    # silent. What the pull-request blobs DID do was evict main's, which every
+    # pull request reads. So a pull request rebuilds what it changed on each
+    # push, and main pays a cold build once.
     - name: Decide what this run may write
       id: policy
       shell: bash
@@ -202,7 +209,8 @@ runs:
         if [ "$WRITE" = "true" ]; then
           echo "write-mounts=true" >> "$GITHUB_OUTPUT"; echo "layer-mode=max" >> "$GITHUB_OUTPUT"
         else
-          echo "write-mounts=false" >> "$GITHUB_OUTPUT"; echo "layer-mode=min" >> "$GITHUB_OUTPUT"
+          # `none`: the overlay below then carries no cache-to at all.
+          echo "write-mounts=false" >> "$GITHUB_OUTPUT"; echo "layer-mode=none" >> "$GITHUB_OUTPUT"
         fi
 
     # The BuildKit cache MOUNTS (not layers): cargo registry + git + target,
@@ -223,7 +231,10 @@ runs:
     # next main run rebuilds the mounts cold. Accepted — the alternative was
     # an entry that was never populated at all.
     - name: Restore and later save BuildKit cache mounts (writers)
-      if: steps.policy.outputs.write-mounts == 'true'
+      # The ref/event half restates the cache-write default literally, so a
+      # caller that passed `cache-write: true` from a pull request still
+      # cannot save (scripts/ci/check_workflow_cache_writes.py reads it).
+      if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: mounts-rw
       uses: actions/cache@v4
       with:
@@ -283,7 +294,10 @@ runs:
 
     # The write side of the layer cache, derived from the read side so the two
     # cannot name different scopes: every `cache-from` line in the HCL becomes
-    # a `cache-to` line with this run's mode.
+    # a `cache-to` line with this run's mode — on a writer. A reader (mode
+    # `none`) gets an overlay with no cache-to line, so bake exports nothing:
+    # neither the compose files nor the cache HCL declare a cache-to of their
+    # own (bake-cache.hcl's header says so).
     - name: Derive the cache-to overlay for this run
       id: overlay
       shell: bash
@@ -316,6 +330,14 @@ runs:
               printf "target %s {\n  cache-to = [\"type=gha,mode=%s,scope=%s,ignore-error=true\"]\n}\n", name, mode, $0
             }' "$f" >> "$out"
         done <<< "$CACHE_HCL"
+        if [ "$MODE" = "none" ]; then
+          # A reader. The scopes were still counted, so a file that declares
+          # none fails above as before; the overlay then writes nothing.
+          printf '%s\n' "// read-only run: no cache-to (only a push to main writes the layer cache)" > "$out"
+          echo "layer cache: read-only, ${n_from} scope(s) read, none written"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         n_to=$(grep -c 'cache-to = ' "$out" || true)
         # Sanity: one cache-to per cache-from, or the derivation silently
         # produced a read-only bake and this step proved nothing.

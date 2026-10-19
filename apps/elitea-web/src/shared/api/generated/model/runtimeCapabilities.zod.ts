@@ -44,9 +44,9 @@ import * as zod from "zod";
 export const RuntimeCapabilities = zod
   .object({
     worker: zod
-      .enum(["python", "rust", ""])
+      .enum(["rust", ""])
       .describe(
-        'The worker image this deployment runs, or "" when it never said (see the operation description).\n',
+        'The worker image this deployment runs (the Rust worker, the only one), or "" when the composition root never said (see the operation description).\n',
       ),
     internal_tools: zod
       .record(zod.string(), zod.boolean())

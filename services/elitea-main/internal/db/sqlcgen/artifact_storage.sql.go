@@ -106,7 +106,7 @@ const getArtifactBucket = `-- name: GetArtifactBucket :one
 SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
-WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL
+WHERE project_id = $1 AND name = $2 AND deleted_at IS NULL AND bucket_type <> 'workspace'
 `
 
 type GetArtifactBucketParams struct {
@@ -139,7 +139,7 @@ const getArtifactBucketByID = `-- name: GetArtifactBucketByID :one
 SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
-WHERE id = $1 AND deleted_at IS NULL
+WHERE id = $1 AND deleted_at IS NULL AND bucket_type <> 'workspace'
 `
 
 // ListExpiredArtifactObjects (below) has no request-bound project scope — it
@@ -240,10 +240,13 @@ const listArtifactBuckets = `-- name: ListArtifactBuckets :many
 SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
-WHERE project_id = $1 AND deleted_at IS NULL
+WHERE project_id = $1 AND deleted_at IS NULL AND bucket_type <> 'workspace'
 ORDER BY name
 `
 
+// The hidden workspace bucket (ADR-0034 decision 3, shared/0168) is never
+// listed, read or resolved by an artifact query: every artifact path answers
+// it as absent.
 func (q *Queries) ListArtifactBuckets(ctx context.Context, projectID int64) ([]EliteaStorageBucket, error) {
 	rows, err := q.db.Query(ctx, listArtifactBuckets, projectID)
 	if err != nil {
@@ -283,6 +286,7 @@ SELECT id, project_id, name, display_name, bucket_type, is_pinned, tags,
        retention_days, expires_at, notified_at, created_at, updated_at, deleted_at
 FROM elitea_storage.buckets
 WHERE deleted_at IS NULL
+  AND bucket_type <> 'workspace'
   AND expires_at IS NOT NULL
   AND expires_at <= $1
   AND notified_at IS NULL
@@ -379,7 +383,7 @@ func (q *Queries) ListArtifactObjects(ctx context.Context, arg ListArtifactObjec
 const listArtifactProjectIDsWithBuckets = `-- name: ListArtifactProjectIDsWithBuckets :many
 SELECT DISTINCT project_id
 FROM elitea_storage.buckets
-WHERE deleted_at IS NULL
+WHERE deleted_at IS NULL AND bucket_type <> 'workspace'
 ORDER BY project_id
 `
 
@@ -536,9 +540,11 @@ const sumArtifactProjectBytes = `-- name: SumArtifactProjectBytes :one
 SELECT COALESCE(SUM(o.byte_length), 0)::bigint
 FROM elitea_storage.objects o
 JOIN elitea_storage.buckets b ON b.id = o.bucket_id
-WHERE b.project_id = $1 AND b.deleted_at IS NULL
+WHERE b.project_id = $1 AND b.deleted_at IS NULL AND b.bucket_type <> 'workspace'
 `
 
+// The workspace bucket does not count against the artifact quota (ADR-0034
+// decision 3): its size is bounded by max_project_workspace_gb instead.
 func (q *Queries) SumArtifactProjectBytes(ctx context.Context, projectID int64) (int64, error) {
 	row := q.db.QueryRow(ctx, sumArtifactProjectBytes, projectID)
 	var column_1 int64

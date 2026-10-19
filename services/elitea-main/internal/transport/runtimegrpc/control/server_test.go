@@ -1420,3 +1420,69 @@ func TestExpectedInputRolesRefusesAToolRunWithOneEntryForBoth(t *testing.T) {
 		t.Fatal("expectedInputRoles() accepted one entry for settings and arguments")
 	}
 }
+
+type wrapUpStub struct {
+	pending map[string]bool
+	err     error
+}
+
+func (s wrapUpStub) WrapUpRequested(_ context.Context, executionID string) (bool, error) {
+	return s.pending[executionID], s.err
+}
+
+// ADR-0034: the take-back signal rides the same lease poll as cancellation.
+// RenewLease and ObserveDesiredState carry workspace_wrap_up for a running
+// cloud turn whose thread is being taken back; never for a cancelled one,
+// and a failed read never fails the renewal.
+func TestLeasePollCarriesTheWorkspaceWrapUpSignal(t *testing.T) {
+	calls := []string{}
+	lease := validLease()
+	newServer := func(lease runtimedomain.ActiveLease, wrapUps WorkspaceWrapUps) *Server {
+		server, err := NewServer(testControlServerConfig(), workloadAuthorizerStub{calls: &calls},
+			verifierSpy{calls: &calls, verifier: newTestVerifier(t)}, claimControllerStub{calls: &calls, lease: lease},
+			inputResolverStub{calls: &calls, manifest: validManifest()}, &settlementControllerStub{calls: &calls})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wrapUps != nil {
+			server.WithWorkspaceWrapUps(wrapUps)
+		}
+		return server
+	}
+	renew := func(server *Server) *runtimev1.RenewLeaseResponseV1 {
+		t.Helper()
+		response, err := server.RenewLease(context.Background(), &runtimev1.RenewLeaseRequestV1{
+			Identity: identityForFence(lease.Fence), Fence: fenceProto(lease.Fence), IdempotencyKey: "renew-1",
+		})
+		if err != nil || response.GetRejection() != nil {
+			t.Fatalf("renew = %v %v", response, err)
+		}
+		return response
+	}
+	observe := func(server *Server) *runtimev1.ObserveDesiredStateResponseV1 {
+		t.Helper()
+		response, err := server.ObserveDesiredState(context.Background(), &runtimev1.ObserveDesiredStateRequestV1{
+			Identity: identityForFence(lease.Fence), Fence: fenceProto(lease.Fence),
+		})
+		if err != nil || response.GetRejection() != nil {
+			t.Fatalf("observe = %v %v", response, err)
+		}
+		return response
+	}
+	pending := wrapUpStub{pending: map[string]bool{lease.Fence.ExecutionID: true}}
+	if !renew(newServer(lease, pending)).GetWorkspaceWrapUp() || !observe(newServer(lease, pending)).GetWorkspaceWrapUp() {
+		t.Fatal("a taken-back cloud turn was not told to wrap up")
+	}
+	if renew(newServer(lease, nil)).GetWorkspaceWrapUp() || renew(newServer(lease, wrapUpStub{})).GetWorkspaceWrapUp() {
+		t.Fatal("an execution with no take back was told to wrap up")
+	}
+	if renew(newServer(lease, wrapUpStub{err: errors.New("database down")})).GetWorkspaceWrapUp() {
+		t.Fatal("an unreadable signal must not wrap up")
+	}
+	cancelled := lease
+	cancelled.DesiredState = runtimedomain.DesiredCancelled
+	if response := renew(newServer(cancelled, pending)); response.GetWorkspaceWrapUp() ||
+		response.GetDesiredState() != runtimev1.DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_CANCELLED {
+		t.Fatalf("a cancelled turn = %v", response)
+	}
+}

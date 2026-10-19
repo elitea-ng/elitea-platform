@@ -225,6 +225,21 @@ func PresenceChannel(projectID string) string {
 	return fmt.Sprintf("project:%s:presence", projectID)
 }
 
+// WorkspaceChannel is the logical channel of one project's workspace handoff
+// state changes (ADR-0034): NATS subject elitea.events.project.<id>.workspace,
+// in elitea-main's own NATS account, published by elitea-main alone. Every
+// frame names its audience (the thread's readers); the SSE stream relays it
+// only to them and strips the audience.
+func WorkspaceChannel(projectID string) string {
+	return fmt.Sprintf("project:%s:workspace", projectID)
+}
+
+// NewWorkspacePublisher builds the Publisher the workspace handoff emits its
+// state changes through: onto WorkspaceChannel, and to no sink.
+func NewWorkspacePublisher(bus Bus) *Publisher {
+	return &Publisher{bus: bus, channel: WorkspaceChannel}
+}
+
 type DomainEvent struct {
 	ProjectID  string `json:"project_id"`
 	EntityID   string `json:"entity_id"`

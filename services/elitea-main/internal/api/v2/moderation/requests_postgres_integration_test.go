@@ -46,6 +46,7 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/moderation"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -529,6 +530,99 @@ FROM centry.notifications WHERE event_type = 'moderation_approved' ORDER BY id D
 			t.Errorf("%s = %v, want the UTC wall clock between %v and %v (session %s)",
 				name, *stored, before, after, zone)
 		}
+	}
+}
+
+// TestModerationRowIsStampedWithTheUTCWallClock reads back the moderation_state
+// row itself: RequestCreate's created_at/updated_at, and the updated_at a
+// decision rewrites. All three are `timestamp` WITHOUT time zone holding the
+// UTC wall clock, and the pool runs in the testpg zone, so a bare now() would
+// store local time. The probe is switched off here so the read-back is what
+// refuses a session-local stamp; the other tests keep the probe on, so the two
+// guards fail independently.
+func TestModerationRowIsStampedWithTheUTCWallClock(t *testing.T) {
+	pool := newModerationPool(t)
+	prepareUsers(t, pool)
+	ctx := context.Background()
+	disableNaiveClockProbe(t, pool)
+
+	requester := moderationRouter(moderation.NewHandler(pool), ada)
+	beforeCreate := time.Now().UTC()
+	recorder := moderationDo(t, requester, http.MethodPost, entityURL(1, "wikis_Wikis"), map[string]any{
+		"issue_type": "Wikis", "description": "Clock check for the created row.",
+	})
+	afterCreate := time.Now().UTC()
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	var created requestRow
+	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create body %q: %v", recorder.Body.String(), err)
+	}
+	createdAt, updatedAt := moderationRowClock(t, ctx, pool, created.ID)
+	assertUTCWallClock(t, "RequestCreate created_at", createdAt, beforeCreate, afterCreate)
+	assertUTCWallClock(t, "RequestCreate updated_at", updatedAt, beforeCreate, afterCreate)
+
+	// Age the row, so the decision's updated_at is a fresh write and not the
+	// value RequestCreate left behind.
+	if _, err := pool.Exec(ctx,
+		`UPDATE centry.moderation_state SET updated_at = '2026-08-01 09:00:00' WHERE id = $1`, created.ID); err != nil {
+		t.Fatalf("age the request: %v", err)
+	}
+	moderator := moderationRouter(moderation.NewHandler(pool), grace)
+	beforeDecision := time.Now().UTC()
+	recorder = moderationDo(t, moderator, http.MethodPut, decisionURL,
+		map[string]any{"id": created.ID, "status": "approved"})
+	afterDecision := time.Now().UTC()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	_, decidedAt := moderationRowClock(t, ctx, pool, created.ID)
+	assertUTCWallClock(t, "decision updated_at", decidedAt, beforeDecision, afterDecision)
+}
+
+// disableNaiveClockProbe switches the probe off on pool's isolated database
+// and drops the pool's idle connections, so every later connection has it off.
+func disableNaiveClockProbe(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	var database string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
+		t.Fatalf("read the current database: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "ALTER DATABASE "+pgx.Identifier{database}.Sanitize()+
+		" SET elitea.naive_clock_probe = 'off'"); err != nil {
+		t.Fatalf("switch the naive clock probe off: %v", err)
+	}
+	pool.Reset()
+}
+
+func moderationRowClock(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, id int64,
+) (created, updated *time.Time) {
+	t.Helper()
+	var zone string
+	if err := pool.QueryRow(ctx, `
+SELECT current_setting('TimeZone'), created_at, updated_at FROM centry.moderation_state WHERE id = $1`, id).
+		Scan(&zone, &created, &updated); err != nil {
+		t.Fatalf("read moderation row %d: %v", id, err)
+	}
+	if zone != testpg.TimeZone() {
+		t.Fatalf("session TimeZone = %q, want %q", zone, testpg.TimeZone())
+	}
+	return created, updated
+}
+
+func assertUTCWallClock(t *testing.T, name string, stored *time.Time, before, after time.Time) {
+	t.Helper()
+	const skew = 5 * time.Minute
+	if stored == nil {
+		t.Errorf("%s is NULL", name)
+		return
+	}
+	if stored.Before(before.Add(-skew)) || stored.After(after.Add(skew)) {
+		t.Errorf("%s = %v, want the UTC wall clock between %v and %v (session %s)",
+			name, *stored, before, after, testpg.TimeZone())
 	}
 }
 
@@ -1305,6 +1399,12 @@ func newModerationPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, string(initial)); err != nil {
 		t.Fatalf("apply 001_initial.sql: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs. Without it a writer
+	// that stores the session-local clock in a `timestamp` WITHOUT time zone
+	// column passes every test here that does not read the column back.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

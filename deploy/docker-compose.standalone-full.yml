@@ -1004,11 +1004,6 @@ services:
       ELITEA_DEEPWIKI_CA_FILE: /run/certs/ca.crt
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
-      # Which worker this stack runs, stated explicitly: elitea-main's own default
-      # is rust, so a Python-worker base must say so or its toolkit catalogue
-      # would describe a worker that is not there. The Rust overlay
-      # (docker-compose.standalone-rust-agent.yml) overrides this with "rust".
-      ELITEA_WORKER_IMPLEMENTATION: "python"
 
       # Where the provider calls BACK to upload the pages it generated: this
       # service on the compose network, plain HTTP — the minted bearer is the
@@ -1874,15 +1869,14 @@ services:
   # agent-token producer of its own, so without this service an admitted run
   # streams nothing and ends in a terminal failure.
   elitea-worker:
-    image: ghcr.io/elitea-ng/elitea-worker-python:standalone
+    # The native Rust worker; docker-compose.standalone-rust-agent.yml (always
+    # applied by deploy/scripts/standalone-stack.sh) sets its command, config
+    # and mounts. The image and build live here so that every compose file set
+    # builds the same image.
+    image: ghcr.io/elitea-ng/elitea-worker-rust:standalone
     build:
-      # Repo root, not services/elitea-worker-python: the Containerfile copies
-      # libs/proto (:17) and testdata/proto/runtime/v1 (:79). It also git-clones
-      # elitea-sdk at a pinned revision behind a SHA-256 archive gate, so a local
-      # elitea-sdk checkout is irrelevant to the build and a hash mismatch is a
-      # build failure rather than a warning.
       context: ..
-      dockerfile: services/elitea-worker-python/Containerfile
+      dockerfile: services/elitea-worker-rust/Containerfile
     # The only supported command shape: one JSON config, no env-var settings.
     # Capabilities are compiled in, not selected here — the Go side decides which
     # it will accept (composition.go's capabilityVersions map).

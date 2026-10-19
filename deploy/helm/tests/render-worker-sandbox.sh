@@ -46,7 +46,8 @@ YAML
 args=(-f deploy/helm/elitea/values-standalone.yaml -f "$work/profiles.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-  --set worker.indexingRuntime=python)
+  --set vector.enabled=true --set main.autoscaling.maxReplicas=3
+  --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key)
 helm template test deploy/helm/elitea "${args[@]}" \
   --show-only templates/worker/configmap-runtime.yaml > "$work/config.yaml"
 python3 - "$work/config.yaml" "$work/profiles.yaml" <<'PY'
@@ -61,10 +62,10 @@ assert config['agent_node_recovery'] is True
 assert config['consumer_id'].endswith('__ELITEA_POD_NAME__')
 PY
 if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementation=python > "$work/error" 2>&1; then
-  echo 'Python worker silently accepted Rust-only runtime options' >&2
+  echo 'the retired Python worker rendered' >&2
   exit 1
 fi
-grep -Fq 'require the Rust worker' "$work/error"
+grep -Fq 'is no longer supported' "$work/error"
 if helm template test deploy/helm/elitea "${args[@]}" --set main.runtime.codeOwnerRecovery.enabled=false \
   --set main.runtime.codeOwnerRecovery.mainWorkloadIdentity= --set 'main.runtime.codeOwnerRecovery.supervisors=null' \
   > "$work/error" 2>&1; then

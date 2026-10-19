@@ -26,8 +26,7 @@
  * `attrs.response_metadata.tool_name` on the stored execution-trace steps must
  * name BOTH node ids, and the first node's step must come BEFORE the second
  * node's. Following `chat.pipeline-authored.spec.ts`'s own step 7, which
- * measured what that key holds on each runtime: a pipeline node id under the
- * native runtime, the literal langgraph name `"agent"` under the SDK worker,
+ * measured what that key holds: a pipeline node id under the native runtime,
  * and `attrs: {}` on the direct-agent fall-through. Two DISTINCT ids in order
  * cannot be produced by any of those.
  *
@@ -311,14 +310,6 @@ async function traceToolNames(page: Page, projectId: string, conversationId: str
 }
 
 test('a two-node graph connected on the canvas runs BOTH nodes, in the order the edge declares', async ({ page }) => {
-  // Same leg restriction as its siblings, for the measured reason recorded in
-  // `chat.pipeline-authored.spec.ts`: the SDK worker publishes no
-  // execution-trace step naming a pipeline node, so the central assertion here
-  // cannot tell a compiled graph from a fall-through under that runtime.
-  test.skip(
-    (process.env['E2E_WORKER'] ?? 'rust') !== 'rust',
-    'the SDK worker emits no pipeline trace step naming the nodes this spec reads',
-  );
   // Create, author two nodes, connect, save, admit, compile, TWO model calls
   // and the stream back.
   test.setTimeout(300_000);

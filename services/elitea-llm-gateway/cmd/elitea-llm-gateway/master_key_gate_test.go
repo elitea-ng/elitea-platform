@@ -168,7 +168,10 @@ func TestGatewayRefusesToStartWithoutAMasterKey(t *testing.T) {
 			case <-time.After(3 * time.Second):
 			}
 			cancel()
-			<-done
+			// cancel() kills the process (exec.CommandContext), so Wait reports the
+			// kill signal: the value only marks that it has exited, which is all
+			// this wait is for. Logged, not asserted.
+			t.Logf("the gateway exited after cancel: %v", <-done)
 			if control.optOut == "true" && !strings.Contains(out.String(), "UNWRAPPED") {
 				t.Errorf("the development opt-out started silently; it must log the unwrapped posture; output:\n%s",
 					out.String())

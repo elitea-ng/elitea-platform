@@ -57,6 +57,33 @@ describe('turnReducer', () => {
     expect(view.items[0]).toMatchObject({ type: 'tool', callId: 'c1', tool: 'read_file', result: { ok: true } });
   });
 
+  it('matches interleaved results of concurrent calls to their calls by id, not position', () => {
+    // Read-only calls of one model step run together (#1213): their results
+    // come back in completion order, between the other calls' events.
+    const failed: AgentEvent = { turn_id: T, seq: 6, kind: 'tool_result', payload: { call_id: 'c1', ok: false, summary: 'not found', truncated: false } };
+    const view = activeView(run([call(1, 'c1'), call(2, 'c2'), call(3, 'c3'), result(4, 'c3'), result(5, 'c2'), failed]));
+    expect(view.items.map((item) => (item.type === 'tool' ? [item.callId, item.result?.summary] : null))).toEqual([
+      ['c1', 'not found'],
+      ['c2', 'ok'],
+      ['c3', 'ok'],
+    ]);
+  });
+
+  it('keeps a commit failure after done until a retry saves it, and shows a later one again', () => {
+    const done: AgentEvent = { turn_id: T, seq: 2, kind: 'done', payload: { committed: false, commit: 'pending', conversation_id: '7', message_ids: [], changed_files: 0 } };
+    const failed = (seq: number, message: string): AgentEvent => ({ turn_id: T, seq, kind: 'commit_failed', payload: { execution_id: 'e1', code: 'local_turn_unavailable', message } });
+    let state = run([status(1, 'done'), done, failed(3, 'not saved')]);
+    expect(activeView(state).commitFailed).toMatchObject({ executionId: 'e1', message: 'not saved' });
+    state = turnReducer(state, { type: 'commit-saved', turnId: T });
+    expect(activeView(state).commitFailed).toBeUndefined();
+    // A late re-delivery of the old failure does not bring it back.
+    state = run([failed(3, 'not saved'), text(0, 'answer')], state);
+    expect(activeView(state).commitFailed).toBeUndefined();
+    // A later failure (a retry refused) does.
+    state = run([failed(4, 'still not saved')], state);
+    expect(activeView(state).commitFailed).toMatchObject({ message: 'still not saved' });
+  });
+
   it('shows an unmatched tool_result rather than dropping it', () => {
     const view = activeView(run([result(1, 'ghost')]));
     expect(view.items[0]).toMatchObject({ type: 'tool', callId: 'ghost', result: { summary: 'ok' } });

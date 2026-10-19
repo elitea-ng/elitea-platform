@@ -186,7 +186,7 @@ function RecordedTurn({ stored }: { stored: StoredTurn }): React.JSX.Element {
   );
 }
 
-function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
+export function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
   if (message.role === 'user') return <YourPrompt text={message.content} />;
   return (
     // The chat's own renderer; raw HTML from the model is dropped, not rendered.
@@ -240,7 +240,12 @@ export function Exchanges({ turn, prompts }: { turn: WorkspaceTurn; prompts: rea
       {exchanges.map((exchange) => (
         <Box key={exchange.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt} />}
-          <TurnTranscript view={exchange.view} busy={exchange.live && turn.busy} onCancel={() => void turn.cancel()} />
+          <TurnTranscript
+            view={exchange.view}
+            busy={exchange.live && turn.busy}
+            onCancel={() => void turn.cancel()}
+            onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
+          />
         </Box>
       ))}
     </>

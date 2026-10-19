@@ -46,13 +46,6 @@
  * row, and still renders its own pin — and the assertions below are about
  * counts, identity and paging rather than about a tool's output. Where a step's
  * OUTCOME matters it is read as `is_error`, which is populated either way.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * THE LEG CONTRACT: BOTH (rust and python)
- * ─────────────────────────────────────────────────────────────────────────────
- * The table, the projection and both routes are elitea-main's, upstream of
- * either runtime; what the worker contributes is the step reports, which both
- * emit. Nothing below reads a field only one of them fills.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -73,14 +66,6 @@ import {
 } from '../fixtures/api';
 
 const API = `${BASE_URL}/api/v2`;
-
-/**
- * Which runtime is answering the turns — `scripts/chat-stream-e2e.sh` is the
- * one place that knows, and it exports this. Read by the three MULTI-CALL
- * journeys below, which are native-only for a HARNESS reason rather than a
- * product one: see `multiCallPrompt`.
- */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -149,21 +134,6 @@ async function getTraceStep(
  * marker here carries its own `response_search` value. It is a real property
  * of the operation's generated schema (`families/openapi/spec.rs`), so the
  * call stays valid; nothing downstream depends on its value.
- *
- * ── WHY EVERY JOURNEY THAT USES THIS IS NATIVE-ONLY ──────────────────────
- *
- * A HARNESS limit, measured, not a product one. The tool's own host is
- * unreachable from the worker on this stack (see the file header). The native
- * worker's https-only client refuses it in milliseconds, so five calls cost
- * nothing; the SDK worker instead DIALS it and waits out a connect/TLS
- * timeout per call. Measured on a python-worker stack: the five-call turn in
- * `a streamed multi-tool turn…` took 17.1 minutes and still had not settled,
- * and the ten-call pagination turn timed out at 5.5 minutes with an empty
- * assistant row — and the test that ran AFTER them failed as collateral (it
- * passes on its own there, re-measured). Nothing about the trace-step
- * contract differs between the legs; what differs is how long an unreachable
- * tool takes to fail. So the multi-call journeys pin the native leg and say
- * why, and the two single-call journeys in this file run on BOTH.
  */
 function multiCallPrompt(count: number, tail: string): string {
   const stamp = String(Date.now() % 1_000_000);
@@ -336,12 +306,6 @@ test('conversation details carry no tool_calls or thinking_steps, and the pins s
  * clamped to the default page rather than answering nothing. */
 test('the trace-steps listing pages with limit and offset', async ({ page }) => {
   test.setTimeout(420_000);
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'multi-call turns are native-only HERE for a harness reason, not a product one: the SDK worker ' +
-      'waits out a connect timeout per call against the unreachable tool host — see `multiCallPrompt`.',
-  );
-
   let fixture: MockToolAgentFixture | undefined;
   try {
     fixture = await createMockToolAgent(page, 'paging');
@@ -428,12 +392,6 @@ test('a streamed multi-tool turn renders one pin per execution, and the count su
   page,
 }) => {
   test.setTimeout(420_000);
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'multi-call turns are native-only HERE for a harness reason, not a product one: the SDK worker ' +
-      'waits out a connect timeout per call against the unreachable tool host — see `multiCallPrompt`.',
-  );
-
   let fixture: MockToolAgentFixture | undefined;
   try {
     fixture = await createMockToolAgent(page, 'pins');
@@ -592,12 +550,6 @@ test('a paused tool call is a trace step, and survives the resume and a return t
  * a settled turn showed are still there after the page is reloaded. */
 test('the tool-call pins a turn showed are still rendered after a reload', async ({ page }) => {
   test.setTimeout(300_000);
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'multi-call turns are native-only HERE for a harness reason, not a product one: the SDK worker ' +
-      'waits out a connect timeout per call against the unreachable tool host — see `multiCallPrompt`.',
-  );
-
   // WAS a render gap (#951), and the halves were measured separately: the
   // steps are durable (`/elitea_core/message_traces/…` answers the same rows
   // before and after, asserted in the test above) and the RENDER of them was

@@ -1,0 +1,26 @@
+# render-egress-proxy.sh: a complete egressProxy install. The two keys are
+# throwaway Ed25519 PUBLIC keys generated for this fixture; their private
+# halves were never stored.
+sandboxKubernetes:
+  executionNamespace: code-execution
+egressProxy:
+  enabled: true
+  signingKey:
+    existingSecret: elitea-egress-token-signing
+  publicKeys:
+    keys:
+      current.pem: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEAEq8DLdXOqAEXtf2VEQDx8f25oCUhWTnS6II1lFBfkN4=
+        -----END PUBLIC KEY-----
+      next.pem: |
+        -----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEAWKMtVnRGuBnpOApvNmpY8jzDWEhRe7+CLF1lzsnrRFg=
+        -----END PUBLIC KEY-----
+  networkPolicy:
+    podCidrs: [10.244.0.0/16, "fd00:10:244::/56"]
+    serviceCidrs: [10.96.0.0/12]
+    adminFrom:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: monitoring

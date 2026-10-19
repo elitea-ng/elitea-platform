@@ -47,6 +47,8 @@ type fakeTx struct {
 
 	// usageErr is injected on the usage-ledger insert.
 	usageErr error
+	// usageErrFor fails the usage-ledger insert of one event id only.
+	usageErrFor map[string]error
 
 	// recorded
 	dedupProbes  []string
@@ -80,6 +82,9 @@ func (t *fakeTx) ExecAffected(_ context.Context, sql string, args ...any) (int64
 		t.usageInserts = append(t.usageInserts, args)
 		if t.usageErr != nil {
 			return 0, t.usageErr
+		}
+		if id, _ := args[0].(string); t.usageErrFor[id] != nil {
+			return 0, t.usageErrFor[id]
 		}
 		return 1, nil
 	}

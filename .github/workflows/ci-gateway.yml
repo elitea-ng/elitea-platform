@@ -25,11 +25,6 @@ on:
     paths:
       - "services/elitea-llm-gateway/**"
       - ".github/workflows/ci-gateway.yml"
-      # internal/sdkpin/pin_test.go compares sdk-pin.json against this lock
-      # file, so a lock-file-only SDK bump is exactly the change that gate
-      # exists to catch. Without this path the job never starts on it, and the
-      # gate cannot run on its own subject (#518 again).
-      - "services/elitea-worker-python/elitea-sdk.lock.json"
       # The toolchain gate below reads this workflow and the gateway
       # Containerfile. Both subjects are already named above; this line adds
       # the gate's OWN file, so an edit to the checker runs the checker (#518).
@@ -42,6 +37,12 @@ on:
       - "deploy/helm/nats/**"
       - "deploy/helm/nats-bootstrap/**"
       - "scripts/nats/**"
+      # The guarded write-back UPSERT both writers must equal
+      # (budget-writeback-guarded-upsert-v1.sql); the gateway half of the
+      # parity gate must run on a contract-only change.
+      - "libs/proto/contracts/**"
+      # The shipped DDL the gateway's Postgres integration tests apply.
+      - "services/elitea-main/migrations/shared/**"
   push:
     branches:
       - main
@@ -51,12 +52,13 @@ on:
       # arm did not, so a push that edited only the gate could not start the
       # gate it edited (#518).
       - ".github/workflows/ci-gateway.yml"
-      - "services/elitea-worker-python/elitea-sdk.lock.json"
       - "scripts/ci/check-gateway-toolchain.sh"
       - "libs/go/natsconn/**"
       - "deploy/helm/nats/**"
       - "deploy/helm/nats-bootstrap/**"
       - "scripts/nats/**"
+      - "libs/proto/contracts/**"
+      - "services/elitea-main/migrations/shared/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -91,14 +93,27 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version: "1.26"
           # The series, at its latest patch: go.mod sets the security floor
           # (1.26.9), and the runner cache can lag behind it.
           check-latest: true
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-llm-gateway/go.sum
+      # PINNED, as ci-go.yml pins it: `version: latest` made this gate a moving
+      # target, and a new release redded main and every open gateway PR on
+      # code nobody had touched (errcheck on `<-done`, 2026-10-16). Raise it
+      # deliberately, together with ci-go.yml, after reading the release notes.
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.9.0
+          # Reads the lint cache everywhere, saves it only on a push to main
+          # (the rule in .github/actions/main-write-cache).
+          skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}
           working-directory: services/elitea-llm-gateway
 
   test:
@@ -107,14 +122,41 @@ jobs:
     defaults:
       run:
         working-directory: services/elitea-llm-gateway
+    # The Postgres integration tests (internal/failmode TestPostgres_*, the
+    # healthy write and the outage recovery against the shipped DDL, and
+    # cmd/elitea-llm-gateway's budget-probe test) skip without a database.
+    # They ran nowhere in CI until this service; ELITEA_REQUIRE_GATEWAY_POSTGRES_TEST
+    # below turns their skip into a failure, so losing the service cannot
+    # read as green (ci-go.yml's #423 pattern). pgvector, as in ci-go.yml, so
+    # one image serves every Postgres test in the repository.
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.5-pg16-trixie
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version: "1.26"
           # The series, at its latest patch: go.mod sets the security floor
           # (1.26.9), and the runner cache can lag behind it.
           check-latest: true
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-llm-gateway/go.sum
 
       - name: Go vet
@@ -137,6 +179,9 @@ jobs:
         run: bash scripts/nats/ci-secure-test-env.sh
 
       - name: Run tests
+        env:
+          ELITEA_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          ELITEA_REQUIRE_GATEWAY_POSTGRES_TEST: "1"
         run: go test -race -count=1 -coverprofile=coverage.out ./...
 
       - name: Coverage floor — enforcement packages

@@ -53,7 +53,7 @@ export const ResolvedApplicationVersion = zod
     definition_sha256: zod
       .string()
       .describe(
-        "SHA-256 (hex) of `version_details` and the three ids; also the ETag.",
+        "SHA-256 (hex) of `version_details` and the three ids. Not the ETag, which digests the whole answer (withheld_secrets and project_context_withheld included).",
       ),
     withheld_secrets: zod
       .array(zod.string())

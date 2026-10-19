@@ -234,7 +234,8 @@ fn workspace_retryable(error: &SandboxCallError) -> bool {
             code: tonic::Code::Unavailable
                 | tonic::Code::Aborted
                 | tonic::Code::DeadlineExceeded
-                | tonic::Code::ResourceExhausted
+                | tonic::Code::ResourceExhausted,
+            ..
         }
     )
 }

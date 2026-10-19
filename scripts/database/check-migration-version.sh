@@ -120,7 +120,12 @@ EOF
       failures=$((failures + 1))
       continue
     fi
-    if printf '%s\n' "${base_paths}" | grep -Fxq -- "${path}"; then
+    # A here-string, not `printf | grep -q`: grep -q exits at its first
+    # match, printf then dies of SIGPIPE on a list larger than the pipe
+    # buffer, and under pipefail that failure read as "not on the base". A
+    # file already on the base was then reported as a NEW migration that
+    # collides with itself (PR #1294: 0094_mcp_prebuilt_catalogue.sql).
+    if grep -Fxq -- "${path}" <<<"${base_paths}"; then
       continue
     fi
     new_paths="${new_paths}${path}

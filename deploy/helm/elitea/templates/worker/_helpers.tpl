@@ -1,4 +1,12 @@
-{{- define "elitea-worker-python.name" -}}
+{{/*
+The pod name label. Its DEFAULT value stays "elitea-worker-python" although
+only the Rust worker exists: app.kubernetes.io/name is in the Deployment's
+selector and immutable after install (renaming it turns every upgrade into an
+unrecoverable "field is immutable" error), and the NATS chart's NetworkPolicy
+admits the worker pods by this exact name (deploy/helm/nats values
+networkPolicy.clients). The value is historical, the image is not.
+*/}}
+{{- define "elitea-worker.name" -}}
 {{- default "elitea-worker-python" .Values.worker.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -13,19 +21,19 @@ an error that reads like a trust problem, nowhere near the rename.
 There is exactly one of each per release, so there is nothing for a release
 prefix to disambiguate. Override only alongside re-minting the certificate.
 */}}
-{{- define "elitea-worker-python.fullname" -}}
+{{- define "elitea-worker.fullname" -}}
 {{- default "elitea-worker" .Values.worker.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{- define "elitea-worker-python.labels" -}}
+{{- define "elitea-worker.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" "elitea-worker-python" .Chart.Version | replace "+" "_" }}
-{{ include "elitea-worker-python.selectorLabels" . }}
+{{ include "elitea-worker.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{- define "elitea-worker-python.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "elitea-worker-python.name" . }}
+{{- define "elitea-worker.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "elitea-worker.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
@@ -35,38 +43,14 @@ and deletes anything else in the destination, so a Secret that carries a key
 this list does not name is a provisioning mistake that fails loudly rather than
 a file the worker silently ignores.
 */}}
-{{- define "elitea-worker-python.materialFiles" -}}
+{{- define "elitea-worker.materialFiles" -}}
 runtime-ca.crt agent-worker-client.crt agent-worker-client.key command-signing-keyring.json worker-output-spool-key agent-checkpoint-connection{{ if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }} rust-compiled-profiles.json{{ end }}
 {{- end }}
 
 {{/*
-Which worker image this release runs.
-
-`worker.image.repository` wins when set, and that is the documented way to pin
-either implementation — including pinning back to the Python worker without
-touching `worker.implementation`. Empty (the default) derives the repository
-from `worker.implementation`.
-
-The helper names are NOT renamed to match. `elitea-worker-python.name` feeds
-app.kubernetes.io/name, which is in the Deployment's selector and immutable
-after install: renaming it turns every upgrade into an unrecoverable "field is
-immutable" error. The names are historical, the images are not.
+The worker image repository: the Rust worker, the only one. `worker.image.repository`
+wins when set, which is how an image is pinned by digest or pulled from a mirror.
 */}}
 {{- define "elitea-worker.imageRepository" -}}
-{{- if .Values.worker.image.repository -}}
-{{- .Values.worker.image.repository -}}
-{{- else if eq .Values.worker.implementation "rust" -}}
-ghcr.io/elitea-ng/elitea-worker-rust
-{{- else -}}
-ghcr.io/elitea-ng/elitea-worker-python
-{{- end -}}
-{{- end }}
-
-{{/*
-True when this release runs the native Rust worker. One place, because four
-templates branch on it and a values path repeated four times is four chances
-to typo a key that Helm resolves to empty and reads as `false`.
-*/}}
-{{- define "elitea-worker.isRust" -}}
-{{- eq .Values.worker.implementation "rust" -}}
+{{- .Values.worker.image.repository | default "ghcr.io/elitea-ng/elitea-worker-rust" -}}
 {{- end }}

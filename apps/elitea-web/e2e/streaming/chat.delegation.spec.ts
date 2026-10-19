@@ -105,9 +105,9 @@ interface Agent {
   readonly name: string;
 }
 
-/** The function name the runtime offers this agent under, on this leg. */
+/** The function name the runtime offers this agent under. */
 function toolNameOf(agent: Agent): string {
-  return agentAsToolName({ agentId: agent.id, versionId: agent.versionId, name: agent.name });
+  return agentAsToolName({ agentId: agent.id, versionId: agent.versionId });
 }
 
 /**
@@ -397,10 +397,9 @@ test('a parent agent delegates to its sub-agent, and the sub-agent’s own answe
     const orchestrator = participants.find((participant) => participant.entityName === 'application');
     expect(orchestrator, 'the parent must be a participant of the conversation').toBeDefined();
 
-    // The name the runtime offers the child under. Both runtimes derive it from
-    // the SAME stored reference and spell it differently, so the marker names
-    // the one this leg uses; the offer assertion below prints what was really
-    // sent, so a naming change reads as a naming change.
+    // The name the runtime offers the child under, derived from the stored
+    // reference; the offer assertion below prints what was really sent, so a
+    // naming change reads as a naming change.
     const childTool = toolNameOf(child);
     const task = `${marker('subtask')} report ready`;
     await startTurn(page, {

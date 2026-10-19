@@ -30,13 +30,11 @@
  * routes, after the turn: a screen that renders a confident answer is exactly
  * what a tool that was never bound also produces.
  *
- * WORKER: the turns run on the NATIVE runtime only. This is deliberate and is
- * not a gap being papered over — the Python SDK worker has no port of either
- * module and this programme excludes the SDK, so `GET
- * /elitea_core/runtime_capabilities` reports both as unavailable there and the
- * UI renders the toggles disabled with that reason. The python leg asserts
- * exactly that, through the last test in this file, rather than listing
- * nothing.
+ * WORKER: the native Rust runtime, the only worker the platform runs. The
+ * capability test in this file asserts that `GET
+ * /elitea_core/runtime_capabilities` reports both modules as served, so a
+ * deployment that stopped serving them fails by name rather than by a turn
+ * that quietly did nothing.
  *
  * STATUS: RUN, on the standalone stack with the native runtime, 2026-09-16.
  * What it measured, recorded here because each finding is a different KIND of
@@ -100,21 +98,6 @@ const PROJECT_CONTEXT_BUILDER = 'project_context_builder';
 
 /** Same pinning rule, and same reason, as `chat.hitl.spec.ts`: an unpinned version runs on the project default, which on a stack with a real provider is not the mock. */
 const MOCK_MODEL = process.env['E2E_MOCK_MODEL'] ?? 'vllm/E2E-MOCK-MODEL';
-
-/**
- * Which runtime answers the turns. `scripts/chat-stream-e2e.sh` exports it;
- * the local default is the native dev stack, as everywhere else in this
- * directory (`chat.toolkit-hitl.spec.ts`).
- *
- * The header states the rule this gates: the two modules are a NATIVE-runtime
- * capability and the Python SDK worker has no port of either. So the python
- * leg does not drive the turns — it asserts the ABSENCE the product itself
- * reports, in the capability test below. A python run that silently listed
- * nothing at all would be the same "a gate that stopped gating" failure this
- * repository keeps paying for, which is why the absence is a TEST and not a
- * `test.describe` the leg skips past.
- */
-const IS_NATIVE_RUNTIME = (process.env['E2E_WORKER'] ?? 'rust') === 'rust';
 
 /**
  * The SECOND project the isolation assertions at the end of this file read.
@@ -369,11 +352,6 @@ async function findSkillByName(
    its resume are `ask_user`'s, not this module's, and this module adds no
    branch to either. */
 test('a chat turn with Skills Builder enabled creates the Skill it names, and does not attach it', async ({ page }) => {
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the Python SDK worker has no port of `skills_builder`; the python leg asserts that absence ' +
-      'through the capability route instead (see the last test in this file)',
-  );
   // Two model round trips (the tool call and the answer quoting its result)
   // plus a create and a save. Every wait below is bounded well under this.
   test.setTimeout(360_000);
@@ -492,11 +470,6 @@ async function readProjectContext(
 /* onetest: ELITEA-2786 — a fully specified request creates the Project Context, in effect, from
    the turn itself. */
 test('a chat turn with Project Context Builder enabled writes the project context', async ({ page }) => {
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the Python SDK worker has no port of `project_context_builder`; the python leg asserts that ' +
-      'absence through the capability route instead (see the last test in this file)',
-  );
   test.setTimeout(360_000);
 
   const stamp = Date.now() % 1_000_000;
@@ -538,11 +511,6 @@ test('a chat turn with Project Context Builder enabled writes the project contex
    a duplicate. This was fail-marked until #946: the SECOND turn could not run at all while the
    first context was in effect. */
 test('a second Project Context Builder turn updates the context in place', async ({ page }) => {
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the Python SDK worker has no port of `project_context_builder`; the python leg asserts that ' +
-      'absence through the capability route instead (see the last test in this file)',
-  );
   // ── WHY THIS TEST WAS FAIL-MARKED, AND WHAT FIXED IT (#946) ─────────────
   //
   // Measured on the standalone stack, 2026-09-16: the first turn wrote the
@@ -627,11 +595,9 @@ test('a second Project Context Builder turn updates the context in place', async
   }
 });
 
-/* onetest: ELITEA-2784/2786 — the precondition BOTH cases assume, and the only half of this file
-   the python leg can assert: whether this deployment serves the two modules at all. The turn
-   tests above run on the native leg; on the python leg this is the assertion, because the SDK
-   worker has no port of either module and the product is required to SAY so (a toggle that is
-   offered and then silently does nothing is the failure #866 existed to end). */
+/* onetest: ELITEA-2784/2786 — the precondition BOTH cases assume: whether this deployment
+   serves the two modules at all. The product is required to SAY so (a toggle that is offered
+   and then silently does nothing is the failure #866 existed to end). */
 test('the deployment reports whether the builder modules are served by its worker', async ({ page }) => {
   test.setTimeout(60_000);
 
@@ -645,26 +611,18 @@ test('the deployment reports whether the builder modules are served by its worke
     internal_tools?: Record<string, boolean>;
   };
 
-  // Which worker the DEPLOYMENT says it runs, checked against which worker
-  // this leg was started as. A mismatch means the leg proved nothing about
-  // the runtime it named, whichever way the rest of the assertions go.
-  expect(
-    body.worker,
-    'the deployment must report the worker this leg was started against',
-  ).toBe(IS_NATIVE_RUNTIME ? 'rust' : 'python');
+  // Which worker the DEPLOYMENT says it runs. Anything but the native runtime
+  // means the turns above proved nothing about it.
+  expect(body.worker, 'the deployment must report the native Rust worker').toBe('rust');
 
   expect(
     body.internal_tools?.[SKILLS_BUILDER],
-    IS_NATIVE_RUNTIME
-      ? '`skills_builder` must be reported AVAILABLE on the native runtime — the turn test above binds it'
-      : '`skills_builder` must be reported UNAVAILABLE on the python worker, which has no port of it',
-  ).toBe(IS_NATIVE_RUNTIME);
+    '`skills_builder` must be reported AVAILABLE on the native runtime — the turn test above binds it',
+  ).toBe(true);
   expect(
     body.internal_tools?.[PROJECT_CONTEXT_BUILDER],
-    IS_NATIVE_RUNTIME
-      ? '`project_context_builder` must be reported AVAILABLE on the native runtime'
-      : '`project_context_builder` must be reported UNAVAILABLE on the python worker',
-  ).toBe(IS_NATIVE_RUNTIME);
+    '`project_context_builder` must be reported AVAILABLE on the native runtime',
+  ).toBe(true);
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -711,11 +669,6 @@ async function skillNamesIn(request: APIRequestContext, projectId: string): Prom
    only: the model names no project, the row appears in the conversation's
    project, and the other project the caller can see is untouched. */
 test('Skills Builder writes into the conversation’s own project and nowhere else', async ({ page }) => {
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the Python SDK worker has no port of `skills_builder`; the python leg asserts that absence ' +
-      'through the capability route instead',
-  );
   test.setTimeout(360_000);
 
   const stamp = Date.now() % 1_000_000;
@@ -767,11 +720,6 @@ test('Skills Builder writes into the conversation’s own project and nowhere el
 test('Project Context Builder writes the conversation’s own project context and leaves another project’s alone', async ({
   page,
 }) => {
-  test.skip(
-    !IS_NATIVE_RUNTIME,
-    'the Python SDK worker has no port of `project_context_builder`; the python leg asserts that ' +
-      'absence through the capability route instead',
-  );
   test.setTimeout(360_000);
 
   const stamp = Date.now() % 1_000_000;

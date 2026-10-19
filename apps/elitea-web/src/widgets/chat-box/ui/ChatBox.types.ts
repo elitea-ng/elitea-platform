@@ -62,6 +62,12 @@ export interface ChatBoxProps {
      * continue one (`pages/chat/LocalWorkNotice.tsx`).
      */
     readonly readOnlyNotice?: ReactNode;
+    /**
+     * Drops regenerate from the transcript while the composer stays (a thread
+     * whose newest answer ran on a desktop: the server refuses to regenerate
+     * it, `local_work_turn`).
+     */
+    readonly noRegenerate?: boolean;
     /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
     readonly editorCallbacks?: ChatBoxEditorCallbacks;
     /** Real lists for the composer's "+" menu — see `processes/chat/model/usePlusMenuEntities.ts`, which is the only layer allowed to fetch them. */

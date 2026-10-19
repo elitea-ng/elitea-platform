@@ -320,6 +320,10 @@ nats:
                     # from this family only, and budget.soft_alert from the
                     # gateway's imported subject only.
                     - "elitea.events.project.*.presence"
+                    # Workspace handoff state changes (ADR-0034): its own
+                    # family too; the SSE route relays them only to each
+                    # frame's audience (the thread's readers).
+                    - "elitea.events.project.*.workspace"
                     # Presence Put/Delete.
                     - "$KV.ELITEA_CANVAS_PRESENCE.>"
                     # Bind (js.KeyValue) and the bucket status check.
@@ -345,8 +349,9 @@ nats:
                     - "$JS.API.ACCOUNT.PURGE.>"
                 subscribe:
                   allow:
-                    # The two families the project SSE route reads.
+                    # The three families the project SSE route reads.
                     - "elitea.events.project.*.presence"
+                    - "elitea.events.project.*.workspace"
                     - "gateway.events.project.*.events"
                     - "_INBOX_elitea-main.>"
 

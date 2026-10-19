@@ -34,31 +34,33 @@ import (
 // real worker-capability verdict despite being hand-written.
 var nativeToolkitTypes = []string{"application", "custom", "database", "datasource", "imagegen"}
 
-// pythonUnsupportedTypes are the SDK types the admitted Python worker image
-// cannot build, expressed as TYPES rather than as the import keys the snapshot
-// records. The pair kubernetes/k8s is the reason this list is written out: the
-// SDK registers that toolkit under `k8s` and publishes it as `kubernetes`, so a
-// capability check keyed on the type would never match it and the tile would be
-// offered by a deployment that cannot run it.
-//
-// google_places, rally, service_now and slack used to be here too. #869 added
-// their four measured third-party API clients (googlemaps, pyral, pysnc,
-// slack_sdk) to the worker's agent-current extra, so the admitted image now
-// imports all four.
-var pythonUnsupportedTypes = []string{
-	"aws", "azure", "azure_search", "bigquery", "delta_lake", "gcp",
-	"kubernetes", "localgit", "yagmail",
+// sdkTypesWithoutRustFamily are SDK types the Rust worker has no family for.
+// kubernetes is the pair that matters: the SDK registers it under `k8s` and
+// publishes it as `kubernetes`, and the Rust match arm is the string "k8s",
+// which no platform type equals.
+var sdkTypesWithoutRustFamily = []string{
+	"aws", "delta_lake", "kubernetes", "localgit",
 }
 
 // rustOnlyTypes are the types the SDK does not have and only the Rust worker
-// serves (ADR-0032 P4). A Python deployment withholds them whole.
+// serves (ADR-0032 P4). A deployment that states no worker withholds them.
 var rustOnlyTypes = []string{"docx", "xlsx"}
 
-// pythonWithheldTypes is every type a Python deployment serves as unavailable.
-func pythonWithheldTypes() []string {
-	all := append(append([]string(nil), pythonUnsupportedTypes...), rustOnlyTypes...)
-	sort.Strings(all)
-	return all
+// rustWithheldTypes is every catalogued type the Rust worker serves as
+// unavailable, as the pinned capability answers it.
+func rustWithheldTypes(t *testing.T) []string {
+	t.Helper()
+	capability := pinnedWorkerCapability(t, "rust")
+	catalogue := pinnedCatalogue(t)
+	withheld := []string{}
+	for _, toolkitType := range catalogue.ToolkitTypes() {
+		key, _ := catalogue.ToolkitImportKey(toolkitType)
+		if ok, _ := capability.SupportsToolkitType(toolkitType, key); !ok {
+			withheld = append(withheld, toolkitType)
+		}
+	}
+	sort.Strings(withheld)
+	return withheld
 }
 
 func pinnedCatalogue(t *testing.T) *runtimecomposition.CurrentToolkitCatalogueSnapshot {
@@ -118,7 +120,7 @@ func metadataOf(t *testing.T, body map[string]any, toolkitType string) map[strin
 func TestToolkitTypeCatalogueServesEverySDKTypeAndTheNativeFour(t *testing.T) {
 	t.Parallel()
 
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 
 	want := map[string]struct{}{}
 	for _, toolkitType := range pinnedCatalogue(t).ToolkitTypes() {
@@ -154,10 +156,10 @@ func TestToolkitTypeCatalogueServesEverySDKTypeAndTheNativeFour(t *testing.T) {
 func TestEveryServedTypeHasSchemaMetadataAndCapabilityVerdict(t *testing.T) {
 	t.Parallel()
 
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	catalogue := pinnedCatalogue(t)
 	unsupported := map[string]struct{}{}
-	for _, toolkitType := range pythonWithheldTypes() {
+	for _, toolkitType := range rustWithheldTypes(t) {
 		unsupported[toolkitType] = struct{}{}
 	}
 
@@ -227,7 +229,7 @@ func TestCatalogueWithoutAWorkerCapabilityOffersEveryType(t *testing.T) {
 
 	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "")...)
 
-	for _, toolkitType := range pythonUnsupportedTypes {
+	for _, toolkitType := range sdkTypesWithoutRustFamily {
 		metadata := metadataOf(t, body, toolkitType)
 		if _, present := metadata["unavailable"]; present {
 			t.Errorf("%s is marked unavailable with no capability source configured", toolkitType)
@@ -243,37 +245,6 @@ func TestCatalogueWithoutAWorkerCapabilityOffersEveryType(t *testing.T) {
 		if unavailable, _ := metadata["unavailable"].(bool); !unavailable {
 			t.Errorf("%s is offered with no capability source", toolkitType)
 		}
-	}
-}
-
-// The Python image installs a measured subset of elitea-sdk[all]. These nine
-// types are in the registry and raise at import, so they fail at the first
-// tool call rather than at create time — which is why they are withheld.
-func TestPythonWorkerCapabilityWithholdsTheTypesItCannotImport(t *testing.T) {
-	t.Parallel()
-
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
-
-	withheld := []string{}
-	for toolkitType := range body {
-		metadata := metadataOf(t, body, toolkitType)
-		if unavailable, _ := metadata["unavailable"].(bool); unavailable {
-			if reason, _ := metadata["unavailable_reason"].(string); reason != "" &&
-				toolkitType != "mcp_config" {
-				withheld = append(withheld, toolkitType)
-			}
-		}
-	}
-	sort.Strings(withheld)
-	if !equalStrings(withheld, pythonWithheldTypes()) {
-		t.Errorf("withheld %v, want %v", withheld, pythonWithheldTypes())
-	}
-
-	// The reason names the toolkit the operator has to act on, and names the
-	// IMPORT KEY, because that is the name the failure is recorded under.
-	reason, _ := metadataOf(t, body, "kubernetes")["unavailable_reason"].(string)
-	if !contains(reason, "k8s") {
-		t.Errorf("kubernetes reason=%q, want it to name the k8s import key", reason)
 	}
 }
 
@@ -314,18 +285,12 @@ func TestRustWorkerCapabilityWithholdsTheFamiliesItCannotMaterialize(t *testing.
 
 // imagegen is hand-written (its credential is the project's own
 // image_generation model, not a pinned-snapshot settings shape) but it IS a
-// real, worker-implemented toolkit (elitea_sdk/tools/imagegen on Python, the
-// native imagegen family on Rust, #864) — unlike the other four hand-written
-// types, it must still carry a genuine worker verdict: buildable under both
-// workers, and offered with no verdict when no capability source is wired.
+// real, worker-implemented toolkit (the native imagegen family, #864), so
+// unlike the other four hand-written types it must still carry a genuine
+// worker verdict: buildable under the Rust
+// worker, and offered with no verdict when no capability source is wired.
 func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
 	t.Parallel()
-
-	python := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
-	pythonMetadata := metadataOf(t, python, "imagegen")
-	if unavailable, _ := pythonMetadata["unavailable"].(bool); unavailable {
-		t.Errorf("imagegen is Python-buildable and is marked unavailable: %#v", pythonMetadata)
-	}
 
 	rust := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	rustMetadata := metadataOf(t, rust, "imagegen")
@@ -349,7 +314,7 @@ func TestImageGenIsHandWrittenButStillWorkerGated(t *testing.T) {
 func TestHandWrittenTypesSurviveTheSDKCatalogue(t *testing.T) {
 	t.Parallel()
 
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 
 	for _, toolkitType := range nativeToolkitTypes {
 		schema := typeSchemaOf(t, body, toolkitType)
@@ -393,7 +358,7 @@ func TestHandWrittenTypesSurviveTheSDKCatalogue(t *testing.T) {
 func TestNameRequiredIsServedForSDKTypesOnly(t *testing.T) {
 	t.Parallel()
 
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 
 	// confluence declares no toolkit_name field, so a name is required.
 	if required, _ := typeSchemaOf(t, body, "confluence")["name_required"].(bool); !required {
@@ -422,7 +387,7 @@ func TestGuardrailsRemoveAServedTypeTheWorkerSupports(t *testing.T) {
 	blocked := &guardrailSourceStub{policy: guardrails.NewPolicy(guardrails.PolicyInput{
 		BlockedToolkits: []string{"github", "confluence"},
 	})}
-	options := append(catalogueOptions(t, "python"), toolkits.WithGuardrails(blocked))
+	options := append(catalogueOptions(t, "rust"), toolkits.WithGuardrails(blocked))
 
 	body := getToolkitTypeCatalogue(t, options...)
 
@@ -441,7 +406,7 @@ func TestGuardrailsRemoveAServedTypeTheWorkerSupports(t *testing.T) {
 func TestServingTheCatalogueDoesNotMutateSharedState(t *testing.T) {
 	t.Parallel()
 
-	options := catalogueOptions(t, "python")
+	options := catalogueOptions(t, "rust")
 	first := getToolkitTypeCatalogue(t, options...)
 
 	// Write into the served tree the way a caller might.
@@ -463,7 +428,7 @@ func TestServingTheCatalogueDoesNotMutateSharedState(t *testing.T) {
 func TestIndexCapableTypesCoverTheIndexingFamilies(t *testing.T) {
 	t.Parallel()
 
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 
 	indexing := []string{
 		"ado_plans", "ado_repos", "ado_wiki", "bitbucket", "confluence",
@@ -511,7 +476,7 @@ func TestTheWebChooserFixtureMatchesTheServedCatalogue(t *testing.T) {
 		t.Fatalf("decode the web chooser fixture: %v", err)
 	}
 
-	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	if len(fixture) != len(body) {
 		t.Fatalf("the fixture holds %d types and the catalogue serves %d", len(fixture), len(body))
 	}
@@ -559,18 +524,6 @@ func sortedKeys(body map[string]any) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func equalStrings(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for index := range got {
-		if got[index] != want[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func contains(haystack, needle string) bool {
@@ -651,37 +604,20 @@ func TestPptxCatalogueListsTheRustOnlyTools(t *testing.T) {
 	}
 }
 
-// The Rust-only tools are offered only where the Rust worker serves them: the
-// Python deployment marks the nineteen unavailable (the metadata mechanism a
-// partial family uses), the Rust deployment marks none.
-func TestPptxRustOnlyToolsAreWithheldOnAPythonDeployment(t *testing.T) {
+// The Rust-only pptx tools are offered on the Rust deployment: it marks none of
+// the twenty-one unavailable.
+func TestPptxRustOnlyToolsAreOfferedOnTheRustDeployment(t *testing.T) {
 	t.Parallel()
 
-	unavailable := func(implementation string) []any {
-		body := getToolkitTypeCatalogue(t, catalogueOptions(t, implementation)...)
-		list, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any)
-		return list
-	}
-	python := unavailable("python")
-	if len(python) != 19 {
-		t.Fatalf("python deployment withholds %d pptx tools, want the 19 Rust-only ones: %v", len(python), python)
-	}
-	for _, sdk := range []string{"fill_template", "translate_presentation"} {
-		for _, name := range python {
-			if name == sdk {
-				t.Errorf("the SDK tool %s must stay available on python", sdk)
-			}
-		}
-	}
-	if rust := unavailable("rust"); len(rust) != 0 {
-		t.Fatalf("rust deployment withholds pptx tools: %v", rust)
+	body := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
+	if list, _ := metadataOf(t, body, "pptx")["unavailable_tools"].([]any); len(list) != 0 {
+		t.Fatalf("rust deployment withholds pptx tools: %v", list)
 	}
 }
 
 // docx and xlsx have no SDK counterpart (ADR-0032 P4): the Rust worker's tools
 // are merged into the catalogue as whole types. The editor lists every tool of
-// each; a Python deployment withholds the type, with a reason that says only
-// the Rust worker serves it; a Rust deployment offers it.
+// each, and the Rust deployment offers it.
 func TestDocxAndXlsxAreRustOnlyTypes(t *testing.T) {
 	t.Parallel()
 
@@ -707,16 +643,6 @@ func TestDocxAndXlsxAreRustOnlyTypes(t *testing.T) {
 			t.Errorf("%s has no label", toolkitType)
 		}
 
-		python := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
-		metadata = metadataOf(t, python, toolkitType)
-		reason, _ := metadata["unavailable_reason"].(string)
-		if unavailable, _ := metadata["unavailable"].(bool); !unavailable ||
-			!contains(reason, "only the Rust worker serves it") {
-			t.Errorf("%s on python: unavailable=%v reason=%q", toolkitType, metadata["unavailable"], reason)
-		}
-		if hidden, _ := metadata["hidden"].(bool); !hidden {
-			t.Errorf("%s is offered as a tile on a Python deployment", toolkitType)
-		}
 	}
 }
 

@@ -42,7 +42,7 @@ function toMessage(row: Record<string, unknown>): ServerMessage | null {
   return { id: key, role, content };
 }
 
-async function serverMessages(projectId: number, conversationId: string): Promise<ServerMessage[]> {
+export async function serverMessages(projectId: number, conversationId: string): Promise<ServerMessage[]> {
   // Newest first (the route's default order), then put back in reading order.
   const payload = await conversationApi.messageList({ projectId, conversationId, page: 0, pageSize: SERVER_MESSAGES });
   return unwrapList<Record<string, unknown>>(payload, 'conversation.messageList')

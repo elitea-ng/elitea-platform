@@ -1,0 +1,70 @@
+{{- /*
+ADR-0034 decision 9: egress for the cloud executor's workspace runs.
+
+The execution namespace keeps its deny-all policy (kubernetes-boundary.yaml).
+NetworkPolicies are additive, so this one opens egress for exactly the Pods
+the supervisor labels `sandbox.elitea.ai/kind: workspace-run` AND
+`sandbox.elitea.ai/egress: public` — the label is set only when the
+project's network switch is on. A workspace run with the network off, and
+every toolkit Code Pod, matches no allow rule and stays fully denied.
+
+Allowed: 0.0.0.0/0 and ::/0 minus RFC 1918, carrier-grade NAT, link-local
+(the 169.254.169.254 metadata address included), loopback, unique-local IPv6
+(fd00:ec2::254 included) and the cluster's own Pod and Service ranges; DNS to
+the cluster resolver only. This is direct mode (network on, no host
+allowlist). A NetworkPolicy cannot enforce host names, so a project with a
+host allowlist runs in proxy mode instead: its Pod carries
+`sandbox.elitea.ai/egress: proxy`, which this policy does not select, and
+workspace-proxy-egress.yaml lets it reach only the egress proxy.
+*/ -}}
+{{- $s := .Values.sandboxKubernetes }}
+{{- $w := $s.workspaceRuns }}
+{{- if and $s.enabled $w.enabled $w.egress.enabled }}
+{{- if or (not $w.egress.podCidrs) (not $w.egress.serviceCidrs) }}{{ fail "sandboxKubernetes.workspaceRuns.egress needs the cluster's podCidrs and serviceCidrs, so workspace runs cannot reach in-cluster services" }}{{ end }}
+{{- if or (not $w.egress.dnsNamespaceLabels) (not $w.egress.dnsPodLabels) }}{{ fail "sandboxKubernetes.workspaceRuns.egress needs explicit DNS namespace and Pod labels" }}{{ end }}
+{{- $v4 := list }}
+{{- $v6 := list }}
+{{- range concat $w.egress.denyCidrs $w.egress.podCidrs $w.egress.serviceCidrs }}
+{{- if not (regexMatch "^[a-fA-F0-9.:]+/[0-9]+$" .) }}{{ fail "sandboxKubernetes.workspaceRuns.egress CIDRs must be explicit IP networks" }}{{ end }}
+{{- if contains ":" . }}{{ $v6 = append $v6 . }}{{ else }}{{ $v4 = append $v4 . }}{{ end }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elitea-workspace-run-egress
+  namespace: {{ $s.executionNamespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector:
+    matchLabels:
+      sandbox.elitea.ai/kind: workspace-run
+      sandbox.elitea.ai/egress: public
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $w.egress.dnsNamespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $w.egress.dnsPodLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range uniq $v4 }}
+              - {{ . | quote }}
+              {{- end }}
+        {{- if $w.egress.ipv6 }}
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- range uniq $v6 }}
+              - {{ . | quote }}
+              {{- end }}
+        {{- end }}
+{{- end }}

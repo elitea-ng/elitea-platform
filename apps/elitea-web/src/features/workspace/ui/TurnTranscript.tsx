@@ -162,9 +162,35 @@ export interface TurnTranscriptProps {
   view: TurnView;
   busy: boolean;
   onCancel: () => void;
+  /** The turn's commit failed after `done`: send it again (absent: the notice offers no Retry). */
+  onRetryCommit?: (executionId: string) => Promise<void>;
 }
 
-export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): React.JSX.Element {
+/** The answer is on screen, but not in the conversation: the host's reason, and "Retry". */
+function CommitFailed({ failed, onRetry }: { failed: NonNullable<TurnView['commitFailed']>; onRetry?: (executionId: string) => Promise<void> }): React.JSX.Element {
+  const [retrying, setRetrying] = useState(false);
+  const action =
+    onRetry === undefined ? undefined : (
+      <Button
+        color="inherit"
+        size="small"
+        disabled={retrying}
+        onClick={() => {
+          setRetrying(true);
+          void onRetry(failed.executionId).finally(() => setRetrying(false));
+        }}
+      >
+        {t('workspace.commitFailed.retry', 'Retry')}
+      </Button>
+    );
+  return (
+    <Alert severity="warning" data-testid="commit-failed" action={action}>
+      {failed.message}
+    </Alert>
+  );
+}
+
+export function TurnTranscript({ view, busy, onCancel, onRetryCommit }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -181,6 +207,7 @@ export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): R
       {view.error !== undefined && (
         <Alert severity="error">{view.error.message}</Alert>
       )}
+      {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (
           <Tooltip title={view.projectInstructions.join(', ')}>
