@@ -31,8 +31,12 @@ def setting(path):
 def values():
     return {
         'postgresql': {'maxConnections': 250},
-        'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS)}},
-        'worker': {'enabled': True, 'implementation': 'rust', 'indexingRuntime': 'python', 'runtime': {'sandboxRuntimes': [
+        # Indexing off: the standalone values turn index dispatch on, and the
+        # Rust indexing runtime (the only one) then needs a vector store these
+        # compiled-snapshot contracts do not exercise.
+        'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS),
+                             'indexIngestDispatch': {'enabled': False, 'commandStream': ''}}},
+        'worker': {'enabled': True, 'implementation': 'rust', 'runtime': {'sandboxRuntimes': [
             dict(language='python', target='python:9446', audience='dns:python', image_digest=IMAGE,
                  policy_revision='python-v1', timeout_seconds=60,
                  preparation=dict(target='python-prep:9448', audience='dns:python-prep',
@@ -401,7 +405,10 @@ class Compose(unittest.TestCase):
                              ('elitea-sandbox', '/run/elitea-sandbox/rust/rust-compiled-profiles.json')]:
             mount = next(m for m in new[name]['volumes'] if m['target'] == target)
             self.assertTrue(mount['read_only'])
-            self.assertFalse(mount['bind']['create_host_path'])
+            # Compose v2.40+ exports create_host_path=false by omitting the key
+            # (true, and the short syntax, export it explicitly), so read the
+            # absent key as false; an explicit true still fails.
+            self.assertIs(mount['bind'].get('create_host_path', False), False)
             self.assertEqual(mount['source'].replace('$$', '$'), '/private/synthetic/release$immutable.json')
 
     def test_compose_export_roundtrip_keeps_dollars(self):
