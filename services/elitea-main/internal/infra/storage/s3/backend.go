@@ -86,8 +86,15 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 
 	client := s3.NewFromConfig(awsCfg, clientOpts...)
 	return &Backend{
-		client:    client,
-		uploader:  transfermanager.New(client),
+		client: client,
+		// The transfer manager does not inherit the client's checksum
+		// setting: unset, it sends CRC32 on every part. Hand it the resolved
+		// one, so AWS_REQUEST_CHECKSUM_CALCULATION=when_required reaches the
+		// multipart path too (RustFS 1.0.0-beta.8 refuses a checksummed
+		// UploadPart into a bucket with default SSE).
+		uploader: transfermanager.New(client, func(o *transfermanager.Options) {
+			o.RequestChecksumCalculation = awsCfg.RequestChecksumCalculation
+		}),
 		bucket:    cfg.Bucket,
 		keyPrefix: cfg.KeyPrefix,
 	}, nil

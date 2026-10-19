@@ -1401,6 +1401,14 @@ main:
     S3_ENDPOINT_URL: ""
     S3_REGION: ""
     S3_FORCE_PATH_STYLE: ""
+    # S3-only. The AWS SDK's own setting, read by the SDK, not by Main's code.
+    # Empty keeps the SDK default: a CRC32 on every upload. "when_required"
+    # sends a checksum only where Main asks for one (presigned SHA-256
+    # uploads), so Main's other uploads, PutObject and every multipart part,
+    # go without a per-request integrity check. Needed for a RustFS
+    # 1.0.0-beta.8 bucket with default encryption, which refuses a
+    # checksummed UploadPart (Cloud executor on Kubernetes, step 2).
+    AWS_REQUEST_CHECKSUM_CALCULATION: ""
     # Azure-only. AZURE_STORAGE_KEY is NOT here — see the secrets: block below;
     # leaving it unset (empty string, the Secret's `optional: true`) makes the
     # backend use workload identity via serviceAccount.annotations instead of a
