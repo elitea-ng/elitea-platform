@@ -1,0 +1,43 @@
+{{- /*
+ADR-0034 decision 9, "Host allowlist: the egress proxy": the network shape of
+a workspace run whose project restricts the network to a host allowlist.
+
+The supervisor labels such a run `sandbox.elitea.ai/kind: workspace-run` AND
+`sandbox.elitea.ai/egress: proxy` (sandbox::workspace_run, EGRESS_PROXY).
+This policy is the ONLY allow rule that selects it: the run reaches the
+egress proxy's pods on the proxy port and nothing else. No DNS (the pod has
+`dnsPolicy: None` and a loopback nameserver; the worker hands it the proxy's
+address as an IP literal), no direct egress. The execution namespace's
+deny-all policy covers everything else, and elitea-workspace-run-egress
+(direct mode) selects only `egress: public`, never these pods.
+
+Rendered whenever the proxy and Kubernetes workspace runs are both on; it
+does not depend on workspaceRuns.egress (direct mode).
+*/ -}}
+{{- $s := .Values.sandboxKubernetes }}
+{{- $w := $s.workspaceRuns }}
+{{- if and $s.enabled $w.enabled .Values.egressProxy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elitea-workspace-run-proxy-egress
+  namespace: {{ $s.executionNamespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector:
+    matchLabels:
+      sandbox.elitea.ai/kind: workspace-run
+      sandbox.elitea.ai/egress: proxy
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "elitea-egress-proxy.selectorLabels" . | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.egressProxy.service.port }}}
+{{- end }}

@@ -57,13 +57,12 @@ interface AdminToolkitTypeGrant {
 /**
  * The worker-support verdict, which is ADVISORY.
  *
- * `unverified` is not a claim that the type fails. It reports that neither the
- * pinned Python worker image nor the Rust worker is KNOWN to carry it. The page
- * shows `reason` beside it so an operator does not read the chip as a refusal.
+ * `unverified` is not a claim that the type fails. It reports that the Rust
+ * worker is not KNOWN to carry it. The page shows `reason` beside it so an
+ * operator does not read the chip as a refusal.
  */
 interface AdminToolkitTypeCapability {
   readonly verdict: 'supported' | 'unverified';
-  readonly python: boolean;
   readonly rust: boolean;
   readonly reason: string;
 }

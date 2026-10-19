@@ -924,7 +924,7 @@ pub(crate) fn runtime_error_policy(
         ),
         RuntimeFailureKind::OutputContinuationExhausted => (
             RuntimeErrorCodeV1::OutputContinuationExhausted,
-            "Automatic continuation could not finish. The model response is incomplete.",
+            "Continuation could not finish. The model response is incomplete.",
             false,
         ),
         RuntimeFailureKind::ModelTimeout => (
@@ -1689,7 +1689,7 @@ mod continuation_failure_tests {
         );
         assert_eq!(
             error.safe_message,
-            "Automatic continuation could not finish. The model response is incomplete."
+            "Continuation could not finish. The model response is incomplete."
         );
         assert!(!error.retryable);
         assert_eq!(

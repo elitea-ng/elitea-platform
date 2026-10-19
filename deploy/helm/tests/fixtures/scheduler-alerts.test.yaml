@@ -1,0 +1,65 @@
+# promtool unit tests for the scheduler's budget write-back alerts, run by
+# deploy/helm/tests/render-scheduler-alerts.sh against the rule the elitea
+# chart renders (templates/scheduler/monitoring.yaml).
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # A fresh scheduler exposes both series at 0, then ONE delta is dropped.
+  # This is the case that never paged while the series first appeared at 1.
+  - interval: 1m
+    input_series:
+      - series: 'budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="22"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="23"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: EliteaBudgetWriteBackDroppedDelta
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EliteaBudgetWriteBackDroppedDelta
+        exp_alerts:
+          - exp_labels: {severity: critical, reason: permanent_apply_error, sqlstate_class: "22"}
+            exp_annotations:
+              summary: "The budget write-back dropped a spend delta"
+              description: "Delta(s) were terminated in the last 15 minutes (reason permanent_apply_error, SQLSTATE class 22). Their spend is NOT in gateway.llm_budget_accumulators. The scheduler's ERROR log line \"delta fails permanently\" names each event_id and amount."
+  # A series that appears late, already at 1 (a restart between scrapes, a new
+  # label value): the `unless ... offset` arm fires.
+  - interval: 1m
+    input_series:
+      - series: 'budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="23"}'
+        values: '_ _ _ _ _ 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: EliteaBudgetWriteBackDroppedDelta
+        exp_alerts:
+          - exp_labels: {severity: critical, reason: permanent_apply_error, sqlstate_class: "23"}
+            exp_annotations:
+              summary: "The budget write-back dropped a spend delta"
+              description: "Delta(s) were terminated in the last 15 minutes (reason permanent_apply_error, SQLSTATE class 23). Their spend is NOT in gateway.llm_budget_accumulators. The scheduler's ERROR log line \"delta fails permanently\" names each event_id and amount."
+  # Nothing dropped: never fires.
+  - interval: 1m
+    input_series:
+      - series: 'budget_writeback_dropped_total{reason="permanent_apply_error",sqlstate_class="22"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: EliteaBudgetWriteBackDroppedDelta
+        exp_alerts: []
+  # Ack-pending above 80% of 40000 for 5m pages; below does not.
+  - interval: 1m
+    input_series:
+      - series: 'budget_writeback_num_ack_pending'
+        values: '1000x5 33000x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: EliteaBudgetWriteBackAckPendingNearlyFull
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: EliteaBudgetWriteBackAckPendingNearlyFull
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "The budget write-back consumer is near its MaxAckPending"
+              description: "82.5% of budget-writeback's 40000 ack-pending slots are held by deliveries waiting on a redelivery. When the window is full, write-back stops taking new deltas for every scope until slots free. Check the scheduler's ERROR/WARN log for the failing apply (database, schema or grants) and /readyz/budget-writeback."

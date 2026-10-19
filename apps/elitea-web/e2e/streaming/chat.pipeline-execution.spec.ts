@@ -69,7 +69,7 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
  * (`src/shared/lib/pipelineStarterTemplate.ts`), reproduced here because
  * nothing under `e2e/` imports from `src/`.
  *
- * It is the smallest graph BOTH runtimes run, and each line is load-bearing
+ * It is the smallest graph the runtime runs, and each line is load-bearing
  * for a measured reason its own source records: every `state:` entry is a
  * MAPPING rather than a bare type name (the SDK's `set_defaults` writes into
  * each entry and raises `TypeError` on a string, which killed a turn before

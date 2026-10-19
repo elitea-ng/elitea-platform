@@ -27,7 +27,16 @@ type PutOptions struct {
 	ContentType   string
 	ContentLength int64 // -1 when unknown
 	Metadata      map[string]string
+	// ChecksumSHA256 is the raw SHA-256 digest the backend must verify on
+	// the PUT. A backend with Capabilities.ChecksumSHA256 refuses a body
+	// that does not match it; a presigned PUT signs it, so the client must
+	// send it as ChecksumSHA256Header. Other backends ignore it.
+	ChecksumSHA256 []byte
 }
+
+// ChecksumSHA256Header is the request header that carries the base64 SHA-256
+// digest of a presigned PUT on a backend with Capabilities.ChecksumSHA256.
+const ChecksumSHA256Header = "x-amz-checksum-sha256"
 
 // ByteRange requests a byte-range read from Get. End -1 means "to end of
 // object".
@@ -65,6 +74,10 @@ type Capabilities struct {
 	Presign         bool
 	NativeMultipart bool
 	ServerSideCopy  bool
+	// ChecksumSHA256: a single-part PUT with PutOptions.ChecksumSHA256 is
+	// refused unless the body matches it, and Stat reports the stored
+	// full-object digest in ObjectInfo.DigestSHA256.
+	ChecksumSHA256 bool
 }
 
 // ObjectStore is the target storage abstraction: S3/Azure/GCS-compatible

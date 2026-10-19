@@ -44,35 +44,11 @@
 */ -}}
 {{- $env = set (deepCopy $env) "ELITEA_CONFIGURATIONS_ENABLED" (include "elitea-main.configurationsEnabled" $) }}
 {{- /*
-  Which worker image this release runs, from the ONE place an operator states
-  it. elitea-main serves a toolkit type as creatable only when the running
-  worker can build it, and the two workers can build different sets: the Python
-  image imports 39 of the 52 SDK toolkits and the native worker materializes 22
-  families. Nothing else tells this process which one is deployed. This
-  chart's default (python, #865/#866) now agrees with elitea-main's own
-  built-in default, but an unstated value would still under-serve a release
-  that overrides worker.implementation to rust without this template
-  running — so the value is always written explicitly, never left implicit.
-
-  An explicit env entry still wins, for the release that pins
-  worker.image.repository directly and so does not follow worker.implementation.
-*/ -}}
-{{- if not (get $env "ELITEA_WORKER_IMPLEMENTATION") }}
-{{- $env = merge (deepCopy $env) (dict "ELITEA_WORKER_IMPLEMENTATION" $.Values.worker.implementation) }}
-{{- end }}
-{{- /*
-  ELITEA_INDEXING_RUNTIME (ADR-0030 decision 6, ADR-0031 V1) is stated the same
-  way, from worker.indexingRuntime, so elitea-main never guesses which store its
-  index routes read: the per-project pgvector index_meta rows (python) or the
-  elitea_runtime.index_registry table (rust). An explicit env entry still wins.
-*/ -}}
-{{- /*
-  The runtime comes from the "elitea.indexingRuntime" helper (the explicit
-  worker.indexingRuntime, python otherwise: the chart never switches to rust by
-  itself). guards.yaml refuses a main.env.ELITEA_INDEXING_RUNTIME override that
-  disagrees with it, and refuses an explicit rust whose prerequisites are
-  missing, because elitea-main refuses ELITEA_INDEXING_RUNTIME=rust with its
-  runtime plane off.
+  ELITEA_INDEXING_RUNTIME (ADR-0030 decision 6, ADR-0031 V1) is stated
+  explicitly from the "elitea.indexingRuntime" helper: rust, the only runtime.
+  elitea-main refuses any other value (the retired python included) at startup,
+  and guards.yaml refuses a main.env override that disagrees, so the two can
+  never index in different places.
 */ -}}
 {{- if not (get $env "ELITEA_INDEXING_RUNTIME") }}
 {{- $indexingRuntime := include "elitea.indexingRuntime" $ }}
@@ -82,10 +58,10 @@
   ELITEA_MEMORY_EMBEDDING_MODEL (worker unit M9): the SAME value as the worker's
   runtime.json memory_embedding_model, so elitea-main knows whether the memory
   toolkit is actually served and withholds it from the catalogue with a reason
-  when no model is configured. Written only under the Rust indexing runtime when
+  when no model is configured. Written only while the release indexes, when
   set; an explicit env entry still wins.
 */ -}}
-{{- if and (eq (include "elitea.indexingRuntime" $) "rust") (($.Values.worker.runtime | default dict).memoryEmbeddingModel) (not (get $env "ELITEA_MEMORY_EMBEDDING_MODEL")) }}
+{{- if and (include "elitea.indexingEnabled" $) (($.Values.worker.runtime | default dict).memoryEmbeddingModel) (not (get $env "ELITEA_MEMORY_EMBEDDING_MODEL")) }}
 {{- $env = merge (deepCopy $env) (dict "ELITEA_MEMORY_EMBEDDING_MODEL" (($.Values.worker.runtime).memoryEmbeddingModel | toString)) }}
 {{- end }}
 {{- /*

@@ -40,7 +40,8 @@ func TestTheStoredWebhookSecretIsRemovedAndNothingElse(t *testing.T) {
 
 	var applicationID int64
 	if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.applications (name, description, owner_id) VALUES ('agent', '', 1) RETURNING id`,
+INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+VALUES ('agent', '', 1, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`,
 	).Scan(&applicationID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
@@ -50,8 +51,8 @@ INSERT INTO p_1.applications (name, description, owner_id) VALUES ('agent', '', 
 		"array":          `["webhook_secret"]`,
 	} {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.application_versions (application_id, name, status, author_id, agent_type, llm_settings)
-VALUES ($1, $2, 'published', 1, 'openai', $3::jsonb)`, applicationID, name, settings); err != nil {
+INSERT INTO p_1.application_versions (application_id, name, status, author_id, agent_type, llm_settings, created_at)
+VALUES ($1, $2, 'published', 1, 'openai', $3::jsonb, now() AT TIME ZONE 'UTC')`, applicationID, name, settings); err != nil {
 			t.Fatalf("seed version %s: %v", name, err)
 		}
 	}

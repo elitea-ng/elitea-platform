@@ -6,7 +6,6 @@
 //! the production runner, and resume through the production text continuation.
 
 use std::collections::HashMap;
-use std::str::FromStr as _;
 use std::sync::Arc;
 
 use adk_rust::graph::{Checkpoint, Checkpointer};
@@ -181,7 +180,7 @@ pub(super) async fn activate(
     attempt: u64,
     definition: &PipelineDefinition,
 ) -> Services {
-    let options = sqlx::postgres::PgConnectOptions::from_str(
+    let options = crate::test_pg::connect_options(
         &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
     .expect("parse database URL")
@@ -191,6 +190,7 @@ pub(super) async fn activate(
         .connect_with(options)
         .await
         .expect("connect isolated database");
+    crate::test_pg::assert_test_session(&pool, "pipeline_pg_test_support::activate").await;
     let fence = [u8::try_from(attempt).expect("attempt"); 32];
     let lease = Arc::new(TestStateWriterLease::current());
     let sessions = PostgresSessionService::activate(

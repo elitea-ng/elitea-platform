@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -174,6 +175,106 @@ func TestEnforcementPlane_UnwiredOnlyWhenConfigured(t *testing.T) {
 	if code != http.StatusOK || status != "ready" {
 		t.Errorf("/readyz = %d %q, want 200 ready for a deliberately NATS-less gateway", code, status)
 	}
+}
+
+// TestPendingRefusesSpend_FollowsTheEnforcementMode pins the live 4.45.1
+// decision: an unwired gateway refuses /llm spend until the gate is installed,
+// in every mode except the documented opt-out (=off).
+func TestPendingRefusesSpend_FollowsTheEnforcementMode(t *testing.T) {
+	for mode, want := range map[string]bool{
+		config.RequireEnforcementAuto: true,
+		config.RequireEnforcementOn:   true,
+		config.RequireEnforcementOff:  false,
+	} {
+		cfg := enforcingCfg()
+		cfg.RequireBudgetEnforcement = mode
+		if got := pendingRefusesSpend(cfg); got != want {
+			t.Errorf("mode %q: pendingRefusesSpend = %v, want %v", mode, got, want)
+		}
+	}
+}
+
+// TestBudgetPendingOpts_ComposesTheBootWindowDecision runs the composition
+// root's decision into a REAL handler and reads the outcome off it:
+// configured + unwired refuses spend (auto, on), the =off opt-out does not, a
+// wired gateway does not, and a NATS-less gateway does not.
+func TestBudgetPendingOpts_ComposesTheBootWindowDecision(t *testing.T) {
+	pool := &pgxpool.Pool{} // never dialled: only its presence is read
+	noNATS := enforcingCfg()
+	noNATS.NATSURL = ""
+	for _, tc := range []struct {
+		name    string
+		cfg     config.Config
+		wired   bool
+		pending bool
+	}{
+		{"auto, unwired", withMode(enforcingCfg(), config.RequireEnforcementAuto), false, true},
+		{"on, unwired", withMode(enforcingCfg(), config.RequireEnforcementOn), false, true},
+		{"off, unwired", withMode(enforcingCfg(), config.RequireEnforcementOff), false, false},
+		{"auto, wired", withMode(enforcingCfg(), config.RequireEnforcementAuto), true, false},
+		{"no NATS configured", noNATS, false, false},
+	} {
+		plane := &enforcementPlane{cfg: tc.cfg}
+		if tc.wired && !plane.install(&governance.GovernanceStore{}) {
+			t.Fatalf("%s: setup install refused", tc.name)
+		}
+		h := llmproxy.NewHandler(nil, nil, nil, budgetPendingOpts(tc.cfg, plane, nil, pool, testLogger())...)
+		if got := h.BudgetEnforcementPending(); got != tc.pending {
+			t.Errorf("%s: BudgetEnforcementPending = %v, want %v", tc.name, got, tc.pending)
+		}
+	}
+}
+
+// TestBudgetPendingOpts_NoPoolStaysClosedAndSaysUntilRestart covers NATS
+// configured with no database pool. The recovery loop cannot run then (it
+// returns at once), so the refusal is for the life of the process. It stays
+// fail-closed, and the log says the refusal lasts until a restart with a
+// working DATABASE_URL instead of "until NATS is reachable".
+func TestBudgetPendingOpts_NoPoolStaysClosedAndSaysUntilRestart(t *testing.T) {
+	var buf safeBuffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	cfg := withMode(enforcingCfg(), config.RequireEnforcementAuto)
+	plane := &enforcementPlane{cfg: cfg}
+	h := llmproxy.NewHandler(nil, nil, nil, budgetPendingOpts(cfg, plane, nil, nil, logger)...)
+	if !h.BudgetEnforcementPending() {
+		t.Fatal("NATS configured with no pool must still refuse spend (fail-closed)")
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"BUDGET ENFORCEMENT PENDING",
+		"until the gateway restarts with a working DATABASE_URL",
+		"reason=",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log does not say %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "until NATS is reachable") {
+		t.Errorf("log promises a recovery that cannot run:\n%s", out)
+	}
+}
+
+func withMode(cfg config.Config, mode string) config.Config {
+	cfg.RequireBudgetEnforcement = mode
+	return cfg
+}
+
+// safeBuffer is a goroutine-safe log sink.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // stubNATS is a server.NATSClient that does nothing. The recovery loop only

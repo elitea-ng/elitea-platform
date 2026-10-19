@@ -372,7 +372,7 @@ func compactSchema(property map[string]any) string {
 // per type, failing on the first type it cannot value.
 func servedCatalogueFixtures(t *testing.T) (map[string]any, map[string]map[string]any) {
 	t.Helper()
-	catalogue := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	catalogue := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	fixtures := make(map[string]map[string]any, len(catalogue))
 	var report []string
 	for _, toolkitType := range sortedKeys(catalogue) {

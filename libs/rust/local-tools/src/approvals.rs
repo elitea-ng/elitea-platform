@@ -962,6 +962,7 @@ mod tests {
             command_deny: vec!["rm".to_owned(), "git push".to_owned()],
             path_deny: vec!["*.pem".to_owned()],
             local_index: false,
+            cloud_handoff: false,
         }
     }
 

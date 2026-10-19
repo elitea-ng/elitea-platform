@@ -48,6 +48,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -1212,6 +1213,12 @@ func newPool(t *testing.T) *pgxpool.Pool {
 				t.Fatalf("apply %s to %s: %v", name, schema, err)
 			}
 		}
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

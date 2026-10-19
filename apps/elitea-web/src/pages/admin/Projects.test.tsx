@@ -49,6 +49,7 @@ const PROJECTS_BODY = {
       suspended: false,
       create_success: true,
       is_personal: false,
+      workspace_bytes: 1610612736,
     },
     {
       id: 42,
@@ -60,6 +61,7 @@ const PROJECTS_BODY = {
       suspended: true,
       create_success: true,
       is_personal: false,
+      workspace_bytes: 0,
     },
     {
       id: 43,
@@ -206,6 +208,15 @@ describe('Admin › Projects', () => {
     expect(within(grid).getByText('Failed')).toBeInTheDocument();
 
     expect(screen.queryByText('No projects')).not.toBeInTheDocument();
+  });
+
+  it("shows each project's cloud copy storage from `workspace_bytes`", async () => {
+    renderAdminRoute(<AdminProjects />);
+    expect(await screen.findByText('atlas')).toBeInTheDocument();
+    const cells = screen.getAllByTestId('admin-project-workspace-bytes').map((cell) => cell.textContent);
+    // atlas 1.5 GiB, borealis an empty 0 B, cirrus from a server without the field.
+    expect(cells).toEqual(['1.5 GiB', '0 B', '—']);
+    expect(screen.getByRole('columnheader', { name: /Cloud copies/ })).toBeInTheDocument();
   });
 
   it('labels the tabs from `counts`, which is not the page total', async () => {

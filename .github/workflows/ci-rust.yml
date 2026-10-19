@@ -3,6 +3,9 @@ name: CI — Rust worker
 on:
   pull_request:
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
@@ -12,6 +15,11 @@ on:
       # and the patched adk crates in libs/rust/vendor; they inherit package
       # fields and lints from the libs/rust workspace.
       - "libs/rust/**"
+      # The workspace-run Docker proofs create the egress network with it.
+      - "deploy/docker/workspace-egress.sh"
+      # ...and run the real egress proxy for the proxy-mode proof.
+      - "services/elitea-egress-proxy/**"
+      - "libs/go/egresslib/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
@@ -26,11 +34,23 @@ on:
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
+      # The owner-schema fixture is migrated by the real command, and the
+      # Docker supervisor tests run through the ledger helper; the ignored-test
+      # guard reads its own script and allowlist.
+      - "services/elitea-main/cmd/elitea-migrate/**"
+      - "services/elitea-main/internal/infra/db/migrate/**"
+      - "scripts/runtime/test_sandbox_ledger.py"
+      - "scripts/ci/check_worker_ignored_tests.py"
+      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/worker-ignored-tests-allowlist.txt"
       - ".github/workflows/ci-rust.yml"
   push:
     branches:
       - main
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
@@ -40,6 +60,11 @@ on:
       # and the patched adk crates in libs/rust/vendor; they inherit package
       # fields and lints from the libs/rust workspace.
       - "libs/rust/**"
+      # The workspace-run Docker proofs create the egress network with it.
+      - "deploy/docker/workspace-egress.sh"
+      # ...and run the real egress proxy for the proxy-mode proof.
+      - "services/elitea-egress-proxy/**"
+      - "libs/go/egresslib/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
@@ -54,6 +79,15 @@ on:
       - "scripts/nats/**"
       - "libs/go/natsconn/**"
       - "docs/runtime-command-bus.md"
+      # The owner-schema fixture is migrated by the real command, and the
+      # Docker supervisor tests run through the ledger helper; the ignored-test
+      # guard reads its own script and allowlist.
+      - "services/elitea-main/cmd/elitea-migrate/**"
+      - "services/elitea-main/internal/infra/db/migrate/**"
+      - "scripts/runtime/test_sandbox_ledger.py"
+      - "scripts/ci/check_worker_ignored_tests.py"
+      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/worker-ignored-tests-allowlist.txt"
       - ".github/workflows/ci-rust.yml"
   workflow_dispatch:
 
@@ -81,10 +115,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
@@ -101,6 +134,14 @@ jobs:
       - name: Run all targets and features
         run: cargo test --locked --all-targets --all-features
 
+      # build.rs reads the compiler release that native bundles record
+      # (`rust_revision`); cargo never runs a build script's own tests, so
+      # compile and run them directly with the pinned rustc.
+      - name: Test the build script's compiler-release parse
+        run: |
+          rustc --edition 2024 --test build.rs -o "${RUNNER_TEMP}/code-runner-build-rs-tests"
+          "${RUNNER_TEMP}/code-runner-build-rs-tests"
+
   quality:
     name: Format, Clippy, docs, and release
     runs-on: ubuntu-latest
@@ -111,10 +152,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Both jobs below used to do a COLD build of the whole 418-crate
       # dependency graph on every Rust PR — twice per PR, once here and once in
@@ -158,6 +198,10 @@ jobs:
   test:
     name: Test with PostgreSQL 18
     runs-on: ubuntu-latest
+    # About 28 min of work on a warm cache: 12 for the full test run, 3 for
+    # the code runner images, under 2 for the Docker tests once the ledger
+    # helper reuses this job's build (it once rebuilt for 7.5 min on the
+    # runner's stable rustc; the helper step now refuses any rebuild).
     timeout-minutes: 45
     services:
       postgres:
@@ -179,10 +223,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Both jobs below used to do a COLD build of the whole 418-crate
       # dependency graph on every Rust PR — twice per PR, once here and once in
@@ -224,7 +267,13 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: |
             go.work.sum
             libs/go/*/go.sum
@@ -287,3 +336,327 @@ jobs:
           cat "$ELITEA_TEST_BUNDLE_TLS/client.pem" "$ELITEA_TEST_BUNDLE_TLS/client.key" > "$ELITEA_TEST_BUNDLE_TLS/client-combined.pem"
           cargo test --locked --lib --all-features sandbox::docker_supervisor::preparation::tests -- --ignored
           cargo test --locked --lib --all-features sandbox::docker_supervisor::hydration::deadline_tests -- --ignored
+
+      # The Code owner-recovery fixtures (ledger_code_recovery_tests.rs,
+      # docker_code_recovery_cleanup_tests.rs) create no schema of their own:
+      # they need ONE agentstate database that already carries the whole
+      # history, through 0013_sandbox_whole_code_recovery.sql. On a bare
+      # database they fail SchemaMigrationRequired(MissingTable). The real
+      # migration command provisions it, so the fixture is the schema a
+      # deployment runs (and drifts with it), not a hand-picked subset.
+      - name: Provision the pre-migrated agentstate owner-schema database
+        working-directory: .
+        env:
+          PGPASSWORD: postgres
+          AGENTSTATE_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/agentstate_code_owner?sslmode=disable"
+        run: |
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE agentstate_code_owner'
+          go run ./services/elitea-main/cmd/elitea-migrate -agentstate
+
+      # PostgreSQL-only #[ignore] tests that no step ran before: the Code
+      # owner-recovery ledger and cleanup, graph node recovery over the
+      # dispatch journal, workspace receipts, direct-tool journal, run-root
+      # fencing and the sandbox receipt fixtures in postgres_checkpointer_tests.
+      # `--skip sandbox_supervisor_` leaves the three Docker cases to the step
+      # below. The filters go after `--`: cargo takes ONE test name, libtest
+      # takes any number.
+      - name: Verify Code owner recovery and journals with PostgreSQL
+        env:
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          ELITEA_CODE_OWNER_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/agentstate_code_owner?sslmode=disable"
+          ELITEA_TEST_WORKSPACE_POSTGRES_REQUIRED: "1"
+        run: |
+          cargo test --locked --lib --all-features -- --ignored --skip sandbox_supervisor_ \
+            agents::graph::node_recovery_runtime::tests::code_owner_tests:: \
+            sandbox::ledger::code_recovery::tests:: \
+            sandbox::docker_supervisor::code_recovery_cleanup::tests:: \
+            sandbox::ledger::workspace::postgres_tests:: \
+            state::postgres_checkpointer_tests::
+
+      # The three sandbox_supervisor_* tests drive real containers through the
+      # Docker supervisor. They need a code runner image by ID: the
+      # `verification` target (python + the PID-1 runner) for recovery and for
+      # the test-only adapter that scripts/runtime/test_sandbox_ledger.py
+      # commits on top of it, and the default target (Deno/Pyodide adapters)
+      # for the mTLS case, which reads the real adapter's JSON envelope.
+      #
+      # CACHE: one GHA scope PER TARGET, each target reading all three. A
+      # single shared scope kept only the LAST export (each `cache-to` replaces
+      # the scope's manifest), so the Deno/Pyodide layers, whose RUN downloads
+      # Pyodide and wheels from jsdelivr and PyPI, were rebuilt from the network
+      # on every pull request. `mode=max` also exports the intermediate stages
+      # (the cargo builder, deno-runtime), which `min` drops; these three scopes
+      # are small next to the 10 GB Actions cache.
+      - uses: docker/setup-buildx-action@v4
+        with:
+          # The builder image from the org's own mirror (mirror-buildkit.yml), by
+          # digest: no anonymous Docker Hub pull per job.
+          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+
+      - name: Build the code runner verification image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: verification
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-verification
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
+
+      - name: Build the code runner Deno/Pyodide image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: default
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-default
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
+
+      # The Rust language image (vendored Cargo tree + the Rust adapter): the
+      # Docker PID-limit test compiles and runs user Rust code in it.
+      - name: Build the code runner Rust image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: rust-runtime
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-rust
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
+
+      # The helper starts its own disposable postgres:18 container
+      # (--pull=never; the service above already pulled the image), generates
+      # the TLS bundle for the mTLS case, and removes everything on exit. It
+      # runs cargo from services/elitea-worker-rust, so it reuses this job's
+      # --all-features lib build under the pinned toolchain.
+      - name: Verify sandbox supervisor recovery, submission and mTLS with Docker
+        working-directory: .
+        run: |
+          set -euo pipefail
+          docker image inspect postgres:18 > /dev/null || docker pull -q postgres:18
+          verification="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-verification)"
+          deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
+          # The lib test binary the steps above built (fresh: this compiles nothing).
+          expected="$(cd services/elitea-worker-rust && cargo test --locked --lib --all-features --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads, sys.stdin) if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["kind"] == ["lib"]))')"
+          echo "the job's lib test binary: ${expected##*/}"
+          # Each helper run must reuse that binary and compile NOTHING: a
+          # `Compiling` line or another binary hash means it picked another
+          # toolchain or feature set and rebuilt (PR #1297 review finding 1).
+          reused() {
+            local log="$1" took="$2" ran compiled plain
+            # CARGO_TERM_COLOR=always: strip the colour codes before reading.
+            plain="$(sed -E 's/\x1b\[[0-9;]*m//g' "$log")"
+            ran="$(printf '%s\n' "$plain" | sed -nE 's/^[[:space:]]*Running unittests src\/lib\.rs \((.*)\)$/\1/p')"
+            ran="${ran##*/}"
+            compiled="$(printf '%s\n' "$plain" | grep -cE '^[[:space:]]*Compiling ' || true)"
+            echo "helper ${log##*/}: ${took}s, ran ${ran:-nothing}, ${compiled} crate(s) compiled"
+            if [ "$compiled" -ne 0 ] || [ "$ran" != "${expected##*/}" ]; then
+              echo "::error::the ledger helper rebuilt the worker (${compiled} Compiling line(s), ran ${ran:-nothing}, expected ${expected##*/})"
+              exit 1
+            fi
+          }
+          started=$SECONDS
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_recovers 2>&1 | tee "${RUNNER_TEMP}/recovers.log"
+          reused "${RUNNER_TEMP}/recovers.log" $((SECONDS - started))
+          started=$SECONDS
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_submits 2>&1 | tee "${RUNNER_TEMP}/submits.log"
+          reused "${RUNNER_TEMP}/submits.log" $((SECONDS - started))
+          started=$SECONDS
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$deno" python3 scripts/runtime/test_sandbox_ledger.py --test-filter sandbox_supervisor_mtls --adapter-image 2>&1 | tee "${RUNNER_TEMP}/mtls.log"
+          reused "${RUNNER_TEMP}/mtls.log" $((SECONDS - started))
+
+      # Docker-only live sandbox tests: no PostgreSQL, no cluster. Each runs a
+      # real container under the Code job policy (non-root, network none,
+      # read-only root, cgroup v2 memory/PID/CPU limits) on the runner's daemon.
+      #   dependency transfer: 2 MiB + 17 B of non-UTF-8 content through the
+      #     runner's native content helpers (the verification image has them);
+      #   workspace exhaustion: Deno fills the 256 MiB workspace -> failed receipt;
+      #   process limit: compiled Rust forks until the PID ceiling -> EAGAIN.
+      - name: Verify Docker sandbox limits and dependency transfer
+        env:
+          ELITEA_CODE_RUNNER_TEST_IMAGE: ""
+        run: |
+          set -euo pipefail
+          verification="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-verification)"
+          deno="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-default)"
+          rust="$(docker image inspect --format '{{.Id}}' elitea-code-runner:ci-rust)"
+          ELITEA_CODE_RUNNER_TEST_IMAGE="$verification" \
+            cargo test --locked --lib --all-features sandbox::dependency_runtime_docker_tests:: -- --ignored
+          ELITEA_TEST_DOCKER_DENO_IMAGE="$deno" ELITEA_TEST_DOCKER_RUST_IMAGE="$rust" \
+            cargo test --locked --lib --all-features sandbox::kubernetes::live_tests::live_docker_ -- --ignored
+
+      # Every #[ignore] test is either selected by a `-- --ignored` invocation
+      # in this file or allowlisted with where it runs instead. Six sandbox
+      # tests once sat ignored with no step to run them, reading like passes.
+      # The list comes from the compiled binaries; the checker also counts the
+      # #[ignore] attributes in the sources so an empty list cannot pass.
+      - name: Every ignored worker test runs somewhere
+        # Not gated on the Docker step: an unrun test is reported either way.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          # 2>&1: cargo's `Running <target>` headers go to stderr, and the
+          # checker needs them to tell which target each test belongs to.
+          cargo test --locked --all-features --lib --bins --tests -- --list --ignored \
+            > "${RUNNER_TEMP}/worker-ignored-tests.txt" 2>&1
+          python3 ../../scripts/ci/check_worker_ignored_tests.py \
+            --list "${RUNNER_TEMP}/worker-ignored-tests.txt" \
+            --workflow ../../.github/workflows/ci-rust.yml \
+            --allowlist ../../scripts/ci/worker-ignored-tests-allowlist.txt \
+            --sources .
+          expected="$(grep -c '^    def test_' ../../scripts/ci/test_check_worker_ignored_tests.py)"
+          output="$(python3 -m unittest discover -s ../../scripts/ci -p 'test_check_worker_ignored_tests.py' -v 2>&1)"
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${expected}" -lt 10 ]; then
+            echo "::error::the guard's own suite ran ${ran:-no} of ${expected} scenario(s)"
+            exit 1
+          fi
+
+  # ADR-0034 decision 9: the cloud executor's workspace runs on the real
+  # Docker runtime. The runner image is built HERE (never locally) and pushed
+  # to a throwaway registry so the run can name it by digest, as production
+  # does. Two opt-in proofs run against it
+  # (src/sandbox/workspace_run_docker_tests.rs):
+  #   * the supervisor bridge end to end: launcher, gRPC, the supervisor's
+  #     service and its Docker backend, the real runner (start, unpack, serve,
+  #     pack, destroy);
+  #   * the egress proof: network on reaches public HTTPS and DNS and NOT
+  #     RFC 1918, 169.254.169.254 or a service on the host (the stand-in for
+  #     Main); network off has no network and no DNS.
+  #   * the proxy proof (host-allowlist mode): on the internal proxy network,
+  #     with a run token for example.com, the real elitea-egress-proxy lets
+  #     the run reach example.com and refuses www.iana.org (off the
+  #     allowlist), a direct connection, DNS, and a fronted tunnel (CONNECT
+  #     example.com, SNI www.iana.org); the proxy's log must show the
+  #     host-not-allowed and sni-mismatch refusals.
+  # ELITEA_REQUIRE_WORKSPACE_DOCKER_TESTS=1 turns a missing variable into a
+  # failure: a skipped proof must not read as a passing one.
+  workspace-run-docker:
+    name: Workspace runs on Docker (bridge and egress proof)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      registry:
+        image: registry:2.8.3
+        ports:
+          - 5000:5000
+    defaults:
+      run:
+        working-directory: services/elitea-worker-rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: services/elitea-worker-rust
+
+      - name: Build and push the workspace runner image
+        working-directory: .
+        run: |
+          set -euo pipefail
+          docker build -f libs/rust/workspace-runner/Containerfile \
+            -t localhost:5000/elitea-workspace-runner:ci .
+          docker push localhost:5000/elitea-workspace-runner:ci
+          image="$(docker inspect --format '{{index .RepoDigests 0}}' localhost:5000/elitea-workspace-runner:ci)"
+          case "$image" in *@sha256:*) ;; *) echo "::error::no digest for the runner image: $image"; exit 1 ;; esac
+          echo "ELITEA_WORKSPACE_RUNNER_TEST_IMAGE=$image" >> "$GITHUB_ENV"
+
+      - name: Create the workspace egress network
+        working-directory: .
+        run: |
+          set -euo pipefail
+          sudo ELITEA_WORKSPACE_EGRESS_DNS="1.1.1.1 9.9.9.9" bash deploy/docker/workspace-egress.sh
+          echo "ELITEA_WORKSPACE_EGRESS_NETWORK=elitea-workspace-egress" >> "$GITHUB_ENV"
+          echo "ELITEA_WORKSPACE_EGRESS_DNS=1.1.1.1,9.9.9.9" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: Start the egress proxy on the proxy network
+        working-directory: .
+        run: |
+          set -euo pipefail
+          keys="${RUNNER_TEMP}/egress-keys"
+          # A throwaway key pair and one token for example.com (test tool;
+          # production tokens are minted by elitea-main).
+          go run ./libs/go/egresslib/cmd/egress-test-token -keys-dir "$keys" \
+            -execution ci-proxy-proof -project 1 -allow example.com -ttl 30m > "${RUNNER_TEMP}/egress-token"
+          chmod 0644 "$keys/test.pem"
+          docker build -f services/elitea-egress-proxy/Containerfile -t elitea-egress-proxy:ci .
+          docker run -d --name egress-proxy --network bridge \
+            -e ELITEA_EGRESS_PROXY_PUBLIC_KEYS=/keys \
+            -e ELITEA_EGRESS_PROXY_DENY_CIDRS=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16 \
+            -v "$keys:/keys:ro" elitea-egress-proxy:ci
+          docker network connect --ip 172.31.251.2 elitea-workspace-proxy egress-proxy
+          for _ in $(seq 1 30); do
+            docker logs egress-proxy 2>&1 | grep -q egress_proxy.started && break
+            sleep 1
+          done
+          docker logs egress-proxy 2>&1 | grep -q egress_proxy.started
+          {
+            echo "ELITEA_WORKSPACE_PROXY_NETWORK=elitea-workspace-proxy"
+            echo "ELITEA_WORKSPACE_PROXY_URL=http://172.31.251.2:3128"
+            echo "ELITEA_WORKSPACE_PROXY_TOKEN_FILE=${RUNNER_TEMP}/egress-token"
+          } >> "$GITHUB_ENV"
+
+      - name: Start a stand-in for Main on the host
+        run: |
+          set -euo pipefail
+          nohup python3 -m http.server 18080 --bind 0.0.0.0 > "${RUNNER_TEMP}/platform.log" 2>&1 &
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:18080/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:18080/ >/dev/null
+          gateway="$(docker network inspect elitea-workspace-egress --format '{{(index .IPAM.Config 0).Gateway}}')"
+          echo "ELITEA_WORKSPACE_EGRESS_PLATFORM_URL=http://${gateway}:18080/" >> "$GITHUB_ENV"
+
+      - name: Run the Docker workspace-run proofs
+        env:
+          ELITEA_REQUIRE_WORKSPACE_DOCKER_TESTS: "1"
+        run: cargo test --locked --lib --all-features sandbox::workspace_run_docker_tests -- --ignored --test-threads=1
+
+      - name: The proxy refused the off-allowlist host and the fronted tunnel
+        if: always()
+        working-directory: .
+        run: |
+          set -euo pipefail
+          docker logs egress-proxy > "${RUNNER_TEMP}/egress-proxy.log" 2>&1 || true
+          for reason in host-not-allowed sni-mismatch; do
+            if ! grep -q "\"reason\":\"$reason\"" "${RUNNER_TEMP}/egress-proxy.log"; then
+              echo "::error::the egress proxy logged no $reason refusal"
+              tail -50 "${RUNNER_TEMP}/egress-proxy.log"
+              exit 1
+            fi
+          done
+          # The token never reaches the proxy's log.
+          if grep -qF "$(cat "${RUNNER_TEMP}/egress-token")" "${RUNNER_TEMP}/egress-proxy.log"; then
+            echo "::error::the run token is in the egress proxy's log"; exit 1
+          fi

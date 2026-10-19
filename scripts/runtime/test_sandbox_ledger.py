@@ -19,6 +19,15 @@ if args.language == "rust" and not args.adapter_image:
 if args.test_filter == "sandbox_supervisor_mtls" and not args.adapter_image:
     parser.error("mTLS verification requires --adapter-image")
 
+def pinned_toolchain(path):
+    """The exact `channel` of a rust-toolchain.toml; refuse anything unreadable."""
+    import re
+    match = re.search(r'^\s*channel\s*=\s*"(\d+\.\d+\.\d+)"\s*$', path.read_text(), re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"{path} names no exact toolchain channel")
+    return match.group(1)
+
+
 root = Path(__file__).resolve().parents[2]
 name = "elitea-sandbox-ledger-test-" + secrets.token_hex(5)
 password = secrets.token_hex(24)
@@ -39,16 +48,17 @@ try:
         openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key",
                 "-out", "ca.pem", "-days", "1", "-subj", "/CN=Disposable sandbox CA",
                 "-addext", "basicConstraints=critical,CA:TRUE")
-        for name, dns, usage in [("server", "supervisor.test", "serverAuth"),
+        # `peer`, not `name`: `name` is the database container, removed in `finally`.
+        for peer, dns, usage in [("server", "supervisor.test", "serverAuth"),
                                  ("worker", "worker.test", "clientAuth"),
                                  ("other", "other.test", "clientAuth")]:
-            openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", name+".key",
-                    "-out", name+".csr", "-subj", "/CN="+dns)
-            (certs / (name+".ext")).write_text(
+            openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", peer+".key",
+                    "-out", peer+".csr", "-subj", "/CN="+dns)
+            (certs / (peer+".ext")).write_text(
                 "subjectAltName=DNS:"+dns+"\nbasicConstraints=critical,CA:FALSE\n"
                 "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage="+usage+"\n")
-            openssl("x509", "-req", "-in", name+".csr", "-CA", "ca.pem", "-CAkey", "ca.key",
-                    "-CAcreateserial", "-out", name+".pem", "-days", "1", "-extfile", name+".ext")
+            openssl("x509", "-req", "-in", peer+".csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+                    "-CAcreateserial", "-out", peer+".pem", "-days", "1", "-extfile", peer+".ext")
         env["ELITEA_TEST_TLS_DIR"] = str(certs)
     if args.test_filter == "sandbox_supervisor_submits" and not args.adapter_image:
         base_image = env.get("ELITEA_CODE_RUNNER_TEST_IMAGE", "")
@@ -93,12 +103,21 @@ try:
     env["ELITEA_TEST_DATABASE_URL"] = (
         f"postgresql://postgres:{password}@{endpoint}/postgres"
     )
+    # Build exactly what ci-rust.yml builds: --all-features, from the worker's
+    # own directory, on the worker's own pinned toolchain. rustup picks the
+    # compiler from the rust-toolchain.toml nearest the CURRENT directory, so
+    # running cargo from the repository root with --manifest-path once used
+    # the runner's default stable rustc and recompiled every dependency
+    # (7m27s, a different test binary). The cwd fixes that; RUSTUP_TOOLCHAIN,
+    # read from the worker's file, keeps it fixed even if the cwd moves or the
+    # root toolchain file is removed.
+    worker = root / "services/elitea-worker-rust"
+    env["RUSTUP_TOOLCHAIN"] = pinned_toolchain(worker / "rust-toolchain.toml")
     result = subprocess.run(
-        ["cargo", "test", "--locked", "--offline", "--manifest-path",
-         "services/elitea-worker-rust/Cargo.toml", "--features",
-         "sandbox-supervisor", "--lib", args.test_filter, "-j", "2",
+        ["cargo", "test", "--locked", "--offline", "--all-features",
+         "--lib", args.test_filter,
          "--", "--ignored", "--nocapture"],
-        cwd=root, env=env, timeout=600,
+        cwd=worker, env=env, timeout=600,
     )
     raise SystemExit(result.returncode)
 finally:

@@ -65,6 +65,22 @@ export interface AdminProjectsTableProps {
 }
 
 /** The admin list is joined for display; the tooltip carries the whole set. */
+/**
+ * The storage a project's cloud copies use, in binary units. `—` when the
+ * server did not send the field.
+ */
+export function formatWorkspaceBytes(bytes: number | undefined): string {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return '—';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} B` : `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+}
+
 function renderAdmins(names: readonly string[]): React.ReactElement {
   const text = names.length > 0 ? names.join(', ') : '—';
   return (
@@ -146,6 +162,18 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
         sortable: false,
         renderCell: (params: GridRenderCellParams<AdminProjectRow>) =>
           renderAdmins(params.row.admin_names),
+      },
+      {
+        field: 'workspace_bytes',
+        headerName: t('pages.admin.projects.column.workspaceBytes', 'Cloud copies'),
+        width: 130,
+        // On the server's sort allow-list (`sortableProjectColumns`).
+        sortable: true,
+        renderCell: (params: GridRenderCellParams<AdminProjectRow>) => (
+          <Typography variant="bodyMedium" color="text.secondary" data-testid="admin-project-workspace-bytes">
+            {formatWorkspaceBytes(params.row.workspace_bytes)}
+          </Typography>
+        ),
       },
       {
         field: 'status',

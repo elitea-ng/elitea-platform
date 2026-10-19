@@ -51,6 +51,12 @@ export const ConversationSummary = zod
       .int()
       .describe("Always -1 today; see the schema description."),
     message_groups_count: zod.int(),
+    workspace_executor: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.8 (ADR-0034). Who runs the thread's turns now: `local`, `cloud` or `returning`. A handoff transition re-delivers the row in the `changes_since` delta.",
+      ),
     is_pinned: zod
       .boolean()
       .describe(

@@ -19,7 +19,7 @@
 # to elitea-main, the Qdrant client) is rustls. libgcc_s comes from distroless
 # cc-debian13 with its package record and licence, as the engines' images do.
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
-FROM rust:1.97.1-trixie AS runtime-libraries
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS runtime-libraries
 COPY --from=runtime-cc /usr/lib/ /cc-lib/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
@@ -33,7 +33,7 @@ RUN cd /cc-lib && \
 FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
 COPY --from=runtime-libraries /runtime-files/ /
 
-FROM rust:1.97.1-trixie AS builder
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder
 
 # `cargo auditable` embeds the dependency list trivy's `rustbinary` analyzer
 # reads; without it an image scan sees only the Debian base (see the

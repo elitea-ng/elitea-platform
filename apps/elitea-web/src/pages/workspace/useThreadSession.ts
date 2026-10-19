@@ -99,7 +99,7 @@ function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: 
   return sets.reverse();
 }
 
-export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send'> {
+export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send' | 'prewarm'> {
   raw: AgentSelection;
   selection: AgentSelection;
   turn: WorkspaceTurn;
@@ -163,7 +163,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(workspace.id) });
     if (id !== conversationId) onAdopt(id);
   };
-  const { canSend, sendError, send } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
+  const { canSend, sendError, send, prewarm } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
   const done = turn.view.done;
   const changeSets = changeSetsOf(history, shown, turn, prompts);
   // `/undo` acts on the last turn, as before: only when it changed files.
@@ -217,5 +217,6 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     canSend,
     sendError,
     send,
+    prewarm,
   };
 }

@@ -1240,7 +1240,9 @@ impl ResolvedDirectHitlDecision {
         } else {
             None
         };
-        if blocked_result.is_none() && sensitive_tools.is_read_only(&self.tool_name) != Some(true) {
+        if blocked_result.is_none()
+            && sensitive_tools.replays_approved(&self.tool_name) != Some(true)
+        {
             tracing::debug!(
                 tool.name = %self.tool_name,
                 "approved direct HITL replay remains closed for an effectful tool"
@@ -1285,7 +1287,7 @@ impl ResolvedDirectHitlDecision {
             ));
             match settled.decision {
                 ToolConfirmationDecision::Approve => {
-                    if sensitive_tools.is_read_only(&call.tool_name) != Some(true) {
+                    if sensitive_tools.replays_approved(&call.tool_name) != Some(true) {
                         return Err(DirectHitlError::new(
                             DirectHitlErrorCode::UnsupportedCapability,
                         ));

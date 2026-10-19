@@ -499,14 +499,12 @@ impl RemoteCodeRuntime {
                                     dispatch_possible,
                                 ));
                             }
-                            Err(SandboxCallError::Submission {
-                                code:
+                            Err(SandboxCallError::Submission { code:
                                     tonic::Code::Unavailable
                                     | tonic::Code::DeadlineExceeded
                                     | tonic::Code::Aborted
-                                    | tonic::Code::ResourceExhausted,
-                            }) => dispatch_possible = true,
-                            Err(SandboxCallError::Submission { code })
+                                    | tonic::Code::ResourceExhausted, .. }) => dispatch_possible = true,
+                            Err(SandboxCallError::Submission { code, .. })
                                 if submission_control_failure(code, invocation.activation)
                                     .is_some() =>
                             {

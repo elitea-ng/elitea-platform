@@ -265,12 +265,9 @@ func currentWorkerThinkingStepFixture(t *testing.T) json.RawMessage {
 	if !ok {
 		t.Fatal("locate current index Activity test source")
 	}
-	fixturePath := filepath.Join(
-		filepath.Dir(sourceFile),
-		"..", "..", "..", "..", "..",
-		"elitea-worker-python", "tests", "fixtures",
-		"current_index_thinking_step.json",
-	)
+	// Recorded from the former Python worker's index thinking step, the shape
+	// stored index activity rows carry; kept as data after that worker went.
+	fixturePath := filepath.Join(filepath.Dir(sourceFile), "testdata", "current_index_thinking_step.json")
 	fixture, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatalf("read standalone worker thinking fixture: %v", err)

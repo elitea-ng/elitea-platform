@@ -24,7 +24,7 @@ independent of the monorepo layout they ship from — see the comment on
 a different file. Change one script, change the other, in the same commit.
 */}}
 
-{{- define "elitea-worker-python.runtimeSessionContainer" -}}
+{{- define "elitea-worker.runtimeSessionContainer" -}}
 {{- $rs := .Values.worker.runtimeSession -}}
 - name: provision
   image: "{{ $rs.image.repository }}:{{ $rs.image.tag }}"
@@ -203,7 +203,7 @@ a different file. Change one script, change the other, in the same commit.
       readOnly: true
 {{- end }}
 
-{{- define "elitea-worker-python.runtimeSessionVolumes" -}}
+{{- define "elitea-worker.runtimeSessionVolumes" -}}
 # The worker's own material, read-only and for one file: the
 # certificate whose SAN is the identity being authorized. Reading it
 # here rather than taking the identity as a value is what makes the row

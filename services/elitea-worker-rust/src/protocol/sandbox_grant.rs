@@ -62,6 +62,15 @@ pub(crate) use code_recovery::{
     CodePlatformOwnerOperation, SignedCodeEnvelope,
 };
 
+/// Workspace-run authority: the binding a run must carry, nothing else.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedWorkspaceRun {
+    /// The spec digest, 64 lowercase hex.
+    pub request: String,
+    /// The claim scope (tenant, project, execution activation), 64 hex.
+    pub owner: String,
+}
+
 /// Preparation authority cannot be passed to execution admission.
 pub struct AuthorizedPreparation {
     authority: VerifiedAuthority,
@@ -195,6 +204,40 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             false,
         )
         .map(|authority| AuthorizedPreparation { authority })
+    }
+
+    /// Verify Main's revision 1 grant for one workspace run (ADR-0034
+    /// decision 9): its request digest is the spec's
+    /// ([`crate::sandbox::workspace_run::spec_digest`]) and its activation is
+    /// the run's name. The returned binding is what the run carries as its
+    /// labels, so exec and destroy prove the same claim scope owns it.
+    ///
+    /// # Errors
+    /// Returns `GrantRejected` for any signature, wire, scope, peer, digest,
+    /// name or lifetime mismatch.
+    pub fn verify_workspace_run(
+        &self,
+        grant: &SignedSandboxJobGrantV1,
+        peer: &str,
+        spec: &crate::protocol::elitea::runtime::v1::WorkspaceRunSpecV1,
+        now_unix_millis: i64,
+    ) -> Result<AuthorizedWorkspaceRun, GrantRejected> {
+        let digest = crate::sandbox::workspace_run::spec_digest(spec);
+        let authority =
+            self.verify_operation(grant, peer, Some(digest), now_unix_millis, false, false)?;
+        if authority.dispatch_activation != spec.name {
+            return Err(GrantRejected);
+        }
+        let owner = authority
+            .scope
+            .runtime_identity()
+            .map_err(|_| GrantRejected)?
+            .job_key()
+            .to_owned();
+        Ok(AuthorizedWorkspaceRun {
+            request: crate::sandbox::workspace_run::hex(&digest),
+            owner,
+        })
     }
 
     /// Verify a stop-only grant without receiving code or state.

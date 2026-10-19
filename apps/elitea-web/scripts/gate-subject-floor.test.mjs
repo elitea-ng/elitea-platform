@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { ROUTE_CATALOGUES } from './lib/i18n-backfill-core.mjs';
 
 /**
  * The RED/GREEN proof for issue #528: a gate whose subject set is empty must
@@ -175,17 +176,21 @@ describe('check-visual-coverage: an empty screenshot index', () => {
 describe('i18n-backfill --check: an extraction that matches nothing', () => {
   // `i18n-backfill-core.mjs` reads its directory walker from `budgets-core`.
   const LIBS = ['i18n-backfill-core.mjs', 'budgets-core.mjs'];
+  // Every catalogue the script reads must exist, each empty: en.json, the
+  // desktop catalogue beside it (ADR-0029), and every route catalogue
+  // (ROUTE_CATALOGUES), so a new route catalogue never breaks this floor.
+  const catalogueFiles = () => ({
+    'src/shared/i18n/en.json': JSON.stringify({}),
+    'src/entries/desktop/i18n/en.desktop.json': JSON.stringify({}),
+    ...Object.fromEntries(ROUTE_CATALOGUES.map((route) => [route.file, JSON.stringify({})])),
+  });
 
   it('RED — a src tree with no source file exits non-zero instead of reporting OK', () => {
     const app = makeApp({
       script: 'i18n-backfill.mjs',
       libs: LIBS,
       dirs: ['src'],
-      files: {
-        'src/shared/i18n/en.json': JSON.stringify({}),
-        // The desktop catalogue is read beside en.json (ADR-0029); both must exist.
-        'src/entries/desktop/i18n/en.desktop.json': JSON.stringify({}),
-      },
+      files: catalogueFiles(),
     });
 
     const result = run(app, ['--check']);
@@ -196,10 +201,7 @@ describe('i18n-backfill --check: an extraction that matches nothing', () => {
   });
 
   it('RED — a renamed `@/shared/i18n` module empties the call-site set', () => {
-    const files = {
-      'src/shared/i18n/en.json': JSON.stringify({}),
-      'src/entries/desktop/i18n/en.desktop.json': JSON.stringify({}),
-    };
+    const files = catalogueFiles();
     // Enough files to clear the file-count floor, every one of them importing
     // `t` from somewhere else — which is exactly what a module rename does.
     for (let i = 0; i < 1600; i++) {

@@ -89,6 +89,32 @@ function buildTestRouter(initialPath: string, content: ReactElement, projectId: 
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
+/**
+ * The same theme with every MUI transition duration at 0, for composition
+ * tests that open and close dialogs. MUI's `Dialog`/`Fade` take their timeout
+ * from `theme.transitions.duration`, and until a dialog's EXIT transition
+ * finishes the page behind it stays `aria-hidden` — so a `findByRole` for a
+ * background control after Cancel waits on ~195 ms of REAL wall-clock time,
+ * stretched arbitrarily on a loaded, coverage-instrumented CI worker. With a
+ * zero timeout the transition completes on the next tick: the mount/unmount
+ * behaviour is still exercised, the clock is not.
+ */
+const instantTransitionTheme = {
+  ...theme,
+  transitions: {
+    ...theme.transitions,
+    duration: {
+      shortest: 0,
+      shorter: 0,
+      short: 0,
+      standard: 0,
+      complex: 0,
+      enteringScreen: 0,
+      leavingScreen: 0,
+    },
+  },
+};
+
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
@@ -106,7 +132,7 @@ export interface RenderToolkitsRouteResult extends RenderResult {
 export function renderToolkitsRoute(
   content: ReactElement,
   initialPath = '/toolkits/create',
-  options: { queryClient?: QueryClient; projectId?: string } = {},
+  options: { queryClient?: QueryClient; projectId?: string; instantTransitions?: boolean } = {},
 ): RenderToolkitsRouteResult {
   const queryClient = options.queryClient ?? createTestQueryClient();
   const router = buildTestRouter(initialPath, content, options.projectId);
@@ -114,7 +140,7 @@ export function renderToolkitsRoute(
   const view = render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider
-        theme={theme}
+        theme={options.instantTransitions === true ? instantTransitionTheme : theme}
         defaultMode={DEFAULT_COLOR_SCHEME}
       >
         <RouterProvider router={router} />

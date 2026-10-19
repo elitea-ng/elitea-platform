@@ -31,10 +31,6 @@
  * which has no runtime plane, no worker and no model — an agent turn cannot
  * happen there at all. The `chat-stream` project matches `streaming/chat.*` and
  * runs against the full standalone stack via `scripts/chat-stream-e2e.sh`.
- *
- * It passes on BOTH workers, and that is the point: the Python worker and the
- * native Rust worker are selected by `STANDALONE_WORKER`, and a UI that only
- * drives one of them is the regression this file catches.
  */
 import { expect, test, type Page } from '@playwright/test';
 

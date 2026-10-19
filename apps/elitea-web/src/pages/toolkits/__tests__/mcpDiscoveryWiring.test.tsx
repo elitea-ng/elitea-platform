@@ -26,6 +26,21 @@ beforeEach(() => {
     http.get('/api/v2/configurations/configurations/:projectId', () => HttpResponse.json({ items: [], total: 0, shared: { items: [], total: 0 } })),
     http.get('/api/v2/configurations/available/', () => HttpResponse.json([])),
     http.get('/api/v2/configurations/models/:projectId', () => HttpResponse.json({ items: [], total: 0 })),
+    /*
+     * Both of these used to fall through to the orval DEFAULT registry, whose
+     * bodies are faker-random: 1–10 random-named tools for the saved toolkit,
+     * and a random grant list. So every run rendered a different editor —
+     * a different number of tool rows to build and query, different
+     * permission-gated controls — behind the slowest requests in the file
+     * (~240 ms each, against ~50 ms for the pinned ones). That variance on a
+     * coverage-instrumented, 4-worker CI shard is what pushed the first test
+     * past vitest's 5 s budget. Pinned: the saved toolkit has no
+     * previously-discovered tools (discovery is what these tests drive), and
+     * the caller holds no extra grants (none of the controls under test are
+     * permission-gated).
+     */
+    http.get('/api/v2/elitea_core/toolkit_available_tools/prompt_lib/:projectId/:toolkitId', () => HttpResponse.json({ tools: [], args_schemas: {} })),
+    http.get('/api/v2/auth/permissions/prompt_lib/:projectId', () => HttpResponse.json([])),
   );
 });
 
@@ -34,6 +49,24 @@ afterEach(() => {
   window.sessionStorage.clear();
   window.localStorage.clear();
 });
+
+/**
+ * Wait for a button by its label, then assert it as an accessible button ONCE.
+ *
+ * `findByRole` re-runs the full role query — accessible-name computation plus
+ * a `getComputedStyle` visibility walk over the whole MUI editor — on every
+ * DOM mutation and every 50 ms poll while the editor's request waterfall
+ * settles. Measured on a coverage-instrumented, CPU-loaded run, that query
+ * was ~65 % of the first test's time (~110 ms an evaluation) and is what
+ * pushed it past 5 s on CI. A text match is a cheap, sufficient readiness
+ * probe; the role assertion that follows keeps what this file proves — that
+ * the control is exposed as an enabled-or-not, accessible, NOT-aria-hidden
+ * button — at one evaluation instead of dozens.
+ */
+async function findButton(name: string): Promise<HTMLElement> {
+  await screen.findAllByText(name, { selector: 'button, button *' });
+  return screen.getByRole('button', { name });
+}
 
 describe('real MCP editor discovery composition', () => {
   it('connects saved MCP Login to REST discovery and its consent dialog', async () => {
@@ -49,22 +82,25 @@ describe('real MCP editor discovery composition', () => {
         },
       } });
     }));
-    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5' });
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Login' }));
+    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5', instantTransitions: true });
+    const user = userEvent.setup({ delay: null });
+    await user.click(await findButton('Login'));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(requests).toBe(1);
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
-    expect(await screen.findByRole('button', { name: 'Login' })).toBeEnabled();
+    // Zero-duration transitions: the dialog unmounts and the page behind it
+    // leaves `aria-hidden` without waiting on the wall clock.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Login' })).toBeEnabled();
   });
 
   it('clears only the selected toolkit grant after Logout confirmation', async () => {
     const resource = 'https://resource.example.com/mcp';
     const token = { access_token: 'fixture-token', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3600000, granted_at: Date.now(), client_reference: 'fixture-reference' };
     window.sessionStorage.setItem('el.mcp.tokens', JSON.stringify({ [resource]: token, 'https://other.example.com/mcp': token }));
-    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5' });
-    const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: 'Logout' }));
+    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5', instantTransitions: true });
+    const user = userEvent.setup({ delay: null });
+    await user.click(await findButton('Logout'));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Log out' }));
     expect(await screen.findByText('Not Connected')).toBeInTheDocument();
     const tokens = JSON.parse(window.sessionStorage.getItem('el.mcp.tokens') ?? '{}') as Record<string, unknown>;
@@ -81,16 +117,16 @@ describe('real MCP editor discovery composition', () => {
     }));
     const save = vi.fn().mockResolvedValue({ id: 'tk-1' });
     const content = mode === 'edit' ? <EditToolkit isMCP deps={{ saveToolkit: save }} /> : <CreateToolkit isMCP deps={{ createToolkit: save }} />;
-    renderToolkitsRoute(content, mode === 'edit' ? '/toolkits/latest/tk-1' : '/mcps/create/mcp', { projectId: '5' });
-    const user = userEvent.setup();
+    renderToolkitsRoute(content, mode === 'edit' ? '/toolkits/latest/tk-1' : '/mcps/create/mcp', { projectId: '5', instantTransitions: true });
+    const user = userEvent.setup({ delay: null });
     if (mode === 'create') {
-      await user.click(await screen.findByRole('button', { name: 'Remote MCP' }));
+      await user.click(await findButton('Remote MCP'));
       const url = await screen.findByRole('textbox', { name: 'URL' });
       await user.clear(url);
       // Paste once, as a user would, without rerendering the schema for every character.
       await user.paste('https://resource.example.com/mcp');
     }
-    await user.click(await screen.findByRole('button', { name: 'Load Tools' }));
+    await user.click(await findButton('Load Tools'));
     await waitFor(() => expect(requests).toBe(1));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Load Tools' })).toBeEnabled());
     // The schema's empty enum must not hide the newly discovered operation.
@@ -111,8 +147,8 @@ describe('real MCP editor discovery composition', () => {
         },
       },
     })));
-    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5' });
-    await userEvent.setup().click(await screen.findByRole('button', { name: 'Load Tools' }));
+    renderToolkitsRoute(<EditToolkit isMCP />, '/toolkits/latest/tk-1', { projectId: '5', instantTransitions: true });
+    await userEvent.setup({ delay: null }).click(await findButton('Load Tools'));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('MCP Authorization')).toBeInTheDocument();
     expect(screen.queryByLabelText(/client secret/i)).not.toBeInTheDocument();

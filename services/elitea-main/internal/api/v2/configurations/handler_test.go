@@ -573,9 +573,13 @@ func TestAvailableServesPinnedRegistrySnapshot(t *testing.T) {
 		}
 	}
 	// The old payload had eight static rows plus whatever the DB happened to
-	// hold; the snapshot is a fixed 52.
-	if len(types) != 52 {
-		t.Errorf("expected the 52 pinned entries, got %d", len(types))
+	// hold; the snapshot is a fixed 52, plus the Go-registered cloud_executor
+	// project setting (ADR-0034 decision 11).
+	if len(types) != 53 {
+		t.Errorf("expected the 52 pinned entries and cloud_executor, got %d", len(types))
+	}
+	if got := found["cloud_executor"].Section; got != "project_settings" {
+		t.Errorf("cloud_executor section = %q, want project_settings", got)
 	}
 	if got := found["open_ai"].Section; got != "ai_credentials" {
 		t.Errorf("open_ai section = %q, want ai_credentials", got)

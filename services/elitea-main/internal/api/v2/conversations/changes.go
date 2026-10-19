@@ -215,6 +215,7 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	if rowsTruncated {
 		page.Rows, positions = page.Rows[:limit], positions[:limit]
 	}
+	annotateWorkspaceExecutors(ctx, pool, s, q.projectID, page.Rows)
 
 	// Tombstones. Which ones this caller is told about:
 	//   conversation        a deletion — of a public conversation to everyone;

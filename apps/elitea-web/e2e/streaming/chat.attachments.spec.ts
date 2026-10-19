@@ -57,14 +57,14 @@
  * either half fails below on its own assertion and says which one moved.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * PHASE 2 — THE PER-LEG CONTRACT, READ OUT OF THE CODE AND THEN MEASURED
+ * PHASE 2 — THE CONTRACT, READ OUT OF THE CODE AND THEN MEASURED
  * ─────────────────────────────────────────────────────────────────────────────
  * Phase 2 adds no traffic of its own: it reads what phase 1's composer send
  * produced. Everything under it is real — admission, dispatch, the worker, the
  * model call — and the only thing this file supplies is the file and the
  * question.
  *
- * ELITEA-MAIN (both legs). The admission transaction — not the worker — writes
+ * ELITEA-MAIN. The admission transaction — not the worker — writes
  * the attachment items, so the question group and its files exist together or
  * not at all. Each item gets a `content` SCAFFOLD: one `{"type":"text"}` chunk
  * naming the bucket, the filename and the filepath, carrying an
@@ -72,28 +72,19 @@
  * (`attachments.go:242-275`, `attachmentContentScaffold`). Those chunks are
  * CONCATENATED, flat, into the runtime input's `input_attachments`
  * (`currentTurnInputAttachments`, reached from `start.go:325` and its adhoc
- * twin `adhoc.go:329`). All of that happens before either worker sees the
- * command, which is why the item assertions are shared and only the terminal
- * state forks.
+ * twin `adhoc.go:329`). All of that happens before the worker sees the
+ * command.
  *
- * ONE CONTRACT, BOTH LEGS — and it was two until 2026-08-29. Each worker
- * splices the attachment chunks into the human message after the user's own
- * text, and each READS a chunk still flagged `needs_content_extraction` and
- * appends its text as a second chunk. So on both legs the file's CONTENT
- * reaches the model, and the mock — which echoes every `type: "text"` part of
- * the last user message (`deploy/mock-llm/server.py:187-215`, `_message_text`
- * joins them) — hands it straight back. That is what makes the unique token
- * INSIDE the uploaded file a proof of arrival rather than of intent, and it is
- * why there is now a single assertion pair below instead of a fork.
+ * The worker splices the attachment chunks into the human message after the
+ * user's own text, READS a chunk still flagged `needs_content_extraction` and
+ * appends its text as a second chunk. So the file's CONTENT reaches the model,
+ * and the mock — which echoes every `type: "text"` part of the last user
+ * message (`deploy/mock-llm/server.py:187-215`, `_message_text` joins them) —
+ * hands it straight back. That is what makes the unique token INSIDE the
+ * uploaded file a proof of arrival rather than of intent.
  *
- * PYTHON (`E2E_WORKER=python`) reads through the SDK artifact toolkit's
- * `read_multiple_files` (`elitea_worker/agents/sdk_adapter.py:529-624`,
- * `_read_attachment_documents`), spliced by `sdk_adapter.py:926-937`.
- *
- * RUST (`E2E_WORKER=rust`) has no vault and no `artifact` toolkit family
- * (`toolkits/materialize.rs` rejects it by kind), so it reads over the ONE
- * channel it holds — elitea-main's private mTLS content listener, on the same
- * live claim and fence that authorized the turn:
+ * The worker reads over elitea-main's private mTLS content listener, on the
+ * same live claim and fence that authorized the turn:
  *
  *     services/elitea-main/internal/infra/storage/runtime_attachment_object.go
  *         POST …/runtime-context/attachments/{bucket}/{name}
@@ -121,13 +112,6 @@
  * `agent_internal_tool_skipped` warning (`internal_tools.rs:41` and the
  * `PLATFORM_INTERNAL_TOOLS` comment above it). The two are independent: content
  * extraction is decided by the input chunk's marker, with the toggle off.
- *
- * `E2E_WORKER` comes from `scripts/chat-stream-e2e.sh`, the one place that
- * knows which runtime the stack runs; the local default is the native runtime,
- * matching the long-lived dev stack. It no longer selects an ASSERTION here —
- * both legs are held to the same contract — and is kept only because a failure
- * message that names the runtime under test is worth more than one that does
- * not.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * PHASE 3 — THE RELOAD, AND THE SECOND HALF THAT USED TO BE MISSING
@@ -166,8 +150,7 @@
  *  - #607's content WRITEBACK — the worker reporting extracted text back onto
  *    the stored item. The native runtime explicitly returns none
  *    (`agents/result.rs:103-107`, `attachment_contents: Vec::new()`), so the
- *    stored `content` array is asserted at its ADMISSION shape, the one both
- *    legs agree on.
+ *    stored `content` array is asserted at its ADMISSION shape.
  */
 import { expect, test } from '@playwright/test';
 import * as fs from 'fs';
@@ -195,23 +178,11 @@ const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 /** The model `seed-llm` seeds into every personal project (see `chat.streaming.spec.ts`). */
 const MODEL_NAME = process.env['E2E_CHAT_MODEL'] || 'E2E-MOCK-MODEL';
 
-/** Which runtime answers the turn. `chat-stream-e2e.sh` sets it; the local default is the dev stack's native runtime. */
-const WORKER = process.env['E2E_WORKER'] ?? 'rust';
-
 /** The bucket `finalizeAttachment` keys chat uploads into when no project policy overrides it. */
 const ATTACHMENT_BUCKET = 'chat-attachments';
 
 /** `chat_conversations.uuid` as it appears in a URL — the identifier an attachment is keyed by. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-// RETARGETED to the native Rust leg (owner direction, PR #1293): the Python
-// worker is being removed, so this journey asserts the runtime that stays;
-// `chat-stream-rust` runs it in full. The Python leg's "Permission denied" was
-// elitea-main refusing the SDK's claim-less read, which carries only the
-// execution-id request-log tag; that is fixed in
-// internal/api/v2/artifacts/system_buckets.go and pinned there by
-// TestAnExecutionTagAloneIsNotAClaim.
-test.skip(WORKER !== 'rust', 'retargeted to the native Rust runtime; the Python worker is being removed');
 
 test('an attachment rides a real turn: the composer sends it, the platform stores it, the reload shows it', async ({
   page,
@@ -411,7 +382,7 @@ test('an attachment rides a real turn: the composer sends it, the platform store
     expect(header, 'the scaffold names the bucket the file lives in').toContain(`Bucket: ${ATTACHMENT_BUCKET}`);
     expect(header, 'the scaffold names the file, which is how the model learns it exists').toContain(fileName);
     // The extraction marker is what tells a worker this document's text has NOT
-    // been read yet. Its absence would make the python leg's read a silent
+    // been read yet. Its absence would make the worker's read a silent
     // no-op that still looked like success.
     const marker = chunks[0]?.['elitea_attachment'] as Record<string, unknown> | undefined;
     expect(marker, 'a document chunk must carry the extraction marker').toBeDefined();
@@ -419,7 +390,7 @@ test('an attachment rides a real turn: the composer sends it, the platform store
     expect(marker?.['bucket']).toBe(ATTACHMENT_BUCKET);
     expect(marker?.['name']).toBe(`${conversationUuid}/${fileName}`);
 
-    // ── The terminal state, ONE contract on both legs ─────────────────────
+    // ── The terminal state ─────────────────────────────────────────────────
     //
     // Two assertions, weakest first, so a partial failure names its own half.
     // The split IS the boundary between rendering the file and reading it.
@@ -434,10 +405,10 @@ test('an attachment rides a real turn: the composer sends it, the platform store
       timeout: 120_000,
       contains: fileName,
       message:
-        `the ${WORKER} worker neither announced nor refused the attached file. If it REFUSED, ` +
+        `the worker neither announced nor refused the attached file. If it REFUSED, ` +
         'the runtime rejected a non-empty input_attachments; if it ANSWERED without the ' +
         'filename, the header chunk never reached the human message ' +
-        '(rust: agents/attachments.rs append_attachment_parts; python: sdk_adapter.py:926-937)',
+        '(agents/attachments.rs append_attachment_parts)',
     });
     // 2. The file's CONTENT reached the model. The token exists only inside the
     //    uploaded bytes — not in the prompt, not in the filename — so it can
@@ -445,7 +416,7 @@ test('an attachment rides a real turn: the composer sends it, the platform store
     //    text as a second chunk. Read once rather than polled: the assertion
     //    above already waited for the row to be finalised.
     //
-    //    ON THE RUST LEG this is the claim-authorized object route end to end:
+    //    This is the claim-authorized object route end to end:
     //    the marker's (bucket, name) reached
     //    `POST …/runtime-context/attachments/{bucket}/{name}` over the live
     //    claim, elitea-main checked the claim's project AND conversation

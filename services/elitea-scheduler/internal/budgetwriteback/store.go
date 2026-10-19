@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -68,7 +69,33 @@ func nullableExecutionID(value string) any {
 	if value == "" {
 		return nil
 	}
-	return value
+	return truncateUTF8(value, usageExecutionIDBytes)
+}
+
+// The usage-ledger column widths (shared migrations 0084 and 0101). The ledger
+// row rides in the SAME transaction as the money, and Postgres refuses an
+// over-long VARCHAR rather than trimming it, so one odd provider or model name
+// used to fail the accumulator write with it, on every delivery ([human
+// decision] 2026-10-16, "Isolate, then drop": remove the known trigger). The
+// gateway's ledger writer trims to the same widths
+// (services/elitea-llm-gateway/internal/failmode usageEventArgs).
+const (
+	usageProviderBytes    = 64
+	usageModelBytes       = 128
+	usageExecutionIDBytes = 128
+)
+
+// truncateUTF8 bounds value to at most limit BYTES, cut on a UTF-8 boundary,
+// so it fits a VARCHAR(limit) and stays valid UTF-8.
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 // RetentionWindow is how long a usage-ledger row is kept (issue #320).
@@ -206,7 +233,9 @@ func (s *Store) Apply(ctx context.Context, group []BudgetDelta) (applyOutcome, e
 			continue
 		}
 		if _, err := tx.ExecAffected(ctx, usageEventSQL,
-			d.EventID, d.ProjectID, d.Usage.UserID, d.Usage.Provider, d.Usage.Model,
+			d.EventID, d.ProjectID, d.Usage.UserID,
+			truncateUTF8(d.Usage.Provider, usageProviderBytes),
+			truncateUTF8(d.Usage.Model, usageModelBytes),
 			d.Usage.PromptTokens, d.Usage.CompletionTokens,
 			d.DeltaNanoUSD, d.PeriodStart, d.PeriodEnd, d.Usage.OccurredAtUnix,
 			nullableExecutionID(d.Usage.ExecutionID),

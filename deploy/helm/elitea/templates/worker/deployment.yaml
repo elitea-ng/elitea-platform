@@ -2,9 +2,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "elitea-worker-python.fullname" . }}
+  name: {{ include "elitea-worker.fullname" . }}
   labels:
-    {{- include "elitea-worker-python.labels" . | nindent 4 }}
+    {{- include "elitea-worker.labels" . | nindent 4 }}
   # The worker rolls AFTER elitea-main: a new worker names its claim on the
   # artifact object API and confines system buckets itself, but it is elitea-main
   # that verifies the claim, so a new worker against an older elitea-main
@@ -39,7 +39,7 @@ spec:
     type: RollingUpdate
   selector:
     matchLabels:
-      {{- include "elitea-worker-python.selectorLabels" . | nindent 6 }}
+      {{- include "elitea-worker.selectorLabels" . | nindent 6 }}
       # The component label is part of the SELECTOR, not decoration: the
       # platform-edge pods carry the same name/instance labels, so without it
       # this Deployment's selector is a subset of theirs and the two overlap —
@@ -48,7 +48,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "elitea-worker-python.selectorLabels" . | nindent 8 }}
+        {{- include "elitea-worker.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: worker
       annotations:
         checksum/runtime: {{ include (print $.Template.BasePath "/worker/configmap-runtime.yaml") . | sha256sum }}
@@ -75,7 +75,7 @@ spec:
               add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
           env:
             - name: MATERIAL_FILES
-              value: {{ include "elitea-worker-python.materialFiles" . | quote }}
+              value: {{ include "elitea-worker.materialFiles" . | quote }}
             - name: OWNER
               value: "{{ .Values.worker.runAsUser }}:{{ .Values.worker.runAsGroup }}"
             # The pod's own name, which is what makes this replica's NATS
@@ -187,26 +187,17 @@ spec:
             {{- with .Values.worker.securityContext }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if eq (include "elitea-worker.isRust" .) "true" }}
           # The Rust worker's argument list is matched as an EXACT five-token
           # slice (services/elitea-worker-rust/src/lib.rs). Both paths must be
-          # absolute, and a four-token `serve --config <path>` — the Python
-          # shape below — is not a degraded mode: it is
-          # `worker_serve.invalid_configuration` and an immediate exit.
+          # absolute; any other shape is `worker_serve.invalid_configuration`
+          # and an immediate exit.
           args:
             - serve
             - --config
             - /run/elitea/runtime.json
             - --toolkit-security-config
             - /run/elitea/toolkit-security.json
-          {{- else }}
-          # The only supported command shape: one JSON config, no env-var
-          # settings. Capabilities are compiled in, and the Go side decides
-          # which of them it will accept.
-          args: ["serve", "--config", "/run/elitea/runtime.json"]
-          {{- end }}
           env:
-            {{- if eq (include "elitea-worker.isRust" .) "true" }}
             # The Rust worker hands the runtime CA to every internal client
             # EXPLICITLY in code, so the process-wide trust store governs
             # exactly one client: the remote-MCP one, which is reqwest/rustls
@@ -228,31 +219,6 @@ spec:
               value: {{ .Values.worker.logLevel | quote }}
             - name: ELITEA_RUST_TRACE
               value: {{ .Values.worker.traceLevel | quote }}
-            {{- else }}
-            # TLS trust for platform_origin. The SDK routes verification
-            # through the OS trust store on import, which cannot contain a CA
-            # minted for this cluster, so that injection is disabled and the
-            # two variables below cover both HTTP stacks the SDK uses:
-            # `requests` for /api/v2 and httpx/openai for the model call.
-            #
-            # The bundle the init container built: the runtime CA AND the
-            # public roots. The runtime CA alone would be tighter for the four
-            # platform hops — and it is still the only thing runtime.json's
-            # ca_path trusts for them — but these two variables are
-            # process-wide, so a private-CA-only bundle also governs what an
-            # agent tool sees when it dials a public HTTPS endpoint.
-            - name: ELITEA_DISABLE_SYSTEM_CA
-              value: "1"
-            - name: REQUESTS_CA_BUNDLE
-              value: /run/elitea-runtime/trust-bundle.crt
-            - name: SSL_CERT_FILE
-              value: /run/elitea-runtime/trust-bundle.crt
-            # The one environment variable the worker itself reads. The Rust
-            # worker carries the same rule in its toolkit-security file
-            # instead; see the ConfigMap.
-            - name: ELITEA_SENSITIVE_TOOLS
-              value: {{ .Values.worker.runtime.sensitiveTools | quote }}
-            {{- end }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:
@@ -264,12 +230,10 @@ spec:
               mountPath: /run/elitea/runtime.json
               subPath: runtime.json
               readOnly: true
-            {{- if eq (include "elitea-worker.isRust" .) "true" }}
             - name: runtime-config
               mountPath: /run/elitea/toolkit-security.json
               subPath: toolkit-security.json
               readOnly: true
-            {{- end }}
             - name: material
               mountPath: /run/elitea-runtime
               {{- if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }}
@@ -367,7 +331,7 @@ spec:
       volumes:
         - name: runtime-config
           configMap:
-            name: {{ include "elitea-worker-python.fullname" . }}-runtime
+            name: {{ include "elitea-worker.fullname" . }}-runtime
         - name: material-source
           secret:
             secretName: {{ required "materialSecretName is required" .Values.worker.materialSecretName }}
@@ -388,7 +352,7 @@ spec:
             medium: Memory
             sizeLimit: {{ .Values.worker.materialInit.sizeLimit }}
         {{- if .Values.nats.tls.enabled }}
-        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-worker-python.fullname" .))) | nindent 8 }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-worker.fullname" .))) | nindent 8 }}
         {{- end }}
         - name: spool
           emptyDir:

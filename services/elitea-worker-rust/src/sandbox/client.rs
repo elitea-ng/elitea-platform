@@ -42,9 +42,58 @@ pub enum SandboxCallError {
     #[error(
         "sandbox submission returned {code}; reconcile the same activation before any further execution"
     )]
-    Submission { code: Code },
+    Submission {
+        code: Code,
+        /// The supervisor's own status message, bounded. Empty for a local
+        /// deadline or a broken local connection, so a transport failure never
+        /// carries a server instruction it did not receive. Not displayed.
+        message: String,
+    },
     #[error("the sandbox response is malformed; completion cannot be confirmed")]
     InvalidReceipt,
+}
+
+/// Longest supervisor status message kept on a submission error.
+const SUBMISSION_MESSAGE_LIMIT: usize = 256;
+
+impl SandboxCallError {
+    /// A submission refused or failed with this wire status.
+    pub(crate) fn submission(status: &tonic::Status) -> Self {
+        if local_transport_failure(status) {
+            return Self::coded(Code::Unavailable);
+        }
+        Self::Submission {
+            code: status.code(),
+            message: status
+                .message()
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(SUBMISSION_MESSAGE_LIMIT)
+                .collect(),
+        }
+    }
+
+    /// The local RPC deadline elapsed; the supervisor said nothing.
+    pub(crate) fn deadline() -> Self {
+        Self::coded(Code::DeadlineExceeded)
+    }
+
+    /// A submission error with no supervisor message.
+    pub(crate) fn coded(code: Code) -> Self {
+        Self::Submission {
+            code,
+            message: String::new(),
+        }
+    }
+
+    /// The supervisor status message, empty when none was received.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn submission_message(&self) -> &str {
+        match self {
+            Self::Submission { message, .. } => message,
+            _ => "",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -236,12 +285,8 @@ impl SandboxClient {
         let response =
             tokio::time::timeout(self.deadline, self.rpc.clone().cancel_sandbox_job(request))
                 .await
-                .map_err(|_| SandboxCallError::Submission {
-                    code: Code::DeadlineExceeded,
-                })?
-                .map_err(|status| SandboxCallError::Submission {
-                    code: submission_code(&status),
-                })?
+                .map_err(|_| SandboxCallError::deadline())?
+                .map_err(|status| SandboxCallError::submission(&status))?
                 .into_inner();
         match SandboxJobStatusV1::try_from(response.status) {
             Ok(SandboxJobStatusV1::Pending) if response.cleanup_pending => {
@@ -308,12 +353,8 @@ impl SandboxClient {
         let response =
             tokio::time::timeout(self.deadline, self.rpc.clone().submit_sandbox_job(request))
                 .await
-                .map_err(|_| SandboxCallError::Submission {
-                    code: Code::DeadlineExceeded,
-                })?
-                .map_err(|status| SandboxCallError::Submission {
-                    code: submission_code(&status),
-                })?
+                .map_err(|_| SandboxCallError::deadline())?
+                .map_err(|status| SandboxCallError::submission(&status))?
                 .into_inner();
         decode(response)
     }
@@ -321,15 +362,23 @@ impl SandboxClient {
 
 // A wire status has no local transport source. Preserve server rejections;
 // only classify a broken local HTTP connection as unavailable.
+#[cfg(test)]
 fn submission_code(status: &tonic::Status) -> Code {
+    if local_transport_failure(status) {
+        return Code::Unavailable;
+    }
+    status.code()
+}
+
+fn local_transport_failure(status: &tonic::Status) -> bool {
     let mut source = std::error::Error::source(status);
     while let Some(error) = source {
         if error.is::<hyper::Error>() {
-            return Code::Unavailable;
+            return true;
         }
         source = error.source();
     }
-    status.code()
+    false
 }
 
 fn decode(response: SubmitSandboxJobResponseV1) -> Result<SandboxOutcome, SandboxCallError> {
@@ -398,6 +447,30 @@ mod tests {
         ] {
             assert_eq!(submission_code(&tonic::Status::new(code, "rejected")), code);
         }
+    }
+
+    #[test]
+    fn submission_errors_carry_only_the_supervisor_message() {
+        let error = SandboxCallError::submission(&tonic::Status::unavailable(
+            "Reconcile the same activation.\u{7}",
+        ));
+        assert!(matches!(
+            error,
+            SandboxCallError::Submission {
+                code: Code::Unavailable,
+                ..
+            }
+        ));
+        assert_eq!(error.submission_message(), "Reconcile the same activation.");
+        let long = "x".repeat(SUBMISSION_MESSAGE_LIMIT * 2);
+        assert_eq!(
+            SandboxCallError::submission(&tonic::Status::internal(long))
+                .submission_message()
+                .len(),
+            SUBMISSION_MESSAGE_LIMIT
+        );
+        assert_eq!(SandboxCallError::deadline().submission_message(), "");
+        assert_eq!(SandboxCallError::Invalid.submission_message(), "");
     }
 
     #[test]

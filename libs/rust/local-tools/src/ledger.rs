@@ -138,4 +138,42 @@ mod tests {
             ErrorCode::StaleRead
         );
     }
+
+    /// Reads run concurrently (adk's `Auto` overlaps read-only calls,
+    /// #1213): the ledger is shared across them, and two reads of one file
+    /// record one stamp, the file's.
+    #[test]
+    fn concurrent_reads_of_one_file_record_one_consistent_stamp() {
+        fn shared<T: Send + Sync>() {}
+        shared::<ReadLedger>();
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(dir.path().join("a.txt"), "one\ntwo\n").expect("write");
+        let workspace = crate::workspace::Workspace::open(dir.path(), &[]).expect("workspace");
+        let ledger = ReadLedger::new();
+        let path = workspace
+            .resolve("a.txt", crate::workspace::Intent::Read)
+            .expect("path");
+        let stamps: Vec<FileStamp> = std::thread::scope(|scope| {
+            let readers: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let read = workspace.read(&path, 1024).expect("read");
+                        ledger.record(&path, read.stamp.clone());
+                        read.stamp
+                    })
+                })
+                .collect();
+            readers
+                .into_iter()
+                .map(|r| r.join().expect("reader"))
+                .collect()
+        });
+        assert!(
+            stamps.windows(2).all(|pair| pair[0] == pair[1]),
+            "{stamps:?}"
+        );
+        let recorded = ledger.seen.lock().expect("lock").get(&path).cloned();
+        assert_eq!(recorded.as_ref(), Some(&stamps[0]));
+        assert!(ledger.check_fresh(&path, Some(&stamps[0])).is_ok());
+    }
 }

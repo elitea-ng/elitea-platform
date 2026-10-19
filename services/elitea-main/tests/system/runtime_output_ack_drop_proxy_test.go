@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,19 +91,6 @@ func startOutputACKDropProxy(t *testing.T, upstreamAddress string, pki runtimePK
 	})
 
 	return proxy
-}
-
-func (p *outputACKDropProxy) port(t *testing.T) int {
-	t.Helper()
-	_, portText, err := net.SplitHostPort(p.address)
-	if err != nil {
-		t.Fatalf("parse output ACK-drop proxy address %q: %v", p.address, err)
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		t.Fatalf("parse output ACK-drop proxy port %q: %v", portText, err)
-	}
-	return port
 }
 
 func (p *outputACKDropProxy) armCommittedACKDrop(t *testing.T) <-chan struct{} {

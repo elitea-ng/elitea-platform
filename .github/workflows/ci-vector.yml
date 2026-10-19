@@ -19,6 +19,9 @@ name: CI — elitea-vector
 on:
   pull_request:
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-vector/**"
       - "libs/proto/elitea/vector/**"
       # The telemetry crate elitea-vector links, and the workspace it
@@ -31,6 +34,9 @@ on:
     branches:
       - main
     paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-vector/**"
       - "libs/proto/elitea/vector/**"
       - "libs/rust/engine-sidecar/**"
@@ -75,10 +81,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Show pinned toolchain
+      - name: Assert the pinned toolchain
         run: |
-          rustc --version
-          cargo --version
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
       # Read everywhere, write on main only: a pull request's target
       # directory duplicated per branch would crowd the 10 GB Actions cache.

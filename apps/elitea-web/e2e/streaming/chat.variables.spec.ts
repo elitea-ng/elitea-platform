@@ -19,9 +19,8 @@
  *
  * ── THE CONTRACT, TRACED TO THE SDK IT PORTS ───────────────────────────────
  *
- * The renderer is a port of the SDK worker's own behaviour, measured at the
- * revision `services/elitea-worker-python/elitea-sdk.lock.json` pins
- * (elitea-sdk 0.9.8 @ b5113a12): `runtime/langchain/assistant.py:557-576`
+ * The renderer is a port of the (retired) Python worker's SDK behaviour,
+ * measured at the revision that worker pinned (elitea-sdk 0.9.8 @ b5113a12): `runtime/langchain/assistant.py:557-576`
  * captures `{name, value}` rows whose value is neither null nor empty, and
  * `:597-657` renders the instructions through
  * `SandboxedEnvironment(undefined=DebugUndefined)` — real Jinja2, not string
@@ -75,31 +74,6 @@
  * folds into `application_versions.meta` — the identical column the runtime
  * reads). If a variables-authoring control is ever added to this edit page,
  * this spec should switch to driving it.
- *
- * ── WHY BOTH WORKER LEGS NOW RUN THE SAME ASSERTION ────────────────────────
- *
- * They did not always. Until the projection was fixed, this file ran the
- * journal assertion on the native leg alone and let the SDK leg assert only
- * that the turn was admitted and answered — because on the SDK leg the
- * substitution was not reachable from this platform's DATA at all. Main's
- * `application_version_details_json` built `'variables', '[]'::jsonb`
- * unconditionally, so the SDK's primary source (`data['variables']`) always
- * arrived empty, and its only other source — `meta['variables']` — is guarded
- * by `isinstance(meta['variables'], dict)` (`assistant.py:574`) while Main
- * stores an ARRAY.
- *
- * That projection now carries the version's real list, read out of the same
- * `application_versions.meta` the HTTP write folds it into and the same place
- * `versionDetailsResponse` reads it back from
- * (`services/elitea-main/internal/db/queries/agent_chat.sql`,
- * `internal/api/v2/applications/handler.go`). The pinned SDK is satisfied by
- * that alone — no patch was added to the two in
- * `services/elitea-worker-python/elitea-sdk.lock.json` — and the substitution
- * is proved against the real wheel by
- * `services/elitea-worker-python/tests/unit/test_agent_variables.py`. So the
- * branch is gone and the journal assertion below is now the SAME contract on
- * both runtimes: whichever worker answers the turn, the VALUE the user stored
- * must be in the system prompt the model received.
  *
  * ── WHERE THIS LIVES ───────────────────────────────────────────────────────
  *
@@ -232,7 +206,7 @@ test('an agent variable is substituted into the instructions the model receives'
     `a populated variable must not be refused at admission: ${(await startResponse.text()).slice(0, 300)}`,
   ).toBe(200);
 
-  // ── 5. …and to ANSWER, on either worker ─────────────────────────────────
+  // ── 5. …and to ANSWER ───────────────────────────────────────────────────
   // The row must NOT be flagged `metadata.is_error`. This is the assertion
   // that was inverted when the runtime grew substitution: a refusal here means
   // an agent with a variable cannot hold a conversation at all.
@@ -244,7 +218,7 @@ test('an agent variable is substituted into the instructions the model receives'
       'renderer (variables.rs) turned a valid template into a failure',
   });
 
-  // ── 6. …and prove the VALUE reached the model, on EITHER worker ────────
+  // ── 6. …and prove the VALUE reached the model ──────────────────────────
   const journal = await readMockLlmJournal(page);
   const chatRequests = journal.filter((entry) => entry.path === '/v1/chat/completions');
   expect(

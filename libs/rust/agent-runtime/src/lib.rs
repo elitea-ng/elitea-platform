@@ -14,6 +14,8 @@
 //! * [`planner`], [`lazy_tools`] — the `planner` and `lazy_tools_mode`
 //!   (Smart Tools Selection) internal tools;
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
+//! * [`step_limit`] — the end of a run that used its model steps, and the
+//!   person's "Continue?" that runs it again on the same session;
 //! * [`toolkits`] — native toolkit families, the Streamable HTTP MCP client,
 //!   tool admission policy and the flat tool namespace;
 //! * [`platform`] — what the runtime writes to the platform
@@ -58,8 +60,11 @@ pub mod lazy_tools;
 pub mod planner;
 pub mod platform;
 pub mod request;
+pub mod step_limit;
 pub mod tool_namespacing;
 pub mod toolkits;
+pub mod workspace_archive;
+pub mod workspace_tools;
 
 /// The patched-adk guard. The two builders below exist only in the patched
 /// adk 2.2.0 crates in `libs/rust/vendor` (the registry releases have

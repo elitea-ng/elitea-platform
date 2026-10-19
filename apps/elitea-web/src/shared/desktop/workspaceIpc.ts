@@ -31,6 +31,21 @@ export interface TurnStartRequest {
   skills: string[];
 }
 
+/** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
+export interface TurnPrewarmRequest {
+  project_id: number;
+  application_id: number;
+  version_id: number;
+  /** The thread's conversation, when it has one. */
+  conversation_id?: string;
+}
+
+/** What a turn to it would find cached on the host now. */
+interface TurnPrewarmed {
+  version: boolean;
+  participant: boolean;
+}
+
 /** One match of `workspace_files` (the "@" picker). */
 export interface WorkspaceFile {
   /** Workspace-relative, without a trailing `/`. */
@@ -80,6 +95,10 @@ export type TurnPhase = 'resolving' | 'starting' | 'running' | 'committing' | 'd
 
 export interface ApprovalRequestPayload {
   request_id: string;
+  /** `continue`: the run used its steps; asked every time, shown as a card in the transcript. Absent for a tool's approval. */
+  kind?: 'continue';
+  /** For `continue`: the steps each run takes (and the next one would). */
+  steps?: number;
   tool: string;
   title: string;
   detail: string;
@@ -96,7 +115,11 @@ interface EventBase {
 
 /** The `done` event's payload. */
 export interface TurnDonePayload {
+  /** True once the turn is saved in its conversation: `done` comes before the commit, so the event says `false` and `agent_turn_status` says how it settled. */
   committed: boolean;
+  /** `pending` (being saved after `done`), `committed`, `failed` (see `commit_failed`) or `none` (a cancelled turn saves nothing). */
+  commit?: 'pending' | 'committed' | 'failed' | 'none';
+  execution_id?: string;
   conversation_id: string;
   message_ids: string[];
   changed_files: number;
@@ -109,13 +132,29 @@ export interface TurnStatus {
 }
 
 export type AgentEvent =
-  | (EventBase & { kind: 'status'; payload: { phase: TurnPhase; message?: string; project_instructions?: string[] } })
+  | (EventBase & {
+      kind: 'status';
+      payload: {
+        phase: TurnPhase;
+        message?: string;
+        project_instructions?: string[];
+        /** On `running` again: the run went on past its step limit, for the n-th time, from the host's own `host_prompt` (never the person's message). */
+        continued?: number;
+        host_prompt?: string;
+        /** On `done`: `step_limit_reached` when the turn stopped at its limit. */
+        note?: string;
+        /** The turn's phases measured since the previous `status` (IPC.md "Timings"). */
+        timings?: { phase: string; ms_since_turn_start: number; phase_ms: number }[];
+      };
+    })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
-  | (EventBase & { kind: 'done'; payload: TurnDonePayload });
+  | (EventBase & { kind: 'done'; payload: TurnDonePayload })
+  /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */
+  | (EventBase & { kind: 'commit_failed'; payload: { execution_id: string; code: string; message: string } });
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
@@ -175,6 +214,10 @@ export interface WorkspaceIpc {
   /** The "@" picker: the workspace's files and folders matching `query`, best first. */
   files(workspaceId: string, query: string, limit?: number): Promise<WorkspaceFile[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
+  retryCommit(executionId: string): Promise<void>;
+  /** Have the host read ahead what a turn to this agent reads first (the composer got focus); starts nothing. */
+  prewarm(request: TurnPrewarmRequest): Promise<TurnPrewarmed>;
   cancelTurn(turnId: string): Promise<void>;
   /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
   turnStatus(turnId: string): Promise<TurnStatus>;
@@ -217,6 +260,8 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     files: (workspaceId, query, limit) =>
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
+    prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
+    retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
     respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
