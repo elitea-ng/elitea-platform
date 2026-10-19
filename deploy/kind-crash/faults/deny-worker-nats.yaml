@@ -19,7 +19,8 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: elitea-worker-python
+      # component, not the historical name label `elitea-worker-python`, which the platform edge shares.
+      app.kubernetes.io/component: worker
   policyTypes:
     - Egress
   egress:

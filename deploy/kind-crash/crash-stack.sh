@@ -298,7 +298,7 @@ cmd_pin() {
 cmd_faults() {
   cat <<FAULTS
 Fault commands (context ${CONTEXT}, namespace ${NS}). Full table: deploy/kind-crash/faults/README.md
-  KX-01  kubectl --context ${CONTEXT} -n ${NS} delete pod -l app.kubernetes.io/name=elitea-worker-python --grace-period=0 --force
+  KX-01  kubectl --context ${CONTEXT} -n ${NS} delete pod -l app.kubernetes.io/component=worker --grace-period=0 --force
   KX-05  kubectl --context ${CONTEXT} -n ${NS} rollout restart deploy/elitea-sandbox-supervisor
   KX-07  kubectl --context ${CONTEXT} -n ${NS} delete pod elitea-nats-0
   KX-09  kubectl --context ${CONTEXT} -n ${NS} delete pod <one of: kubectl get pod -l app.kubernetes.io/name=elitea-main>
