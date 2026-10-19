@@ -126,6 +126,8 @@ export interface ToolCallStepWire {
   readonly timestamp_finish?: string;
   readonly content?: string;
   readonly error?: unknown;
+  /** Present on a call that paused for the user (native runtime contract 1.2). */
+  readonly pause?: unknown;
 }
 
 /** Raw persisted HITL interrupt dict (chat.helpers.js:85-105). */

@@ -229,6 +229,7 @@ function buildToolCallMeta(
     icon_meta: step.tool_meta?.icon_meta,
     agent_type: step.tool_meta?.metadata?.agent_type,
     ...codeDebugToolMeta(step),
+    ...(step.pause ? { pause: step.pause } : {}),
   };
 }
 

@@ -104,4 +104,9 @@ describe('buildToolActions', () => {
     expect(run([{ name: 'n'.repeat(2049), call_id: 'call-b' }])).not.toHaveProperty('parent_agent_path');
     expect(run([{ name: 'n'.repeat(2048), call_id: 'c'.repeat(512) }])).toHaveProperty('parent_agent_path');
   });
+
+  it('keeps the pause marker of a call that paused for the user', () => {
+    const [action] = buildToolActions([], [{ tool_run_id: 't1', tool_name: 'ask_user', pause: { interrupt_id: 'i1' } }], '2026-01-01T00:00:00Z', undefined, undefined);
+    expect(action?.toolMeta).toMatchObject({ pause: { interrupt_id: 'i1' } });
+  });
 });

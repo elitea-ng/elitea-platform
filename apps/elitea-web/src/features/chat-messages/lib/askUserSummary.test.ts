@@ -59,3 +59,19 @@ describe('buildAskUserSummary', () => {
     expect(buildAskUserSummary(null, 'User answered:\n- no separator')).toBeNull();
   });
 });
+
+describe('askUserSummary on the native runtime shapes (pm1084 browser run)', () => {
+  it('reads a JSON-encoded tool output string', () => {
+    const output = JSON.stringify('User answered:\n- Which region do you want?: EU');
+    expect(buildAskUserSummary({ questions: [{ id: 'region', question: 'Which region do you want?' }] }, output)).toEqual([
+      { question: 'Which region do you want?', answer: 'EU' },
+    ]);
+  });
+
+  it('ignores the paused call and picks the answered one', () => {
+    const paused = { name: 'ask_user', status: 'complete', toolMeta: { pause: { interrupt_id: 'i1' } } };
+    const answered = { name: 'ask_user', status: 'complete', toolMeta: {} };
+    expect(findAskUserAction([paused])).toBeNull();
+    expect(findAskUserAction([paused, answered])).toBe(answered);
+  });
+});

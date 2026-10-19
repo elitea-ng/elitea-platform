@@ -17,6 +17,7 @@ export interface AskUserSummaryItem {
 interface AskUserActionLike {
   readonly name?: unknown;
   readonly status?: unknown;
+  readonly toolMeta?: unknown;
 }
 
 interface QuestionSpec {
@@ -28,12 +29,32 @@ interface QuestionSpec {
 // Splits the ask_user tool result string ("User answered:\n- <label>: <value>")
 // into its answer-line bodies (prefix stripped), tolerating a non-string input.
 function extractAnswerLines(raw: unknown): string[] {
-  if (typeof raw !== 'string') return [];
-  return raw
+  const text = decodedOutput(raw);
+  if (typeof text !== 'string') return [];
+  return text
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.startsWith(ANSWER_LINE_PREFIX))
     .map((line) => line.slice(ANSWER_LINE_PREFIX.length));
+}
+
+// The native runtime persists a string tool output JSON-encoded
+// (`"User answered:\n- …"`); decode it so its lines can be read.
+function decodedOutput(raw: unknown): unknown {
+  if (typeof raw !== 'string' || !raw.startsWith('"')) return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'string' ? parsed : raw;
+  } catch {
+    return raw;
+  }
+}
+
+// A call that paused for the user settles as complete but carries its pause;
+// it has no answer yet, so the summary skips it.
+function isPausedCall(action: AskUserActionLike): boolean {
+  const meta = action.toolMeta;
+  return meta !== null && typeof meta === 'object' && 'pause' in meta && Boolean((meta as { pause?: unknown }).pause);
 }
 
 // Fallback { label: value } map for when the question specs are unavailable.
@@ -90,7 +111,10 @@ function questionLabel(spec: unknown): string {
 export function findAskUserAction<T extends AskUserActionLike>(toolActions: readonly T[] | null | undefined): T | null {
   if (!Array.isArray(toolActions)) return null;
   const list: readonly T[] = toolActions;
-  return list.find((item) => item?.name === ASK_USER_TOOL_NAME && item?.status === ToolActionStatus.complete) ?? null;
+  return (
+    list.find((item) => item?.name === ASK_USER_TOOL_NAME && item?.status === ToolActionStatus.complete && !isPausedCall(item)) ??
+    null
+  );
 }
 
 /**
