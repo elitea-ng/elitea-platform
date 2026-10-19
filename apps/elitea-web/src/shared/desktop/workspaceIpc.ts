@@ -124,6 +124,8 @@ export type AgentEvent =
         host_prompt?: string;
         /** On `done`: `step_limit_reached` when the turn stopped at its limit. */
         note?: string;
+        /** The turn's phases measured since the previous `status` (IPC.md "Timings"). */
+        timings?: { phase: string; ms_since_turn_start: number; phase_ms: number }[];
       };
     })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })

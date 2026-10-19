@@ -896,7 +896,7 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string}` — `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
@@ -924,6 +924,24 @@ call order, whatever order they ran in.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.
+
+**Timings.** A `status` event carries, as `timings`, every phase of the
+turn measured since the previous `status` (absent when none was):
+
+```ts
+type Timing = { phase: "resolving" | "participant" | "starting" | "first_token" | "tools" | "committing"; ms_since_turn_start: number; phase_ms: number };
+```
+
+`resolving` is the agent version's read (`resolved_version`), `participant`
+the conversation lookup (the answering participant and UUID), `starting`
+from `status` `starting` to the local turn's start (a session seed
+included), `first_token` from `status` `running` to the model's first
+streamed chunk, `tools` the wall time any tool call ran (overlapping calls
+counted once), `committing` the commit request. `ms_since_turn_start` is
+when the phase ended, from `agent_turn_start`. A phase before the first
+token that takes longer than 2 s is logged as a warning, and each turn
+logs one line with all of them (`local turn timings: resolving=…ms …`):
+what to compare before and after a change.
 
 **Step limit.** Each run of the agent takes at most its step limit of
 model steps: the workspace's own setting (`workspace_agent_settings_set`)

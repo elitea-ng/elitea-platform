@@ -3674,3 +3674,76 @@ async fn writes_stay_sequential_and_ordered() {
     assert_eq!(remote, ["One", "One", "Two", "Two"]);
     assert_eq!(committed_call_order(&h.server), order);
 }
+
+// ---- Turn timings (#1213 stage 2) ----
+
+const PHASE_ORDER: [&str; 6] = [
+    "resolving",
+    "participant",
+    "starting",
+    "first_token",
+    "tools",
+    "committing",
+];
+
+/// The phases each `status` event of `events` carries timings for.
+fn timed_phases(events: &[AgentEvent]) -> Vec<(String, Vec<String>)> {
+    events
+        .iter()
+        .filter(|e| e.kind == "status")
+        .map(|e| {
+            let phases = e.payload["timings"]
+                .as_array()
+                .map(|timings| {
+                    timings
+                        .iter()
+                        .map(|t| {
+                            assert!(
+                                t["phase_ms"].is_u64() && t["ms_since_turn_start"].is_u64(),
+                                "{t}"
+                            );
+                            t["phase"].as_str().unwrap().to_owned()
+                        })
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            // Phases measured concurrently (the version and the conversation
+            // are read together) end in either order: compared in the
+            // turn's order.
+            let mut phases = phases;
+            phases.sort_by_key(|phase| PHASE_ORDER.iter().position(|known| known == phase));
+            (e.payload["phase"].as_str().unwrap().to_owned(), phases)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn status_events_carry_the_turns_phase_timings() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    let owned = timed_phases(&events);
+    let phases: Vec<(&str, Vec<&str>)> = owned
+        .iter()
+        .map(|(phase, timed)| (phase.as_str(), timed.iter().map(String::as_str).collect()))
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            ("resolving", vec![]),
+            ("starting", vec!["resolving", "participant"]),
+            ("running", vec!["starting"]),
+            ("committing", vec!["first_token", "tools"]),
+            ("done", vec!["committing"]),
+        ]
+    );
+    // The clock only moves forward.
+    let since: Vec<u64> = events
+        .iter()
+        .filter_map(|e| e.payload["timings"].as_array())
+        .flatten()
+        .map(|t| t["ms_since_turn_start"].as_u64().unwrap())
+        .collect();
+    assert!(since.windows(2).all(|w| w[0] <= w[1]), "{since:?}");
+}

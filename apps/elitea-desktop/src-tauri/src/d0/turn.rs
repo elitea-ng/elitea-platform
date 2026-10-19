@@ -55,7 +55,7 @@ use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, Pla
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::definition::{self, Admitted};
 use super::environment;
-use super::events::{EventEmitter, Phase, TurnEvents};
+use super::events::{EventEmitter, Phase, Timed, TurnEvents};
 use super::framing;
 use super::mentions;
 use super::model::GatewayTransport;
@@ -1036,6 +1036,7 @@ impl AgentHost {
         let credentials: Arc<dyn Credentials> =
             Arc::new(PinnedCredentials::current(self.deps.credentials.clone())?);
         let api = Arc::new(self.api.with_credentials(credentials));
+        let resolving = std::time::Instant::now();
         let resolved = api
             .resolved_version(
                 request.project_id,
@@ -1043,6 +1044,7 @@ impl AgentHost {
                 request.version_id,
             )
             .await?;
+        events.timed(Timed::Resolving, resolving.elapsed());
         if resolved.project_context_withheld {
             events.status(
                 Phase::Resolving,
@@ -1078,6 +1080,7 @@ impl AgentHost {
                 "The agent's frozen skills or project context could not be loaded, so the turn was not started.",
             )
         })?;
+        let looking_up = std::time::Instant::now();
         let answering = api
             .answering_participant(
                 request.project_id,
@@ -1086,6 +1089,7 @@ impl AgentHost {
                 request.version_id,
             )
             .await?;
+        events.timed(Timed::Participant, looking_up.elapsed());
         // Checked and taken atomically, per workspace id, before the session
         // may be rebuilt; released on every early return below.
         let claim = WorkspaceClaim::take(&self.busy, &request.workspace_id, TURN_RUNNING)?;
@@ -1099,6 +1103,7 @@ impl AgentHost {
             &policy,
         )?;
         events.status(Phase::Starting, None);
+        let starting = std::time::Instant::now();
         let question_id = uuid::Uuid::new_v4().to_string();
         // The conversation's session: reopened from the store, seeded from
         // the server when it is behind (a take-back, a new device, a refused
@@ -1134,6 +1139,7 @@ impl AgentHost {
             )
             .await;
         let started = started?;
+        events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
         Ok(Prepared {
             conversation,
@@ -1231,6 +1237,8 @@ impl AgentHost {
             let changes = recorder.changes(session.workspace());
             self.index_changed(&request.workspace_id, changes.len());
             tap.changes(&changes);
+            events.tools_done();
+            events.log_timings();
             events.status(Phase::Cancelled, None);
             entry.finish(
                 &events,
@@ -1277,7 +1285,9 @@ impl AgentHost {
             );
             events.error(&error.code, &error.message);
         }
+        events.tools_done();
         events.status(Phase::Committing, None);
+        let committing = std::time::Instant::now();
         let sandbox_mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
         let mut assistant = json!({ "content": answer });
         if let Some(error) = &failure {
@@ -1299,6 +1309,7 @@ impl AgentHost {
             }
             Err(error) => Err(error.clone()),
         };
+        events.timed(Timed::Committing, committing.elapsed());
         // The session holds what the server holds, or is marked to be
         // rebuilt from it.
         memory
@@ -1316,6 +1327,7 @@ impl AgentHost {
         self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
         let changed_files = changes.len();
+        events.log_timings();
         if let Err(error) = &committed {
             log::warn!(
                 "a local turn was not saved: {}",

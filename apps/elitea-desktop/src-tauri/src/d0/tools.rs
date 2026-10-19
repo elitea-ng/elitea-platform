@@ -123,6 +123,23 @@ fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)
     }
 }
 
+/// One call's share of the tools' wall time; ends when dropped, so a call
+/// a cancel drops mid-way still ends.
+struct ToolTimer<'a>(&'a TurnEvents);
+
+impl<'a> ToolTimer<'a> {
+    fn begin(events: &'a TurnEvents) -> Self {
+        events.tool_began();
+        Self(events)
+    }
+}
+
+impl Drop for ToolTimer<'_> {
+    fn drop(&mut self) {
+        self.0.tool_ended();
+    }
+}
+
 #[async_trait]
 impl Tool for ObservedTool {
     fn name(&self) -> &str {
@@ -193,7 +210,9 @@ impl Tool for ObservedTool {
                     .map(str::to_owned)
             })
             .flatten();
+        let running = ToolTimer::begin(&observer.events);
         let result = self.inner.execute(ctx, args).await;
+        drop(running);
         let (ok, summary, truncated, error) = match &result {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("error");
