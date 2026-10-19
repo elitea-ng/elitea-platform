@@ -237,10 +237,9 @@ mod tests {
             u64::from(MAX_RUNTIME_LOST_RETRIES)
         );
         assert_eq!(policy["retry_window_ms"], RUNTIME_LOST_RETRY_WINDOW_MS);
-        let terminal =
-            crate::protocol::output::runtime_error(crate::protocol::output::model_failure(Some(
-                crate::agents::graph::code_runtime::CODE_RUNTIME_UNAVAILABLE,
-            )));
+        let terminal = crate::protocol::output::runtime_error(
+            crate::protocol::output::model_failure(Some("pipeline.code_runtime_unavailable")),
+        );
         let name =
             crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::try_from(terminal.code)
                 .unwrap()

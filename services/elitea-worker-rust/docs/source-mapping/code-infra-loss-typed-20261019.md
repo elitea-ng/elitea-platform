@@ -64,8 +64,14 @@ Stacked on FU-214 (`code-runtime-lost-retry-20261016.md`). It reuses its lost-ru
   - past the allowance it settles `pipeline.code_runtime_unavailable`;
   - the FU-214 exhausted case now settles as infrastructure.
 
-Counts, deployed re-proof (CR-SK-P11 on current main; the FU-234 Worker loss during final provisioning) and browser
-evidence: pending, see the PR.
+Counts:
+- clippy `-D warnings` is clean.
+- Targeted unit suites: 22 passed.
+- Real PostgreSQL suites (wiring, node journal, Supervisor deadlines): 32 passed.
+  - 2 of them first hit the known fixture connect timeout under load. Both passed when run alone.
+
+Deployed re-proof (CR-SK-P11 on current main; the FU-234 Worker loss during final provisioning) and browser evidence
+are still pending. See the PR.
 
 ## Follow-ups
 
