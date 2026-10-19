@@ -57,7 +57,7 @@ describe('ApplicationAnswer', () => {
     renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} toolActions={answer.toolActions}
       continuation={{ renderAuthModal: () => null, onContinueMcpExecution: vi.fn() }} />);
     expect(screen.getByRole('button', { name: 'Authorize' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Skip Auth' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled();
     expect(screen.getByText('Authorization details are unavailable. You can skip this tool.')).toBeInTheDocument();
   });
 
@@ -90,11 +90,14 @@ describe('ApplicationAnswer', () => {
       continuation={{ onContinueMcpExecution: onContinue }}
     />);
 
-    const skipButtons = screen.getAllByRole('button', { name: 'Skip Auth' });
+    const skipButtons = screen.getAllByRole('button', { name: 'Skip' });
     expect(skipButtons).toHaveLength(2);
-    const guard = screen.getByRole('region', { name: 'surname resolver authorization' });
+    // Reference `AnswerApprovals`: each delegated request sits in its own
+    // instance accordion, below the answer content, as a bare card.
+    const bucket = screen.getAllByTestId('chat-answer-nested-agent-accordion-details-surname resolver').at(-1) as HTMLElement;
     const answerText = screen.getByText('Both children need authorization.');
-    expect(guard.compareDocumentPosition(answerText) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(answerText.compareDocumentPosition(bucket) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(screen.getAllByTestId('chat-answer-nested-agent-accordion-summary-name resolver').at(-1)?.textContent).toBe('name resolver');
     for (const button of screen.getAllByRole('button', { name: 'Authorize' })) {
       expect(button).toBeDisabled();
     }
@@ -333,9 +336,13 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
       />,
     );
 
+    // Reference `ApplicationThinkView.jsx`: a live tree stays expanded when
+    // it settles, and the reader owns it from then on.
     const summary = screen.getByRole('button', { name: /Thought for/ });
-    expect(summary.getAttribute('aria-expanded')).toBe('false');
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
 
+    await user.click(summary);
+    expect(summary.getAttribute('aria-expanded')).toBe('false');
     await user.click(summary);
     expect(summary.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('The user is greeting me.')).toBeVisible();

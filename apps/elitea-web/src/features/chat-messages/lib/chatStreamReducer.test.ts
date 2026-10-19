@@ -791,10 +791,10 @@ describe('applyChatStreamFrame — interrupts', () => {
       expect(history[0]?.threadId).toBe('thread-1');
     });
 
-    it('leaves hitlInterrupts UNSET for a single pause so resume stays sequential', () => {
-      // The consumer reads the array's mere presence as "parallel" and switches
-      // to the hitl_decisions resume shape; populating it here would misroute a
-      // pause the backend expects to answer with a single hitl_action.
+    it('carries a single pause as a one-card list too, mirrored by the singular field', () => {
+      // The resume path decides the body from the SIZE of the pending set, not
+      // from the array's presence, so a single pause no longer needs the array
+      // left unset; a one-card set still resumes with the single-card body.
       const history = applyChatStreamFrame(
         [pendingAssistant()],
         frame(SocketMessageType.AgentHitlInterrupt, {
@@ -803,7 +803,7 @@ describe('applyChatStreamFrame — interrupts', () => {
         CONTEXT,
       );
 
-      expect(history[0]?.hitlInterrupts).toBeUndefined();
+      expect(history[0]?.hitlInterrupts).toHaveLength(1);
       expect(history[0]?.hitlInterrupt).toMatchObject({ tool_name: 'delete_file', resume_strategy: 'single' });
     });
 
@@ -911,10 +911,10 @@ describe('applyChatStreamFrame — interrupts', () => {
       expect(interruptsOf(history)[0]?.['thread_id']).toBe('child-thread');
     });
 
-    it('keeps streaming for an in-process parallel aggregate and populates the array', () => {
-      // N paused sub-agents in ONE frame, each labelled with its parent but
-      // with no child thread — so it is not the fan-out shape, yet the run is
-      // just as much still active.
+    it('parks an aggregate of sub-agent cards: it is the terminal pause, so not streaming', () => {
+      // N paused sub-agents in ONE frame, each labelled with its parent. The
+      // Worker sends this aggregate LAST (`AgentPauseAccumulator::finish`);
+      // nothing runs behind it, so the live view settles.
       const history = applyChatStreamFrame(
         [pendingAssistant()],
         frame(SocketMessageType.AgentHitlInterrupt, {
@@ -928,7 +928,7 @@ describe('applyChatStreamFrame — interrupts', () => {
         CONTEXT,
       );
 
-      expect(history[0]?.isStreaming).toBe(true);
+      expect(history[0]?.isStreaming).toBe(false);
       expect(interruptsOf(history).map((entry) => entry['tool_call_id'])).toEqual(['c-1', 'c-2']);
       // The singular field tracks the first still-pending entry.
       expect(history[0]?.hitlInterrupt).toMatchObject({ tool_call_id: 'c-1' });

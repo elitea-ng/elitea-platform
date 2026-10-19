@@ -14,6 +14,8 @@ import { t } from '@/shared/i18n';
 import { Icon } from './Icon';
 
 interface CalloutProps {
+  /** Replaces the kind's default label ("Note", "Warning", …) as the heading. */
+  readonly title?: string;
   readonly children?: ReactNode;
 }
 
@@ -41,41 +43,41 @@ function Callout({
   );
 }
 
-export function Note({ children }: CalloutProps) {
+export function Note({ title, children }: CalloutProps) {
   return (
-    <Callout kind="note" label={t('entries.docs.callout.note', 'Note')} icon={<Icon as={Pin} />}>
+    <Callout kind="note" label={title ?? t('entries.docs.callout.note', 'Note')} icon={<Icon as={Pin} />}>
       {children}
     </Callout>
   );
 }
 
-export function Tip({ children }: CalloutProps) {
+export function Tip({ title, children }: CalloutProps) {
   return (
-    <Callout kind="tip" label={t('entries.docs.callout.tip', 'Tip')} icon={<Icon as={Lightbulb} />}>
+    <Callout kind="tip" label={title ?? t('entries.docs.callout.tip', 'Tip')} icon={<Icon as={Lightbulb} />}>
       {children}
     </Callout>
   );
 }
 
-export function Info({ children }: CalloutProps) {
+export function Info({ title, children }: CalloutProps) {
   return (
-    <Callout kind="info" label={t('entries.docs.callout.info', 'Info')} icon={<Icon as={InfoIcon} />}>
+    <Callout kind="info" label={title ?? t('entries.docs.callout.info', 'Info')} icon={<Icon as={InfoIcon} />}>
       {children}
     </Callout>
   );
 }
 
-export function Warning({ children }: CalloutProps) {
+export function Warning({ title, children }: CalloutProps) {
   return (
-    <Callout kind="warning" label={t('entries.docs.callout.warning', 'Warning')} icon={<Icon as={AlertTriangle} />}>
+    <Callout kind="warning" label={title ?? t('entries.docs.callout.warning', 'Warning')} icon={<Icon as={AlertTriangle} />}>
       {children}
     </Callout>
   );
 }
 
-export function Check({ children }: CalloutProps) {
+export function Check({ title, children }: CalloutProps) {
   return (
-    <Callout kind="check" label={t('entries.docs.callout.check', 'Check')} icon={<Icon as={CheckCircle2} />}>
+    <Callout kind="check" label={title ?? t('entries.docs.callout.check', 'Check')} icon={<Icon as={CheckCircle2} />}>
       {children}
     </Callout>
   );

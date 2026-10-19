@@ -343,7 +343,9 @@ export function reduceToolFrame(
             message: undefined,
             status: action.status === ToolActionStatus.actionRequired ? action.status : ToolActionStatus.complete,
             ended_at: frame.response_metadata?.timestamp_finish ?? frame.created_at,
-            toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy },
+            // The pause marker tells a paused call (no answer yet) from the
+            // re-run that carries the answer — the ask_user summary needs it.
+            toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy, pause: frame.response_metadata?.['pause'] ?? true },
           };
         }),
       });

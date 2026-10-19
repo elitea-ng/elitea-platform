@@ -113,6 +113,9 @@ export interface ToolCallStepWire {
     readonly toolkit_type?: string;
     readonly parent_agent_name?: string;
     readonly parent_agent_call_id?: string;
+    /** The Worker's ancestry overlay (`[{name, call_id, sibling_ordinal?}]`, ≤3 tiers); read defensively. */
+    readonly parent_agent_path?: unknown;
+    readonly sibling_ordinal?: unknown;
     readonly mcp_server_url?: string;
     readonly langgraph_node?: string;
   };
@@ -123,6 +126,8 @@ export interface ToolCallStepWire {
   readonly timestamp_finish?: string;
   readonly content?: string;
   readonly error?: unknown;
+  /** Present on a call that paused for the user (native runtime contract 1.2). */
+  readonly pause?: unknown;
 }
 
 /** Raw persisted HITL interrupt dict (chat.helpers.js:85-105). */

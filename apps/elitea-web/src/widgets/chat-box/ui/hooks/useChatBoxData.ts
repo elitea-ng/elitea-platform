@@ -33,6 +33,8 @@ import {
 } from '@/features/chat-messages';
 import type { ChatMessage } from '@/features/chat-messages';
 import { resolveSeededChatHistory } from './useChatBoxData.seed';
+import { restoreQueuedAuthorizations } from './useChatBoxHandlers.authorization';
+import { pendingCards, restoreQueuedHitlDecisions } from './useChatBoxHandlers.hitlCards';
 import { useListModelsQuery } from '@/shared/api/configurationsApi';
 import type { ConfigModel } from '@/shared/api/configurationsApi';
 import { useSocketClient } from '@/shared/api/socket/client';
@@ -237,20 +239,29 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
    */
   const persistedTraceStepsByGroup = useConversationTraceSteps(projectId, conversationId);
 
+  // The decisions a reader made on a paused response before a reload come
+  // back with the hydrated history (`model/hitlDecisionQueue`).
+  const queueKey = conversationUuid ?? (conversationId !== undefined ? String(conversationId) : undefined);
   const seedConversationForSync = useCallback(
     (): ConversationForSync => ({
       // `exactOptionalPropertyTypes`: only set `id`/`participants` when
       // actually present, rather than assigning an explicit `undefined`.
       ...(conversationId !== undefined ? { id: conversationId } : {}),
-      chat_history: convertMessagesToChatHistory(
-        messageGroups ?? [],
-        participants as MessageParticipantWire[] | undefined,
-        undefined,
-        persistedTraceStepsByGroup,
+      chat_history: restoreQueuedAuthorizations(
+        restoreQueuedHitlDecisions(
+          convertMessagesToChatHistory(
+            messageGroups ?? [],
+            participants as MessageParticipantWire[] | undefined,
+            undefined,
+            persistedTraceStepsByGroup,
+          ),
+          queueKey,
+        ),
+        conversationUuid,
       ),
       ...(participants !== undefined ? { participants: participants as MessageParticipantWire[] } : {}),
     }),
-    [conversationId, messageGroups, participants, persistedTraceStepsByGroup],
+    [conversationId, conversationUuid, queueKey, messageGroups, participants, persistedTraceStepsByGroup],
   );
 
   const [conversationForSync, setConversationForSync] = useState<ConversationForSync>(seedConversationForSync);
@@ -301,11 +312,13 @@ export function useChatBoxData(params: UseChatBoxDataParams): UseChatBoxDataResu
   }, []);
 
   // -- Pending HITL interrupt --
+  // A card whose set was already submitted (`decided`) owes nothing: counting
+  // it would keep the composer disabled after a quietly consumed set (409).
   const pendingHitlMessage = useMemo(
-    () => messageList.messages.findLast((item) => Boolean(item.hitlInterrupt) || Boolean(item.hitlInterrupts?.length)),
+    () => messageList.messages.findLast((item) => pendingCards(item).length > 0),
     [messageList.messages],
   );
-  const hasPendingHitlInterrupt = Boolean(pendingHitlMessage?.hitlInterrupt || pendingHitlMessage?.hitlInterrupts?.length);
+  const hasPendingHitlInterrupt = pendingHitlMessage !== undefined;
 
   // -- Participant resolution --
   const resolveParticipant = useCallback(

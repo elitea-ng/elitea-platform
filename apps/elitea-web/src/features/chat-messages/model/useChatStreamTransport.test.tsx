@@ -409,9 +409,7 @@ describe("useChatStreamTransport", () => {
    * follows it, so a transport that stays attached locks the composer for the
    * rest of the session.
    *
-   * The message keeps `isStreaming: true`. That is the reducer's own rule for
-   * both parallel shapes, and it holds the live thinking view open. Only the
-   * TRANSPORT detaches here.
+   * The parked message is not streaming (W9).
    */
   it("closes on an in-process parallel aggregate pause", async () => {
     okStart();
@@ -439,8 +437,73 @@ describe("useChatStreamTransport", () => {
 
     await waitFor(() => expect(api.current?.isStreaming).toBe(false));
     expect(registry.getOpen()).toHaveLength(0);
-    // The reducer still marks the message live, which keeps the thinking view
-    // open for the siblings that have not rendered a card.
+    // A parked run is not streaming (W9): every remaining branch is paused.
+    expect(history.current[0]?.isStreaming).toBe(false);
+  });
+
+  /**
+   * Main reveals a paused run's pause frames only after its result is
+   * projected, then streams one progress frame per card and the aggregate
+   * back to back, with nothing marking the last. Detaching on the first card
+   * dropped the second from the live view (`usePauseSettle`).
+   */
+  it("keeps every card of a pause batch before it closes", async () => {
+    okStart();
+    const { api, history, Probe } = harness();
+    render(<Probe />);
+    await started(api);
+    const card = (id: string, name: string) => ({
+      type: "hitl", interrupt_id: id, tool_call_id: `tc-${id}`, guardrail_type: "sensitive_tool",
+      available_actions: ["approve", "reject"], parent_agent_name: name, parent_agent_call_id: `call-${id}`,
+      parent_agent_path: [{ name, call_id: `call-${id}` }],
+    });
+    const frame = (cards: object[]) => nodeEvent({
+      type: "agent_hitl_interrupt",
+      content: "Approval needed",
+      response_metadata: { thread_id: "t-1", message: "Approval needed", hitl_interrupt: cards[0], hitl_interrupts: cards },
+    });
+    act(() => {
+      registry.emit("execution.node_event", frame([card("i1", "Sub")]));
+      registry.emit("execution.node_event", frame([card("i2", "Sub")]));
+      registry.emit("execution.node_event", frame([card("i1", "Sub"), card("i2", "Sub")]));
+    });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
+    expect((history.current[0]?.hitlInterrupts ?? []).map((entry) => (entry as { interrupt_id?: string }).interrupt_id)).toEqual(["i1", "i2"]);
+    expect(api.current?.isStreaming).toBe(false);
+  });
+
+  it("shows a card that arrives after the window closed only after a reload, never live", async () => {
+    okStart();
+    const { history, Probe, api } = harness();
+    render(<Probe />);
+    await started(api);
+    const frame = (id: string) => nodeEvent({
+      type: "agent_hitl_interrupt",
+      content: "Approval needed",
+      response_metadata: {
+        thread_id: "t-1", message: "Approval needed",
+        hitl_interrupts: [{ type: "hitl", interrupt_id: id, tool_call_id: `tc-${id}`, available_actions: ["approve", "reject"] }],
+      },
+    });
+    act(() => { registry.emit("execution.node_event", frame("i1")); });
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
+    act(() => { registry.emit("execution.node_event", frame("late")); });
+    expect((history.current[0]?.hitlInterrupts ?? []).map((entry) => (entry as { interrupt_id?: string }).interrupt_id)).toEqual(["i1"]);
+  });
+
+  it("treats a stamped progress card as mid-run, so only the aggregate ends observation", async () => {
+    okStart();
+    const { history, Probe, api } = harness();
+    render(<Probe />);
+    await started(api);
+    const card = { type: "hitl", interrupt_id: "i1", tool_call_id: "tc-i1", available_actions: ["approve", "reject"] };
+    act(() => {
+      registry.emit("execution.node_event", nodeEvent({
+        type: "agent_hitl_interrupt", content: "Approval needed",
+        response_metadata: { thread_id: "t-1", message: "Approval needed", pause_progress: true, hitl_interrupts: [card] },
+      }));
+    });
+    expect(registry.getOpen()).toHaveLength(1);
     expect(history.current[0]?.isStreaming).toBe(true);
   });
 
