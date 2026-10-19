@@ -16,12 +16,10 @@
 
 {{- define "elitea.codeNodes.validate" -}}
 {{- $runtime := .Values.main.runtime | default dict -}}
-{{- $owner := $runtime.codeOwnerRecovery | default dict -}}
-{{- $workspace := $runtime.codeWorkspace | default dict -}}
-{{- $platform := $runtime.codePlatform | default dict -}}
-{{- $debug := $runtime.codeDebugArtifacts | default dict -}}
-{{- $fields := dict "codeOwnerRecovery" (list "enabled" "mainWorkloadIdentity" "supervisors") "codeWorkspace" (list "enabled" "repositoryCapabilities" "egressAllowlist" "policy") "codePlatform" (list "enabled" "brokerPolicies") "codeDebugArtifacts" (list "enabled") -}}
-{{- range $name, $settings := dict "codeOwnerRecovery" $owner "codeWorkspace" $workspace "codePlatform" $platform "codeDebugArtifacts" $debug -}}
+{{- $raw := dict "codeOwnerRecovery" ($runtime.codeOwnerRecovery | default dict) "codeWorkspace" ($runtime.codeWorkspace | default dict) "codePlatform" ($runtime.codePlatform | default dict) "codeDebugArtifacts" ($runtime.codeDebugArtifacts | default dict) -}}
+{{- include "elitea.removedRecoverySettings" . -}}
+{{- $fields := dict "codeOwnerRecovery" (list "mainWorkloadIdentity" "supervisors") "codeWorkspace" (list "enabled" "repositoryCapabilities" "egressAllowlist" "policy") "codePlatform" (list "enabled" "brokerPolicies") "codeDebugArtifacts" (list "enabled") -}}
+{{- range $name, $settings := $raw -}}
 {{- if not (kindIs "map" $settings) -}}{{- fail (printf "Code settings %s require an object" $name) -}}{{- end -}}
 {{- range $field, $_ := $settings -}}
 {{- if not (has $field (get $fields $name)) -}}{{- fail (printf "Code settings %s contain an unknown field" $name) -}}{{- end -}}
@@ -35,17 +33,23 @@
 {{- fail "Code consumer environment must derive from typed chart settings" -}}
 {{- end -}}
 {{- end -}}
-{{- if and (not $owner.enabled) (or $owner.mainWorkloadIdentity $owner.supervisors) -}}
-{{- fail "Code owner settings require codeOwnerRecovery.enabled=true" -}}
-{{- end -}}
-{{- if and (not $workspace.enabled) (or $workspace.repositoryCapabilities $workspace.egressAllowlist $workspace.policy) -}}
+{{- $rawWorkspace := get $raw "codeWorkspace" -}}
+{{- $rawPlatform := get $raw "codePlatform" -}}
+{{- if and (eq (toString $rawWorkspace.enabled) "false") (or $rawWorkspace.repositoryCapabilities $rawWorkspace.egressAllowlist $rawWorkspace.policy) -}}
 {{- fail "Code workspace settings require codeWorkspace.enabled=true" -}}
 {{- end -}}
-{{- if and (not $platform.enabled) $platform.brokerPolicies -}}
+{{- if and (eq (toString $rawPlatform.enabled) "false") $rawPlatform.brokerPolicies -}}
 {{- fail "Code broker policies require codePlatform.enabled=true" -}}
 {{- end -}}
+{{- /* From here on, the effective settings: canonical where empty. */ -}}
+{{- $code := include "elitea.code.settings" . | fromJson -}}
+{{- $owner := $code.owner -}}
+{{- $workspace := $code.workspace -}}
+{{- $platform := $code.platform -}}
+{{- $debug := $code.debug -}}
+{{- $audiences := $code.audiences -}}
 {{- if or $owner.enabled $workspace.enabled $platform.enabled $debug.enabled -}}
-{{- if or (not $runtime.enabled) (not ($runtime.agentExecutionDispatch | default dict).enabled) (not $owner.enabled) (eq (len ($runtime.sandboxAudiences | default list)) 0) -}}
+{{- if or (not $runtime.enabled) (not ($runtime.agentExecutionDispatch | default dict).enabled) (not $owner.enabled) (eq (len $audiences) 0) -}}
 {{- fail "Code consumers require runtime, agent dispatch, Code owner recovery, and exact sandbox audiences" -}}
 {{- end -}}
 {{- if or (not $owner.mainWorkloadIdentity) (not (kindIs "slice" $owner.supervisors)) (eq (len $owner.supervisors) 0) (gt (len $owner.supervisors) 16) -}}
@@ -56,7 +60,7 @@
 {{- if or (not (kindIs "map" $supervisor)) (ne (len $supervisor) 2) (not $supervisor.audience) (not $supervisor.httpsOrigin) -}}
 {{- fail "Code owner supervisors require exactly audience and httpsOrigin" -}}
 {{- end -}}
-{{- if or (not (has $supervisor.audience $runtime.sandboxAudiences)) (hasKey $seen $supervisor.audience) (not (regexMatch "^https://[^/?#@[:space:]]+/?$" $supervisor.httpsOrigin)) -}}
+{{- if or (not (has $supervisor.audience $audiences)) (hasKey $seen $supervisor.audience) (not (regexMatch "^https://[^/?#@[:space:]]+/?$" $supervisor.httpsOrigin)) -}}
 {{- fail "Code owner supervisors require unique configured audiences and fixed HTTPS origins" -}}
 {{- end -}}
 {{- $_ := set $seen $supervisor.audience true -}}
@@ -109,25 +113,37 @@
 {{- end -}}
 
 {{/*
-  The Rust worker's node attempt journal (worker.runtime.agentNodeRecovery)
-  runs every Code node as an original-Code visit that elitea-main admits
-  before any sandbox dispatch, and Main admits it only with original-Code
-  owner recovery, signing only for its supervisors' audiences. Without it
-  each Code node fails at admission with the generic runtime failure, and
-  every pod still reports Ready.
+  The Rust worker always runs its node attempt journal, so every Code node is
+  an original-Code visit that elitea-main admits before any sandbox dispatch,
+  and Main admits it only with original-Code owner recovery, signing only for
+  its owner supervisors' audiences. Without it each Code node fails at
+  admission with the generic runtime failure, and every pod still reports
+  Ready. So every execution audience (and a platform_client's) needs an owner
+  supervisor. A preparation audience is NOT an owner supervisor: Main only
+  signs its grants, so it must be in the sandbox audiences.
 */}}
 {{- define "elitea.codeNodes.validateWorker" -}}
-{{- $worker := .Values.worker.runtime | default dict -}}
-{{- $owner := (.Values.main.runtime | default dict).codeOwnerRecovery | default dict -}}
-{{- if and .Values.worker.enabled (eq $worker.agentNodeRecovery true) (gt (len ($worker.sandboxRuntimes | default list)) 0) -}}
-{{- if ne $owner.enabled true -}}
-{{- fail "worker.runtime.agentNodeRecovery=true with worker.runtime.sandboxRuntimes needs main.runtime.codeOwnerRecovery.enabled=true: Code nodes would be refused without original-Code owner recovery, before any sandbox dispatch. Enable codeOwnerRecovery for the same supervisors, or clear agentNodeRecovery or sandboxRuntimes." -}}
+{{- $runtimes := include "elitea.sandbox.runtimes" . | fromJsonArray -}}
+{{- if and .Values.worker.enabled (gt (len $runtimes) 0) -}}
+{{- $code := include "elitea.code.settings" . | fromJson -}}
+{{- $owner := $code.owner -}}
+{{- if not $owner.enabled -}}
+{{- fail "worker.runtime.sandboxRuntimes (the Code sandbox) needs the agent runtime (main.runtime.enabled and main.runtime.agentExecutionDispatch.enabled): the worker's node journal is always on, and Code nodes would be refused without original-Code owner recovery, which elitea-main runs only with Agent dispatch, before any sandbox dispatch." -}}
 {{- end -}}
 {{- $owned := list -}}
 {{- range $supervisor := $owner.supervisors -}}{{- $owned = append $owned $supervisor.audience -}}{{- end -}}
-{{- range $profile := $worker.sandboxRuntimes -}}
-{{- if not (has $profile.audience $owned) -}}
-{{- fail (printf "worker.runtime.sandboxRuntimes has no main.runtime.codeOwnerRecovery supervisor for audience %q: with agentNodeRecovery=true, Code nodes on it would be refused without original-Code owner recovery for that supervisor. Add the supervisor to codeOwnerRecovery.supervisors." (toString $profile.audience)) -}}
+{{- range $profile := $runtimes -}}
+{{- $execution := list $profile.audience -}}
+{{- if $profile.platform_client -}}{{- $execution = append $execution $profile.platform_client.audience -}}{{- end -}}
+{{- range $audience := $execution -}}
+{{- if not (has $audience $owned) -}}
+{{- fail (printf "worker.runtime.sandboxRuntimes has no main.runtime.codeOwnerRecovery supervisor for audience %q: the node journal is always on, so Code nodes on it would be refused without original-Code owner recovery for that supervisor. Add the supervisor to codeOwnerRecovery.supervisors." (toString $audience)) -}}
+{{- end -}}
+{{- end -}}
+{{- if $profile.preparation -}}
+{{- if not (has $profile.preparation.audience $code.audiences) -}}
+{{- fail (printf "worker.runtime.sandboxRuntimes preparation audience %q is not in main.runtime.sandboxAudiences: elitea-main would not sign its dependency preparation grants. Preparation audiences need no owner supervisor, only the audience." (toString $profile.preparation.audience)) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -136,26 +152,26 @@
 {{- define "elitea.codeNodes.env" -}}
 {{- $runtime := .Values.main.runtime -}}
 {{- $dir := $runtime.material.mountPath | trimSuffix "/" -}}
-{{- $owner := $runtime.codeOwnerRecovery | default dict -}}
+{{- $code := include "elitea.code.settings" . | fromJson -}}
+{{- $owner := $code.owner -}}
 {{- if $owner.enabled -}}
 {{- $supervisors := list -}}
 {{- range $supervisor := $owner.supervisors -}}
 {{- $supervisors = append $supervisors (dict "audience" $supervisor.audience "https_origin" $supervisor.httpsOrigin) -}}
 {{- end }}
-ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
 ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: {{ dict "main_workload_identity" $owner.mainWorkloadIdentity "certificate_chain_path" (printf "%s/code-owner-client.crt" $dir) "private_key_path" (printf "%s/code-owner-client.key" $dir) "server_ca_path" (printf "%s/runtime-ca.crt" $dir) "supervisors" $supervisors | toJson | quote }}
 {{- end -}}
-{{- $workspace := $runtime.codeWorkspace | default dict -}}
+{{- $workspace := $code.workspace -}}
 {{- if $workspace.enabled }}
 ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED: "true"
 ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG: {{ dict "revision" 1 "repository_capabilities" $workspace.repositoryCapabilities "egress_allowlist" $workspace.egressAllowlist "policy" $workspace.policy | toJson | quote }}
 {{- end -}}
-{{- $platform := $runtime.codePlatform | default dict -}}
+{{- $platform := $code.platform -}}
 {{- if $platform.enabled }}
 ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
 ELITEA_RUNTIME_CODE_PLATFORM_CONFIG: {{ dict "revision" 1 "content_keys_file" (printf "%s/code-platform-content-keys.json" $dir) "broker_policies" $platform.brokerPolicies | toJson | quote }}
 {{- end -}}
-{{- if ($runtime.codeDebugArtifacts | default dict).enabled }}
+{{- if $code.debug.enabled }}
 ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
 ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE: {{ printf "%s/agent-checkpoint-connection" $dir | quote }}
 {{- end -}}

@@ -31,7 +31,7 @@ func TestCodePreparationPoliciesCrossOutputBoundaryWithoutRawDetails(t *testing.
 	if err := json.Unmarshal(data, &policies); err != nil {
 		t.Fatal(err)
 	}
-	if len(policies) != 3 {
+	if len(policies) != 4 {
 		t.Fatalf("unexpected preparation policy count: %d", len(policies))
 	}
 	for _, policy := range policies {

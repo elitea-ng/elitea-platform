@@ -426,6 +426,9 @@ func (c Config) ProjectVectorStoreProvisioned() bool {
 }
 
 func (c Config) Validate() error {
+	if c.Enabled && c.AgentExecutionDispatchEnabled && c.CodeOwnerRecovery == nil {
+		return errors.New("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG is required: Code owner recovery is always on with Agent dispatch")
+	}
 	if err := validateCodeOwnerConfig(c.CodeOwnerRecovery, c.Enabled, c.AgentExecutionDispatchEnabled, c.SandboxAudiences); err != nil {
 		return err
 	}

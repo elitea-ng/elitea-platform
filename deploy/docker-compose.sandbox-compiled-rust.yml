@@ -1,4 +1,4 @@
-# Add after standalone-full, standalone-rust-agent, and sandbox.
+# Add after standalone-full (which runs the Code sandbox by default).
 # Run check-compiled-sandbox-material.py before this opt-in overlay.
 services:
   runtime-material:

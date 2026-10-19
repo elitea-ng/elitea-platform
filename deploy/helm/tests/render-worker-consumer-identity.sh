@@ -36,7 +36,7 @@ CHART="deploy/helm/elitea"
 # worker.enabled is FALSE in the shipped defaults and everything here lives
 # inside that condition. Without this the whole file passes against templates
 # that never render — the failure mode render-workload-session.sh records.
-BASE=(-f "$CHART/values-standalone.yaml"
+BASE=(-f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
       --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)

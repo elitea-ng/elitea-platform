@@ -4,10 +4,34 @@ cd "$(dirname "$0")/../../.."
 chart=deploy/helm/elitea
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-base=(-f "$chart/values-standalone.yaml" --namespace platform
+base=(-f "$chart/values-standalone.yaml" -f "$chart/../tests/fixtures/code-material-values.yaml" --namespace platform
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 helm template sandbox "$chart" "${base[@]}" > "$work/default.yaml"
+# The Code sandbox renders wherever the agent runtime runs: main.runtime, its
+# agent dispatch AND the worker (PLAN §8.3). Every render below has the worker.
+# The `file` profiles of this script read their configuration from the
+# material Secret, so the worker's Code backends are stated explicitly (one
+# Python backend on the canonical deno supervisor, which Main's default owner
+# recovery covers); the chart derives them only from its rendered profiles.
+cat > "$work/explicit-runtimes.yaml" <<'YAML'
+worker:
+  enabled: true
+  runtime:
+    sandboxRuntimes:
+      - language: python
+        target: elitea-sandbox-deno:9446
+        audience: dns:elitea-sandbox-deno
+        image_digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        policy_revision: deno-v1
+        timeout_seconds: 60
+main:
+  runtime:
+    indexIngestDispatch:
+      enabled: false
+      commandStream: ""
+YAML
+base+=(-f "$work/explicit-runtimes.yaml")
 helm template sandbox "$chart" "${base[@]}" \
   --set sandboxKubernetes.enabled=true \
   --set sandboxKubernetes.executionNamespace=code-execution \
@@ -67,7 +91,8 @@ supervisor=(--set sandboxKubernetes.enabled=true
   --set sandboxKubernetes.supervisor.profiles[0].port=9446
   --set sandboxKubernetes.supervisor.profiles[1].file=rust.json
   --set sandboxKubernetes.supervisor.profiles[1].port=9447
-  --set sandboxKubernetes.supervisor.image=registry/supervisor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+  --set sandboxKubernetes.supervisor.image=registry/supervisor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  --set-json 'sandboxKubernetes.supervisor.contentStaging=[]')
 helm template sandbox "$chart" "${base[@]}" "${supervisor[@]}" \
   --show-only templates/sandbox/supervisor.yaml > "$work/supervisor.yaml"
 python3 - "$work/supervisor.yaml" <<'PYTEST'
@@ -96,8 +121,7 @@ assert [p['port'] for p in service['spec']['ports']] == [9446,9447]
 PYTEST
 for invalid in 'sandboxKubernetes.supervisor.image=runtime:latest' \
     'sandboxKubernetes.supervisor.profiles[1].port=9446' \
-    'sandboxKubernetes.supervisor.profiles[0].file=../escape' \
-    'sandboxKubernetes.enabled=false'; do
+    'sandboxKubernetes.supervisor.profiles[0].file=../escape'; do
   if helm template sandbox "$chart" "${base[@]}" "${supervisor[@]}" --set "$invalid" > "$work/invalid" 2>&1; then
     echo "Unsafe supervisor configuration accepted: $invalid" >&2; exit 1
   fi
@@ -225,7 +249,6 @@ for invalid in 'sandboxKubernetes.preparation.namespace=platform' \
     'sandboxKubernetes.preparation.maxPods=4097' \
     'sandboxKubernetes.preparation.maxPods=1.5' \
     'sandboxKubernetes.supervisor.enabled=false' \
-    'sandboxKubernetes.enabled=false' \
     'sandboxKubernetes.preparation.resolverCidrs[0]=0.0.0.0/0' \
     'sandboxKubernetes.preparation.resolverCidrs[0]=::/0' \
     'sandboxKubernetes.preparation.resolverCidrs[0]=registry.example' \
@@ -336,4 +359,22 @@ policies = [d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata'].ge
 assert [d['metadata']['name'] for d in policies] == ['elitea-code-deny-network'], policies
 assert policies[0]['spec'] == dict(podSelector={}, policyTypes=['Ingress', 'Egress'], ingress=[], egress=[])
 PYTEST
+# Turning the Kubernetes sandbox off is an explicit operator choice, never a
+# silent one: with the worker's own Code backends stated it renders no sandbox
+# object, and without them the render is refused (the derived backends need the
+# chart's supervisor).
+helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.enabled=false > "$work/off.yaml"
+python3 - "$work/off.yaml" <<'PYTEST'
+import sys, yaml
+docs = list(filter(None, yaml.safe_load_all(open(sys.argv[1]))))
+names = [d['metadata']['name'] for d in docs]
+for absent in ['elitea-sandbox-supervisor', 'elitea-sandbox-profiles', 'elitea-code-deny-network',
+               'elitea-python-preparation-network', 'elitea-sandbox-image-warmup']:
+    assert absent not in names, absent
+PYTEST
+if helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.enabled=false \
+    --set-json 'worker.runtime.sandboxRuntimes=[]' > "$work/invalid" 2>&1; then
+  echo 'The Code sandbox turned off silently' >&2; exit 1
+fi
+grep -Fq 'set worker.runtime.sandboxRuntimes to the supervisors you deploy yourself' "$work/invalid"
 echo 'Kubernetes sandbox and optional Python preparation rendering checks passed'

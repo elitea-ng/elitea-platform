@@ -41,7 +41,7 @@
 {{- end }}
 {{- if and (not $enabled) ($c.profilesSha256 | default "") }}{{ fail "compiled snapshot pin requires explicit enablement" }}{{ end }}
 {{- if $enabled }}
-{{- if or (not $runtime.enabled) (not $runtime.agentExecutionDispatch.enabled) (eq (len $runtime.sandboxAudiences) 0) }}{{ fail "compiled snapshots require runtime, agent dispatch, and supervisor audiences" }}{{ end }}
+{{- if or (not $runtime.enabled) (not $runtime.agentExecutionDispatch.enabled) (eq (len (include "elitea.code.settings" . | fromJson).audiences) 0) }}{{ fail "compiled snapshots require runtime, agent dispatch, and supervisor audiences" }}{{ end }}
 {{- if not (regexMatch "^[a-f0-9]{64}$" (default "" $c.profilesSha256)) }}{{ fail "rustCompiledSnapshots.profilesSha256 must be lowercase SHA-256" }}{{ end }}
 {{- if ne (len $c) 8 }}{{ fail "rustCompiledSnapshots requires exactly its eight typed settings" }}{{ end }}
 {{- range $field, $max := dict "globalEntries" 100000 "globalBytes" 1099511627776 "tenantEntries" 100000 "tenantBytes" 1099511627776 "publishingTtlSeconds" 300 "readyTtlSeconds" 86400 }}

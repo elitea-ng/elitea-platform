@@ -56,7 +56,7 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # against a refusal. The gateway postures are render-only values: `.invalid` is
 # reserved by RFC 2606 and never resolves.
 RENDER=(
-  -f "$CHART/values-standalone.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml"
   --set worker.enabled=true
   --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
@@ -137,10 +137,16 @@ required = {
     "platform_origin", "ca_path", "certificate_path", "private_key_path",
     "ed25519_keyring_path", "spool_root", "spool_key_path",
     "agent_checkpoint_connection_path", "limits",
+    # The Code sandbox is on wherever the agent runtime runs (PLAN §8.3): the
+    # four canonical languages, derived from the chart's own supervisor.
+    "sandbox_runtimes",
 }
 assert set(parsed) == required, (
     f"missing {sorted(required - set(parsed))}, unexpected {sorted(set(parsed) - required)}"
 )
+# Recovery is not a setting: the worker refuses these keys.
+assert "agent_node_recovery" not in parsed and "agent_model_checkpoint_recovery" not in parsed, parsed
+assert [r["language"] for r in parsed["sandbox_runtimes"]] == ["python", "javascript", "typescript", "rust"], parsed["sandbox_runtimes"]
 assert parsed["schema_version"] == "elitea.runtime-deploy.v1", parsed["schema_version"]
 PY
 

@@ -35,6 +35,10 @@ pub(crate) enum CodePreparationFailure {
     Failed,
     Cancelled,
     Unconfirmed,
+    /// The node declares dependencies, but this deployment has no
+    /// preparation runtime for its language (FU-229). Decided before any
+    /// journal record, Main admission or sandbox dispatch.
+    Unavailable,
 }
 
 impl CodePreparationFailure {
@@ -43,6 +47,7 @@ impl CodePreparationFailure {
             Self::Failed => "pipeline.code_preparation_failed",
             Self::Cancelled => "pipeline.code_preparation_cancelled",
             Self::Unconfirmed => "pipeline.code_preparation_unconfirmed",
+            Self::Unavailable => "pipeline.code_preparation_unavailable",
         }
     }
     pub(super) fn graph_error(self) -> GraphError {
@@ -580,6 +585,13 @@ mod tests {
                 Some(CodePreparationFailure::Cancelled)
             ),
             Some("pipeline.code_preparation_cancelled")
+        );
+        assert_eq!(
+            terminal_failure_code(
+                NodeFailureClass::InvalidConfiguration,
+                Some(CodePreparationFailure::Unavailable)
+            ),
+            Some("pipeline.code_preparation_unavailable")
         );
         assert_eq!(
             terminal_failure_code(NodeFailureClass::LeaseLost, None),

@@ -1151,7 +1151,8 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 		switch payload.GetSafeMessage() {
 		case "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
 			"Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
-			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.":
+			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
+			"Code dependency preparation is not available for this language in this deployment. Remove the package imports or ask your administrator to enable dependency preparation. Later nodes did not run.":
 			return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: payload.GetSafeMessage()}, true
 		}
 	}

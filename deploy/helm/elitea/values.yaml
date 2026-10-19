@@ -156,6 +156,30 @@ postgresql:
   # shares the server. Subtracted from maxConnections before the check.
   reservedConnections: 25
 
+  # ── TCP keepalives (FU-221) ────────────────────────────────────────────────
+  #
+  # A client that dies without closing its socket (a node lost under a worker
+  # or elitea-main) keeps its backend, its locks and its connection slot until
+  # the server notices, which with the kernel defaults takes about two hours.
+  # The platform runs the server with tcp_keepalives_idle=20,
+  # tcp_keepalives_interval=5 and tcp_keepalives_count=3 (the standalone
+  # compose postgres command), which detects it in about 35 seconds.
+  #
+  # THIS CHART CANNOT SET AN EXTERNAL SERVER'S GUCs. Set the three on the
+  # server you run; with CloudNativePG:
+  #
+  #   spec:
+  #     postgresql:
+  #       parameters:
+  #         tcp_keepalives_idle: "20"
+  #         tcp_keepalives_interval: "5"
+  #         tcp_keepalives_count: "3"
+  #
+  # What the chart does set: the pgbouncer component's tcp_keepalive/keepidle/
+  # keepintvl/keepcnt (1/20/5/3) on both of the pooler's sides, and dbInit's
+  # ALTER ROLE <dbInit.appRole> SET tcp_keepalives_* = 20/5/3, a role default
+  # that covers that role's sessions where the server-wide setting is missing.
+
 # ── PgBouncer — the Postgres pooler (issue #964) ───────────────────────────
 #
 # Transaction-mode pooler in front of elitea-main's database, off by default.
@@ -1963,34 +1987,70 @@ main:
     # cross-checks the two and refuses to start on a mismatch.
     signingKeyId: ""
 
-    # Exact supervisor grant audiences. Empty disables sandbox grant issuance.
+    # THE CODE CONSUMERS ARE ON WHEREVER THE AGENT RUNTIME RUNS (PLAN §8.3, §8.7):
+    # with runtime.enabled and agentExecutionDispatch.enabled, elitea-main
+    # composes original-Code owner recovery, the Code workspace, the Code
+    # platform broker and Code debug artifacts, exactly as the standalone
+    # compose stack does. They need no value beyond the material below, and
+    # each empty setting means the canonical one (the same table as
+    # deploy/scripts/code-material.py). Without agent dispatch there is no Code
+    # node to serve and they stay off; an explicit setting there is refused as
+    # dead configuration.
+    #
+    # The material Secret (runtime.material) then also carries:
+    #   code-owner-client.crt / .key      Main's owner identity: a clientAuth
+    #                                     leaf with SAN DNS:elitea-code-owner-main,
+    #                                     signed by the runtime CA
+    #                                     (code-material.py certs issues it)
+    #   code-platform-content-keys.json   the private platform content key
+    #                                     document
+    #   agent-checkpoint-connection       the AgentState DSN for debug receipts
+    #
+    # Exact supervisor grant audiences. Empty with the Code consumers on means
+    # the seven canonical audiences, in this order: dns:elitea-sandbox-deno,
+    # -rust, -deno-native, -preparation, -javascript-preparation,
+    # -typescript-preparation, -rust-preparation. Empty without them disables
+    # sandbox grant issuance.
     sandboxAudiences: []
 
-    # These Code consumers remain off until their exact deployment is accepted.
-    # Enabled owner recovery adds code-owner-client.crt and .key to material.
+    # Main signs original-Code intents for these supervisors only. Empty
+    # mainWorkloadIdentity means dns:elitea-code-owner-main; empty supervisors
+    # means the three execution profiles (preparation audiences are not owner
+    # supervisors):
+    #   dns:elitea-sandbox-deno         https://elitea-sandbox-deno:9446
+    #   dns:elitea-sandbox-deno-native  https://elitea-sandbox-deno-native:9450
+    #   dns:elitea-sandbox-rust         https://elitea-sandbox-rust:9447
+    # ALWAYS ON with Agent dispatch (PLAN §8.7 X1): there is no enable bit, and
+    # a values file that still sets codeOwnerRecovery.enabled fails the render.
+    # Every Code node is an original-Code visit Main admits only through it.
     codeOwnerRecovery:
-      enabled: false
       mainWorkloadIdentity: ""
       supervisors: []
 
     # Credentials stay in Main. Execution containers retain network denial.
-    # Use exact host:port rules and the bounded CodeWorkspacePolicy fields.
+    # Empty means repositoryCapabilities [github], egressAllowlist
+    # [api.github.com:443] and the bounded policy {revision 1, max_files 1024,
+    # max_file_bytes 1048576, max_total_bytes 16777216, max_manifest_bytes
+    # 524288, max_path_bytes 255, max_depth 16, max_projections 64,
+    # max_acquisition_seconds 300}. Set them to exact host:port rules and the
+    # bounded CodeWorkspacePolicy fields to override.
     codeWorkspace:
-      enabled: false
+      enabled: true
       repositoryCapabilities: []
       egressAllowlist: []
       policy: {}
 
-    # Add private code-platform-content-keys.json to the existing material Secret.
-    # Broker policies bound calls and bytes; existing permissions govern operations.
+    # Broker policies bound calls and bytes; existing permissions govern
+    # operations. Empty means [{revision 1, max_calls 32, max_total_bytes
+    # 1048576}], which the derived worker platform_client uses too.
     codePlatform:
-      enabled: false
+      enabled: true
       brokerPolicies: []
 
-    # Add private agent-checkpoint-connection to the existing material Secret.
-    # The same receipt pool serves debug and compiled snapshots when both use it.
+    # The same receipt pool serves debug and compiled snapshots when both use
+    # it (four AgentState connections per replica, counted in the budget).
     codeDebugArtifacts:
-      enabled: false
+      enabled: true
 
     # OFF by default. Every consumer must receive identical pinned manifest bytes.
     # Existing material Secrets must add rust-compiled-profiles.json.
@@ -2028,6 +2088,14 @@ main:
     #   control-server.crt / .key     the control listener keypair
     #   output-server.crt / .key      the output listener keypair
     #   content-server.crt / .key     the content listener keypair
+    #
+    # And, wherever the agent runtime runs (the Code consumers are on, see
+    # codeOwnerRecovery above), the names deploy/scripts/code-material.py
+    # certs writes beside them:
+    #
+    #   code-owner-client.crt / .key     Main's original-Code owner identity
+    #   code-platform-content-keys.json  the private platform content keys
+    #   agent-checkpoint-connection      the AgentState DSN (debug receipts)
     #
     # The server certificates must carry the Service name, because the agent
     # worker dials all three listeners on this Service.
@@ -4180,7 +4248,9 @@ worker:
     # that each wait out an in-flight turn.
     cooldownSeconds: 300
 
-  # One Secret carrying every file the worker reads. Keys:
+  # One Secret carrying every file the worker reads. Keys (all required;
+  # agent-checkpoint-connection is the AgentState DSN behind the node journal
+  # and model-checkpoint recovery, which are always on):
   #   runtime-ca.crt                 agent-worker-client.crt
   #   agent-worker-client.key        command-signing-keyring.json
   #   worker-output-spool-key        agent-checkpoint-connection
@@ -4432,29 +4502,39 @@ worker:
     publicBaseUrl: ""
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
-    # Rust-only. Enable checkpoint recovery after verifying the deployment contract.
-    agentModelCheckpointRecovery: false
-    # Rust-only. Durable node attempt journal: an interrupted effectful node stops
-    # for recovery instead of repeating its effect. Effectful pipeline direct tool
-    # nodes require it; Code nodes use it when present.
-    # Turning it on ALSO turns on model-step resume for agent turns: under a
-    # node-recovery claim elitea-main grants model checkpoint inspection
-    # (services/elitea-main/internal/infra/db/repos/node_recovery_claim.go), whatever
-    # agentModelCheckpointRecovery says. So it stays off here, as recovery as a
-    # whole does, until the pod-replacement proofs pass (recovery-guarantees.md,
-    # ruling D1 and gaps G-WORKER-02/03/13/14). Compose turns it on
-    # (deploy/runtime/worker-runtime.rust.json); a Kubernetes install that wants
-    # parity sets it to true, and needs no extra material: the journal lives in
-    # the AgentState database behind agent-checkpoint-connection.
-    # With sandboxRuntimes it also needs main.runtime.codeOwnerRecovery: the
-    # journal runs each Code node as an original-Code visit that elitea-main
-    # admits only with owner recovery, so the render refuses the pair without it.
-    # A boolean only.
-    agentNodeRecovery: false
-    # Rust-only deployment-selected Code backends. These are never YAML node inputs.
-    # Entries use SandboxRuntimeConfig fields: language, target, audience,
-    # image_digest, policy_revision, and timeout_seconds.
-    # The target hostname must match the supervisor certificate SAN.
+    # RECOVERY IS NOT A SETTING (PLAN §8.3). The Rust worker always runs the
+    # durable node attempt journal and model-checkpoint recovery: an
+    # interrupted effectful node stops for recovery instead of repeating its
+    # effect, and an agent turn resumes from its last model checkpoint. Both
+    # live in the AgentState database behind agent-checkpoint-connection, which
+    # runtime.json always names. The former values agentNodeRecovery and
+    # agentModelCheckpointRecovery are removed: a values file that still sets
+    # either fails the render (the worker itself refuses the keys at startup).
+    #
+    # Deployment-selected Code backends (SandboxRuntimeConfig, never YAML node
+    # inputs). EMPTY IS THE DEFAULT AND MEANS "THE CHART'S OWN SUPERVISOR": the
+    # chart derives the four languages from sandboxKubernetes.supervisor.profiles
+    # and sandboxKubernetes.runnerImages, exactly as the standalone compose stack
+    # writes them (deploy/scripts/code-material.py):
+    #   python      execution deno        (elitea-sandbox-deno:9446)        + platform_client,
+    #               preparation prep      (elitea-sandbox-preparation:9448)
+    #   javascript  execution denonative  (elitea-sandbox-deno-native:9450) + platform_client,
+    #               preparation jsprep    (elitea-sandbox-javascript-preparation:9449, native)
+    #   typescript  execution denonative  + platform_client,
+    #               preparation tsprep    (elitea-sandbox-typescript-preparation:9451, native)
+    #   rust        execution rust        (elitea-sandbox-rust:9447),
+    #               preparation rsprep    (elitea-sandbox-rust-preparation:9452, native)
+    # image_digest is the digest of the runner image, the platform_client
+    # bounds are main.runtime.codePlatform's first broker policy, and a native
+    # preparation carries native_platform {linux, nativePlatformArch, gnu}.
+    #
+    # An explicit list replaces the derived one (supervisors this chart does not
+    # deploy, for example). Each execution audience then needs a
+    # main.runtime.codeOwnerRecovery supervisor, and every audience (execution,
+    # platform_client, preparation) must be in main.runtime.sandboxAudiences:
+    # the worker runs every Code node as an original-Code visit that elitea-main
+    # admits only with owner recovery for that audience. The target hostname
+    # must match the supervisor certificate SAN.
     sandboxRuntimes: []
     # ADR-0034 decision 9, the cloud executor (Rust worker only): the sandbox
     # supervisor's `workspace` profile this worker starts workspace runs on,
@@ -4699,25 +4779,67 @@ otelCollector:
   tolerations: []
   affinity: {}
 
-# Optional image preparation only; this does not enable Code-node execution.
-# Images must provide /bin/sleep and be pinned by registry digest.
-# Use the same nodeSelector for the future sandbox Jobs and this warmer.
+# ── The Code sandbox (PLAN §8.3) ───────────────────────────────────────────
+#
+# ON WHEREVER THE AGENT RUNTIME RUNS: with main.runtime.enabled,
+# main.runtime.agentExecutionDispatch.enabled and worker.enabled, the chart
+# deploys the Kubernetes sandbox supervisor with the seven canonical profiles
+# (three execution, four dependency preparation), the execution and preparation
+# namespace boundaries and the runner image warmup, and the worker gets all four
+# languages, each with preparation. This is the standalone compose stack's
+# shape (deploy/scripts/code-material.py holds the table). Without the agent
+# runtime none of it renders and no value below is needed.
+#
+# DEPLOYMENT MATERIAL STAYS CONFIGURABLE AND IS REQUIRED: with the agent
+# runtime on, a missing piece fails the render with a message naming the value
+# (never a silently absent sandbox):
+#   sandboxKubernetes.runnerImages.deno / .rust        runner images by digest
+#   sandboxKubernetes.supervisor.image                 supervisor image by digest
+#   sandboxKubernetes.supervisor.contentStagingInitImage
+#   sandboxKubernetes.preparation.resolverCidrs        package registry egress
+#   the Secret sandboxKubernetes.supervisor.materialSecret (see its keys below)
+# deploy/helm/tests/fixtures/code-material-values.yaml is a render-only example.
+
+# Pre-pulls the runner images onto the sandbox nodes: Code Pods run them with
+# imagePullPolicy Never. Empty images means the two runner images
+# (sandboxKubernetes.runnerImages); an empty nodeSelector means
+# sandboxKubernetes.nodeSelector. Images must provide /bin/sleep and be pinned
+# by registry digest.
 sandboxImageWarmup:
-  enabled: false
+  enabled: true
   images: []
   # Example: [{name: python, image: "registry/runtime@sha256:<64 hex digits>"}]
   nodeSelector: {}
   tolerations: []
   imagePullSecrets: []
 
-# Optional Kubernetes supervisor and isolated Code namespaces.
-# Use dedicated namespaces with a NetworkPolicy-capable CNI.
+# The Kubernetes supervisor and its isolated Code namespaces. Use a
+# NetworkPolicy-capable CNI, a RuntimeClass named runtimeClass, and nodes that
+# carry nodeSelector.
 sandboxKubernetes:
-  enabled: false
-  executionNamespace: ""
+  enabled: true
+  executionNamespace: elitea-code-execution
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
+  # REQUIRED with the agent runtime: the two Code runner images, each
+  # registry/name@sha256:<64 hex> (services/elitea-code-runner/Containerfile,
+  # targets default and rust-runtime). The supervisor profiles run them, the
+  # derived worker sandboxRuntimes bind their digests, and the warmup pulls them.
+  runnerImages:
+    deno: ""
+    rust: ""
+  # The sandbox nodes' architecture, for the native (JavaScript, TypeScript,
+  # Rust) profiles and preparations: amd64 or arm64.
+  nativePlatformArch: amd64
+  # The durable identity of this cluster in the supervisors' job receipts.
+  # Never change it on an existing install: receipts recorded under one
+  # cluster are not recovered under another.
+  cluster: elitea
+  # The RuntimeClass and node selection of every Code Pod.
+  runtimeClass: elitea-code
+  nodeSelector:
+    elitea.ai/sandbox: "true"
   # ADR-0034: the cloud executor's workspace runs, one Pod per cloud turn in
   # the execution namespace (disk-backed /workspace, the workspace runner
   # image). Toolkit Code Pods are not affected by anything below.
@@ -4753,43 +4875,85 @@ sandboxKubernetes:
         kubernetes.io/metadata.name: kube-system
       dnsPodLabels:
         k8s-app: kube-dns
-  # Optional Python resolver boundary. Execution keeps its deny-all policy.
+  # Dependency preparation (Python, JavaScript, TypeScript, Rust): the
+  # preparation profiles run their Pods here, the only Code Pods with egress
+  # (DNS and TCP 443 to resolverCidrs). Execution keeps its deny-all policy.
   preparation:
-    enabled: false
-    namespace: ""
+    enabled: true
+    namespace: elitea-code-preparation
     maxPods: 4
     # Match the cluster DNS deployment explicitly.
     dnsNamespaceLabels:
       kubernetes.io/metadata.name: kube-system
     dnsPodLabels:
       k8s-app: kube-dns
-    # Required public registry or controlled egress gateway CIDRs, TCP 443 only.
-    # NetworkPolicy cannot enforce registry hostnames. Verify the operator egress policy.
+    # REQUIRED with the agent runtime: the package registries' CIDRs (or a
+    # controlled egress gateway's), TCP 443 only. NetworkPolicy cannot enforce
+    # hostnames, so verify the operator egress policy. The registries reached:
+    # pypi.org, files.pythonhosted.org, cdn.jsdelivr.net (Pyodide),
+    # registry.npmjs.org, jsr.io, index.crates.io, static.crates.io.
     resolverCidrs: []
   supervisor:
-    enabled: false
+    enabled: true
+    # REQUIRED with the agent runtime: elitea-sandbox-supervisor by registry
+    # digest (registry/name@sha256:<64 hex>).
     image: ""
-    # Existing Secret: flat configuration, certificate, keyring, and database files.
-    materialSecret: ""
-    # Admit one to eight profiles with distinct files, ports, and durable owners.
-    # All-language acquisition requires seven independent profiles.
+    # The Secret with the supervisor's certificates, keys, keyring and database
+    # files (never its configuration, which the chart renders). Flat keys:
+    #   runtime-ca.crt                 the runtime CA: client CA of every
+    #                                  profile and CA of Main's content listener
+    #   command-signing-keyring.json   Main's command signing keyring
+    #   database-url                   the AgentState DSN for job receipts
+    #   database-ca.crt                the AgentState server's CA
+    #   <serviceName>.crt / .key                  each profile's server leaf
+    #   <serviceName>-content-client.crt / .key   each profile's content client
+    # deploy/scripts/gen-sandbox-certs.sh <runtime-ca-dir> <out> --native issues
+    # every leaf under exactly these names:
+    #   kubectl create secret generic elitea-sandbox-material \
+    #     --from-file=<out> --from-file=runtime-ca.crt ... --from-file=database-url ...
+    materialSecret: elitea-sandbox-material
+    # One to eight profiles. An entry with `name` is RENDERED by the chart into
+    # the elitea-sandbox-profiles ConfigMap (config <name>.json; owner
+    # <release>-<serviceName>; audience dns:<serviceName>; certificates
+    # <serviceName>.crt/.key and <serviceName>-content-client.crt/.key from the
+    # material Secret; staging root /run/elitea-sandbox-content/<name>/private;
+    # backend kind kubernetes with runnerImages[runner], runtimeClass,
+    # nodeSelector and cluster above; execution profiles in executionNamespace,
+    # preparation profiles in preparation.namespace; concurrency and database
+    # connections 4 for execution, 1 and 2 for preparation; cpu 1). An entry
+    # with `file` reads that flat configuration file from the material Secret
+    # instead (an ADR-0034 workspace profile, for example).
+    # The defaults are the canonical table (CONTRACT, compose):
     profiles:
-      - file: deno.json
-        port: 9446
-      - file: rust.json
-        port: 9447
-    # Optional profiles may set serviceName for a certificate-matched DNS alias.
-    # Each content client uses /run/elitea-sandbox-content/<name>/private.
-    # Admit at most eight clients with distinct staging names.
-    # Budget pooled database connections and staging memory for every profile.
-    contentStaging: []
-    # Example: [{name: deno, sizeMiB: 256}, {name: preparation, sizeMiB: 256}]
-    # Required with contentStaging. Use a pinned image with /bin/sh, mkdir, and chmod.
+      - {name: deno, port: 9446, serviceName: elitea-sandbox-deno, purpose: execution, languages: [python], policyRevision: deno-v1, runner: deno, timeoutSeconds: 60, memoryMiB: 512, nativeWorkspaceMiB: 0, codePlatformProfile: true}
+      - {name: rust, port: 9447, serviceName: elitea-sandbox-rust, purpose: execution, languages: [rust], policyRevision: rust-v1, runner: rust, timeoutSeconds: 180, memoryMiB: 2048, nativeWorkspaceMiB: 1024, codePlatformProfile: false}
+      - {name: denonative, port: 9450, serviceName: elitea-sandbox-deno-native, purpose: execution, languages: [javascript, typescript], policyRevision: deno-v1, runner: deno, timeoutSeconds: 60, memoryMiB: 1024, nativeWorkspaceMiB: 512, codePlatformProfile: true}
+      - {name: prep, port: 9448, serviceName: elitea-sandbox-preparation, purpose: preparation, languages: [python], policyRevision: python-preparation-v1, runner: deno, timeoutSeconds: 120, memoryMiB: 512, nativeWorkspaceMiB: 0, codePlatformProfile: false}
+      - {name: jsprep, port: 9449, serviceName: elitea-sandbox-javascript-preparation, purpose: preparation, languages: [javascript], policyRevision: deno-preparation-v1, runner: deno, timeoutSeconds: 120, memoryMiB: 1024, nativeWorkspaceMiB: 512, codePlatformProfile: false}
+      - {name: tsprep, port: 9451, serviceName: elitea-sandbox-typescript-preparation, purpose: preparation, languages: [typescript], policyRevision: deno-preparation-v1, runner: deno, timeoutSeconds: 120, memoryMiB: 1024, nativeWorkspaceMiB: 512, codePlatformProfile: false}
+      - {name: rsprep, port: 9452, serviceName: elitea-sandbox-rust-preparation, purpose: preparation, languages: [rust], policyRevision: cargo-preparation-v1, runner: rust, timeoutSeconds: 300, memoryMiB: 2048, nativeWorkspaceMiB: 1024, codePlatformProfile: false}
+    # One memory-backed staging directory per content client, at
+    # /run/elitea-sandbox-content/<name>/private; every rendered profile needs
+    # the entry named like it. At most eight, distinct names. The staging
+    # memory counts against the supervisor's memory limit below.
+    contentStaging:
+      - {name: deno, sizeMiB: 256}
+      - {name: rust, sizeMiB: 256}
+      - {name: denonative, sizeMiB: 256}
+      - {name: prep, sizeMiB: 256}
+      - {name: jsprep, sizeMiB: 256}
+      - {name: tsprep, sizeMiB: 256}
+      - {name: rsprep, sizeMiB: 256}
+    # REQUIRED with the agent runtime (contentStaging is never empty by
+    # default): a pinned image with /bin/sh, mkdir and chmod, by digest.
     contentStagingInitImage: ""
+    # The limit holds the seven 256 MiB staging directories (1792 MiB of
+    # memory-backed emptyDir, charged to this pod) plus the process itself.
+    # Raise it with contentStaging.
     resources:
       requests:
         cpu: 100m
-        memory: 128Mi
+        memory: 256Mi
       limits:
         cpu: "1"
-        memory: 512Mi
+        memory: 2560Mi

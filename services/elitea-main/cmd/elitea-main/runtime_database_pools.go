@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -112,19 +113,10 @@ func (p *runtimeDatabasePools) openVectorIntrospection(ctx context.Context, dsn 
 }
 
 func openRuntimePostgresPool(ctx context.Context, dsn string, spec runtimePoolSpec) (runtimePoolResource, error) {
-	config, err := pgxpool.ParseConfig(dsn)
+	config, err := runtimePostgresPoolConfig(dsn, spec)
 	if err != nil {
-		return runtimePoolResource{}, fmt.Errorf("parse PostgreSQL configuration: %w", err)
+		return runtimePoolResource{}, err
 	}
-	config.MaxConns = spec.maxConns
-	config.MinConns = 0
-	config.MaxConnIdleTime = 5 * time.Minute
-	config.MaxConnLifetime = 30 * time.Minute
-	config.MaxConnLifetimeJitter = 5 * time.Minute
-	if config.ConnConfig.RuntimeParams == nil {
-		config.ConnConfig.RuntimeParams = make(map[string]string)
-	}
-	config.ConnConfig.RuntimeParams["application_name"] = "elitea-runtime-" + spec.role
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return runtimePoolResource{}, fmt.Errorf("construct PostgreSQL pool: %w", err)
@@ -134,6 +126,24 @@ func openRuntimePostgresPool(ctx context.Context, dsn string, spec runtimePoolSp
 		return runtimePoolResource{}, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
 	return runtimePoolResource{pool: pool, close: pool.Close}, nil
+}
+
+func runtimePostgresPoolConfig(dsn string, spec runtimePoolSpec) (*pgxpool.Config, error) {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse PostgreSQL configuration: %w", err)
+	}
+	infradb.WithTCPKeepAlive(&config.ConnConfig.Config)
+	config.MaxConns = spec.maxConns
+	config.MinConns = 0
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.MaxConnLifetime = 30 * time.Minute
+	config.MaxConnLifetimeJitter = 5 * time.Minute
+	if config.ConnConfig.RuntimeParams == nil {
+		config.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	config.ConnConfig.RuntimeParams["application_name"] = "elitea-runtime-" + spec.role
+	return config, nil
 }
 
 func (p *runtimeDatabasePools) Close() {

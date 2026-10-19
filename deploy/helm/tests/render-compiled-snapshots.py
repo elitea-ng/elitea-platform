@@ -17,6 +17,8 @@ SPEC = importlib.util.spec_from_file_location('preflight', ROOT / 'deploy/script
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 RAW = (ROOT / 'deploy/helm/tests/fixtures/compiled-profiles.synthetic.json').read_bytes()
+# The Code sandbox material: the sandbox renders wherever the agent runtime runs.
+FIXTURE = ROOT / 'deploy/helm/tests/fixtures/code-material-values.yaml'
 PIN = hashlib.sha256(RAW).hexdigest()
 IMAGE = json.loads(RAW)['profiles'][0]['binding']['execution_image_digest']
 SAFE_ENV = {'PATH': os.environ['PATH'], 'COMPOSE_DISABLE_ENV_FILE': '1'}
@@ -29,10 +31,19 @@ def setting(path):
 
 
 def values():
+    # The worker's Code backends are explicit here, so Main's original-Code
+    # owner recovery (always needed: the node journal is always on) names their
+    # execution audiences, and the preparation audiences are sandbox audiences.
     return {
         'postgresql': {'maxConnections': 250},
-        'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS)}},
-        'worker': {'enabled': True, 'implementation': 'rust', 'indexingRuntime': 'python', 'runtime': {'sandboxRuntimes': [
+        'main': {'runtime': {
+            'sandboxAudiences': ['dns:rust', 'dns:python', 'dns:python-prep', 'dns:rust-prep'],
+            'codeOwnerRecovery': {'mainWorkloadIdentity': 'dns:elitea-code-owner-main', 'supervisors': [
+                {'audience': 'dns:python', 'httpsOrigin': 'https://python:9446'},
+                {'audience': 'dns:rust', 'httpsOrigin': 'https://rust:9447'}]},
+            'indexIngestDispatch': {'enabled': False, 'commandStream': ''},
+            'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS)}},
+        'worker': {'enabled': True, 'implementation': 'rust', 'runtime': {'sandboxRuntimes': [
             dict(language='python', target='python:9446', audience='dns:python', image_digest=IMAGE,
                  policy_revision='python-v1', timeout_seconds=60,
                  preparation=dict(target='python-prep:9448', audience='dns:python-prep',
@@ -198,7 +209,7 @@ class Helm(unittest.TestCase):
             filename = Path(directory) / 'values.yaml'; filename.write_text(yaml.safe_dump(value))
             result = subprocess.run([
                 'helm', 'template', 'compiled', str(CHART), '-f', str(CHART / 'values-standalone.yaml'),
-                '-f', str(filename), '--namespace', 'platform',
+                '-f', str(FIXTURE), '-f', str(filename), '--namespace', 'platform',
                 '--set', 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1',
                 '--set', 'llmGateway.egressPosture=public-unrestricted',
                 '--set', 'networkPolicies.main.noExternalIngress=true',
@@ -228,7 +239,7 @@ class Helm(unittest.TestCase):
         supervisor = by_name['Deployment', 'elitea-sandbox-supervisor']['spec']['template']['spec']
         self.assertTrue(supervisor['containers'][0]['securityContext']['readOnlyRootFilesystem'])
         self.assertTrue(next(m for m in supervisor['containers'][0]['volumeMounts'] if m['name'] == 'private-material')['readOnly'])
-        policies = [d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata']['namespace'] == 'code-execution']
+        policies = [d for d in docs if d['kind'] == 'NetworkPolicy' and d['metadata'].get('namespace') == 'code-execution']
         self.assertEqual(policies[0]['spec']['egress'], [])
 
     def test_default_off_preserves_existing_consumer_shape(self):
@@ -301,6 +312,9 @@ class Helm(unittest.TestCase):
         v['postgresql'] = dict(maxConnections=100, reservedConnections=25)
         v['main']['autoscaling'] = dict(enabled=True, maxReplicas=8)
         del v['main']['runtime']['rustCompiledSnapshots']
+        # Debug receipts share the compiled pool and are on by default; off,
+        # no receipt pool remains.
+        v['main']['runtime']['codeDebugArtifacts'] = dict(enabled=False)
         del v['worker']['runtime']['sandboxRuntimes'][1]['compiled_snapshot']
         v['sandboxKubernetes']['supervisor']['profiles'][1] = dict(file='rust.json', port=9447)
         result = self.render(v)
@@ -365,12 +379,11 @@ class Helm(unittest.TestCase):
 
 class Compose(unittest.TestCase):
     def render(self, enabled, missing_pin=False):
-        files = ['standalone-full', 'standalone-rust-agent', 'sandbox']
+        # The Code sandbox is part of the default standalone stack (PLAN §8.3).
+        files = ['standalone-full']
         if enabled:
             files.append('sandbox-compiled-rust')
-        env = dict(SAFE_ENV, ELITEA_SANDBOX_SUPERVISOR_IMAGE='local/supervisor@sha256:' + 'a' * 64,
-                   ELITEA_SANDBOX_DOCKER_GID='999', ELITEA_SANDBOX_WORKER_CONFIG='/private/synthetic/worker.json',
-                   ELITEA_SANDBOX_DENO_MATERIAL='/private/synthetic/deno', ELITEA_SANDBOX_RUST_MATERIAL='/private/synthetic/rust',
+        env = dict(SAFE_ENV, ELITEA_SANDBOX_DOCKER_GID='999', ELITEA_CODE_MATERIAL_DIR='/private/synthetic/code',
                    ELITEA_SANDBOX_DOCKER_SOCKET='/private/synthetic/docker.sock',
                    ELITEA_RUST_COMPILED_PROFILES_FILE='/private/synthetic/release$immutable.json',
                    ELITEA_RUST_COMPILED_PROFILES_SHA256=PIN,

@@ -28,7 +28,7 @@ chart=deploy/helm/elitea
 fixture=deploy/helm/tests/fixtures/egress-proxy-values.yaml
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-base=(-f "$chart/values-standalone.yaml" --namespace platform
+base=(-f "$chart/values-standalone.yaml" -f "$chart/../tests/fixtures/code-material-values.yaml" --namespace platform
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 
@@ -319,7 +319,10 @@ else
 fi
 
 echo "== a proxy-mode workspace run reaches only the proxy port"
-runs=(--set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
+# The Code sandbox (and its execution namespace) renders with the worker,
+# wherever the agent runtime runs.
+runs=(--set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
+  --set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
 helm template t "$chart" "${base[@]}" -f "$fixture" "${runs[@]}" > "$work/runs.yaml"
 helm template t "$chart" "${base[@]}" "${runs[@]}" > "$work/runs-noproxy.yaml"
 # Direct mode alongside: both policies, each selecting its own label.

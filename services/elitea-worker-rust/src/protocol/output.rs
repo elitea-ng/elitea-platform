@@ -102,6 +102,9 @@ pub enum RuntimeFailureKind {
     CodePreparationFailed,
     CodePreparationCancelled,
     CodePreparationUnconfirmed,
+    /// The Code node declares dependencies, but this deployment has no
+    /// preparation runtime for its language (FU-229).
+    CodePreparationUnavailable,
 
     DependencyUnavailable,
     DeadlineExceeded,
@@ -723,6 +726,9 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.code_preparation_unconfirmed") => {
             RuntimeFailureKind::CodePreparationUnconfirmed
         }
+        Some("pipeline.code_preparation_unavailable") => {
+            RuntimeFailureKind::CodePreparationUnavailable
+        }
 
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(
@@ -875,6 +881,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::CodePreparationUnconfirmed => (
             RuntimeErrorCodeV1::PipelineCodeFailed,
             "Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
+            false,
+        ),
+        RuntimeFailureKind::CodePreparationUnavailable => (
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "Code dependency preparation is not available for this language in this deployment. Remove the package imports or ask your administrator to enable dependency preparation. Later nodes did not run.",
             false,
         ),
         RuntimeFailureKind::PipelineCodeFailed => (
@@ -1030,6 +1041,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::CodePreparationFailed,
         RuntimeFailureKind::CodePreparationCancelled,
         RuntimeFailureKind::CodePreparationUnconfirmed,
+        RuntimeFailureKind::CodePreparationUnavailable,
         RuntimeFailureKind::DependencyUnavailable,
         RuntimeFailureKind::DeadlineExceeded,
         RuntimeFailureKind::AuthorizationFailed,

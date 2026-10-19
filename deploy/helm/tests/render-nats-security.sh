@@ -52,7 +52,7 @@ NS=elitea
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
 # The standalone profile: the runtime plane on, so the command bus's
 # identities (elitea-main-runtime, elitea-worker) render too.
-"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" -f "$DIR/helm/tests/fixtures/code-material-values.yaml" --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-runtime.yaml"
 

@@ -324,7 +324,7 @@ fi
 # origin that is not the edge. Off (every render above): neither appears.
 
 echo "== deepwiki.callbackViaPlatformEdge routes the callback hop through the edge =="
-EDGE="-f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
+EDGE="-f $CHART/values-standalone.yaml -f $CHART/../tests/fixtures/code-material-values.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
 edge="$(render $COMPLETE $EDGE)" || fail "the callback hop through the edge does not render: $edge"
 expect "callback origin in elitea-main" \
   "$(printf '%s' "$edge" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
@@ -340,7 +340,7 @@ if render $COMPLETE --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1;
 else
   note "refused without worker.platformEdge"
 fi
-if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
+if render $COMPLETE -f $CHART/values-standalone.yaml -f $CHART/../tests/fixtures/code-material-values.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
   fail "callbackViaPlatformEdge renders beside an explicit non-edge callback origin"
 else
   note "refused beside http://elitea-main:8080"

@@ -4108,7 +4108,8 @@ pub(super) fn child_failure_report(
     let recovery = match kind {
         RuntimeFailureKind::ModelAccessDenied
         | RuntimeFailureKind::ModelBudgetExhausted(_)
-        | RuntimeFailureKind::CodePreparationUnconfirmed => "ask_administrator",
+        | RuntimeFailureKind::CodePreparationUnconfirmed
+        | RuntimeFailureKind::CodePreparationUnavailable => "ask_administrator",
         _ if retryable => "verify_before_retry",
         _ => "revise_task",
     };

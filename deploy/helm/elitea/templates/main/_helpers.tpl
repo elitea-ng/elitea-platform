@@ -891,7 +891,7 @@ and the term that actually moves is the one this counts.
 {{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
 {{- $poolAvailable := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
 {{- $compiledDirect := 0 -}}
-{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
+{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled (include "elitea.code.settings" . | fromJson).debug.enabled -}}
 {{/* The private receipt DSN is independent of the product PgBouncer route. */}}
 {{- $compiledDirect = mul 4 $replicas -}}
 {{- end -}}
@@ -925,7 +925,7 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 {{- end -}}
 
-{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
+{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled (include "elitea.code.settings" . | fromJson).debug.enabled -}}
 {{/* Debug and compiled receipts share the same four-connection AgentState pool. */}}
 {{- $perReplica = add $perReplica 4 -}}
 {{- end -}}
@@ -1268,7 +1268,7 @@ ELITEA_RUNTIME_NATS_TLS_CA_FILE: {{ printf "%s/ca.crt" (include "elitea-main.run
 ELITEA_RUNTIME_NATS_TLS_CERT_FILE: {{ printf "%s/tls.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 ELITEA_RUNTIME_NATS_TLS_KEY_FILE: {{ printf "%s/tls.key" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
 {{- end }}
-ELITEA_RUNTIME_SANDBOX_AUDIENCES: {{ join "," ($runtime.sandboxAudiences | default list) | quote }}
+ELITEA_RUNTIME_SANDBOX_AUDIENCES: {{ join "," (include "elitea.code.settings" . | fromJson).audiences | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_ID: {{ $runtime.signingKeyId | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_FILE: {{ printf "%s/command-signing-key.pem" $dir | quote }}
 ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE: {{ printf "%s/command-signing-keyring.json" $dir | quote }}

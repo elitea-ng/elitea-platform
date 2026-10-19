@@ -18,17 +18,10 @@ type Pool struct {
 }
 
 func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
-	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+	poolCfg, err := poolConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("db: parse config: %w", err)
+		return nil, err
 	}
-	if cfg.MaxConns > 0 {
-		poolCfg.MaxConns = cfg.MaxConns
-	}
-	if cfg.MinConns > 0 {
-		poolCfg.MinConns = cfg.MinConns
-	}
-
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("db: create pool: %w", err)
@@ -38,6 +31,21 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	return &Pool{Pool: pool}, nil
+}
+
+func poolConfig(cfg Config) (*pgxpool.Config, error) {
+	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("db: parse config: %w", err)
+	}
+	WithTCPKeepAlive(&poolCfg.ConnConfig.Config)
+	if cfg.MaxConns > 0 {
+		poolCfg.MaxConns = cfg.MaxConns
+	}
+	if cfg.MinConns > 0 {
+		poolCfg.MinConns = cfg.MinConns
+	}
+	return poolCfg, nil
 }
 
 func (p *Pool) Ping(ctx context.Context) error {

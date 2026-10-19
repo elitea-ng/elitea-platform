@@ -22,8 +22,17 @@
 #      durable agent checkpoint store is unavailable".
 #   2. CREATE EXTENSION vector, into public, where the index plane's unqualified
 #      DDL needs it. No migration creates it, so nothing else will.
+#   3. TCP keepalives for the application role (FU-221): ALTER ROLE ... SET
+#      tcp_keepalives_idle/interval/count = 20/5/3, so the server detects a
+#      force-killed client (a node lost under a worker) in ~35 s instead of
+#      the kernel's ~2 h and releases its locks and connection slot. The chart
+#      cannot set an external server's GUCs (see the postgresql block in
+#      values.yaml); a role default is the part an administrator DSN can set.
+#      Skipped, with a warning, when appRole is empty, does not exist yet, or
+#      the DSN may not alter it.
 #
-# Both are idempotent, and an already-prepared database costs two queries.
+# All three are idempotent, and an already-prepared database costs a few
+# queries.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -123,6 +132,23 @@ spec:
               # 2. the vector type, on the default search_path.
               psql "$PGURL" -v ON_ERROR_STOP=1 \
                 -c "CREATE EXTENSION IF NOT EXISTS vector SCHEMA public"
+
+              # 3. server-side TCP keepalives for the application role's
+              #    sessions (FU-221). ALTER ROLE ... SET is idempotent; the
+              #    settings apply to the role's new sessions.
+              if [ -n "$APP_ROLE" ] && [ "$(psql "$PGURL" -Atqc \
+                    "SELECT 1 FROM pg_roles WHERE rolname = '$APP_ROLE'")" = "1" ]; then
+                if psql "$PGURL" -v ON_ERROR_STOP=1 \
+                    -c "ALTER ROLE \"$APP_ROLE\" SET tcp_keepalives_idle = 20" \
+                    -c "ALTER ROLE \"$APP_ROLE\" SET tcp_keepalives_interval = 5" \
+                    -c "ALTER ROLE \"$APP_ROLE\" SET tcp_keepalives_count = 3"; then
+                  echo "role $APP_ROLE: tcp keepalives 20/5/3"
+                else
+                  echo "WARNING: could not set tcp_keepalives_idle/interval/count on role $APP_ROLE; set them on the PostgreSQL server (20/5/3)." >&2
+                fi
+              else
+                echo "WARNING: role ${APP_ROLE:-<dbInit.appRole empty>} not found; set tcp_keepalives_idle/interval/count (20/5/3) on the PostgreSQL server." >&2
+              fi
 
               echo "database prepared"
           resources:

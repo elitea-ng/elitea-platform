@@ -58,7 +58,7 @@ helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" >"$WO
 pass "the chart renders with default values"
 
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" >"$WORK/standalone.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" >"$WORK/standalone.yaml"
 pass "the chart renders with values-standalone.yaml"
 
 # Enable every dispatch plane and sandbox grants for the complete environment check.
@@ -66,6 +66,9 @@ cat >"$WORK/all-planes.yaml" <<'YAML'
 main:
   runtime:
     sandboxAudiences:
+      - dns:elitea-sandbox-deno
+      - dns:elitea-sandbox-deno-native
+      - dns:elitea-sandbox-rust
       - dns:sandbox.test
       - spiffe://elitea.test/sandbox/rust
     indexScheduling:
@@ -73,7 +76,7 @@ main:
       instanceId: elitea-main-0
 YAML
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" -f "$WORK/all-planes.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" -f "$WORK/all-planes.yaml" \
   >"$WORK/all-planes-render.yaml"
 pass "the chart renders with every runtime dispatch plane and sandbox grants on"
 
@@ -357,14 +360,18 @@ fi
 # ---------------------------------------------------------------------------
 # 4. The runtime plane matches what the composition root requires.
 #
-# Empty sandbox audiences disable grant issuance. An active list must preserve exact identities.
-# ConfigFromEnv accepts an empty list; validateSandboxAudiences rejects empty entries in an active list.
-if [ -z "$(data ELITEA_RUNTIME_SANDBOX_AUDIENCES "$WORK/standalone.yaml")" ]; then
-  pass "sandbox grant issuance stays disabled without configured audiences"
+# The Code consumers are on wherever the agent runtime runs (PLAN §8.3), so an
+# empty sandboxAudiences means the seven canonical audiences, and grant
+# issuance is on. An explicit list must preserve exact identities (and keep
+# the owner supervisors' audiences). ConfigFromEnv accepts an empty list;
+# validateSandboxAudiences rejects empty entries in an active list.
+CANONICAL_AUDIENCES="dns:elitea-sandbox-deno,dns:elitea-sandbox-rust,dns:elitea-sandbox-deno-native,dns:elitea-sandbox-preparation,dns:elitea-sandbox-javascript-preparation,dns:elitea-sandbox-typescript-preparation,dns:elitea-sandbox-rust-preparation"
+if [ "$(data ELITEA_RUNTIME_SANDBOX_AUDIENCES "$WORK/standalone.yaml")" = "$CANONICAL_AUDIENCES" ]; then
+  pass "the agent runtime grants the seven canonical sandbox audiences by default"
 else
-  fail "the chart enables sandbox grant audiences without explicit configuration"
+  fail "the default sandbox grant audiences are not the seven canonical ones"
 fi
-if [ "$(data ELITEA_RUNTIME_SANDBOX_AUDIENCES "$WORK/all-planes-render.yaml")" = "dns:sandbox.test,spiffe://elitea.test/sandbox/rust" ]; then
+if [ "$(data ELITEA_RUNTIME_SANDBOX_AUDIENCES "$WORK/all-planes-render.yaml")" = "dns:elitea-sandbox-deno,dns:elitea-sandbox-deno-native,dns:elitea-sandbox-rust,dns:sandbox.test,spiffe://elitea.test/sandbox/rust" ]; then
   pass "active sandbox grant audiences preserve the configured exact identities"
 else
   fail "active sandbox grant audiences differ from the configured exact identities"
@@ -617,7 +624,7 @@ else
   fail "toolkit discovery is enabled by default"
 fi
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" --set main.runtime.toolkitDiscovery.enabled=true >"$WORK/discovery.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" --set main.runtime.toolkitDiscovery.enabled=true >"$WORK/discovery.yaml"
 if [ "$(data ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED "$WORK/discovery.yaml")" = "true" ]; then
   pass "toolkit discovery activation reaches the rendered environment"
 else
@@ -639,7 +646,7 @@ main:
             secretProviderClass: elitea-runtime-material
 YAML
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" -f "$WORK/csi-material.yaml" >"$WORK/csi-render.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" -f "$WORK/csi-material.yaml" >"$WORK/csi-render.yaml"
 if [ "$(yq eval-all 'select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "runtime-material") | has("csi")' "$WORK/csi-render.yaml")" = "true" ]; then
   pass "runtime.material.volume still mounts the volume the operator supplies"
 else
@@ -865,7 +872,7 @@ agentStateMigrations:
     key: connection-url
 YAML
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   -f "$WORK/agentstate-migration.yaml" >"$WORK/agentstate-migration-render.yaml"
 agentstate_job='select(.kind == "Job") | select(.metadata.name | test("agentstate-migrate$"))'
 if [ "$(yq eval-all "$agentstate_job | .spec.template.spec.containers[0].args[0]" "$WORK/agentstate-migration-render.yaml")" = "-agentstate" ]; then
@@ -900,7 +907,7 @@ main:
               secretProviderClass: elitea-main-auth-material
 YAML
 helm template ${GATEWAY_RENDER_POSTURE} ${ONLY_MAIN} test-release "$CHART" \
-  -f "$CHART/values-standalone.yaml" -f "$WORK/auth-csi-material.yaml" >"$WORK/auth-csi-render.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" -f "$WORK/auth-csi-material.yaml" >"$WORK/auth-csi-render.yaml"
 if [ "$(yq eval-all 'select(.kind == "Deployment") | .spec.template.spec.volumes[] | select(.name == "auth-material") | has("csi")' "$WORK/auth-csi-render.yaml")" = "true" ]; then
   pass "fileConfig.authConfig.material.volume still mounts the volume the operator supplies"
 else
@@ -943,21 +950,21 @@ $output"
 
 refuses "a runtime block with no command stream" \
   "commandStream" \
-  -f "$CHART/values-standalone.yaml" --set main.runtime.commandStream=""
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" --set main.runtime.commandStream=""
 
 refuses "a runtime block with no material source" \
   "material[./]secretName" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.runtime.material.secretName="" --set-json 'main.runtime.material.volume={}'
 
 refuses "two material sources at once" \
   "material[./]secretName" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set-json 'main.runtime.material.volume={"emptyDir":{}}'
 
 refuses "a Secret mode the init container cannot read" \
   "secretDefaultMode" \
-  -f "$CHART/values-standalone.yaml" --set main.runtime.material.secretDefaultMode=256
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" --set main.runtime.material.secretDefaultMode=256
 
 refuses "a material Secret set while the runtime is off" \
   "runtime.enabled" \
@@ -967,11 +974,11 @@ refuses "a material Secret set while the runtime is off" \
 # URL rendered as tls://.<namespace>.svc.cluster.local:4222 without a word.
 refuses "the runtime with no NATS to publish commands to" \
   "main.runtime.enabled=true needs a NATS" \
-  -f "$CHART/values-standalone.yaml" --set-string nats.service=
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" --set-string nats.service=
 
 refuses "the runtime without production authentication" \
   "fileConfig.authConfig.enabled" \
-  -f "$CHART/values-standalone.yaml" --set main.fileConfig.authConfig.enabled=false
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" --set main.fileConfig.authConfig.enabled=false
 
 refuses "the Configurations plane without ANY authentication" \
   "needs an authenticated deployment" \
@@ -987,12 +994,12 @@ refuses "the Configurations plane without a public project id" \
 
 refuses "index ingest without the Configurations plane" \
   "ELITEA_CONFIGURATIONS_ENABLED" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set-string main.env.ELITEA_CONFIGURATIONS_ENABLED=false
 
 refuses "index scheduling without index ingest" \
   "runtime.indexIngestDispatch.enabled" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.runtime.indexScheduling.enabled=true \
   --set main.runtime.indexScheduling.instanceId=elitea-main-0 \
   --set main.runtime.indexIngestDispatch.enabled=false
@@ -1007,19 +1014,19 @@ refuses "toolkit discovery while the runtime is off" \
 
 refuses "toolkit discovery with index dispatch only" \
   "needs an active agentExecutionDispatch" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.runtime.toolkitDiscovery.enabled=true \
   --set main.runtime.agentExecutionDispatch.enabled=false \
   --set main.runtime.indexIngestDispatch.enabled=true
 
 refuses "a Redis-era consumerGroup on a dispatch plane" \
   "consumerGroup is gone" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.runtime.indexIngestDispatch.consumerGroup=elitea-index-worker-v1
 
 refuses "a Redis-era runtime.redis block" \
   "runtime.redis is gone" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.runtime.redis.url=rediss://producer@elitea-runtime-redis:6380/0
 
 # The runtime Redis is removed (docs/UPGRADING.md, "runtime-redis removed").
@@ -1036,7 +1043,7 @@ refuses "a values file that still carries a disabled runtimeRedis block" \
 
 refuses "a command stream outside the command bus contract" \
   "not one of the command bus's streams" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.runtime.agentExecutionDispatch.commandStream=commands.v1.agent.execute.agent.shared.1.0
 
 refuses "a runtime name set through the env map" \
@@ -1045,24 +1052,24 @@ refuses "a runtime name set through the env map" \
 
 refuses "agentstate migration without a database Secret" \
   "agentStateMigrations.databaseSecret.name" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set agentStateMigrations.enabled=true
 
 # --- The authentication material, issue #444 --------------------------------
 refuses "production authentication with no material source" \
   "authConfig[./]material[./]secretName" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.material.secretName="" \
   --set-json 'main.fileConfig.authConfig.material.volume={}'
 
 refuses "two authentication material sources at once" \
   "authConfig[./]material[./]secretName" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set-json 'main.fileConfig.authConfig.material.volume={"emptyDir":{}}'
 
 refuses "an authentication Secret mode the init container cannot read" \
   "authConfig[./]material[./]secretDefaultMode" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.material.secretDefaultMode=256
 
 refuses "an authentication material Secret set while authentication is off" \
@@ -1071,18 +1078,18 @@ refuses "an authentication material Secret set while authentication is off" \
 
 refuses "a document and an external ConfigMap at once" \
   "authConfig[./]configMapName" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.configMapName=elitea-main-auth-config
 
 refuses "production authentication with no document at all" \
   "authConfig[./]document" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set-json 'main.fileConfig.authConfig.document={}'
 
 # The defect itself: a material path that the mounted directory cannot serve.
 refuses "a material path outside the mounted directory" \
   "outside fileConfig.authConfig.material.mountPath" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.document.credentials.attempt_key_file=/etc/elsewhere/auth-attempt-key
 
 # The retired schema. The Form sign-in state is in PostgreSQL (elitea-main
@@ -1090,22 +1097,22 @@ refuses "a material path outside the mounted directory" \
 # block, or names elitea.auth.form.v1, is refused while the chart renders.
 refuses "an authentication document that still carries a redis block" \
   "has a redis block" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.document.redis.url=rediss://auth@elitea-runtime-redis:6380/0
 
 refuses "the retired elitea.auth.form.v1 schema" \
   "accepts only elitea.auth.form.v2" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.document.schema_version=elitea.auth.form.v1
 
 refuses "a material file name no Secret key can carry" \
   "Kubernetes Secret key" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set 'main.fileConfig.authConfig.document.credentials.pat_signing_key_file=/run/elitea-auth/pat key'
 
 refuses "one authentication material directory shared with the runtime" \
   "runtime.material.mountPath" \
-  -f "$CHART/values-standalone.yaml" \
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml" \
   --set main.fileConfig.authConfig.material.mountPath=/run/elitea-runtime
 
 # ---------------------------------------------------------------------------

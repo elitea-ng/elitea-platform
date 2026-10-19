@@ -55,14 +55,14 @@ fn code_platform_startup_preserves_omitted_profiles_and_exact_policy() {
 
 #[test]
 fn code_platform_startup_requires_original_attempt_storage_owner() {
-    for (field, value) in [
-        ("agent_node_recovery", json!(false)),
-        ("agent_checkpoint_connection_path", Value::Null),
-    ] {
-        let mut input = example();
-        input[field] = value;
-        assert!(accepted(input).is_err(), "{field}");
-    }
+    assert!(accepted(example()).is_ok());
+    let mut input = example();
+    input["agent_checkpoint_connection_path"] = Value::Null;
+    assert!(accepted(input).is_err());
+    // Recovery is not a setting: a file that still tries to switch it is refused.
+    let mut input = example();
+    input["agent_node_recovery"] = json!(true);
+    assert!(accepted(input).is_err());
 }
 
 #[test]

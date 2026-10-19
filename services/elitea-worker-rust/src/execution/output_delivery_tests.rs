@@ -609,31 +609,153 @@ fn authorized_control_with_policy(
 ) -> Arc<AgentControlClient<RecoveryControl>> {
     Arc::new(
         AgentControlClient::new(
-            RecoveryControl {
-                trace,
-                claim_fixture: "accepted_claim",
-                settlement_fails: false,
-                authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
-                authorize_unavailable: false,
-                renew_fail_after: None,
-                renew_fail_switch: None,
-                renew_attempts: AtomicUsize::new(0),
-                wrap_up: false,
-                observe_states: Mutex::new(
-                    observe_states
-                        .into_iter()
-                        .map(|state| state as i32)
-                        .collect(),
-                ),
-            },
-            ControlGrpcConfig {
-                deadline: Duration::from_secs(1),
-                workload_session_id: "workload-1".to_owned(),
-                producer_id: "worker-1".to_owned(),
-            },
+            authorized_recovery_control(trace, observe_states),
+            test_control_config(),
         )
         .expect("authorized control"),
     )
+}
+
+fn authorized_recovery_control(
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    observe_states: impl IntoIterator<Item = DesiredExecutionStateV1>,
+) -> RecoveryControl {
+    RecoveryControl {
+        trace,
+        claim_fixture: "accepted_claim",
+        settlement_fails: false,
+        authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+        authorize_unavailable: false,
+        renew_fail_after: None,
+        renew_fail_switch: None,
+        renew_attempts: AtomicUsize::new(0),
+        wrap_up: false,
+        observe_states: Mutex::new(
+            observe_states
+                .into_iter()
+                .map(|state| state as i32)
+                .collect(),
+        ),
+    }
+}
+
+fn test_control_config() -> ControlGrpcConfig {
+    ControlGrpcConfig {
+        deadline: Duration::from_secs(1),
+        workload_session_id: "workload-1".to_owned(),
+        producer_id: "worker-1".to_owned(),
+    }
+}
+
+/// Records the recovery opt-ins of every claim the processor sends.
+struct ClaimOptInRecorder {
+    inner: RecoveryControl,
+    /// `(node_recovery, agent_model_checkpoint_recovery)` per claim.
+    opt_ins: Arc<Mutex<Vec<(bool, bool)>>>,
+}
+
+#[async_trait]
+impl ControlRpc for ClaimOptInRecorder {
+    async fn claim_command(
+        &self,
+        request: Request<ClaimCommandRequestV1>,
+    ) -> Result<Response<ClaimCommandResponseV1>, Status> {
+        let claim = request.get_ref();
+        self.opt_ins
+            .lock()
+            .expect("opt-ins")
+            .push((claim.node_recovery, claim.agent_model_checkpoint_recovery));
+        self.inner.claim_command(request).await
+    }
+    async fn begin_execution(
+        &self,
+        request: Request<BeginExecutionRequestV1>,
+    ) -> Result<Response<BeginExecutionResponseV1>, Status> {
+        self.inner.begin_execution(request).await
+    }
+    async fn authorize_invocation(
+        &self,
+        request: Request<AuthorizeInvocationRequestV1>,
+    ) -> Result<Response<AuthorizeInvocationResponseV1>, Status> {
+        self.inner.authorize_invocation(request).await
+    }
+    async fn renew_lease(
+        &self,
+        request: Request<RenewLeaseRequestV1>,
+    ) -> Result<Response<RenewLeaseResponseV1>, Status> {
+        self.inner.renew_lease(request).await
+    }
+    async fn observe_desired_state(
+        &self,
+        request: Request<ObserveDesiredStateRequestV1>,
+    ) -> Result<Response<ObserveDesiredStateResponseV1>, Status> {
+        self.inner.observe_desired_state(request).await
+    }
+    async fn prepare_settlement(
+        &self,
+        request: Request<PrepareSettlementRequestV1>,
+    ) -> Result<Response<PrepareSettlementResponseV1>, Status> {
+        self.inner.prepare_settlement(request).await
+    }
+}
+
+/// Recovery is not a setting: the processor production builds claims every
+/// delivery with node recovery, the Main opt-in that also routes
+/// model-checkpoint recovery (Main refuses both opt-ins on one claim).
+#[tokio::test]
+async fn the_production_agent_processor_always_claims_with_recovery() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let opt_ins = Arc::new(Mutex::new(Vec::new()));
+    let (temporary, output_root) = root();
+    let control = Arc::new(
+        AgentControlClient::new(
+            ClaimOptInRecorder {
+                inner: authorized_recovery_control(Arc::clone(&trace), []),
+                opt_ins: Arc::clone(&opt_ins),
+            },
+            test_control_config(),
+        )
+        .expect("recording control"),
+    );
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("invocation admission"),
+    );
+    let connector = FakeProgressConnector {
+        state: FakeProgressState::new(std::iter::repeat_n(LiveProgressAction::Acknowledge, 8), []),
+    };
+    let processor = native_agent_delivery_processor(
+        Arc::new(TestOnlyConformanceHmacAuthenticator),
+        preflight(output_root, "worker-1"),
+        control,
+        Arc::new(recovery_retirer(Arc::clone(&trace), Ok(()))),
+        Arc::new(KindAgentInput {
+            trace: Arc::clone(&trace),
+            kind: AgentExecutionKind::Application,
+        }),
+        Arc::new(|| NOW),
+        admission,
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation config"),
+        Arc::new(TestNativeAssembler {
+            trace: Arc::clone(&trace),
+            agent: Arc::new(ImmediateTextAgent),
+            sensitive: false,
+        }),
+        connector,
+        1,
+        recovery_config(1),
+    );
+
+    processor
+        .process(bus_delivery(signed_command_for_kind(
+            AgentExecutionKind::Application,
+        )))
+        .await;
+    processor.close().await.expect("delivery processor drain");
+
+    assert_eq!(*opt_ins.lock().expect("opt-ins"), [(true, false)]);
+    assert_eq!(trace.lock().expect("trace").last(), Some(&"retire"));
+    drop(processor);
+    drop(temporary);
 }
 
 fn ambiguous_output_recovery_control(
@@ -4860,7 +4982,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
             recovery_config(1),
             coordinator,
         )
-        .with_checkpoint_recovery(true);
+        .with_checkpoint_only_recovery();
         let raw = bytes("signed_command");
         let verified =
             parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
@@ -5000,7 +5122,7 @@ async fn run_checkpoint_delivery_with_pending_progress(
         recovery_config(1),
         coordinator,
     )
-    .with_checkpoint_recovery(true);
+    .with_checkpoint_only_recovery();
     let raw = bytes("signed_command");
     let verified =
         parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))

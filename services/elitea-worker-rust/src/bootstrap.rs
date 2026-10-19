@@ -573,6 +573,7 @@ fn load_agentstate_options(
     );
     PgConnectOptions::from_str(connection.as_str())
         .map(sqlx::ConnectOptions::disable_statement_logging)
+        .map(crate::pg_keepalive::with_server_tcp_keepalives)
         .map_err(|_| ProductionBootstrapError::InvalidConfiguration)
 }
 
@@ -770,8 +771,6 @@ mod tests {
             index_model_call_cap: None,
             memory_embedding_model: None,
             toolkit_model_call_cap: None,
-            agent_model_checkpoint_recovery: false,
-            agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
             limits: RuntimeLimits {
                 nats_fetch_batch: 8,
@@ -833,6 +832,26 @@ mod tests {
                 .expect("compose profile")
                 .tls
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn the_agentstate_pool_asks_postgres_for_the_shared_keepalive() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().expect("root");
+        let root = root.path().canonicalize().expect("canonical root");
+        let path = root.join("agent-checkpoint-connection");
+        std::fs::write(&path, "postgresql://u:p@postgres:5432/agentstate\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("permissions");
+        let mut deployment = deployment();
+        deployment.agent_checkpoint_connection_path = Some(path);
+        let options = super::load_agentstate_options(&deployment).expect("agentstate options");
+        assert_eq!(
+            options.get_options(),
+            Some(
+                "-c tcp_keepalives_idle=20 -c tcp_keepalives_interval=5 -c tcp_keepalives_count=3"
+            )
         );
     }
 

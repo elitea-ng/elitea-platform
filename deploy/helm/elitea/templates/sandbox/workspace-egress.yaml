@@ -19,7 +19,7 @@ workspace-proxy-egress.yaml lets it reach only the egress proxy.
 */ -}}
 {{- $s := .Values.sandboxKubernetes }}
 {{- $w := $s.workspaceRuns }}
-{{- if and $s.enabled $w.enabled $w.egress.enabled }}
+{{- if and (include "elitea.sandbox.kubernetes" .) $w.enabled $w.egress.enabled }}
 {{- if or (not $w.egress.podCidrs) (not $w.egress.serviceCidrs) }}{{ fail "sandboxKubernetes.workspaceRuns.egress needs the cluster's podCidrs and serviceCidrs, so workspace runs cannot reach in-cluster services" }}{{ end }}
 {{- if or (not $w.egress.dnsNamespaceLabels) (not $w.egress.dnsPodLabels) }}{{ fail "sandboxKubernetes.workspaceRuns.egress needs explicit DNS namespace and Pod labels" }}{{ end }}
 {{- $v4 := list }}

@@ -1,44 +1,27 @@
-# Optional Python preparation
+# Dependency preparation
 
 ## Docker deployment
 
-Add `docker-compose.sandbox-preparation.yml` after the full standalone, Rust-agent, and sandbox overlays.
-The overlay adds a third profile to the existing supervisor process.
-The preparation listener uses port 9448 and audience `dns:elitea-sandbox-preparation`.
-The overlay adds no host port and keeps the supervisor on the existing platform network.
+The standalone compose stack prepares dependencies for every Code language by default (PLAN §8.3); there is no
+overlay. `elitea-sandbox` serves four preparation profiles beside the three execution profiles:
 
-Use `sandbox-preparation.example.json` as the preparation configuration schema.
-Copy the example to a private material directory as `config.json`.
-Set `ELITEA_SANDBOX_PREPARATION_MATERIAL` to that directory.
-Keep the existing sandbox overlay inputs, including `ELITEA_SANDBOX_WORKER_CONFIG`.
-The optional overlay extends Main's sandbox audience list with the preparation audience.
+| Profile | Port | Audience | Languages | Policy | Preparer image |
+| --- | --- | --- | --- | --- | --- |
+| `prep` | 9448 | `dns:elitea-sandbox-preparation` | Python (PyPI) | `python-preparation-v1` | Deno runner |
+| `jsprep` | 9449 | `dns:elitea-sandbox-javascript-preparation` | JavaScript (npm) | `deno-preparation-v1` | Deno runner |
+| `tsprep` | 9451 | `dns:elitea-sandbox-typescript-preparation` | TypeScript (npm) | `deno-preparation-v1` | Deno runner |
+| `rsprep` | 9452 | `dns:elitea-sandbox-rust-preparation` | Rust (crates.io) | `cargo-preparation-v1` | Rust runner |
 
-## Prepare the profile
+`deploy/scripts/code-material.py` (run by `standalone-stack.sh certs` and `up`) issues the leaves below with
+`gen-sandbox-certs.sh --native` and renders every profile's `config.json` and the worker's `preparation` blocks with the
+same image digest, policy revision and timeout on both sides. Preparers run on the stack's own `code-preparation`
+network; the worker, Main and the execution containers never join it. Docker cannot limit that network's egress to
+host names: the preparer's own `--allow-net` list is the destination limit (PyPI: `cdn.jsdelivr.net`, `pypi.org`,
+`files.pythonhosted.org`; npm and crates.io through their registries). Every content client has its own bounded,
+`noexec` 256 MiB staging tmpfs. A Code node that declares packages on a runtime without a preparation profile fails
+with the typed refusal `pipeline.code_preparation_unavailable` before any sandbox work.
 
-Select a fixed preparation image that contains the trusted preparation launcher and native Pyodide dependency resolver.
-Load that image into the supervisor's Docker daemon before startup.
-Replace the example digest with its immutable image digest.
-Match the preparation image, policy revision, and timeout in the worker and supervisor configurations.
-Set a distinct stable preparation owner. Preserve that owner and Docker daemon during supervisor replacement.
-
-Set `purpose` to `preparation` and `languages` to `["python"]`.
-Keep port 9448 distinct from Deno port 9446 and Rust port 9447.
-Keep the backend as `{"kind":"docker"}`.
-The example limits preparation to one concurrent job, one CPU, 512 MiB memory, and 120 seconds.
-The Docker runtime applies its existing process and workspace limits.
-The consolidated supervisor remains UID 10001 with dropped capabilities, a read-only root, and bounded process count.
-The optional overlay raises its memory limit to 1 GiB for private staging.
-
-Create a dedicated resolver network in the same Docker daemon through the operator's network provisioning process.
-Set its exact name in `preparation_network`.
-The example uses `elitea-python-preparation-resolver`.
-Do not select `host`, `none`, `bridge`, or the platform network.
-Attach only trusted preparation containers to this network.
-The worker, supervisor, and execution containers do not join it.
-Configure DNS and registry egress policy outside Compose.
-The current native adapter needs `cdn.jsdelivr.net`, `pypi.org`, and `files.pythonhosted.org`.
-Block access to platform services and unrelated networks through the operator's egress policy.
-A named network alone does not enforce those destination limits.
+The sections below document the material contract the script implements, for operators who assemble it by hand.
 
 ## Issue separate TLS leaves
 
@@ -110,7 +93,7 @@ Keep CA private keys and Main private signing keys outside supervisor material.
 Keep database credentials, worker credentials, and supervisor material outside preparation and execution containers.
 Apply the existing agentstate receipt migrations through 0010 before starting these profiles.
 Migration 0009 provides the preparation bundle receipt. Migration 0010 provides the durable phase clocks.
-This overlay does not apply migrations or copy trust material.
+The material job does not apply migrations; `elitea-agentstate-migrate` runs them before the supervisor starts.
 
 ## Enable execution content downloads
 
@@ -138,7 +121,7 @@ Its DNS identity must equal the Deno audience in the revision 3 content grant.
 The preparation content client uses the preparation audience for publication.
 Both content clients use Main's existing private HTTPS listener on port 9445.
 
-The overlay mounts separate Deno and preparation staging filesystems.
+The default stack mounts a separate staging filesystem for every content client.
 Each tmpfs has a 256 MiB limit, UID 10001 ownership, and mode 0700.
 Each tmpfs disables execution, device files, and set-user-ID behavior.
 The example content clients limit concurrent transfers to one and use 30-second deadlines.
@@ -175,29 +158,9 @@ This optional deployment profile admits Python preparation only.
 
 ## Verify Docker
 
-Render all four overlays before startup:
-
-```bash
-docker compose \
-  -f deploy/docker-compose.standalone-full.yml \
-  -f deploy/docker-compose.standalone-rust-agent.yml \
-  -f deploy/docker-compose.sandbox.yml \
-  -f deploy/docker-compose.sandbox-preparation.yml \
-  config
-```
-
-Treat rendered configuration as private because existing stack environment fields can contain deployment values.
-Verify the three configuration arguments, internal DNS aliases, private material mounts, and bounded tmpfs mounts.
-Verify the dedicated resolver network and registry egress policy before starting preparation.
-Verify Main grant issuance, publication, offline execution, Stop, and worker or supervisor replacement through the complete deployed path.
-Verify persistent chat and the pipeline testing interface before closing the Code acceptance gate.
-
-The extracted patch checks shell and example JSON syntax.
-Compose rendering and disposable certificate issuance must be repeated during integration validation.
-It does not start services, create an operator network, pull images, apply migrations, or modify live material.
-It does not prove browser acceptance.
-The optional Kubernetes contract is below.
-
+`python3 scripts/runtime/test_durability_defaults.py` renders the default compose and the rendered material and fails
+if any preparation profile, audience, worker preparation block or the resolver network is missing. Treat a rendered
+configuration as private: existing stack environment fields can contain deployment values.
 
 ## Kubernetes deployment
 

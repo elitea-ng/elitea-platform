@@ -16,7 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Nil is the default. Endpoints contain no credential or worker-provided URL.
+// Required with native Agent dispatch, nil without it. Endpoints contain no
+// credential or worker-provided URL.
 type CodeOwnerConfig struct {
 	MainWorkloadIdentity string                `json:"main_workload_identity"`
 	CertificateChainPath string                `json:"certificate_chain_path"`
@@ -29,20 +30,29 @@ type CodeOwnerSupervisor struct {
 	HTTPSOrigin string `json:"https_origin"`
 }
 
+// CodeOwnerRecoverySwitchRemoved refuses a process environment that still
+// carries the former owner recovery switch (PLAN.md §8.7 X1).
+const CodeOwnerRecoverySwitchRemoved = "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED was removed: Code owner recovery is always on with Agent dispatch"
+
+// Code owner recovery is not a setting: with native Agent dispatch it is
+// always on and its config is required; without Agent dispatch there is no
+// owner and the config must be absent.
 func codeOwnerConfigFromEnv(lookup LookupEnv, enabled, agents bool, audiences []string) (*CodeOwnerConfig, error) {
-	flag, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED")
-	if flag == "" || flag == "false" {
-		if raw, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"); raw != "" {
-			return nil, errors.New("code owner recovery settings require explicit enablement")
+	if _, set := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED"); set {
+		return nil, errors.New(CodeOwnerRecoverySwitchRemoved)
+	}
+	raw, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG")
+	if !enabled || !agents {
+		if raw != "" {
+			return nil, errors.New("code owner recovery requires native Agent dispatch")
 		}
 		return nil, nil
 	}
-	if flag != "true" || !enabled || !agents {
-		return nil, errors.New("code owner recovery requires native Agent dispatch")
+	if raw == "" {
+		return nil, errors.New("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG is required: Code owner recovery is always on with Agent dispatch")
 	}
-	raw, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG")
-	if len(raw) == 0 || len(raw) > 16384 {
-		return nil, errors.New("code owner recovery configuration is required")
+	if len(raw) > 16384 {
+		return nil, errors.New("code owner recovery configuration is invalid")
 	}
 	var cfg CodeOwnerConfig
 	if code.Decode([]byte(raw), &cfg, 16384) != nil || !codeOwnerConfigFields([]byte(raw)) {

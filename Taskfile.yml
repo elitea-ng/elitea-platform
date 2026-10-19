@@ -243,6 +243,7 @@ tasks:
       - task: helm:code-consumers
       - task: helm:main-master-key
       - task: helm:worker-node-recovery
+      - task: durability-defaults
       - task: helm:gateway-master-key
       - task: helm:indexing-runtime
 
@@ -252,8 +253,14 @@ tasks:
       # ADR-0030 decision 6 / ADR-0031 V1. Needs python3 with PyYAML.
       - bash deploy/helm/tests/render-indexing-runtime.sh
 
+  durability-defaults:
+    desc: Check that the default standalone compose and the default Helm render run node recovery, model-checkpoint recovery, Main Code owner recovery and the Code sandbox with preparation for every language (PLAN §8.3)
+    cmds:
+      # Needs docker compose, helm and python3 with PyYAML.
+      - python3 scripts/runtime/test_durability_defaults.py
+
   helm:worker-node-recovery:
-    desc: Check that worker.runtime.agentNodeRecovery is written for the Rust worker only when true, never for the Python worker, and that a non-boolean recovery switch is refused
+    desc: Check that the removed recovery switches are refused and that the Rust worker always gets its checkpoint connection
     cmds:
       # G-WORKER-01 (services/elitea-worker-rust/docs/recovery-guarantees.md).
       # Needs python3 with PyYAML.
@@ -276,7 +283,7 @@ tasks:
       - bash deploy/helm/tests/render-gateway-master-key.sh
 
   helm:code-consumers:
-    desc: Check opt-in Code consumers and private material boundaries
+    desc: Check the default-on Code consumers and private material boundaries
     cmds:
       - python3 scripts/runtime/test_code_consumers_deployment.py
       - python3 scripts/runtime/test_code_material_install.py

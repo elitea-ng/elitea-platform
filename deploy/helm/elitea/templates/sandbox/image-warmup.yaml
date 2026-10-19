@@ -1,7 +1,21 @@
-{{- if .Values.sandboxImageWarmup.enabled }}
+{{- if and .Values.sandboxImageWarmup.enabled (include "elitea.sandbox.kubernetes" .) }}
 {{- $w := .Values.sandboxImageWarmup }}
-{{- if not $w.images }}{{ fail "sandboxImageWarmup.images must contain pinned runtime images" }}{{ end }}
-{{- if not $w.nodeSelector }}{{ fail "sandboxImageWarmup.nodeSelector must select sandbox nodes explicitly" }}{{ end }}
+{{- /* Code Pods run the runner images with imagePullPolicy Never, so the
+  sandbox nodes must hold them. Empty images: the two runner images;
+  empty nodeSelector: the Code Pods' own (sandboxKubernetes.nodeSelector). */}}
+{{- $images := $w.images | default list }}
+{{- if not $images }}
+{{- $byImage := dict }}
+{{- range $runner := list "deno" "rust" }}
+{{- $image := include "elitea.sandbox.runnerImage" (dict "ctx" $ "runner" $runner) }}
+{{- if not (hasKey $byImage $image) }}
+{{- $_ := set $byImage $image true }}
+{{- $images = append $images (dict "name" (printf "runner-%s" $runner) "image" $image) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $nodeSelector := $w.nodeSelector | default .Values.sandboxKubernetes.nodeSelector }}
+{{- if not $nodeSelector }}{{ fail "sandboxImageWarmup.nodeSelector must select sandbox nodes explicitly" }}{{ end }}
 {{- $seen := dict }}
 apiVersion: apps/v1
 kind: DaemonSet
@@ -32,13 +46,13 @@ spec:
           type: RuntimeDefault
       {{- include "elitea.imagePullSecrets" (dict "local" $w.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       nodeSelector:
-        {{- toYaml $w.nodeSelector | nindent 8 }}
+        {{- toYaml $nodeSelector | nindent 8 }}
       {{- with $w.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        {{- range $w.images }}
+        {{- range $images }}
         {{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" .name) }}{{ fail "sandbox warmup image name must be a DNS label" }}{{ end }}
         {{- if hasKey $seen .name }}{{ fail "sandbox warmup image names must be unique" }}{{ end }}
         {{- $_ := set $seen .name true }}

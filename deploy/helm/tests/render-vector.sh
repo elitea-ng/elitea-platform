@@ -41,7 +41,7 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # elitea-main replica (50 instead of 42), so the profile's 4 replicas no
 # longer fit its 175 available connections: 3 x 50 = 150 do.
 COMPLETE="\
--f $CHART/values-standalone.yaml \
+-f $CHART/values-standalone.yaml -f $CHART/../tests/fixtures/code-material-values.yaml \
 --set llmGateway.egressPosture=allowlist \
 --set llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=elitea.invalid:8000 \
 --set vector.enabled=true \
@@ -313,7 +313,7 @@ expect_refusal "replication above node count" "cannot place more replicas than n
   --set vector.qdrant.internal.replicas=1
 expect_refusal "one replica" "minReplicas must be at least 2" \
   --set vector.autoscaling.minReplicas=1
-expect_refusal "the introspection pool is in the connection budget" "50 per elitea-main replica" \
+expect_refusal "the introspection pool is in the connection budget" "54 per elitea-main replica" \
   --set main.autoscaling.maxReplicas=4
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'

@@ -64,25 +64,29 @@ fi
 # ── 2. the arithmetic ────────────────────────────────────────────────────────
 echo "== an over-budget topology is refused, and the message shows its working =="
 if output="$(render --set main.env.ELITEA_DATABASE_MAX_CONNS=8 --set main.autoscaling.maxReplicas=10)"; then
-  fail "10 replicas x (8 + 36) = 440 connections rendered against a budget of 175"
+  fail "10 replicas x (8 + 36 + 4) = 480 connections rendered against a budget of 200"
 else
-  for fragment in "can open 440" "44 per elitea-main replica x 10 replicas" "only 175 are available"; do
+  for fragment in "can open 480" "48 per elitea-main replica x 10 replicas" "only 200 are available"; do
     if [[ "$output" != *"$fragment"* ]]; then
       fail "the refusal does not show its working — missing: $fragment"
     fi
   done
-  note "refused: 440 = 44 x 10, against 175"
+  note "refused: 480 = 48 x 10, against 200"
 fi
 
 # ── 3. the guard PERMITS a sane topology ─────────────────────────────────────
 #
 # Without this the whole script would pass against a template that refuses
 # everything, which is the failure mode a one-directional gate cannot see.
+#
+# values-standalone.yaml states a 225-connection server (200 after the 25
+# reserved), and every runtime replica also opens the four Code debug receipt
+# connections: the Code consumers are on wherever the agent runtime runs.
 echo "== a topology inside the budget renders =="
 if render --set main.env.ELITEA_DATABASE_MAX_CONNS=4 \
           --set main.autoscaling.enabled=false \
           --set main.replicaCount=1 >/dev/null; then
-  note "1 replica x (4 + 36) = 40 renders, inside 175"
+  note "1 replica x (4 + 36 + 4) = 44 renders, inside 200"
 else
   fail "the guard refuses a topology well inside the budget, so it is not a guard"
 fi
@@ -93,8 +97,8 @@ budget_render() {
   render --set "main.env.ELITEA_DATABASE_MAX_CONNS=$1" \
          --set main.autoscaling.enabled=false --set main.replicaCount=1 >/dev/null 2>&1
 }
-if budget_render 139; then note "175 renders"; else fail "175 was refused; the boundary is off by one"; fi
-if budget_render 140; then fail "176 rendered; the boundary is off by one"; else note "176 refused"; fi
+if budget_render 160; then note "200 renders"; else fail "200 was refused; the boundary is off by one"; fi
+if budget_render 161; then fail "201 rendered; the boundary is off by one"; else note "201 refused"; fi
 
 # ── 5. the runtime plane OFF does not pay for pools it does not open ─────────
 #
@@ -140,27 +144,29 @@ else
 fi
 
 echo "== a pooler pool that outgrows the server budget is refused =="
-if output="$(render "${PB[@]}" --set pgbouncer.poolSize=180 2>&1)"; then
-  fail "poolSize 180 + reserve 4 = 184 rendered against a server budget of 175"
+# The server side also carries the Code receipt pools, which bypass the
+# pooler: 4 per replica x 4 replicas = 16.
+if output="$(render "${PB[@]}" --set pgbouncer.poolSize=190 2>&1)"; then
+  fail "poolSize 190 + reserve 4 + 16 Code receipts = 210 rendered against a server budget of 200"
 else
-  for fragment in "184 server-side connections" "only 175 are available"; do
+  for fragment in "can open 210 PostgreSQL server connections" "194 PgBouncer plus 16 independent Code receipt connections" "only 200 are available"; do
     if [[ "$output" != *"$fragment"* ]]; then
       fail "the refusal does not show its working — missing: $fragment"
     fi
   done
-  note "refused: 184 = 180 + 4, against 175"
+  note "refused: 210 = 190 + 4 + 16, against 200"
 fi
 
 echo "== a replica fan-out that outgrows the pooler's client ceiling is refused =="
 if output="$(render "${PB[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=64 --set pgbouncer.maxClientConn=300 2>&1)"; then
-  fail "4 replicas x (64 + 36) = 400 client connections rendered under a maxClientConn of 300"
+  fail "4 replicas x (64 + 36 + 4) = 416 client connections rendered under a maxClientConn of 300"
 else
-  for fragment in "400 client connections" "100 per replica x 4" "pgbouncer.maxClientConn allows 300"; do
+  for fragment in "416 client connections" "104 per replica x 4" "pgbouncer.maxClientConn allows 300"; do
     if [[ "$output" != *"$fragment"* ]]; then
       fail "the refusal does not show its working — missing: $fragment"
     fi
   done
-  note "refused: 400 = 100 x 4, against 300"
+  note "refused: 416 = 104 x 4, against 300"
 fi
 
 echo "== a literal 0 reaches the validator (sprig default would mask it) =="
@@ -172,10 +178,10 @@ else
   note "refused: the validator and the ConfigMap read the same 0"
 fi
 
-# The client-side refusal must not have been the server-side one: 48 + 4 = 52
-# is inside 175, so only the client term can have fired.
+# The client-side refusal must not have been the server-side one: 48 + 4 + 16
+# = 68 is inside 200, so only the client term can have fired.
 if render "${PB[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=4 >/dev/null 2>&1; then
-  note "a pooler topology inside both budgets renders (52 server, 160 client)"
+  note "a pooler topology inside both budgets renders (68 server, 176 client)"
 else
   fail "the guard refuses a pooler topology inside both budgets, so it is not a guard"
 fi

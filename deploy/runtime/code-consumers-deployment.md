@@ -4,7 +4,8 @@ Main owns repository acquisition, scoped platform calls, and authorized debug ar
 Worker owns graph checkpoints. Supervisor owns isolated execution resources.
 Runner receives selected state and signed, bounded platform authority.
 
-These consumers remain disabled by default.
+These consumers are on by default wherever the agent runtime runs (PLAN §8.3): the standalone compose stack and the
+Helm chart with the runtime enabled. Deployment material stays configurable and is required.
 Enabling a consumer does not grant repository, credential, toolkit, or artifact access.
 Main applies the current actor, project, resource, and execution permissions.
 
@@ -18,22 +19,16 @@ Keep HTTP and deferred graph admission disabled unless their separate acceptance
 
 ## Docker Compose
 
-Add `docker-compose.code-consumers.yml` after the full standalone, Rust Worker, and sandbox overlays.
-This optional overlay enables workspace, platform, and debug consumers together.
-It introduces no additional service or public port.
+`docker-compose.standalone-full.yml` enables the owner recovery, workspace, platform, and debug consumers itself;
+no overlay is needed. It introduces no additional public port.
 
-Provide these explicit operator variables:
+`deploy/scripts/standalone-stack.sh certs` runs `deploy/scripts/code-material.py certs`, which issues Main's Code owner
+client certificate (`dns:elitea-code-owner-main`, client authentication, signed by the runtime CA) and the private
+platform content key into `deploy/certs/runtime/`. `runtime-material` installs them from there. The consumer
+configurations (owner identity and the three execution Supervisor origins, workspace policy, broker policy) are fixed
+values in the compose file.
 
-| Variable | Required value |
-| --- | --- |
-| `ELITEA_CODE_OWNER_CLIENT_CERT_FILE` | Prepared Main Code owner certificate file |
-| `ELITEA_CODE_OWNER_CLIENT_KEY_FILE` | Matching private certificate key file |
-| `ELITEA_CODE_PLATFORM_CONTENT_KEYS_FILE` | Private Main platform content key document |
-| `ELITEA_CODE_OWNER_RECOVERY_CONFIG` | Exact Main identity, Supervisor origins, and installed TLS paths |
-| `ELITEA_CODE_WORKSPACE_CONFIG` | Revision one, repository capabilities, exact egress entries, and bounded policy |
-| `ELITEA_CODE_PLATFORM_CONFIG` | Revision one, installed private content key path, and bounded broker policies |
-
-Use the filenames shown in the overlay for installed material references.
+Installed material references use the fixed paths under `/run/elitea-runtime/`.
 The debug DSN uses `/run/elitea-runtime/agent-checkpoint-connection`.
 The material installer copies private owner and broker files only into Main's volume.
 Private files use mode `0600`. The public owner certificate uses mode `0644`.

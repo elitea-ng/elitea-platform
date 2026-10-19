@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
+	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,6 +19,7 @@ func databasePoolConfig(
 	if err != nil {
 		return nil, fmt.Errorf("parse database pool configuration: %w", err)
 	}
+	infradb.WithTCPKeepAlive(&config.ConnConfig.Config)
 	raw, ok := lookup(databaseMaxConnectionsEnvironment)
 	if !ok || raw == "" {
 		return config, nil

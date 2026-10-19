@@ -21,8 +21,8 @@ Main must use the same limits.
 The limits permit 1 through 4096 calls and 1 through 67108864 total bytes.
 The example uses 32 calls and 1048576 bytes.
 These limits produce policy digest `a299856c1b28b5aee8488da91e8dd2cb33251c89b677733b63447179144d03da`.
-Set `agent_node_recovery` to `true` and configure durable checkpoint storage.
-These settings preserve the original attempt owner.
+Configure durable checkpoint storage (`agent_checkpoint_connection_path`, required for every Worker).
+Node recovery is always on, which preserves the original attempt owner.
 
 Python, JavaScript and TypeScript can share one execution listener with their pure routes.
 The example uses the same exact image, audience and execution policy for these routes.

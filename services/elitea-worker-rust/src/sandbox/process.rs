@@ -594,6 +594,25 @@ fn connect_content(
     .map_err(|_| StartupError("configure verified dependency content transport"))
 }
 
+/// The ledger connects directly to `PostgreSQL`: verified TLS, no statement
+/// logging, and the shared FU-221 server keepalive.
+fn receipt_connect_options(
+    database_url: &[u8],
+    ca_pem: Vec<u8>,
+) -> Result<PgConnectOptions, StartupError> {
+    let options: PgConnectOptions = std::str::from_utf8(database_url)
+        .map_err(|_| StartupError("parse database configuration"))?
+        .trim()
+        .parse()
+        .map_err(|_| StartupError("parse database configuration"))?;
+    Ok(crate::pg_keepalive::with_server_tcp_keepalives(
+        options
+            .ssl_mode(PgSslMode::VerifyFull)
+            .ssl_root_cert_from_pem(ca_pem)
+            .disable_statement_logging(),
+    ))
+}
+
 async fn connect_receipts(config: &Config) -> Result<sqlx::PgPool, StartupError> {
     let read = |path: &Path, limit, private, label| {
         read_regular_file(path, limit, private, label)
@@ -605,20 +624,15 @@ async fn connect_receipts(config: &Config) -> Result<sqlx::PgPool, StartupError>
         true,
         "sandbox database URL",
     )?);
-    let options: PgConnectOptions = std::str::from_utf8(&database_url)
-        .map_err(|_| StartupError("parse database configuration"))?
-        .trim()
-        .parse()
-        .map_err(|_| StartupError("parse database configuration"))?;
-    let options = options
-        .ssl_mode(PgSslMode::VerifyFull)
-        .ssl_root_cert_from_pem(read(
+    let options = receipt_connect_options(
+        &database_url,
+        read(
             &config.database_ca_path,
             1024 * 1024,
             false,
             "sandbox database CA",
-        )?)
-        .disable_statement_logging();
+        )?,
+    )?;
     let pool = PgPoolOptions::new()
         .max_connections(config.database_connections)
         .acquire_timeout(Duration::from_secs(10))
@@ -661,6 +675,21 @@ mod tests {
     use super::*;
     const EXAMPLE: &str =
         include_str!("../../../../deploy/runtime/sandbox-supervisor.example.json");
+
+    #[test]
+    fn the_receipt_ledger_asks_postgres_for_the_shared_keepalive() {
+        let options = receipt_connect_options(
+            b"postgresql://u:p@postgres:5432/db\n",
+            b"-----BEGIN CERTIFICATE-----".to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            options.get_options(),
+            Some(
+                "-c tcp_keepalives_idle=20 -c tcp_keepalives_interval=5 -c tcp_keepalives_count=3"
+            )
+        );
+    }
 
     #[test]
     fn validates_example_and_rejects_unbounded_profiles() {

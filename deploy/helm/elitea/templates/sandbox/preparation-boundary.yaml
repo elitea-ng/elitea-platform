@@ -1,12 +1,12 @@
 {{- $s := .Values.sandboxKubernetes }}
 {{- $p := $s.preparation }}
-{{- if $p.enabled }}
-{{- if or (not $s.enabled) (not $s.supervisor.enabled) }}{{ fail "Kubernetes preparation requires the consolidated sandbox supervisor" }}{{ end }}
+{{- if and $p.enabled (include "elitea.sandbox.kubernetes" .) }}
+{{- if not $s.supervisor.enabled }}{{ fail "Kubernetes preparation requires the consolidated sandbox supervisor" }}{{ end }}
 {{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $p.namespace) }}{{ fail "sandboxKubernetes.preparation.namespace must be an explicit DNS label" }}{{ end }}
 {{- if or (eq $p.namespace .Release.Namespace) (eq $p.namespace $s.executionNamespace) (hasPrefix "kube-" $p.namespace) (eq $p.namespace "default") }}{{ fail "sandboxKubernetes.preparation.namespace must be separate from platform and execution" }}{{ end }}
 {{- if or (not (regexMatch "^[0-9]+$" (toString $p.maxPods))) (lt (int $p.maxPods) 1) (gt (int $p.maxPods) 4096) }}{{ fail "sandboxKubernetes.preparation.maxPods must be between 1 and 4096" }}{{ end }}
 {{- if or (not $p.dnsNamespaceLabels) (not $p.dnsPodLabels) }}{{ fail "Kubernetes preparation requires explicit DNS namespace and Pod labels" }}{{ end }}
-{{- if or (not $p.resolverCidrs) (gt (len $p.resolverCidrs) 64) }}{{ fail "Kubernetes preparation requires one to 64 resolver CIDRs" }}{{ end }}
+{{- if or (not $p.resolverCidrs) (gt (len $p.resolverCidrs) 64) }}{{ fail "sandboxKubernetes.preparation.resolverCidrs is required: Code dependency preparation (on wherever the agent runtime runs) reaches the package registries only through one to 64 resolver CIDRs (TCP 443). Set the CIDRs of pypi.org, files.pythonhosted.org, cdn.jsdelivr.net, registry.npmjs.org, jsr.io and the crates.io index, or of your controlled egress gateway." }}{{ end }}
 {{- $cidrs := dict }}
 {{- range $p.resolverCidrs }}
 {{- if not (regexMatch "^[a-fA-F0-9.:]+/[0-9]+$" .) }}{{ fail "Kubernetes preparation resolver CIDRs must be explicit IP networks" }}{{ end }}

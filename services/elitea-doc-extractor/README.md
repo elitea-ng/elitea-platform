@@ -225,7 +225,7 @@ would fail CI there.
 * Image: `ghcr.io/elitea-ng/elitea-doc-extractor` (`Containerfile`, distroless
   `base-nossl-debian13` plus `libgcc_s`, built with `cargo auditable`;
   `docker-bake.hcl`, `publish.yml`, `ci-image-scan.yml`).
-* Compose: `deploy/docker-compose.standalone-rust-agent.yml` adds the
+* Compose: `deploy/docker-compose.standalone-full.yml` runs the
   service (2560 MiB `mem_limit`, a 64 MiB tmpfs at `/tmp`), the shared
   `standalone_doc_extractor_sock` volume and `extractor_socket` in
   `deploy/runtime/worker-runtime.rust.json`. The validate worker's document

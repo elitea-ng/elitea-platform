@@ -97,8 +97,12 @@ where
         let router = AgentDeliveryRouter::from_shared(Arc::clone(&control), Arc::clone(&retirer));
         Self {
             router,
+            // Recovery is not a setting: every processor claims with node
+            // recovery, which also routes model-checkpoint recovery (Main
+            // refuses both opt-ins on one claim). Only tests select the
+            // checkpoint-only route.
             checkpoint_recovery: false,
-            node_recovery: false,
+            node_recovery: true,
             sandbox_stop: None,
             authenticator,
             output,
@@ -114,13 +118,12 @@ where
         }
     }
 
-    pub(super) fn with_node_recovery(mut self, enabled: bool) -> Self {
-        self.node_recovery = enabled;
-        self
-    }
-
-    pub(super) fn with_checkpoint_recovery(mut self, enabled: bool) -> Self {
-        self.checkpoint_recovery = enabled;
+    /// Test-only: the model-checkpoint-only claim route production no
+    /// longer uses (its delivery machinery is shared with node recovery).
+    #[cfg(test)]
+    pub(super) fn with_checkpoint_only_recovery(mut self) -> Self {
+        self.node_recovery = false;
+        self.checkpoint_recovery = true;
         self
     }
 
@@ -177,8 +180,8 @@ where
         }
     }
 
-    /// Opt-in delivery composition. Bootstrap remains on the ordinary route
-    /// until restored browser output and deployed recovery acceptance pass.
+    /// Model-checkpoint-only claim route; production claims through
+    /// [`Self::process_node_recovery_verified`] instead.
     pub(super) async fn process_checkpoint_verified(
         &self,
         delivery: CommandDelivery,

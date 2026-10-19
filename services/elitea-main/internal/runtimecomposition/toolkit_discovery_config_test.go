@@ -20,6 +20,7 @@ func TestDiscoveryActivationDefaultsClosedAndRequiresRuntime(t *testing.T) {
 		t.Fatal("discovery enabled with index dispatch only")
 	}
 	env["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
+	withCodeOwnerRecovery(env)
 	env["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	config, err = ConfigFromEnv(mapLookup(env))
 	if err != nil || !config.ToolkitDiscoveryEnabled {

@@ -10,6 +10,7 @@ import (
 func TestStandaloneRustToolkitsUseAgentRuntimeWithoutIndexing(t *testing.T) {
 	env := validEnvironment()
 	env["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
+	withCodeOwnerRecovery(env)
 	env["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
 	env["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	env["ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED"] = "true"

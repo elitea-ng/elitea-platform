@@ -22,7 +22,7 @@ CHART="deploy/helm/elitea"
 # `if .Values.worker.enabled`. Turning it on here is not incidental: without
 # it every assertion below passes against a guard that never runs, which is
 # how this file read green while measuring nothing during development.
-BASE=(-f "$CHART/values-standalone.yaml"
+BASE=(-f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
       --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)

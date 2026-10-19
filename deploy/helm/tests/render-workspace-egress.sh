@@ -8,10 +8,13 @@ cd "$(dirname "$0")/../../.."
 chart=deploy/helm/elitea
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-base=(-f "$chart/values-standalone.yaml" --namespace platform
+base=(-f "$chart/values-standalone.yaml" -f "$chart/../tests/fixtures/code-material-values.yaml" --namespace platform
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-  --set sandboxKubernetes.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
+  --set sandboxKubernetes.enabled=true --set sandboxKubernetes.executionNamespace=code-execution
+  # The Code sandbox renders wherever the agent runtime runs (the worker on).
+  --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false
+  --set-string main.runtime.indexIngestDispatch.commandStream=)
 on=(--set sandboxKubernetes.workspaceRuns.enabled=true
   --set sandboxKubernetes.workspaceRuns.egress.enabled=true
   --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.244.0.0/16'
@@ -65,9 +68,19 @@ grep -Fq 'podCidrs and serviceCidrs' "$work/invalid"
 # The worker's workspace runs (ADR-0034): written to runtime.json for the Rust
 # worker, with the audience Main signs grants for; refused otherwise.
 cat > "$work/runs.yaml" <<'YAML'
+# The workspace audience first, then the seven Code audiences the agent
+# runtime grants by default (the explicit list replaces them).
 main:
   runtime:
-    sandboxAudiences: [dns:elitea-sandbox-workspace]
+    sandboxAudiences:
+      - dns:elitea-sandbox-workspace
+      - dns:elitea-sandbox-deno
+      - dns:elitea-sandbox-rust
+      - dns:elitea-sandbox-deno-native
+      - dns:elitea-sandbox-preparation
+      - dns:elitea-sandbox-javascript-preparation
+      - dns:elitea-sandbox-typescript-preparation
+      - dns:elitea-sandbox-rust-preparation
 worker:
   enabled: true
   implementation: rust
@@ -81,7 +94,7 @@ worker:
       max_disk_bytes: 10737418240
       turn_wall_seconds: 3600
 YAML
-worker=(-f "$chart/values-standalone.yaml" -f "$work/runs.yaml"
+worker=(-f "$chart/values-standalone.yaml" -f "$chart/../tests/fixtures/code-material-values.yaml" -f "$work/runs.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
   --set vector.enabled=true --set main.autoscaling.maxReplicas=3 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key)
@@ -96,7 +109,7 @@ assert runs == {'target': 'elitea-sandbox-workspace:9470', 'audience': 'dns:elit
                 'turn_wall_seconds': 3600}, runs
 PY
 # Absent by default.
-helm template test "$chart" -f "$chart/values-standalone.yaml" \
+helm template test "$chart" -f "$chart/values-standalone.yaml" -f "$chart/../tests/fixtures/code-material-values.yaml" \
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1 \
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
   --set worker.enabled=true --set worker.implementation=rust --set vector.enabled=true --set main.autoscaling.maxReplicas=3 --set vector.qdrant.apiKeySecret.name=elitea-qdrant-api-key \

@@ -42,7 +42,6 @@
       "lease_poll_interval_millis": 10000,
       "shutdown_timeout_millis": 30000
     },
-    "agent_node_recovery": true,
     "sandbox_runtimes": [
       {
         "language": "python",

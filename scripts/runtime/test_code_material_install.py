@@ -18,8 +18,7 @@ BASE_FILES = (
     "platform-edge.crt platform-edge.key"
 ).split()
 CODE_FILES = ("code-owner-client.crt", "code-owner-client.key", "code-platform-content-keys.json")
-ENABLED = {"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "true",
-           "ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "true",
+ENABLED = {"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "true",
            "ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED": "true"}
 
 
@@ -50,7 +49,7 @@ class InstallerTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10, check=False)
         return root, result
 
-    def test_default_off_requires_no_code_material(self):
+    def test_without_code_material_nothing_code_is_installed(self):
         def remove(source):
             for name in CODE_FILES:
                 (source / name).unlink()
@@ -74,12 +73,27 @@ class InstallerTests(unittest.TestCase):
             for name in CODE_FILES:
                 self.assertFalse((root / "dst" / consumer / name).exists())
 
-    def test_invalid_flags_or_missing_owner_fail_before_any_copy(self):
-        for flags in ({"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "true"},
-                      {"ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED": "true"},
-                      {"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "yes"}):
-            with self.subTest(flags=flags):
-                root, result = self.run_install(flags)
+    def test_owner_identity_has_no_switch_and_is_installed_when_present(self):
+        root, result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in CODE_FILES[:2]:
+            self.assertTrue((root / "dst/main" / name).exists(), name)
+
+    def test_removed_flag_invalid_flags_or_missing_owner_fail_before_any_copy(self):
+        def remove_owner(source):
+            for name in CODE_FILES[:2]:
+                (source / name).unlink()
+        def remove_owner_key(source):
+            (source / CODE_FILES[1]).unlink()
+        cases = [({"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "true"}, None),
+                 ({"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "false"}, None),
+                 ({"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "yes"}, None),
+                 ({"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "true"}, remove_owner),
+                 ({"ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED": "true"}, remove_owner),
+                 ({}, remove_owner_key)]
+        for flags, change in cases:
+            with self.subTest(flags=flags, change=getattr(change, "__name__", None)):
+                root, result = self.run_install(flags, change)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((root / "dst").exists())
 

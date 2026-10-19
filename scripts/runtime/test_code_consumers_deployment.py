@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Check Code consumer packaging without services, secrets, or runtime admission."""
+"""Check Code consumer packaging without services, secrets, or runtime admission.
+
+The Code consumers are ON wherever the agent runtime runs (PLAN §8.3): with
+main.runtime.enabled and agentExecutionDispatch.enabled the chart composes
+owner recovery, the workspace, the platform broker and debug artifacts with the
+canonical configuration, exactly as the standalone compose stack does. Explicit
+settings override the canonical ones and keep every typed bound.
+"""
 import copy
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,7 +27,7 @@ POLICY = {"revision": 1, "max_files": 1024, "max_file_bytes": 1048576,
           "max_acquisition_seconds": 300}
 BROKER = {"revision": 1, "max_calls": 32, "max_total_bytes": 1048576}
 CODE = {"sandboxAudiences": ["dns:elitea-sandbox-deno", "dns:elitea-sandbox-rust"],
-        "codeOwnerRecovery": {"enabled": True, "mainWorkloadIdentity": "dns:elitea-main",
+        "codeOwnerRecovery": {"mainWorkloadIdentity": "dns:elitea-main",
                               "supervisors": [
                                   {"audience": "dns:elitea-sandbox-deno", "httpsOrigin": "https://elitea-sandbox-deno:9446"},
                                   {"audience": "dns:elitea-sandbox-rust", "httpsOrigin": "https://elitea-sandbox-rust:9447"}]},
@@ -53,60 +59,95 @@ def code_environment(output):
             if name.startswith(PREFIXES) or name == DEBUG_DSN}
 
 
+CANONICAL_AUDIENCES = ",".join("dns:elitea-sandbox-" + name for name in (
+    "deno", "rust", "deno-native", "preparation", "javascript-preparation",
+    "typescript-preparation", "rust-preparation"))
+CANONICAL_SUPERVISORS = [
+    {"audience": "dns:elitea-sandbox-deno", "https_origin": "https://elitea-sandbox-deno:9446"},
+    {"audience": "dns:elitea-sandbox-deno-native", "https_origin": "https://elitea-sandbox-deno-native:9450"},
+    {"audience": "dns:elitea-sandbox-rust", "https_origin": "https://elitea-sandbox-rust:9447"}]
+
+
+def main_environment(output):
+    candidates = [doc["data"] for doc in yaml.safe_load_all(output)
+                  if doc and doc.get("kind") == "ConfigMap"
+                  and "ELITEA_RUNTIME_ENABLED" in doc.get("data", {})]
+    if len(candidates) != 1:
+        raise AssertionError("Expected exactly one Main runtime configuration")
+    return candidates[0]
+
+
 class PackagingTests(unittest.TestCase):
-    def assert_private_material_mounts(self, authored, normalized):
-        targets = {"/src/code-owner-client.crt", "/src/code-owner-client.key",
-                   "/src/code-platform-content-keys.json"}
-        for mounts in (authored, normalized):
-            self.assertEqual(len(mounts), len(targets))
-            self.assertEqual({mount["target"] for mount in mounts}, targets)
-            for mount in mounts:
-                self.assertEqual(mount["type"], "bind")
-                self.assertIs(mount["read_only"], True)
-        for mount in authored:
-            self.assertIs(mount.get("bind", {}).get("create_host_path"), False,
-                          "Private material must explicitly disable host-path creation")
-        for mount in normalized:
-            # Compose versions can omit false-valued fields from normalized JSON.
-            # The authored safeguard above must remain explicit.
-            self.assertIs(mount.get("bind", {}).get("create_host_path", False), False)
-
-    def test_private_material_mount_normalization_preserves_host_path_guard(self):
-        overlay = yaml.safe_load((ROOT / "deploy/docker-compose.code-consumers.yml").read_text())
-        authored = overlay["services"]["runtime-material"]["volumes"]
-        self.assert_private_material_mounts(authored, authored)
-        for omitted in ("create_host_path", "bind"):
-            normalized = copy.deepcopy(authored)
-            for mount in normalized:
-                if omitted == "bind":
-                    mount.pop("bind")
-                else:
-                    mount["bind"].pop("create_host_path")
-            with self.subTest(normalized_omits=omitted):
-                self.assert_private_material_mounts(authored, normalized)
-        for value in (None, True):
-            unsafe = copy.deepcopy(authored)
-            if value is None:
-                unsafe[0]["bind"].pop("create_host_path")
-            else:
-                unsafe[0]["bind"]["create_host_path"] = value
-            with self.subTest(authored_create_host_path=value), self.assertRaises(AssertionError):
-                self.assert_private_material_mounts(unsafe, authored)
-        unsafe = copy.deepcopy(authored)
-        unsafe[0]["bind"]["create_host_path"] = True
-        with self.assertRaises(AssertionError):
-            self.assert_private_material_mounts(authored, unsafe)
-
-    def test_default_chart_does_not_enable_code_consumers(self):
+    def test_default_chart_enables_code_consumers_with_canonical_configuration(self):
+        # values-standalone.yaml runs the agent runtime (no worker): no Code
+        # value at all, and every consumer is on with the canonical setting.
         result = render({})
         self.assertEqual(result.returncode, 0, result.stderr)
+        env = code_environment(result.stdout)
+        # Owner recovery has no enable variable (PLAN §8.7 X1; Main refuses it).
+        self.assertEqual(len(env), 7)
+        self.assertNotIn("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED", env)
+        for name, value in env.items():
+            if name.endswith("_ENABLED"):
+                self.assertEqual(value, "true", name)
+        owner = json.loads(env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"])
+        self.assertEqual(owner, {"main_workload_identity": "dns:elitea-code-owner-main",
+                                 "certificate_chain_path": "/run/elitea-runtime/code-owner-client.crt",
+                                 "private_key_path": "/run/elitea-runtime/code-owner-client.key",
+                                 "server_ca_path": "/run/elitea-runtime/runtime-ca.crt",
+                                 "supervisors": CANONICAL_SUPERVISORS})
+        self.assertEqual(json.loads(env["ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG"]),
+                         {"revision": 1, "repository_capabilities": ["github"],
+                          "egress_allowlist": ["api.github.com:443"], "policy": POLICY})
+        self.assertEqual(json.loads(env["ELITEA_RUNTIME_CODE_PLATFORM_CONFIG"]),
+                         {"revision": 1, "content_keys_file": "/run/elitea-runtime/code-platform-content-keys.json",
+                          "broker_policies": [BROKER]})
+        self.assertEqual(env[DEBUG_DSN], "/run/elitea-runtime/agent-checkpoint-connection")
+        self.assertEqual(main_environment(result.stdout)["ELITEA_RUNTIME_SANDBOX_AUDIENCES"], CANONICAL_AUDIENCES)
+
+    def test_default_chart_matches_the_standalone_compose_stack(self):
+        # One configuration, two deployment paths: the chart's defaults and the
+        # standalone compose stack's elitea-main environment must agree.
+        result = render({})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        chart = main_environment(result.stdout)
+        compose = yaml.safe_load((ROOT / "deploy/docker-compose.standalone-full.yml").read_text())
+        compose_env = compose["services"]["elitea-main"]["environment"]
+        names = [name for name in chart if name.startswith(PREFIXES) or name == DEBUG_DSN]
+        names.append("ELITEA_RUNTIME_SANDBOX_AUDIENCES")
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(name, compose_env)
+                if name.endswith("_CONFIG"):
+                    self.assertEqual(json.loads(chart[name]), json.loads(compose_env[name]))
+                else:
+                    self.assertEqual(chart[name], str(compose_env[name]))
+
+    def test_owner_recovery_enable_bit_was_removed(self):
+        for value in (True, False, "true"):
+            with self.subTest(value=value):
+                result = render({"main": {"runtime": {"codeOwnerRecovery": {"enabled": value}}}})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("main.runtime.codeOwnerRecovery.enabled was removed: "
+                              "Code owner recovery is always on with Agent dispatch", result.stderr)
+
+    def test_without_agent_dispatch_code_consumers_stay_off_and_settings_are_refused(self):
+        off = {"main": {"runtime": {"agentExecutionDispatch": {"enabled": False, "commandStream": ""},
+                                    "indexIngestDispatch": {"enabled": False, "commandStream": ""}}}}
+        result = render(off)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(code_environment(result.stdout), {})
+        explicit = copy.deepcopy(off)
+        explicit["main"]["runtime"]["codeOwnerRecovery"] = CODE["codeOwnerRecovery"]
+        result = render(explicit)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("apply only where the agent runtime runs", result.stderr)
 
     def test_enabled_chart_uses_typed_policy_and_one_material_directory(self):
         result = render({"main": {"runtime": CODE}})
         self.assertEqual(result.returncode, 0, result.stderr)
         env = code_environment(result.stdout)
-        self.assertEqual(len(env), 8)
+        self.assertEqual(len(env), 7)
         owner = json.loads(env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"])
         self.assertEqual(owner, {"main_workload_identity": "dns:elitea-main",
                                 "certificate_chain_path": "/run/elitea-runtime/code-owner-client.crt",
@@ -135,8 +176,8 @@ class PackagingTests(unittest.TestCase):
             target[path[-1]] = value
             cases.append({"main": {"runtime": config}})
         altered(["enabled"], False)
-        altered(["codeOwnerRecovery", "enabled"], False)
-        altered(["codeOwnerRecovery", "enabled"], "true")
+        # An explicit audience list without the default owner supervisors' audiences.
+        cases.append({"main": {"runtime": {"sandboxAudiences": ["dns:elitea-sandbox-deno"]}}})
         altered(["codeOwnerRecovery", "supervisors", 0, "httpsOrigin"], "http://elitea-sandbox-deno:9446")
         altered(["codeOwnerRecovery", "supervisors", 0, "audience"], "dns:unselected")
         altered(["codeWorkspace", "enabled"], False)
@@ -188,31 +229,6 @@ class PackagingTests(unittest.TestCase):
                          "worker": {"enabled": False},
                          "sandboxKubernetes": {"supervisor": {"enabled": False}}})
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_compose_contract_matches_chart_and_keeps_material_in_main(self):
-        rendered = render({"main": {"runtime": CODE}})
-        self.assertEqual(rendered.returncode, 0, rendered.stderr)
-        expected = code_environment(rendered.stdout)
-        values = {"ELITEA_CODE_OWNER_RECOVERY_CONFIG": expected["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"],
-                  "ELITEA_CODE_WORKSPACE_CONFIG": expected["ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG"],
-                  "ELITEA_CODE_PLATFORM_CONFIG": expected["ELITEA_RUNTIME_CODE_PLATFORM_CONFIG"],
-                  "ELITEA_CODE_OWNER_CLIENT_CERT_FILE": "/tmp/code-owner-client.crt",
-                  "ELITEA_CODE_OWNER_CLIENT_KEY_FILE": "/tmp/code-owner-client.key",
-                  "ELITEA_CODE_PLATFORM_CONTENT_KEYS_FILE": "/tmp/code-platform-content-keys.json"}
-        result = subprocess.run(
-            ["docker", "compose", "--env-file", "/dev/null", "-f", "deploy/docker-compose.code-consumers.yml",
-             "config", "--no-consistency", "--format", "json"],
-            cwd=ROOT, env={"PATH": os.environ["PATH"], "COMPOSE_DISABLE_ENV_FILE": "1", **values},
-            capture_output=True, text=True, timeout=30, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        services = json.loads(result.stdout)["services"]
-        self.assertEqual(set(services), {"runtime-material", "elitea-main"})
-        self.assertEqual(services["elitea-main"]["environment"], expected)
-        material = services["runtime-material"]
-        overlay = yaml.safe_load((ROOT / "deploy/docker-compose.code-consumers.yml").read_text())
-        authored = overlay["services"]["runtime-material"]["volumes"]
-        self.assert_private_material_mounts(authored, material["volumes"])
-        self.assertNotIn("ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED", material["environment"])
 
 
 if __name__ == "__main__":

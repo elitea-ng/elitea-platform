@@ -19,7 +19,7 @@ dispatched twice**.
 | Tool returns an error | The pipeline stops with the typed `pipeline.tool_failed` error, as for read-only tools. The attempt is recorded as an uncertain effect and is never re-dispatched. |
 | Tool ran but its result could not be journaled (lease lost, result over the 1 MiB journal cap) | Typed `pipeline.tool_failed`, saying "The tool completed, but its result could not be recorded. It will not run again." No re-dispatch. |
 | Worker dies during the call | The node does not call the tool again. Run recovery refuses a direct-tool frontier, and a re-entered attempt returns the recovery card. |
-| No fenced node writer (`agent_node_recovery` off) | Effectful tools are refused before any pause or call. Read-only tools run as before. |
+| No fenced node writer (no node recovery authority, e.g. a test runtime) | Effectful tools are refused before any pause or call. Read-only tools run as before. Production Workers always run node recovery. |
 
 ## Current platform behaviour (reference only)
 
@@ -66,13 +66,9 @@ What we deliberately do not port:
    differs between pause and resume, so the pause and the approved dispatch are different
    activations.
 6. **Configuration.**
-   - `agent_node_recovery: true` is set in `deploy/runtime/worker-runtime.rust.json`, which the Rust compose
-     overlay mounts. The shared `worker-runtime.json` stays without it because the Python worker rejects unknown
-     keys. The NATS-secure compose profile does not enable it.
-   - Helm has a `worker.runtime.agentNodeRecovery` toggle for Rust installs. It defaults to false: under a
-     node-recovery claim Main also grants model checkpoint inspection, so the toggle opens recovery on Kubernetes,
-     which stays closed until the pod-replacement proofs pass (`recovery-guarantees.md`, D1). A non-boolean value
-     and `true` with the Python worker fail the render (`deploy/helm/tests/render-worker-node-recovery.sh`).
+   - Node recovery is not a setting: every Worker runs it and needs `agent_checkpoint_connection_path`. The former
+     `agent_node_recovery` key and Helm's `worker.runtime.agentNodeRecovery` toggle were removed (defaults PR,
+     2026-10-19); a file that still names the key is refused at startup (`recovery-guarantees.md`, D1).
 
 ## Recovery guarantees
 

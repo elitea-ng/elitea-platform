@@ -45,17 +45,12 @@ NS=(--namespace elitea)
 # elitea-main. Renders that exercise other things state it; the guard section
 # below renders without it.
 NOEXT=(--set networkPolicies.main.noExternalIngress=true)
-STANDALONE=(-f "$CHART/values-standalone.yaml")
+STANDALONE=(-f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml")
 WORKER=(--set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
-SUPERVISOR=(--set sandboxKubernetes.enabled=true
-  --set sandboxKubernetes.executionNamespace=code-execution
-  --set sandboxKubernetes.supervisor.enabled=true
-  --set sandboxKubernetes.supervisor.materialSecret=sandbox-material
-  --set 'sandboxKubernetes.supervisor.profiles[0].file=deno.json'
-  --set 'sandboxKubernetes.supervisor.profiles[0].port=9446'
-  --set 'sandboxKubernetes.supervisor.profiles[1].file=rust.json'
-  --set 'sandboxKubernetes.supervisor.profiles[1].port=9447'
-  --set sandboxKubernetes.supervisor.image=registry/supervisor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+# The Code sandbox supervisor is not a separate opt-in: it renders with the
+# worker wherever the agent runtime runs (PLAN §8.3), its material from
+# fixtures/code-material-values.yaml, which STANDALONE carries. So every
+# render with WORKER below has the supervisor too.
 DEEPWIKI=(--set deepwiki.enabled=true
   --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com
   --set main.fileConfig.deepwikiClientMaterial.enabled=true
@@ -198,6 +193,14 @@ if main:
     # runtime listeners: exactly the ports the Deployment declares, worker only
     ctr = deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0]["ports"]
     rt = sorted(p["containerPort"] for p in ctr if p["name"].startswith("runtime-"))
+    # The sandbox supervisor reaches the content listener alone (Code
+    # dependency content), in its own rule.
+    content = [p["containerPort"] for p in ctr if p["name"] == "runtime-content"]
+    sup_rule = by.pop((content[0],), None) if (sup and content) else None
+    if sup and worker:
+        check(sup_rule is not None, "main: no content-listener rule for the sandbox supervisor")
+        if sup_rule:
+            check(peer_targets(sup_rule, "main:content") == [SUP], "main: the content-listener rule must admit the supervisor only")
     rts = [k for k in by if k != (8080,)]
     if rt and worker:
         check(rts == [tuple(rt)], f"main: runtime rule ports {rts}, want {[tuple(rt)]}")
@@ -205,7 +208,7 @@ if main:
             check(peer_targets(by[rts[0]], "main:runtime") == [WORKER], "main: runtime listeners must admit the worker only")
     else:
         check(not rts, f"main: unexpected rules for ports {rts} (runtime={rt}, worker={worker})")
-    check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else [])), "main: ports admitted are not exactly 8080 + runtime")
+    check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else [])), "main: ports admitted are not exactly 8080 + runtime (+ the supervisor's content rule)")
 
 # ── platform edge ────────────────────────────────────────────────────────────
 ep = policies.get("elitea-platform-edge-netpol")
@@ -304,7 +307,8 @@ if sp:
     spec = sp["spec"]
     check(spec["policyTypes"] == ["Ingress"], "supervisor: policyTypes must be Ingress only")
     by = rules_by_ports(spec["ingress"], "supervisor")
-    check(list(by) == [(9446, 9447)], f"supervisor: ports {list(by)}, want the profile ports")
+    want_ports = tuple(sorted(p["containerPort"] for p in deployments["elitea-sandbox-supervisor"]["spec"]["template"]["spec"]["containers"][0]["ports"]))
+    check(list(by) == [want_ports] and len(want_ports) == 7, f"supervisor: ports {list(by)}, want the seven profile ports {want_ports}")
     if by:
         got = peer_targets(next(iter(by.values())), "supervisor")
         check(got == sorted([WORKER, MAIN]), f"supervisor admits {got}, want worker + main")
@@ -333,9 +337,9 @@ run staging      0 0 0 none 0 -- -f "$CHART/values-staging.yaml"
 # values-kind.yaml runs DeepWiki with its callback on elitea-main:8080.
 run kind         0 0 0 direct 0 -- -f "$REPO/deploy/kind/values-kind.yaml"
 echo "== composed installs =="
-run worker-edge  1 1 0 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
-run full         1 1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
-run full-via-edge 1 1 1 edge 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
+run worker-edge  1 1 1 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
+run full         1 1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
+run full-via-edge 1 1 1 edge 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
 # The platform gRPC service: declared, configured, exposed and admitted together.
 EXPECT_GRPC=0 run deepwiki-no-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}"
 EXPECT_GRPC=1 run deepwiki-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}'
@@ -374,7 +378,7 @@ refuses "inventory platform gRPC clients without mutual TLS" "inventory.platform
   "${STANDALONE[@]}" "${NOEXT[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.mtls.enabled=false
 refuses "enabled=false without externallyManaged" "networkPolicies.externallyManaged" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.enabled=false
-if render off-managed "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" --set networkPolicies.enabled=false --set networkPolicies.externallyManaged=true; then
+if render off-managed "${STANDALONE[@]}" "${WORKER[@]}" --set networkPolicies.enabled=false --set networkPolicies.externallyManaged=true; then
   n="$(count_policies "$WORK/off-managed.yaml")"
   [ "$n" = "0" ] && pass "enabled=false + externallyManaged=true renders no chart-owned policies" || fail "enabled=false rendered $n policies"
 fi
@@ -410,7 +414,7 @@ refuses "gateway-api ingress without ingressFrom" "main.ingress.enabled=true wit
 refuses "plain ingress without ingressFrom"       "main.ingress.enabled=true with networkPolicies.enabled=true needs networkPolicies.main.ingressFrom" "${STANDALONE[@]}" "${PLAIN[@]}" "${EXTRA[@]}"
 for variant in gwapi plain none; do
   case "$variant" in gwapi) args=("${GWAPI[@]}");; plain) args=("${PLAIN[@]}");; none) args=();; esac
-  if render "ingress-$variant" "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" ${args[@]+"${args[@]}"} -f "$WORK/peers.yaml"; then
+  if render "ingress-$variant" "${STANDALONE[@]}" "${WORKER[@]}" ${args[@]+"${args[@]}"} -f "$WORK/peers.yaml"; then
     if out="$(python3 - "$WORK/ingress-$variant.yaml" <<'PY' 2>&1
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]

@@ -1,4 +1,4 @@
-{{- if .Values.sandboxKubernetes.enabled }}
+{{- if include "elitea.sandbox.kubernetes" . }}
 {{- $s := .Values.sandboxKubernetes }}
 {{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $s.executionNamespace) }}
 {{- fail "sandboxKubernetes.executionNamespace must be an explicit DNS label" }}

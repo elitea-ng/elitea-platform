@@ -35,6 +35,16 @@ const RUNTIME_GRPC_REQUEST_BYTES: usize = 64 * 1024;
 const RUNTIME_GRPC_RESPONSE_BYTES: usize = 80 * 1024;
 const MAX_LEASE_POLL_INTERVAL_MILLIS: u64 = 10_000;
 
+/// Readable startup refusal of a worker without `AgentState` storage.
+pub(crate) const CHECKPOINT_STORAGE_REQUIRED: &str = "agent_checkpoint_connection_path is required: \
+     agent node and model-checkpoint recovery are always on";
+
+/// Deploy keys that used to switch recovery off. A file still naming one is
+/// refused (`deny_unknown_fields`) with [`RECOVERY_KEYS_REMOVED`].
+const REMOVED_RECOVERY_KEYS: [&str; 2] = ["agent_node_recovery", "agent_model_checkpoint_recovery"];
+pub(crate) const RECOVERY_KEYS_REMOVED: &str = "agent_node_recovery and \
+     agent_model_checkpoint_recovery were removed: recovery is always on";
+
 /// Stable, data-free deployment configuration failure.
 #[derive(Debug)]
 pub enum RuntimeConfigError {
@@ -139,11 +149,12 @@ pub struct RuntimeDeployConfig {
     pub ed25519_keyring_path: PathBuf,
     pub spool_root: PathBuf,
     pub spool_key_path: PathBuf,
+    /// The `AgentState` `PostgreSQL` connection file. Required: node recovery and
+    /// model-checkpoint recovery are always on (they are not settings), so
+    /// every worker needs durable checkpoint storage. `Option` only so that an
+    /// absent value is refused by [`RuntimeDeployConfig::validate`] with a
+    /// readable reason instead of a generic parse failure.
     pub agent_checkpoint_connection_path: Option<PathBuf>,
-    #[serde(default)]
-    pub agent_model_checkpoint_recovery: bool,
-    #[serde(default)]
-    pub agent_node_recovery: bool,
     #[serde(default)]
     pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
     /// The cloud executor (ADR-0034 decision 9): the sandbox supervisor's
@@ -442,9 +453,6 @@ impl RuntimeDeployConfig {
             .map_err(|_| invalid_config())?;
             profile.validate_preparation()?;
             if let Some(platform) = &profile.platform_client {
-                if !self.agent_node_recovery || self.agent_checkpoint_connection_path.is_none() {
-                    return Err(invalid_config());
-                }
                 platform.validate(profile)?;
             }
             if let Some(compiled) = &profile.compiled_snapshot {
@@ -502,14 +510,12 @@ impl RuntimeDeployConfig {
         ] {
             require_absolute_path(path)?;
         }
-        if let Some(path) = &self.agent_checkpoint_connection_path {
-            require_absolute_path(path)?;
-        }
-        if (self.agent_model_checkpoint_recovery || self.agent_node_recovery)
-            && self.agent_checkpoint_connection_path.is_none()
-        {
-            return Err(invalid_config());
-        }
+        let Some(checkpoint_storage) = &self.agent_checkpoint_connection_path else {
+            return Err(RuntimeConfigError::InvalidConfiguration(
+                CHECKPOINT_STORAGE_REQUIRED,
+            ));
+        };
+        require_absolute_path(checkpoint_storage)?;
         self.limits.validate()?;
         Ok(self)
     }
@@ -634,8 +640,21 @@ pub fn load_deploy_config(path: &Path) -> Result<RuntimeDeployConfig, RuntimeCon
         "runtime deployment configuration",
     )?;
     serde_json::from_slice::<RuntimeDeployConfig>(&raw)
-        .map_err(|_| invalid_config())?
+        .map_err(|error| deploy_parse_error(&error))?
         .validate()
+}
+
+/// The removed recovery keys get a readable refusal; any other parse failure
+/// stays the generic, data-free one.
+fn deploy_parse_error(error: &serde_json::Error) -> RuntimeConfigError {
+    let message = error.to_string();
+    if REMOVED_RECOVERY_KEYS
+        .iter()
+        .any(|key| message.starts_with(&format!("unknown field `{key}`")))
+    {
+        return RuntimeConfigError::InvalidConfiguration(RECOVERY_KEYS_REMOVED);
+    }
+    invalid_config()
 }
 
 /// Read one regular file under an explicit permission and size policy.
@@ -909,35 +928,49 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_recovery_requires_explicit_opt_in_and_durable_storage() {
+    fn recovery_is_not_a_setting_and_a_file_naming_a_removed_key_is_refused() {
         let root = tempdir().expect("root");
-        let mut value = config(root.path());
-        let loaded: super::RuntimeDeployConfig =
-            serde_json::from_value(value.clone()).expect("config");
-        assert!(!loaded.agent_model_checkpoint_recovery);
-        value["agent_model_checkpoint_recovery"] = json!(true);
-        let loaded: super::RuntimeDeployConfig =
-            serde_json::from_value(value.clone()).expect("opt-in");
-        assert!(loaded.validate().is_ok());
-        value["agent_checkpoint_connection_path"] = Value::Null;
-        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
-        assert!(loaded.validate().is_err());
+        let root_path = root.path().canonicalize().expect("canonical root");
+        let base = config(&root_path);
+        let path = root_path.join("runtime.json");
+        write_config(&path, &base);
+        assert!(load_deploy_config(&path).is_ok(), "the base file loads");
+        for key in ["agent_model_checkpoint_recovery", "agent_node_recovery"] {
+            for value in [json!(true), json!(false)] {
+                let mut stale = base.clone();
+                stale[key] = value;
+                assert!(
+                    serde_json::from_value::<super::RuntimeDeployConfig>(stale.clone()).is_err(),
+                    "{key} must be refused, recovery is always on"
+                );
+                write_config(&path, &stale);
+                let Err(RuntimeConfigError::InvalidConfiguration(reason)) =
+                    load_deploy_config(&path)
+                else {
+                    panic!("{key} must be a startup refusal");
+                };
+                assert_eq!(reason, super::RECOVERY_KEYS_REMOVED);
+            }
+        }
     }
 
     #[test]
-    fn node_recovery_requires_explicit_opt_in_and_durable_storage() {
+    fn every_worker_requires_durable_agent_checkpoint_storage() {
         let root = tempdir().expect("root");
         let mut value = config(root.path());
-        let loaded: super::RuntimeDeployConfig =
-            serde_json::from_value(value.clone()).expect("config");
-        assert!(!loaded.agent_node_recovery);
-        value["agent_node_recovery"] = json!(true);
-        let loaded: super::RuntimeDeployConfig =
-            serde_json::from_value(value.clone()).expect("opt-in");
-        assert!(loaded.validate().is_ok());
         value["agent_checkpoint_connection_path"] = Value::Null;
-        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
-        assert!(loaded.validate().is_err());
+        let absent = value.clone();
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("agent_checkpoint_connection_path");
+        for input in [absent, value] {
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(input).expect("parsed");
+            let Err(RuntimeConfigError::InvalidConfiguration(reason)) = loaded.validate() else {
+                panic!("a worker without checkpoint storage must be refused");
+            };
+            assert_eq!(reason, super::CHECKPOINT_STORAGE_REQUIRED);
+        }
     }
 
     #[test]

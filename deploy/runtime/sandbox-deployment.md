@@ -1,26 +1,26 @@
 # Docker sandbox deployment
 
-Apply `docker-compose.sandbox.yml` after the full standalone and Rust-agent overlays.
-This adds one supervisor process with Deno and Rust runtime profiles. Each profile admits one fixed runtime image and policy.
+The default standalone stack (`docker-compose.standalone-full.yml`) runs the sandbox supervisor: one process with
+seven profiles (Python on Deno, JavaScript and TypeScript on native Deno, Rust, and one dependency preparation profile
+per language; see [dependency preparation](sandbox-preparation-deployment.md)). No overlay is needed (PLAN §8.3).
+Each profile admits one fixed runtime image and policy.
 The worker never mounts the Docker socket. Sandbox containers receive neither the socket nor supervisor trust material.
-
-Add the optional [Python preparation overlay](sandbox-preparation-deployment.md) for a third supervisor listener and verified shared-content delivery.
-That overlay requires separate client certificates, private staging, and an operator-provisioned resolver network.
 
 Use `--build-arg CARGO_BUILD_JOBS=1` when building the supervisor on a memory-constrained shared host.
 This optional setting bounds build concurrency. It does not change supervisor or sandbox runtime limits.
 Reserve memory for the running rehearsal services before starting a release build.
 
-Set these deployment inputs:
+`deploy/scripts/code-material.py` (run by `standalone-stack.sh certs` and `up`) prepares the material and every
+profile's `config.json` under `deploy/certs/code/` (or `ELITEA_CODE_MATERIAL_DIR`), bound to the runner images' ids;
+`sandbox-material` installs them into the supervisor's volume. The remaining inputs have defaults:
 
-| Variable | Required value |
+| Variable | Default |
 | --- | --- |
-| `ELITEA_SANDBOX_SUPERVISOR_IMAGE` | Built supervisor image, preferably pinned by digest |
-| `ELITEA_SANDBOX_DOCKER_SOCKET` | Host Docker socket path |
-| `ELITEA_SANDBOX_DOCKER_GID` | Socket group accessible to supervisor UID 10001 |
-| `ELITEA_SANDBOX_DENO_MATERIAL` | Prepared Deno supervisor material directory |
-| `ELITEA_SANDBOX_RUST_MATERIAL` | Prepared Rust supervisor material directory |
-| `ELITEA_SANDBOX_WORKER_CONFIG` | Existing worker configuration with four sandbox runtime profiles |
+| `ELITEA_SANDBOX_DOCKER_SOCKET` | `/var/run/docker.sock` |
+| `ELITEA_SANDBOX_DOCKER_GID` | the socket's group (`standalone-stack.sh` reads it; Docker Desktop: `0`) |
+| `ELITEA_CODE_MATERIAL_DIR` | `deploy/certs/code` |
+
+The sections below document the material contract for an operator who assembles it by hand.
 
 Run `bash deploy/scripts/gen-sandbox-certs.sh <runtime-ca-directory> <private-output-directory>` to issue server certificates.
 The script preserves existing files and verifies their CA, hostname, expiry, and key pairing on rerun.
@@ -37,7 +37,7 @@ Use server certificates with the corresponding Compose network alias.
 Set Deno to port 9446 and Rust to port 9447. Both listeners run in the same supervisor container.
 Use `/run/elitea-sandbox/deno/` paths in the Deno configuration.
 Use `/run/elitea-sandbox/rust/` paths in the Rust configuration.
-The process accepts up to four `--config` arguments. It rejects duplicate owners or listener ports before startup.
+The process accepts up to eight `--config` arguments. It rejects duplicate owners or listener ports before startup.
 The worker CA must verify these certificates; the supervisor CA must verify the worker certificate.
 Copy the current Main signing verification keyring. Never give the supervisor Main's private signing key.
 
@@ -219,8 +219,8 @@ Set `worker.implementation=rust` and populate `worker.runtime.sandboxRuntimes` f
 Each entry uses `language`, `target`, `audience`, `image_digest`, `policy_revision`, and `timeout_seconds`.
 Match image digests, policy revisions, and supported languages to the selected supervisor profile.
 Use a target hostname present in the supervisor certificate. A Service name alone does not establish TLS identity.
-Set `worker.runtime.agentModelCheckpointRecovery=true` for the verified checkpoint recovery deployment.
-With `worker.runtime.agentNodeRecovery=true`, also configure `main.runtime.codeOwnerRecovery` for the same supervisor audiences ([Code consumers](code-consumers-deployment.md)).
+Checkpoint and node recovery are always on in the Worker (there is no setting).
+Configure `main.runtime.codeOwnerRecovery` for the same supervisor audiences ([Code consumers](code-consumers-deployment.md)).
 Main admits a journaled Code node only through original-Code owner recovery, so the chart refuses the journal with sandbox runtimes without it.
 The chart rejects these Rust-only options when the Python worker is selected.
 

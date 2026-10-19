@@ -21,6 +21,7 @@ pub mod diagnostics;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod execution;
 mod indexing;
+pub(crate) mod pg_keepalive;
 pub mod protocol;
 pub mod sandbox;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

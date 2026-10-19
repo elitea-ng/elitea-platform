@@ -62,23 +62,16 @@ data:
     {{- if ne (get $pairs ($r.natsStream | toString)) ($r.natsConsumer | toString) }}
     {{- fail (printf "worker.runtime.natsStream %q with natsConsumer %q is not a command bus route. The streams and their durables are fixed (docs/runtime-command-bus.md): %v." ($r.natsStream | toString) ($r.natsConsumer | toString) $pairs) }}
     {{- end }}
-    {{- /* The recovery switches are booleans and nothing else: a string
-    "false" is truthy in a template and would turn recovery on without a word.
-    Each key is written only when true: false is the Rust worker's own default,
-    and leaving it out keeps the default runtime.json minimal (render-worker.sh). */}}
-    {{- range $key := list "agentModelCheckpointRecovery" "agentNodeRecovery" }}
-    {{- if not (kindIs "bool" (get $r $key)) }}
-    {{- fail (printf "worker.runtime.%s must be true or false, not %v" $key (get $r $key)) }}
-    {{- end }}
-    {{- end }}
-    {{- if $r.agentModelCheckpointRecovery }}
-    {{- $_ := set $config "agent_model_checkpoint_recovery" true }}
-    {{- end }}
-    {{- if $r.agentNodeRecovery }}
-    {{- $_ := set $config "agent_node_recovery" true }}
-    {{- end }}
-    {{- if gt (len $r.sandboxRuntimes) 0 }}
-    {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
+    {{- /* Recovery is not a setting: the worker always runs its node attempt
+    journal and model-checkpoint recovery, and refuses the former
+    agent_node_recovery / agent_model_checkpoint_recovery keys, so neither is
+    ever written; agent_checkpoint_connection_path above is always present.
+    sandbox_runtimes is the operator's list or, where the Code sandbox is on,
+    the four canonical languages (_code-defaults.tpl). */}}
+    {{- include "elitea.removedRecoverySettings" . }}
+    {{- $sandboxRuntimes := include "elitea.sandbox.runtimes" . | fromJsonArray }}
+    {{- if gt (len $sandboxRuntimes) 0 }}
+    {{- $_ := set $config "sandbox_runtimes" $sandboxRuntimes }}
     {{- end }}
     {{- /* ADR-0034: the cloud executor's workspace runs. */}}
     {{- with ($r.workspaceRuns | default dict) }}
@@ -87,7 +80,7 @@ data:
     {{- fail (printf "worker.runtime.workspaceRuns.%s is required" $key) }}
     {{- end }}
     {{- end }}
-    {{- if not (has .audience ($.Values.main.runtime.sandboxAudiences | default list)) }}
+    {{- if not (has .audience (include "elitea.code.settings" $ | fromJson).audiences) }}
     {{- fail "worker.runtime.workspaceRuns.audience must be in main.runtime.sandboxAudiences" }}
     {{- end }}
     {{- $_ := set $config "workspace_runs" (dict "target" .target "audience" .audience "scratch_root" .scratch_root "cpu_millis" (int64 .cpu_millis) "memory_bytes" (int64 .memory_bytes) "max_disk_bytes" (int64 .max_disk_bytes) "turn_wall_seconds" (int64 .turn_wall_seconds)) }}

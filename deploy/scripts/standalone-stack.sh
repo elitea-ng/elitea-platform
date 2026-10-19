@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # Wrapper for the full standalone stack (deploy/docker-compose.standalone-full.yml).
 #
-#   certs        generate local mTLS + runtime-plane material (idempotent)
+#   certs        generate local mTLS + runtime-plane material (idempotent),
+#                including the Code runtime's sandbox leaves, Main's Code owner
+#                identity and the platform content key (code-material.py)
 #   build        rebuild the stack's images from source (`up` reuses existing
 #                tags, so a code change needs this first)
-#   up           bring the stack up and wait for healthy. It starts postgres
-#                first and runs pg-collation-repair before the rest
+#   up           bring the stack up and wait for healthy. It renders the Code
+#                runtime material for this stack's runner images first
+#                (code-material.py render), starts postgres, runs
+#                pg-collation-repair, then the rest. The stack runs agent node
+#                recovery, model-checkpoint recovery, Main's Code owner recovery
+#                and the Code sandbox with dependency preparation for Python,
+#                JavaScript, TypeScript and Rust: the defaults, not options
+#   code-material
+#                render the Code runtime material only (part of `up`)
 #   pg-collation-repair
 #                reindex every database whose recorded collation version
 #                differs from the C library's, then record the new version.
@@ -149,7 +158,7 @@ detect_compose_bin
 # believing it tested Python. A stack created under the Python worker needs
 # `down -v` first: its indexes are not migrated.
 case "${STANDALONE_WORKER:-rust}" in
-  rust) OVERLAY="${REPO_ROOT}/deploy/docker-compose.standalone-rust-agent.yml ${OVERLAY}" ;;
+  rust) ;;
   *) echo "ERROR: STANDALONE_WORKER must be rust (got '${STANDALONE_WORKER}'); the Python worker was removed." >&2; exit 1 ;;
 esac
 for overlay_file in $OVERLAY; do
@@ -845,6 +854,50 @@ EOF
   fi
 }
 
+# The Code runtime's per-stack configuration: the seven supervisor profiles and
+# the worker runtime JSON are bound to the runner images' ids, so they are
+# rendered here, after the images exist and before anything starts. The
+# preparation network is the stack's own `code-preparation` network.
+render_code_material() {
+  # The runner images as compose resolves them (an image-selection overlay may
+  # name other tags). Only the two image names are read from the rendering.
+  local images deno_image rust_image
+  images="$($COMPOSE_BIN $COMPOSE_F config --format json | python3 -c '
+import json, sys
+services = json.load(sys.stdin)["services"]
+print(services["elitea-code-runner-deno"]["image"], services["elitea-code-runner-rust"]["image"])')"
+  deno_image="${images% *}"
+  rust_image="${images#* }"
+  if ! docker image inspect "$deno_image" >/dev/null 2>&1 || ! docker image inspect "$rust_image" >/dev/null 2>&1; then
+    echo "→ Building the Code runner images (first run)…"
+    $COMPOSE_BIN $COMPOSE_F build elitea-code-runner-deno elitea-code-runner-rust
+  fi
+  local deno_digest rust_digest arch
+  deno_digest="$(docker image inspect --format '{{.Id}}' "$deno_image")"
+  rust_digest="$(docker image inspect --format '{{.Id}}' "$rust_image")"
+  case "$(docker info --format '{{.Architecture}}' 2>/dev/null || uname -m)" in
+    aarch64|arm64) arch=arm64 ;;
+    *) arch=amd64 ;;
+  esac
+  # ELITEA_CODE_MATERIAL_DIR (default deploy/certs/code) is where compose reads
+  # it from; a second stack from the same checkout sets its own.
+  python3 "${REPO_ROOT}/deploy/scripts/code-material.py" render \
+    --out "${ELITEA_CODE_MATERIAL_DIR:-${REPO_ROOT}/deploy/certs/code}" \
+    --deno-digest "$deno_digest" --rust-digest "$rust_digest" --arch "$arch" \
+    --network "${PROJECT}_code-preparation" --owner-prefix "$PROJECT"
+  # The supervisor drives the engine through its socket as uid 10001, so it
+  # joins the socket's group. Inside Docker Desktop's VM that is root (0); on a
+  # Linux host it is the socket's own group.
+  if [ -z "${ELITEA_SANDBOX_DOCKER_GID:-}" ]; then
+    if [ "$(uname -s)" = Linux ] && [ -S /var/run/docker.sock ]; then
+      ELITEA_SANDBOX_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+    else
+      ELITEA_SANDBOX_DOCKER_GID=0
+    fi
+  fi
+  export ELITEA_SANDBOX_DOCKER_GID
+}
+
 case "${1:-}" in
   certs)
     # Two independent trust roots, minted by two scripts: the gateway CA for the
@@ -863,6 +916,10 @@ case "${1:-}" in
     INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
       "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
     "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
+    # Off the runtime CA too: the Code sandbox's server and content-client
+    # leaves, PostgreSQL's TLS pair, Main's Code owner client identity and the
+    # platform content key. The Code runtime is on by default (PLAN §8.3).
+    python3 "${REPO_ROOT}/deploy/scripts/code-material.py" certs
     # After the runtime's: elitea-vector's certificate is signed by the
     # runtime CA (elitea-main's control listener trusts only that root for
     # token introspection), and is re-issued when that CA rotates.
@@ -897,6 +954,12 @@ case "${1:-}" in
       echo "ERROR: elitea-vector material missing (vector.crt and elitea-main's main-client.crt). Run: $0 certs" >&2
       exit 1
     fi
+    if [ ! -f "${REPO_ROOT}/deploy/certs/runtime/code-owner-client.crt" ] \
+       || [ ! -f "${REPO_ROOT}/deploy/certs/sandbox/elitea-sandbox-rust-preparation.crt" ]; then
+      echo "ERROR: Code runtime material missing (sandbox leaves, Code owner identity). Run: $0 certs" >&2
+      exit 1
+    fi
+    render_code_material
     # oidc-mock's published port must equal its container port (the issuer is
     # derived from the Host header), so the port cannot be REMAPPED — but it
     # can be MOVED, on both sides at once, and `E2E_OIDC_PORT` does exactly
@@ -959,6 +1022,15 @@ case "${1:-}" in
 
   pg-collation-repair)
     pg_collation_repair
+    ;;
+
+  code-material)
+    # The render step `up` runs first, on its own: the seven supervisor
+    # profiles, PostgreSQL's TLS pair and the worker runtime JSON for this
+    # stack's runner images (builds them if missing). For a caller that starts
+    # services itself before `up` (a database restore needs postgres, and
+    # postgres needs its TLS pair).
+    render_code_material
     ;;
 
   build)

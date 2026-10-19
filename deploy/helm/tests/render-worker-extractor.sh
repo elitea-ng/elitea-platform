@@ -58,7 +58,7 @@ ok()  { PASS=$((PASS+1)); echo "  ok: $1"; }
 bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 
 RENDER=(
-  -f "$CHART/values-standalone.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml"
   --set worker.enabled=true
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true

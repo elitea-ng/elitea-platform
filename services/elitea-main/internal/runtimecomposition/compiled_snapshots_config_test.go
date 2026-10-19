@@ -144,6 +144,9 @@ func TestCompiledSnapshotMaterialInventoryIncludesOriginalAgentState(t *testing.
 	c.CurrentMainBaseURL = "http://127.0.0.1:8080"
 	c.AgentExecutionCommandStream = "ELITEA_RT_V1_AGENT"
 	c.SandboxAudiences = []string{"elitea.supervisor"}
+	owner := codeOwnerConfigurationFixture()
+	owner.Supervisors[0].Audience = "elitea.supervisor"
+	c.CodeOwnerRecovery = &owner
 	cfg := compiledTestConfig()
 	c.RustCompiledSnapshots = &cfg
 	files, err := c.MaterialFiles()

@@ -686,3 +686,7 @@ mod workspace_remote;
 #[cfg(test)]
 #[path = "code_platform_startup_tests.rs"]
 mod platform_startup_tests;
+
+#[cfg(test)]
+#[path = "code_preparation_unavailable_tests.rs"]
+mod preparation_unavailable_tests;

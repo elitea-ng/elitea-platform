@@ -1,9 +1,9 @@
 # The workspace egress proxy (ADR-0034 decision 9, "Host allowlist: the
-# egress proxy") for the compose stack. Add after standalone-full and the
-# sandbox overlay:
+# egress proxy") for the compose stack. Add after standalone-full (which runs
+# the Code sandbox by default):
 #
 #   docker compose -f docker-compose.standalone-full.yml \
-#     -f docker-compose.sandbox.yml -f docker-compose.egress-proxy.yml up -d
+#     -f docker-compose.egress-proxy.yml up -d
 #
 # Before starting:
 #   1. Run deploy/docker/workspace-egress.sh once on the Docker host (root).

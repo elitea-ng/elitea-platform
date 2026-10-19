@@ -1,0 +1,18 @@
+# Render-only Code sandbox MATERIAL for chart tests (PLAN §8.3).
+#
+# The Code sandbox is on wherever the agent runtime runs (main.runtime.enabled,
+# main.runtime.agentExecutionDispatch.enabled, worker.enabled), and the chart
+# refuses to render it without deployment material. This file is the material,
+# and nothing else: placeholder images on the reserved registry.example name
+# with syntactically valid digests, and a TEST-NET-1 resolver range (RFC 5737).
+# None of it resolves or pulls. Every other Code setting is the chart default.
+sandboxKubernetes:
+  runnerImages:
+    deno: registry.example/elitea-code-runner@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    rust: registry.example/elitea-code-runner-rust@sha256:2222222222222222222222222222222222222222222222222222222222222222
+  preparation:
+    resolverCidrs:
+      - 192.0.2.0/24
+  supervisor:
+    image: registry.example/elitea-sandbox-supervisor@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    contentStagingInitImage: registry.example/busybox@sha256:4444444444444444444444444444444444444444444444444444444444444444

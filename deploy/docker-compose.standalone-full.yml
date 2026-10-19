@@ -186,7 +186,32 @@ services:
     # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128). The image
     # default of 100 would cap the pooler's server connections and re-introduce
     # the queue the pooler change removes.
-    command: ["postgres", "-c", "max_connections=200"]
+    #
+    # TLS: the Code sandbox supervisors reach the agentstate ledger with
+    # sslmode=verify-full (DNS:postgres, signed by the runtime CA; pgtls-init
+    # installs the pair). Plaintext clients are still accepted on the internal
+    # network, as before.
+    #
+    # Keepalives (FU-221): a client that is killed without closing its socket
+    # (a force-killed container, a lost node) left its backend idle for the
+    # kernel default of ~2 h; with a pid-limited server that exhausts fork.
+    # 20 s idle + 3 probes 5 s apart drops such a backend after ~35 s.
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/tls/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/tls/server.key
+      - -c
+      - tcp_keepalives_idle=20
+      - -c
+      - tcp_keepalives_interval=5
+      - -c
+      - tcp_keepalives_count=3
     environment:
       POSTGRES_USER: elitea
       POSTGRES_PASSWORD: elitea
@@ -204,6 +229,10 @@ services:
       - "${STANDALONE_PG_PORT:-15433}:5432"
     volumes:
       - standalone_pg_data:/var/lib/postgresql/data
+      - standalone_pg_tls:/var/lib/postgresql/tls:ro
+    depends_on:
+      pgtls-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U elitea"]
       interval: 5s
@@ -311,6 +340,13 @@ services:
   runtime-material:
     image: docker.io/library/debian:trixie-slim
     entrypoint: ["/bin/sh", "/opt/install-material.sh"]
+    # The Code consumers are on by default (PLAN §8.3): Main's original-Code
+    # owner identity, the platform content key and the agentstate DSN for debug
+    # artifacts are installed into Main's volume. deploy/scripts/code-material.py
+    # (run by `standalone-stack.sh certs`) writes them into deploy/certs/runtime.
+    environment:
+      ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
     volumes:
       - ./runtime/install-material.sh:/opt/install-material.sh:ro
       - ./certs/runtime:/src:ro
@@ -686,9 +722,9 @@ services:
     environment:
       MOCK_LLM_PORT: "8090"
       MOCK_LLM_MODEL: "E2E-MOCK-MODEL"
-      # The SDK accepts the mock's plain HTTP tool listener. The native overlay
-      # retains HTTPS tool schemas for its HTTPS-only materialization contract.
-      MOCK_LLM_TOOL_BASE_URL: "http://llm-mock:8090/tool"
+      # HTTPS tool schemas: the native worker's tool materialization accepts
+      # HTTPS only.
+      MOCK_LLM_TOOL_BASE_URL: "https://llm-mock:8090/tool"
       # 0 by default — a fast reply is what every other consumer wants. The
       # chat streaming journey overrides it so "a partial answer was painted"
       # is deterministic rather than a race (see e2e/streaming/).
@@ -1209,6 +1245,9 @@ services:
       # and no second workload_sessions row. ELITEA_RT_V1_INDEX (with a worker
       # on elitea-index-worker-v1) is the alternative shape.
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
+      # The registry, not the per-project pgvector index_meta rows, holds index
+      # metadata (ADR-0031 V1); vectors go to Qdrant through elitea-vector.
+      ELITEA_INDEXING_RUNTIME: "rust"
 
       # Toolkit tool discovery: GET .../toolkit_available_tools/prompt_lib/...,
       # which fills the tool lists on the toolkit and MCP pages. Unset, the
@@ -1227,8 +1266,22 @@ services:
       # composition.go cross-checks this key id against the keyring entry and
       # refuses to start on a mismatch, so it must equal the id baked into
       # command-signing-keyring.json by gen-runtime-certs.sh.
-      # Empty disables grants until a supervisor audience is configured.
-      ELITEA_RUNTIME_SANDBOX_AUDIENCES: ${ELITEA_RUNTIME_SANDBOX_AUDIENCES:-}
+      # Every Code sandbox profile elitea-sandbox serves (three execution, four
+      # preparation; deploy/scripts/code-material.py holds the table). Main signs
+      # job grants only for these audiences.
+      ELITEA_RUNTIME_SANDBOX_AUDIENCES: "dns:elitea-sandbox-deno,dns:elitea-sandbox-rust,dns:elitea-sandbox-deno-native,dns:elitea-sandbox-preparation,dns:elitea-sandbox-javascript-preparation,dns:elitea-sandbox-typescript-preparation,dns:elitea-sandbox-rust-preparation"
+      # The Code consumers, on by default (PLAN §8.3). The Worker runs every Code
+      # node under the node-recovery journal, as an original-Code visit Main
+      # admits only with owner recovery, for each execution audience. Material
+      # paths are the ones runtime-material installs. Owner recovery has no
+      # switch: Main runs it whenever Agent dispatch is on.
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: '{"certificate_chain_path":"/run/elitea-runtime/code-owner-client.crt","main_workload_identity":"dns:elitea-code-owner-main","private_key_path":"/run/elitea-runtime/code-owner-client.key","server_ca_path":"/run/elitea-runtime/runtime-ca.crt","supervisors":[{"audience":"dns:elitea-sandbox-deno","https_origin":"https://elitea-sandbox-deno:9446"},{"audience":"dns:elitea-sandbox-deno-native","https_origin":"https://elitea-sandbox-deno-native:9450"},{"audience":"dns:elitea-sandbox-rust","https_origin":"https://elitea-sandbox-rust:9447"}]}'
+      ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG: '{"egress_allowlist":["api.github.com:443"],"policy":{"max_acquisition_seconds":300,"max_depth":16,"max_file_bytes":1048576,"max_files":1024,"max_manifest_bytes":524288,"max_path_bytes":255,"max_projections":64,"max_total_bytes":16777216,"revision":1},"repository_capabilities":["github"],"revision":1}'
+      ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_PLATFORM_CONFIG: '{"broker_policies":[{"max_calls":32,"max_total_bytes":1048576,"revision":1}],"content_keys_file":"/run/elitea-runtime/code-platform-content-keys.json","revision":1}'
+      ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
+      ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE: /run/elitea-runtime/agent-checkpoint-connection
       ELITEA_RUNTIME_SIGNING_KEY_ID: "standalone-runtime-v1"
       ELITEA_RUNTIME_SIGNING_KEY_FILE: /run/elitea-runtime/command-signing-key.pem
       ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE: /run/elitea-runtime/command-signing-keyring.json
@@ -1869,71 +1922,57 @@ services:
   # agent-token producer of its own, so without this service an admitted run
   # streams nothing and ends in a terminal failure.
   elitea-worker:
-    # The native Rust worker; docker-compose.standalone-rust-agent.yml (always
-    # applied by deploy/scripts/standalone-stack.sh) sets its command, config
-    # and mounts. The image and build live here so that every compose file set
-    # builds the same image.
+    # The native Rust worker (the Python worker was removed). Every Code node,
+    # effectful direct tool node and model step runs under the durable
+    # node-recovery journal with model-checkpoint resume: that is not a setting
+    # (PLAN §8.3). The runtime JSON is deploy/runtime/worker-runtime.rust.json
+    # plus the four Code languages, each with dependency preparation, bound to
+    # this stack's runner images; deploy/scripts/code-material.py renders it
+    # (standalone-stack.sh up).
     image: ghcr.io/elitea-ng/elitea-worker-rust:standalone
     build:
       context: ..
       dockerfile: services/elitea-worker-rust/Containerfile
     # The only supported command shape: one JSON config, no env-var settings.
-    # Capabilities are compiled in, not selected here — the Go side decides which
-    # it will accept (composition.go's capabilityVersions map).
-    command: ["serve", "--config", "/run/elitea/runtime.json"]
+    command:
+      - serve
+      - --config
+      - /run/elitea/runtime.json
+      - --toolkit-security-config
+      - /run/elitea/toolkit-security.json
     environment:
-      # TLS trust for platform_origin. The SDK routes verification through the
-      # OS trust store on import (elitea_sdk/_system_ca.py injects truststore),
-      # which cannot contain a CA minted on this machine minutes ago. Disabling
-      # that injection restores the standard mechanisms, and then the two
-      # variables below cover both HTTP stacks the SDK uses: `requests` for the
-      # /api/v2 calls (REQUESTS_CA_BUNDLE) and httpx/openai for the model call
-      # (SSL_CERT_FILE, honoured by ssl.create_default_context).
+      # TLS trust for the REMOTE MCP client, and for nothing else.
       #
-      # A runtime-CA-only bundle is correct AND tighter than adding public
-      # roots: every destination the worker dials — control, output, content,
-      # platform_origin — is signed by that CA, and model traffic egresses
-      # through elitea-main's /llm proxy rather than directly to a provider.
+      # Every internal destination the worker dials — control, output, content,
+      # the model gateway — is handed the runtime CA EXPLICITLY in code
+      # (src/security.rs `private_ca()`, fanned out in src/bootstrap.rs), so
+      # the process-wide trust store governs exactly one client, the MCP one:
+      # `reqwest-mcp` (reqwest with `rustls`), which resolves to
+      # `rustls-platform-verifier` → `rustls-native-certs` → `SSL_CERT_FILE`.
       #
-      # THE BUNDLE, NOT THE RUNTIME CA ALONE (#983 trust half). A remote MCP
-      # server is the one destination on this stack that is NOT signed by the
-      # runtime CA: mcp-mock serves HTTPS with a certificate minted into its own
-      # image. Pointed at the runtime CA alone, the python leg cannot complete
-      # a TLS handshake with it at all — measured, before any MCP request:
-      # `mcp_adapter.py _preflight_auth_check` →
-      # `ClientConnectorCertificateError: self-signed certificate in
-      # certificate chain`, after which the toolkit has no tools and the turn
-      # answers a plain echo naming nothing. The native worker was given the
-      # same bundle for the same reason
-      # (deploy/docker-compose.standalone-rust-agent.yml).
-      #
-      # `worker-trust` below concatenates runtime CA + mcp-mock CA and NOTHING
-      # ELSE. Public roots are deliberately still absent, and the paragraph
-      # above this one says why they were absent before: every internal
-      # destination — control, output, content, platform_origin — is signed by
-      # the runtime CA, and model traffic egresses through elitea-main's /llm
-      # proxy rather than to a provider. No toolkit on this stack dials a
-      # publicly signed endpoint; a lane that adds one adds its own root here
-      # and says which tool needs it. These variables REPLACE the trust store
-      # rather than add to it, so every addition is a real widening.
-      ELITEA_DISABLE_SYSTEM_CA: "1"
-      REQUESTS_CA_BUNDLE: /run/elitea-worker-trust/worker-ca-bundle.pem
-      SSL_CERT_FILE: /run/elitea-worker-trust/worker-ca-bundle.pem
-      # The one environment variable the worker itself reads. Mirrors the
-      # hybrid's fail-safe snapshot: broader than the current
-      # `artifact.delete_file` rule so metadata drift cannot bypass approval;
-      # `remove_index` (the indexing families' index delete) is destructive too.
-      ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file","remove_index"]}'
+      # It must be the BUNDLE, not mcp-mock's certificate alone: this variable
+      # REPLACES the platform trust store rather than adding to it, and pointing
+      # it at a single self-signed certificate would strip the public roots
+      # that the toolkit families (github, slack, …) verify against. Unset, the
+      # MCP leg fails as `native_agent.dependency_unavailable`.
+      SSL_CERT_FILE: /run/elitea-mcp-trust/mcp-mock-ca-bundle.pem
+      ELITEA_RUST_LOG: "info"
+      ELITEA_RUST_TRACE: "info"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - ./runtime/worker-runtime.json:/run/elitea/runtime.json:ro
+      - ${ELITEA_CODE_MATERIAL_DIR:-./certs/code}/worker-runtime.json:/run/elitea/runtime.json:ro
+      - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
-      # The combined bundle the two variables above name. Read-only: the worker
-      # consumes it, `worker-trust` is what writes it.
       - standalone_worker_trust:/run/elitea-worker-trust:ro
       # 0700 and owned by uid 10001 — the worker contract requires a private
       # spool root. A fresh named volume starts 0755 owned by root, so it is
       # prepared by the init service rather than assumed.
       - standalone_worker_spool:/var/lib/elitea-worker/output-spool
+      - standalone_mcp_mock_trust:/run/elitea-mcp-trust:ro
+      # The document extractor's socket (worker-runtime.rust.json
+      # `extractor_socket`): the directory is shared with the sidecar below
+      # and nothing else mounts it.
+      - standalone_doc_extractor_sock:/run/elitea-extract
     depends_on:
       runtime-material:
         condition: service_completed_successfully
@@ -1947,13 +1986,29 @@ services:
         condition: service_healthy
       platform-edge:
         condition: service_started
-      # The bundle both trust variables name must exist before the worker's
-      # first TLS dial — of ANY destination, not only the MCP one, because it
-      # is now the whole trust store. A late file would break only the runs
-      # that raced it, so the one-shot is waited on rather than hoped for
-      # (the same rule the native overlay applies to mcp-mock-trust).
+      elitea-agentstate-migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+      # The index runs' vector store (worker-runtime.rust.json `vector_target`).
+      elitea-vector:
+        condition: service_healthy
+      # Not `service_healthy`: the worker dials the socket lazily, per
+      # document, and a sidecar that is still starting costs one document
+      # skipped `extract_failed`, not a failed start.
+      elitea-doc-extractor:
+        condition: service_started
+      # The bundle SSL_CERT_FILE names must exist before the worker's first MCP
+      # connection; `rustls-native-certs` reads it lazily, per client build.
+      mcp-mock-trust:
+        condition: service_completed_successfully
+      mcp-mock:
+        condition: service_healthy
       worker-trust:
         condition: service_completed_successfully
+      # The Code sandbox the runtime JSON names (seven listeners in one process).
+      elitea-sandbox:
+        condition: service_started
     restart: unless-stopped
 
   worker-spool-init:
@@ -2092,6 +2147,240 @@ services:
       elitea-web:
         condition: service_healthy
 
+  # ── The document extraction sidecar (ADR-0030 I1) ─────────────────────────
+  # PDF and Office documents an index run fetched are read HERE, not in the
+  # worker: the worker's Cargo.lock cannot hold the PDF backend (its kube
+  # client caps smallvec below the backend's floor), and a parser of untrusted
+  # documents belongs behind a process boundary anyway — a crash or an OOM kill
+  # here is one document skipped `extract_failed`, never a dead worker.
+  #
+  # gRPC over a Unix socket in the shared volume; no port, no TLS, and NO
+  # NETWORK: `network_mode: none` leaves the container with loopback only,
+  # which is exactly what a process that reads untrusted bytes and must send
+  # nothing anywhere should have. The peer IS checked: the service reads the
+  # connecting process's uid (SO_PEERCRED) and serves ELITEA_EXTRACTOR_PEER_UIDS
+  # only — the worker's uid, 10001 in its image — refusing any other peer
+  # PERMISSION_DENIED (the pod-local Unix-socket sidecar exception in
+  # AGENTS.md). The socket directory ships in the image owned 10001:10001
+  # mode 0770, which is what the named volume below is seeded with. The
+  # memory limit is what the extractor reads from its cgroup to lower its
+  # input cap (README.md, "Memory"): 2560 MiB and not a round 2 GiB, because
+  # the defaults below need 50 MiB × 4 slots × 6 (expansion) × 2 (the half
+  # kept for the process) = 2400 MiB for `fit_memory` to leave the 50 MiB
+  # cap as configured (Config::memory_limit_for_caps); under 2 GiB it would
+  # quietly lower the cap to ~44 MiB.
+  elitea-doc-extractor:
+    image: ghcr.io/elitea-ng/elitea-doc-extractor:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-doc-extractor/Containerfile
+    # The image's own ENTRYPOINT/CMD: `elitea-doc-extractor serve`.
+    network_mode: none
+    mem_limit: 2560m
+    pids_limit: 128
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ELITEA_EXTRACTOR_SOCKET: /run/elitea-extract/extractor.sock
+      # The worker's own document cap (IndexRunLimits::max_document_bytes).
+      ELITEA_EXTRACTOR_MAX_INPUT_BYTES: "52428800"
+      ELITEA_EXTRACTOR_MAX_PAGES: "1000"
+      ELITEA_EXTRACTOR_TIMEOUT_MILLIS: "120000"
+      # Not below the worker's document concurrency (IndexRunLimits, 4): the
+      # worker keeps at most this many calls in flight (it reads the figure
+      # from Capabilities) and queues the rest itself, so the sidecar's slot
+      # wait below is never what a busy run runs into.
+      ELITEA_EXTRACTOR_CONCURRENCY: "4"
+      # How long a request may still wait for a slot before RESOURCE_EXHAUSTED;
+      # apart from the extraction timeout on purpose (queueing is not a
+      # timeout). The worker derives its call deadline from this figure too.
+      ELITEA_EXTRACTOR_SLOT_WAIT_MILLIS: "600000"
+      # The worker container's uid (services/elitea-worker-rust/Containerfile
+      # `USER 10001:10001`). Every other peer on the socket is refused.
+      ELITEA_EXTRACTOR_PEER_UIDS: "10001"
+      RUST_LOG: "${ELITEA_EXTRACTOR_LOG:-info}"
+    volumes:
+      - standalone_doc_extractor_sock:/run/elitea-extract
+      # A small writable tmpfs at /tmp on a read-only root: xberg may need
+      # temp files for some formats, and without one such a document fails
+      # as an extractor-side INTERNAL (extract_failed) rather than being
+      # read. Memory-backed and capped; nothing persists.
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
+          mode: 01777
+    healthcheck:
+      # Distroless: no shell. The binary asks Capabilities over its own socket
+      # and fails when every slot is held by an extraction that outran its
+      # timeout, so a wedged process is restarted even if its own exit did not
+      # happen.
+      test: ["CMD", "/usr/local/bin/elitea-doc-extractor", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+
+  # ── The Code sandbox (on by default, PLAN §8.3) ──────────────────────────
+  # One supervisor process serves seven mTLS profiles: three execution
+  # (Python on Deno/Pyodide; JavaScript and TypeScript on native Deno; Rust)
+  # and four dependency preparation (PyPI, npm for JavaScript, npm for
+  # TypeScript, crates.io). Preparation runs in a separate container on the
+  # resolver network below; execution stays offline. Each profile's material
+  # and config.json come from deploy/scripts/code-material.py (certs + render,
+  # both run by standalone-stack.sh) and are installed by sandbox-material.
+  # The profile table lives in that script and in deploy/README.md.
+  elitea-sandbox:
+    image: ghcr.io/elitea-ng/elitea-sandbox-supervisor:standalone
+    build:
+      context: ..
+      dockerfile: services/elitea-worker-rust/Containerfile
+      target: supervisor
+    user: "10001:10001"
+    # The Docker socket's group inside the engine (standalone-stack.sh sets it
+    # from the socket; Docker Desktop's is root).
+    group_add:
+      - "${ELITEA_SANDBOX_DOCKER_GID:-0}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    # The process plus seven 256 MiB staging filesystems (tmpfs counts here).
+    mem_limit: 3g
+    cpus: 1.0
+    restart: unless-stopped
+    stop_grace_period: 20s
+    command:
+      - --config
+      - /run/elitea-sandbox/deno/config.json
+      - --config
+      - /run/elitea-sandbox/rust/config.json
+      - --config
+      - /run/elitea-sandbox/denonative/config.json
+      - --config
+      - /run/elitea-sandbox/prep/config.json
+      - --config
+      - /run/elitea-sandbox/jsprep/config.json
+      - --config
+      - /run/elitea-sandbox/tsprep/config.json
+      - --config
+      - /run/elitea-sandbox/rsprep/config.json
+    networks:
+      default:
+        aliases:
+          - elitea-sandbox-deno
+          - elitea-sandbox-rust
+          - elitea-sandbox-deno-native
+          - elitea-sandbox-preparation
+          - elitea-sandbox-javascript-preparation
+          - elitea-sandbox-typescript-preparation
+          - elitea-sandbox-rust-preparation
+    # Disposable download staging, one per content client, bounded, no exec.
+    tmpfs:
+      - /run/elitea-sandbox-content/deno:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/rust:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/denonative:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/prep:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/jsprep:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/tsprep:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/rsprep:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+    volumes:
+      - standalone_sandbox_material:/run/elitea-sandbox:ro
+      - type: bind
+        source: ${ELITEA_SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    depends_on:
+      sandbox-material:
+        condition: service_completed_successfully
+      elitea-agentstate-migrate:
+        condition: service_completed_successfully
+      # The runner images must exist before the supervisor checks them.
+      elitea-code-runner-deno:
+        condition: service_completed_successfully
+      elitea-code-runner-rust:
+        condition: service_completed_successfully
+
+  # The supervisor's private material (keys 0600, uid 10001), copied from
+  # deploy/certs/code/sandbox (ELITEA_CODE_MATERIAL_DIR moves the rendered
+  # material, e.g. for a second stack from one checkout). Joins the resolver network only so compose
+  # creates it with the stack (the preparation profiles name it); it reaches
+  # nothing.
+  sandbox-material:
+    image: docker.io/library/debian:trixie-slim
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        for p in deno rust denonative prep jsprep tsprep rsprep; do
+          mkdir -p /dst/$$p
+          rm -f /dst/$$p/*
+          cp /src/$$p/* /dst/$$p/
+          chown -R 10001:10001 /dst/$$p
+          chmod 700 /dst/$$p
+          chmod 600 /dst/$$p/*
+        done
+    volumes:
+      - type: bind
+        source: ${ELITEA_CODE_MATERIAL_DIR:-./certs/code}/sandbox
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - standalone_sandbox_material:/dst
+    networks: [default, code-preparation]
+    restart: "no"
+
+  # PostgreSQL's TLS pair (DNS:postgres), owned by the postgres uid.
+  pgtls-init:
+    image: docker.io/library/debian:trixie-slim
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        cp /src/server.crt /src/server.key /dst/
+        chown 999:999 /dst/server.crt /dst/server.key
+        chmod 644 /dst/server.crt
+        chmod 600 /dst/server.key
+    volumes:
+      - type: bind
+        source: ${ELITEA_CODE_MATERIAL_DIR:-./certs/code}/pg
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - standalone_pg_tls:/dst
+    restart: "no"
+
+  # The runner images the supervisor starts Code in, by image id (their
+  # digests are bound into the supervisor and worker configs). One-shot
+  # services so `build` builds them and the supervisor waits for them; they
+  # exit immediately and reach nothing.
+  elitea-code-runner-deno:
+    image: ghcr.io/elitea-ng/elitea-code-runner:standalone-deno
+    build:
+      context: ../services/elitea-code-runner
+      dockerfile: Containerfile
+      target: deno-runtime
+    entrypoint: ["/bin/true"]
+    network_mode: none
+    read_only: true
+    restart: "no"
+  elitea-code-runner-rust:
+    image: ghcr.io/elitea-ng/elitea-code-runner:standalone-rust
+    build:
+      context: ../services/elitea-code-runner
+      dockerfile: Containerfile
+      target: rust-runtime
+    entrypoint: ["/bin/true"]
+    network_mode: none
+    read_only: true
+    restart: "no"
+
 volumes:
   # The engine sidecar's Unix socket, shared between the Go host and the
   # native engine (ADR-0023 H2). Nothing else mounts it.
@@ -2120,3 +2409,16 @@ volumes:
   # The PYTHON worker's whole trust store — runtime CA + mcp-mock CA, no public
   # roots. Written by worker-trust; mounted read-only by the worker (#983).
   standalone_worker_trust:
+  # The native worker's document-extractor socket, shared with the sidecar.
+  standalone_doc_extractor_sock:
+  # PostgreSQL's TLS pair, installed by pgtls-init.
+  standalone_pg_tls:
+  # The sandbox supervisor's seven profiles, installed by sandbox-material.
+  standalone_sandbox_material:
+
+networks:
+  # Where dependency preparers resolve packages (PyPI, npm, crates.io). Only the
+  # supervisor's preparation containers join it; the worker, Main and the
+  # offline execution containers never do. Docker cannot limit egress to host
+  # names, so the preparer's own --allow-net list is the destination limit.
+  code-preparation: {}

@@ -16,7 +16,7 @@ does not depend on workspaceRuns.egress (direct mode).
 */ -}}
 {{- $s := .Values.sandboxKubernetes }}
 {{- $w := $s.workspaceRuns }}
-{{- if and $s.enabled $w.enabled .Values.egressProxy.enabled }}
+{{- if and (include "elitea.sandbox.kubernetes" .) $w.enabled .Values.egressProxy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

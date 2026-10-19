@@ -16,26 +16,30 @@
 # consumed the last slot. elitea-main.validateConnectionBudget now refuses to
 # render the mismatch instead.
 #
-# 200 is what this profile expects the server to be configured for. Change it
+# The Code consumers (on wherever the agent runtime runs) add Code debug
+# receipts: four AgentState connections per replica, so a replica is ~46.
+#
+# 225 is what this profile expects the server to be configured for. Change it
 # to match yours; the guard checks against whatever it says.
 postgresql:
-  maxConnections: 200
+  maxConnections: 225
 
 main:
   # WITH THE RUNTIME PLANE ON, THIS CEILING IS A DATABASE PROPERTY.
   #
   # The chart's default is 10, chosen against CPU and memory targets. Each
-  # replica costs ~42 connections here (36 runtime + 6 primary), so ten of them
-  # is 420 against the 175 the server above leaves — the autoscaler would
+  # replica costs ~46 connections here (36 runtime + 6 primary + 4 Code), so ten of them
+  # is 460 against the 200 the server above leaves — the autoscaler would
   # exhaust PostgreSQL long before it exhausted a node.
   #
-  # 4 x 42 = 168, inside 175. Raise this only together with
+  # 4 x 46 = 184 (42 plus the four Code debug receipt connections), inside
+  # the 200 the server above leaves. Raise this only together with
   # postgresql.maxConnections; the guard checks the pair, which is the point.
   #
   # vector.enabled adds elitea-vector's token-introspection pool (8
   # connections per replica, ELITEA_RUNTIME_DB_VECTOR_INTROSPECTION_MAX_CONNS):
-  # 50 per replica, so 4 replicas no longer fit. Lower maxReplicas to 3 (150) or
-  # raise postgresql.maxConnections to 225 when you turn vector on.
+  # 54 per replica, so 4 replicas no longer fit. Lower maxReplicas to 3 (162) or
+  # raise postgresql.maxConnections to 241 when you turn vector on.
   autoscaling:
     maxReplicas: 4
 
@@ -84,9 +88,20 @@ main:
   #   PRIVATE:
   #     command-signing-key.pem
   #     control-server.key       output-server.key       content-server.key
+  #     code-owner-client.key    code-platform-content-keys.json
+  #     agent-checkpoint-connection
   #   PUBLIC:
   #     runtime-ca.crt           command-signing-keyring.json
   #     control-server.crt       output-server.crt       content-server.crt
+  #     code-owner-client.crt
+  #
+  # The code-* files and agent-checkpoint-connection are the Code consumers'
+  # material: this profile runs the agent runtime, so original-Code owner
+  # recovery, the Code platform broker and Code debug artifacts are on
+  # (PLAN §8.3). deploy/scripts/code-material.py certs issues the owner leaf
+  # (SAN DNS:elitea-code-owner-main, clientAuth, under the runtime CA) and the
+  # platform content key document; agent-checkpoint-connection is the AgentState
+  # DSN gen-runtime-certs.sh writes.
   #
   # The init container installs every key at mode 0600, which both securefile
   # profiles accept, so the Secret itself carries no mode requirement.
@@ -360,7 +375,11 @@ main:
       #     --from-file=deploy/certs/runtime/output-server.crt \
       #     --from-file=deploy/certs/runtime/output-server.key \
       #     --from-file=deploy/certs/runtime/content-server.crt \
-      #     --from-file=deploy/certs/runtime/content-server.key
+      #     --from-file=deploy/certs/runtime/content-server.key \
+      #     --from-file=deploy/certs/runtime/code-owner-client.crt \
+      #     --from-file=deploy/certs/runtime/code-owner-client.key \
+      #     --from-file=deploy/certs/runtime/code-platform-content-keys.json \
+      #     --from-file=deploy/certs/runtime/agent-checkpoint-connection
       #
       # Use runtime.material.volume instead only when another mechanism already
       # writes these as real, owner-owned files at mountPath.

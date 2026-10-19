@@ -22,16 +22,49 @@ that contract and the permission rules its material must satisfy.
 `deploy/scripts/standalone-stack.sh`, is the one-host path: the whole topology,
 including the runtime plane, on one machine.
 
-The agent worker is the native Rust worker by default (the Rust overlay,
-`docker-compose.standalone-rust-agent.yml`, is applied for you, and elitea-main
-is told `ELITEA_WORKER_IMPLEMENTATION=rust` and `ELITEA_INDEXING_RUNTIME=rust`).
-`STANDALONE_WORKER=python deploy/scripts/standalone-stack.sh ...` selects the
-legacy Python worker until it is removed. Running `docker compose -f
-deploy/docker-compose.standalone-full.yml` by itself, without the script, still
-gives the Python worker, and that base file states
-`ELITEA_WORKER_IMPLEMENTATION=python` so its toolkit catalogue matches. Where the
-Rust worker cannot serve a configured toolkit, tool or built-in capability, the
-chat says so on the reply (a compact notice naming what was left out and why).
+The agent worker is the native Rust worker, the only one; its document
+extractor and the Rust indexing runtime are part of the base file
+(`docker-compose.standalone-rust-agent.yml` is kept empty for callers that still
+pass it). Where the Rust worker cannot serve a configured toolkit, tool or
+built-in capability, the chat says so on the reply (a compact notice naming what
+was left out and why).
+
+### Durability and the Code runtime are the default
+
+The base file runs, with no overlay and no flag (PLAN §8.3):
+
+- agent node recovery and model-checkpoint recovery. They are not settings: the
+  worker always runs them, and a runtime JSON that still names
+  `agent_node_recovery` or `agent_model_checkpoint_recovery` is refused at start;
+- Main's original-Code owner recovery, the Code workspace, platform and debug
+  artifact consumers;
+- the Code sandbox (`elitea-sandbox`, one supervisor process, seven mTLS
+  profiles) with dependency preparation for every language:
+
+  | Profile | Port | Purpose | Languages | Runner |
+  |---|---|---|---|---|
+  | `elitea-sandbox-deno` | 9446 | execution | Python | Deno |
+  | `elitea-sandbox-rust` | 9447 | execution | Rust | Rust |
+  | `elitea-sandbox-deno-native` | 9450 | execution | JavaScript, TypeScript | Deno |
+  | `elitea-sandbox-preparation` | 9448 | preparation (PyPI) | Python | Deno |
+  | `elitea-sandbox-javascript-preparation` | 9449 | preparation (npm) | JavaScript | Deno |
+  | `elitea-sandbox-typescript-preparation` | 9451 | preparation (npm) | TypeScript | Deno |
+  | `elitea-sandbox-rust-preparation` | 9452 | preparation (crates.io) | Rust | Rust |
+
+  Preparers run on the stack's `code-preparation` network; execution stays
+  offline. A Code node that imports packages on a runtime without preparation
+  fails with the typed "dependency preparation is not available" refusal;
+- PostgreSQL with TLS (the supervisors' ledger connection is `verify-full`) and
+  server TCP keepalives 20 s / 5 s / 3 probes, the pooler likewise.
+
+The material comes from the existing material job:
+`standalone-stack.sh certs` also runs `deploy/scripts/code-material.py certs`
+(sandbox leaves, Main's Code owner identity `dns:elitea-code-owner-main`, the
+platform content key), and `standalone-stack.sh up` first renders the seven
+profiles and the worker runtime JSON for this stack's runner images
+(`code-material.py render`, into `deploy/certs/code`, or
+`ELITEA_CODE_MATERIAL_DIR`). `scripts/runtime/test_durability_defaults.py`
+fails if the default compose or the default Helm render turns any of this off.
 
 ### Operator quick start (no seeders)
 
@@ -344,9 +377,9 @@ worker deployed separately needs `worker.implementation: python`. (4) A
 `main.env.ELITEA_INDEXING_RUNTIME` that disagrees with `worker.indexingRuntime`
 fails the render. `deploy/scripts/standalone-stack.sh` does not
 switch an existing stack: it records the worker on `up` and keeps it until you
-set `STANDALONE_WORKER`. `worker.runtime.agentModelCheckpointRecovery` and
-`agentNodeRecovery` stay `false` by default until the pod-replacement proofs in
-`services/elitea-worker-rust/docs/recovery-guarantees.md` (ruling D1) pass. The Rust worker is a smaller, faster
+set `STANDALONE_WORKER`. Agent node recovery and model-checkpoint recovery are always on (the former
+`worker.runtime.agentModelCheckpointRecovery` and `agentNodeRecovery` values were
+removed; a values file that still sets them fails the render). The Rust worker is a smaller, faster
 process but — as of this release — has no adapter for 18 of the 52 catalogued
 toolkit types and no implementation for 6 of the platform's internal chat-agent
 tools (`values.yaml`'s `worker.implementation` comment lists both sets); a

@@ -397,9 +397,7 @@ impl ProductionAgentRuntime {
             output.clone(),
             limits.output_max_sessions,
             terminal_recovery,
-        )
-        .with_checkpoint_recovery(deployment.agent_model_checkpoint_recovery)
-        .with_node_recovery(deployment.agent_node_recovery);
+        );
         let toolkit = ToolkitDeliveryProcessor::new(
             output_preflight,
             control,
@@ -501,10 +499,12 @@ impl std::error::Error for ProductionAgentRuntimeError {}
 
 const fn map_config_error(error: &RuntimeConfigError) -> ProductionServeError {
     match error {
-        RuntimeConfigError::InvalidConfiguration(_) => ProductionServeError {
+        // Every configuration reason is a fixed, data-free string; passing it
+        // through makes a startup refusal readable (e.g. a removed key).
+        RuntimeConfigError::InvalidConfiguration(reason) => ProductionServeError {
             code: "worker_serve.invalid_configuration",
             retryable: false,
-            message: "the worker serve configuration is invalid",
+            message: reason,
         },
         RuntimeConfigError::ResourceExhausted(_) => ProductionServeError {
             code: "worker_serve.resource_exhausted",
@@ -621,6 +621,17 @@ mod tests {
         let shutdown = shutdown_timeout_error();
         assert_eq!(shutdown.code(), "worker_serve.shutdown_timeout");
         assert!(shutdown.retryable());
+    }
+
+    #[test]
+    fn a_startup_configuration_refusal_names_its_fixed_reason() {
+        let error =
+            super::map_config_error(&crate::config::RuntimeConfigError::InvalidConfiguration(
+                crate::config::RECOVERY_KEYS_REMOVED,
+            ));
+        assert_eq!(error.code(), "worker_serve.invalid_configuration");
+        assert!(!error.retryable());
+        assert_eq!(error.to_string(), crate::config::RECOVERY_KEYS_REMOVED);
     }
 
     #[test]

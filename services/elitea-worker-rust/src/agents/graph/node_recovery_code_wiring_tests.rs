@@ -30,6 +30,7 @@ use std::time::Duration;
 use tonic::{Request, Response, Status};
 
 const PLATFORM_YAML: &str = "entry_point: code\nstate:\n  count: int\n  value: int\n  private: str\nnodes:\n  - id: code\n    type: code\n    language: python\n    code: 'return 41'\n    input: [value]\n    output: [count]\n    platform_client: true\n    transition: END\n";
+const MICROPIP_YAML: &str = "entry_point: code\nstate:\n  count: int\n  value: int\n  private: str\nnodes:\n  - id: code\n    type: code\n    language: python\n    code: 'import micropip; return 41'\n    input: [value]\n    output: [count]\n    transition: END\n";
 const PURE_YAML: &str = "entry_point: code\nstate:\n  count: int\n  value: int\n  private: str\nnodes:\n  - id: code\n    type: code\n    language: python\n    code: 'return 41'\n    input: [value]\n    output: [count]\n    transition: END\n";
 
 // ---------------------------------------------------------------- Main content
@@ -50,6 +51,8 @@ struct MainScript {
 }
 #[derive(Default)]
 struct MainCalls {
+    /// Original-visit admissions Main received.
+    visits: usize,
     steps: usize,
     effects: usize,
     effects_body: Option<serde_json::Value>,
@@ -91,6 +94,7 @@ impl InputContentRpc for FakeMain {
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let ok = http::StatusCode::OK;
         if path.ends_with("/code-sandbox/visits") {
+            self.calls.lock().unwrap().visits += 1;
             if self.script.refuse_visit {
                 return Ok(json_response(
                     http::StatusCode::FORBIDDEN,
@@ -958,6 +962,53 @@ async fn failed_runtime_without_a_platform_client_never_asks_the_journal() {
     assert_eq!(h.main.lock().unwrap().effects, 0);
     assert_eq!(h.main.lock().unwrap().steps, 0);
     assert_eq!(run.failure().await.replay, ReplaySafety::NoExternalEffect);
+}
+
+// ------------------------------- G: dependencies without a preparation runtime
+
+/// FU-229: a node that declares dependencies on a runtime with no preparation
+/// profile settles with the typed refusal before any dispatch-journal row,
+/// intent or supervisor call. The original visit (and a selected debug export)
+/// still precede it, as for every preparation failure.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn declared_dependencies_without_preparation_fail_typed_before_any_effect() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    let run = run(&h, MICROPIP_YAML, false).await;
+    assert!(run.node.execute(&run.context).await.is_err());
+    assert_eq!(
+        run.events().await,
+        ["pipeline.code_preparation_unavailable"]
+    );
+    let failure = run.failure().await;
+    assert_eq!(failure.class, NodeFailureClass::Unknown);
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+    {
+        let main = h.main.lock().unwrap();
+        assert_eq!((main.visits, main.steps, main.effects), (1, 0, 0));
+        assert!(main.pending_at_intent.is_empty());
+    }
+    assert_eq!(h.supervisor.lock().unwrap().submits, 0);
+    assert!(h.dispatch.pending(&h.scope).await.unwrap().is_empty());
+}
+
+/// The same node without the import runs exactly as before: Main admits the
+/// visit and the supervisor receives the job.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn the_same_node_without_dependencies_still_reaches_the_supervisor() {
+    let h = harness(QUIET, Duration::ZERO).await;
+    let run = run(&h, PURE_YAML, false).await;
+    assert!(
+        run.node.execute(&run.context).await.is_err(),
+        "the fake fails it"
+    );
+    assert_ne!(
+        run.events().await,
+        ["pipeline.code_preparation_unavailable"]
+    );
+    assert_eq!(h.main.lock().unwrap().visits, 1);
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
 }
 
 // ------------------------------------------- F: release on the raw hydration

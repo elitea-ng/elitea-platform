@@ -36,23 +36,34 @@ case "$COMPILED_ENABLED" in
     ;;
   *) exit 1 ;;
 esac
-CODE_OWNER_ENABLED=${ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED:-false}
+# Main's original-Code owner recovery has no switch (PLAN §8.3/§8.7): it is on
+# wherever Agent dispatch is, and Main refuses to start without its identity.
+# The removed flag is refused rather than ignored.
+if [ -n "${ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED+set}" ]; then
+  echo "ERROR: ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED was removed: Code owner recovery is always on" >&2
+  exit 1
+fi
 CODE_PLATFORM_ENABLED=${ELITEA_RUNTIME_CODE_PLATFORM_ENABLED:-false}
 CODE_DEBUG_ENABLED=${ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED:-false}
-for flag in "$CODE_OWNER_ENABLED" "$CODE_PLATFORM_ENABLED" "$CODE_DEBUG_ENABLED"; do
+for flag in "$CODE_PLATFORM_ENABLED" "$CODE_DEBUG_ENABLED"; do
   case "$flag" in true|false) ;; *) exit 1 ;; esac
 done
-if [ "$CODE_PLATFORM_ENABLED" = true ] || [ "$CODE_DEBUG_ENABLED" = true ]; then
-  [ "$CODE_OWNER_ENABLED" = true ] || exit 1
-fi
-# These files enter Main's volume only. No private broker material enters a runner.
-if [ "$CODE_OWNER_ENABLED" = true ]; then
+# The owner identity is installed whenever the material job produced it; a
+# half pair (or a link, an empty or an oversized file) is refused.
+CODE_OWNER_PRESENT=false
+if [ -e "$SRC/code-owner-client.crt" ] || [ -e "$SRC/code-owner-client.key" ] \
+   || [ -L "$SRC/code-owner-client.crt" ] || [ -L "$SRC/code-owner-client.key" ]; then
   for name in code-owner-client.crt code-owner-client.key; do
     [ -f "$SRC/$name" ] && [ ! -L "$SRC/$name" ] || exit 1
     size=$(wc -c < "$SRC/$name")
     [ "$size" -gt 0 ] && [ "$size" -le 1048576 ] || exit 1
   done
+  CODE_OWNER_PRESENT=true
 fi
+if [ "$CODE_PLATFORM_ENABLED" = true ] || [ "$CODE_DEBUG_ENABLED" = true ]; then
+  [ "$CODE_OWNER_PRESENT" = true ] || exit 1
+fi
+# These files enter Main's volume only. No private broker material enters a runner.
 if [ "$CODE_PLATFORM_ENABLED" = true ]; then
   [ -f "$SRC/code-platform-content-keys.json" ] && [ ! -L "$SRC/code-platform-content-keys.json" ] || exit 1
   size=$(wc -c < "$SRC/code-platform-content-keys.json")
@@ -121,7 +132,7 @@ if [ "$COMPILED_ENABLED" = true ]; then
   install_files "$WORKER" 10001:10001 0600 rust-compiled-profiles.json
 fi
 
-if [ "$CODE_OWNER_ENABLED" = true ]; then
+if [ "$CODE_OWNER_PRESENT" = true ]; then
   install_files "$MAIN" 65532:65532 0644 code-owner-client.crt
   install_files "$MAIN" 65532:65532 0600 code-owner-client.key
 fi

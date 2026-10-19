@@ -1,5 +1,5 @@
 {{- $s := .Values.sandboxKubernetes }}
-{{- if and $s.supervisor.enabled .Values.networkPolicies.enabled }}
+{{- if and (include "elitea.sandbox.supervisorOn" .) .Values.networkPolicies.enabled }}
 # Ingress to the sandbox supervisor pods: each profile port admits the worker
 # pods and elitea-main (code-owner recovery), and probeFrom. Nothing else in
 # the cluster may open a connection.

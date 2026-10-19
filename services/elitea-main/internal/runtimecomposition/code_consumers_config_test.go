@@ -19,7 +19,6 @@ func codeConsumerEnvironment(t *testing.T) map[string]string {
 	values["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
 	values["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	values["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = owner.Supervisors[0].Audience
-	values["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED"] = "true"
 	values["ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED"] = "true"
 	values["ELITEA_RUNTIME_CODE_PLATFORM_ENABLED"] = "true"
 	values["ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED"] = "true"
@@ -57,7 +56,6 @@ func TestCodeConsumersDefaultOffAndRequireExplicitOwner(t *testing.T) {
 		}
 	}
 	values := codeConsumerEnvironment(t)
-	delete(values, "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED")
 	delete(values, "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG")
 	if _, err := ConfigFromEnv(mapLookup(values)); err == nil {
 		t.Fatal("consumers enabled without original owner")

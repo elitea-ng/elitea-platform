@@ -43,6 +43,7 @@ impl RemoteCodeRuntime {
         ),
         CodePreparationFailure,
     > {
+        refuse_unavailable_preparation(invocation, profile)?;
         self.admit_preparation_mode(invocation, profile)
             .await
             .map_err(|_| CodePreparationFailure::Failed)?;
@@ -540,6 +541,56 @@ where
         }
     }
     reconcile_or_prepare().await
+}
+
+/// FU-229: a node that declares dependencies on a runtime without a
+/// preparation profile is refused with a typed, readable failure instead of
+/// running and failing at import time. Pure: it runs before any journal
+/// record, Main admission or sandbox dispatch.
+pub(super) fn refuse_unavailable_preparation(
+    invocation: &CodeInvocation<'_>,
+    profile: &CodeRuntimeProfile,
+) -> Result<(), CodePreparationFailure> {
+    if profile.preparation.is_none()
+        && profile.preparation_client.is_none()
+        && declares_dependencies(
+            invocation.language,
+            invocation.source,
+            invocation.dependencies_toml,
+        )
+    {
+        return Err(CodePreparationFailure::Unavailable);
+    }
+    Ok(())
+}
+
+/// Package import specifiers the Deno runners resolve through preparation.
+const DENO_PACKAGE_SPECIFIERS: [&str; 6] = ["\"npm:", "'npm:", "`npm:", "\"jsr:", "'jsr:", "`jsr:"];
+
+/// Whether the saved node declares dependencies its runtime must prepare:
+/// Rust a saved `dependencies` TOML, JavaScript/TypeScript an `npm:`/`jsr:`
+/// import specifier, Python the `micropip` installer.
+pub(super) fn declares_dependencies(
+    language: CodeLanguage,
+    source: &str,
+    dependencies_toml: Option<&str>,
+) -> bool {
+    match language {
+        CodeLanguage::Rust => dependencies_toml.is_some(),
+        CodeLanguage::JavaScript | CodeLanguage::TypeScript => DENO_PACKAGE_SPECIFIERS
+            .iter()
+            .any(|specifier| source.contains(specifier)),
+        CodeLanguage::Python => contains_identifier(source, "micropip"),
+    }
+}
+
+fn contains_identifier(source: &str, identifier: &str) -> bool {
+    let continues = |c: char| c.is_alphanumeric() || c == '_';
+    source.match_indices(identifier).any(|(start, _)| {
+        let end = start + identifier.len();
+        !source[..start].chars().next_back().is_some_and(continues)
+            && !source[end..].chars().next().is_some_and(continues)
+    })
 }
 
 fn requires_dependency_preparation(

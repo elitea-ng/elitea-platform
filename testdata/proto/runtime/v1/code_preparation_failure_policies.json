@@ -16,5 +16,11 @@
     "code": "PIPELINE_CODE_FAILED",
     "message": "Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
     "retryable": false
+  },
+  {
+    "upstream_code": "pipeline.code_preparation_unavailable",
+    "code": "PIPELINE_CODE_FAILED",
+    "message": "Code dependency preparation is not available for this language in this deployment. Remove the package imports or ask your administrator to enable dependency preparation. Later nodes did not run.",
+    "retryable": false
   }
 ]

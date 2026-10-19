@@ -1,18 +1,36 @@
 {{- $s := .Values.sandboxKubernetes }}
-{{- if $s.supervisor.enabled }}
-{{- if not $s.enabled }}{{ fail "Kubernetes supervisor requires sandboxKubernetes.enabled" }}{{ end }}
-{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" $s.supervisor.image) }}
-{{- fail "Kubernetes supervisor image must use a registry SHA-256 digest" }}{{ end }}
-{{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $s.supervisor.materialSecret) }}
-{{- fail "Kubernetes supervisor requires a named materialSecret" }}{{ end }}
+{{- if include "elitea.sandbox.supervisorOn" . }}
+{{- /*
+  The Code sandbox supervisor (PLAN §8.3: on wherever the agent runtime runs).
+  Profiles with `name` are rendered by the chart into the
+  elitea-sandbox-profiles ConfigMap; profiles with `file` read a flat
+  configuration from the material Secret. Both sources are projections, which
+  the supervisor's --prepare-material copies into owner-private regular files
+  (services/elitea-worker-rust/src/sandbox/material.rs) before any listener
+  starts: the Secret into /run/elitea-sandbox, the ConfigMap into
+  /run/elitea-sandbox-profiles.
+*/}}
+{{- include "elitea.sandbox.digest" (dict "path" "sandboxKubernetes.supervisor.image" "value" $s.supervisor.image "what" "the elitea-sandbox-supervisor image") }}
+{{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" (toString $s.supervisor.materialSecret)) }}
+{{- fail "sandboxKubernetes.supervisor.materialSecret is required: name the Secret with the supervisor's certificates, keys, keyring and database files (a DNS label; default elitea-sandbox-material)." }}{{ end }}
 {{- if or (lt (len $s.supervisor.profiles) 1) (gt (len $s.supervisor.profiles) 8) }}
 {{- fail "Kubernetes supervisor requires one to eight profiles" }}{{ end }}
+{{- $configs := include "elitea.sandbox.profileConfigs" . | fromJson }}
 {{- $ports := dict }}{{- $files := dict }}{{- $services := dict }}
+{{- $args := list }}
 {{- range $s.supervisor.profiles }}
-{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" (default "" .file)) }}{{ fail "Kubernetes profile file must be a flat filename" }}{{ end }}
+{{- $file := "" }}
+{{- if hasKey . "name" }}
+{{- $file = printf "%s.json" .name }}
+{{- $args = append $args (printf "/run/elitea-sandbox-profiles/%s" $file) }}
+{{- else }}
+{{- $file = default "" .file }}
+{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" $file) }}{{ fail "Kubernetes profile file must be a flat filename" }}{{ end }}
+{{- $args = append $args (printf "/run/elitea-sandbox/%s" $file) }}
+{{- end }}
 {{- if or (not (regexMatch "^[0-9]+$" (toString .port))) (lt (int .port) 1024) (gt (int .port) 65535) }}{{ fail "Kubernetes profile port must be between 1024 and 65535" }}{{ end }}
-{{- if or (hasKey $ports (toString .port)) (hasKey $files .file) }}{{ fail "Kubernetes profiles require unique files and ports" }}{{ end }}
-{{- $_ := set $ports (toString .port) true }}{{- $_ := set $files .file true }}
+{{- if or (hasKey $ports (toString .port)) (hasKey $files $file) }}{{ fail "Kubernetes profiles require unique files and ports" }}{{ end }}
+{{- $_ := set $ports (toString .port) true }}{{- $_ := set $files $file true }}
 {{- with .serviceName }}
 {{- if or (not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" .)) (not (hasPrefix "elitea-sandbox-" .)) (eq . "elitea-sandbox-supervisor") (hasKey $services .) }}{{ fail "Kubernetes profile serviceName must be a unique elitea-sandbox DNS label" }}{{ end }}
 {{- $_ := set $services . true }}
@@ -20,13 +38,29 @@
 {{- end }}
 {{- $staging := $s.supervisor.contentStaging | default list }}
 {{- if gt (len $staging) 8 }}{{ fail "Kubernetes content staging supports at most eight clients" }}{{ end }}
-{{- if and $staging (not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" (default "" $s.supervisor.contentStagingInitImage))) }}{{ fail "Kubernetes content staging init image must use a registry SHA-256 digest" }}{{ end }}
+{{- if $staging }}
+{{- include "elitea.sandbox.digest" (dict "path" "sandboxKubernetes.supervisor.contentStagingInitImage" "value" $s.supervisor.contentStagingInitImage "what" "a pinned image with /bin/sh, mkdir and chmod") }}
+{{- end }}
 {{- $stagingNames := dict }}
 {{- range $staging }}
 {{- if not (regexMatch "^[a-z]([a-z0-9-]{0,46}[a-z0-9])?$" (default "" .name)) }}{{ fail "Kubernetes content staging name must be a DNS label of at most 48 characters" }}{{ end }}
 {{- if hasKey $stagingNames .name }}{{ fail "Kubernetes content staging names must be unique" }}{{ end }}
 {{- $_ := set $stagingNames .name true }}
 {{- if or (not (regexMatch "^[0-9]+$" (toString .sizeMiB))) (lt (int .sizeMiB) 1) (gt (int .sizeMiB) 1024) }}{{ fail "Kubernetes content staging sizeMiB must be between 1 and 1024" }}{{ end }}
+{{- end }}
+{{- if $configs }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elitea-sandbox-profiles
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-sandbox-supervisor.selectorLabels" . | nindent 4 }}
+data:
+  {{- range $name, $config := $configs }}
+  {{ $name }}.json: {{ toJson $config | quote }}
+  {{- end }}
+---
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -44,6 +78,12 @@ spec:
     metadata:
       labels:
         {{- include "elitea-sandbox-supervisor.selectorLabels" . | nindent 8 }}
+      {{- if $configs }}
+      annotations:
+        # A changed profile rolls the supervisor: the configuration is copied
+        # once, at start, by the init container.
+        checksum/profiles: {{ toJson $configs | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $s.supervisorServiceAccount }}
       {{- include "elitea.imagePullSecrets" (dict "local" (list) "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -74,6 +114,26 @@ spec:
               readOnly: true
             - name: private-material
               mountPath: /run/elitea-sandbox
+        {{- if $configs }}
+        - name: prepare-profiles
+          image: {{ $s.supervisor.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["--prepare-material", "/run/projected-profiles", "/run/elitea-sandbox-profiles"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - name: projected-profiles
+              mountPath: /run/projected-profiles
+              readOnly: true
+            - name: private-profiles
+              mountPath: /run/elitea-sandbox-profiles
+        {{- end }}
         {{- if $staging }}
         - name: prepare-content-staging
           image: {{ $s.supervisor.contentStagingInitImage | quote }}
@@ -104,9 +164,9 @@ spec:
           image: {{ $s.supervisor.image | quote }}
           imagePullPolicy: IfNotPresent
           args:
-            {{- range $s.supervisor.profiles }}
+            {{- range $args }}
             - --config
-            - {{ printf "/run/elitea-sandbox/%s" .file | quote }}
+            - {{ . | quote }}
             {{- end }}
           ports:
             {{- range $index, $profile := $s.supervisor.profiles }}
@@ -127,6 +187,11 @@ spec:
             - name: private-material
               mountPath: /run/elitea-sandbox
               readOnly: true
+            {{- if $configs }}
+            - name: private-profiles
+              mountPath: /run/elitea-sandbox-profiles
+              readOnly: true
+            {{- end }}
             {{- range $staging }}
             - name: content-{{ .name }}
               mountPath: {{ printf "/run/elitea-sandbox-content/%s" .name | quote }}
@@ -140,6 +205,16 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        {{- if $configs }}
+        - name: projected-profiles
+          configMap:
+            name: elitea-sandbox-profiles
+            defaultMode: 0444
+        - name: private-profiles
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
         {{- range $staging }}
         - name: content-{{ .name }}
           emptyDir:

@@ -43,7 +43,7 @@ for tool in helm yq; do
 done
 
 GATEWAY_RENDER_POSTURE=(--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.render-only=gateway --set networkPolicies.main.noExternalIngress=false)
-STANDALONE=(-f "$CHART/values-standalone.yaml")
+STANDALONE=(-f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/code-material-values.yaml")
 
 # The identity floor the strip middleware must delete (lower case). It is the
 # browser-edge floor of edge_identity_strip_test.go minus the names in

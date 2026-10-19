@@ -65,6 +65,17 @@ target "elitea-vector" {
 target "elitea-doc-extractor" {
   cache-from = ["type=gha,scope=elitea-doc-extractor-linux-amd64"]
 }
+// The Code sandbox (on by default, PLAN §8.3): the supervisor shares the
+// Rust worker's builder stage; the two runner images are what it starts Code in.
+target "elitea-sandbox" {
+  cache-from = ["type=gha,scope=elitea-sandbox-supervisor-linux-amd64"]
+}
+target "elitea-code-runner-deno" {
+  cache-from = ["type=gha,scope=elitea-code-runner-deno-linux-amd64"]
+}
+target "elitea-code-runner-rust" {
+  cache-from = ["type=gha,scope=elitea-code-runner-rust-linux-amd64"]
+}
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
 }
@@ -92,7 +103,9 @@ group "e2e" {
   targets = ["elitea-main", "elitea-deepwiki", "elitea-inventory", "elitea-web"]
 }
 
-// deploy/docker-compose.standalone-full.yml (+ the rust overlay)
+// deploy/docker-compose.standalone-full.yml: the native Rust worker, its
+// document extractor and the Code sandbox (supervisor + runner images) are
+// part of the base stack.
 group "standalone" {
   targets = [
     "elitea-migrate", "elitea-agentstate-migrate", "elitea-main", "elitea-scheduler",
@@ -101,13 +114,13 @@ group "standalone" {
     "elitea-inventory", "elitea-inventory-engine",
     "elitea-vector",
     "elitea-web", "elitea-worker", "mcp-mock", "qtest-mock",
-    "ado-mock",
+    "ado-mock", "elitea-doc-extractor",
+    "elitea-sandbox", "elitea-code-runner-deno", "elitea-code-runner-rust",
   ]
 }
 
-// The standalone stack plus deploy/docker-compose.standalone-rust-agent.yml,
-// whose elitea-doc-extractor sidecar only that overlay defines (a group that
-// named it without the overlay would have no build context).
+// Kept for the callers that name it; the rust overlay it once described is
+// merged into the base stack.
 group "standalone-rust" {
-  targets = ["standalone", "elitea-doc-extractor"]
+  targets = ["standalone"]
 }

@@ -78,6 +78,16 @@ impl TestConnectOptions {
         Self(self.0.disable_statement_logging())
     }
 
+    /// The production FU-221 keepalive options, for tests of that helper.
+    #[must_use]
+    pub(crate) fn with_server_tcp_keepalives(self) -> Self {
+        Self(crate::pg_keepalive::with_server_tcp_keepalives(self.0))
+    }
+
+    pub(crate) fn get_options(&self) -> Option<&str> {
+        self.0.get_options()
+    }
+
     pub(crate) fn get_host(&self) -> &str {
         self.0.get_host()
     }
