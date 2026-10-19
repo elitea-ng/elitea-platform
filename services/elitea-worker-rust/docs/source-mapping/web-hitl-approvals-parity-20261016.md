@@ -171,7 +171,7 @@ same response is Main's contract (FU-228); the result on pm1084 is recorded in Â
 Image for the pass: `elitea-web:trackw-13fcc9719`, Id `sha256:0d017774eb09â€¦`, built from `13fcc9719` (this branch
 merged with `main` `f4e6157aa`); extracted SPA assets contain the branch-only strings `chat-static-pause-panel` and
 `pause_progress`. It supersedes `elitea-web:trackw-00cddc4e2`. The image stays valid for every later head whose
-`git diff --name-only 13fcc9719 <head>` touches no Web build input (`apps/elitea-web/**`). Results: pending (stack not
+`git diff --name-only 13fcc9719 <head>` touches no Web build input (`apps/elitea-web/**`); checked: `13fcc9719..a17550ef2` changes only this file. Results: pending (stack not
 yet free).
 
 ## 9. Visual gaps (deferred)
