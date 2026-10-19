@@ -146,6 +146,11 @@ function buildHitlInterruptFromRaw(wire: HitlInterruptRawWire): Record<string, u
   };
 }
 
+/** A stored `fanout_parked_v1` (contract §8): an object with a `pending` list. */
+function isParkedMeta(value: unknown): boolean {
+  return Boolean(value) && typeof value === 'object' && Array.isArray((value as RawRecord)['pending']);
+}
+
 /** HITL resume-state reconstruction (convertChatConversationMessages.js:271-285) — #4823. */
 export function assistantHitlFields(
   meta: MessageGroupWire['meta'],
@@ -162,4 +167,13 @@ export function assistantHitlFields(
     ...(hitlInterrupts !== undefined ? { hitlInterrupts } : {}),
     ...(meta?.thread_id !== undefined ? { threadId: meta.thread_id } : {}),
   };
+}
+
+/**
+ * A response Main parked on per-interrupt cards (fan-out contract v1.1 §8):
+ * its cards live in the interrupt ledger, not in this row, and the flag is
+ * what makes the chat read them back (`useInterruptLedger`).
+ */
+export function assistantParkedFields(meta: MessageGroupWire['meta']): Partial<Pick<AssistantMessage, 'fanoutParked'>> {
+  return isParkedMeta(meta?.fanout_parked_v1) ? { fanoutParked: true } : {};
 }

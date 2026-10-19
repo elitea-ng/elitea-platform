@@ -107,6 +107,16 @@ export type NormalizedHitlInterrupt = {
   readonly parent_agent_path: readonly AgentPathTier[];
   /** The interrupt's own sibling ordinal, when the raw interrupt states a positive integer one. */
   readonly sibling_ordinal?: number;
+  /**
+   * A per-interrupt ledger card (`fanout-interrupt-card`, `lib/fanoutFrames.ts`):
+   * its Worker-minted key, ledger kind and the row revision a decision expects.
+   * Absent on every continuation-resumed pause.
+   */
+  readonly interrupt_key?: string;
+  readonly ledger_kind?: string;
+  readonly ledger_revision?: number;
+  /** The MCP server a delegated-auth ledger card signs in to (`display.server_url`). */
+  readonly server_url?: string;
   /** The decision for this card was submitted with its whole set; nothing is owed on it. */
   readonly decided?: boolean;
   /** The user decided this card; the decision waits for its siblings (`hitlDecisionQueue`). */

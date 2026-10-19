@@ -44,7 +44,6 @@ import { resetTurnForReplay } from "../lib/chatStreamReattach";
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
 import { usePendingReplay, useReattach } from "./usePendingReplay";
-import { isPauseFrameType, usePauseSettle } from "./usePauseSettle";
 import {
   nonEmptyString,
   useChatStreamRunStarters,
@@ -134,16 +133,14 @@ export function useChatStreamTransport(
   );
 
   /** Forget the run and close its stream. Never touches chat history. */
-  const pauseSettle = usePauseSettle();
   const detach = useCallback(() => {
-    pauseSettle.cancel();
     ownerRef.current = undefined;
     cancelRef.current = null;
     questionIdRef.current = undefined;
     generationRef.current = undefined;
     clearPendingReplay();
     closeStreamRef.current();
-  }, [clearPendingReplay, pauseSettle]);
+  }, [clearPendingReplay]);
 
   const onNodeEvent = useCallback(
     (frame: ExecutionEventData) => {
@@ -192,13 +189,13 @@ export function useChatStreamTransport(
         return;
       }
       if (isRootContextFrame(identifiedFrame) || terminal) refreshContext();
-      const epoch = runEpochRef.current; // A terminal pause closes after its card batch (`usePauseSettle`).
-      if (terminal && isPauseFrameType(identifiedFrame.type)) pauseSettle.defer(() => { if (runEpochRef.current === epoch) detach(); });
-      else if (terminal) detach();
+      // A per-card pause frame carries `pause_progress` and is not terminal; the
+      // first pause frame without it is the batch's aggregate (contract §9.2).
+      if (terminal) detach();
       if (shouldForwardAgentEvent(identifiedFrame.type))
         onAgentEventRef.current?.(identifiedFrame);
     },
-    [setChatHistory, detach, refreshContext, ownsRun, takePendingReplay, pauseSettle],
+    [setChatHistory, detach, refreshContext, ownsRun, takePendingReplay],
   );
 
   /**
@@ -297,7 +294,7 @@ export function useChatStreamTransport(
       const active = activeConversationRef.current;
       if (active !== undefined && active !== runConversationUuid) return true;
       ownerRef.current = runConversationUuid;
-      runEpochRef.current += 1; pauseSettle.cancel(); // a new run owns a fresh pause window
+      runEpochRef.current += 1;
       contextProjectRef.current = projectId;
       refreshContext();
       questionIdRef.current = questionId;
@@ -313,7 +310,7 @@ export function useChatStreamTransport(
       openStream(accepted.events_url);
       return true;
     },
-    [openStream, refreshContext, pauseSettle],
+    [openStream, refreshContext],
   );
 
   const attachExistingRun = useCallback<UseChatStreamTransportResult['attachExistingRun']>((target) => {

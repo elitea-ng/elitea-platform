@@ -26,6 +26,10 @@ import {
   type UseChatStreamTransportResult,
 } from "./useChatStreamTransport";
 import type { ChatMessage } from "../lib/convertMessagesToChatHistory";
+import { fanoutFixture } from "../__tests__/fanoutFixtures";
+
+const cardFixture = fanoutFixture<{ interrupt_id: string; interrupt_key: string }>("fanout-interrupt-card-v1");
+const parkedFixture = fanoutFixture("fanout-parked-v1");
 
 const BASE = "/api/v2";
 const EVENTS_URL = "/api/v2/executions/7/exec-1/events";
@@ -442,12 +446,11 @@ describe("useChatStreamTransport", () => {
   });
 
   /**
-   * Main reveals a paused run's pause frames only after its result is
-   * projected, then streams one progress frame per card and the aggregate
-   * back to back, with nothing marking the last. Detaching on the first card
-   * dropped the second from the live view (`usePauseSettle`).
+   * Contract v1.1 §9.2 (FU-227): every per-card pause frame carries
+   * `pause_progress: true` and the aggregate does not. The batch settles on
+   * the first unmarked pause frame, synchronously: no quiet window, no timer.
    */
-  it("keeps every card of a pause batch before it closes", async () => {
+  it("keeps every marked card of a pause batch and closes on the unmarked aggregate at once", async () => {
     okStart();
     const { api, history, Probe } = harness();
     render(<Probe />);
@@ -457,22 +460,26 @@ describe("useChatStreamTransport", () => {
       available_actions: ["approve", "reject"], parent_agent_name: name, parent_agent_call_id: `call-${id}`,
       parent_agent_path: [{ name, call_id: `call-${id}` }],
     });
-    const frame = (cards: object[]) => nodeEvent({
+    const frame = (cards: object[], progress: boolean) => nodeEvent({
       type: "agent_hitl_interrupt",
       content: "Approval needed",
-      response_metadata: { thread_id: "t-1", message: "Approval needed", hitl_interrupt: cards[0], hitl_interrupts: cards },
+      response_metadata: {
+        thread_id: "t-1", message: "Approval needed", hitl_interrupt: cards[0], hitl_interrupts: cards,
+        ...(progress ? { pause_progress: true } : {}),
+      },
     });
     act(() => {
-      registry.emit("execution.node_event", frame([card("i1", "Sub")]));
-      registry.emit("execution.node_event", frame([card("i2", "Sub")]));
-      registry.emit("execution.node_event", frame([card("i1", "Sub"), card("i2", "Sub")]));
+      registry.emit("execution.node_event", frame([card("i1", "Sub")], true));
+      registry.emit("execution.node_event", frame([card("i2", "Sub")], true));
     });
-    await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
+    expect(registry.getOpen()).toHaveLength(1);
+    act(() => { registry.emit("execution.node_event", frame([card("i1", "Sub"), card("i2", "Sub")], false)); });
+    expect(registry.getOpen()).toHaveLength(0);
     expect((history.current[0]?.hitlInterrupts ?? []).map((entry) => (entry as { interrupt_id?: string }).interrupt_id)).toEqual(["i1", "i2"]);
     expect(api.current?.isStreaming).toBe(false);
   });
 
-  it("shows a card that arrives after the window closed only after a reload, never live", async () => {
+  it("closes on the first unmarked pause frame without waiting, and folds nothing after it", async () => {
     okStart();
     const { history, Probe, api } = harness();
     render(<Probe />);
@@ -486,9 +493,34 @@ describe("useChatStreamTransport", () => {
       },
     });
     act(() => { registry.emit("execution.node_event", frame("i1")); });
-    await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
+    expect(registry.getOpen()).toHaveLength(0);
     act(() => { registry.emit("execution.node_event", frame("late")); });
     expect((history.current[0]?.hitlInterrupts ?? []).map((entry) => (entry as { interrupt_id?: string }).interrupt_id)).toEqual(["i1"]);
+  });
+
+  it("treats the parked terminal frame as the end of the run and a marked fan-out card as progress", async () => {
+    okStart();
+    const { history, Probe, api } = harness();
+    render(<Probe />);
+    await started(api);
+    act(() => {
+      registry.emit("execution.node_event", nodeEvent({
+        type: "agent_interrupt_pending", content: null,
+        response_metadata: { pause_progress: true, interrupt_card_v1: cardFixture },
+      }));
+    });
+    expect(registry.getOpen()).toHaveLength(1);
+    expect(history.current[0]?.isStreaming).toBe(true);
+    act(() => {
+      registry.emit("execution.node_event", nodeEvent({
+        type: "agent_hitl_interrupt", content: null,
+        response_metadata: { fanout_parked_v1: { ...parkedFixture, pending: [{ interrupt_id: cardFixture.interrupt_id, interrupt_key: cardFixture.interrupt_key }] } },
+      }));
+    });
+    expect(registry.getOpen()).toHaveLength(0);
+    expect(history.current[0]?.isStreaming).toBe(false);
+    expect(history.current[0]?.fanoutParked).toBe(true);
+    expect((history.current[0]?.hitlInterrupts ?? []).map((entry) => (entry as { interrupt_key?: string }).interrupt_key)).toEqual([cardFixture.interrupt_key]);
   });
 
   it("treats a stamped progress card as mid-run, so only the aggregate ends observation", async () => {

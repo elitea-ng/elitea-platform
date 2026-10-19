@@ -100,6 +100,8 @@ export interface AssistantMessage extends MessageBase {
   readonly toolActions?: readonly ToolAction[];
   readonly hitlInterrupt?: unknown;
   readonly hitlInterrupts?: readonly unknown[];
+  /** The stored response parked with open per-interrupt cards (`meta.fanout_parked_v1`). */
+  readonly fanoutParked?: boolean;
   readonly threadId?: string;
   readonly requiresConfirmation?: { readonly message: string; readonly buttonText: string };
   readonly likes?: number;

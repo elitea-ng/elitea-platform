@@ -27,6 +27,7 @@ import { buildChatContinuePayload, tryEmit } from './useChatBoxHandlers.helpers'
 import type { ChatBoxHandlerDeps, HitlInterruptAction, StreamStartOutcome } from './useChatBoxHandlers.helpers';
 import { cardFlags, cardKey, cardsOf, patchMessageCards, pendingCards, type HitlCard } from './useChatBoxHandlers.hitlCards';
 import { undeliveredText } from './useChatBoxHandlers.turns';
+import { decideLedgerCard, isLedgerCard } from './useChatBoxHandlers.ledger';
 
 /** The five `hitl_action` values the Go route admits (`currentRootHITLAction`). */
 const ROOT_HITL_ACTIONS: readonly string[] = ['approve', 'reject', 'edit', 'block_with_comment', 'answer'];
@@ -344,8 +345,11 @@ export async function decideHitlCard(deps: ChatBoxHandlerDeps, action: HitlInter
   const pending = pendingCards(message);
   const target = findTargetCard(pending, action, cards);
   if (!target) return;
+  // A per-interrupt ledger card is decided on its own (contract §6, §9.3).
+  if (isLedgerCard(target)) return decideLedgerCard(deps, message, target, action);
   const independent = Boolean(action.childThreadId) || isIndependentChild(target);
-  const set = independent ? [target] : pending.filter((card) => !isIndependentChild(card));
+  // Ledger cards never join a root continuation set: each is decided alone.
+  const set = independent ? [target] : pending.filter((card) => !isIndependentChild(card) && !isLedgerCard(card));
   const { scope, childThread } = decisionScope(deps, message, target, action, independent, cards);
   const decision: QueuedHitlDecision = { ...decisionAction(action), interruptId: cardKey(target, cards) };
   let decisions: readonly QueuedHitlDecision[] = [decision];

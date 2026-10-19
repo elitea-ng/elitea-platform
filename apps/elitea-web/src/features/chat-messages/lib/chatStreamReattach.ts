@@ -38,6 +38,12 @@ export interface ReattachableTurn {
   readonly messageId: string;
   readonly executionId: string;
   readonly questionId?: string | undefined;
+  /**
+   * `append`: a woken fan-out execution (contract §8) continues the SAME
+   * response, so its frames fold onto what the parked run already showed
+   * instead of replaying it from an empty row.
+   */
+  readonly replay?: 'append' | undefined;
 }
 
 /**

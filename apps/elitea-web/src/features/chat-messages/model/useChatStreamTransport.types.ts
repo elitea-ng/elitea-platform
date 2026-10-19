@@ -76,4 +76,6 @@ export interface ChatStreamReattachParams {
   readonly executionId: string;
   readonly responseMessageId: string;
   readonly questionId?: string | undefined;
+  /** `append`: do not reset the seeded row (a fan-out wake continues the same response). */
+  readonly replay?: 'append' | undefined;
 }

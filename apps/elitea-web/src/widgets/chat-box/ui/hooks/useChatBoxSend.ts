@@ -376,6 +376,7 @@ export function useChatBoxSend(
         executionId: turn.executionId,
         responseMessageId: turn.messageId,
         questionId: turn.questionId,
+        ...(turn.replay ? { replay: turn.replay } : {}),
       });
     },
     [projectId, conversationUuid, reattach],

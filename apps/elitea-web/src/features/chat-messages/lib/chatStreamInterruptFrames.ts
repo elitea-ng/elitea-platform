@@ -16,6 +16,7 @@ import {
   type NormalizedHitlInterrupt,
 } from './hitlInterrupts';
 import { replaceAt, threadIdOf, type ChatStreamContext } from './chatStreamShared';
+import { readParked } from './fanoutFrames';
 
 import type { ChatMessage } from './convertMessagesToChatHistory';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
@@ -55,25 +56,21 @@ function singlePauseRaw(frame: ChatStreamFrame): Record<string, unknown> {
 }
 
 /**
- * The marker a pause-progress frame would carry (proposed Worker contract).
- *
- * TODAY THE WEB CANNOT TELL a per-card progress frame from the terminal
- * aggregate. The Worker publishes every card through `publish_pause_progress`
- * and the aggregate through `publish_result_event`
- * (`services/elitea-worker-rust/src/execution/native_agent_lifecycle.rs`
- * `publish_batch` / `NativeStreamOutcome::Paused`), but both reach the browser
- * as the same `execution.node_event` with the same `type`, and for one card the
- * same `response_metadata` (`AgentPauseAccumulator::finish_hitl` clones the
- * first card's event). Main adds no marker either: its replay only HIDES every
- * pause frame until the terminal `AGENT_EXECUTION_RESULT` is projected
- * (`services/elitea-main/internal/infra/db/repos/replay_events.go`).
- *
- * So a pause frame is terminal unless it says it is progress. A Worker that
- * stamps `pause_progress: true` on each progress card (and strips it from the
- * aggregate) makes the N-card case exact; until then the first card ends the
- * observation, which is today's behaviour.
+ * The pause-progress marker (contract `fanout-interrupt-decisions-v1.md`
+ * §9.2, FU-227). The Worker stamps `response_metadata.pause_progress: true` on
+ * every per-card pause frame (`output_delivery.rs` `stamp_pause_progress`,
+ * `fanout_frames.rs` `interrupt_pending_event`) and never on the aggregate:
+ * the root path's paused terminal frame (`finish_hitl`) and the parked
+ * terminal frame (`fanout_parked_v1`). The pause batch therefore settles on
+ * the FIRST pause frame of the response without the marker; no timer guesses
+ * when the batch is over.
  */
 const PAUSE_PROGRESS_MARKER = 'pause_progress';
+
+/** Does this frame carry the parked execution's `fanout_parked_v1` (contract §8)? */
+function isParkedFrame(frame: ChatStreamFrame): boolean {
+  return readParked(frame.response_metadata?.['fanout_parked_v1']) !== undefined;
+}
 
 /**
  * A fan-out CHILD pause (Track-2 indexer shape): it stamps the child's own
@@ -110,11 +107,13 @@ function isFanoutChildPause(frame: ChatStreamFrame): boolean {
  * "the run is parked" and "the observer is released" cannot disagree.
  */
 export function isTerminalPauseFrame(frame: ChatStreamFrame): boolean {
+  if (frame.response_metadata?.[PAUSE_PROGRESS_MARKER] === true) return false;
+  // The parked terminal frame ends the run whatever its type (§8).
+  if (isParkedFrame(frame)) return true;
   if (frame.type === SocketMessageType.McpAuthorizationRequired) {
     return Array.isArray(frame.response_metadata?.['authorization_requests']);
   }
   if (frame.type !== SocketMessageType.AgentHitlInterrupt) return false;
-  if (frame.response_metadata?.[PAUSE_PROGRESS_MARKER] === true) return false;
   return !isFanoutChildPause(frame);
 }
 
@@ -134,7 +133,10 @@ function frameInterrupts(frame: ChatStreamFrame): {
   const nested = responseMetadata?.hitl_interrupt;
   // A frame whose only pause IS the aggregate (nested, or the metadata itself)
   // names no card: assembling one from its legacy fields would invent it.
-  const aggregateOnly = isParallelAggregateInterrupt(nested) || isParallelAggregateInterrupt(responseMetadata);
+  // The parked terminal frame names cards only by key: it is reconcile-only
+  // (`applyFanoutParkedFrame`) and never synthesises a card of its own.
+  const aggregateOnly = isParallelAggregateInterrupt(nested) || isParallelAggregateInterrupt(responseMetadata)
+    || (nested === undefined && isParkedFrame(frame));
   const raws: readonly Record<string, unknown>[] =
     listed.length > 0 ? listed : aggregateOnly ? [] : [singlePauseRaw(frame)];
   const candidates: readonly (Readonly<Record<string, unknown>> | undefined)[] = [...listed, nested, responseMetadata];

@@ -75,6 +75,11 @@ export const SocketMessageType = {
   AgentSwarmAgentStart: 'agent_swarm_agent_start',
   AgentSwarmAgentResponse: 'agent_swarm_agent_response',
   AgentSwarmHandoff: 'agent_swarm_handoff',
+  /** Fan-out contract v1.1 §9 (`lib/chatStreamFanoutFrames.ts`). */
+  AgentInterruptPending: 'agent_interrupt_pending',
+  AgentHitlResolved: 'agent_hitl_resolved',
+  AgentFanoutMember: 'agent_fanout_member',
+  AgentFanoutProgress: 'agent_fanout_progress',
 } as const;
 
 /**
@@ -122,6 +127,10 @@ export const HANDLED_STREAM_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.ChatPredictSummaryStarted,
   SocketMessageType.ChatPredictSummaryFinished,
   SocketMessageType.ChatUserMessage,
+  SocketMessageType.AgentInterruptPending,
+  SocketMessageType.AgentHitlResolved,
+  SocketMessageType.AgentFanoutMember,
+  SocketMessageType.AgentFanoutProgress,
 ]);
 
 /**
