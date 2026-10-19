@@ -66,6 +66,8 @@ export interface WorkspaceComposerProps {
   onSend: (prompt: string, mentions: string[], skills: string[]) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
+  /** The composer got focus: the page lets the host read ahead for the send (#1213). */
+  onFocus?: () => void;
 }
 
 function sendButtonSx(theme: Theme) {
@@ -214,7 +216,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   };
 
   return (
-    <Box data-testid="workspace-composer" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <Box data-testid="workspace-composer" onFocus={props.onFocus} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {menuOpen && (
         <SuggestionMenu
           data-testid={open.kind === 'file' ? 'workspace-file-menu' : 'workspace-command-menu'}

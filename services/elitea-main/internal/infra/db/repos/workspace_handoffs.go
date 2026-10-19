@@ -309,10 +309,19 @@ SELECT source, author_id FROM %s.chat_conversations WHERE uuid = $1::uuid`, sche
 				return workspacehandoff.ErrExecutorIsCloud
 			case existing.State != workspacestore.StateLocal:
 				return workspacehandoff.ErrInProgress
-			case existing.DeletedAt == nil && existing.DeleteAfter != nil && !existing.DeleteAfter.After(time.Now()):
+			}
+			if existing.DeletedAt == nil && existing.DeleteAfter != nil {
 				// The previous cloud copy is being erased: the erasure owns the
-				// thread prefix until its listing is empty.
-				return workspacehandoff.ErrInProgress
+				// thread prefix until its listing is empty. delete_after is
+				// stamped with the database clock, so it is compared there;
+				// against this process's clock a skew either way misreads it.
+				var erasing bool
+				if err := tx.QueryRow(ctx, `SELECT $1::timestamptz <= clock_timestamp()`, *existing.DeleteAfter).Scan(&erasing); err != nil {
+					return fmt.Errorf("workspace handoff: read erasure: %w", err)
+				}
+				if erasing {
+					return workspacehandoff.ErrInProgress
+				}
 			}
 		}
 		var pending bool

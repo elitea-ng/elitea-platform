@@ -115,6 +115,13 @@ exactly as a policy-confirmed one does, and a recorded decision for that call id
 and argument fingerprint answers it. Unset, nothing changes. The worker uses it
 to ask before a destructive `run_command` of a cloud workspace.
 
+`ToolExecutionStrategy::Auto` keeps the model's order across writes (#1213):
+only a run of adjacent read-only, concurrency-safe calls overlaps, and any other
+call runs alone in its place. The published 2.2.0 partitions the whole step and
+runs every safe call first, so a read listed after a write ran before it and
+read the old file. The desktop runs local tools under `Auto`; the regression is
+`d0::tests::a_read_after_a_write_in_one_step_runs_after_it`.
+
 `with_session_event_refresh` reloads the session view after each persisted event.
 Its default is false. Elitea enables it to use its durable active-history projection.
 All stream fragments still reach the caller. Partial fragments do not accumulate in the refreshed session.

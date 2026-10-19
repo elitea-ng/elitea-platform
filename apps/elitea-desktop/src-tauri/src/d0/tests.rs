@@ -363,7 +363,8 @@ fn request(workspace_id: &str) -> TurnRequest {
     }
 }
 
-async fn until_done(emitter: &VecEmitter) -> Vec<AgentEvent> {
+/// Until a turn's `done` event (only the event: its commit may still run).
+async fn done_event(emitter: &VecEmitter) -> Vec<AgentEvent> {
     for _ in 0..500 {
         let events = emitter.all();
         if events.iter().any(|event| event.kind == "done") {
@@ -374,7 +375,7 @@ async fn until_done(emitter: &VecEmitter) -> Vec<AgentEvent> {
     panic!("the turn did not finish: {:?}", emitter.kinds());
 }
 
-async fn until_done_of(emitter: &VecEmitter, turn_id: &str) {
+async fn done_event_of(emitter: &VecEmitter, turn_id: &str) {
     for _ in 0..500 {
         if emitter
             .all()
@@ -386,6 +387,36 @@ async fn until_done_of(emitter: &VecEmitter, turn_id: &str) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("turn {turn_id} did not finish: {:?}", emitter.kinds());
+}
+
+/// What `agent_turn_status` says of a turn's `done` now (its commit settles
+/// after the event).
+fn settled_done(h: &Harness, turn_id: &str) -> Value {
+    h.host.status(turn_id).unwrap().done.unwrap()
+}
+
+/// Until no commit of `host` is queued or running (they run after `done`).
+async fn commits_settled(host: &AgentHost) {
+    for _ in 0..500 {
+        if host.unsaved_commits().0 == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("a commit did not settle");
+}
+
+/// Until a turn's `done` and its commit: the turn as the platform ends up
+/// holding it. Every event, `commit_failed` included.
+async fn until_done(h: &Harness) -> Vec<AgentEvent> {
+    done_event(&h.emitter).await;
+    commits_settled(&h.host).await;
+    h.emitter.all()
+}
+
+async fn until_done_of(h: &Harness, turn_id: &str) {
+    done_event_of(&h.emitter, turn_id).await;
+    commits_settled(&h.host).await;
 }
 
 /// The platform of [`platform`], with a model that stalls while `slow` is
@@ -424,7 +455,7 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     let started = h.host.start(request(&h.workspace_id)).await.unwrap();
     assert_eq!(started.execution_id, EXECUTION);
-    let events = until_done(&h.emitter).await;
+    let events = until_done(&h).await;
 
     // Event sequencing: one turn id, gapless sequence, phases in order.
     assert!(events.iter().all(|e| e.turn_id == started.turn_id));
@@ -454,7 +485,6 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
             "tool_result:call-remote",
             "text_delta",
             "text_delta",
-            "status:committing",
             "status:done",
             "done",
         ]
@@ -492,8 +522,15 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(approval["title"], "Create a Jira issue");
     assert_eq!(approval["reason"], "Creates an issue in Jira");
     assert_eq!(approval["can_remember"], false);
+    // `done` came before the commit; the status says how it settled.
     let done = &by_kind("done")[0].payload;
-    assert_eq!(done["committed"], true);
+    assert_eq!(done["commit"], "pending");
+    assert_eq!(done["execution_id"], EXECUTION);
+    let settled = settled_done(&h, &started.turn_id);
+    assert_eq!(
+        (settled["committed"].clone(), settled["commit"].clone()),
+        (json!(true), json!("committed"))
+    );
     assert_eq!(done["conversation_id"], 42);
     assert_eq!(done["changed_files"], 1);
     assert_eq!(
@@ -530,7 +567,11 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(first["model"], "gpt-test");
     let system = first["messages"][0]["content"].as_str().unwrap();
     assert!(
-        system.starts_with("Be brief.\n\nMemory: the user likes tea."),
+        system.starts_with("Be brief.\n\n## Environment\n"),
+        "{system}"
+    );
+    assert!(
+        system.find("\n\nMemory: the user likes tea.") > system.find("## Environment"),
         "{system}"
     );
     assert!(system.contains("Available skill: Style."), "{system}");
@@ -621,7 +662,7 @@ async fn a_denied_remote_call_is_a_tool_failure_the_model_reads() {
     let server = serve(platform(agent_details(), &[])).await;
     let h = harness(server, allowed(), UiDecision::Deny).await;
     h.host.start(request(&h.workspace_id)).await.unwrap();
-    let events = until_done(&h.emitter).await;
+    let events = until_done(&h).await;
     let results: Vec<_> = events.iter().filter(|e| e.kind == "tool_result").collect();
     assert_eq!(results[1].payload["ok"], false);
     assert!(
@@ -727,7 +768,7 @@ async fn a_cancelled_turn_commits_nothing() {
     h.host.cancel(&started.turn_id).unwrap();
     // A second cancel of a cancelled turn is still a cancel.
     h.host.cancel(&started.turn_id).unwrap();
-    let events = until_done(&h.emitter).await;
+    let events = until_done(&h).await;
     let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
     assert_eq!(kinds[kinds.len() - 2], "status");
     assert_eq!(events[events.len() - 2].payload["phase"], "cancelled");
@@ -753,7 +794,7 @@ async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
     let server = stalling_platform(slow.clone()).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     let first = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &first.turn_id).await;
+    until_done_of(&h, &first.turn_id).await;
     let notes = h.folder.path().join("notes.txt");
     assert!(notes.exists());
 
@@ -779,7 +820,7 @@ async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
 
     h.host.cancel(&second.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
-    until_done_of(&h.emitter, &second.turn_id).await;
+    until_done_of(&h, &second.turn_id).await;
     assert_eq!(
         h.host.restore(&first.turn_id, None, false).unwrap(),
         ["notes.txt"]
@@ -807,7 +848,7 @@ async fn only_the_last_turns_of_a_workspace_are_kept() {
     let mut ids = Vec::new();
     for _ in 0..=TURNS_KEPT_PER_WORKSPACE {
         let started = h.host.start(request(&h.workspace_id)).await.unwrap();
-        until_done_of(&h.emitter, &started.turn_id).await;
+        until_done_of(&h, &started.turn_id).await;
         ids.push(started.turn_id);
     }
     // The oldest is forgotten, with a code that says why.
@@ -839,7 +880,7 @@ async fn a_workspace_with_a_running_turn_cannot_be_removed() {
 
     h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
-    until_done_of(&h.emitter, &running.turn_id).await;
+    until_done_of(&h, &running.turn_id).await;
     h.host.remove_workspace(&h.workspace_id).await.unwrap();
     // Its turns are gone from the host, and a new turn finds no workspace.
     assert_eq!(
@@ -875,7 +916,7 @@ async fn a_model_refusal_is_committed_as_a_failed_turn() {
     .await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     h.host.start(request(&h.workspace_id)).await.unwrap();
-    let events = until_done(&h.emitter).await;
+    let events = until_done(&h).await;
     let error = events.iter().find(|e| e.kind == "error").unwrap();
     assert_eq!(
         error.payload["code"],
@@ -886,11 +927,9 @@ async fn a_model_refusal_is_committed_as_a_failed_turn() {
         .filter(|e| e.kind == "status")
         .map(|e| e.payload["phase"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(
-        phases,
-        ["resolving", "starting", "running", "committing", "error"]
-    );
-    assert_eq!(events.last().unwrap().payload["committed"], true);
+    assert_eq!(phases, ["resolving", "starting", "running", "error"]);
+    let done = events.iter().find(|e| e.kind == "done").unwrap();
+    assert_eq!(settled_done(&h, &done.turn_id)["committed"], true);
     let commit = &seen(
         &h.server,
         &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
@@ -1071,7 +1110,7 @@ async fn referenced_files_are_listed_under_the_prompt_never_inlined() {
     let mut with_mentions = request(&h.workspace_id);
     with_mentions.mentions = vec!["src/main.rs".into(), "src".into(), "src/main.rs".into()];
     h.host.start(with_mentions).await.unwrap();
-    until_done(&h.emitter).await;
+    until_done(&h).await;
     let expected =
         "Write notes and file a bug\n\nFiles the user referenced:\n- src/main.rs\n- src/";
     let start = &seen(
@@ -1101,7 +1140,7 @@ async fn agents_md_is_applied_after_the_agents_instructions_and_reported() {
     req.mentions = vec!["apps/web/main.ts".into()];
     req.plan_mode = true;
     h.host.start(req).await.unwrap();
-    let events = until_done(&h.emitter).await;
+    let events = until_done(&h).await;
     let running = events
         .iter()
         .find(|e| e.kind == "status" && e.payload["phase"] == "running")
@@ -1145,7 +1184,7 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
     req.prompt = "/style Write notes and file a bug".into();
     req.skills = vec!["style".into()];
     h.host.start(req).await.unwrap();
-    until_done(&h.emitter).await;
+    until_done(&h).await;
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
@@ -1170,6 +1209,92 @@ async fn a_picked_skill_is_applied_to_the_turn_after_the_agents_instructions() {
         start_body["user_input"],
         "/style Write notes and file a bug"
     );
+}
+
+/// `git` in `dir`, isolated from the person's configuration.
+fn git_in(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .current_dir(dir)
+        .args([
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+/// The first `/llm` request's system prompt: the agent's instructions, the
+/// host's environment section (folder name, branch, changed files,
+/// enforcement, network; no absolute path), then the untrusted parts
+/// (the picked skill, AGENTS.md, both nonce-framed), then the memory.
+#[tokio::test]
+async fn system_prompt_order_env_before_untrusted() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    git_in(h.folder.path(), &["init", "-q"]);
+    git_in(h.folder.path(), &["add", "-A"]);
+    git_in(h.folder.path(), &["commit", "-q", "-m", "init"]);
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.\n").unwrap();
+    std::fs::write(h.folder.path().join("draft.txt"), "x").unwrap();
+    let mut req = request(&h.workspace_id);
+    req.prompt = "/style Write notes and file a bug".into();
+    req.skills = vec!["style".into()];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    let at = |needle: &str| {
+        system
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {system}"))
+    };
+    let order = [
+        at("Be brief."),
+        at("## Environment\n"),
+        at("name=\"Style\">\nWrite tersely."),
+        at("Run task test."),
+        at("Memory: the user likes tea."),
+    ];
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+    let environment = &system[order[1]..];
+    let environment = &environment[..environment.find("\n\n## ").unwrap()];
+    let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
+    assert!(
+        environment.contains(&format!(
+            "- Workspace: {folder} (git: branch main, 2 changed files)"
+        )),
+        "{environment}"
+    );
+    assert!(
+        environment.contains("- Sandbox: workspace-write, "),
+        "{environment}"
+    );
+    assert!(
+        environment.contains("- Network for commands: off (loopback off too)"),
+        "{environment}"
+    );
+    assert!(environment.contains("search_files"), "{environment}");
+    // The host's section is not framed; the untrusted parts are.
+    assert!(!environment.contains("nonce="), "{environment}");
+    // No absolute path, of the folder or of the app's data.
+    for path in [h.folder.path(), h.app.path()] {
+        let canonical = std::fs::canonicalize(path).unwrap();
+        for spelling in [path.to_string_lossy(), canonical.to_string_lossy()] {
+            assert!(!system.contains(spelling.as_ref()), "{spelling}: {system}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -1303,7 +1428,7 @@ async fn a_running_turn_keeps_its_workspace_on_its_project() {
 
     h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
-    until_done_of(&h.emitter, &running.turn_id).await;
+    until_done_of(&h, &running.turn_id).await;
     assert_eq!(
         h.host.bind_project(&h.workspace_id, 2).unwrap().project_id,
         Some(2)
@@ -1423,17 +1548,22 @@ async fn a_turn_past_its_run_is_not_cancellable() {
     );
     let refused = h.host.cancel(&started.turn_id).unwrap_err();
     assert_eq!(refused.code, "turn_not_cancellable");
-    let status = h.host.status(&started.turn_id).unwrap();
-    assert_eq!((status.state, status.done), ("committing", None));
-    hold.store(false, Ordering::SeqCst);
-    let events = until_done(&h.emitter).await;
-    // The refusal was the truth: the turn was committed.
-    let done = events.last().unwrap();
-    assert_eq!(done.payload["committed"], true);
-    // A UI that missed `done` gets the same payload from the status.
+    // `done` was sent before the commit: the turn is done, its commit
+    // pending.
     let status = h.host.status(&started.turn_id).unwrap();
     assert_eq!(status.state, "done");
-    assert_eq!(status.done.as_ref(), Some(&done.payload));
+    let pending = status.done.unwrap();
+    assert_eq!(pending["commit"], "pending");
+    hold.store(false, Ordering::SeqCst);
+    let events = until_done(&h).await;
+    // The refusal was the truth: the turn was committed.
+    let done = events.iter().find(|e| e.kind == "done").unwrap();
+    assert_eq!(done.payload, pending);
+    // A UI that missed `done` gets its payload from the status, settled.
+    let settled = settled_done(&h, &started.turn_id);
+    assert_eq!(settled["committed"], true);
+    assert_eq!(settled["commit"], "committed");
+    assert_eq!(settled["message_ids"], done.payload["message_ids"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1452,16 +1582,18 @@ async fn a_turn_never_finishes_under_another_session() {
         h.credentials
             .switch_to((!signed_out).then_some("https://other.example#2"));
         slow.store(false, Ordering::SeqCst);
-        until_done_of(&h.emitter, &started.turn_id).await;
+        until_done_of(&h, &started.turn_id).await;
         let events = h.emitter.all();
+        // The commit, after `done`, is refused locally and reported.
         assert!(
             events
                 .iter()
-                .any(|e| e.kind == "error" && e.payload["code"] == "identity_changed"),
+                .any(|e| (e.kind == "error" || e.kind == "commit_failed")
+                    && e.payload["code"] == "identity_changed"),
             "{:?}",
             h.emitter.kinds()
         );
-        assert_eq!(events.last().unwrap().payload["committed"], false);
+        assert_eq!(settled_done(&h, &started.turn_id)["committed"], false);
         assert!(
             seen(
                 &h.server,
@@ -1490,14 +1622,14 @@ async fn signing_out_cancels_running_turns_and_forgets_kept_ones() {
     )
     .await;
     let finished = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &finished.turn_id).await;
+    until_done_of(&h, &finished.turn_id).await;
     slow.store(true, Ordering::SeqCst);
     let running = h.host.start(request(&h.workspace_id)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     h.host.forget_identity();
     slow.store(false, Ordering::SeqCst);
-    until_done_of(&h.emitter, &running.turn_id).await;
+    until_done_of(&h, &running.turn_id).await;
     let done = h
         .emitter
         .all()
@@ -1533,7 +1665,7 @@ async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
     std::fs::write(h.folder.path().join("README.md"), "x").unwrap();
     asked.mentions = vec!["README.md".into()];
     let started = h.host.start(asked).await.unwrap();
-    let emitted: Vec<AgentEvent> = until_done(&h.emitter)
+    let emitted: Vec<AgentEvent> = until_done(&h)
         .await
         .into_iter()
         .filter(|e| e.turn_id == started.turn_id)
@@ -1617,7 +1749,7 @@ async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
 async fn removing_a_workspace_forgets_its_threads() {
     let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
     let started = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &started.turn_id).await;
+    until_done_of(&h, &started.turn_id).await;
     assert_eq!(
         h.host
             .thread_history(&h.workspace_id, "42")
@@ -1646,7 +1778,7 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
     )
     .await;
     let done = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &done.turn_id).await;
+    until_done_of(&h, &done.turn_id).await;
     slow.store(true, Ordering::SeqCst);
     let running = h.host.start(request(&h.workspace_id)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1670,7 +1802,7 @@ async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
 
     h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
-    until_done_of(&h.emitter, &running.turn_id).await;
+    until_done_of(&h, &running.turn_id).await;
     doctor.fix("workspaces.drop_missing", true).unwrap();
     assert!(workspaces.all().unwrap().is_empty());
     // As workspace_remove: its kept turns, its session and its thread
@@ -1727,9 +1859,9 @@ fn files_in(dir: &std::path::Path) -> Vec<String> {
 async fn undo_is_for_the_newest_turn_and_an_older_one_restores_the_folder_only_when_asked() {
     let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
     let first = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &first.turn_id).await;
+    until_done_of(&h, &first.turn_id).await;
     let second = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &second.turn_id).await;
+    until_done_of(&h, &second.turn_id).await;
     let folder = h.folder.path();
     assert_eq!(files_in(folder), ["turn0.txt", "turn1.txt"]);
     assert!(!h.host.undo_offer(&first.turn_id).unwrap().latest);
@@ -1785,7 +1917,7 @@ async fn undo_is_for_the_newest_turn_and_an_older_one_restores_the_folder_only_w
 async fn a_restore_runs_on_the_current_session_and_refuses_a_checkpoint_it_cannot_reach() {
     let h = harness(writing_platform().await, allowed(), UiDecision::AllowOnce).await;
     let first = h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done_of(&h.emitter, &first.turn_id).await;
+    until_done_of(&h, &first.turn_id).await;
     // The folder becomes a git work tree, and the policy changes, so the
     // workspace's session is replaced: its checkpoints are git ones now,
     // the turn's is a copy the current session cannot reach.
@@ -1895,7 +2027,7 @@ async fn index_tools_run_locally_and_a_toolkit_tool_never_takes_their_names() {
     let h = harness(server, index_allowed(), UiDecision::AllowOnce).await;
     built_index(&h).await;
     h.host.start(request(&h.workspace_id)).await.unwrap();
-    let events = until_done(&h.emitter).await;
+    let events = until_done(&h).await;
 
     let tools = offered_tools(&h.server);
     for name in elitea_local_index::tools::NAMES {
@@ -1934,7 +2066,7 @@ async fn plan_mode_keeps_the_index_tools() {
     let mut req = request(&h.workspace_id);
     req.plan_mode = true;
     h.host.start(req).await.unwrap();
-    until_done(&h.emitter).await;
+    until_done(&h).await;
     let tools = offered_tools(&h.server);
     assert!(
         tools.iter().any(|t| t == "search_knowledge_graph"),
@@ -1951,7 +2083,7 @@ async fn the_policy_turning_the_index_off_offers_no_index_tools() {
     // `local_index` absent (off) while local work stays allowed.
     h.policy.set(allowed());
     h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done(&h.emitter).await;
+    until_done(&h).await;
     let tools = offered_tools(&h.server);
     assert!(tools.iter().any(|t| t == "write_file"), "{tools:?}");
     for name in elitea_local_index::tools::NAMES {
@@ -1969,7 +2101,7 @@ async fn a_turns_changes_mark_the_index_stale_and_removal_deletes_it() {
     built_index(&h).await;
     // The turn writes notes.txt.
     h.host.start(request(&h.workspace_id)).await.unwrap();
-    until_done(&h.emitter).await;
+    until_done(&h).await;
     let status = h.index.status(&h.workspace_id).await.unwrap();
     assert_eq!(status.state, elitea_local_index::service::IndexState::Stale);
     assert_eq!(status.changed_files, 1);
@@ -2332,7 +2464,7 @@ fn turn(h: &Harness, prompt: &str) -> TurnRequest {
 /// Run one turn and wait for its `done`.
 async fn run_turn(h: &Harness, prompt: &str) -> String {
     let started = h.host.start(turn(h, prompt)).await.unwrap();
-    until_done_of(&h.emitter, &started.turn_id).await;
+    until_done_of(h, &started.turn_id).await;
     started.turn_id
 }
 
@@ -2657,7 +2789,7 @@ async fn cancelled_turn_leaves_no_session_events() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     h.host.cancel(&started.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
-    until_done_of(&h.emitter, &started.turn_id).await;
+    until_done_of(&h, &started.turn_id).await;
     let committed = h
         .emitter
         .all()
@@ -2692,7 +2824,8 @@ async fn a_refused_commit_forces_a_reseed_from_the_server() {
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     run_turn(&h, "create hello.txt with hi").await;
     // Turn 2: the server refuses to save it.
-    convo.lock().unwrap().refuse_commits = 1;
+    // Every attempt (the commit is retried) is refused.
+    convo.lock().unwrap().refuse_commits = 3;
     let second = run_turn(&h, "what file did you just create?").await;
     let done = h
         .emitter
@@ -2813,7 +2946,7 @@ async fn a_refused_session_store_still_runs_the_turn_seeded_from_the_server() {
             .start(turn(&emitter_off, "what file did you just create?"))
             .await
             .unwrap();
-        until_done_of(&emitter_off.emitter, &started.turn_id).await;
+        done_event_of(&emitter_off.emitter, &started.turn_id).await;
         let bodies = llm_bodies(&emitter_off.server);
         let last = shape(bodies.last().unwrap());
         assert_eq!(last.len(), 5, "{last:?}");
@@ -3107,7 +3240,7 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
     // The first turn settles; the second one may go on and re-seed.
     slow.store(false, Ordering::SeqCst);
     h.host.cancel(&started.turn_id).unwrap();
-    until_done_of(&h.emitter, &started.turn_id).await;
+    until_done_of(&h, &started.turn_id).await;
     let second = h
         .host
         .start(TurnRequest {
@@ -3116,7 +3249,7 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
         })
         .await
         .unwrap();
-    until_done_of(&h.emitter, &second.turn_id).await;
+    until_done_of(&h, &second.turn_id).await;
     assert_eq!(seed_requests(&h.server), 2, "the second turn re-seeded");
     let second_body = llm_bodies(&h.server)
         .iter()
@@ -3127,4 +3260,1190 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
         second_body.contains("late question") && second_body.contains("Late answer."),
         "the late groups were folded in: {second_body}"
     );
+}
+
+/// The agent of the step-limit tests: two model steps per run.
+fn two_step_details() -> Value {
+    let mut details = agent_details();
+    details["meta"] = json!({"step_limit": 2});
+    details
+}
+
+/// The platform of [`platform`] with a model that calls `list_tree` for its
+/// first `tool_calls` requests (every request when `None`), then answers.
+async fn looping_platform(tool_calls: Option<usize>) -> MockServer {
+    let inner = platform(two_step_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            if tool_calls.is_none_or(|limit| call < limit) {
+                return tool_call(&format!("call-{call}"), "list_tree", &json!({}));
+            }
+            return say("Done.");
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn of_kind(events: &[AgentEvent], kind: &str) -> Vec<Value> {
+    events
+        .iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| e.payload.clone())
+        .collect()
+}
+
+fn commit_bodies(server: &MockServer) -> Vec<Value> {
+    seen(
+        server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )
+    .iter()
+    .map(|req| serde_json::from_str(&req.body).unwrap())
+    .collect()
+}
+
+#[tokio::test]
+async fn step_limit_asks_to_continue_and_continues_same_session() {
+    let h = harness(
+        looping_platform(Some(3)).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+
+    // At the limit (2 steps), the person is asked; never remembered.
+    let questions = of_kind(&events, "approval_request");
+    assert_eq!(questions.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(questions[0]["kind"], "continue");
+    assert_eq!(questions[0]["title"], "The agent used its 2 steps");
+    assert_eq!(questions[0]["steps"], 2);
+    assert_eq!(questions[0]["can_remember"], false);
+    // The run goes on, from the host's prompt (marked so), not a new start.
+    let continued: Vec<Value> = of_kind(&events, "status")
+        .into_iter()
+        .filter(|s| s.get("continued").is_some())
+        .collect();
+    assert_eq!(continued.len(), 1);
+    assert_eq!(continued[0]["phase"], "running");
+    assert_eq!(
+        continued[0]["host_prompt"],
+        "Continue from where you stopped."
+    );
+
+    // The second run's first request carries the first run whole: the
+    // prompt, both tool calls and their results, then the host's prompt.
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 4);
+    let second_run = shape(&bodies[2]);
+    assert_eq!(
+        second_run
+            .iter()
+            .map(|(role, _, _)| role.as_str())
+            .collect::<Vec<_>>(),
+        ["user", "assistant", "tool", "assistant", "tool", "user"],
+        "{second_run:?}"
+    );
+    assert!(second_run[0].1.contains("Write notes and file a bug"));
+    assert_eq!(second_run[1].2, ["list_tree"]);
+    assert_eq!(second_run[5].1, "Continue from where you stopped.");
+    let call_ids: Vec<&str> = bodies[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["tool_calls"][0]["id"].as_str())
+        .collect();
+    assert_eq!(call_ids, ["call-0", "call-1"]);
+
+    // One execution, one commit: the server sees one turn with every step.
+    assert_eq!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .len(),
+        1
+    );
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    let body = &commits[0];
+    assert_eq!(
+        body["user_message"]["content"],
+        "Write notes and file a bug"
+    );
+    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(body["tool_calls"].as_object().unwrap().len(), 3);
+    assert_eq!(body["hitl_exchanges"][0]["kind"], "continue");
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "approve");
+    assert!(body["hitl_exchanges"][0].get("tool_run_id").is_none());
+    let statuses = of_kind(&events, "status");
+    assert!(
+        statuses.iter().all(|s| s.get("note").is_none()),
+        "{statuses:?}"
+    );
+    assert_eq!(of_kind(&events, "done")[0]["commit"], "pending");
+    assert_eq!(commit_bodies(&h.server).len(), 1);
+}
+
+#[tokio::test]
+async fn continue_is_capped() {
+    let h = harness(
+        looping_platform(None).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    // Asked three times, each time anew; a fourth limit is not asked.
+    assert_eq!(of_kind(&events, "approval_request").len(), 3);
+    assert_eq!(llm_bodies(&h.server).len(), 8, "4 runs of 2 steps");
+    // The turn is committed as it is, once, noted as stopped at the limit.
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["tool_calls"].as_object().unwrap().len(), 8);
+    assert_eq!(commits[0]["hitl_exchanges"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        commits[0]["assistant_message"],
+        json!({"content": "The agent stopped after using its 2 steps."})
+    );
+    let done_status = of_kind(&events, "status")
+        .into_iter()
+        .find(|s| s["phase"] == "done")
+        .unwrap();
+    assert_eq!(done_status["note"], "step_limit_reached");
+    assert_eq!(of_kind(&events, "done")[0]["commit"], "pending");
+}
+
+#[tokio::test]
+async fn stop_here_commits_the_turn_at_its_limit() {
+    let h = harness(looping_platform(None).await, allowed(), UiDecision::Deny).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(of_kind(&events, "approval_request").len(), 1);
+    assert_eq!(llm_bodies(&h.server).len(), 2);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["hitl_exchanges"][0]["decision"], "reject");
+    let done_status = of_kind(&events, "status")
+        .into_iter()
+        .find(|s| s["phase"] == "done")
+        .unwrap();
+    assert_eq!(done_status["note"], "step_limit_reached");
+}
+
+/// The server refuses a commit with more than `localturn.MaxToolCalls`
+/// (512) keys in `tool_calls`: a turn stops there, never asks to go on, and
+/// commits exactly that many.
+#[tokio::test]
+async fn a_turn_stops_at_the_tool_calls_a_commit_may_carry() {
+    let inner = platform(agent_details(), &[]);
+    let steps = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            // Nine calls a step: the 57th step crosses 512.
+            let step = steps.fetch_add(1, Ordering::SeqCst);
+            let ids: Vec<String> = (0..9).map(|n| format!("call-{step}-{n}")).collect();
+            let calls: Vec<(&str, &str, Value)> = ids
+                .iter()
+                .map(|id| (id.as_str(), "list_tree", json!({})))
+                .collect();
+            return tool_calls(&calls);
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(
+        llm_bodies(&h.server).len(),
+        57,
+        "not asked again past the cap"
+    );
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "no Continue?"
+    );
+    // The call past the cap was neither run nor shown.
+    assert_eq!(of_kind(&events, "tool_call").len(), 512);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    let calls = commits[0]["tool_calls"].as_object().unwrap();
+    assert_eq!(calls.len(), super::recorder::MAX_TOOL_CALLS);
+    assert!(!calls.contains_key("call-56-8"));
+    let done_status = of_kind(&events, "status")
+        .into_iter()
+        .find(|s| s["phase"] == "done")
+        .unwrap();
+    assert_eq!(done_status["note"], "tool_call_limit_reached");
+    assert!(of_kind(&events, "commit_failed").is_empty());
+}
+
+/// The workspace's own step limit wins over the agent's `meta.step_limit`.
+#[tokio::test]
+async fn the_workspace_step_limit_wins_over_the_agents() {
+    let inner = platform(two_step_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return tool_call("call", "list_tree", &json!({}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.workspaces
+        .set_agent_settings(
+            &h.workspace_id,
+            crate::workspaces::AgentSettings {
+                step_limit: Some(10),
+            },
+        )
+        .unwrap();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let question = &of_kind(&events, "approval_request")[0];
+    assert_eq!(question["title"], "The agent used its 10 steps");
+    assert_eq!(llm_bodies(&h.server).len(), 10);
+}
+
+// ---- Parallel read-only tools (#1213 stage 1) ----
+
+/// One model answer asking for several tool calls, in this order.
+fn tool_calls(calls: &[(&str, &str, Value)]) -> Res {
+    let deltas: Vec<Value> = calls
+        .iter()
+        .enumerate()
+        .map(|(index, (id, name, args))| {
+            json!({"index": index, "id": id, "type": "function",
+                "function": {"name": name, "arguments": args.to_string()}})
+        })
+        .collect();
+    sse(&[
+        json!({"choices": [{"delta": {"tool_calls": deltas}}]}),
+        json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+    ])
+}
+
+/// When one probe call ran: its call id, start and end.
+type ProbeLog = Arc<Mutex<Vec<(String, std::time::Instant, std::time::Instant)>>>;
+
+/// A tool that sleeps `args.ms` and records when it ran: read-only and
+/// concurrency-safe (`probe_read`), or neither (`probe_write`).
+struct ProbeTool {
+    name: &'static str,
+    read_only: bool,
+    log: ProbeLog,
+}
+
+#[async_trait]
+impl adk_core::Tool for ProbeTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "A probe that records when it runs."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({"type": "object", "properties": {"ms": {"type": "integer"}}}))
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        self.read_only
+    }
+
+    async fn execute(
+        &self,
+        ctx: Arc<dyn adk_core::ToolContext>,
+        args: Value,
+    ) -> adk_core::Result<Value> {
+        let begun = std::time::Instant::now();
+        let ms = args.get("ms").and_then(Value::as_u64).unwrap_or(100);
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+        self.log.lock().unwrap().push((
+            ctx.function_call_id().to_owned(),
+            begun,
+            std::time::Instant::now(),
+        ));
+        Ok(json!({"slept_ms": ms}))
+    }
+}
+
+struct ProbeToolset(Vec<Arc<dyn adk_core::Tool>>);
+
+#[async_trait]
+impl adk_core::Toolset for ProbeToolset {
+    fn name(&self) -> &str {
+        "probes"
+    }
+
+    async fn tools(
+        &self,
+        _ctx: Arc<dyn adk_core::ReadonlyContext>,
+    ) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
+        Ok(self.0.clone())
+    }
+}
+
+fn add_probes(h: &Harness) -> ProbeLog {
+    let log = ProbeLog::default();
+    h.host.add_test_toolset(Arc::new(ProbeToolset(vec![
+        Arc::new(ProbeTool {
+            name: "probe_read",
+            read_only: true,
+            log: log.clone(),
+        }),
+        Arc::new(ProbeTool {
+            name: "probe_write",
+            read_only: false,
+            log: log.clone(),
+        }),
+    ])));
+    log
+}
+
+/// The platform of [`platform`], whose model asks for `first` in its first
+/// answer, then says "Done.".
+async fn one_step_platform(first: Vec<(&'static str, &'static str, Value)>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                tool_calls(&first)
+            } else {
+                say("Done.")
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+/// The positions of `kind` events of `call_id`.
+fn event_at(events: &[AgentEvent], kind: &str, call_id: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e.kind == kind && e.payload["call_id"] == call_id)
+        .unwrap_or_else(|| panic!("no {kind} of {call_id}"))
+}
+
+/// The commit's `tool_calls` keys in the order the body carries them (the
+/// server keeps the object's order; a `Value` would sort them).
+fn committed_call_order(server: &MockServer) -> Vec<String> {
+    let commit = &seen(
+        server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let mut ids: Vec<String> = body["tool_calls"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    ids.sort_by_key(|id| commit.body.find(&format!("\"{id}\":{{")).unwrap());
+    ids
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn read_only_calls_run_concurrently() {
+    std::fs::create_dir_all(std::env::temp_dir()).unwrap();
+    // Three reads that take 400, 250 and 100 ms, and a real read_file, in
+    // one model step. Ids sort the other way round from the model's order.
+    let server = one_step_platform(vec![
+        ("call-z", "probe_read", json!({"ms": 400})),
+        ("call-m", "probe_read", json!({"ms": 250})),
+        ("call-k", "read_file", json!({"path": "a.txt"})),
+        ("call-a", "probe_read", json!({"ms": 100})),
+    ])
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("a.txt"), "hello\n").unwrap();
+    let log = add_probes(&h);
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let log = log.lock().unwrap().clone();
+    assert_eq!(log.len(), 3, "{log:?}");
+    // They overlapped: every one began before any one ended.
+    let last_start = log.iter().map(|(_, start, _)| *start).max().unwrap();
+    let first_end = log.iter().map(|(_, _, end)| *end).min().unwrap();
+    assert!(
+        last_start < first_end,
+        "the reads ran one after another: {log:?}"
+    );
+    // They finished shortest first, not in the model's order.
+    let finished: Vec<&str> = log.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(finished, ["call-a", "call-m", "call-z"]);
+    // The local read_file is one of the concurrent calls: it started before
+    // the probes ended.
+    assert!(
+        event_at(&events, "tool_call", "call-k") < event_at(&events, "tool_result", "call-a"),
+        "{:?}",
+        h.emitter.kinds()
+    );
+    // Every result reached the UI under its call's id.
+    for id in ["call-z", "call-m", "call-k", "call-a"] {
+        assert!(event_at(&events, "tool_call", id) < event_at(&events, "tool_result", id));
+    }
+    // The commit lists the steps in the model's order.
+    assert_eq!(
+        committed_call_order(&h.server),
+        ["call-z", "call-m", "call-k", "call-a"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writes_stay_sequential_and_ordered() {
+    // Two writes of a probe, a local write_file and two remote toolkit
+    // calls (each asks for confirmation) in one step, in this order.
+    let server = one_step_platform(vec![
+        ("call-5", "probe_write", json!({"ms": 200})),
+        (
+            "call-4",
+            "write_file",
+            json!({"path": "notes.txt", "content": "hi\n"}),
+        ),
+        ("call-3", "Jira_create_issue", json!({"summary": "One"})),
+        ("call-2", "Jira_create_issue", json!({"summary": "Two"})),
+        ("call-1", "probe_write", json!({"ms": 50})),
+    ])
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let log = add_probes(&h);
+    // The UI answers each question; at most one is ever open.
+    let most_open = Arc::new(AtomicUsize::new(0));
+    {
+        let (host, most_open) = (Arc::downgrade(&h.host), most_open.clone());
+        let previous = h.emitter.on_event.lock().unwrap().take().unwrap();
+        h.emitter
+            .on_event
+            .lock()
+            .unwrap()
+            .replace(Box::new(move |event: &AgentEvent| {
+                if event.kind == "approval_request"
+                    && let Some(host) = host.upgrade()
+                {
+                    most_open.fetch_max(host.open_approvals(), Ordering::SeqCst);
+                }
+                previous(event);
+            }));
+    }
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    // One at a time, in the model's order: each call ends before the next
+    // begins.
+    let order = ["call-5", "call-4", "call-3", "call-2", "call-1"];
+    for pair in order.windows(2) {
+        assert!(
+            event_at(&events, "tool_result", pair[0]) < event_at(&events, "tool_call", pair[1]),
+            "{pair:?}: {:?}",
+            h.emitter.kinds()
+        );
+    }
+    let log = log.lock().unwrap().clone();
+    assert_eq!(log.len(), 2);
+    assert!(log[0].2 <= log[1].1, "the probe writes overlapped: {log:?}");
+    // Two confirmations, never both open.
+    assert_eq!(of_kind(&events, "approval_request").len(), 2);
+    assert_eq!(most_open.load(Ordering::SeqCst), 1);
+    let remote: Vec<Value> = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3")
+        .iter()
+        .map(|req| {
+            serde_json::from_str::<Value>(&req.body).unwrap()["arguments"]["summary"].clone()
+        })
+        .collect();
+    assert_eq!(remote, ["One", "One", "Two", "Two"]);
+    assert_eq!(committed_call_order(&h.server), order);
+}
+
+#[tokio::test]
+async fn a_read_after_a_write_in_one_step_runs_after_it() {
+    // read, write, read: the second read must see the write, so the write
+    // is a barrier in the model's order (the vendored adk-agent patch; the
+    // published Auto ran both reads first).
+    let server = one_step_platform(vec![
+        ("call-1", "probe_read", json!({"ms": 100})),
+        ("call-2", "probe_write", json!({"ms": 50})),
+        ("call-3", "probe_read", json!({"ms": 100})),
+    ])
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let log = add_probes(&h);
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let log = log.lock().unwrap().clone();
+    let span = |id: &str| {
+        log.iter()
+            .find(|(call, _, _)| call == id)
+            .map(|(_, start, end)| (*start, *end))
+            .unwrap_or_else(|| panic!("{id} did not run: {log:?}"))
+    };
+    let (read_1, write, read_2) = (span("call-1"), span("call-2"), span("call-3"));
+    assert!(
+        read_1.1 <= write.0,
+        "the write began before the read before it ended: {log:?}"
+    );
+    assert!(
+        write.1 <= read_2.0,
+        "the read after the write ran before it: {log:?}"
+    );
+    assert_eq!(
+        committed_call_order(&h.server),
+        ["call-1", "call-2", "call-3"]
+    );
+}
+
+// ---- Turn timings (#1213 stage 2) ----
+
+const PHASE_ORDER: [&str; 6] = [
+    "resolving",
+    "participant",
+    "starting",
+    "first_token",
+    "tools",
+    "committing",
+];
+
+/// The phases each `status` event of `events` carries timings for.
+fn timed_phases(events: &[AgentEvent]) -> Vec<(String, Vec<String>)> {
+    events
+        .iter()
+        .filter(|e| e.kind == "status")
+        .map(|e| {
+            let phases = e.payload["timings"]
+                .as_array()
+                .map(|timings| {
+                    timings
+                        .iter()
+                        .map(|t| {
+                            assert!(
+                                t["phase_ms"].is_u64() && t["ms_since_turn_start"].is_u64(),
+                                "{t}"
+                            );
+                            t["phase"].as_str().unwrap().to_owned()
+                        })
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            // Phases measured concurrently (the version and the conversation
+            // are read together) end in either order: compared in the
+            // turn's order.
+            let mut phases = phases;
+            phases.sort_by_key(|phase| PHASE_ORDER.iter().position(|known| known == phase));
+            (e.payload["phase"].as_str().unwrap().to_owned(), phases)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn status_events_carry_the_turns_phase_timings() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let owned = timed_phases(&events);
+    let phases: Vec<(&str, Vec<&str>)> = owned
+        .iter()
+        .map(|(phase, timed)| (phase.as_str(), timed.iter().map(String::as_str).collect()))
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            ("resolving", vec![]),
+            ("starting", vec!["resolving", "participant"]),
+            ("running", vec!["starting"]),
+            ("done", vec!["first_token", "tools"]),
+        ]
+    );
+    // The clock only moves forward.
+    let since: Vec<u64> = events
+        .iter()
+        .filter_map(|e| e.payload["timings"].as_array())
+        .flatten()
+        .map(|t| t["ms_since_turn_start"].as_u64().unwrap())
+        .collect();
+    assert!(since.windows(2).all(|w| w[0] <= w[1]), "{since:?}");
+}
+
+// ---- One round trip before the first token (#1213 stage 3) ----
+
+/// A platform whose agent version can change between turns and is tagged
+/// (`ETag`, a 304 for `If-None-Match` with the current tag), whose answers
+/// to the pre-model requests take `delay`, and which logs when each request
+/// arrived and was answered.
+struct Versioned {
+    details: Mutex<Value>,
+    withheld: Mutex<Vec<String>>,
+    /// The version read answers this status instead (a revoked permission).
+    refuse: Mutex<Option<u16>>,
+    /// The conversation's agent participant, and starts for it refused.
+    participant: Mutex<i64>,
+    delay: Mutex<Duration>,
+    /// How long a commit takes, and how many commits to refuse (503).
+    commit_delay: Mutex<Duration>,
+    refuse_commits: Mutex<usize>,
+    log: Mutex<Vec<(String, std::time::Instant, std::time::Instant)>>,
+}
+
+impl Versioned {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            details: Mutex::new(agent_details()),
+            withheld: Mutex::new(Vec::new()),
+            refuse: Mutex::new(None),
+            participant: Mutex::new(77),
+            delay: Mutex::new(Duration::ZERO),
+            commit_delay: Mutex::new(Duration::ZERO),
+            refuse_commits: Mutex::new(0),
+            log: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn etag(&self) -> String {
+        let text = format!(
+            "{}{:?}",
+            self.details.lock().unwrap(),
+            self.withheld.lock().unwrap()
+        );
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+        format!(
+            "\"{}\"",
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, digest)
+        )
+    }
+
+    /// The requests logged so far, from `from` on.
+    fn since(&self, from: usize) -> Vec<(String, std::time::Instant, std::time::Instant)> {
+        self.log.lock().unwrap()[from..].to_vec()
+    }
+}
+
+fn short_path(path: &str) -> String {
+    let path = path.split('?').next().unwrap_or(path);
+    for (prefix, name) in [
+        ("/api/v2/elitea_core/resolved_version/", "resolved_version"),
+        ("/api/v2/elitea_core/conversation/", "conversation"),
+        ("/api/v2/elitea_core/local_turn/", "start"),
+        ("/api/v2/elitea_core/local_turn_commit/", "commit"),
+        ("/llm/", "llm"),
+    ] {
+        if path.starts_with(prefix) {
+            return name.to_owned();
+        }
+    }
+    path.to_owned()
+}
+
+async fn versioned_platform(state: Arc<Versioned>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    serve(move |req: &Req| {
+        let arrived = std::time::Instant::now();
+        let name = short_path(&req.path);
+        let delay = *state.delay.lock().unwrap();
+        if matches!(name.as_str(), "resolved_version" | "conversation" | "start") && !delay.is_zero() {
+            tokio::task::block_in_place(|| std::thread::sleep(delay));
+        }
+        let res = match name.as_str() {
+            "resolved_version" => {
+                if let Some(status) = *state.refuse.lock().unwrap() {
+                    Res::json(status, &json!({"error": "forbidden", "message": "No access to this version."}))
+                } else {
+                    let etag = state.etag();
+                    if req.headers.get("if-none-match") == Some(&etag) {
+                        Res { status: 304, headers: vec![("ETag", etag)], body: String::new(), raw: Vec::new() }
+                    } else {
+                        let held = state.withheld.lock().unwrap().clone();
+                        let withheld: Vec<&str> = held.iter().map(String::as_str).collect();
+                        let mut res = Res::json(200, &resolved(&state.details.lock().unwrap(), &withheld));
+                        res.headers.push(("ETag", etag));
+                        res
+                    }
+                }
+            }
+            "conversation" if !req.path.contains("messages_limit") => {
+                let participant = *state.participant.lock().unwrap();
+                Res::json(
+                    200,
+                    &json!({"id": 42, "message_count": 0, "uuid": CONVERSATION_UUID, "participants": [
+                        {"id": 70, "entity_name": "user", "entity_meta": {"id": 1}},
+                        {"id": participant, "entity_name": "application", "entity_meta": {"id": 5, "project_id": 1},
+                         "entity_settings": {"version_id": 9}}
+                    ]}),
+                )
+            }
+            "start" => {
+                let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+                if body["participant_id"] != *state.participant.lock().unwrap() {
+                    Res::json(422, &json!({"error": "local_turn_participant", "message": "not a participant"}))
+                } else {
+                    inner(req)
+                }
+            }
+            "llm" => say("Done."),
+            "commit" => {
+                let delay = *state.commit_delay.lock().unwrap();
+                if !delay.is_zero() {
+                    tokio::task::block_in_place(|| std::thread::sleep(delay));
+                }
+                let mut refuse = state.refuse_commits.lock().unwrap();
+                if *refuse > 0 {
+                    *refuse -= 1;
+                    Res::json(503, &json!({"error": "local_turn_unavailable", "message": "Retry with the same body."}))
+                } else {
+                    inner(req)
+                }
+            }
+            _ => inner(req),
+        };
+        state.log.lock().unwrap().push((name, arrived, std::time::Instant::now()));
+        res
+    })
+    .await
+}
+
+/// A turn of `h` to the end; the platform requests it made before its
+/// first model request, as (name, arrived, answered).
+async fn timed_turn(
+    h: &Harness,
+    state: &Versioned,
+) -> Vec<(String, std::time::Instant, std::time::Instant)> {
+    let from = state.log.lock().unwrap().len();
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(h, &started.turn_id).await;
+    state
+        .since(from)
+        .into_iter()
+        .take_while(|(name, _, _)| name != "llm")
+        .collect()
+}
+
+/// Every one of `requests` arrived before any of them was answered: one
+/// round trip, however many requests.
+fn one_round_trip(requests: &[(String, std::time::Instant, std::time::Instant)]) -> bool {
+    let last_arrival = requests
+        .iter()
+        .map(|(_, arrived, _)| *arrived)
+        .max()
+        .unwrap();
+    let first_answer = requests
+        .iter()
+        .map(|(_, _, answered)| *answered)
+        .min()
+        .unwrap();
+    last_arrival < first_answer
+}
+
+fn names(requests: &[(String, std::time::Instant, std::time::Instant)]) -> Vec<&str> {
+    let mut names: Vec<&str> = requests.iter().map(|(name, _, _)| name.as_str()).collect();
+    names.sort_unstable();
+    names
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_cold_turn_reads_the_version_and_the_conversation_together() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.delay.lock().unwrap() = Duration::from_millis(300);
+    let before = timed_turn(&h, &state).await;
+    let reads: Vec<_> = before
+        .iter()
+        .filter(|(name, _, _)| name == "resolved_version" || name == "conversation")
+        .cloned()
+        .collect();
+    assert_eq!(names(&reads), ["conversation", "resolved_version"]);
+    assert!(
+        one_round_trip(&reads),
+        "read one after the other: {before:?}"
+    );
+    // The start needs both, so it follows them.
+    let start = before.iter().find(|(name, _, _)| name == "start").unwrap();
+    assert!(reads.iter().all(|(_, _, answered)| *answered <= start.1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn warm_turn_makes_one_request_before_the_model() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    timed_turn(&h, &state).await;
+    *state.delay.lock().unwrap() = Duration::from_millis(300);
+    let from = h.server.seen().len();
+    let before = timed_turn(&h, &state).await;
+    // The start, with the version's revalidation and the conversation's
+    // re-read beside it: one round trip, nothing serial before the model.
+    assert_eq!(
+        names(&before),
+        ["conversation", "resolved_version", "start"],
+        "{before:?}"
+    );
+    assert!(
+        one_round_trip(&before),
+        "a request waited for another: {before:?}"
+    );
+    let revalidation = h.server.seen()[from..]
+        .iter()
+        .find(|req| short_path(&req.path) == "resolved_version")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        revalidation.headers.get("if-none-match"),
+        Some(&state.etag())
+    );
+    // The start is never cached: each turn opened its own execution, with
+    // its own question.
+    let starts = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    );
+    assert_eq!(starts.len(), 2);
+    let question =
+        |req: &Req| serde_json::from_str::<Value>(&req.body).unwrap()["question_id"].clone();
+    assert_ne!(question(&starts[0]), question(&starts[1]));
+}
+
+#[tokio::test]
+async fn changed_definition_is_readmitted_before_the_model() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let system = |h: &Harness| {
+        llm_bodies(&h.server).last().unwrap()["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    timed_turn(&h, &state).await;
+    assert!(system(&h).starts_with("Be brief."));
+    // Changed between turns: the second turn's model sees the new one.
+    state.details.lock().unwrap()["instructions"] = json!("Be thorough.");
+    timed_turn(&h, &state).await;
+    assert!(system(&h).starts_with("Be thorough."), "{}", system(&h));
+    // Now refused locally: the turn stops with the refusal, the model is
+    // never asked.
+    let models = llm_bodies(&h.server).len();
+    state.withheld.lock().unwrap().push("/instructions".into());
+    let error = h.host.start(request(&h.workspace_id)).await.unwrap_err();
+    assert_eq!(error.code, "secrets_withheld");
+    assert_eq!(llm_bodies(&h.server).len(), models);
+    // A revoked permission is the same: the platform's 403 stops the turn.
+    state.withheld.lock().unwrap().clear();
+    *state.refuse.lock().unwrap() = Some(403);
+    assert_eq!(
+        h.host
+            .start(request(&h.workspace_id))
+            .await
+            .unwrap_err()
+            .code,
+        "forbidden"
+    );
+    assert_eq!(llm_bodies(&h.server).len(), models);
+    // Nothing of the refused versions was kept: the next turn reads afresh
+    // (no If-None-Match) and runs.
+    *state.refuse.lock().unwrap() = None;
+    let from = h.server.seen().len();
+    timed_turn(&h, &state).await;
+    let reads: Vec<Req> = h.server.seen()[from..]
+        .iter()
+        .filter(|req| short_path(&req.path) == "resolved_version")
+        .cloned()
+        .collect();
+    assert_eq!(reads.len(), 1);
+    assert!(!reads[0].headers.contains_key("if-none-match"));
+    assert_eq!(llm_bodies(&h.server).len(), models + 1);
+}
+
+#[tokio::test]
+async fn a_participant_that_changed_is_looked_up_and_started_again() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    timed_turn(&h, &state).await;
+    // The agent left and joined again: a new participant id.
+    *state.participant.lock().unwrap() = 78;
+    let before = timed_turn(&h, &state).await;
+    let starts: Vec<Value> = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    )
+    .iter()
+    .map(|req| serde_json::from_str::<Value>(&req.body).unwrap()["participant_id"].clone())
+    .collect();
+    assert_eq!(starts, [json!(77), json!(77), json!(78)], "{before:?}");
+    // The cache holds the new one: the next turn starts on it at once.
+    timed_turn(&h, &state).await;
+    let starts = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&starts[3].body).unwrap()["participant_id"],
+        78
+    );
+    assert_eq!(starts.len(), 4);
+}
+
+#[tokio::test]
+async fn prewarm_fills_both_caches_and_starts_nothing() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let prewarm = super::turn::PrewarmRequest {
+        project_id: 1,
+        application_id: 5,
+        version_id: 9,
+        conversation_id: Some(json!(42)),
+    };
+    let warmed = h.host.prewarm(prewarm.clone()).await.unwrap();
+    assert_eq!(
+        warmed,
+        super::turn::Prewarmed {
+            version: true,
+            participant: true
+        }
+    );
+    let seen_names: Vec<String> = h
+        .server
+        .seen()
+        .iter()
+        .map(|req| short_path(&req.path))
+        .collect();
+    assert!(
+        !seen_names
+            .iter()
+            .any(|name| name == "start" || name == "llm"),
+        "{seen_names:?}"
+    );
+    // Already warm: no request at all.
+    let count = h.server.seen().len();
+    h.host.prewarm(prewarm.clone()).await.unwrap();
+    assert_eq!(h.server.seen().len(), count);
+    // The first turn is a warm one.
+    *state.delay.lock().unwrap() = Duration::ZERO;
+    let before = timed_turn(&h, &state).await;
+    assert_eq!(
+        names(&before),
+        ["conversation", "resolved_version", "start"]
+    );
+    // Signing out forgets both.
+    h.host.forget_identity();
+    let warmed = h
+        .host
+        .prewarm(super::turn::PrewarmRequest {
+            conversation_id: None,
+            ..prewarm
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        warmed,
+        super::turn::Prewarmed {
+            version: true,
+            participant: false
+        }
+    );
+    assert!(
+        h.server.seen()[count..]
+            .iter()
+            .rfind(|req| short_path(&req.path) == "resolved_version")
+            .is_some_and(|req| !req.headers.contains_key("if-none-match")),
+        "read afresh after the sign-out"
+    );
+}
+
+// ---- The commit after `done` (#1213 stage 5) ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn done_precedes_commit() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.commit_delay.lock().unwrap() = Duration::from_millis(400);
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    done_event_of(&h.emitter, &started.turn_id).await;
+    // The UI has the answer and its `done` while the commit is in flight.
+    let answered = |name: &str| state.since(0).iter().any(|(n, _, _)| n == name);
+    assert!(!answered("commit"), "done waited for the commit");
+    let done = h
+        .emitter
+        .all()
+        .into_iter()
+        .find(|e| e.kind == "done")
+        .unwrap();
+    assert_eq!(done.payload["commit"], "pending");
+    assert_eq!(h.host.status(&started.turn_id).unwrap().state, "done");
+    // The workspace stays held by the commit: a handoff (send, take back,
+    // restore) cannot snapshot it without the last turn.
+    assert_eq!(
+        h.host
+            .claim_workspace(&h.workspace_id, "busy")
+            .err()
+            .map(|e| e.code),
+        Some("workspace_busy".to_owned())
+    );
+    commits_settled(&h.host).await;
+    // Free once the commit settled.
+    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
+    assert!(answered("commit"));
+    assert_eq!(settled_done(&h, &started.turn_id)["committed"], true);
+    assert!(
+        h.emitter
+            .kinds()
+            .iter()
+            .all(|kind| *kind != "commit_failed")
+    );
+}
+
+#[tokio::test]
+async fn a_failed_commit_is_reported_and_its_retry_saves_it() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // Refused on every attempt of the commit (3) and of the first retry (3).
+    *state.refuse_commits.lock().unwrap() = 6;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let failed = of_kind(&events, "commit_failed");
+    assert_eq!(failed.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(failed[0]["execution_id"], EXECUTION);
+    assert_eq!(failed[0]["code"], "local_turn_unavailable");
+    assert_eq!(
+        *events.last().unwrap(),
+        *events.iter().find(|e| e.kind == "commit_failed").unwrap()
+    );
+    let attempts = |h: &Harness| {
+        seen(
+            &h.server,
+            &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+        )
+    };
+    assert_eq!(attempts(&h).len(), 3, "retried on the same execution");
+    let bodies: Vec<String> = attempts(&h).iter().map(|req| req.body.clone()).collect();
+    assert!(
+        bodies.windows(2).all(|w| w[0] == w[1]),
+        "the same body every time"
+    );
+    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "failed");
+    // Retry: refused once more (reported again), then saved.
+    assert_eq!(
+        h.host.retry_commit(EXECUTION).await.unwrap_err().code,
+        "local_turn_unavailable"
+    );
+    assert_eq!(of_kind(&h.emitter.all(), "commit_failed").len(), 2);
+    h.host.retry_commit(EXECUTION).await.unwrap();
+    assert_eq!(attempts(&h).len(), 7);
+    assert_eq!(settled_done(&h, &started.turn_id)["committed"], true);
+    assert_eq!(attempts(&h).last().unwrap().body, bodies[0]);
+    // Nothing is kept once it is saved.
+    assert_eq!(
+        h.host.retry_commit(EXECUTION).await.unwrap_err().code,
+        "commit_unknown"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn next_turn_waits_for_previous_commit() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.commit_delay.lock().unwrap() = Duration::from_millis(400);
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    done_event_of(&h.emitter, &first.turn_id).await;
+    // The next turn of the conversation is sent at once, from the same
+    // workspace (it is free): its start waits for the commit.
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &second.turn_id).await;
+    let log = state.since(0);
+    let commit = log.iter().find(|(name, _, _)| name == "commit").unwrap();
+    let starts: Vec<_> = log.iter().filter(|(name, _, _)| name == "start").collect();
+    assert_eq!(starts.len(), 2);
+    assert!(
+        starts[1].1 >= commit.2,
+        "the second start did not wait for the first commit: {log:?}"
+    );
+}
+
+/// At the moment `done` is emitted the commit already holds its lane's
+/// slot and the workspace: a next turn (or a handoff) that acts on `done`
+/// can never find the lane idle or the workspace free before the commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn at_done_the_commit_already_holds_its_lane_and_the_workspace() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // At `done`: commits pending, and what a workspace claim was refused with.
+    type AtDone = Option<(usize, Option<String>)>;
+    let seen_at_done: Arc<Mutex<AtDone>> = Arc::default();
+    let host = Arc::downgrade(&h.host);
+    let workspace_id = h.workspace_id.clone();
+    let record = seen_at_done.clone();
+    h.emitter
+        .on_event
+        .lock()
+        .unwrap()
+        .replace(Box::new(move |event: &AgentEvent| {
+            if event.kind == "done"
+                && let Some(host) = host.upgrade()
+            {
+                let busy = host
+                    .claim_workspace(&workspace_id, "busy")
+                    .err()
+                    .map(|e| e.code);
+                *record.lock().unwrap() = Some((host.unsaved_commits().0, busy));
+            }
+        }));
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    assert_eq!(
+        *seen_at_done.lock().unwrap(),
+        Some((1, Some("workspace_busy".to_owned())))
+    );
+}
+
+/// A handoff claim right after `done` is refused until the commit settled;
+/// the next turn of the workspace waits for it instead of being refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_handoff_after_done_waits_for_the_commit_and_a_next_turn_waits_too() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.commit_delay.lock().unwrap() = Duration::from_millis(400);
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    done_event_of(&h.emitter, &first.turn_id).await;
+    let refused = h
+        .host
+        .claim_workspace(&h.workspace_id, "Wait for the running turn to end.")
+        .err()
+        .map(|e| e.code);
+    assert_eq!(refused.as_deref(), Some("workspace_busy"));
+    let committed = |state: &Versioned| state.since(0).iter().any(|(n, _, _)| n == "commit");
+    assert!(!committed(&state), "the commit was still in flight");
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    assert!(committed(&state), "the next turn started after the commit");
+    until_done_of(&h, &second.turn_id).await;
+    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
+}
+
+/// A failed commit releases the workspace once its retries are used up.
+#[tokio::test]
+async fn a_failed_commit_releases_the_workspace() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.refuse_commits.lock().unwrap() = 3;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(of_kind(&events, "commit_failed").len(), 1);
+    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
 }

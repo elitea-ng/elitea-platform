@@ -123,6 +123,23 @@ fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)
     }
 }
 
+/// One call's share of the tools' wall time; ends when dropped, so a call
+/// a cancel drops mid-way still ends.
+struct ToolTimer<'a>(&'a TurnEvents);
+
+impl<'a> ToolTimer<'a> {
+    fn begin(events: &'a TurnEvents) -> Self {
+        events.tool_began();
+        Self(events)
+    }
+}
+
+impl Drop for ToolTimer<'_> {
+    fn drop(&mut self) {
+        self.0.tool_ended();
+    }
+}
+
 #[async_trait]
 impl Tool for ObservedTool {
     fn name(&self) -> &str {
@@ -165,6 +182,17 @@ impl Tool for ObservedTool {
         let call_id = ctx.function_call_id().to_owned();
         let tool = self.inner.name().to_owned();
         let observer = &self.observer;
+        // Past the most tool calls a commit may carry the call is not run
+        // (nor shown): the turn stops after this step (`turn.rs` `run_once`).
+        if !observer.recorder.tool_started(&call_id, &tool, &args) {
+            return Ok(json!({
+                "status": "error",
+                "message": format!(
+                    "Not run: this turn reached its limit of {} tool calls.",
+                    super::recorder::MAX_TOOL_CALLS
+                ),
+            }));
+        }
         observer.events.send(
             "tool_call",
             json!({
@@ -174,7 +202,6 @@ impl Tool for ObservedTool {
                 "remote": self.remote,
             }),
         );
-        observer.recorder.tool_started(&call_id, &tool, &args);
         if !self.remote
             && let Some(session) = &observer.session
         {
@@ -193,7 +220,9 @@ impl Tool for ObservedTool {
                     .map(str::to_owned)
             })
             .flatten();
+        let running = ToolTimer::begin(&observer.events);
         let result = self.inner.execute(ctx, args).await;
+        drop(running);
         let (ok, summary, truncated, error) = match &result {
             Ok(value) => {
                 let failed = value.get("status").and_then(Value::as_str) == Some("error");

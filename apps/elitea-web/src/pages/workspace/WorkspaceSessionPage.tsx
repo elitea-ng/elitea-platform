@@ -37,6 +37,7 @@ import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, P
 import { SessionPanel } from './SessionPanel';
 import { UnboundFolder } from './UnboundFolder';
 import { useAgentSkills } from './useAgentSkills';
+import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
 import { useThreadHandoff, type ThreadHandoff } from './useThreadHandoff';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
@@ -99,13 +100,16 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
-  const [pendingApproval, ...waiting] = turn.view.approvals;
+  // "Continue?" at the step limit is a card in the transcript; the rest are the dialog's queue.
+  const continueRequest = turn.view.approvals.find((approval) => approval.kind === 'continue');
+  const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => approval.kind !== 'continue');
   const busy = turn.busy || session.rebind.isPending;
   const started = turn.turnId !== null || turn.earlier.length > 0;
   // The intro stands in for a thread with nothing to show: new, or its history unreadable.
   const nothingEarlier = session.history.kind === 'none' || session.history.kind === 'unavailable';
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
   const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
+  const codingAgent = useLocalCodingAgent(projectId, raw.empty);
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -128,7 +132,9 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               <CloudTranscript projectId={projectId} conversationId={conversationId} />
             ) : (
               <>
-              {raw.empty && <NoAgents busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
+              {raw.empty && (
+                <NoAgents codingAgent={codingAgent} busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />
+              )}
               {!raw.empty && !started && nothingEarlier && (
                 <ThreadIntro
                   workspace={workspace}
@@ -139,6 +145,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               )}
               <EarlierTurns history={session.history} shown={session.shown} />
               <Exchanges turn={turn} prompts={session.prompts} />
+              <ApprovalDialog request={continueRequest} queued={0} onRespond={session.answer} />
               </>
             )}
           </Box>
@@ -158,6 +165,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
             onStop={() => void turn.cancel()}
             onCommand={session.run}
+            onFocus={session.prewarm}
           />
         </Box>
       </Box>

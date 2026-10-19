@@ -895,15 +895,20 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
         let started = h.agents.start(local(prompt));
-        let emitter = emitter.clone();
+        let (emitter, agents) = (emitter.clone(), h.agents.clone());
         async move {
             let started = started.await.unwrap();
             for _ in 0..500 {
+                // Its `done` and its commit: the commit holds the workspace
+                // (a send before it settles is refused as busy).
                 if emitter
                     .all()
                     .iter()
                     .any(|e| e.kind == "done" && e.turn_id == started.turn_id)
                 {
+                    tokio::time::timeout(Duration::from_secs(5), agents.commits_idle())
+                        .await
+                        .expect("the turn's commit settled");
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1687,15 +1692,20 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
         let started = h.agents.start(local(prompt));
-        let emitter = emitter.clone();
+        let (emitter, agents) = (emitter.clone(), h.agents.clone());
         async move {
             let started = started.await.unwrap();
             for _ in 0..500 {
+                // Its `done` and its commit: the commit holds the workspace
+                // (a send before it settles is refused as busy).
                 if emitter
                     .all()
                     .iter()
                     .any(|e| e.kind == "done" && e.turn_id == started.turn_id)
                 {
+                    tokio::time::timeout(Duration::from_secs(5), agents.commits_idle())
+                        .await
+                        .expect("the turn's commit settled");
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

@@ -132,6 +132,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
@@ -142,12 +144,31 @@ inside the folder.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
+| `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
-| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
+| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
+| `turn_commit_retry` | `{execution_id}` | `null` once the turn's failed commit (`commit_failed`) is saved: sent again with the same execution id and body, in its conversation's order. Rejects `commit_unknown` when the host keeps no failed commit of that execution (it was saved, the app restarted, or the session signed out), or with the commit's refusal, which is also sent as another `commit_failed`. |
+
+**One round trip before the first token.** The host keeps, for the app's
+session only (never on disk; dropped on sign-out, a new sign-in or another
+deployment), the last resolved agent version per project, agent and
+version, with its `ETag`, and each conversation's answering participant and
+UUID per agent version. A cold turn reads the version and the conversation
+together. A warm one admits the cached version at once and sends the
+local turn's start right away, on the cached participant, with the
+version's revalidation (`If-None-Match`; a `304` costs nothing) and the
+conversation's re-read (its message count decides the session's seed)
+beside it. A changed version is admitted again before the model's first
+request; a refused or unreadable one (`403`, `404`, a local refusal) stops
+the turn with its code before any model request, and its execution
+expires on the server. A participant that changed, or a start the platform
+refuses for it (`404`, `422`), is started again on the fresh one, once.
+The start itself is never cached: its memory recall is computed fresh at
+every turn.
 
 `agent_turn_start` resolves the agent version, checks it, and starts the
 local turn on the platform before it resolves; the run then continues in
@@ -894,29 +915,93 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[]}` — `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `approval_request` | `{request_id, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` |
+| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
 | `error` | `{code, message}` |
-| `done` | `{committed: boolean, conversation_id, message_ids: string[], changed_files: number}` |
+| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
+| `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`)* →
-`status` `committing` → `status` `done` | `error` → `done`. A cancelled turn
-ends `status` `cancelled` → `done` with `committed: false`; nothing is
+`status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
+ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
 the start is still committed, as a failed answer (`is_error`), and its
-`error` event comes before `status` `committing`. `done` is always the last
-event of a started turn, and the host holds the workspace (`workspace_busy`)
-until it is sent, so the UI is busy until `done`, not until `error`.
+`error` event comes before `status` `error`. `done` ends the turn for the
+UI, and the host holds the workspace (`workspace_busy`) until it is sent,
+so the UI is busy until `done`, not until `error`.
+
+**The commit after `done`.** `done` is sent as soon as the run ends; the
+turn's commit then runs in its conversation's lane (one at a time per
+conversation, in order). The next turn of that conversation starts (its
+`local_turn` start, whose memory recall reads the committed conversation)
+only once the previous commit settled, so it waits in `status` `starting`
+while one is still being saved. A commit that fails is retried with backoff
+on the same execution id and body (`409 local_turn_already_committed`
+counts as saved); after the last attempt (or at once for a refusal a retry
+cannot change, such as `410` or `403`) the host sends `commit_failed`
+(the turn's last event) and keeps the body in memory until the app quits.
+`agent_turn_status` answers the settled state: its `done` payload carries
+`committed: true, commit: "committed"`, or `commit: "failed"`. A quit with a
+commit still running or failed is logged; that execution expires on the
+server, as before.
+The read-only, concurrency-safe calls of one model step (`read_file`,
+`list_tree`, `search_files`, `read_document`, git reads, the index tools)
+run together, at most 8 at once, before the step's other calls; writes,
+commands and remote toolkit calls then run one at a time in the model's
+order, so at most one tool `approval_request` is open at a time. Their
+`tool_call` and `tool_result` events interleave: match a result to its call
+by `call_id`, never by position. The commit lists the steps in the model's
+call order, whatever order they ran in.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.
 
+**Timings.** A `status` event carries, as `timings`, every phase of the
+turn measured since the previous `status` (absent when none was):
+
+```ts
+type Timing = { phase: "resolving" | "participant" | "starting" | "first_token" | "tools" | "committing"; ms_since_turn_start: number; phase_ms: number };
+```
+
+`resolving` is the agent version's read (`resolved_version`; on a warm
+turn its revalidation, beside the start), `participant` the conversation
+lookup (the answering participant and UUID; on a warm turn its re-read,
+beside the start), `starting` from `status` `starting` until the local turn
+is started and its session ready (a seed included), `first_token` from `status` `running` to the model's first
+streamed chunk, `tools` the wall time any tool call ran (overlapping calls
+counted once), `committing` the commit with its retries (it runs after
+`done`, so it is in the log line only, never on a `status`). `ms_since_turn_start` is
+when the phase ended, from `agent_turn_start`. A phase before the first
+token that takes longer than 2 s is logged as a warning, and each turn
+logs one line with all of them (`local turn timings: resolving=…ms …`):
+what to compare before and after a change.
+
+**Step limit.** Each run of the agent takes at most its step limit of
+model steps: the workspace's own setting (`workspace_agent_settings_set`)
+when the person set one, else the agent's `meta.step_limit`, else 100; never
+more than 200. The workspace setting wins because it is the person's choice
+on this machine, while an agent's value is often the platform's default
+(an agent created without one is stamped 25).
+When a run ends because it used them (adk's own end of the run, not a
+count), the host asks `approval_request {kind: "continue", title: "The agent
+used its N steps", detail: <the start of the agent's last text>, steps: N,
+can_remember: false}`. It is asked through the prompt only: no workspace
+rule or remembered choice answers it, and `allow_always` answers once.
+`allow_once` / `allow_always` continue: the same agent runs again on the same
+session, within the same execution, from the host's prompt "Continue from
+where you stopped." (`status` `running` with `continued`), at most 3 times a
+turn. `deny`, no answer within 10 minutes, or a fourth limit end the turn
+normally: what happened is committed as one turn (its `hitl_exchanges` hold
+each question as kind `continue`), and `status` `done` carries
+`note: "step_limit_reached"`. Cancelling while the question is open cancels
+the turn.
+
 `message_ids` are the question's and the answer's message UUIDs, in that
-order, when committed. `approval_request.can_remember` is true when
+order: the messages the commit writes. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
 file change); otherwise `allow_always` answers once and the UI does not
 offer it. It is false for a `run_command` that would run unconfined,

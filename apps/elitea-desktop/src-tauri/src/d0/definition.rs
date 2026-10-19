@@ -11,9 +11,12 @@ use serde_json::{Map, Value};
 use super::api::ResolvedVersion;
 use elitea_agent_runtime::host::ReasoningEffort;
 
-/// Default model-turn bound when the agent sets no `step_limit`.
-pub const DEFAULT_STEP_LIMIT: u32 = 25;
-const MAX_STEP_LIMIT: u32 = 200;
+/// Model steps of a workspace turn's run when neither the workspace's
+/// settings nor the agent (`meta.step_limit`) set them. At the limit
+/// the person is asked whether to continue (`step_limit` in the runtime).
+pub const DEFAULT_STEP_LIMIT: u32 = 100;
+/// The most steps one run may take, whoever sets them.
+pub const MAX_STEP_LIMIT: u32 = 200;
 /// The OpenAI tool-name rule (`^[A-Za-z0-9_-]{1,64}$`).
 const MAX_TOOL_NAME: usize = 64;
 
@@ -62,6 +65,10 @@ pub struct Admitted {
     pub instructions: String,
     pub model: ModelSettings,
     pub remote_tools: Vec<RemoteToolSpec>,
+    /// Model steps per run: the workspace's own setting (see
+    /// [`Admitted::with_workspace_step_limit`]), else the agent's
+    /// `meta.step_limit`, else [`DEFAULT_STEP_LIMIT`]; at most
+    /// [`MAX_STEP_LIMIT`].
     pub step_limit: u32,
     /// The version document, for the runtime's instruction authority.
     pub version_details: Map<String, Value>,
@@ -123,9 +130,23 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
             .to_owned(),
         model: model_settings(details)?,
         remote_tools,
-        step_limit: step_limit(details),
+        step_limit: agent_step_limit(details).unwrap_or(DEFAULT_STEP_LIMIT),
         version_details: details.clone(),
     })
+}
+
+impl Admitted {
+    /// The workspace's own step limit (its settings), which wins over the
+    /// agent's `meta.step_limit`: it is the person's choice on their own
+    /// machine, while an agent's value is often the platform's cloud
+    /// default (every agent created without one is stamped 25).
+    #[must_use]
+    pub fn with_workspace_step_limit(mut self, workspace: Option<u32>) -> Self {
+        if let Some(limit) = workspace.filter(|limit| *limit > 0) {
+            self.step_limit = limit.min(MAX_STEP_LIMIT);
+        }
+        self
+    }
 }
 
 fn invalid_model() -> Refusal {
@@ -174,14 +195,15 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
     })
 }
 
-fn step_limit(details: &Map<String, Value>) -> u32 {
+/// The agent's own `meta.step_limit`, capped at [`MAX_STEP_LIMIT`].
+fn agent_step_limit(details: &Map<String, Value>) -> Option<u32> {
     details
         .get("meta")
         .and_then(|meta| meta.get("step_limit"))
         .and_then(Value::as_u64)
         .and_then(|limit| u32::try_from(limit).ok())
         .filter(|limit| *limit > 0)
-        .map_or(DEFAULT_STEP_LIMIT, |limit| limit.min(MAX_STEP_LIMIT))
+        .map(|limit| limit.min(MAX_STEP_LIMIT))
 }
 
 /// One spec per selected tool, or one generic spec for `all_tools`; none
@@ -304,6 +326,47 @@ mod tests {
             "all_tools": all, "selected_tools": selected,
             "toolkit_ref": {"toolkit_id": 3, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
         })
+    }
+
+    #[test]
+    fn workspace_default_step_limit_is_100() {
+        let admit_meta = |meta: Value| {
+            admit(
+                &resolved(json!({
+                    "instructions": "Be brief.",
+                    "llm_settings": {"model_name": "gpt-x"},
+                    "meta": meta,
+                })),
+                &[],
+            )
+            .unwrap()
+        };
+        // No `meta.step_limit`: a workspace turn runs 100 steps, or the
+        // workspace's own limit when its settings set one.
+        let default = admit_meta(json!({}));
+        assert_eq!(default.step_limit, 100);
+        assert_eq!(
+            default.clone().with_workspace_step_limit(None).step_limit,
+            100
+        );
+        assert_eq!(
+            default
+                .clone()
+                .with_workspace_step_limit(Some(150))
+                .step_limit,
+            150
+        );
+        assert_eq!(default.with_workspace_step_limit(Some(900)).step_limit, 200);
+        // The agent's explicit value beats the default; the workspace's own
+        // setting beats the agent's.
+        let agent = admit_meta(json!({"step_limit": 30}));
+        assert_eq!(agent.step_limit, 30);
+        assert_eq!(agent.clone().with_workspace_step_limit(None).step_limit, 30);
+        assert_eq!(agent.with_workspace_step_limit(Some(150)).step_limit, 150);
+        // Capped at 200; zero or nonsense is no value.
+        assert_eq!(admit_meta(json!({"step_limit": 5000})).step_limit, 200);
+        assert_eq!(admit_meta(json!({"step_limit": 0})).step_limit, 100);
+        assert_eq!(admit_meta(json!({"step_limit": "many"})).step_limit, 100);
     }
 
     #[test]

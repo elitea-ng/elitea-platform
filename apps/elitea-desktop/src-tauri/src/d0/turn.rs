@@ -19,13 +19,16 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
-use adk_core::{Agent, Content, Event, Part, RunConfig, StreamingMode, Toolset};
+use adk_core::{
+    Agent, Content, Event, Part, RunConfig, StreamingMode, ToolConcurrencyConfig,
+    ToolExecutionStrategy, Toolset,
+};
 use adk_runner::Runner;
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{
@@ -37,6 +40,7 @@ use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
+use elitea_agent_runtime::step_limit::{self, StepBudget};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
@@ -44,17 +48,23 @@ use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::project_instructions::{self, ProjectInstructions, TRUNCATED_NOTE};
 use elitea_local_tools::provider::LocalToolProvider;
 use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
-use futures::StreamExt as _;
+use futures::{FutureExt as _, StreamExt as _};
 use serde_json::{Map, Value, json};
 
-use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, PlatformApi};
+use super::api::{
+    AnsweringParticipant, ApiError, Credentials, LocalTurnStarted, PinnedCredentials, PlatformApi,
+    ResolvedVersion, Revalidated,
+};
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
+use super::cache::{ParticipantKey, TurnCaches, VersionKey};
+use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::definition::{self, Admitted};
-use super::events::{EventEmitter, Phase, TurnEvents};
+use super::environment;
+use super::events::{EventEmitter, Phase, Timed, TurnEvents};
 use super::framing;
 use super::mentions;
 use super::model::GatewayTransport;
-use super::recorder::{FileChange, Recorder};
+use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
     RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
 };
@@ -71,6 +81,9 @@ const AGENT_NAME: &str = AGENT_AUTHOR;
 const USER_ID: &str = crate::sessions::ADK_USER;
 /// How long one tool call may take (an approval can keep it waiting).
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// At most this many tool calls of one model step run at once (adk's
+/// `Auto` overlaps only read-only, concurrency-safe calls).
+const MAX_CONCURRENT_TOOLS: usize = 8;
 
 /// Where the stored `native_client_policy` comes from.
 pub trait PolicySource: Send + Sync {
@@ -148,6 +161,23 @@ pub struct TurnStarted {
     pub execution_id: String,
 }
 
+/// `agent_prewarm`'s arguments: what the composer is about to send to.
+#[derive(Clone, Debug)]
+pub struct PrewarmRequest {
+    pub project_id: i64,
+    pub application_id: i64,
+    pub version_id: i64,
+    /// The conversation's numeric id or UUID, when the thread has one.
+    pub conversation_id: Option<Value>,
+}
+
+/// `agent_prewarm`'s answer: what a turn to it would find cached now.
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct Prewarmed {
+    pub version: bool,
+    pub participant: bool,
+}
+
 /// `agent_turn_status`'s answer.
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 pub struct TurnStatus {
@@ -209,14 +239,40 @@ struct WorkspaceSession {
     policy: LocalWorkPolicy,
 }
 
-/// The workspaces something holds right now (a running turn, a restore, a
-/// removal), by workspace id. One set for the host, so it outlives the
-/// session rebuild a policy change causes.
-type BusySet = Arc<Mutex<HashSet<String>>>;
+/// What holds a workspace now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hold {
+    /// A running turn, a restore, a removal, a handoff: refuse the next.
+    Work,
+    /// A finished turn's commit (after its `done`, until the commit and the
+    /// session's settle end, landed or failed): a handoff, restore or removal
+    /// is refused, and the next turn waits for it.
+    Commit,
+}
 
-/// A workspace held by one turn (or one restore or removal); released when
-/// dropped, so every exit path (a refusal, a panic, the end of the run)
-/// frees it.
+/// The workspaces something holds right now (a running turn, its commit, a
+/// restore, a removal), by workspace id. One set for the host, so it
+/// outlives the session rebuild a policy change causes.
+#[derive(Default)]
+struct Busy {
+    held: Mutex<HashMap<String, Hold>>,
+    /// Bumped on every release, for the turns waiting on a commit's hold.
+    released: tokio::sync::watch::Sender<u64>,
+}
+
+type BusySet = Arc<Busy>;
+
+impl Busy {
+    fn held(&self) -> std::sync::MutexGuard<'_, HashMap<String, Hold>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// A workspace held by one turn (or its commit, or one restore or
+/// removal); released when dropped, so every exit path (a refusal, a panic,
+/// the end of the run or of the commit) frees it.
 pub(crate) struct WorkspaceClaim {
     busy: BusySet,
     workspace_id: String,
@@ -225,29 +281,116 @@ pub(crate) struct WorkspaceClaim {
 impl WorkspaceClaim {
     /// Check and take the workspace in one step, under the set's lock.
     fn take(busy: &BusySet, workspace_id: &str, message: &str) -> Result<Self, TurnError> {
-        let mut held = busy
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !held.insert(workspace_id.to_owned()) {
+        let mut held = busy.held();
+        if held.contains_key(workspace_id) {
             return Err(TurnError::new("workspace_busy", message));
         }
+        held.insert(workspace_id.to_owned(), Hold::Work);
+        drop(held);
         Ok(Self {
             busy: busy.clone(),
             workspace_id: workspace_id.to_owned(),
         })
     }
+
+    /// [`Self::take`] for a turn: a previous turn's commit still holding
+    /// the workspace is waited for (the turn would wait for it anyway);
+    /// anything else holding it refuses the turn.
+    async fn take_for_turn(
+        busy: &BusySet,
+        workspace_id: &str,
+        message: &str,
+    ) -> Result<Self, TurnError> {
+        loop {
+            // Subscribed before the check: a release between the two still
+            // wakes the wait.
+            let mut released = busy.released.subscribe();
+            // The guard is dropped here: `take` locks again.
+            let hold = busy.held().get(workspace_id).copied();
+            if hold != Some(Hold::Commit) {
+                return Self::take(busy, workspace_id, message);
+            }
+            let _ = released.changed().await;
+        }
+    }
+
+    /// The turn is done; its commit keeps the workspace until it settles.
+    fn into_commit(self) -> Self {
+        if let Some(hold) = self.busy.held().get_mut(&self.workspace_id) {
+            *hold = Hold::Commit;
+        }
+        self
+    }
 }
 
 impl Drop for WorkspaceClaim {
     fn drop(&mut self) {
+        self.busy.held().remove(&self.workspace_id);
         self.busy
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.workspace_id);
+            .released
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 }
 
 const TURN_RUNNING: &str = "A turn is already running in this workspace.";
+const CONTEXT_WITHHELD: &str =
+    "You cannot view this project's context, so this turn runs without it.";
+
+/// The names a remote tool may not take: every local tool's and every index
+/// tool's (whether or not this workspace has an index: names stay stable as
+/// the index comes and goes).
+fn local_tool_names() -> Vec<&'static str> {
+    TOOLS
+        .iter()
+        .map(|tool| tool.name)
+        .chain(INDEX_TOOLS)
+        .collect()
+}
+
+/// The conversation's participant that answers with the request's agent
+/// version, and its UUID.
+async fn lookup_participant(
+    api: &PlatformApi,
+    request: &TurnRequest,
+    conversation: &str,
+) -> Result<AnsweringParticipant, TurnError> {
+    Ok(api
+        .answering_participant(
+            request.project_id,
+            conversation,
+            request.application_id,
+            request.version_id,
+        )
+        .await?)
+}
+
+/// `start` of the local turn (never cached: its memory recall is computed
+/// fresh at each turn, ADR-0029 decision 8).
+async fn start_turn(
+    api: &PlatformApi,
+    request: &TurnRequest,
+    answering: &AnsweringParticipant,
+    question_id: &str,
+) -> Result<LocalTurnStarted, TurnError> {
+    Ok(api
+        .start_turn(
+            request.project_id,
+            &answering.conversation_uuid,
+            &json!({
+                "question_id": question_id,
+                "user_input": request.prompt,
+                "participant_id": answering.id,
+            }),
+        )
+        .await?)
+}
+
+/// The platform refused a start for its conversation or participant
+/// (`local_turn_not_found`, `local_turn_participant`): a cached participant
+/// may be out of date.
+fn refused_for_participant(error: &TurnError) -> bool {
+    matches!(error.status, Some(404 | 422))
+}
 
 /// What `checkpoint_restore` can put back for a turn.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -327,6 +470,19 @@ impl TurnEntry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(payload.clone());
         events.send("done", payload);
+    }
+
+    /// The turn's commit settled after its `done` (`committed` or
+    /// `failed`): `agent_turn_status` answers it from now on.
+    fn commit_settled(&self, outcome: &'static str) {
+        let mut done = self
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(Value::Object(payload)) = done.as_mut() {
+            payload.insert("commit".into(), json!(outcome));
+            payload.insert("committed".into(), json!(outcome == "committed"));
+        }
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, RunState> {
@@ -492,6 +648,17 @@ pub struct AgentHost {
     /// Whose history the signed-in session writes: the session's identity
     /// (origin and sign-in) and the owner it resolved to.
     owner: Mutex<Option<(String, Owner)>>,
+    /// The agent versions and answering participants read this session.
+    caches: TurnCaches,
+    /// The commits after `done`, one lane per conversation.
+    commits: CommitQueues,
+    /// Commits that failed after their retries, by execution id, for
+    /// `turn_commit_retry` (kept in memory until the app quits).
+    failed_commits: Mutex<HashMap<String, FailedCommit>>,
+    /// Extra toolsets every turn offers (tests: tools that record when they
+    /// run).
+    #[cfg(test)]
+    test_toolsets: Mutex<Vec<Arc<dyn Toolset>>>,
 }
 
 /// The tag one AGENTS.md file is framed in.
@@ -501,8 +668,8 @@ pub(super) const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instruct
 /// The precedence line of the AGENTS.md section: it ranks last (see
 /// `skills::SKILLS_PRECEDENCE` for the same order from above).
 pub(super) const PROJECT_PRECEDENCE: &str = "Precedence: these files rank last. The \
-     agent's own instructions and any skill picked for this turn, both above, \
-     outrank them where they disagree.";
+     agent's own instructions, the environment section and any skill picked for \
+     this turn, all above, outrank them where they disagree.";
 
 /// The agent's instructions (with any skill picked for this turn already
 /// after them), then the workspace's AGENTS.md files as one delimited
@@ -549,6 +716,30 @@ pub fn with_project_instructions(
     } else {
         format!("{instructions}\n\n{section}")
     }
+}
+
+/// A turn's system prompt, in the order of authority: the agent's
+/// instructions, the host's environment section (trusted: not framed),
+/// the skills picked for the turn and the workspace's AGENTS.md (both
+/// untrusted, framed under `nonce`), then the memory recall.
+#[must_use]
+pub fn system_instruction(
+    agent: &str,
+    environment: &str,
+    invoked: &[InvokedSkill],
+    project: &ProjectInstructions,
+    recall: &str,
+    nonce: &str,
+) -> String {
+    let authored = splice_memory(agent, environment);
+    splice_memory(
+        &with_project_instructions(
+            &skills::with_invoked_skills(&authored, invoked, nonce),
+            project,
+            nonce,
+        ),
+        recall,
+    )
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -613,7 +804,24 @@ impl AgentHost {
             busy: BusySet::default(),
             turns: Mutex::new(TurnTable::default()),
             owner: Mutex::new(None),
+            caches: TurnCaches::default(),
+            commits: CommitQueues::default(),
+            failed_commits: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            test_toolsets: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Offer `toolset` in every later turn, as a local toolset (tests).
+    #[cfg(test)]
+    pub(super) fn add_test_toolset(&self, toolset: Arc<dyn Toolset>) {
+        self.test_toolsets.lock().expect("lock").push(toolset);
+    }
+
+    /// How many approval questions are open, of every turn (tests).
+    #[cfg(test)]
+    pub(super) fn open_approvals(&self) -> usize {
+        self.broker.open()
     }
 
     fn policy(&self) -> Result<LocalWorkPolicy, TurnError> {
@@ -698,6 +906,18 @@ impl AgentHost {
             .session
             .sandbox_request(SandboxMode::WorkspaceWrite, false)
             .expect("request")
+    }
+
+    /// The step limit the workspace's settings set, if any (unreadable
+    /// settings are logged and ignored: the turn runs on the default).
+    fn workspace_step_limit(&self, workspace_id: &str) -> Option<u32> {
+        match self.deps.workspaces.agent_settings(workspace_id) {
+            Ok(settings) => settings.step_limit,
+            Err(error) => {
+                log::warn!("the workspace's agent settings were not used: {error}");
+                None
+            }
+        }
     }
 
     /// The request's workspace, bound to the request's project. A turn runs
@@ -940,6 +1160,156 @@ impl AgentHost {
         }
     }
 
+    /// Admit `resolved` for `request`: D0's refusals, the step limit, the
+    /// picked skills (one of this version's own, as the platform answered
+    /// it to this person) and the rest of the runtime's instruction
+    /// admission (the project context, the catalogue's bounds). `run_agent`
+    /// admits the same definition again under the real ids.
+    fn admit(
+        &self,
+        request: &TurnRequest,
+        resolved: &ResolvedVersion,
+    ) -> Result<(Admitted, Vec<InvokedSkill>), TurnError> {
+        let admitted = definition::admit(resolved, &local_tool_names())
+            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
+            .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
+        let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
+        InstructionPlan::admit(&execution_request(
+            request,
+            &admitted,
+            "admission",
+            "admission",
+        ))
+        .map_err(|_| {
+            TurnError::new(
+                "skill_invalid",
+                "The agent's frozen skills or project context could not be loaded, so the turn was not started.",
+            )
+        })?;
+        Ok((admitted, invoked))
+    }
+
+    /// The conversation's agent session for this turn (see [`SessionPlan`]).
+    async fn open_memory(
+        &self,
+        api: &PlatformApi,
+        owner: Option<&Owner>,
+        request: &TurnRequest,
+        policy: &LocalWorkPolicy,
+        answering: &AnsweringParticipant,
+        question_id: &str,
+    ) -> Result<SessionPlan, TurnError> {
+        SessionPlan::open(
+            self.deps.sessions.as_ref(),
+            owner,
+            api,
+            request.project_id,
+            policy,
+            answering,
+            question_id,
+        )
+        .await
+        .map_err(|error| match error {
+            SessionError::Api(error) => TurnError::from(error),
+            SessionError::Busy => TurnError::new(
+                "conversation_busy",
+                "Another turn of this conversation is still running.",
+            ),
+        })
+    }
+
+    /// `agent_prewarm`: read what a turn to this agent version (and
+    /// conversation) would read first and keep it in the caches, so the
+    /// turn's start is its only serial request. Starts no execution and
+    /// never reads the memory recall (`start` is never cached). Only an
+    /// admissible version is kept; a failed read is just not cached.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `local_work_disabled`, `not_signed_in`.
+    pub async fn prewarm(&self, request: PrewarmRequest) -> Result<Prewarmed, TurnError> {
+        check_project_id(request.project_id)?;
+        let conversation = request
+            .conversation_id
+            .as_ref()
+            .map(conversation_key)
+            .transpose()?;
+        self.policy()?;
+        let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
+        let identity = pinned.pinned_identity().to_owned();
+        let api = self.api.with_credentials(Arc::new(pinned));
+        let version_key = VersionKey {
+            identity: identity.clone(),
+            project_id: request.project_id,
+            application_id: request.application_id,
+            version_id: request.version_id,
+        };
+        let participant_key = conversation.map(|conversation| ParticipantKey {
+            identity,
+            project_id: request.project_id,
+            conversation,
+            application_id: request.application_id,
+            version_id: request.version_id,
+        });
+        let turn = TurnRequest {
+            workspace_id: String::new(),
+            project_id: request.project_id,
+            conversation_id: Value::Null,
+            application_id: request.application_id,
+            version_id: request.version_id,
+            prompt: String::new(),
+            plan_mode: false,
+            mentions: Vec::new(),
+            skills: Vec::new(),
+        };
+        let need_version = self.caches.version(&version_key).is_none();
+        let need_participant = participant_key
+            .as_ref()
+            .is_some_and(|key| self.caches.participant(key).is_none());
+        let (version, participant, _) = tokio::join!(
+            async {
+                if need_version {
+                    Some(
+                        api.resolved_version(
+                            request.project_id,
+                            request.application_id,
+                            request.version_id,
+                            None,
+                        )
+                        .await,
+                    )
+                } else {
+                    None
+                }
+            },
+            async {
+                match (&participant_key, need_participant) {
+                    (Some(key), true) => {
+                        Some(lookup_participant(&api, &turn, &key.conversation).await)
+                    }
+                    _ => None,
+                }
+            },
+            // Whose session this is: the turn's session store needs it.
+            self.owner(&api),
+        );
+        if let Some(Ok(Revalidated::Fresh { resolved, etag })) = version
+            && definition::admit(&resolved, &local_tool_names()).is_ok()
+        {
+            self.caches
+                .keep_version(version_key.clone(), &resolved, etag.as_deref());
+        }
+        if let (Some(Ok(answering)), Some(key)) = (participant, &participant_key) {
+            self.caches.keep_participant(key.clone(), &answering);
+        }
+        Ok(Prewarmed {
+            version: self.caches.version(&version_key).is_some(),
+            participant: participant_key
+                .as_ref()
+                .is_some_and(|key| self.caches.participant(key).is_some()),
+        })
+    }
+
     async fn prepare(
         &self,
         request: &TurnRequest,
@@ -971,61 +1341,108 @@ impl AgentHost {
         };
         // Every request of the turn, from here to its commit, goes out under
         // the session signed in now, or not at all (`identity_changed`).
-        let credentials: Arc<dyn Credentials> =
-            Arc::new(PinnedCredentials::current(self.deps.credentials.clone())?);
+        let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
+        let identity = pinned.pinned_identity().to_owned();
+        let credentials: Arc<dyn Credentials> = Arc::new(pinned);
         let api = Arc::new(self.api.with_credentials(credentials));
-        let resolved = api
-            .resolved_version(
-                request.project_id,
-                request.application_id,
-                request.version_id,
-            )
-            .await?;
-        if resolved.project_context_withheld {
-            events.status(
-                Phase::Resolving,
-                Some("You cannot view this project's context, so this turn runs without it."),
-            );
+        let version_key = VersionKey {
+            identity: identity.clone(),
+            project_id: request.project_id,
+            application_id: request.application_id,
+            version_id: request.version_id,
+        };
+        let participant_key = ParticipantKey {
+            identity,
+            project_id: request.project_id,
+            conversation: conversation.clone(),
+            application_id: request.application_id,
+            version_id: request.version_id,
+        };
+        // A cached version is admitted now and revalidated beside the start
+        // (below); one that no longer admits (a skill picked from a newer
+        // list of them) is read again as if it were not cached.
+        let warm = self.caches.version(&version_key).and_then(|cached| {
+            self.admit(request, &cached.resolved)
+                .ok()
+                .map(|admitted| (cached, admitted))
+        });
+        let cached_participant = self.caches.participant(&participant_key);
+        // What is not cached is read now, the version and the conversation
+        // together (neither depends on the other), with whose session this
+        // is (cached after the session's first turn).
+        let reading = std::time::Instant::now();
+        let (fetched, looked_up, owner) = tokio::join!(
+            async {
+                if warm.is_some() {
+                    return None;
+                }
+                let answer = api
+                    .resolved_version(
+                        request.project_id,
+                        request.application_id,
+                        request.version_id,
+                        None,
+                    )
+                    .await;
+                events.timed(Timed::Resolving, reading.elapsed());
+                Some(answer)
+            },
+            async {
+                if cached_participant.is_some() {
+                    return None;
+                }
+                let answer = lookup_participant(&api, request, &conversation).await;
+                events.timed(Timed::Participant, reading.elapsed());
+                Some(answer)
+            },
+            async { self.owner(&api).await.ok() },
+        );
+        // The version's refusals come before the conversation's.
+        let (resolved_withheld, (admitted, invoked), revalidate) = match (warm, fetched) {
+            (Some((cached, admitted)), _) => (
+                cached.resolved.project_context_withheld,
+                admitted,
+                Some(cached.etag),
+            ),
+            (None, Some(fetched)) => {
+                let Revalidated::Fresh { resolved, etag } = fetched? else {
+                    return Err(TurnError::new(
+                        "invalid_response",
+                        "the platform answered an unconditional read as not modified",
+                    ));
+                };
+                let admitted = self.admit(request, &resolved).inspect_err(|_| {
+                    self.caches.forget_version(&version_key);
+                })?;
+                self.caches
+                    .keep_version(version_key.clone(), &resolved, etag.as_deref());
+                (resolved.project_context_withheld, admitted, None)
+            }
+            (None, None) => {
+                return Err(TurnError::new(
+                    "internal",
+                    "the agent version was neither cached nor read",
+                ));
+            }
+        };
+        if resolved_withheld {
+            events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
-        // A remote tool never takes a local tool's name, nor an index
-        // tool's (whether or not this workspace has an index: names stay
-        // stable as the index comes and goes).
-        let local_names: Vec<&str> = TOOLS
-            .iter()
-            .map(|tool| tool.name)
-            .chain(INDEX_TOOLS)
-            .collect();
-        let admitted = definition::admit(&resolved, &local_names)
-            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
-        // A picked skill must be one of this version's own, as the platform
-        // answered it to this person: refused here, before the turn starts.
-        let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
-        // The rest of the runtime's instruction admission (the project
-        // context, the catalogue's bounds), also before the turn starts:
-        // run_agent admits the same definition again under the real ids.
-        InstructionPlan::admit(&execution_request(
-            request,
-            &admitted,
-            "admission",
-            "admission",
-        ))
-        .map_err(|_| {
-            TurnError::new(
-                "skill_invalid",
-                "The agent's frozen skills or project context could not be loaded, so the turn was not started.",
-            )
-        })?;
-        let answering = api
-            .answering_participant(
-                request.project_id,
-                &conversation,
-                request.application_id,
-                request.version_id,
-            )
-            .await?;
+        let fresh_participant = match looked_up {
+            Some(answer) => {
+                let answering = answer?;
+                self.caches
+                    .keep_participant(participant_key.clone(), &answering);
+                Some(answering)
+            }
+            None => None,
+        };
         // Checked and taken atomically, per workspace id, before the session
         // may be rebuilt; released on every early return below.
-        let claim = WorkspaceClaim::take(&self.busy, &request.workspace_id, TURN_RUNNING)?;
+        // A previous turn's commit still holding the workspace is waited
+        // for (that turn's conversation is read after it, below).
+        let claim =
+            WorkspaceClaim::take_for_turn(&self.busy, &request.workspace_id, TURN_RUNNING).await?;
         // Read again under the claim: the workspace may have been removed or
         // re-bound while the version and the conversation were read (neither
         // can happen from here on, both take the claim).
@@ -1036,41 +1453,131 @@ impl AgentHost {
             &policy,
         )?;
         events.status(Phase::Starting, None);
-        let question_id = uuid::Uuid::new_v4().to_string();
+        let starting = std::time::Instant::now();
+        let mut question_id = uuid::Uuid::new_v4().to_string();
+        // A cached version's revalidation runs beside the start: a 304 costs
+        // the turn nothing, and whatever it answers is acted on before the
+        // model's first request.
+        let revalidation = async {
+            let tag = revalidate.as_deref()?;
+            let revalidating = std::time::Instant::now();
+            let answer = api
+                .resolved_version(
+                    request.project_id,
+                    request.application_id,
+                    request.version_id,
+                    Some(tag),
+                )
+                .await;
+            events.timed(Timed::Resolving, revalidating.elapsed());
+            Some(answer)
+        };
         // The conversation's session: reopened from the store, seeded from
         // the server when it is behind (a take-back, a new device, a refused
         // commit). Held (tagged with the question until the server names the
         // execution) so no second turn of the conversation writes to it.
-        let owner = self.owner(&api).await.ok();
-        let mut memory = SessionPlan::open(
-            self.deps.sessions.as_ref(),
-            owner.as_ref(),
-            &api,
-            request.project_id,
-            &policy,
-            &answering,
-            &question_id,
-        )
-        .await
-        .map_err(|error| match error {
-            SessionError::Api(error) => TurnError::from(error),
-            SessionError::Busy => TurnError::new(
-                "conversation_busy",
-                "Another turn of this conversation is still running.",
-            ),
-        })?;
-        let started = api
-            .start_turn(
-                request.project_id,
-                &answering.conversation_uuid,
-                &json!({
-                    "question_id": question_id,
-                    "user_input": request.prompt,
-                    "participant_id": answering.id,
-                }),
-            )
-            .await;
-        let started = started?;
+        let (answering, started, mut memory, revalidated) =
+            match (fresh_participant, cached_participant) {
+                (Some(answering), _) => {
+                    // The previous turn's commit first (its recall reads the
+                    // committed conversation), then the session, then the
+                    // start.
+                    self.commits
+                        .idle(&lane_key(request.project_id, &answering.conversation_uuid))
+                        .await;
+                    let memory = self
+                        .open_memory(
+                            &api,
+                            owner.as_ref(),
+                            request,
+                            &policy,
+                            &answering,
+                            &question_id,
+                        )
+                        .await?;
+                    let (started, revalidated) = tokio::join!(
+                        start_turn(&api, request, &answering, &question_id),
+                        revalidation,
+                    );
+                    (answering, started?, memory, revalidated)
+                }
+                (None, Some(cached)) => {
+                    // The start goes out on the cached participant while the
+                    // conversation is read again: its message count decides the
+                    // session's seed, and a participant that changed (or a start
+                    // refused for it) is started again on the fresh one, once.
+                    self.commits
+                        .idle(&lane_key(request.project_id, &cached.conversation_uuid))
+                        .await;
+                    let looking_up = std::time::Instant::now();
+                    let (started, looked_up, revalidated) = tokio::join!(
+                        start_turn(&api, request, &cached, &question_id),
+                        async {
+                            let answer = lookup_participant(&api, request, &conversation).await;
+                            events.timed(Timed::Participant, looking_up.elapsed());
+                            answer
+                        },
+                        revalidation,
+                    );
+                    let answering = looked_up.inspect_err(|_| {
+                        self.caches.forget_participant(&participant_key);
+                    })?;
+                    self.caches
+                        .keep_participant(participant_key.clone(), &answering);
+                    let same = answering.id == cached.id
+                        && answering.conversation_uuid == cached.conversation_uuid;
+                    let started = match started {
+                        Ok(started) if same => started,
+                        Err(error) if same && !refused_for_participant(&error) => {
+                            return Err(error);
+                        }
+                        // The started execution (if any) is left to expire.
+                        _ => {
+                            question_id = uuid::Uuid::new_v4().to_string();
+                            start_turn(&api, request, &answering, &question_id).await?
+                        }
+                    };
+                    let memory = self
+                        .open_memory(
+                            &api,
+                            owner.as_ref(),
+                            request,
+                            &policy,
+                            &answering,
+                            &question_id,
+                        )
+                        .await?;
+                    (answering, started, memory, revalidated)
+                }
+                (None, None) => {
+                    return Err(TurnError::new(
+                        "internal",
+                        "the conversation was neither cached nor read",
+                    ));
+                }
+            };
+        // The freshest definition is admitted before the model is asked: a
+        // changed one again, and a refused (or unreadable) one stops the turn
+        // here. Its execution expires, as an abandoned run's does.
+        let (admitted, invoked) = match revalidated {
+            None | Some(Ok(Revalidated::NotModified)) => (admitted, invoked),
+            Some(Ok(Revalidated::Fresh { resolved, etag })) => {
+                let readmitted = self.admit(request, &resolved).inspect_err(|_| {
+                    self.caches.forget_version(&version_key);
+                })?;
+                self.caches
+                    .keep_version(version_key.clone(), &resolved, etag.as_deref());
+                if resolved.project_context_withheld && !resolved_withheld {
+                    events.status(Phase::Starting, Some(CONTEXT_WITHHELD));
+                }
+                readmitted
+            }
+            Some(Err(error)) => {
+                self.caches.forget_version(&version_key);
+                return Err(error.into());
+            }
+        };
+        events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
         Ok(Prepared {
             conversation,
@@ -1087,6 +1594,11 @@ impl AgentHost {
             claim,
             api,
             memory,
+            folder: environment::folder_name(
+                &workspace.name,
+                Path::new(&workspace.path),
+                std::env::home_dir().as_deref(),
+            ),
         })
     }
 
@@ -1097,6 +1609,7 @@ impl AgentHost {
         mut guard: LocalExecutionGuard,
     ) {
         let Prepared {
+            conversation_uuid,
             tap,
             project,
             invoked,
@@ -1109,6 +1622,7 @@ impl AgentHost {
             claim,
             api,
             mut memory,
+            folder,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -1124,7 +1638,7 @@ impl AgentHost {
         let sink = Arc::new(TurnSink::default());
         let run = self.run_agent(
             &request, &events, &workspace, &admitted, &project, &invoked, &started, &recorder,
-            &sink, &api, &memory,
+            &sink, &api, &memory, &folder,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -1162,11 +1676,14 @@ impl AgentHost {
             let changes = recorder.changes(session.workspace());
             self.index_changed(&request.workspace_id, changes.len());
             tap.changes(&changes);
+            events.tools_done();
+            events.log_timings();
             events.status(Phase::Cancelled, None);
             entry.finish(
                 &events,
                 json!({
                     "committed": false,
+                    "commit": "none",
                     "conversation_id": conversation_id,
                     "message_ids": [],
                     "changed_files": changes.len(),
@@ -1174,9 +1691,28 @@ impl AgentHost {
             );
             return;
         };
-        let (answer, failure) = match result {
-            Ok(answer) => (answer, None),
-            Err(error) => (sink.last_text(), Some(error)),
+        let (answer, stopped_at_limit, stopped_at_calls, failure) = match result {
+            Ok(AgentAnswer {
+                text,
+                step_limit_reached,
+                tool_call_limit_reached,
+            }) => (text, step_limit_reached, tool_call_limit_reached, None),
+            Err(error) => (sink.last_text(), false, false, Some(error)),
+        };
+        // A turn that stopped at a limit is committed as it is, with what
+        // the agent last said (or that it stopped there).
+        let answer = if stopped_at_calls && answer.trim().is_empty() {
+            format!(
+                "The agent stopped after making {} tool calls.",
+                recorder::MAX_TOOL_CALLS
+            )
+        } else if stopped_at_limit && answer.trim().is_empty() {
+            format!(
+                "The agent stopped after using its {} steps.",
+                admitted.step_limit
+            )
+        } else {
+            answer
         };
         let _ = sink
             .finish(match &failure {
@@ -1195,80 +1731,229 @@ impl AgentHost {
             );
             events.error(&error.code, &error.message);
         }
-        events.status(Phase::Committing, None);
+        events.tools_done();
         let sandbox_mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
         let mut assistant = json!({ "content": answer });
         if let Some(error) = &failure {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
-        let body = json!({
-            "user_message": { "content": request.prompt },
-            "assistant_message": assistant,
-            "tool_calls": recorder.tool_calls(),
-            "hitl_exchanges": recorder.hitl_exchanges(),
-            "local_work": recorder.work_report(sandbox_mode.as_str()),
-        });
-        let committed = api
-            .commit_turn(request.project_id, &started.execution_id, &body)
-            .await;
-        // The session holds what the server holds, or is marked to be
-        // rebuilt from it.
-        memory
-            .settle(
-                &started.execution_id,
-                match &committed {
-                    Ok(_) => Ok(started.response_message_id.as_str()),
-                    Err(_) => Err(Refusal::NotSaved),
-                },
-            )
-            .await;
-        // Free before `done`: the UI may send the next turn as soon as it sees it.
-        drop(claim);
+        let body = CommitBody {
+            user_message: json!({ "content": request.prompt }),
+            assistant_message: assistant,
+            tool_calls: recorder.tool_calls(),
+            hitl_exchanges: recorder.hitl_exchanges(),
+            local_work: recorder.work_report(sandbox_mode.as_str()),
+        }
+        .encode();
+        // The workspace stays held by the commit (below) until it settles:
+        // a handoff, restore or removal is refused until the last turn is
+        // saved (or its commit failed), and the next turn waits for it.
+        let claim = claim.into_commit();
         let changes = recorder.changes(session.workspace());
         self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
-        let changed_files = changes.len();
-        if let Err(error) = &committed {
-            log::warn!(
-                "a local turn was not saved: {}",
-                log_reason(&error.code, error.status)
+        if failure.is_some() {
+            events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
+        } else if stopped_at_calls {
+            events.noted(
+                Phase::Done,
+                "Stopped at the tool-call limit.",
+                recorder::TOOL_CALL_LIMIT_REACHED,
             );
+        } else if stopped_at_limit {
+            events.noted(
+                Phase::Done,
+                "Stopped at the step limit.",
+                step_limit::STEP_LIMIT_REACHED,
+            );
+        } else {
+            events.status(Phase::Done, None);
         }
-        match committed {
-            Ok(_) => {
-                if failure.is_some() {
-                    events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
-                } else {
-                    events.status(Phase::Done, None);
-                }
-                entry.finish(
-                    &events,
-                    json!({
-                        "committed": true,
-                        "conversation_id": conversation_id,
-                        "message_ids": [started.question_id, started.response_message_id],
-                        "changed_files": changed_files,
+        let lane = lane_key(request.project_id, &conversation_uuid);
+        let host = self.clone();
+        let retry = self.commit_retry();
+        let project_id = request.project_id;
+        let (done_sent, after_done) = tokio::sync::oneshot::channel::<()>();
+        let (done_events, done_entry) = (events.clone(), entry.clone());
+        let execution_id = started.execution_id.clone();
+        let done = json!({
+            "committed": false,
+            "commit": "pending",
+            "execution_id": started.execution_id,
+            "conversation_id": conversation_id,
+            "message_ids": [started.question_id, started.response_message_id],
+            "changed_files": changes.len(),
+        });
+        let job = async move {
+            // Nothing of the commit is reported before the turn's `done`.
+            let _ = after_done.await;
+            let work = std::panic::AssertUnwindSafe(async {
+                let committing = std::time::Instant::now();
+                let outcome = match &body {
+                    Ok(body) => commits::commit(&api, project_id, &execution_id, body, retry).await,
+                    Err(error) => Err(error.clone()),
+                };
+                events.timed(Timed::Committing, committing.elapsed());
+                // The session holds what the server holds, or is marked to be
+                // rebuilt from it.
+                memory
+                    .settle(
+                        &execution_id,
+                        match &outcome {
+                            Ok(()) => Ok(started.response_message_id.as_str()),
+                            Err(_) => Err(Refusal::NotSaved),
+                        },
+                    )
+                    .await;
+                events.log_timings();
+                host.commit_settled(
+                    &execution_id,
+                    outcome,
+                    body.ok().map(|body| FailedCommit {
+                        lane: lane_key(project_id, &conversation_uuid),
+                        api,
+                        project_id,
+                        body: Arc::new(body),
+                        events: events.clone(),
+                        entry: entry.clone(),
                     }),
+                    &events,
+                    &entry,
+                );
+            })
+            .catch_unwind()
+            .await;
+            // A commit that panicked is a commit that failed (not kept for a
+            // retry: what it held is gone).
+            if work.is_err() {
+                host.commit_settled(
+                    &execution_id,
+                    Err(ApiError::local(
+                        "internal",
+                        "the commit stopped unexpectedly",
+                    )),
+                    None,
+                    &events,
+                    &entry,
                 );
             }
+            // Released only now, landed or failed: a failed commit frees the
+            // workspace once its retries are used up (`turn_commit_retry`
+            // later runs without it; a handoff before then sends the
+            // conversation without that turn, as the server holds it).
+            drop(claim);
+        };
+        // The slot is taken before `done`: a next turn that sees `done`
+        // finds the lane busy and waits for this commit.
+        self.commits.push(&lane, job.boxed());
+        // `done` before the commit: the person sees the answer at once; the
+        // commit follows in the conversation's lane, and `commit_failed`
+        // reports one that did not land.
+        done_entry.finish(&done_events, done);
+        let _ = done_sent.send(());
+    }
+
+    /// How a commit after `done` is retried.
+    fn commit_retry(&self) -> CommitRetry {
+        CommitRetry::from_remote(self.deps.retry)
+    }
+
+    /// A turn's commit settled: the turn says so, and one that did not land
+    /// is kept for `turn_commit_retry` and reported (`commit_failed`).
+    fn commit_settled(
+        &self,
+        execution_id: &str,
+        outcome: Result<(), ApiError>,
+        retry: Option<FailedCommit>,
+        events: &TurnEvents,
+        entry: &TurnEntry,
+    ) {
+        match outcome {
+            Ok(()) => entry.commit_settled("committed"),
             Err(error) => {
-                events.error(
-                    &error.code,
-                    &format!("The turn could not be saved: {}", error.message),
+                log::warn!(
+                    "a local turn was not saved: {}",
+                    log_reason(&error.code, error.status)
                 );
-                events.status(Phase::Error, Some(&error.message));
-                entry.finish(
-                    &events,
+                entry.commit_settled("failed");
+                if let Some(retry) = retry {
+                    self.failed_commits
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(execution_id.to_owned(), retry);
+                }
+                events.send(
+                    "commit_failed",
                     json!({
-                        "committed": false,
-                        "conversation_id": conversation_id,
-                        "message_ids": [],
-                        "changed_files": changed_files,
+                        "execution_id": execution_id,
+                        "code": error.code,
+                        "message": format!("The turn could not be saved: {}", error.message),
                     }),
                 );
             }
         }
+    }
+
+    /// `turn_commit_retry`: send a turn's failed commit again (same
+    /// execution id, same body), in its conversation's lane; resolves once
+    /// it settled.
+    ///
+    /// # Errors
+    ///
+    /// `commit_unknown` for an execution with no failed commit kept, or the
+    /// commit's refusal (it is then kept, and reported, again).
+    pub async fn retry_commit(self: &Arc<Self>, execution_id: &str) -> Result<(), TurnError> {
+        let failed = self
+            .failed_commits
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(execution_id)
+            .ok_or_else(|| {
+                TurnError::new(
+                    "commit_unknown",
+                    "This app keeps no unsaved turn with that execution id.",
+                )
+            })?;
+        let (reply, settled) = tokio::sync::oneshot::channel();
+        let host = self.clone();
+        let retry = self.commit_retry();
+        let id = execution_id.to_owned();
+        let lane = failed.lane.clone();
+        self.commits.push(
+            &lane,
+            async move {
+                let outcome =
+                    commits::commit(&failed.api, failed.project_id, &id, &failed.body, retry).await;
+                let answer = outcome.clone().map_err(TurnError::from);
+                let (events, entry) = (failed.events.clone(), failed.entry.clone());
+                host.commit_settled(&id, outcome, Some(failed), &events, &entry);
+                let _ = reply.send(answer);
+            }
+            .boxed(),
+        );
+        settled
+            .await
+            .map_err(|_| TurnError::new("internal", "the commit stopped unexpectedly"))?
+    }
+
+    /// Until no commit is queued or running (the app's exit waits on it,
+    /// bounded).
+    pub async fn commits_idle(&self) {
+        self.commits.all_idle().await;
+    }
+
+    /// Commits queued or running, and failed ones kept: what a quit now
+    /// leaves unsaved (each such execution expires on the server).
+    #[must_use]
+    pub fn unsaved_commits(&self) -> (usize, usize) {
+        (
+            self.commits.pending(),
+            self.failed_commits
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1285,11 +1970,42 @@ impl AgentHost {
         sink: &Arc<TurnSink>,
         api: &Arc<PlatformApi>,
         memory: &SessionPlan,
-    ) -> Result<String, TurnError> {
+        folder: &str,
+    ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
         // closing tag carrying it (d0/framing.rs).
         let nonce = framing::nonce();
+        // The host's environment section names the tools offered now: the
+        // session's, then the index tools when the workspace's index is on
+        // and built (they only read, so plan mode keeps them). The index is
+        // looked up while the environment's probes run.
+        let local_offered: Vec<String> = workspace
+            .session
+            .available_tools()
+            .iter()
+            .map(|tool| tool.name.to_owned())
+            .collect();
+        let (index, mut facts) = tokio::join!(
+            async {
+                match &self.deps.index {
+                    Some(registry) => registry.for_turn(&request.workspace_id).await,
+                    None => None,
+                }
+            },
+            environment::gather(
+                &workspace.session,
+                folder.to_owned(),
+                &workspace.policy,
+                request.plan_mode,
+                local_offered,
+            ),
+        );
+        if index.is_some() {
+            facts
+                .tools
+                .extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
+        }
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -1302,13 +2018,13 @@ impl AgentHost {
             .bind(ModelRequest {
                 model_project_id: check_project_id(request.project_id)?,
                 model_name: admitted.model.model_name.clone(),
-                system_instruction: splice_memory(
-                    &with_project_instructions(
-                        &skills::with_invoked_skills(&admitted.instructions, invoked, &nonce),
-                        project,
-                        &nonce,
-                    ),
+                system_instruction: system_instruction(
+                    &admitted.instructions,
+                    &environment::preamble(&facts),
+                    invoked,
+                    project,
                     &started.memory_recall.text,
+                    &nonce,
                 ),
                 max_tokens: admitted.model.max_tokens,
                 temperature: admitted.model.temperature,
@@ -1349,12 +2065,6 @@ impl AgentHost {
         } else {
             admitted.remote_tools.clone()
         };
-        // The workspace's index tools, when its index is on and built: they
-        // only read, so plan mode keeps them.
-        let index = match &self.deps.index {
-            Some(registry) => registry.for_turn(&request.workspace_id).await,
-            None => None,
-        };
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
             provider = provider.with(Arc::new(IndexToolProvider::new(index)));
@@ -1378,7 +2088,12 @@ impl AgentHost {
             .max_iterations(admitted.step_limit)
             .tool_timeout(TOOL_TIMEOUT)
             .disallow_transfer_to_parent(true)
-            .disallow_transfer_to_peers(true);
+            .disallow_transfer_to_peers(true)
+            // The read-only, concurrency-safe calls of one model step (local
+            // reads, the index tools) run together, then the rest (writes,
+            // commands, remote toolkits) one at a time in the model's order.
+            // adk takes it from the agent: RunConfig has no such field.
+            .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
         for toolset in toolsets {
             // The local tools and the index tools run here; only the
@@ -1388,6 +2103,14 @@ impl AgentHost {
                 toolset,
                 observer.clone(),
                 remote,
+            )) as Arc<dyn Toolset>);
+        }
+        #[cfg(test)]
+        for toolset in self.test_toolsets.lock().expect("lock").iter() {
+            builder = builder.toolset(Arc::new(ObservedToolset::new(
+                toolset.clone(),
+                observer.clone(),
+                false,
             )) as Arc<dyn Toolset>);
         }
         for toolset in plan.toolsets() {
@@ -1413,6 +2136,10 @@ impl AgentHost {
         let session_id = memory.session_id.clone();
         let run_config = RunConfig {
             streaming_mode: StreamingMode::None,
+            tool_concurrency: ToolConcurrencyConfig {
+                max_concurrency: Some(MAX_CONCURRENT_TOOLS),
+                ..ToolConcurrencyConfig::default()
+            },
             ..RunConfig::default()
         };
         let runner = Runner::builder()
@@ -1422,23 +2149,63 @@ impl AgentHost {
             .run_config(run_config)
             .build()
             .map_err(|_| failed("internal", "The agent runner could not be built."))?;
-        let mut stream = runner
-            .run_str(
-                USER_ID,
-                &session_id,
-                Content::new("user").with_text(request.prompt.clone()),
-            )
-            .await
-            .map_err(|e| failed("agent_failed", &e.to_string()))?;
-        while let Some(event) = stream.next().await {
-            let event = event.map_err(|e| model_failure(&e.to_string()))?;
-            sink.emit(&event)
-                .await
-                .map_err(|e| failed("agent_failed", &e.to_string()))?;
+        // At the step limit the person is asked whether to go on (never a
+        // rule or a remembered choice: the prompt, not the session's
+        // approvals); on "continue" the same runner runs again on the same
+        // session, within this execution, from the host's own prompt.
+        let mut budget = StepBudget::new(admitted.step_limit);
+        let mut content = Content::new("user").with_text(request.prompt.clone());
+        loop {
+            match run_once(&runner, &session_id, content, sink, recorder).await? {
+                RunEnd::Answered => {
+                    return Ok(AgentAnswer {
+                        text: bound
+                            .take_completed_text()
+                            .unwrap_or_else(|_| sink.last_text()),
+                        step_limit_reached: false,
+                        tool_call_limit_reached: false,
+                    });
+                }
+                // The server keeps at most so many tool calls of a turn: no
+                // "Continue?" past them (the commit would be refused).
+                RunEnd::ToolCallLimit => {
+                    return Ok(AgentAnswer {
+                        text: sink.last_text(),
+                        step_limit_reached: false,
+                        tool_call_limit_reached: true,
+                    });
+                }
+                RunEnd::StepLimit => {
+                    let go_on = budget.may_continue()
+                        && !recorder.tool_call_limit_reached()
+                        && step_limit::ask_to_continue(
+                            workspace.prompt.as_ref(),
+                            "step_limit",
+                            budget.limit(),
+                            &sink.last_said(),
+                        )
+                        .await;
+                    let next = if go_on {
+                        budget.continue_content()
+                    } else {
+                        None
+                    };
+                    match next {
+                        Some(next) => {
+                            events.continued(budget.limit(), budget.continues());
+                            content = next;
+                        }
+                        None => {
+                            return Ok(AgentAnswer {
+                                text: sink.last_text(),
+                                step_limit_reached: !recorder.tool_call_limit_reached(),
+                                tool_call_limit_reached: recorder.tool_call_limit_reached(),
+                            });
+                        }
+                    }
+                }
+            }
         }
-        Ok(bound
-            .take_completed_text()
-            .unwrap_or_else(|_| sink.last_text()))
     }
 
     /// `agent_turn_cancel`: stop a running turn; it then commits nothing.
@@ -1511,6 +2278,11 @@ impl AgentHost {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.caches.clear();
+        self.failed_commits
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
@@ -2034,6 +2806,17 @@ where
     }
 }
 
+/// A commit that failed after its retries, as `turn_commit_retry` sends it
+/// again.
+struct FailedCommit {
+    lane: String,
+    api: Arc<PlatformApi>,
+    project_id: i64,
+    body: Arc<Vec<u8>>,
+    events: Arc<TurnEvents>,
+    entry: Arc<TurnEntry>,
+}
+
 struct Prepared {
     /// The conversation as the UI named it (its id or UUID).
     conversation: String,
@@ -2056,6 +2839,101 @@ struct Prepared {
     api: Arc<PlatformApi>,
     /// The conversation's session, held by this turn.
     memory: SessionPlan,
+    /// The folder's name as the environment section shows it.
+    folder: String,
+}
+
+/// The body of `local_turn_commit`, encoded with its `tool_calls` in the
+/// model's call order (see [`ToolCalls`]).
+#[derive(serde::Serialize)]
+struct CommitBody {
+    user_message: Value,
+    assistant_message: Value,
+    tool_calls: ToolCalls,
+    hitl_exchanges: Vec<Value>,
+    local_work: Value,
+}
+
+impl CommitBody {
+    fn encode(&self) -> Result<Vec<u8>, ApiError> {
+        serde_json::to_vec(self)
+            .map_err(|_| ApiError::local("invalid_request", "the turn could not be encoded"))
+    }
+}
+
+/// What the agent's runs ended with.
+struct AgentAnswer {
+    text: String,
+    /// The last run stopped at the step limit and the turn did not go on
+    /// (the person said stop, did not answer, or the continues ran out).
+    step_limit_reached: bool,
+    /// The turn made the most tool calls a commit may carry
+    /// ([`recorder::MAX_TOOL_CALLS`]): it stopped there, not to be continued.
+    tool_call_limit_reached: bool,
+}
+
+/// How one run of the agent ended.
+enum RunEnd {
+    /// The model answered (or the run ended without an error).
+    Answered,
+    /// adk's own end: the run used its `max_iterations` steps.
+    StepLimit,
+    /// The turn's tool calls reached [`recorder::MAX_TOOL_CALLS`]: the run
+    /// is stopped after the step that reached it.
+    ToolCallLimit,
+}
+
+/// One run of `runner` on the session from `content`, its events to `sink`.
+/// The calls each model answer asks for are noted with `recorder` in the
+/// model's order before any of them runs (adk yields the answer first), so
+/// the commit lists the steps in that order however they ran.
+async fn run_once(
+    runner: &Runner,
+    session_id: &str,
+    content: Content,
+    sink: &TurnSink,
+    recorder: &Recorder,
+) -> Result<RunEnd, TurnError> {
+    let mut stream = runner
+        .run_str(USER_ID, session_id, content)
+        .await
+        .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;
+    while let Some(event) = stream.next().await {
+        let event = match event {
+            Ok(event) => event,
+            Err(error) if recorder.tool_call_limit_reached() => {
+                log::info!(
+                    "a local turn's run ended at the tool-call limit ({})",
+                    if step_limit::reached(&error) {
+                        "and its step limit"
+                    } else {
+                        "with an error"
+                    }
+                );
+                return Ok(RunEnd::ToolCallLimit);
+            }
+            Err(error) if step_limit::reached(&error) => return Ok(RunEnd::StepLimit),
+            Err(error) => return Err(model_failure(&error.to_string())),
+        };
+        if !event.llm_response.partial
+            && let Some(content) = &event.llm_response.content
+            && content.role == "model"
+        {
+            recorder.calls_planned(content.parts.iter().filter_map(|part| match part {
+                Part::FunctionCall { id: Some(id), .. } => Some(id.as_str()),
+                _ => None,
+            }));
+        }
+        sink.emit(&event)
+            .await
+            .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;
+        // Stopped between steps: the model is not asked again (a call past
+        // the limit was not run, `tools.rs`).
+        if recorder.tool_call_limit_reached() {
+            return Ok(RunEnd::ToolCallLimit);
+        }
+    }
+    Ok(RunEnd::Answered)
 }
 
 fn model_failure(text: &str) -> TurnError {
@@ -2157,12 +3035,22 @@ fn execution_request(
 #[derive(Default)]
 pub struct TurnSink {
     last_text: Mutex<String>,
+    /// The model's last text, with tool calls or without (what it said it
+    /// was doing): the "Continue?" question shows it.
+    last_said: Mutex<String>,
     outcome: Mutex<Option<RunOutcome>>,
 }
 
 impl TurnSink {
     fn last_text(&self) -> String {
         self.last_text
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default()
+    }
+
+    fn last_said(&self) -> String {
+        self.last_said
             .lock()
             .map(|text| text.clone())
             .unwrap_or_default()
@@ -2188,6 +3076,12 @@ impl EventSink for TurnSink {
                     _ => None,
                 })
                 .collect();
+            if !text.is_empty()
+                && content.role == "model"
+                && let Ok(mut said) = self.last_said.lock()
+            {
+                said.clone_from(&text);
+            }
             if !has_calls
                 && !text.is_empty()
                 && content.role == "model"
@@ -2304,7 +3198,7 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_then_the_skill_then_agents_md_each_saying_its_rank() {
+    fn the_agent_then_the_environment_then_the_skill_then_agents_md_each_saying_its_rank() {
         use elitea_local_tools::project_instructions::InstructionFile;
         let project = ProjectInstructions {
             files: vec![InstructionFile {
@@ -2318,9 +3212,12 @@ mod tests {
             name: "Style".into(),
             instructions: "Write tersely.".into(),
         }];
-        let assembled = with_project_instructions(
-            &skills::with_invoked_skills("Be brief.", &skill, NONCE),
+        let assembled = system_instruction(
+            "Be brief.",
+            "## Environment\n- Today: 2026-10-10",
+            &skill,
             &project,
+            "Memory: tea.",
             NONCE,
         );
         let at = |needle: &str| {
@@ -2330,6 +3227,7 @@ mod tests {
         };
         let order = [
             at("Be brief."),
+            at("## Environment"),
             at(skills::SKILLS_HEADING),
             at(skills::SKILLS_PRECEDENCE),
             at("Write tersely."),
@@ -2338,20 +3236,23 @@ mod tests {
             at(PROJECT_PRECEDENCE),
             at("Run task test."),
             at(END_OF_PROJECT_INSTRUCTIONS),
+            at("Memory: tea."),
         ];
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{assembled}");
+        // The host's section is trusted: it is not framed under the nonce.
+        assert!(!assembled[..at(skills::SKILLS_HEADING)].contains(NONCE));
         // Each preamble names what outranks it and what it outranks.
-        assert!(
-            skills::SKILLS_PRECEDENCE.contains("agent's own instructions above outrank this skill")
-        );
+        assert!(skills::SKILLS_PRECEDENCE.contains(
+            "agent's own instructions and the environment section above outrank this skill"
+        ));
         assert!(
             skills::SKILLS_PRECEDENCE
                 .contains("this skill outranks the workspace's project instructions (AGENTS.md)")
         );
         assert!(PROJECT_PRECEDENCE.contains("rank last"));
-        assert!(
-            PROJECT_PRECEDENCE.contains("any skill picked for this turn, both above, outrank them")
-        );
+        assert!(PROJECT_PRECEDENCE.contains(
+            "the environment section and any skill picked for this turn, all above, outrank them"
+        ));
     }
 
     #[test]

@@ -1516,6 +1516,54 @@ pub fn capped(bytes: &[u8]) -> (String, bool) {
     (String::from_utf8_lossy(&bytes[..end]).into_owned(), true)
 }
 
+/// The longest branch name [`parse_status_summary`] keeps.
+const MAX_SUMMARY_BRANCH: usize = 100;
+
+/// What `git status --porcelain=v1 --branch` says in two facts: the current
+/// branch and how many paths changed. For a host's note to the model, not
+/// a tool result: nothing else of the output (no path) is kept.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StatusSummary {
+    /// `None` when detached, or when the name is not one git itself would
+    /// take (so the note never carries arbitrary text from the repository).
+    pub branch: Option<String>,
+    /// Changed, staged and untracked paths (one per status line).
+    pub changed: usize,
+}
+
+/// Parse `git status --porcelain=v1 --branch` output (no `-z`; a path with
+/// a newline is quoted by git, so one entry is one line).
+#[must_use]
+pub fn parse_status_summary(output: &[u8]) -> StatusSummary {
+    let text = String::from_utf8_lossy(output);
+    let mut summary = StatusSummary::default();
+    for line in text.lines() {
+        if let Some(header) = line.strip_prefix("## ") {
+            let name = header
+                .strip_prefix("No commits yet on ")
+                .or_else(|| header.strip_prefix("Initial commit on "))
+                .unwrap_or(header);
+            let name = name.split("...").next().unwrap_or_default();
+            let name = name.split(" [").next().unwrap_or_default().trim();
+            summary.branch = plain_branch_name(name).then(|| name.to_owned());
+        } else if !line.trim().is_empty() {
+            summary.changed += 1;
+        }
+    }
+    summary
+}
+
+/// A branch name made only of the characters ordinary names use, at most
+/// [`MAX_SUMMARY_BRANCH`] bytes; `HEAD (no branch)` (detached) is not one.
+fn plain_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_SUMMARY_BRANCH
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._/-+#@".contains(&byte))
+}
+
 trait CharBoundary {
     fn is_char_boundary_at(&self, index: usize) -> bool;
 }
@@ -1536,10 +1584,35 @@ mod tests {
 
     use std::sync::Arc;
 
-    use super::{Repo, capped, check_revision, dangerous_key, driver_of, parse_config};
+    use super::{
+        Repo, StatusSummary, capped, check_revision, dangerous_key, driver_of, parse_config,
+        parse_status_summary,
+    };
     use crate::deny::DenyList;
     use crate::error::ErrorCode;
     use crate::sandbox::SandboxConfig;
+
+    #[test]
+    fn a_status_summary_keeps_the_branch_and_the_count_only() {
+        let summary = |text: &str| parse_status_summary(text.as_bytes());
+        assert_eq!(
+            summary("## main...origin/main [ahead 1]\n M src/a.rs\n?? new.txt\nR  old -> new\n"),
+            StatusSummary {
+                branch: Some("main".into()),
+                changed: 3
+            }
+        );
+        assert_eq!(summary("## feat/x-1\n").branch.as_deref(), Some("feat/x-1"));
+        assert_eq!(
+            summary("## No commits yet on trunk\n").branch.as_deref(),
+            Some("trunk")
+        );
+        // Detached, or a name no ordinary branch has: no branch is reported.
+        assert_eq!(summary("## HEAD (no branch)\n M a\n").branch, None);
+        assert_eq!(summary("## ignore\tall\n").branch, None);
+        assert_eq!(summary(&format!("## {}\n", "b".repeat(101))).branch, None);
+        assert_eq!(summary("").changed, 0);
+    }
 
     fn init(dir: &Path) {
         let status = Command::new("git")

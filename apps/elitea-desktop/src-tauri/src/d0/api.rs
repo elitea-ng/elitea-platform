@@ -111,6 +111,15 @@ impl Credentials for PinnedCredentials {
     }
 }
 
+impl PinnedCredentials {
+    /// The identity these credentials are pinned to (whose caches a turn
+    /// may use).
+    #[must_use]
+    pub fn pinned_identity(&self) -> &str {
+        &self.identity
+    }
+}
+
 /// A refused or failed platform call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiError {
@@ -143,6 +152,8 @@ impl std::fmt::Display for ApiError {
 pub struct Answer {
     pub status: u16,
     pub body: Value,
+    /// The `ETag` header, when the platform sent one.
+    pub etag: Option<String>,
 }
 
 impl Answer {
@@ -182,6 +193,18 @@ pub struct ResolvedVersion {
     #[serde(default)]
     pub project_context_withheld: bool,
     pub version_details: Map<String, Value>,
+}
+
+/// What a (conditional) `resolved_version` read answered.
+#[derive(Clone, Debug)]
+pub enum Revalidated {
+    /// The copy the caller holds is current (304, or 200 with its tag).
+    NotModified,
+    /// The document, and its tag when the platform sent one.
+    Fresh {
+        resolved: ResolvedVersion,
+        etag: Option<String>,
+    },
 }
 
 /// `startLocalTurn` (decision 5c).
@@ -273,6 +296,29 @@ impl PlatformApi {
         body: Option<&Value>,
         headers: &[(&str, &str)],
     ) -> Result<Answer, ApiError> {
+        let body = match body {
+            Some(value) => Some(serde_json::to_vec(value).map_err(|_| {
+                ApiError::local("invalid_request", "the request could not be encoded")
+            })?),
+            None => None,
+        };
+        self.send_bytes(method, path, body.as_deref(), headers)
+            .await
+    }
+
+    /// [`Self::send`] with a body already encoded as JSON (one whose object
+    /// keys must keep their order, which a `serde_json::Value` cannot).
+    ///
+    /// # Errors
+    ///
+    /// No answer arrived.
+    pub async fn send_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&[u8]>,
+        headers: &[(&str, &str)],
+    ) -> Result<Answer, ApiError> {
         let bearer = self.credentials.bearer().await?;
         let answer = self
             .send_with(&bearer, &method, path, body, headers)
@@ -289,7 +335,7 @@ impl PlatformApi {
         bearer: &Bearer,
         method: &Method,
         path: &str,
-        body: Option<&Value>,
+        body: Option<&[u8]>,
         headers: &[(&str, &str)],
     ) -> Result<Answer, ApiError> {
         let mut request = self
@@ -305,7 +351,9 @@ impl PlatformApi {
             request = request.header(*name, *value);
         }
         if let Some(body) = body {
-            request = request.json(body);
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.to_vec());
         }
         let response = request.send().await.map_err(|error| {
             if error.is_timeout() {
@@ -315,6 +363,11 @@ impl PlatformApi {
             }
         })?;
         let status = response.status().as_u16();
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let bytes = response
             .bytes()
             .await
@@ -324,28 +377,50 @@ impl PlatformApi {
         } else {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         };
-        Ok(Answer { status, body })
+        Ok(Answer { status, body, etag })
     }
 
+    /// The agent version resolved for execution, revalidated against
+    /// `if_none_match` (the `ETag` of a copy the caller holds) when given.
+    /// Every call is the platform's full read under the caller's
+    /// permissions; only the body is spared when nothing changed.
+    ///
     /// # Errors
     ///
-    /// Refused (404, 422 …) or failed.
+    /// Refused (403, 404, 422 …) or failed.
     pub async fn resolved_version(
         &self,
         project_id: i64,
         application_id: i64,
         version_id: i64,
-    ) -> Result<ResolvedVersion, ApiError> {
-        self.send(
-            Method::GET,
-            &format!(
-                "/api/v2/elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}"
-            ),
-            None,
-            &[],
-        )
-        .await?
-        .into_ok()
+        if_none_match: Option<&str>,
+    ) -> Result<Revalidated, ApiError> {
+        let headers: Vec<(&str, &str)> = if_none_match
+            .map(|etag| ("If-None-Match", etag))
+            .into_iter()
+            .collect();
+        let answer = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}"
+                ),
+                None,
+                &headers,
+            )
+            .await?;
+        if answer.status == StatusCode::NOT_MODIFIED.as_u16() && if_none_match.is_some() {
+            return Ok(Revalidated::NotModified);
+        }
+        // A server that ignores If-None-Match answers 200 with the same tag.
+        if if_none_match.is_some() && answer.etag.as_deref() == if_none_match {
+            return Ok(Revalidated::NotModified);
+        }
+        let etag = answer.etag.clone();
+        Ok(Revalidated::Fresh {
+            resolved: answer.into_ok()?,
+            etag,
+        })
     }
 
     /// The conversation's participant that answers with this agent version,
@@ -569,6 +644,9 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// `body` is the commit's JSON, encoded (its `tool_calls` keys are in
+    /// the model's call order, which the server keeps).
+    ///
     /// # Errors
     ///
     /// Refused (409, 410 …) or failed.
@@ -576,9 +654,9 @@ impl PlatformApi {
         &self,
         project_id: i64,
         execution_id: &str,
-        body: &Value,
+        body: &[u8],
     ) -> Result<Value, ApiError> {
-        self.send(
+        self.send_bytes(
             Method::POST,
             &format!(
                 "/api/v2/elitea_core/local_turn_commit/prompt_lib/{project_id}/{execution_id}"
