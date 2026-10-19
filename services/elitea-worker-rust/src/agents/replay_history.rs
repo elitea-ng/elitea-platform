@@ -116,6 +116,7 @@ pub(super) fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequ
     request
         .contents
         .retain(|content| !content.parts.is_empty() && !is_confirmation_notice(content, &called));
+    drop_answered_replay_markers(&mut request.contents);
     close_abandoned_calls(&mut request.contents, &results);
     Ok(request)
 }
@@ -142,6 +143,28 @@ fn is_confirmation_notice(content: &Content, called: &std::collections::HashSet<
     text.strip_prefix(PREFIX)
         .and_then(|rest| rest.strip_suffix(SUFFIX))
         .is_some_and(|tool| called.contains(tool))
+}
+
+/// The runtime's replay marker asks the model to continue a decided call. Once
+/// the replayed call follows it in the history, a later turn does not resend
+/// it: the request keeps the continuation's shape (the call, its result or
+/// block, which carries any reviewer comment) plus the new turns. A marker no
+/// call follows yet stays, so a pending continuation keeps its instruction.
+fn drop_answered_replay_markers(contents: &mut Vec<Content>) {
+    let Some(last_call) = contents.iter().rposition(|content| {
+        content
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::FunctionCall { .. }))
+    }) else {
+        return;
+    };
+    let mut index = 0;
+    contents.retain(|content| {
+        let keep = index > last_call || !super::direct_hitl::is_replay_marker(content);
+        index += 1;
+        keep
+    });
 }
 
 /// A later user turn can follow a failed child without a recorded tool result.
@@ -265,6 +288,56 @@ mod tests {
             role: role.into(),
             parts,
         }
+    }
+
+    #[test]
+    fn a_later_turn_drops_the_answered_replay_marker_and_keeps_user_text() {
+        let marker = |decision: &str| {
+            content(
+                "user",
+                vec![Part::Text {
+                    text: format!(
+                        "[Elitea direct HITL hitl_e1:{}] The pending tool call was {decision}",
+                        "a".repeat(43)
+                    ),
+                }],
+            )
+        };
+        let text = |role: &str, text: &str| content(role, vec![Part::Text { text: text.into() }]);
+        let request = LlmRequest {
+            contents: vec![
+                text("user", "task"),
+                marker("approved. Continue the original request."),
+                content("model", vec![call(1)]),
+                content("user", vec![result(1)]),
+                text("model", "done"),
+                text("user", "[Elitea direct HITL typed by a person"),
+                // A marker no call follows yet keeps its instruction.
+                marker("rejected. Continue without executing it."),
+            ],
+            ..LlmRequest::new("model", Vec::new())
+        };
+        let projected = model_history(request).expect("projected");
+        let texts: Vec<_> = projected
+            .contents
+            .iter()
+            .map(|content| match content.parts.as_slice() {
+                [Part::Text { text }] => text.chars().take(24).collect::<String>(),
+                _ => content.role.clone(),
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "task",
+                "model",
+                "user",
+                "done",
+                "[Elitea direct HITL type",
+                "[Elitea direct HITL hitl"
+            ],
+            "only the answered marker is dropped"
+        );
     }
 
     /// The vendored ADK writes the notice this projection removes; a changed

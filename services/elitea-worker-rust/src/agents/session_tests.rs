@@ -1804,7 +1804,7 @@ fn expected_blocked_result(reason: &str) -> Value {
         "blocked_toolkit_name": "Fixture Tools",
         "blocked_toolkit_type": "fixture",
         "denial_reason": reason,
-        "message": "You declined THIS specific call to 'Fixture Tools.double'; it was not executed. The block is for THIS invocation only, not the tool itself. This is NOT a stop signal — do not end your turn or summarize yet. Do not retry this same call with the same arguments, but DO continue: if more items remain, call the tool again for the NEXT item now; otherwise use another available tool to keep making progress. Only stop and ask the user when nothing remains that can be done without this exact declined call."
+        "message": "You declined THIS specific call to Fixture Tools.double. It was not executed. The block is for THIS invocation only, not the tool itself. This is NOT a stop signal — do not end your turn or summarize yet. Do not retry this same call with the same arguments, but DO continue: if more items remain, call the tool again for the NEXT item now; otherwise use another available tool to keep making progress. Only stop and ask the user when nothing remains that can be done without this exact declined call."
     })
 }
 

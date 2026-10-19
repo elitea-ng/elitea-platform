@@ -1152,8 +1152,8 @@ async fn application_and_adhoc_share_authorized_redemption_model_session_and_pro
             "earlier question"
         );
         assert_eq!(body["messages"][2]["role"], "assistant");
-        assert_eq!(body["messages"][2]["content"][0]["text"], "earlier ");
-        assert_eq!(body["messages"][2]["content"][1]["text"], "answer");
+        // The stored answer's text parts reach the provider as one string.
+        assert_eq!(body["messages"][2]["content"], "earlier answer");
         assert_eq!(body["messages"][3]["content"], "current");
         assert_eq!(
             body["messages"][0]["content"],

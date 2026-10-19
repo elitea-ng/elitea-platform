@@ -2311,7 +2311,18 @@ fn replay_marker(event: &Event) -> Option<(&str, ToolConfirmationDecision, Optio
     if event.author != "user" {
         return None;
     }
-    let content = event.llm_response.content.as_ref()?;
+    replay_marker_content(event.llm_response.content.as_ref()?)
+}
+
+/// True for the runtime's own replay marker: bookkeeping for the replayed
+/// call, never conversation content a provider needs on a later turn.
+pub(super) fn is_replay_marker(content: &Content) -> bool {
+    replay_marker_content(content).is_some()
+}
+
+fn replay_marker_content(
+    content: &Content,
+) -> Option<(&str, ToolConfirmationDecision, Option<&str>)> {
     if content.role != "user" || content.parts.len() != 1 {
         return None;
     }
@@ -2624,7 +2635,7 @@ pub(crate) fn blocked_tool_result(
         (
             "message".to_owned(),
             Value::String(format!(
-                "You declined THIS specific call to '{action_label}'; it was not executed. The block is for THIS invocation only, not the tool itself. This is NOT a stop signal — do not end your turn or summarize yet. Do not retry this same call with the same arguments, but DO continue: if more items remain, call the tool again for the NEXT item now; otherwise use another available tool to keep making progress. Only stop and ask the user when nothing remains that can be done without this exact declined call."
+                "You declined THIS specific call to {action_label}. It was not executed. The block is for THIS invocation only, not the tool itself. This is NOT a stop signal — do not end your turn or summarize yet. Do not retry this same call with the same arguments, but DO continue: if more items remain, call the tool again for the NEXT item now; otherwise use another available tool to keep making progress. Only stop and ask the user when nothing remains that can be done without this exact declined call."
             )),
         ),
     ]);

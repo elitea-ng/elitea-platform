@@ -84,6 +84,8 @@ Real PostgreSQL. Each phase runs in its own OS process and claim, and the effect
 | Root Agent: approve, then repeat | `ordinary_effect_pg_tests.rs` `postgres_root_approved_effectful_call_runs_once_and_a_repeat_runs_nothing` | 1 tool call; the repeat makes 0. |
 | Root: block / foreign decision | `postgres_root_blocked_effectful_call_never_runs`, `postgres_root_decision_for_another_interrupt_is_refused` | 0 tool calls. |
 | Root: process replaced after dispatch | `postgres_root_worker_replaced_after_dispatch_refuses_as_may_have_started` | Refused at assembly with the recovery-refused cause, 0 tool calls. |
+| Root: recorded outcome, two Workers replaced in a row | `postgres_root_recorded_outcome_survives_two_replaced_workers_without_a_rerun` | The tool ran and its result was persisted; the next two Workers die at the model request, and the second one's tool would exit if it were ever called (it is not); the third continues with 0 tool calls. |
+| Pipeline: block after a dispatched approval | `postgres_block_after_a_dispatched_approval_is_refused_not_reported_as_blocked` | A block of a call that may have run is refused, never reported as "declined, not executed". |
 
 Unit tests:
 - `direct_hitl_tests.rs` `an_approved_effectful_call_runs_once_and_is_refused_after_its_dispatch` (never dispatched,
@@ -96,9 +98,22 @@ Unit tests:
 
 The approve PG test was red before the fix with `agent.legacy` → `Internal`, which is the live symptom.
 
+### Review findings fixed before the PR
+
+An opus review of the first version found four defects. Each one is fixed and has a test:
+
+1. A later continuation's replay marker reset the root's dispatch and result facts, so a second crash after a
+   recorded outcome would have re-run the effect. The facts are now monotonic across markers
+   (`persisted_replay_state_with_confirmation`).
+2. A root sibling dispatched without a result was not refused when the decided call's result existed. The replayed
+   message now marks every call it carries as dispatched.
+3. A nested Block after a dispatched approval was accepted. It is now refused as stale.
+4. Non-sensitive siblings of the replayed message were neither journaled nor served. Every call of the message is now
+   journaled, and its recorded outcome is served.
+
 ## Performance
 
-- One extra fenced append before, and one after, each approved NESTED call. These are the only new writes; there is
+- One extra fenced append before, and one after, each call a nested replay executes. These are the only new writes; there is
   no write per chunk or per token.
 - Records are bounded at 256 KiB each (`MAX_DISPATCH_RECORD_BYTES`) and at 2 × 64 per decision
   (`MAX_DISPATCH_RECORDS`).

@@ -673,6 +673,56 @@ async fn large_system_instruction_reaches_openai_messages_intact() {
     assert_eq!(body["messages"][1]["content"], "explain this");
 }
 
+/// A streamed answer is stored as one text part per chunk. A later turn sends it
+/// as one string, the shape of the answer the provider produced, not one
+/// content block per chunk.
+#[tokio::test(flavor = "current_thread")]
+async fn a_streamed_answer_in_history_reaches_the_provider_as_one_string() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse())))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let chunked = Content {
+        role: "model".to_owned(),
+        parts: ["reverse", " returned", " ES", "RE", "VER", "-", "1", "C"]
+            .into_iter()
+            .map(|text| Part::Text {
+                text: text.to_owned(),
+            })
+            .collect(),
+    };
+    let request = tool_request(vec![
+        Content::new("user").with_text("run it"),
+        chunked,
+        Content::new("user").with_text("again"),
+    ]);
+    drain(
+        bound
+            .generate_for_test(request)
+            .await
+            .expect("model response stream"),
+    )
+    .await
+    .expect("valid SSE");
+
+    let captured = captured.lock().expect("captured requests");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    let answer = &body["messages"][2];
+    assert_eq!(answer["role"], "assistant", "{body}");
+    assert_eq!(answer["content"], "reverse returned ESREVER-1C", "{body}");
+}
+
 /// Demo issue 1: Qwen's chat template in vLLM refuses a system message that is
 /// not first ("System message must be at the beginning."). Every system
 /// `Content` — the skill catalogue, project context, checkpoint authority, a

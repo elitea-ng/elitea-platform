@@ -1053,14 +1053,14 @@ fn append_openai_messages(
 
 fn openai_assistant_message(content: &Content) -> Result<serde_json::Value, AdkError> {
     let mut text = String::new();
-    let mut text_blocks = Vec::new();
+    let mut has_text = false;
     let mut reasoning = String::new();
     let mut calls = Vec::new();
     for part in &content.parts {
         match part {
             Part::Text { text: value } => {
                 text.push_str(value);
-                text_blocks.push(serde_json::json!({"type": "text", "text": value}));
+                has_text = true;
             }
             Part::Thinking {
                 thinking: value, ..
@@ -1083,10 +1083,14 @@ fn openai_assistant_message(content: &Content) -> Result<serde_json::Value, AdkE
         "role".to_owned(),
         serde_json::Value::String("assistant".to_owned()),
     );
+    // A streamed answer is stored as one text part per chunk. The provider
+    // gets it as one string, the shape of the answer it produced: one block
+    // per chunk costs ~30 bytes each on every later turn, and some upstream
+    // edges refuse the fragment pattern.
     message.insert(
         "content".to_owned(),
-        if calls.is_empty() && reasoning.is_empty() && !text_blocks.is_empty() {
-            serde_json::Value::Array(text_blocks)
+        if calls.is_empty() && reasoning.is_empty() && has_text {
+            serde_json::Value::String(text)
         } else if text.is_empty() {
             serde_json::Value::Null
         } else {

@@ -31,10 +31,12 @@ const EXIT_AFTER_DISPATCH: i32 = 86;
 const EXIT_AFTER_OUTCOME: i32 = 87;
 const GENERATION: u64 = 3;
 const DONE: &str = "root finished after the approved change";
+const LATER: &str = "root answered the later turn";
 
 fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
     match scenario {
         "approve" => &[("start", 0), ("approve", 0), ("repeat", 0)],
+        "later_turn" => &[("start", 0), ("approve", 0), ("later", 0)],
         "block" => &[("start", 0), ("block", 0)],
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
         "stale" => &[("start", 0), ("stale", 0)],
@@ -98,6 +100,11 @@ async fn run_scenario(scenario: &str) {
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_root_approved_effectful_call_runs_once_and_a_repeat_runs_nothing() {
     run_scenario("approve").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_root_later_turn_after_an_approval_sends_one_call_and_result() {
+    run_scenario("later_turn").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -392,6 +399,52 @@ async fn postgres_root_effect_child() {
                 captured.lock().expect("captured").len(),
                 0,
                 "repeat: no model call"
+            );
+        }
+        "later" => {
+            let (assembler, captured, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(text_response(LATER))],
+                false,
+            );
+            let mut next = request();
+            next.binding.request_content_digest = [47; 32];
+            next.payload.user_input = super::super::request::UserInput::Text("run it again".into());
+            let invocation = assembler
+                .assemble(turn(&next, "execution-later", 3))
+                .await
+                .expect("later: a new user turn assembles");
+            let (browser, failure) = run_turn(invocation).await;
+            assert!(failure.is_none(), "later: {failure:?}");
+            assert!(
+                said(&browser, LATER),
+                "later: the Agent answers: {browser:?}"
+            );
+            assert_eq!(calls.load(Ordering::Acquire), 0, "later: nothing re-runs");
+            let body: serde_json::Value =
+                serde_json::from_slice(&captured.lock().expect("captured")[0].body)
+                    .expect("model request JSON");
+            // A later turn has a fresh turn's shape: the decided call, its result,
+            // the answer as one string, the new user turn. No runtime bookkeeping.
+            let raw = body.to_string();
+            assert!(
+                !raw.contains("[Elitea direct HITL") && !raw.contains("Tool confirmation required"),
+                "later: runtime bookkeeping reaches the provider: {body}"
+            );
+            let messages = body["messages"].as_array().expect("messages");
+            let roles: Vec<&str> = messages
+                .iter()
+                .map(|message| message["role"].as_str().unwrap_or_default())
+                .collect();
+            assert_eq!(
+                roles,
+                ["system", "user", "assistant", "tool", "assistant", "user"],
+                "later: {body}"
+            );
+            assert_eq!(messages[2]["tool_calls"].as_array().map(Vec::len), Some(1));
+            assert_eq!(
+                messages[4]["content"], DONE,
+                "later: the earlier answer is one string: {body}"
             );
         }
         "block" => {
