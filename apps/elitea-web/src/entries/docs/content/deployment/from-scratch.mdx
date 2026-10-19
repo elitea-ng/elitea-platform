@@ -62,7 +62,7 @@ Write the answers down. Every one ends up in a value or a Secret, and several ar
 | Bucket and region | `elitea-artifacts`, `eu-west-1` | `STORAGE_*` / `S3_*` env | data does not move by itself |
 | Identity provider and client | issuer URL, client id, client secret | `OIDC_*` env and a Secret | edit values |
 | First administrator | `email:admin@example.com` | `ELITEA_INITIAL_GLOBAL_ADMINS` | add entries any time; nobody is ever demoted by this list |
-| Worker identity (SPIFFE id) | `spiffe://elitea.example.com/ns/elitea/sa/agent-worker` | the worker certificate, `worker.runtimeSession.expectedIdentity` | re-mint the worker certificate |
+| Worker identity (SPIFFE id) | `spiffe://elitea.example.com/ns/elitea/sa/worker` | the worker certificate, `worker.runtimeSession.expectedIdentity` | re-mint the worker certificate |
 | Model provider hosts | `api.openai.com`, `10.0.5.20:8000` | `GATEWAY_EGRESS_ALLOWLIST` | edit values |
 
 ## Prerequisites
@@ -190,8 +190,9 @@ Without `externallyManaged: true` the chart refuses to render. Otherwise the ins
 Create the role and the platform database yourself as above. Then let the `dbInit` hook create the agent-state database and the extension before each install and upgrade. It needs a superuser DSN **for the platform database**:
 
 ```bash
-kubectl -n elitea create secret generic elitea-postgres-cluster-superuser \
-  --from-literal=uri='postgres://postgres:<password>@pg.internal:5432/elitea_v2?sslmode=require'
+DSN='postgres://postgres:<pw>@pg.internal:5432/elitea_v2?sslmode=require'
+kubectl -n elitea create secret generic \
+  elitea-postgres-cluster-superuser --from-literal=uri="$DSN"
 ```
 
 ```yaml
@@ -247,58 +248,80 @@ The script below writes every generated value into `./elitea-material`, owner-on
 
 ```bash
 #!/usr/bin/env bash
-# mint-elitea-material.sh — every generated value the elitea chart needs.
+# mint-elitea-material.sh — every generated value the chart needs.
 set -euo pipefail
 
 NS="${NS:-elitea}"
 DIR="${DIR:-$PWD/elitea-material}"
 DAYS="${DAYS:-825}"
-WORKER_ID="${WORKER_ID:-spiffe://elitea.example.com/ns/elitea/sa/agent-worker}"
+WORKER_ID="${WORKER_ID:-spiffe://elitea.example.com/ns/elitea/sa/worker}"
 KEY_ID="${KEY_ID:-elitea-runtime-v1}"
 DB_HOST="${DB_HOST:-pg.internal}"
 DB_ROLE="${DB_ROLE:-elitea_v2}"
 DB_NAME="${DB_NAME:-elitea_v2}"
 
 umask 077; mkdir -p "$DIR"; cd "$DIR"
-[ -f runtime-ca.crt ] && { echo "material exists in $DIR; delete it to rotate"; exit 0; }
+if [ -f runtime-ca.crt ]; then
+  echo "material exists in $DIR; delete it to rotate"; exit 0
+fi
 
 token()    { openssl rand -base64 32 | tr -d '\n=' ; }
 urltoken() { openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n=' ; }
-sans()     { printf 'DNS:%s,DNS:%s.%s.svc,DNS:%s.%s.svc.cluster.local' "$1" "$1" "$NS" "$1" "$NS"; }
+sans() {   # every name a client may dial the Service by
+  local s="$1"
+  printf 'DNS:%s,DNS:%s.%s.svc,DNS:%s.%s.svc.cluster.local' \
+    "$s" "$s" "$NS" "$s" "$NS"
+}
+sign() {   # stem, extensions: sign <stem>.csr with the runtime CA
+  openssl x509 -req -in "$1.csr" -out "$1.crt" -days "$DAYS" \
+    -CA runtime-ca.crt -CAkey runtime-ca.key -CAcreateserial \
+    -extfile <(printf '%b' "$2") 2>/dev/null
+}
+SERVER_EXT='extendedKeyUsage=serverAuth
+keyUsage=critical,digitalSignature,keyEncipherment'
+CLIENT_EXT='extendedKeyUsage=clientAuth
+keyUsage=critical,digitalSignature'
 
 server_cert() { # stem, service
-  openssl req -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.csr" -subj "/CN=$2" 2>/dev/null
-  openssl x509 -req -in "$1.csr" -CA runtime-ca.crt -CAkey runtime-ca.key -CAcreateserial \
-    -out "$1.crt" -days "$DAYS" -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n' "$(sans "$2")") 2>/dev/null
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=$2" \
+    -keyout "$1.key" -out "$1.csr" 2>/dev/null
+  sign "$1" "subjectAltName=$(sans "$2")\n$SERVER_EXT"
 }
 
-# The runtime CA: elitea-main's three runtime listeners, the worker's private
-# edge, the worker's identity and (through cert-manager) elitea-vector.
-openssl req -x509 -newkey rsa:2048 -nodes -keyout runtime-ca.key -out runtime-ca.crt \
-  -days "$DAYS" -subj "/CN=elitea-runtime-ca" \
-  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
-for stem in control-server output-server content-server; do server_cert "$stem" elitea-main; done
+# The runtime CA signs elitea-main's runtime listeners, the worker's
+# private edge and identity, and (via cert-manager) elitea-vector.
+openssl req -x509 -newkey rsa:2048 -nodes -days "$DAYS" \
+  -subj "/CN=elitea-runtime-ca" \
+  -keyout runtime-ca.key -out runtime-ca.crt \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+for stem in control-server output-server content-server; do
+  server_cert "$stem" elitea-main
+done
 server_cert platform-edge elitea-platform-edge
 
 # The worker's client certificate: exactly ONE URI SAN, nothing else.
-openssl req -newkey rsa:2048 -nodes -keyout agent-worker-client.key -out agent-worker-client.csr \
-  -subj "/CN=elitea-agent-worker" 2>/dev/null
-openssl x509 -req -in agent-worker-client.csr -CA runtime-ca.crt -CAkey runtime-ca.key -CAcreateserial \
-  -out agent-worker-client.crt -days "$DAYS" \
-  -extfile <(printf 'subjectAltName=URI:%s\nextendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature\n' "$WORKER_ID") 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-agent-worker" \
+  -keyout agent-worker-client.key -out agent-worker-client.csr 2>/dev/null
+sign agent-worker-client "subjectAltName=URI:$WORKER_ID\n$CLIENT_EXT"
 rm -f ./*.csr ./*.srl
 
-# The Ed25519 command-signing pair; the keyring holds its public half under KEY_ID.
+# The Ed25519 command-signing pair; the keyring holds its public half.
 openssl genpkey -algorithm ed25519 -out command-signing-key.pem
-PUB="$(openssl pkey -in command-signing-key.pem -pubout -outform DER | tail -c 32 | base64 | tr -d '\n')"
-printf '{\n  "schema_version": "elitea.runtime-ed25519-keyring.v1",\n  "keys": [{"key_id": "%s", "public_key_base64": "%s"}]\n}\n' \
-  "$KEY_ID" "$PUB" > command-signing-keyring.json
+PUB="$(openssl pkey -in command-signing-key.pem -pubout -outform DER \
+  | tail -c 32 | base64 | tr -d '\n')"
+cat > command-signing-keyring.json <<JSON
+{
+  "schema_version": "elitea.runtime-ed25519-keyring.v1",
+  "keys": [{"key_id": "$KEY_ID", "public_key_base64": "$PUB"}]
+}
+JSON
 
 # Independent random values. Never derive two of them from one seed: the
 # platform refuses two files with equal bytes.
-openssl rand 32 > auth-attempt-key                        # 32 raw bytes
-printf '%s' "$(token)" > auth-pat-signing-key             # text, no newline
-openssl rand 32 > worker-output-spool-key                 # exactly 32 raw bytes
+openssl rand 32 > auth-attempt-key                 # 32 raw bytes
+printf '%s' "$(token)" > auth-pat-signing-key      # text, no newline
+openssl rand 32 > worker-output-spool-key          # exactly 32 raw bytes
 printf '%s' "$(token)" > gateway-identity-secret
 printf '%s' "$(token)" > application-secret-key
 openssl rand -hex 32 | tr -d '\n' > qdrant-api-key
@@ -307,22 +330,25 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n' > secrets-master-key
 # URL-safe, because it is embedded in a postgres:// URL.
 printf '%s' "$(urltoken)" > db-password
 
-printf 'postgres://%s:%s@%s:5432/%s?sslmode=require' \
-  "$DB_ROLE" "$(cat db-password)" "$DB_HOST" "$DB_NAME" > database-url
-printf 'postgresql://%s:%s@%s:5432/%s_agentstate?sslmode=require' \
-  "$DB_ROLE" "$(cat db-password)" "$DB_HOST" "$DB_NAME" > agent-checkpoint-connection
+DSN="$DB_ROLE:$(cat db-password)@$DB_HOST:5432"
+printf 'postgres://%s/%s?sslmode=require' \
+  "$DSN" "$DB_NAME" > database-url
+printf 'postgresql://%s/%s_agentstate?sslmode=require' \
+  "$DSN" "$DB_NAME" > agent-checkpoint-connection
 
-# The Form users file. The authentication document requires it even though
-# nobody signs in with a password: Form sign-in is off unless you enable it.
-printf '{"users": [{"login": "unused", "email": "unused@example.invalid", "password": "%s"}]}\n' \
-  "$(token)" > auth-form-users.json
+# The Form users file. The authentication document requires it even
+# though nobody signs in with a password: Form sign-in is off by default.
+cat > auth-form-users.json <<JSON
+{"users": [{"login": "unused", "email": "unused@example.invalid",
+            "password": "$(token)"}]}
+JSON
 
 chmod 600 ./*
 echo "material written to $DIR"
 ```
 
 ```bash
-WORKER_ID=spiffe://elitea.example.com/ns/elitea/sa/agent-worker \
+WORKER_ID=spiffe://elitea.example.com/ns/elitea/sa/worker \
 DB_HOST=pg.internal bash mint-elitea-material.sh
 ```
 
@@ -332,30 +358,34 @@ Use the generated `db-password` when you create the role in Step 2.
 
 ```bash
 cd elitea-material
-k() { kubectl -n elitea "$@" --dry-run=client -o yaml | kubectl apply -f -; }
+k() { kubectl -n elitea "$@" --dry-run=client -o yaml \
+      | kubectl apply -f -; }
+f() { for name; do printf -- '--from-file=%s ' "$name"; done; }
 
-k create secret generic elitea-main-db --from-file=database-url
+k create secret generic elitea-main-db $(f database-url)
 k create secret generic elitea-llm-gateway-secrets \
-  --from-file=identity-secret=gateway-identity-secret --from-file=secrets-master-key
+  $(f identity-secret=gateway-identity-secret secrets-master-key)
 k create secret generic elitea-main-llm-gateway-secrets \
-  --from-file=gateway-identity-secret
-k create secret generic elitea-main-sso \
-  --from-file=application-secret-key \
-  --from-literal=oidc-client-secret='<client secret from your identity provider>'
+  $(f gateway-identity-secret)
+k create secret generic elitea-main-sso $(f application-secret-key) \
+  --from-literal=oidc-client-secret='<client secret from your IdP>'
 k create secret generic elitea-main-auth-material \
-  --from-file=auth-attempt-key --from-file=auth-pat-signing-key --from-file=auth-form-users.json
+  $(f auth-attempt-key auth-pat-signing-key auth-form-users.json)
 k create secret generic elitea-runtime-material \
-  --from-file=runtime-ca.crt --from-file=command-signing-key.pem --from-file=command-signing-keyring.json \
-  --from-file=control-server.crt --from-file=control-server.key \
-  --from-file=output-server.crt --from-file=output-server.key \
-  --from-file=content-server.crt --from-file=content-server.key
+  $(f runtime-ca.crt command-signing-key.pem) \
+  $(f command-signing-keyring.json) \
+  $(f control-server.crt control-server.key) \
+  $(f output-server.crt output-server.key) \
+  $(f content-server.crt content-server.key)
 k create secret generic elitea-worker-material \
-  --from-file=runtime-ca.crt --from-file=agent-worker-client.crt --from-file=agent-worker-client.key \
-  --from-file=command-signing-keyring.json --from-file=worker-output-spool-key \
-  --from-file=agent-checkpoint-connection
-k create secret tls elitea-platform-edge-tls --cert=platform-edge.crt --key=platform-edge.key
-k create secret tls elitea-runtime-ca --cert=runtime-ca.crt --key=runtime-ca.key
-k create secret generic elitea-qdrant-api --from-file=api-key=qdrant-api-key
+  $(f runtime-ca.crt agent-worker-client.crt agent-worker-client.key) \
+  $(f command-signing-keyring.json worker-output-spool-key) \
+  $(f agent-checkpoint-connection)
+k create secret tls elitea-platform-edge-tls \
+  --cert=platform-edge.crt --key=platform-edge.key
+k create secret tls elitea-runtime-ca \
+  --cert=runtime-ca.crt --key=runtime-ca.key
+k create secret generic elitea-qdrant-api $(f api-key=qdrant-api-key)
 ```
 
 The key names are part of the contract. The chart and the binaries look files up by these exact names, and nothing renames them for you.
@@ -389,13 +419,15 @@ NATS is the platform's bus for live updates, presence, LLM budget counters and t
 ```bash
 VERSION=4.53.0
 
-# The sizing profiles ship inside the chart; the base values alone do not turn
-# JetStream storage on, so always apply one of them.
+# The sizing profiles ship inside the chart. The base values alone do
+# not turn JetStream storage on, so always apply one of them.
 helm pull oci://ghcr.io/elitea-ng/charts/nats --version "$VERSION" --untar
 
 helm install elitea-nats ./nats -n elitea -f nats/values-scale1.yaml
 
-helm install elitea-nats-bootstrap oci://ghcr.io/elitea-ng/charts/nats-bootstrap --version "$VERSION" -n elitea \
+helm install elitea-nats-bootstrap \
+  oci://ghcr.io/elitea-ng/charts/nats-bootstrap \
+  --version "$VERSION" -n elitea \
   --set natsUrl=tls://elitea-nats:4222 \
   --set replicas=1
 ```
@@ -425,9 +457,9 @@ dbInit:                        # see Step 2 for the other option
   enabled: false
   externallyManaged: true
 
-# The worker's session and checkpoint tables live in the agent-state database
-# and come from a separate migration lineage. Without this Job every agent turn
-# fails on a missing table while every pod reports Ready.
+# The worker's session and checkpoint tables live in the agent-state
+# database and come from a separate migration lineage. Without this Job
+# every agent turn fails on a missing table while every pod reports Ready.
 agentStateMigrations:
   enabled: true
   databaseSecret:
@@ -437,7 +469,8 @@ agentStateMigrations:
 networkPolicies:
   enabled: true
   main:
-    ingressFrom:               # the pods of YOUR Gateway implementation (Step 7)
+    # The data-plane pods of YOUR Gateway implementation (Step 7).
+    ingressFrom:
       - namespaceSelector:
           matchLabels:
             kubernetes.io/metadata.name: envoy-gateway-system
@@ -462,7 +495,7 @@ main:
     ELITEA_APPLICATION_SKILLS_ENABLED: "true"
     ELITEA_CONFIGURATIONS_MUTATION_ENABLED: "false"
     ELITEA_ARTIFACTS_ENABLED: "true"
-    ELITEA_ALLOW_PROJECT_OWN_LLMS: "true"      # "false": shared models only
+    ELITEA_ALLOW_PROJECT_OWN_LLMS: "true"   # "false": shared models only
 
     # Single sign-on
     OIDC_ISSUER_URL: "https://login.example.com/realms/elitea"
@@ -475,7 +508,8 @@ main:
     STORAGE_BACKEND: "s3"
     STORAGE_CONTAINER: "elitea-artifacts"
     S3_REGION: "eu-west-1"
-    S3_ENDPOINT_URL: ""        # empty for AWS; http(s)://host:port for MinIO, RustFS, Ceph
+    # Empty for AWS; http(s)://host:port for MinIO, RustFS, Ceph.
+    S3_ENDPOINT_URL: ""
     S3_FORCE_PATH_STYLE: "false"   # "true" for MinIO, RustFS, Ceph
 
     # The /llm hop to the gateway: the Service is elitea-llm-gateway-svc
@@ -507,9 +541,9 @@ main:
       enabled: true
       secretName: elitea-main-gateway-client-tls   # issued by the chart
       mountPath: /run/elitea-llm-gateway
-    # Production authentication. Required by the runtime plane, personal access
-    # tokens and the worker's private edge, even when nobody signs in with a
-    # password.
+    # Production authentication. Required by the runtime plane, personal
+    # access tokens and the worker's private edge, even when nobody signs
+    # in with a password.
     authConfig:
       enabled: true
       material:
@@ -542,7 +576,8 @@ main:
         authorization:
           main_configured_public_rules: []
         identity:
-          initial_global_admins: []   # empty: ELITEA_INITIAL_GLOBAL_ADMINS applies
+          # Empty: ELITEA_INITIAL_GLOBAL_ADMINS applies.
+          initial_global_admins: []
         provider:
           kind: form
           form:
@@ -572,8 +607,10 @@ llmGateway:
     LLM_BUDGET_EXPECTED_REPLICAS: "1"     # always equal to replicaCount
     # Every origin that reaches /llm, public and in-cluster. A provider
     # credential pointing back here is refused, so a loop is impossible.
-    GATEWAY_SELF_LLM_ORIGINS: "https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1"
-    GATEWAY_EGRESS_ALLOWLIST: "api.openai.com,api.anthropic.com,*.openai.azure.com,generativelanguage.googleapis.com"
+    GATEWAY_SELF_LLM_ORIGINS: >-
+      https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
+    GATEWAY_EGRESS_ALLOWLIST: >-
+      api.openai.com,api.anthropic.com,*.openai.azure.com
   egressPosture: "allowlist"
   secrets:
     GATEWAY_IDENTITY_SECRET:
@@ -596,10 +633,11 @@ worker:
   runtime:
     publicBaseUrl: https://elitea.example.com
   # Writes the worker's row in elitea_runtime.workload_sessions after each
-  # migration, and a CronJob renews it. Must equal the worker certificate's SAN.
+  # migration, and a CronJob renews it. Must equal the worker
+  # certificate's SAN.
   runtimeSession:
     enabled: true
-    expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/agent-worker"
+    expectedIdentity: "spiffe://elitea.example.com/ns/elitea/sa/worker"
   platformEdge:
     enabled: true
     tlsSecretName: elitea-platform-edge-tls
@@ -619,7 +657,8 @@ vector:
       name: elitea-qdrant-api
       key: api-key
     internal:
-      replicas: 1              # 3 for HA, then raise collection.replicationFactor
+      # 3 for HA, then raise collection.replicationFactor.
+      replicas: 1
       storage:
         size: 50Gi
   collection:
@@ -652,7 +691,8 @@ DeepWiki (`deepwiki`), Inventory (`inventory`), the egress proxy for per-project
 ### Render it before you install it
 
 ```bash
-helm template elitea oci://ghcr.io/elitea-ng/charts/elitea --version "$VERSION" \
+helm template elitea oci://ghcr.io/elitea-ng/charts/elitea \
+  --version "$VERSION" \
   -n elitea -f values-prod.yaml > /dev/null && echo "renders"
 ```
 
@@ -661,7 +701,8 @@ Each refusal names the field and tells you what to do. Fix them all here, where 
 ### Install
 
 ```bash
-helm install elitea oci://ghcr.io/elitea-ng/charts/elitea --version "$VERSION" \
+helm install elitea oci://ghcr.io/elitea-ng/charts/elitea \
+  --version "$VERSION" \
   -n elitea -f values-prod.yaml --timeout 15m
 ```
 
@@ -692,7 +733,9 @@ kind: HTTPRoute
 metadata: {name: elitea-main, namespace: elitea}
 spec:
   parentRefs:
-    - {name: <your-gateway>, namespace: <its-namespace>, sectionName: https}
+    - name: <your-gateway>
+      namespace: <its-namespace>
+      sectionName: https
   hostnames: [elitea.example.com]
   rules:
     - matches:
@@ -707,17 +750,31 @@ spec:
         - path: {type: PathPrefix, value: /app/application_tool_icon}
         - path: {type: Exact, value: /healthz}
         - path: {type: Exact, value: /.well-known/elitea-client}
-        # Elitea's own MCP server: /app/<project id>/mcp. Needs regex support.
-        - path: {type: RegularExpression, value: "^/app/[0-9]+/mcp(/.*)?$"}
-      timeouts: {request: 0s}      # 0s disables it: SSE and model streams are long
+        # Elitea's MCP server, /app/<project id>/mcp. Needs regex support.
+        - path:
+            type: RegularExpression
+            value: "^/app/[0-9]+/mcp(/.*)?$"
+      # 0s disables the timeout: SSE and model streams are long-lived.
+      timeouts: {request: 0s}
       filters:
         - type: RequestHeaderModifier
           requestHeaderModifier:
-            remove: [X-Auth-Type, X-Auth-ID, X-Auth-User-ID, X-Auth-Reference,
-                     X-Auth-Signature, X-Auth-Avatar, X-Auth-Avatar-State,
-                     X-Auth-Session-Id, X-Auth-Session-Name, X-Auth-Session-Endpoint,
-                     X-Elitea-Identity-Signature, X-Elitea-Project-Id, X-Elitea-User-Id,
-                     X-Elitea-Tenant-Id, X-Elitea-Execution-Id]
+            remove:
+              - X-Auth-Type
+              - X-Auth-ID
+              - X-Auth-User-ID
+              - X-Auth-Reference
+              - X-Auth-Signature
+              - X-Auth-Avatar
+              - X-Auth-Avatar-State
+              - X-Auth-Session-Id
+              - X-Auth-Session-Name
+              - X-Auth-Session-Endpoint
+              - X-Elitea-Identity-Signature
+              - X-Elitea-Project-Id
+              - X-Elitea-User-Id
+              - X-Elitea-Tenant-Id
+              - X-Elitea-Execution-Id
       backendRefs:
         - {name: elitea-main, port: 8080}
 ---
@@ -726,7 +783,9 @@ kind: HTTPRoute
 metadata: {name: elitea-web, namespace: elitea}
 spec:
   parentRefs:
-    - {name: <your-gateway>, namespace: <its-namespace>, sectionName: https}
+    - name: <your-gateway>
+      namespace: <its-namespace>
+      sectionName: https
   hostnames: [elitea.example.com]
   rules:
     - matches:
@@ -754,7 +813,8 @@ The platform repository keeps the reviewed copy of these rules in `deploy/gatewa
 `networkPolicies.main.ingressFrom` in the values file must select the pods that actually forward traffic, meaning your gateway's data-plane pods, not its controller. Find their namespace and labels:
 
 ```bash
-kubectl get pods -A -l app.kubernetes.io/name=envoy --show-labels   # Envoy Gateway
+# Envoy Gateway:
+kubectl get pods -A -l app.kubernetes.io/name=envoy --show-labels
 ```
 
 If the selector is wrong, the gateway gets connection timeouts from elitea-main while everything in the namespace looks healthy.
@@ -771,7 +831,7 @@ You can keep an existing Traefik. It needs one Gateway API HTTPRoute for everyth
    - `oidc:<sub>` always matches. Read your exact reference after a first sign-in from `GET /api/v2/social/author` (field `provider_refs`), add it, and sign in again.
    - The list never demotes anybody. Remove administrators in the admin console instead.
 3. **Check the public project.** The first migration seeds project `1`, "Default Project", which `platform.aiProjectId: "1"` names. Its shared models are what every other project can use. Keep it, or name another existing project. The chart refuses a values file in which the copies of this id disagree.
-4. **Add a model provider.** In the admin console (`/admin/app`), go to **Configuration › LLM Proxy › Providers & models**. Add a credential for OpenAI, Anthropic, Azure OpenAI or an OpenAI-compatible server, then publish the models you want shared. A provider whose host is not in `GATEWAY_EGRESS_ALLOWLIST` is refused at request time.
+4. **Add a model provider.** In the admin console (`/admin/app`), go to **Configuration › LLM Proxy › Providers & models**. Add a credential for OpenAI, Anthropic, Azure OpenAI or an OpenAI-compatible server, then publish the models you want shared ([LLM Proxy](/admin/llm-proxy) has the details). A provider whose host is not in `GATEWAY_EGRESS_ALLOWLIST` is refused at request time.
 5. **Optional: SAML and SCIM.** SAML providers are configured only in the admin console (**Configuration › Authentication**), so sign in through OIDC first. SCIM accepts only a SCIM client credential created on the same page. Personal access tokens are refused there.
 
 Then open a chat, pick a shared model and send a message. That one exchange exercises the edge, elitea-main, NATS, the command bus, the worker, the platform edge, the agent-state database, the LLM gateway and the provider.
@@ -787,15 +847,19 @@ kubectl -n elitea get certificates   # every one READY=True
 </Step>
 <Step title="The edge reaches elitea-main">
 ```bash
-curl -si https://elitea.example.com/healthz | grep -i -e '^HTTP' -e '^vary'
-# HTTP/2 200 and "vary: Origin". elitea-main sets that header; a gateway 404 does not.
-curl -si https://elitea.example.com/.well-known/elitea-client | grep -i '^vary'
+curl -si https://elitea.example.com/healthz \
+  | grep -i -e '^HTTP' -e '^vary'
+# Expect HTTP/2 200 and "vary: Origin".
+# elitea-main sets that header; a gateway 404 does not.
+curl -si https://elitea.example.com/.well-known/elitea-client \
+  | grep -i '^vary'
 ```
 </Step>
 <Step title="The MCP endpoint goes to elitea-main, not the web app">
 ```bash
 curl -si -X POST https://elitea.example.com/app/1/mcp | head -5
-# a JSON 401 from elitea-main. An HTML page or a 405 means the regex rule lost to /app.
+# Expect a JSON 401 from elitea-main.
+# An HTML page or a 405 means the regex rule lost to /app.
 ```
 </Step>
 <Step title="The web app and admin console load">
@@ -819,7 +883,7 @@ The test that matters. If it hangs or fails, use the table below.
 | elitea-main exits: master key invalid | not 44 base64url characters, or a trailing newline | regenerate with the Step 4 command; never `echo` it into a file |
 | elitea-main exits naming the application secret key | SSO configured and `elitea-main-sso` missing or empty | create the Secret |
 | `FATAL: sorry, too many clients already` in any pod | the connection budget is wrong | set `postgresql.maxConnections` to the server's real value and lower `main.autoscaling.maxReplicas` |
-| Every `/llm` call 401 or 403 | the two gateway identity secrets differ | put the same value in both Secrets and restart main and the gateway |
+| Every `/llm` call is refused by the gateway | the two gateway identity secrets differ | put the same value in both Secrets and restart main and the gateway |
 | `/llm` answers 503 `llm_gateway_not_configured` | `LLM_GATEWAY_URL` is empty | set the four `LLM_GATEWAY_*` values |
 | Chat sends but nothing ever answers; the worker is Ready | no valid workload session, or the worker certificate's SAN differs from `expectedIdentity` | check the `workload-session` Job's logs; re-mint with the right `WORKER_ID` |
 | Chat fails: "durable agent checkpoint store is unavailable" or a missing relation | the agent-state database or its migrations are missing | create the database; set `agentStateMigrations.enabled: true` |
@@ -836,8 +900,10 @@ The test that matters. If it hangs or fails, use the table below.
 - **Verify what you install.** Charts and images are signed with cosign:
   ```bash
   cosign verify ghcr.io/elitea-ng/charts/elitea:4.53.0 \
-    --certificate-identity-regexp '^https://github.com/elitea-ng/elitea-platform/' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    --certificate-identity-regexp \
+      '^https://github.com/elitea-ng/elitea-platform/' \
+    --certificate-oidc-issuer \
+      https://token.actions.githubusercontent.com
   ```
 - **Certificate expiry.** The minted runtime material is valid for 825 days by default. cert-manager renews its own certificates; nothing renews the minted ones. Re-mint the runtime CA, the listener, edge and worker certificates, and the `elitea-runtime-ca` Secret before they expire. Keep the master key, the PAT signing key and the database password, which the script would otherwise regenerate.
 - **Rotation costs.** Rotating `auth-pat-signing-key` invalidates every personal access token. Rotating `application-secret-key` signs everyone out. `secrets-master-key` cannot be rotated by replacing it.
