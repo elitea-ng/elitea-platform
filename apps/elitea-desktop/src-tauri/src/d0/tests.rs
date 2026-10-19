@@ -3436,6 +3436,54 @@ async fn stop_here_commits_the_turn_at_its_limit() {
     assert_eq!(done_status["note"], "step_limit_reached");
 }
 
+/// The server refuses a commit with more than `localturn.MaxToolCalls`
+/// (512) keys in `tool_calls`: a turn stops there, never asks to go on, and
+/// commits exactly that many.
+#[tokio::test]
+async fn a_turn_stops_at_the_tool_calls_a_commit_may_carry() {
+    let inner = platform(agent_details(), &[]);
+    let steps = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            // Nine calls a step: the 57th step crosses 512.
+            let step = steps.fetch_add(1, Ordering::SeqCst);
+            let ids: Vec<String> = (0..9).map(|n| format!("call-{step}-{n}")).collect();
+            let calls: Vec<(&str, &str, Value)> = ids
+                .iter()
+                .map(|id| (id.as_str(), "list_tree", json!({})))
+                .collect();
+            return tool_calls(&calls);
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(
+        llm_bodies(&h.server).len(),
+        57,
+        "not asked again past the cap"
+    );
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "no Continue?"
+    );
+    // The call past the cap was neither run nor shown.
+    assert_eq!(of_kind(&events, "tool_call").len(), 512);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    let calls = commits[0]["tool_calls"].as_object().unwrap();
+    assert_eq!(calls.len(), super::recorder::MAX_TOOL_CALLS);
+    assert!(!calls.contains_key("call-56-8"));
+    let done_status = of_kind(&events, "status")
+        .into_iter()
+        .find(|s| s["phase"] == "done")
+        .unwrap();
+    assert_eq!(done_status["note"], "tool_call_limit_reached");
+    assert!(of_kind(&events, "commit_failed").is_empty());
+}
+
 /// The workspace's own step limit wins over the agent's `meta.step_limit`.
 #[tokio::test]
 async fn the_workspace_step_limit_wins_over_the_agents() {
@@ -4235,9 +4283,18 @@ async fn done_precedes_commit() {
         .unwrap();
     assert_eq!(done.payload["commit"], "pending");
     assert_eq!(h.host.status(&started.turn_id).unwrap().state, "done");
-    // The workspace is free at `done`, as before.
-    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
+    // The workspace stays held by the commit: a handoff (send, take back,
+    // restore) cannot snapshot it without the last turn.
+    assert_eq!(
+        h.host
+            .claim_workspace(&h.workspace_id, "busy")
+            .err()
+            .map(|e| e.code),
+        Some("workspace_busy".to_owned())
+    );
     commits_settled(&h.host).await;
+    // Free once the commit settled.
+    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
     assert!(answered("commit"));
     assert_eq!(settled_done(&h, &started.turn_id)["committed"], true);
     assert!(
@@ -4315,4 +4372,78 @@ async fn next_turn_waits_for_previous_commit() {
         starts[1].1 >= commit.2,
         "the second start did not wait for the first commit: {log:?}"
     );
+}
+
+/// At the moment `done` is emitted the commit already holds its lane's
+/// slot and the workspace: a next turn (or a handoff) that acts on `done`
+/// can never find the lane idle or the workspace free before the commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn at_done_the_commit_already_holds_its_lane_and_the_workspace() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // At `done`: commits pending, and what a workspace claim was refused with.
+    type AtDone = Option<(usize, Option<String>)>;
+    let seen_at_done: Arc<Mutex<AtDone>> = Arc::default();
+    let host = Arc::downgrade(&h.host);
+    let workspace_id = h.workspace_id.clone();
+    let record = seen_at_done.clone();
+    h.emitter
+        .on_event
+        .lock()
+        .unwrap()
+        .replace(Box::new(move |event: &AgentEvent| {
+            if event.kind == "done"
+                && let Some(host) = host.upgrade()
+            {
+                let busy = host
+                    .claim_workspace(&workspace_id, "busy")
+                    .err()
+                    .map(|e| e.code);
+                *record.lock().unwrap() = Some((host.unsaved_commits().0, busy));
+            }
+        }));
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    assert_eq!(
+        *seen_at_done.lock().unwrap(),
+        Some((1, Some("workspace_busy".to_owned())))
+    );
+}
+
+/// A handoff claim right after `done` is refused until the commit settled;
+/// the next turn of the workspace waits for it instead of being refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_handoff_after_done_waits_for_the_commit_and_a_next_turn_waits_too() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.commit_delay.lock().unwrap() = Duration::from_millis(400);
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    done_event_of(&h.emitter, &first.turn_id).await;
+    let refused = h
+        .host
+        .claim_workspace(&h.workspace_id, "Wait for the running turn to end.")
+        .err()
+        .map(|e| e.code);
+    assert_eq!(refused.as_deref(), Some("workspace_busy"));
+    let committed = |state: &Versioned| state.since(0).iter().any(|(n, _, _)| n == "commit");
+    assert!(!committed(&state), "the commit was still in flight");
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    assert!(committed(&state), "the next turn started after the commit");
+    until_done_of(&h, &second.turn_id).await;
+    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
+}
+
+/// A failed commit releases the workspace once its retries are used up.
+#[tokio::test]
+async fn a_failed_commit_releases_the_workspace() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    *state.refuse_commits.lock().unwrap() = 3;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert_eq!(of_kind(&events, "commit_failed").len(), 1);
+    assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
 }

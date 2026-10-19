@@ -17,16 +17,46 @@ use tokio::sync::{mpsc, watch};
 
 use super::api::{ApiError, PlatformApi};
 
+/// One commit job.
+type Job = BoxFuture<'static, ()>;
+
 /// One conversation's lane: its jobs, and how many are queued or running.
 struct Lane {
-    jobs: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
+    jobs: mpsc::UnboundedSender<Job>,
     pending: Arc<watch::Sender<usize>>,
 }
 
-/// The commit lanes of every conversation, keyed by [`lane_key`].
-#[derive(Default)]
-pub struct CommitQueues {
+/// The lanes, and how many jobs all of them hold.
+struct Inner {
     lanes: Mutex<HashMap<String, Lane>>,
+    total: watch::Sender<usize>,
+}
+
+impl Inner {
+    fn lanes(&self) -> std::sync::MutexGuard<'_, HashMap<String, Lane>> {
+        self.lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The commit lanes of every conversation, keyed by [`lane_key`]. A lane
+/// exists while it holds a job: it is removed (and its task ends) when it
+/// goes idle, under the same lock a push takes, so a push never lands on a
+/// lane that is going away.
+pub struct CommitQueues {
+    inner: Arc<Inner>,
+}
+
+impl Default for CommitQueues {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                lanes: Mutex::new(HashMap::new()),
+                total: watch::Sender::new(0),
+            }),
+        }
+    }
 }
 
 /// A conversation's lane: its project and UUID.
@@ -36,51 +66,95 @@ pub fn lane_key(project_id: i64, conversation_uuid: &str) -> String {
 }
 
 impl CommitQueues {
-    fn lanes(&self) -> std::sync::MutexGuard<'_, HashMap<String, Lane>> {
-        self.lanes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     /// Run `job` after every job queued on `key` before it (on a task of
-    /// the lane's own, so it outlives the turn that queued it).
-    pub fn push(&self, key: &str, job: BoxFuture<'static, ()>) {
-        let mut lanes = self.lanes();
-        let lane = lanes.entry(key.to_owned()).or_insert_with(|| {
-            let (jobs, mut queued) = mpsc::unbounded_channel::<BoxFuture<'static, ()>>();
-            let pending = Arc::new(watch::Sender::new(0_usize));
-            let counter = pending.clone();
-            tokio::spawn(async move {
-                while let Some(job) = queued.recv().await {
-                    job.await;
-                    counter.send_modify(|count| *count = count.saturating_sub(1));
-                }
-            });
-            Lane { jobs, pending }
-        });
+    /// the lane's own, so it outlives the turn that queued it). The job is
+    /// counted before this returns: [`Self::idle`] called after it waits.
+    pub fn push(&self, key: &str, job: Job) {
+        let mut lanes = self.inner.lanes();
+        let lane = lanes
+            .entry(key.to_owned())
+            .or_insert_with(|| spawn_lane(&self.inner, key));
         lane.pending.send_modify(|count| *count += 1);
+        self.inner.total.send_modify(|count| *count += 1);
+        // The lane's task runs while the lane is in the map (it removes the
+        // lane before it ends), so the send cannot fail.
         if lane.jobs.send(job).is_err() {
             lane.pending
+                .send_modify(|count| *count = count.saturating_sub(1));
+            self.inner
+                .total
                 .send_modify(|count| *count = count.saturating_sub(1));
         }
     }
 
     /// Until every job queued on `key` so far has run.
     pub async fn idle(&self, key: &str) {
-        let pending = self.lanes().get(key).map(|lane| lane.pending.subscribe());
+        let pending = self
+            .inner
+            .lanes()
+            .get(key)
+            .map(|lane| lane.pending.subscribe());
         if let Some(mut pending) = pending {
+            // A removed lane's sender is gone only after its count is 0.
             let _ = pending.wait_for(|count| *count == 0).await;
         }
+    }
+
+    /// Until every lane is idle (jobs queued meanwhile included).
+    pub async fn all_idle(&self) {
+        let mut total = self.inner.total.subscribe();
+        let _ = total.wait_for(|count| *count == 0).await;
     }
 
     /// How many commits are queued or running, over every lane.
     #[must_use]
     pub fn pending(&self) -> usize {
-        self.lanes()
-            .values()
-            .map(|lane| *lane.pending.borrow())
-            .sum()
+        *self.inner.total.borrow()
     }
+
+    #[cfg(test)]
+    fn lane_count(&self) -> usize {
+        self.inner.lanes().len()
+    }
+}
+
+/// A lane's task: its jobs one after another, each on a task of its own so
+/// a job that panics fails alone (the count still goes down); removes the
+/// lane and ends once nothing is left in it.
+fn spawn_lane(inner: &Arc<Inner>, key: &str) -> Lane {
+    let (jobs, mut queued) = mpsc::unbounded_channel::<Job>();
+    let pending = Arc::new(watch::Sender::new(0_usize));
+    let (inner, key, counter) = (inner.clone(), key.to_owned(), pending.clone());
+    tokio::spawn(async move {
+        while let Some(job) = queued.recv().await {
+            if let Err(error) = tokio::spawn(job).await {
+                log::error!(
+                    "a local turn's commit job {}",
+                    if error.is_panic() {
+                        "panicked"
+                    } else {
+                        "was cancelled"
+                    }
+                );
+            }
+            // Under the lanes' lock, against a concurrent push.
+            let mut lanes = inner.lanes();
+            counter.send_modify(|count| *count = count.saturating_sub(1));
+            inner
+                .total
+                .send_modify(|count| *count = count.saturating_sub(1));
+            if *counter.borrow() == 0 {
+                if lanes
+                    .get(&key)
+                    .is_some_and(|lane| Arc::ptr_eq(&lane.pending, &counter))
+                {
+                    lanes.remove(&key);
+                }
+                return;
+            }
+        }
+    });
+    Lane { jobs, pending }
 }
 
 /// How often, and how patiently, a commit is retried.
@@ -195,6 +269,73 @@ mod tests {
         assert_eq!(queues.pending(), 0);
         // A lane never used is idle.
         queues.idle("2/x").await;
+        queues.all_idle().await;
+    }
+
+    #[tokio::test]
+    async fn a_panicking_job_fails_alone_and_the_lane_still_goes_idle() {
+        let queues = CommitQueues::default();
+        let ran = Arc::new(AtomicUsize::new(0));
+        queues.push("1/c", async { panic!("a commit job panicked") }.boxed());
+        let counted = ran.clone();
+        queues.push(
+            "1/c",
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+            .boxed(),
+        );
+        tokio::time::timeout(Duration::from_secs(5), queues.idle("1/c"))
+            .await
+            .expect("the lane went idle");
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "the next job still ran");
+        assert_eq!(queues.pending(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_idle_lane_is_removed_and_a_later_push_gets_a_new_one() {
+        let queues = CommitQueues::default();
+        let ran = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let counted = ran.clone();
+            queues.push(
+                "1/c",
+                async move {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+                .boxed(),
+            );
+            assert_eq!(queues.lane_count(), 1);
+            queues.idle("1/c").await;
+            // The count reaches 0 and the lane goes in one step, under the
+            // lock this takes.
+            assert_eq!(queues.lane_count(), 0);
+        }
+        assert_eq!(ran.load(Ordering::SeqCst), 2);
+        // Pushes racing the lane's removal all run.
+        let queues = Arc::new(queues);
+        let mut pushers = Vec::new();
+        for _ in 0..50 {
+            let (queues, counted) = (queues.clone(), ran.clone());
+            pushers.push(tokio::spawn(async move {
+                queues.push(
+                    "1/c",
+                    async move {
+                        tokio::task::yield_now().await;
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    .boxed(),
+                );
+            }));
+        }
+        for pusher in pushers {
+            pusher.await.unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(5), queues.all_idle())
+            .await
+            .expect("every lane went idle");
+        assert_eq!(ran.load(Ordering::SeqCst), 52);
+        assert_eq!(queues.lane_count(), 0);
     }
 
     #[test]

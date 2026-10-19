@@ -81,7 +81,10 @@ export type TurnAction =
   | { type: 'begin'; turnId: string }
   | { type: 'event'; event: AgentEvent }
   | { type: 'approval-resolved'; turnId: string; requestId: string }
-  /** A retried commit was saved: the turn no longer offers "Retry". */
+  /**
+   * A retried commit was saved, or the host has nothing left to retry
+   * (refused with no new `commit_failed`): the turn no longer offers "Retry".
+   */
   | { type: 'commit-saved'; turnId: string }
   /** A turn still running that this session did not start (the thread was reopened): its recorded events, then live ones. */
   | { type: 'adopt'; turnId: string; events: readonly AgentEvent[] }

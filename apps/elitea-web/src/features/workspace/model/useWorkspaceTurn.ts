@@ -65,11 +65,17 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const ready = useRef<Promise<unknown>>(Promise.resolve());
+  /** The newest `commit_failed` seq heard per turn: tells a refused retry the host reported from one it did not. */
+  const commitFailures = useRef(new Map<string, number>());
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    const subscribed = ipc.onEvent((event) => dispatch({ type: 'event', event })).then((off) => {
+    const heard = (event: AgentEvent): void => {
+      if (event.kind === 'commit_failed') commitFailures.current.set(event.turn_id, Math.max(event.seq, commitFailures.current.get(event.turn_id) ?? -1));
+      dispatch({ type: 'event', event });
+    };
+    const subscribed = ipc.onEvent(heard).then((off) => {
       if (disposed) off();
       else unlisten = off;
     });
@@ -175,11 +181,20 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
 
   const retryCommit = useCallback(
     async (retried: string, executionId: string) => {
+      const before = commitFailures.current.get(retried);
       try {
         await ipc.retryCommit(executionId);
         dispatch({ type: 'commit-saved', turnId: retried });
-      } catch {
-        // The host reported it as the turn's next `commit_failed`.
+      } catch (error) {
+        // A refused commit is reported as the turn's next `commit_failed`
+        // (its "Retry" stays). Anything else (`commit_unknown`: the host
+        // keeps nothing to send; a failed call) came with no event: the
+        // stale "Retry" goes and the error shows. A later `commit_failed`
+        // (a newer seq) still brings it back.
+        if (commitFailures.current.get(retried) === before) {
+          dispatch({ type: 'commit-saved', turnId: retried });
+          setStartError(describeWorkspaceError(error));
+        }
       }
     },
     [ipc],

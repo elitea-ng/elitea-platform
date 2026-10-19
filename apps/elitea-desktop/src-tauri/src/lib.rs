@@ -397,6 +397,10 @@ pub fn run() {
     app.run(on_run_event);
 }
 
+/// How long the app's exit waits for the local turns' commits still queued
+/// or running, over every conversation.
+const EXIT_COMMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[allow(clippy::needless_pass_by_value)] // the signature `App::run` takes
 fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     // The history writer commits what it still holds before the process ends.
@@ -406,8 +410,21 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
         if let Some(history) = &local.history {
             history.flush();
         }
-        // A turn's commit runs after its `done`: one still queued, or kept
+        // A turn's commit runs after its `done`: the exit waits (bounded)
+        // for those queued or running; one still pending after that, or kept
         // after it failed, is not saved; its execution expires on the server.
+        if local.agents.unsaved_commits().0 > 0 {
+            let agents = local.agents.clone();
+            let settled = tauri::async_runtime::block_on(async move {
+                tokio::time::timeout(EXIT_COMMIT_WAIT, agents.commits_idle()).await
+            });
+            if settled.is_err() {
+                log::warn!(
+                    "the exit stopped waiting for local turn commits after {}s",
+                    EXIT_COMMIT_WAIT.as_secs()
+                );
+            }
+        }
         let (pending, failed) = local.agents.unsaved_commits();
         if pending + failed > 0 {
             log::warn!(

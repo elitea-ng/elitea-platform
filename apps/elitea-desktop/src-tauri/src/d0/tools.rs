@@ -182,6 +182,17 @@ impl Tool for ObservedTool {
         let call_id = ctx.function_call_id().to_owned();
         let tool = self.inner.name().to_owned();
         let observer = &self.observer;
+        // Past the most tool calls a commit may carry the call is not run
+        // (nor shown): the turn stops after this step (`turn.rs` `run_once`).
+        if !observer.recorder.tool_started(&call_id, &tool, &args) {
+            return Ok(json!({
+                "status": "error",
+                "message": format!(
+                    "Not run: this turn reached its limit of {} tool calls.",
+                    super::recorder::MAX_TOOL_CALLS
+                ),
+            }));
+        }
         observer.events.send(
             "tool_call",
             json!({
@@ -191,7 +202,6 @@ impl Tool for ObservedTool {
                 "remote": self.remote,
             }),
         );
-        observer.recorder.tool_started(&call_id, &tool, &args);
         if !self.remote
             && let Some(session) = &observer.session
         {

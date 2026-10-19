@@ -32,6 +32,14 @@ enum PostState {
 const MAX_COMMANDS: usize = 500;
 const MAX_PATHS: usize = 2000;
 const MAX_TOOL_OUTPUT: usize = 64 * 1024;
+/// The most tool calls one commit may carry: the server refuses a commit
+/// with more (`localturn.MaxToolCalls` in
+/// `services/elitea-main/internal/application/localturn/localturn.go`,
+/// counted as the keys of `tool_calls` by `CommitLocalTurn` in
+/// `internal/infra/db/repos/local_turns.go`). Keep the two equal.
+pub const MAX_TOOL_CALLS: usize = 512;
+/// The `done` status note of a turn stopped at [`MAX_TOOL_CALLS`].
+pub const TOOL_CALL_LIMIT_REACHED: &str = "tool_call_limit_reached";
 
 /// The commit's `tool_calls`: one JSON object whose keys are in the order
 /// held here. A `serde_json::Map` cannot keep it (the desktop links
@@ -140,8 +148,11 @@ impl Recorder {
         });
     }
 
-    /// A tool call began.
-    pub fn tool_started(&self, run_id: &str, tool_name: &str, inputs: &Value) {
+    /// A tool call is about to begin: recorded, unless the turn already
+    /// holds [`MAX_TOOL_CALLS`] (then `false`: the call must not run, as
+    /// the commit could not carry it).
+    #[must_use]
+    pub fn tool_started(&self, run_id: &str, tool_name: &str, inputs: &Value) -> bool {
         let mut entry = Map::new();
         entry.insert("run_id".into(), json!(run_id));
         entry.insert("tool_name".into(), json!(tool_name));
@@ -154,7 +165,22 @@ impl Recorder {
             },
         );
         entry.insert("timestamp_start".into(), json!(now()));
-        self.with(|state| state.steps.push((run_id.to_owned(), entry)));
+        self.with(|state| {
+            if state.steps.len() >= MAX_TOOL_CALLS {
+                return false;
+            }
+            state.steps.push((run_id.to_owned(), entry));
+            true
+        })
+        // A poisoned recorder records nothing, so its commit is within the cap.
+        .unwrap_or(true)
+    }
+
+    /// The turn holds [`MAX_TOOL_CALLS`]: it stops, and is not continued.
+    #[must_use]
+    pub fn tool_call_limit_reached(&self) -> bool {
+        self.with(|state| state.steps.len() >= MAX_TOOL_CALLS)
+            .unwrap_or(false)
     }
 
     /// A tool call ended; `error` is its error text, if it failed.
@@ -532,7 +558,7 @@ mod tests {
     #[test]
     fn tool_steps_carry_the_trace_keys_the_commit_stores() {
         let recorder = Recorder::default();
-        recorder.tool_started("call-1", "read_file", &json!({"path": "a"}));
+        assert!(recorder.tool_started("call-1", "read_file", &json!({"path": "a"})));
         recorder.tool_finished("call-1", &json!({"status": "error"}), Some("not found"));
         let calls = recorder.tool_calls();
         let entry = calls.get("call-1").unwrap();
@@ -550,13 +576,13 @@ mod tests {
         // a, z, m and finished in yet another order.
         recorder.calls_planned(["call-z", "call-m", "call-a"]);
         for id in ["call-a", "call-z", "call-m"] {
-            recorder.tool_started(id, "read_file", &json!({}));
+            assert!(recorder.tool_started(id, "read_file", &json!({})));
         }
         for id in ["call-m", "call-a", "call-z"] {
             recorder.tool_finished(id, &json!("ok"), None);
         }
         // A call the answer did not name (none today) goes last.
-        recorder.tool_started("call-0", "read_file", &json!({}));
+        assert!(recorder.tool_started("call-0", "read_file", &json!({})));
         let calls = recorder.tool_calls();
         assert_eq!(calls.ids(), ["call-z", "call-m", "call-a", "call-0"]);
         let text = serde_json::to_string(&calls).unwrap();
@@ -567,5 +593,23 @@ mod tests {
                 && at("call-a") < at("call-0"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_turn_records_at_most_the_tool_calls_a_commit_may_carry() {
+        let recorder = Recorder::default();
+        for n in 0..MAX_TOOL_CALLS {
+            assert!(!recorder.tool_call_limit_reached());
+            assert!(recorder.tool_started(&format!("call-{n}"), "read_file", &json!({})));
+        }
+        assert!(recorder.tool_call_limit_reached());
+        // The next call is refused and not recorded: the commit stays
+        // within what the server takes.
+        assert!(!recorder.tool_started("call-over", "read_file", &json!({})));
+        let calls = recorder.tool_calls();
+        assert_eq!(calls.0.len(), MAX_TOOL_CALLS);
+        assert!(calls.get("call-over").is_none());
+        let encoded: Value = serde_json::to_value(&calls).unwrap();
+        assert_eq!(encoded.as_object().unwrap().len(), 512);
     }
 }

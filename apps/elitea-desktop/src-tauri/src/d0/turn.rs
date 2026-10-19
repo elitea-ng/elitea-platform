@@ -19,7 +19,7 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -64,7 +64,7 @@ use super::events::{EventEmitter, Phase, Timed, TurnEvents};
 use super::framing;
 use super::mentions;
 use super::model::GatewayTransport;
-use super::recorder::{FileChange, Recorder, ToolCalls};
+use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
     RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
 };
@@ -239,14 +239,40 @@ struct WorkspaceSession {
     policy: LocalWorkPolicy,
 }
 
-/// The workspaces something holds right now (a running turn, a restore, a
-/// removal), by workspace id. One set for the host, so it outlives the
-/// session rebuild a policy change causes.
-type BusySet = Arc<Mutex<HashSet<String>>>;
+/// What holds a workspace now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hold {
+    /// A running turn, a restore, a removal, a handoff: refuse the next.
+    Work,
+    /// A finished turn's commit (after its `done`, until the commit and the
+    /// session's settle end, landed or failed): a handoff, restore or removal
+    /// is refused, and the next turn waits for it.
+    Commit,
+}
 
-/// A workspace held by one turn (or one restore or removal); released when
-/// dropped, so every exit path (a refusal, a panic, the end of the run)
-/// frees it.
+/// The workspaces something holds right now (a running turn, its commit, a
+/// restore, a removal), by workspace id. One set for the host, so it
+/// outlives the session rebuild a policy change causes.
+#[derive(Default)]
+struct Busy {
+    held: Mutex<HashMap<String, Hold>>,
+    /// Bumped on every release, for the turns waiting on a commit's hold.
+    released: tokio::sync::watch::Sender<u64>,
+}
+
+type BusySet = Arc<Busy>;
+
+impl Busy {
+    fn held(&self) -> std::sync::MutexGuard<'_, HashMap<String, Hold>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// A workspace held by one turn (or its commit, or one restore or
+/// removal); released when dropped, so every exit path (a refusal, a panic,
+/// the end of the run or of the commit) frees it.
 pub(crate) struct WorkspaceClaim {
     busy: BusySet,
     workspace_id: String,
@@ -255,25 +281,54 @@ pub(crate) struct WorkspaceClaim {
 impl WorkspaceClaim {
     /// Check and take the workspace in one step, under the set's lock.
     fn take(busy: &BusySet, workspace_id: &str, message: &str) -> Result<Self, TurnError> {
-        let mut held = busy
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !held.insert(workspace_id.to_owned()) {
+        let mut held = busy.held();
+        if held.contains_key(workspace_id) {
             return Err(TurnError::new("workspace_busy", message));
         }
+        held.insert(workspace_id.to_owned(), Hold::Work);
+        drop(held);
         Ok(Self {
             busy: busy.clone(),
             workspace_id: workspace_id.to_owned(),
         })
     }
+
+    /// [`Self::take`] for a turn: a previous turn's commit still holding
+    /// the workspace is waited for (the turn would wait for it anyway);
+    /// anything else holding it refuses the turn.
+    async fn take_for_turn(
+        busy: &BusySet,
+        workspace_id: &str,
+        message: &str,
+    ) -> Result<Self, TurnError> {
+        loop {
+            // Subscribed before the check: a release between the two still
+            // wakes the wait.
+            let mut released = busy.released.subscribe();
+            // The guard is dropped here: `take` locks again.
+            let hold = busy.held().get(workspace_id).copied();
+            if hold != Some(Hold::Commit) {
+                return Self::take(busy, workspace_id, message);
+            }
+            let _ = released.changed().await;
+        }
+    }
+
+    /// The turn is done; its commit keeps the workspace until it settles.
+    fn into_commit(self) -> Self {
+        if let Some(hold) = self.busy.held().get_mut(&self.workspace_id) {
+            *hold = Hold::Commit;
+        }
+        self
+    }
 }
 
 impl Drop for WorkspaceClaim {
     fn drop(&mut self) {
+        self.busy.held().remove(&self.workspace_id);
         self.busy
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&self.workspace_id);
+            .released
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 }
 
@@ -1384,7 +1439,10 @@ impl AgentHost {
         };
         // Checked and taken atomically, per workspace id, before the session
         // may be rebuilt; released on every early return below.
-        let claim = WorkspaceClaim::take(&self.busy, &request.workspace_id, TURN_RUNNING)?;
+        // A previous turn's commit still holding the workspace is waited
+        // for (that turn's conversation is read after it, below).
+        let claim =
+            WorkspaceClaim::take_for_turn(&self.busy, &request.workspace_id, TURN_RUNNING).await?;
         // Read again under the claim: the workspace may have been removed or
         // re-bound while the version and the conversation were read (neither
         // can happen from here on, both take the claim).
@@ -1633,16 +1691,22 @@ impl AgentHost {
             );
             return;
         };
-        let (answer, stopped_at_limit, failure) = match result {
+        let (answer, stopped_at_limit, stopped_at_calls, failure) = match result {
             Ok(AgentAnswer {
                 text,
                 step_limit_reached,
-            }) => (text, step_limit_reached, None),
-            Err(error) => (sink.last_text(), false, Some(error)),
+                tool_call_limit_reached,
+            }) => (text, step_limit_reached, tool_call_limit_reached, None),
+            Err(error) => (sink.last_text(), false, false, Some(error)),
         };
-        // A turn that stopped at its limit is committed as it is, with what
+        // A turn that stopped at a limit is committed as it is, with what
         // the agent last said (or that it stopped there).
-        let answer = if stopped_at_limit && answer.trim().is_empty() {
+        let answer = if stopped_at_calls && answer.trim().is_empty() {
+            format!(
+                "The agent stopped after making {} tool calls.",
+                recorder::MAX_TOOL_CALLS
+            )
+        } else if stopped_at_limit && answer.trim().is_empty() {
             format!(
                 "The agent stopped after using its {} steps.",
                 admitted.step_limit
@@ -1682,13 +1746,21 @@ impl AgentHost {
             local_work: recorder.work_report(sandbox_mode.as_str()),
         }
         .encode();
-        // Free before `done`: the UI may send the next turn as soon as it sees it.
-        drop(claim);
+        // The workspace stays held by the commit (below) until it settles:
+        // a handoff, restore or removal is refused until the last turn is
+        // saved (or its commit failed), and the next turn waits for it.
+        let claim = claim.into_commit();
         let changes = recorder.changes(session.workspace());
         self.index_changed(&request.workspace_id, changes.len());
         tap.changes(&changes);
         if failure.is_some() {
             events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
+        } else if stopped_at_calls {
+            events.noted(
+                Phase::Done,
+                "Stopped at the tool-call limit.",
+                recorder::TOOL_CALL_LIMIT_REACHED,
+            );
         } else if stopped_at_limit {
             events.noted(
                 Phase::Done,
@@ -1698,61 +1770,88 @@ impl AgentHost {
         } else {
             events.status(Phase::Done, None);
         }
-        // `done` before the commit: the person sees the answer at once. The
-        // commit follows in the conversation's lane (the next turn of the
-        // conversation waits for it); `commit_failed` reports one that did
-        // not land.
-        entry.finish(
-            &events,
-            json!({
-                "committed": false,
-                "commit": "pending",
-                "execution_id": started.execution_id,
-                "conversation_id": conversation_id,
-                "message_ids": [started.question_id, started.response_message_id],
-                "changed_files": changes.len(),
-            }),
-        );
         let lane = lane_key(request.project_id, &conversation_uuid);
         let host = self.clone();
         let retry = self.commit_retry();
         let project_id = request.project_id;
+        let (done_sent, after_done) = tokio::sync::oneshot::channel::<()>();
+        let (done_events, done_entry) = (events.clone(), entry.clone());
+        let execution_id = started.execution_id.clone();
+        let done = json!({
+            "committed": false,
+            "commit": "pending",
+            "execution_id": started.execution_id,
+            "conversation_id": conversation_id,
+            "message_ids": [started.question_id, started.response_message_id],
+            "changed_files": changes.len(),
+        });
         let job = async move {
-            let execution_id = started.execution_id.clone();
-            let committing = std::time::Instant::now();
-            let outcome = match &body {
-                Ok(body) => commits::commit(&api, project_id, &execution_id, body, retry).await,
-                Err(error) => Err(error.clone()),
-            };
-            events.timed(Timed::Committing, committing.elapsed());
-            // The session holds what the server holds, or is marked to be
-            // rebuilt from it.
-            memory
-                .settle(
+            // Nothing of the commit is reported before the turn's `done`.
+            let _ = after_done.await;
+            let work = std::panic::AssertUnwindSafe(async {
+                let committing = std::time::Instant::now();
+                let outcome = match &body {
+                    Ok(body) => commits::commit(&api, project_id, &execution_id, body, retry).await,
+                    Err(error) => Err(error.clone()),
+                };
+                events.timed(Timed::Committing, committing.elapsed());
+                // The session holds what the server holds, or is marked to be
+                // rebuilt from it.
+                memory
+                    .settle(
+                        &execution_id,
+                        match &outcome {
+                            Ok(()) => Ok(started.response_message_id.as_str()),
+                            Err(_) => Err(Refusal::NotSaved),
+                        },
+                    )
+                    .await;
+                events.log_timings();
+                host.commit_settled(
                     &execution_id,
-                    match &outcome {
-                        Ok(()) => Ok(started.response_message_id.as_str()),
-                        Err(_) => Err(Refusal::NotSaved),
-                    },
-                )
-                .await;
-            events.log_timings();
-            host.commit_settled(
-                &execution_id,
-                outcome,
-                body.ok().map(|body| FailedCommit {
-                    lane: lane_key(project_id, &conversation_uuid),
-                    api,
-                    project_id,
-                    body: Arc::new(body),
-                    events: events.clone(),
-                    entry: entry.clone(),
-                }),
-                &events,
-                &entry,
-            );
+                    outcome,
+                    body.ok().map(|body| FailedCommit {
+                        lane: lane_key(project_id, &conversation_uuid),
+                        api,
+                        project_id,
+                        body: Arc::new(body),
+                        events: events.clone(),
+                        entry: entry.clone(),
+                    }),
+                    &events,
+                    &entry,
+                );
+            })
+            .catch_unwind()
+            .await;
+            // A commit that panicked is a commit that failed (not kept for a
+            // retry: what it held is gone).
+            if work.is_err() {
+                host.commit_settled(
+                    &execution_id,
+                    Err(ApiError::local(
+                        "internal",
+                        "the commit stopped unexpectedly",
+                    )),
+                    None,
+                    &events,
+                    &entry,
+                );
+            }
+            // Released only now, landed or failed: a failed commit frees the
+            // workspace once its retries are used up (`turn_commit_retry`
+            // later runs without it; a handoff before then sends the
+            // conversation without that turn, as the server holds it).
+            drop(claim);
         };
+        // The slot is taken before `done`: a next turn that sees `done`
+        // finds the lane busy and waits for this commit.
         self.commits.push(&lane, job.boxed());
+        // `done` before the commit: the person sees the answer at once; the
+        // commit follows in the conversation's lane, and `commit_failed`
+        // reports one that did not land.
+        done_entry.finish(&done_events, done);
+        let _ = done_sent.send(());
     }
 
     /// How a commit after `done` is retried.
@@ -1838,6 +1937,12 @@ impl AgentHost {
             .map_err(|_| TurnError::new("internal", "the commit stopped unexpectedly"))?
     }
 
+    /// Until no commit is queued or running (the app's exit waits on it,
+    /// bounded).
+    pub async fn commits_idle(&self) {
+        self.commits.all_idle().await;
+    }
+
     /// Commits queued or running, and failed ones kept: what a quit now
     /// leaves unsaved (each such execution expires on the server).
     #[must_use]
@@ -1871,35 +1976,36 @@ impl AgentHost {
         // This turn's framing nonce: the untrusted blocks end only at a
         // closing tag carrying it (d0/framing.rs).
         let nonce = framing::nonce();
-        // The workspace's index tools, when its index is on and built: they
-        // only read, so plan mode keeps them.
-        let index = match &self.deps.index {
-            Some(registry) => registry.for_turn(&request.workspace_id).await,
-            None => None,
-        };
-        // The host's environment section names the tools offered now.
-        let offered: Vec<String> = workspace
+        // The host's environment section names the tools offered now: the
+        // session's, then the index tools when the workspace's index is on
+        // and built (they only read, so plan mode keeps them). The index is
+        // looked up while the environment's probes run.
+        let local_offered: Vec<String> = workspace
             .session
             .available_tools()
             .iter()
             .map(|tool| tool.name.to_owned())
-            .chain(
-                index
-                    .is_some()
-                    .then_some(INDEX_TOOLS)
-                    .into_iter()
-                    .flatten()
-                    .map(str::to_owned),
-            )
             .collect();
-        let facts = environment::gather(
-            &workspace.session,
-            folder.to_owned(),
-            &workspace.policy,
-            request.plan_mode,
-            offered,
-        )
-        .await;
+        let (index, mut facts) = tokio::join!(
+            async {
+                match &self.deps.index {
+                    Some(registry) => registry.for_turn(&request.workspace_id).await,
+                    None => None,
+                }
+            },
+            environment::gather(
+                &workspace.session,
+                folder.to_owned(),
+                &workspace.policy,
+                request.plan_mode,
+                local_offered,
+            ),
+        );
+        if index.is_some() {
+            facts
+                .tools
+                .extend(INDEX_TOOLS.iter().map(|name| (*name).to_owned()));
+        }
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
             http: api.http().await.clone(),
@@ -2057,10 +2163,21 @@ impl AgentHost {
                             .take_completed_text()
                             .unwrap_or_else(|_| sink.last_text()),
                         step_limit_reached: false,
+                        tool_call_limit_reached: false,
+                    });
+                }
+                // The server keeps at most so many tool calls of a turn: no
+                // "Continue?" past them (the commit would be refused).
+                RunEnd::ToolCallLimit => {
+                    return Ok(AgentAnswer {
+                        text: sink.last_text(),
+                        step_limit_reached: false,
+                        tool_call_limit_reached: true,
                     });
                 }
                 RunEnd::StepLimit => {
                     let go_on = budget.may_continue()
+                        && !recorder.tool_call_limit_reached()
                         && step_limit::ask_to_continue(
                             workspace.prompt.as_ref(),
                             "step_limit",
@@ -2081,7 +2198,8 @@ impl AgentHost {
                         None => {
                             return Ok(AgentAnswer {
                                 text: sink.last_text(),
-                                step_limit_reached: true,
+                                step_limit_reached: !recorder.tool_call_limit_reached(),
+                                tool_call_limit_reached: recorder.tool_call_limit_reached(),
                             });
                         }
                     }
@@ -2749,6 +2867,9 @@ struct AgentAnswer {
     /// The last run stopped at the step limit and the turn did not go on
     /// (the person said stop, did not answer, or the continues ran out).
     step_limit_reached: bool,
+    /// The turn made the most tool calls a commit may carry
+    /// ([`recorder::MAX_TOOL_CALLS`]): it stopped there, not to be continued.
+    tool_call_limit_reached: bool,
 }
 
 /// How one run of the agent ended.
@@ -2757,6 +2878,9 @@ enum RunEnd {
     Answered,
     /// adk's own end: the run used its `max_iterations` steps.
     StepLimit,
+    /// The turn's tool calls reached [`recorder::MAX_TOOL_CALLS`]: the run
+    /// is stopped after the step that reached it.
+    ToolCallLimit,
 }
 
 /// One run of `runner` on the session from `content`, its events to `sink`.
@@ -2777,6 +2901,17 @@ async fn run_once(
     while let Some(event) = stream.next().await {
         let event = match event {
             Ok(event) => event,
+            Err(error) if recorder.tool_call_limit_reached() => {
+                log::info!(
+                    "a local turn's run ended at the tool-call limit ({})",
+                    if step_limit::reached(&error) {
+                        "and its step limit"
+                    } else {
+                        "with an error"
+                    }
+                );
+                return Ok(RunEnd::ToolCallLimit);
+            }
             Err(error) if step_limit::reached(&error) => return Ok(RunEnd::StepLimit),
             Err(error) => return Err(model_failure(&error.to_string())),
         };
@@ -2792,6 +2927,11 @@ async fn run_once(
         sink.emit(&event)
             .await
             .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;
+        // Stopped between steps: the model is not asked again (a call past
+        // the limit was not run, `tools.rs`).
+        if recorder.tool_call_limit_reached() {
+            return Ok(RunEnd::ToolCallLimit);
+        }
     }
     Ok(RunEnd::Answered)
 }
