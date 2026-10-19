@@ -1100,6 +1100,7 @@ func (h *Handler) streamOpenAI(
 			continue
 		}
 		if chunk.BifrostError != nil {
+			h.logProviderRefusal(chunk.BifrostError)
 			data, _ := json.Marshal(openAIErrorBody(chunk.BifrostError))
 			_ = sw.Data(string(data))
 			s.settleEarly(lossReasonProviderError)
@@ -1185,6 +1186,7 @@ func (h *Handler) streamResponses(
 			continue
 		}
 		if chunk.BifrostError != nil {
+			h.logProviderRefusal(chunk.BifrostError)
 			data, _ := json.Marshal(openAIErrorBody(chunk.BifrostError))
 			_ = sw.Event("error", string(data))
 			s.settleEarly(lossReasonProviderError)
