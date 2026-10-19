@@ -53,10 +53,6 @@
 #     with a checksum mismatch, and the fix is `go work sync` on the branch.
 #     This is a known cost of the workspace layout, not a reason to skip the
 #     scanning.
-#   - services/elitea-llm-gateway/internal/sdkpin/elitea-sdk.lock.json. The SDK
-#     revision is pinned there by digest, and the gateway asserts the same digest in
-#     internal/sdkpin/sdk-pin.json. Dependabot does not read either file, so
-#     the SDK is NOT covered by this configuration and stays a manual bump.
 #   - The Debian base layers. Those are the majority of every image-scan
 #     finding, and they move with the Containerfile's FROM line.
 #   - The Rust toolchain, deliberately. There is no `docker` and no
@@ -168,8 +164,8 @@ updates:
       # nothing here would have caught: from 1.82.0 it requires
       # protobuf >= 7.35.1, so `pip install ./libs/proto[generate]` becomes
       # ResolutionImpossible against the protobuf == 6.33.6 pinned above.
-      # No CI job installs the `generate` extra — ci-python.yml installs
-      # ./libs/proto without extras — so #800 went green on a manifest that
+      # No CI job installs the `generate` extra, so #800 went green on a
+      # manifest that
       # cannot be installed. It is also a generator pin: toolchain.lock and
       # the version assertions in scripts/contract/generate_proto.sh name
       # 1.76.0 and protoc 31.1, and moving it rewrites every file under

@@ -2416,9 +2416,8 @@ except Exception as error:
         ;;
     esac
 
-    # The elitea-sdk client check that used to run here drove the SDK inside
-    # the Python worker's image. It went with the Python worker; the SDK's
-    # contract with /llm is CI's .github/workflows/ci-python.yml (SDK contract).
+    # (The elitea-sdk client check that ran here drove the SDK inside the
+    # Python worker's image; it went with the Python worker.)
 
     echo "→ chat critical path (#284 smoke):"
     # Precondition first, because the failure it produces is a bare HTTP 500

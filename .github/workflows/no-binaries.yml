@@ -193,6 +193,11 @@ jobs:
             exit 1
           fi
           python -m pytest -q "${tests[@]}"
+      # Every image build that compiles Rust into a shared BuildKit target
+      # cache must touch its sources first, or a stale binary ships under a
+      # fresh tag. It reads only the committed Containerfiles.
+      - name: Rust image builds compile the checked-out source
+        run: python -m pytest -q scripts/contract/test_cargo_target_cache_freshness.py
 
   # Issue #518. The wiring is a separate artifact from the gate, and only the
   # gate feels like the work. `helm-lint.yml` was correct in its own file and
