@@ -399,9 +399,12 @@ impl OrdinaryNativeAgentAssembler {
                         Arc::new(crate::workspace_run::tools::TurnDiffSource::new(
                             Arc::clone(turn),
                         )),
-                        Arc::new(crate::workspace_run::tools::LogPullRequestAudit::new(
-                            context.execution_id(),
-                        )),
+                        Arc::new(
+                            crate::workspace_run::tools::LogPullRequestAudit::new(
+                                context.execution_id(),
+                            )
+                            .with_audit(turn.audit()),
+                        ),
                     )
                 } else {
                     None

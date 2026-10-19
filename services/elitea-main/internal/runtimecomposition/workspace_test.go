@@ -8,6 +8,7 @@ import (
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"google.golang.org/grpc/metadata"
 )
@@ -94,5 +95,13 @@ func TestFinishingIngestorEndsTheCloudTurnOnlyAfterAProjectedResult(t *testing.T
 	refused := finishingAgentExecutionIngestor{next: scriptedAgentIngestor{err: outputapp.ErrOutputCancelled}, lifecycle: lifecycle}
 	if _, err := refused.IngestAgent(context.Background(), frame); err == nil || len(lifecycle.finished) != 1 {
 		t.Fatalf("a refused projection finished the turn: %v", lifecycle.finished)
+	}
+}
+
+// The dead-turn reaper must never reap a worker that renews on time: its
+// grace is at least the claim lease the composition issues.
+func TestDeadTurnGraceCoversTheClaimLease(t *testing.T) {
+	if workspacehandoff.DeadTurnGrace < claimLeaseTTL {
+		t.Fatalf("DeadTurnGrace %s < claimLeaseTTL %s", workspacehandoff.DeadTurnGrace, claimLeaseTTL)
 	}
 }

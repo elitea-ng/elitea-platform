@@ -182,6 +182,25 @@ type Store interface {
 	// stored. An empty map when the thread has none. The values are never
 	// logged, audited or cached.
 	EnvSecret(ctx context.Context, claim ClaimRef) (map[string]string, error)
+	// RecordEvent writes an audit event the worker observed in the running
+	// turn (decision 12): EventScanBlocked or EventPullRequestOpened, with
+	// the allowlisted attributes only (never a path).
+	RecordEvent(ctx context.Context, claim ClaimRef, event ExecutorEvent) error
+}
+
+// The executor audit events (workspacehandoff.EventScanBlocked and
+// EventPullRequestOpened).
+const (
+	EventScanBlocked       = "handoff.scan_blocked"
+	EventPullRequestOpened = "pull_request.opened"
+)
+
+// ExecutorEvent is one executor audit event: its kind and its attributes
+// (scan_blocked: findings, rules; pull_request.opened: toolkit, branch,
+// base, number, url, files).
+type ExecutorEvent struct {
+	Kind  string
+	Attrs map[string]string
 }
 
 const (

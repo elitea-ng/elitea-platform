@@ -14,6 +14,7 @@
 //! turn fails with `workspace_run.unavailable` instead of running without
 //! its files.
 
+pub(crate) mod audit;
 pub(crate) mod codec;
 pub(crate) mod context;
 pub(crate) mod file_redact;

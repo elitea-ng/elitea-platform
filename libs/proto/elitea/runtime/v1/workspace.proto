@@ -215,6 +215,41 @@ message WorkspaceEnvVarsV1 {
   reserved 2 to 15;
 }
 
+// The audit events only the executor observes (ADR-0034 decision 12). The
+// fields are the ones Main records and nothing else: no field can carry a
+// path or file content.
+enum WorkspaceExecutorEventKindV1 {
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_UNSPECIFIED = 0;
+  // handoff.scan_blocked: the hydrated tree held credential-shaped content.
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_SCAN_BLOCKED = 1;
+  // pull_request.opened: open_pull_request opened one.
+  WORKSPACE_EXECUTOR_EVENT_KIND_V1_PULL_REQUEST_OPENED = 2;
+}
+
+message WorkspaceRecordEventRequestV1 {
+  WorkspaceClaimV1 claim = 1;
+  WorkspaceExecutorEventKindV1 kind = 2;
+  // scan_blocked: how many findings, and the distinct rule ids.
+  uint32 findings = 3;
+  repeated string rules = 4;
+  // pull_request.opened: the toolkit, the branches, the number, its URL and
+  // how many files it changes.
+  string toolkit = 5;
+  string branch = 6;
+  string base = 7;
+  uint64 number = 8;
+  string url = 9;
+  uint32 files = 10;
+  reserved 11 to 15;
+}
+
+message WorkspaceRecordEventResponseV1 {
+  bool recorded = 1;
+  WorkspaceRefusalV1 refusal = 2;
+  RuntimeErrorV1 rejection = 3;
+  reserved 4 to 15;
+}
+
 service WorkspaceStoreService {
   rpc WorkspaceFetchPlan(WorkspaceFetchPlanRequestV1) returns (stream WorkspaceFetchFrameV1);
   rpc WorkspaceUpload(stream WorkspaceUploadFrameV1) returns (WorkspaceUploadResponseV1);
@@ -222,4 +257,7 @@ service WorkspaceStoreService {
   // The thread's harvested env, as a claim-bound runtime secret: only when the
   // runtime context's `workspace.env_secret` is true.
   rpc WorkspaceEnvSecret(WorkspaceEnvSecretRequestV1) returns (stream WorkspaceEnvSecretFrameV1);
+  // An executor audit event of the running turn, bound to its claim and
+  // fence like every call here.
+  rpc WorkspaceRecordEvent(WorkspaceRecordEventRequestV1) returns (WorkspaceRecordEventResponseV1);
 }

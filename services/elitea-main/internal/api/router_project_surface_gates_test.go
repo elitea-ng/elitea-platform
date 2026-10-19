@@ -361,7 +361,9 @@ func assertSubscribedToOwnProject(t *testing.T, source closedEventSource, projec
 	t.Helper()
 	got := drainAsked(source)
 	sort.Strings(got)
-	want := []string{fmt.Sprintf("project:%d:events", projectID), fmt.Sprintf("project:%d:presence", projectID)}
+	// The project's live updates, canvas presence and handoff state events
+	// (ADR-0034), each on its own channel.
+	want := []string{fmt.Sprintf("project:%d:events", projectID), fmt.Sprintf("project:%d:presence", projectID), fmt.Sprintf("project:%d:workspace", projectID)}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the admitted stream subscribed to %q, want %q", got, want)
 	}

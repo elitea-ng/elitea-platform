@@ -810,6 +810,18 @@ func (r *WorkspaceHandoffsRepository) ForceReclaim(ctx context.Context, t worksp
     reclaim_requested_at = NULL`)
 }
 
+func (r *WorkspaceHandoffsRepository) DeadCloudTurns(ctx context.Context, grace time.Duration, limit int) ([]workspacehandoff.Handoff, error) {
+	return r.due(ctx, `state = 'CLOUD_RUNNING'
+  AND state_changed_at < clock_timestamp() - make_interval(secs => $1)
+  AND EXISTS (SELECT 1 FROM elitea_runtime.execution_claims AS c WHERE c.execution_id = running_execution_id)
+  AND NOT EXISTS (
+      SELECT 1 FROM elitea_runtime.execution_claims AS c
+      WHERE c.execution_id = running_execution_id
+        AND ((c.released_at IS NULL AND c.lease_expires_at > clock_timestamp() - make_interval(secs => $1))
+             OR c.released_at > clock_timestamp() - make_interval(secs => $1)))
+ORDER BY state_changed_at LIMIT $2`, grace.Seconds(), limit)
+}
+
 func (r *WorkspaceHandoffsRepository) DueAbandonedReclaim(ctx context.Context, before time.Time, limit int) ([]workspacehandoff.Handoff, error) {
 	return r.due(ctx, `state = 'RECLAIMING' AND state_changed_at <= $1 ORDER BY state_changed_at LIMIT $2`, before, limit)
 }

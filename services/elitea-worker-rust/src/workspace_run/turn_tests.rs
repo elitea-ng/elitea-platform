@@ -46,6 +46,10 @@ struct StoreState {
     upload_fails: bool,
     env: Vec<(String, String)>,
     env_reads: u32,
+    /// Executor audit events Main recorded.
+    events: Vec<super::audit::ExecutorEvent>,
+    /// Answer this many record-event calls with a non-retryable refusal.
+    events_refused: u32,
 }
 
 struct FakeStore(Mutex<StoreState>);
@@ -158,6 +162,23 @@ impl WorkspaceStore for FakeStore {
         let mut state = self.state();
         state.env_reads += 1;
         Ok(SecretEnv::new(state.env.clone()))
+    }
+
+    async fn record_event(
+        &self,
+        _claim: &WorkspaceClaimV1,
+        event: &super::audit::ExecutorEvent,
+    ) -> Result<(), StoreCallError> {
+        let mut state = self.state();
+        if state.events_refused > 0 {
+            state.events_refused -= 1;
+            return Err(StoreCallError::Refused {
+                code: super::store::RefusalCode::StaleEpoch,
+                current: BTreeMap::new(),
+            });
+        }
+        state.events.push(event.clone());
+        Ok(())
     }
 }
 
@@ -655,6 +676,65 @@ async fn a_secret_in_the_tree_fails_the_turn_before_any_sandbox_starts() {
         .expect("refused");
     assert_eq!(error, WorkspaceRunError::SecretFound { findings: 1 });
     assert!(harness.launcher.launched.lock().expect("l").is_empty());
+    // Decision 12: Main recorded handoff.scan_blocked before the turn failed,
+    // with the count and the rule ids, never the path.
+    let events = harness.store.state().events.clone();
+    assert_eq!(events.len(), 1);
+    let super::audit::ExecutorEvent::ScanBlocked { findings, rules } = &events[0] else {
+        panic!("scan_blocked expected: {events:?}");
+    };
+    assert_eq!(*findings, 1);
+    assert!(!rules.is_empty());
+    assert!(
+        rules
+            .iter()
+            .all(|rule| !rule.contains('/') && !rule.contains("app.env"))
+    );
+}
+
+/// `pull_request.opened` reaches Main before the turn ends, with the file
+/// count; an audit refusal is logged and never fails the turn.
+#[tokio::test]
+async fn executor_audit_events_reach_main_and_never_fail_the_turn() {
+    use elitea_agent_runtime::toolkits::workspace_pull_request::{
+        PullRequestAudit, PullRequestOpened,
+    };
+    let harness = harness(CLOUD_REFS, &[("src/main.rs", "fn main() {}\n")]);
+    let turn = harness
+        .factory
+        .begin(
+            &later_turn(),
+            claim(2),
+            "execution-1",
+            Arc::new(super::sandbox::NoGrants),
+        )
+        .await
+        .expect("hydrated");
+    let audit = super::tools::LogPullRequestAudit::new("execution-1").with_audit(turn.audit());
+    let opened = PullRequestOpened {
+        toolkit: "github".to_owned(),
+        repository: "o/r".to_owned(),
+        branch: "elitea/cloud-1".to_owned(),
+        base: "main".to_owned(),
+        number: 42,
+        files: 3,
+        upstream_sha: "u".repeat(40),
+    };
+    harness.store.state().events_refused = 1;
+    audit.opened(&opened); // refused: logged, not retried, the turn goes on
+    audit.opened(&opened);
+    turn.finish(TurnEnd::Completed).await.expect("published");
+    let state = harness.store.state();
+    assert_eq!(state.publishes.len(), 1, "the turn published");
+    assert_eq!(state.events.len(), 1, "flushed before the turn ended");
+    assert!(matches!(
+        &state.events[0],
+        super::audit::ExecutorEvent::PullRequestOpened {
+            files: 3,
+            number: 42,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]
