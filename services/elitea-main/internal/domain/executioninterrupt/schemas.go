@@ -21,6 +21,7 @@ var schemaStems = []string{
 	"fanout-interrupt-card",
 	"fanout-interrupt-decision-request",
 	"fanout-member",
+	"fanout-parked",
 }
 
 const schemaBaseURL = "https://schemas.elitea.ai/runtime/v1/"
@@ -29,6 +30,7 @@ type compiledSchemas struct {
 	card     *jsonschema.Schema
 	decision *jsonschema.Schema
 	ack      *jsonschema.Schema
+	parked   *jsonschema.Schema
 }
 
 var loadSchemas = sync.OnceValues(func() (compiledSchemas, error) {
@@ -58,6 +60,9 @@ var loadSchemas = sync.OnceValues(func() (compiledSchemas, error) {
 		return compiledSchemas{}, err
 	}
 	if out.ack, err = compile("fanout-interrupt-ack-request"); err != nil {
+		return compiledSchemas{}, err
+	}
+	if out.parked, err = compile("fanout-parked"); err != nil {
 		return compiledSchemas{}, err
 	}
 	return out, nil
