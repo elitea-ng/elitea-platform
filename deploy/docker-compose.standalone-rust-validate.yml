@@ -63,8 +63,8 @@ services:
       # The file is DERIVED: deploy/scripts/render-validate-worker-runtime.py
       # renders it from worker-runtime.rust.json with exactly those five keys
       # replaced, and CI (helm-lint.yml) fails when the committed copy drifts.
-      # Everything else, limits and the node-recovery flag included, is the
-      # agent worker's; the flag is inert here because no agent execution ever
+      # Everything else, limits and the checkpoint connection included, is the
+      # agent worker's; recovery is inert here because no agent execution ever
       # arrives on the VALIDATE stream.
       - ./runtime/worker-runtime.rust-validate.json:/run/elitea/runtime.json:ro
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro

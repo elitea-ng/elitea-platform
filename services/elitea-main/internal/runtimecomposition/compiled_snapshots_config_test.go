@@ -10,6 +10,7 @@ import (
 
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/security/securefile"
 )
 
@@ -147,6 +148,9 @@ func TestCompiledSnapshotMaterialInventoryIncludesOriginalAgentState(t *testing.
 	owner := codeOwnerConfigurationFixture()
 	owner.Supervisors[0].Audience = "elitea.supervisor"
 	c.CodeOwnerRecovery = &owner
+	c.CodeWorkspace = &CodeWorkspaceConfig{Revision: 1, RepositoryCapabilities: []string{"github"}, EgressAllowlist: []string{"api.github.com:443"}, Policy: storage.DefaultCodeWorkspacePolicy()}
+	c.CodePlatform = &CodePlatformDeploymentConfig{Revision: 1, ContentKeysFile: "/run/elitea-runtime/code-platform-content-keys.json", BrokerPolicies: []storage.CodeBrokerPolicy{{Revision: 1, MaxCalls: 32, MaxTotalBytes: 1048576}}}
+	c.CodeDebugArtifacts = &CodeDebugArtifactsConfig{AgentStateDSNFile: "/run/elitea-runtime/agent-checkpoint-connection"}
 	cfg := compiledTestConfig()
 	c.RustCompiledSnapshots = &cfg
 	files, err := c.MaterialFiles()

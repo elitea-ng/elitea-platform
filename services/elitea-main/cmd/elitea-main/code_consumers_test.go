@@ -32,6 +32,27 @@ func codeStartupConfig(t *testing.T, dsn string) runtimecomposition.Config {
 	}
 }
 
+func TestCodeConsumerStartupWithAgentDispatchRequiresEveryConsumer(t *testing.T) {
+	for _, drop := range []func(*runtimecomposition.Config){
+		func(c *runtimecomposition.Config) { c.CodeWorkspace = nil },
+		func(c *runtimecomposition.Config) { c.CodePlatform = nil },
+		func(c *runtimecomposition.Config) { c.CodeDebugArtifacts = nil },
+		func(c *runtimecomposition.Config) {
+			c.CodeWorkspace, c.CodePlatform, c.CodeDebugArtifacts = nil, nil, nil
+		},
+	} {
+		config := codeStartupConfig(t, "postgres://fixture-only")
+		drop(&config)
+		_, err := openCodeConsumerStartupWithFactory(context.Background(), config, runtimePoolResource{}, func(context.Context, string, runtimePoolSpec) (runtimePoolResource, error) {
+			t.Fatal("a partial Code consumer composition opened a database pool")
+			return runtimePoolResource{}, nil
+		})
+		if err == nil {
+			t.Fatal("Agent dispatch started without every Code consumer")
+		}
+	}
+}
+
 func TestCodeConsumerStartupDisabledDoesNotReadMaterialOrOpenPools(t *testing.T) {
 	result, err := openCodeConsumerStartupWithFactory(context.Background(), runtimecomposition.Config{}, runtimePoolResource{}, func(context.Context, string, runtimePoolSpec) (runtimePoolResource, error) {
 		t.Fatal("disabled Code consumer opened a database pool")

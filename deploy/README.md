@@ -56,6 +56,11 @@ The base file runs, with no overlay and no flag (PLAN §8.3):
   fails with the typed "dependency preparation is not available" refusal;
 - PostgreSQL with TLS (the supervisors' ledger connection is `verify-full`) and
   server TCP keepalives 20 s / 5 s / 3 probes, the pooler likewise.
+  The Worker's AgentState pool and the supervisors' ledger pools ask the server
+  for the same keepalives with startup options, so their connection material
+  (`agent-checkpoint-connection`, the supervisors' `database-url`) must point
+  directly at PostgreSQL, never at pgbouncer or another pooler (poolers refuse
+  unknown startup parameters).
 
 The material comes from the existing material job:
 `standalone-stack.sh certs` also runs `deploy/scripts/code-material.py certs`

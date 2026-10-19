@@ -67,20 +67,21 @@ class DefaultComposeTests(unittest.TestCase):
 
     def test_main_runs_every_code_consumer_and_grants_every_audience(self):
         env = self.services["elitea-main"]["environment"]
-        for name in ("WORKSPACE", "PLATFORM", "DEBUG_ARTIFACTS"):
-            self.assertEqual(env.get(f"ELITEA_RUNTIME_CODE_{name}_ENABLED"), "true", name)
-        # Owner recovery has no switch (PLAN §8.7): Main refuses the removed variable.
+        # The Code consumers have no switch (PLAN §8.7): Main refuses the removed
+        # variables and requires their settings with Agent dispatch.
         self.assertEqual(env.get("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"), "true")
-        self.assertNotIn("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED", env)
+        for name in ("OWNER_RECOVERY", "WORKSPACE", "PLATFORM", "DEBUG_ARTIFACTS"):
+            self.assertNotIn(f"ELITEA_RUNTIME_CODE_{name}_ENABLED", env, name)
+        for name in ("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG", "ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG",
+                     "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG", "ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE"):
+            self.assertTrue(env.get(name), name)
         self.assertEqual(set(env["ELITEA_RUNTIME_SANDBOX_AUDIENCES"].split(",")), AUDIENCES)
         owner = json.loads(env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"])
         self.assertEqual(owner["main_workload_identity"], "dns:elitea-code-owner-main")
         self.assertEqual({s["audience"] for s in owner["supervisors"]},
                          {"dns:elitea-sandbox-deno", "dns:elitea-sandbox-deno-native", "dns:elitea-sandbox-rust"})
-        material = self.services["runtime-material"]["environment"]
-        for name in ("PLATFORM", "DEBUG_ARTIFACTS"):
-            self.assertEqual(material.get(f"ELITEA_RUNTIME_CODE_{name}_ENABLED"), "true", name)
-        self.assertNotIn("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED", material)
+        material = self.services["runtime-material"].get("environment") or {}
+        self.assertFalse([k for k in material if k.startswith("ELITEA_RUNTIME_CODE_")])
 
     def test_supervisor_serves_seven_profiles_and_the_worker_waits_for_it(self):
         sandbox = self.services["elitea-sandbox"]

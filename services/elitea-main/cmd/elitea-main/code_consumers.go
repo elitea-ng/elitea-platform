@@ -43,11 +43,14 @@ func openCodeConsumerStartup(ctx context.Context, config runtimecomposition.Conf
 }
 
 func openCodeConsumerStartupWithFactory(ctx context.Context, config runtimecomposition.Config, compiledState runtimePoolResource, factory runtimePoolFactory) (result codeConsumerStartup, err error) {
-	if config.CodeWorkspace == nil && config.CodePlatform == nil && config.CodeDebugArtifacts == nil {
+	agents := config.Enabled && config.AgentExecutionDispatchEnabled
+	if !agents && config.CodeWorkspace == nil && config.CodePlatform == nil && config.CodeDebugArtifacts == nil {
 		return result, nil
 	}
-	if ctx == nil || !config.Enabled || !config.AgentExecutionDispatchEnabled || config.CodeOwnerRecovery == nil {
-		return result, errors.New("code consumer startup requires original Code owner composition")
+	// With Agent dispatch the three consumers are always composed (PLAN.md §8.7).
+	if ctx == nil || !agents || config.CodeOwnerRecovery == nil ||
+		config.CodeWorkspace == nil || config.CodePlatform == nil || config.CodeDebugArtifacts == nil {
+		return result, errors.New("code consumer startup requires Agent dispatch with the original Code owner and every Code consumer")
 	}
 	defer func() {
 		if err != nil {

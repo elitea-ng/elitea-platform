@@ -31,10 +31,10 @@ CODE = {"sandboxAudiences": ["dns:elitea-sandbox-deno", "dns:elitea-sandbox-rust
                               "supervisors": [
                                   {"audience": "dns:elitea-sandbox-deno", "httpsOrigin": "https://elitea-sandbox-deno:9446"},
                                   {"audience": "dns:elitea-sandbox-rust", "httpsOrigin": "https://elitea-sandbox-rust:9447"}]},
-        "codeWorkspace": {"enabled": True, "repositoryCapabilities": ["github"],
+        "codeWorkspace": {"repositoryCapabilities": ["github"],
                           "egressAllowlist": ["api.github.com:443"], "policy": POLICY},
-        "codePlatform": {"enabled": True, "brokerPolicies": [BROKER]},
-        "codeDebugArtifacts": {"enabled": True}}
+        "codePlatform": {"brokerPolicies": [BROKER]},
+        "codeDebugArtifacts": {}}
 
 
 def render(extra):
@@ -84,12 +84,11 @@ class PackagingTests(unittest.TestCase):
         result = render({})
         self.assertEqual(result.returncode, 0, result.stderr)
         env = code_environment(result.stdout)
-        # Owner recovery has no enable variable (PLAN §8.7 X1; Main refuses it).
-        self.assertEqual(len(env), 7)
-        self.assertNotIn("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED", env)
-        for name, value in env.items():
-            if name.endswith("_ENABLED"):
-                self.assertEqual(value, "true", name)
+        # No consumer has an enable variable (PLAN §8.7; Main refuses them):
+        # three configurations and the debug DSN.
+        self.assertEqual(sorted(env), sorted([
+            "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG", "ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG",
+            "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG", DEBUG_DSN]))
         owner = json.loads(env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"])
         self.assertEqual(owner, {"main_workload_identity": "dns:elitea-code-owner-main",
                                  "certificate_chain_path": "/run/elitea-runtime/code-owner-client.crt",
@@ -131,6 +130,15 @@ class PackagingTests(unittest.TestCase):
                 self.assertIn("main.runtime.codeOwnerRecovery.enabled was removed: "
                               "Code owner recovery is always on with Agent dispatch", result.stderr)
 
+    def test_consumer_enable_bits_were_removed(self):
+        for key in ("codeWorkspace", "codePlatform", "codeDebugArtifacts"):
+            for value in (True, False):
+                with self.subTest(key=key, value=value):
+                    result = render({"main": {"runtime": {key: {"enabled": value}}}})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"main.runtime.{key}.enabled was removed: "
+                                  "the Code consumers are always on with Agent dispatch", result.stderr)
+
     def test_without_agent_dispatch_code_consumers_stay_off_and_settings_are_refused(self):
         off = {"main": {"runtime": {"agentExecutionDispatch": {"enabled": False, "commandStream": ""},
                                     "indexIngestDispatch": {"enabled": False, "commandStream": ""}}}}
@@ -147,7 +155,7 @@ class PackagingTests(unittest.TestCase):
         result = render({"main": {"runtime": CODE}})
         self.assertEqual(result.returncode, 0, result.stderr)
         env = code_environment(result.stdout)
-        self.assertEqual(len(env), 7)
+        self.assertEqual(len(env), 4)
         owner = json.loads(env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"])
         self.assertEqual(owner, {"main_workload_identity": "dns:elitea-main",
                                 "certificate_chain_path": "/run/elitea-runtime/code-owner-client.crt",
@@ -162,9 +170,7 @@ class PackagingTests(unittest.TestCase):
                          {"revision": 1, "content_keys_file": "/run/elitea-runtime/code-platform-content-keys.json",
                           "broker_policies": [BROKER]})
         self.assertEqual(env[DEBUG_DSN], "/run/elitea-runtime/agent-checkpoint-connection")
-        for name, value in env.items():
-            if name.endswith("_ENABLED"):
-                self.assertEqual(value, "true")
+        self.assertFalse(any(name.endswith("_ENABLED") for name in env), env)
 
     def test_invalid_owner_or_consumer_contract_fails_rendering(self):
         cases = []
@@ -180,7 +186,6 @@ class PackagingTests(unittest.TestCase):
         cases.append({"main": {"runtime": {"sandboxAudiences": ["dns:elitea-sandbox-deno"]}}})
         altered(["codeOwnerRecovery", "supervisors", 0, "httpsOrigin"], "http://elitea-sandbox-deno:9446")
         altered(["codeOwnerRecovery", "supervisors", 0, "audience"], "dns:unselected")
-        altered(["codeWorkspace", "enabled"], False)
         altered(["codeWorkspace", "repositoryCapabilities"], ["github", "github"])
         altered(["codeWorkspace", "egressAllowlist"], ["*.github.com:443"])
         altered(["codeWorkspace", "egressAllowlist"], ["api.github.com:443", "api.github.com:443"])
@@ -193,7 +198,6 @@ class PackagingTests(unittest.TestCase):
         altered(["codeWorkspace", "policy", "max_files"], 0)
         altered(["codeWorkspace", "policy", "revision"], 2)
         altered(["codeWorkspace", "policy", "unexpected"], 1)
-        altered(["codePlatform", "enabled"], False)
         altered(["codePlatform", "brokerPolicies"], [BROKER, BROKER])
         altered(["codePlatform", "brokerPolicies", 0, "max_calls"], 4097)
         altered(["codePlatform", "brokerPolicies", 0, "max_total_bytes"], "1048576")

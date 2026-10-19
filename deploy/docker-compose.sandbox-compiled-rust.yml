@@ -1,4 +1,9 @@
 # Add after standalone-full (which runs the Code sandbox by default).
+# NOT YET ADAPTED to the default stack: the Rust profile's config.json is now
+# rendered by deploy/scripts/code-material.py into a read-only volume on every
+# `standalone-stack.sh up`, so the compiled_snapshot block and the manifest this
+# overlay binds must be added to that rendering first (follow-up of the
+# defaults PR). Until then this overlay is for hand-assembled material only.
 # Run check-compiled-sandbox-material.py before this opt-in overlay.
 services:
   runtime-material:

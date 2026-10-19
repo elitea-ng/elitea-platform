@@ -36,44 +36,44 @@ case "$COMPILED_ENABLED" in
     ;;
   *) exit 1 ;;
 esac
-# Main's original-Code owner recovery has no switch (PLAN §8.3/§8.7): it is on
-# wherever Agent dispatch is, and Main refuses to start without its identity.
-# The removed flag is refused rather than ignored.
-if [ -n "${ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED+set}" ]; then
-  echo "ERROR: ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED was removed: Code owner recovery is always on" >&2
+# Main's Code owner recovery and its Code consumers (workspace, platform, debug
+# artifacts) have no switch (PLAN §8.3/§8.7): they are on wherever Agent
+# dispatch is, and Main refuses to start without their material. The removed
+# flags are refused rather than ignored.
+for removed in ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED ELITEA_RUNTIME_CODE_PLATFORM_ENABLED \
+               ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED; do
+  if eval "[ -n \"\${$removed+set}\" ]"; then
+    echo "ERROR: $removed was removed: the Code consumers are always on with Agent dispatch" >&2
+    exit 1
+  fi
+done
+# present <name> <max-bytes>: true when the material job produced the file; a
+# link, an empty or an oversized file is refused before anything is copied.
+present() {
+  if [ ! -e "$SRC/$1" ] && [ ! -L "$SRC/$1" ]; then
+    return 1
+  fi
+  if [ ! -f "$SRC/$1" ] || [ -L "$SRC/$1" ]; then
+    echo "ERROR: Code material $1 must be a regular file" >&2
+    exit 1
+  fi
+  size=$(wc -c < "$SRC/$1")
+  if [ "$size" -le 0 ] || [ "$size" -gt "$2" ]; then
+    echo "ERROR: Code material $1 is empty or larger than $2 bytes" >&2
+    exit 1
+  fi
+  return 0
+}
+# These files enter Main's volume only. No private broker material enters a runner.
+CODE_OWNER_CERT=false; CODE_OWNER_KEY=false; CODE_PLATFORM_KEYS=false; CODE_DEBUG_DSN=false
+present code-owner-client.crt 1048576 && CODE_OWNER_CERT=true
+present code-owner-client.key 1048576 && CODE_OWNER_KEY=true
+if [ "$CODE_OWNER_CERT" != "$CODE_OWNER_KEY" ]; then
+  echo "ERROR: the Code owner identity needs both code-owner-client.crt and code-owner-client.key" >&2
   exit 1
 fi
-CODE_PLATFORM_ENABLED=${ELITEA_RUNTIME_CODE_PLATFORM_ENABLED:-false}
-CODE_DEBUG_ENABLED=${ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED:-false}
-for flag in "$CODE_PLATFORM_ENABLED" "$CODE_DEBUG_ENABLED"; do
-  case "$flag" in true|false) ;; *) exit 1 ;; esac
-done
-# The owner identity is installed whenever the material job produced it; a
-# half pair (or a link, an empty or an oversized file) is refused.
-CODE_OWNER_PRESENT=false
-if [ -e "$SRC/code-owner-client.crt" ] || [ -e "$SRC/code-owner-client.key" ] \
-   || [ -L "$SRC/code-owner-client.crt" ] || [ -L "$SRC/code-owner-client.key" ]; then
-  for name in code-owner-client.crt code-owner-client.key; do
-    [ -f "$SRC/$name" ] && [ ! -L "$SRC/$name" ] || exit 1
-    size=$(wc -c < "$SRC/$name")
-    [ "$size" -gt 0 ] && [ "$size" -le 1048576 ] || exit 1
-  done
-  CODE_OWNER_PRESENT=true
-fi
-if [ "$CODE_PLATFORM_ENABLED" = true ] || [ "$CODE_DEBUG_ENABLED" = true ]; then
-  [ "$CODE_OWNER_PRESENT" = true ] || exit 1
-fi
-# These files enter Main's volume only. No private broker material enters a runner.
-if [ "$CODE_PLATFORM_ENABLED" = true ]; then
-  [ -f "$SRC/code-platform-content-keys.json" ] && [ ! -L "$SRC/code-platform-content-keys.json" ] || exit 1
-  size=$(wc -c < "$SRC/code-platform-content-keys.json")
-  [ "$size" -gt 0 ] && [ "$size" -le 4096 ] || exit 1
-fi
-if [ "$CODE_DEBUG_ENABLED" = true ]; then
-  [ -f "$SRC/agent-checkpoint-connection" ] && [ ! -L "$SRC/agent-checkpoint-connection" ] || exit 1
-  size=$(wc -c < "$SRC/agent-checkpoint-connection")
-  [ "$size" -gt 0 ] && [ "$size" -le 16384 ] || exit 1
-fi
+present code-platform-content-keys.json 4096 && CODE_PLATFORM_KEYS=true
+present agent-checkpoint-connection 16384 && CODE_DEBUG_DSN=true
 [ -r "$SRC/runtime-ca.crt" ] || {
   echo "ERROR: $SRC/runtime-ca.crt missing — run deploy/scripts/gen-runtime-certs.sh" >&2
   exit 1
@@ -132,14 +132,14 @@ if [ "$COMPILED_ENABLED" = true ]; then
   install_files "$WORKER" 10001:10001 0600 rust-compiled-profiles.json
 fi
 
-if [ "$CODE_OWNER_PRESENT" = true ]; then
+if [ "$CODE_OWNER_CERT" = true ]; then
   install_files "$MAIN" 65532:65532 0644 code-owner-client.crt
   install_files "$MAIN" 65532:65532 0600 code-owner-client.key
 fi
-if [ "$CODE_PLATFORM_ENABLED" = true ]; then
+if [ "$CODE_PLATFORM_KEYS" = true ]; then
   install_files "$MAIN" 65532:65532 0600 code-platform-content-keys.json
 fi
-if [ "$CODE_DEBUG_ENABLED" = true ]; then
+if [ "$CODE_DEBUG_DSN" = true ]; then
   install_files "$MAIN" 65532:65532 0600 agent-checkpoint-connection
 fi
 

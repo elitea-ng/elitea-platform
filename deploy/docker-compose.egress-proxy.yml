@@ -16,6 +16,9 @@
 #      holding the public key.
 #   3. Name the proxy network in the supervisor's workspace profile
 #      ("backend": {"kind": "docker", "proxy_network": "elitea-workspace-proxy", ...}).
+#      The workspace profile is not one of the seven Code profiles
+#      deploy/scripts/code-material.py renders (it rewrites those on every
+#      `standalone-stack.sh up`); add it as its own material and --config.
 #   4. Run `deploy/scripts/standalone-stack.sh certs` (or
 #      deploy/scripts/gen-egress-proxy-certs.sh on its own, after
 #      gen-runtime-certs.sh). It issues the proxy's audit client certificate

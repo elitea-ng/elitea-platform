@@ -1,7 +1,6 @@
 package runtimecomposition
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -11,54 +10,63 @@ import (
 
 func codeConsumerEnvironment(t *testing.T) map[string]string {
 	t.Helper()
-	owner := codeOwnerConfigurationFixture()
-	workspace := CodeWorkspaceConfig{Revision: 1, RepositoryCapabilities: []string{"github"}, EgressAllowlist: []string{"api.github.com:443"}, Policy: storage.DefaultCodeWorkspacePolicy()}
-	platform := CodePlatformDeploymentConfig{Revision: 1, ContentKeysFile: "/run/elitea-runtime/code-platform-content-keys.json", BrokerPolicies: []storage.CodeBrokerPolicy{{Revision: 1, MaxCalls: 32, MaxTotalBytes: 1048576}}}
 	values := oneDirectoryEnvironment()
 	values["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
 	values["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
 	values["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
-	values["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = owner.Supervisors[0].Audience
-	values["ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED"] = "true"
-	values["ELITEA_RUNTIME_CODE_PLATFORM_ENABLED"] = "true"
-	values["ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED"] = "true"
-	values[CodeDebugAgentStateDSNFileEnv] = "/run/elitea-runtime/agent-checkpoint-connection"
-	for name, value := range map[string]any{
-		"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG": owner,
-		"ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG":      workspace,
-		"ELITEA_RUNTIME_CODE_PLATFORM_CONFIG":       platform,
-	} {
-		raw, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		values[name] = string(raw)
-	}
-	return values
+	return withCodeRuntime(values)
 }
 
-func TestCodeConsumersDefaultOffAndRequireExplicitOwner(t *testing.T) {
-	config, err := ConfigFromEnv(mapLookup(nil))
-	if err != nil || config.CodeWorkspace != nil || config.CodePlatform != nil || config.CodeDebugArtifacts != nil {
-		t.Fatal("default changed Code consumer composition", err)
+var codeConsumerSettings = []string{"ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG", "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG", CodeDebugAgentStateDSNFileEnv}
+
+// The Code consumers have no switches (PLAN.md §8.7): with Agent dispatch all
+// three are composed and their settings are required; without it they are refused.
+func TestCodeConsumersHaveNoSwitchesAndAreRequiredWithAgentDispatch(t *testing.T) {
+	config, err := ConfigFromEnv(mapLookup(codeConsumerEnvironment(t)))
+	if err != nil || config.CodeWorkspace == nil || config.CodePlatform == nil || config.CodeDebugArtifacts == nil {
+		t.Fatal("Agent dispatch did not compose every Code consumer", err)
+	}
+	for _, name := range codeConsumerSettings {
+		values := codeConsumerEnvironment(t)
+		delete(values, name)
+		if _, err := ConfigFromEnv(mapLookup(values)); err == nil || !strings.Contains(err.Error(), name+" is required") {
+			t.Fatalf("Agent dispatch without %s: %v", name, err)
+		}
 	}
 	for _, feature := range []string{"WORKSPACE", "PLATFORM", "DEBUG_ARTIFACTS"} {
-		for _, flag := range []string{"true", "yes", "TRUE", " true"} {
-			values := map[string]string{"ELITEA_RUNTIME_CODE_" + feature + "_ENABLED": flag}
-			if _, err := ConfigFromEnv(mapLookup(values)); err == nil {
-				t.Fatal("unowned or malformed enablement was accepted", feature, flag)
+		name := "ELITEA_RUNTIME_CODE_" + feature + "_ENABLED"
+		for _, value := range []string{"true", "false", "", "yes"} {
+			for _, values := range []map[string]string{codeConsumerEnvironment(t), {}} {
+				values[name] = value
+				if _, err := ConfigFromEnv(mapLookup(values)); err == nil || err.Error() != name+" was removed: the Code consumers are always on with Agent dispatch" {
+					t.Fatalf("removed switch %s=%q: %v", name, value, err)
+				}
 			}
 		}
 	}
-	for _, name := range []string{"ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG", "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG", CodeDebugAgentStateDSNFileEnv} {
-		if _, err := ConfigFromEnv(mapLookup(map[string]string{name: "/missing/material"})); err == nil {
-			t.Fatal("disabled consumer settings were accepted", name)
+	// Without Agent dispatch (runtime off or on) the settings are refused.
+	for _, name := range codeConsumerSettings {
+		value := codeConsumerEnvironment(t)[name]
+		if _, err := ConfigFromEnv(mapLookup(map[string]string{name: value})); err == nil {
+			t.Fatal("Code consumer setting accepted with the runtime off", name)
+		}
+		values := oneDirectoryEnvironment()
+		values[name] = value
+		if _, err := ConfigFromEnv(mapLookup(values)); err == nil {
+			t.Fatal("Code consumer setting accepted without Agent dispatch", name)
 		}
 	}
-	values := codeConsumerEnvironment(t)
-	delete(values, "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG")
-	if _, err := ConfigFromEnv(mapLookup(values)); err == nil {
-		t.Fatal("consumers enabled without original owner")
+	// A composed Config with Agent dispatch must carry all three.
+	for _, drop := range []func(*Config){
+		func(c *Config) { c.CodeWorkspace = nil },
+		func(c *Config) { c.CodePlatform = nil },
+		func(c *Config) { c.CodeDebugArtifacts = nil },
+	} {
+		composed := config
+		drop(&composed)
+		if composed.Validate() == nil {
+			t.Fatal("composed Config with Agent dispatch omitted a Code consumer")
+		}
 	}
 }
 

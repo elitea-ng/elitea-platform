@@ -859,38 +859,49 @@ EOF
 # rendered here, after the images exist and before anything starts. The
 # preparation network is the stack's own `code-preparation` network.
 render_code_material() {
+  # The engine CLI that matches the compose binary (docker or podman).
+  local engine="${COMPOSE_BIN%% *}"
   # The runner images as compose resolves them (an image-selection overlay may
   # name other tags). Only the two image names are read from the rendering.
   local images deno_image rust_image
   images="$($COMPOSE_BIN $COMPOSE_F config --format json | python3 -c '
 import json, sys
 services = json.load(sys.stdin)["services"]
-print(services["elitea-code-runner-deno"]["image"], services["elitea-code-runner-rust"]["image"])')"
+print(services["elitea-code-runner-deno"]["image"], services["elitea-code-runner-rust"]["image"])')" \
+    || { echo "ERROR: could not resolve the Code runner images from the compose configuration." >&2; exit 1; }
   deno_image="${images% *}"
   rust_image="${images#* }"
-  if ! docker image inspect "$deno_image" >/dev/null 2>&1 || ! docker image inspect "$rust_image" >/dev/null 2>&1; then
+  if ! "$engine" image inspect "$deno_image" >/dev/null 2>&1 || ! "$engine" image inspect "$rust_image" >/dev/null 2>&1; then
     echo "→ Building the Code runner images (first run)…"
     $COMPOSE_BIN $COMPOSE_F build elitea-code-runner-deno elitea-code-runner-rust
   fi
   local deno_digest rust_digest arch
-  deno_digest="$(docker image inspect --format '{{.Id}}' "$deno_image")"
-  rust_digest="$(docker image inspect --format '{{.Id}}' "$rust_image")"
-  case "$(docker info --format '{{.Architecture}}' 2>/dev/null || uname -m)" in
+  deno_digest="$("$engine" image inspect --format '{{.Id}}' "$deno_image")"
+  rust_digest="$("$engine" image inspect --format '{{.Id}}' "$rust_image")"
+  case "$("$engine" info --format '{{.Architecture}}' 2>/dev/null || uname -m)" in
     aarch64|arm64) arch=arm64 ;;
     *) arch=amd64 ;;
   esac
   # ELITEA_CODE_MATERIAL_DIR (default deploy/certs/code) is where compose reads
-  # it from; a second stack from the same checkout sets its own.
+  # it from; a second stack from the same checkout sets its own. Made absolute
+  # here so the script and compose (which resolves relative to deploy/) agree.
+  ELITEA_CODE_MATERIAL_DIR="${ELITEA_CODE_MATERIAL_DIR:-${REPO_ROOT}/deploy/certs/code}"
+  case "$ELITEA_CODE_MATERIAL_DIR" in
+    /*) ;;
+    *) ELITEA_CODE_MATERIAL_DIR="$(pwd)/${ELITEA_CODE_MATERIAL_DIR}" ;;
+  esac
+  export ELITEA_CODE_MATERIAL_DIR
   python3 "${REPO_ROOT}/deploy/scripts/code-material.py" render \
-    --out "${ELITEA_CODE_MATERIAL_DIR:-${REPO_ROOT}/deploy/certs/code}" \
+    --out "$ELITEA_CODE_MATERIAL_DIR" \
     --deno-digest "$deno_digest" --rust-digest "$rust_digest" --arch "$arch" \
     --network "${PROJECT}_code-preparation" --owner-prefix "$PROJECT"
   # The supervisor drives the engine through its socket as uid 10001, so it
   # joins the socket's group. Inside Docker Desktop's VM that is root (0); on a
-  # Linux host it is the socket's own group.
+  # Linux host it is the configured socket's own group.
   if [ -z "${ELITEA_SANDBOX_DOCKER_GID:-}" ]; then
-    if [ "$(uname -s)" = Linux ] && [ -S /var/run/docker.sock ]; then
-      ELITEA_SANDBOX_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+    local socket="${ELITEA_SANDBOX_DOCKER_SOCKET:-/var/run/docker.sock}"
+    if [ "$(uname -s)" = Linux ] && [ -S "$socket" ]; then
+      ELITEA_SANDBOX_DOCKER_GID="$(stat -c %g "$socket")"
     else
       ELITEA_SANDBOX_DOCKER_GID=0
     fi

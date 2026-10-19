@@ -4,18 +4,30 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 func codeOwnerConfigurationFixture() CodeOwnerConfig {
 	return CodeOwnerConfig{MainWorkloadIdentity: "spiffe://elitea/main", CertificateChainPath: "/run/elitea-runtime/owner-client.crt", PrivateKeyPath: "/run/elitea-runtime/owner-client.key", ServerCAPath: "/run/elitea-runtime/runtime-ca.crt", Supervisors: []CodeOwnerSupervisor{{Audience: "spiffe://elitea/supervisor/one", HTTPSOrigin: "https://supervisor.invalid"}}}
 }
 
-// withCodeOwnerRecovery adds the owner config every Agent-dispatch
-// environment requires, and admits its supervisor audience.
-func withCodeOwnerRecovery(env map[string]string) map[string]string {
+// withCodeRuntime adds what every Agent-dispatch environment requires: the
+// owner config (admitting its supervisor audience) and the three Code
+// consumer settings.
+func withCodeRuntime(env map[string]string) map[string]string {
 	owner := codeOwnerConfigurationFixture()
-	raw, _ := json.Marshal(owner)
-	env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"] = string(raw)
+	workspace := CodeWorkspaceConfig{Revision: 1, RepositoryCapabilities: []string{"github"}, EgressAllowlist: []string{"api.github.com:443"}, Policy: storage.DefaultCodeWorkspacePolicy()}
+	platform := CodePlatformDeploymentConfig{Revision: 1, ContentKeysFile: "/run/elitea-runtime/code-platform-content-keys.json", BrokerPolicies: []storage.CodeBrokerPolicy{{Revision: 1, MaxCalls: 32, MaxTotalBytes: 1048576}}}
+	for name, value := range map[string]any{
+		"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG": owner,
+		"ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG":      workspace,
+		"ELITEA_RUNTIME_CODE_PLATFORM_CONFIG":       platform,
+	} {
+		raw, _ := json.Marshal(value)
+		env[name] = string(raw)
+	}
+	env[CodeDebugAgentStateDSNFileEnv] = "/run/elitea-runtime/agent-checkpoint-connection"
 	audience := owner.Supervisors[0].Audience
 	if current := env["ELITEA_RUNTIME_SANDBOX_AUDIENCES"]; current == "" {
 		env["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = audience
@@ -128,7 +140,7 @@ func TestCodeOwnerConfigurationRejectsForeignAndNonFixedOriginWithoutReadingKeys
 
 // The same rule at the process boundary (ConfigFromEnv) and on a composed Config.
 func TestConfigComposesCodeOwnerRecoveryExactlyWithAgentDispatch(t *testing.T) {
-	agents := withCodeOwnerRecovery(agentDispatchEnvironment())
+	agents := withCodeRuntime(agentDispatchEnvironment())
 	agents["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
 	config, err := ConfigFromEnv(mapLookup(agents))
 	if err != nil || config.CodeOwnerRecovery == nil {
@@ -156,7 +168,7 @@ func TestConfigComposesCodeOwnerRecoveryExactlyWithAgentDispatch(t *testing.T) {
 	}
 	delete(agents, "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED")
 
-	noAgents := withCodeOwnerRecovery(validEnvironment())
+	noAgents := withCodeRuntime(validEnvironment())
 	if _, err := ConfigFromEnv(mapLookup(noAgents)); err == nil {
 		t.Fatal("owner config accepted without Agent dispatch")
 	}

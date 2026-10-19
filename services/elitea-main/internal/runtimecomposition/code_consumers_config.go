@@ -38,61 +38,52 @@ type CodeDebugArtifactsConfig struct {
 	AgentStateDSNFile string
 }
 
-func codeConsumerFlag(lookup LookupEnv, feature, materialName string) (bool, error) {
-	flag, _ := lookup("ELITEA_RUNTIME_CODE_" + feature + "_ENABLED")
-	if flag == "" || flag == "false" {
-		if raw, _ := lookup(materialName); raw != "" {
-			return false, errors.New("code consumer settings require explicit enablement")
-		}
-		return false, nil
-	}
-	if flag != "true" {
-		return false, errors.New("code consumer enablement must be true or false")
-	}
-	return true, nil
+// removedCodeConsumerSwitches refuses a process environment that still carries
+// a former Code consumer switch (PLAN.md §8.7): the consumers are not settings.
+var removedCodeConsumerSwitches = [...]string{
+	"ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED",
+	"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED",
+	"ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED",
 }
 
+// codeConsumerConfigFromEnv composes all three Code consumers whenever the
+// original Code owner is composed (runtime + native Agent dispatch); their
+// settings are then required. Without an owner, any setting is refused.
 func codeConsumerConfigFromEnv(lookup LookupEnv, owner *CodeOwnerConfig) (*CodeWorkspaceConfig, *CodePlatformDeploymentConfig, *CodeDebugArtifactsConfig, error) {
-	workspaceEnabled, err := codeConsumerFlag(lookup, "WORKSPACE", "ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	platformEnabled, err := codeConsumerFlag(lookup, "PLATFORM", "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	debugEnabled, err := codeConsumerFlag(lookup, "DEBUG_ARTIFACTS", CodeDebugAgentStateDSNFileEnv)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if (workspaceEnabled || platformEnabled || debugEnabled) && owner == nil {
-		return nil, nil, nil, errors.New("code consumers require original Code owner composition")
-	}
-	var workspace *CodeWorkspaceConfig
-	var platform *CodePlatformDeploymentConfig
-	var debug *CodeDebugArtifactsConfig
-	if workspaceEnabled {
-		raw, _ := lookup("ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG")
-		workspace = new(CodeWorkspaceConfig)
-		if code.Decode([]byte(raw), workspace, codeConsumerConfigLimit) != nil ||
-			!codeWorkspaceConfigFields([]byte(raw)) || workspace.Validate() != nil {
-			return nil, nil, nil, errors.New("code workspace operator configuration is invalid")
+	for _, name := range removedCodeConsumerSwitches {
+		if _, set := lookup(name); set {
+			return nil, nil, nil, errors.New(name + " was removed: the Code consumers are always on with Agent dispatch")
 		}
 	}
-	if platformEnabled {
-		raw, _ := lookup("ELITEA_RUNTIME_CODE_PLATFORM_CONFIG")
-		platform = new(CodePlatformDeploymentConfig)
-		if code.Decode([]byte(raw), platform, codeConsumerConfigLimit) != nil ||
-			!codePlatformConfigFields([]byte(raw)) || platform.Validate() != nil {
-			return nil, nil, nil, errors.New("code platform operator configuration is invalid")
+	settings := [...]string{"ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG", "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG", CodeDebugAgentStateDSNFileEnv}
+	var values [len(settings)]string
+	for index, name := range settings {
+		values[index], _ = lookup(name)
+		if owner == nil && values[index] != "" {
+			return nil, nil, nil, errors.New("code consumer settings require native Agent dispatch")
 		}
 	}
-	if debugEnabled {
-		path, _ := lookup(CodeDebugAgentStateDSNFileEnv)
-		debug = &CodeDebugArtifactsConfig{AgentStateDSNFile: path}
-		if debug.Validate() != nil {
-			return nil, nil, nil, errors.New("code debug AgentState material path is invalid")
+	if owner == nil {
+		return nil, nil, nil, nil
+	}
+	for index, name := range settings {
+		if values[index] == "" {
+			return nil, nil, nil, errors.New(name + " is required: the Code consumers are always on with Agent dispatch")
 		}
+	}
+	workspace := new(CodeWorkspaceConfig)
+	if raw := []byte(values[0]); code.Decode(raw, workspace, codeConsumerConfigLimit) != nil ||
+		!codeWorkspaceConfigFields(raw) || workspace.Validate() != nil {
+		return nil, nil, nil, errors.New("code workspace operator configuration is invalid")
+	}
+	platform := new(CodePlatformDeploymentConfig)
+	if raw := []byte(values[1]); code.Decode(raw, platform, codeConsumerConfigLimit) != nil ||
+		!codePlatformConfigFields(raw) || platform.Validate() != nil {
+		return nil, nil, nil, errors.New("code platform operator configuration is invalid")
+	}
+	debug := &CodeDebugArtifactsConfig{AgentStateDSNFile: values[2]}
+	if debug.Validate() != nil {
+		return nil, nil, nil, errors.New("code debug AgentState material path is invalid")
 	}
 	return workspace, platform, debug, nil
 }

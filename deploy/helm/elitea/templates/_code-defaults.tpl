@@ -47,11 +47,10 @@
 {{- end -}}
 
 {{/*
-  Main's effective Code consumers. Original-Code owner recovery is always on
-  with the agent runtime (PLAN §8.7 X1: it has no enable bit); the workspace,
-  platform and debug consumers are on when the agent runtime is on and their
-  own `enabled` (default true) is not false. An empty setting takes the
-  canonical value. Explicit settings without the agent runtime are refused:
+  Main's effective Code consumers. Original-Code owner recovery, the Code
+  workspace, the Code platform broker and Code debug artifacts are always on
+  with the agent runtime (PLAN §8.7: no gates, none has an enable bit). An
+  empty setting takes the canonical value. Explicit settings without the agent runtime are refused:
   they would configure nothing.
 */}}
 {{- define "elitea.code.settings" -}}
@@ -71,17 +70,17 @@
 {{- $_ := set $o "mainWorkloadIdentity" ($owner.mainWorkloadIdentity | default $canonical.identity) -}}
 {{- $_ := set $o "supervisors" (ternary $owner.supervisors $canonical.supervisors (not (empty $owner.supervisors))) -}}
 {{- end -}}
-{{- $w := dict "enabled" (and (eq (toString $on) "true") (ne (toString $workspace.enabled) "false")) -}}
+{{- $w := dict "enabled" (eq (toString $on) "true") -}}
 {{- if $w.enabled -}}
 {{- $_ := set $w "repositoryCapabilities" (ternary $workspace.repositoryCapabilities $canonical.repositoryCapabilities (not (empty $workspace.repositoryCapabilities))) -}}
 {{- $_ := set $w "egressAllowlist" (ternary $workspace.egressAllowlist $canonical.egressAllowlist (not (empty $workspace.egressAllowlist))) -}}
 {{- $_ := set $w "policy" (ternary $workspace.policy $canonical.policy (not (empty $workspace.policy))) -}}
 {{- end -}}
-{{- $p := dict "enabled" (and (eq (toString $on) "true") (ne (toString $platform.enabled) "false")) -}}
+{{- $p := dict "enabled" (eq (toString $on) "true") -}}
 {{- if $p.enabled -}}
 {{- $_ := set $p "brokerPolicies" (ternary $platform.brokerPolicies $canonical.brokerPolicies (not (empty $platform.brokerPolicies))) -}}
 {{- end -}}
-{{- $d := dict "enabled" (and (eq (toString $on) "true") (ne (toString $debug.enabled) "false")) -}}
+{{- $d := dict "enabled" (eq (toString $on) "true") -}}
 {{- $audiences := $runtime.sandboxAudiences | default list -}}
 {{- if and (empty $audiences) (or $o.enabled $w.enabled $p.enabled $d.enabled) -}}
 {{- $audiences = $canonical.audiences -}}
@@ -249,7 +248,7 @@
 {{- $audience := printf "dns:%s" (toString $e.serviceName) -}}
 {{- $digest := last (splitList "@" (include "elitea.sandbox.runnerImage" (dict "ctx" $ "runner" (toString $e.runner)))) -}}
 {{- $entry := dict "language" $language "target" $target "audience" $audience "image_digest" $digest "policy_revision" (toString $e.policyRevision) "timeout_seconds" (int64 $e.timeoutSeconds) -}}
-{{- if and (index $row 3) $e.codePlatformProfile $platform.enabled -}}
+{{- if and (index $row 3) $e.codePlatformProfile -}}
 {{- $policy := first $platform.brokerPolicies -}}
 {{- $_ := set $entry "platform_client" (dict "target" $target "audience" $audience "image_digest" $digest "policy_revision" (toString $e.policyRevision) "timeout_seconds" (int64 $e.timeoutSeconds) "max_calls" (int64 $policy.max_calls) "max_total_bytes" (int64 $policy.max_total_bytes)) -}}
 {{- end -}}
@@ -270,12 +269,18 @@
 {{/*
   Recovery is not a setting. The worker refuses agent_node_recovery and
   agent_model_checkpoint_recovery in runtime.json, and elitea-main refuses
-  ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED; the values that wrote them are
+  the ELITEA_RUNTIME_CODE_*_ENABLED variables; the values that wrote them are
   gone, and a values file that still names one is told so.
 */}}
 {{- define "elitea.removedRecoverySettings" -}}
-{{- if hasKey ((.Values.main.runtime | default dict).codeOwnerRecovery | default dict) "enabled" -}}
+{{- $mainRuntime := .Values.main.runtime | default dict -}}
+{{- if hasKey ($mainRuntime.codeOwnerRecovery | default dict) "enabled" -}}
 {{- fail "main.runtime.codeOwnerRecovery.enabled was removed: Code owner recovery is always on with Agent dispatch. Delete the value from your values file; mainWorkloadIdentity, supervisors and sandboxAudiences stay configurable." -}}
+{{- end -}}
+{{- range $key := list "codeWorkspace" "codePlatform" "codeDebugArtifacts" -}}
+{{- if hasKey (get $mainRuntime $key | default dict) "enabled" -}}
+{{- fail (printf "main.runtime.%s.enabled was removed: the Code consumers are always on with Agent dispatch. Delete the value from your values file; their other settings stay configurable." $key) -}}
+{{- end -}}
 {{- end -}}
 {{- $r := (.Values.worker | default dict).runtime | default dict -}}
 {{- if hasKey $r "agentNodeRecovery" -}}
@@ -284,4 +289,9 @@
 {{- if hasKey $r "agentModelCheckpointRecovery" -}}
 {{- fail "worker.runtime.agentModelCheckpointRecovery was removed: model-checkpoint recovery is always on. Delete the value from your values file." -}}
 {{- end -}}
+{{- end -}}
+
+{{/* The rendered supervisor profiles' ConfigMap, release-prefixed. */}}
+{{- define "elitea-sandbox.profilesConfigMap" -}}
+{{- printf "%s-sandbox-profiles" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}

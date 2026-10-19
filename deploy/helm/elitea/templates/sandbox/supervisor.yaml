@@ -3,7 +3,7 @@
 {{- /*
   The Code sandbox supervisor (PLAN §8.3: on wherever the agent runtime runs).
   Profiles with `name` are rendered by the chart into the
-  elitea-sandbox-profiles ConfigMap; profiles with `file` read a flat
+  <release>-sandbox-profiles ConfigMap; profiles with `file` read a flat
   configuration from the material Secret. Both sources are projections, which
   the supervisor's --prepare-material copies into owner-private regular files
   (services/elitea-worker-rust/src/sandbox/material.rs) before any listener
@@ -52,7 +52,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: elitea-sandbox-profiles
+  name: {{ include "elitea-sandbox.profilesConfigMap" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "elitea-sandbox-supervisor.selectorLabels" . | nindent 4 }}
@@ -208,7 +208,7 @@ spec:
         {{- if $configs }}
         - name: projected-profiles
           configMap:
-            name: elitea-sandbox-profiles
+            name: {{ include "elitea-sandbox.profilesConfigMap" . }}
             defaultMode: 0444
         - name: private-profiles
           emptyDir:

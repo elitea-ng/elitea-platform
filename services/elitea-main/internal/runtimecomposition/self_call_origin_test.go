@@ -21,7 +21,7 @@ import (
 func agentDispatchEnvironment() map[string]string {
 	environment := validEnvironment()
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	withCodeOwnerRecovery(environment)
+	withCodeRuntime(environment)
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	return environment
 }

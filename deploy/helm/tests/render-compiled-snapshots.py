@@ -312,11 +312,15 @@ class Helm(unittest.TestCase):
         v['postgresql'] = dict(maxConnections=100, reservedConnections=25)
         v['main']['autoscaling'] = dict(enabled=True, maxReplicas=8)
         del v['main']['runtime']['rustCompiledSnapshots']
-        # Debug receipts share the compiled pool and are on by default; off,
-        # no receipt pool remains.
-        v['main']['runtime']['codeDebugArtifacts'] = dict(enabled=False)
         del v['worker']['runtime']['sandboxRuntimes'][1]['compiled_snapshot']
         v['sandboxKubernetes']['supervisor']['profiles'][1] = dict(file='rust.json', port=9447)
+        # Without compiled snapshots the receipt pool stays: Code debug
+        # artifacts are always on with Agent dispatch (PLAN §8.7) and use it,
+        # so the same 52 + 32 server connections are counted.
+        result = self.render(v)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('52 PgBouncer plus 32 independent Code receipt connections across 8 Main replicas', result.stderr)
+        v['postgresql']['maxConnections'] = 109
         result = self.render(v)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -471,7 +475,10 @@ class Installer(unittest.TestCase):
     def test_default_off_copies_no_new_main_authority(self):
         root, result = self.run_installer(None, None)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse((root / 'dst/main/agent-checkpoint-connection').exists())
+        # Code debug artifacts are always on with Agent dispatch (PLAN §8.7),
+        # so Main always gets its private receipt DSN when the material has it;
+        # compiled snapshots stay opt-in and copy nothing.
+        self.assertEqual((root / 'dst/main/agent-checkpoint-connection').stat().st_mode & 0o777, 0o600)
         self.assertFalse((root / 'dst/main/rust-compiled-profiles.json').exists())
         self.assertFalse((root / 'dst/worker/rust-compiled-profiles.json').exists())
 

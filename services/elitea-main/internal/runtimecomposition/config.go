@@ -429,6 +429,9 @@ func (c Config) Validate() error {
 	if c.Enabled && c.AgentExecutionDispatchEnabled && c.CodeOwnerRecovery == nil {
 		return errors.New("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG is required: Code owner recovery is always on with Agent dispatch")
 	}
+	if c.Enabled && c.AgentExecutionDispatchEnabled && (c.CodeWorkspace == nil || c.CodePlatform == nil || c.CodeDebugArtifacts == nil) {
+		return errors.New("the Code consumers (workspace, platform, debug artifacts) are always on with Agent dispatch")
+	}
 	if err := validateCodeOwnerConfig(c.CodeOwnerRecovery, c.Enabled, c.AgentExecutionDispatchEnabled, c.SandboxAudiences); err != nil {
 		return err
 	}

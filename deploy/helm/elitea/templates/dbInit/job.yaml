@@ -1,5 +1,13 @@
 {{- if .Values.dbInit.enabled }}
 {{- $d := .Values.dbInit }}
+{{- /* Both names are spliced into SQL below (identifiers and a literal), so
+  each is a plain lowercase PostgreSQL identifier or the render fails. */}}
+{{- if not (regexMatch "^[a-z_][a-z0-9_]{0,62}$" (toString $d.agentStateDatabase)) }}
+{{- fail (printf "dbInit.agentStateDatabase %q must be a plain PostgreSQL identifier: ^[a-z_][a-z0-9_]{0,62}$" (toString $d.agentStateDatabase)) }}
+{{- end }}
+{{- if and $d.appRole (not (regexMatch "^[a-z_][a-z0-9_]{0,62}$" (toString $d.appRole))) }}
+{{- fail (printf "dbInit.appRole %q must be empty or a plain PostgreSQL identifier: ^[a-z_][a-z0-9_]{0,62}$" (toString $d.appRole)) }}
+{{- end }}
 # The two things elitea-migrate cannot do for itself, because both need rights
 # the migrating role does not have.
 #

@@ -183,9 +183,12 @@ services:
     image: pgvector/pgvector:0.8.1-pg18-trixie
     shm_size: '2g'
     # Raise the server-side budget for the enlarged #965 pooler pool
-    # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128). The image
-    # default of 100 would cap the pooler's server connections and re-introduce
-    # the queue the pooler change removes.
+    # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128, at most 132
+    # server connections). The image default of 100 would cap the pooler's
+    # server connections and re-introduce the queue the pooler change removes.
+    # 250, not 200, since the Code sandbox is on by default: its seven ledger
+    # pools hold up to 3×4 + 4×2 = 20 direct connections, Main's Code debug
+    # receipts 4 more, beside the worker, migrations, gateway and providers.
     #
     # TLS: the Code sandbox supervisors reach the agentstate ledger with
     # sslmode=verify-full (DNS:postgres, signed by the runtime CA; pgtls-init
@@ -199,7 +202,7 @@ services:
     command:
       - postgres
       - -c
-      - max_connections=200
+      - max_connections=250
       - -c
       - ssl=on
       - -c
@@ -340,13 +343,11 @@ services:
   runtime-material:
     image: docker.io/library/debian:trixie-slim
     entrypoint: ["/bin/sh", "/opt/install-material.sh"]
-    # The Code consumers are on by default (PLAN §8.3): Main's original-Code
+    # The Code consumers have no switch (PLAN §8.3/§8.7): Main's original-Code
     # owner identity, the platform content key and the agentstate DSN for debug
-    # artifacts are installed into Main's volume. deploy/scripts/code-material.py
-    # (run by `standalone-stack.sh certs`) writes them into deploy/certs/runtime.
-    environment:
-      ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
-      ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
+    # artifacts are installed into Main's volume whenever present.
+    # deploy/scripts/code-material.py (run by `standalone-stack.sh certs`)
+    # writes them into deploy/certs/runtime.
     volumes:
       - ./runtime/install-material.sh:/opt/install-material.sh:ro
       - ./certs/runtime:/src:ro
@@ -1270,17 +1271,15 @@ services:
       # preparation; deploy/scripts/code-material.py holds the table). Main signs
       # job grants only for these audiences.
       ELITEA_RUNTIME_SANDBOX_AUDIENCES: "dns:elitea-sandbox-deno,dns:elitea-sandbox-rust,dns:elitea-sandbox-deno-native,dns:elitea-sandbox-preparation,dns:elitea-sandbox-javascript-preparation,dns:elitea-sandbox-typescript-preparation,dns:elitea-sandbox-rust-preparation"
-      # The Code consumers, on by default (PLAN §8.3). The Worker runs every Code
-      # node under the node-recovery journal, as an original-Code visit Main
-      # admits only with owner recovery, for each execution audience. Material
-      # paths are the ones runtime-material installs. Owner recovery has no
-      # switch: Main runs it whenever Agent dispatch is on.
+      # The Code consumers (owner recovery, workspace, platform, debug artifacts)
+      # have no switch: Main runs them whenever Agent dispatch is on and refuses
+      # to start without these settings (PLAN §8.3/§8.7). The Worker runs every
+      # Code node under the node-recovery journal, as an original-Code visit
+      # Main admits only with owner recovery, for each execution audience.
+      # Material paths are the ones runtime-material installs.
       ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: '{"certificate_chain_path":"/run/elitea-runtime/code-owner-client.crt","main_workload_identity":"dns:elitea-code-owner-main","private_key_path":"/run/elitea-runtime/code-owner-client.key","server_ca_path":"/run/elitea-runtime/runtime-ca.crt","supervisors":[{"audience":"dns:elitea-sandbox-deno","https_origin":"https://elitea-sandbox-deno:9446"},{"audience":"dns:elitea-sandbox-deno-native","https_origin":"https://elitea-sandbox-deno-native:9450"},{"audience":"dns:elitea-sandbox-rust","https_origin":"https://elitea-sandbox-rust:9447"}]}'
-      ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED: "true"
       ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG: '{"egress_allowlist":["api.github.com:443"],"policy":{"max_acquisition_seconds":300,"max_depth":16,"max_file_bytes":1048576,"max_files":1024,"max_manifest_bytes":524288,"max_path_bytes":255,"max_projections":64,"max_total_bytes":16777216,"revision":1},"repository_capabilities":["github"],"revision":1}'
-      ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
       ELITEA_RUNTIME_CODE_PLATFORM_CONFIG: '{"broker_policies":[{"max_calls":32,"max_total_bytes":1048576,"revision":1}],"content_keys_file":"/run/elitea-runtime/code-platform-content-keys.json","revision":1}'
-      ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
       ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE: /run/elitea-runtime/agent-checkpoint-connection
       ELITEA_RUNTIME_SIGNING_KEY_ID: "standalone-runtime-v1"
       ELITEA_RUNTIME_SIGNING_KEY_FILE: /run/elitea-runtime/command-signing-key.pem
@@ -1960,7 +1959,12 @@ services:
       ELITEA_RUST_TRACE: "info"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     volumes:
-      - ${ELITEA_CODE_MATERIAL_DIR:-./certs/code}/worker-runtime.json:/run/elitea/runtime.json:ro
+      - type: bind
+        source: ${ELITEA_CODE_MATERIAL_DIR:-./certs/code}/worker-runtime.json
+        target: /run/elitea/runtime.json
+        read_only: true
+        bind:
+          create_host_path: false
       - ./runtime/worker-toolkit-security.json:/run/elitea/toolkit-security.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
       - standalone_worker_trust:/run/elitea-worker-trust:ro
@@ -2311,7 +2315,7 @@ services:
   # creates it with the stack (the preparation profiles name it); it reaches
   # nothing.
   sandbox-material:
-    image: docker.io/library/debian:trixie-slim
+    image: docker.io/library/debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -2337,7 +2341,7 @@ services:
 
   # PostgreSQL's TLS pair (DNS:postgres), owned by the postgres uid.
   pgtls-init:
-    image: docker.io/library/debian:trixie-slim
+    image: docker.io/library/debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -2421,4 +2425,7 @@ networks:
   # supervisor's preparation containers join it; the worker, Main and the
   # offline execution containers never do. Docker cannot limit egress to host
   # names, so the preparer's own --allow-net list is the destination limit.
-  code-preparation: {}
+  code-preparation:
+    # Preparers reach their registries, not each other.
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"

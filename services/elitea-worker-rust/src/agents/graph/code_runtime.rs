@@ -36,8 +36,10 @@ pub(crate) enum CodePreparationFailure {
     Cancelled,
     Unconfirmed,
     /// The node declares dependencies, but this deployment has no
-    /// preparation runtime for its language (FU-229). Decided before any
-    /// journal record, Main admission or sandbox dispatch.
+    /// preparation runtime for its language (FU-229). Decided at the start of
+    /// the preparation phase: after Main's original-visit admission and a
+    /// selected debug export, before any dispatch-journal row, signed intent,
+    /// preparation or sandbox dispatch.
     Unavailable,
 }
 

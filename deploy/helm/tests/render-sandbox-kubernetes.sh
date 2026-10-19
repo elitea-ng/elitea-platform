@@ -368,7 +368,7 @@ python3 - "$work/off.yaml" <<'PYTEST'
 import sys, yaml
 docs = list(filter(None, yaml.safe_load_all(open(sys.argv[1]))))
 names = [d['metadata']['name'] for d in docs]
-for absent in ['elitea-sandbox-supervisor', 'elitea-sandbox-profiles', 'elitea-code-deny-network',
+for absent in ['elitea-sandbox-supervisor', 'sandbox-sandbox-profiles', 'elitea-code-deny-network',
                'elitea-python-preparation-network', 'elitea-sandbox-image-warmup']:
     assert absent not in names, absent
 PYTEST

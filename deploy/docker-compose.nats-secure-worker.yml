@@ -13,5 +13,8 @@
 services:
   elitea-worker:
     volumes:
-      - ./runtime/worker-runtime.nats-secure.json:/run/elitea/runtime.json:ro
+      # The default runtime (Code sandbox and preparation included) over the
+      # secured bus, rendered by deploy/scripts/code-material.py beside
+      # worker-runtime.json.
+      - ${ELITEA_CODE_MATERIAL_DIR:-./certs/code}/worker-runtime.nats-secure.json:/run/elitea/runtime.json:ro
       - ./certs/nats/clients/elitea-worker:/etc/nats-client:ro

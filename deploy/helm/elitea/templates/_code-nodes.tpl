@@ -18,28 +18,17 @@
 {{- $runtime := .Values.main.runtime | default dict -}}
 {{- $raw := dict "codeOwnerRecovery" ($runtime.codeOwnerRecovery | default dict) "codeWorkspace" ($runtime.codeWorkspace | default dict) "codePlatform" ($runtime.codePlatform | default dict) "codeDebugArtifacts" ($runtime.codeDebugArtifacts | default dict) -}}
 {{- include "elitea.removedRecoverySettings" . -}}
-{{- $fields := dict "codeOwnerRecovery" (list "mainWorkloadIdentity" "supervisors") "codeWorkspace" (list "enabled" "repositoryCapabilities" "egressAllowlist" "policy") "codePlatform" (list "enabled" "brokerPolicies") "codeDebugArtifacts" (list "enabled") -}}
+{{- $fields := dict "codeOwnerRecovery" (list "mainWorkloadIdentity" "supervisors") "codeWorkspace" (list "repositoryCapabilities" "egressAllowlist" "policy") "codePlatform" (list "brokerPolicies") "codeDebugArtifacts" (list) -}}
 {{- range $name, $settings := $raw -}}
 {{- if not (kindIs "map" $settings) -}}{{- fail (printf "Code settings %s require an object" $name) -}}{{- end -}}
 {{- range $field, $_ := $settings -}}
 {{- if not (has $field (get $fields $name)) -}}{{- fail (printf "Code settings %s contain an unknown field" $name) -}}{{- end -}}
-{{- end -}}
-{{- if and (hasKey $settings "enabled") (not (kindIs "bool" $settings.enabled)) -}}
-{{- fail (printf "main.runtime.%s.enabled must be boolean" $name) -}}
 {{- end -}}
 {{- end -}}
 {{- range $name, $_ := .Values.main.env -}}
 {{- if or (hasPrefix "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_" $name) (hasPrefix "ELITEA_RUNTIME_CODE_WORKSPACE_" $name) (hasPrefix "ELITEA_RUNTIME_CODE_PLATFORM_" $name) (eq $name "ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED") (eq $name "ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE") -}}
 {{- fail "Code consumer environment must derive from typed chart settings" -}}
 {{- end -}}
-{{- end -}}
-{{- $rawWorkspace := get $raw "codeWorkspace" -}}
-{{- $rawPlatform := get $raw "codePlatform" -}}
-{{- if and (eq (toString $rawWorkspace.enabled) "false") (or $rawWorkspace.repositoryCapabilities $rawWorkspace.egressAllowlist $rawWorkspace.policy) -}}
-{{- fail "Code workspace settings require codeWorkspace.enabled=true" -}}
-{{- end -}}
-{{- if and (eq (toString $rawPlatform.enabled) "false") $rawPlatform.brokerPolicies -}}
-{{- fail "Code broker policies require codePlatform.enabled=true" -}}
 {{- end -}}
 {{- /* From here on, the effective settings: canonical where empty. */ -}}
 {{- $code := include "elitea.code.settings" . | fromJson -}}
@@ -163,16 +152,13 @@ ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: {{ dict "main_workload_identity" $own
 {{- end -}}
 {{- $workspace := $code.workspace -}}
 {{- if $workspace.enabled }}
-ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED: "true"
 ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG: {{ dict "revision" 1 "repository_capabilities" $workspace.repositoryCapabilities "egress_allowlist" $workspace.egressAllowlist "policy" $workspace.policy | toJson | quote }}
 {{- end -}}
 {{- $platform := $code.platform -}}
 {{- if $platform.enabled }}
-ELITEA_RUNTIME_CODE_PLATFORM_ENABLED: "true"
 ELITEA_RUNTIME_CODE_PLATFORM_CONFIG: {{ dict "revision" 1 "content_keys_file" (printf "%s/code-platform-content-keys.json" $dir) "broker_policies" $platform.brokerPolicies | toJson | quote }}
 {{- end -}}
 {{- if $code.debug.enabled }}
-ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED: "true"
 ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE: {{ printf "%s/agent-checkpoint-connection" $dir | quote }}
 {{- end -}}
 {{- end -}}

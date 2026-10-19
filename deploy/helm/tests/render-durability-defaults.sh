@@ -17,7 +17,8 @@
 #     execution supervisors), the
 #     Code platform broker, Code debug artifacts and the Code workspace, and
 #     the seven sandbox audiences;
-#   * the Kubernetes supervisor with its seven chart-rendered profiles, the
+#   * the Kubernetes supervisor with its seven chart-rendered profiles (in the
+#     release-prefixed <release>-sandbox-profiles ConfigMap), the
 #     execution and preparation namespace boundaries, and the runner warmup;
 #   * FU-221 keepalives: pgbouncer (rendered on) and dbInit's role defaults.
 #
@@ -169,14 +170,15 @@ assert runtime["sandbox_runtimes"] == want, json.dumps(runtime["sandbox_runtimes
 echo "== Main: the Code consumers and the seven audiences =="
 assert full '
 env = main_env()
-for name in ("PLATFORM", "DEBUG_ARTIFACTS", "WORKSPACE"):
-    assert env.get(f"ELITEA_RUNTIME_CODE_{name}_ENABLED") == "true", name
-# Owner recovery has no enable bit (PLAN §8.7 X1): Main refuses the variable,
-# and its configuration is what turns it on.
-assert "ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED" not in env
-assert env.get("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG")
-' && ok "Main: PLATFORM/DEBUG_ARTIFACTS/WORKSPACE_ENABLED true, owner recovery configured with no enable variable" \
-  || bad "a Main Code consumer is off by default, or the removed owner enable variable is rendered"
+# No Code consumer has an enable bit (PLAN §8.7): Main refuses the variables,
+# and each configuration is what turns its consumer on.
+for name in ("OWNER_RECOVERY", "PLATFORM", "DEBUG_ARTIFACTS", "WORKSPACE"):
+    assert f"ELITEA_RUNTIME_CODE_{name}_ENABLED" not in env, name
+for name in ("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG", "ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG",
+             "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG", "ELITEA_CODE_DEBUG_AGENTSTATE_DSN_FILE"):
+    assert env.get(name), name
+' && ok "Main: owner recovery, workspace, platform and debug are configured, with no enable variable" \
+  || bad "a Main Code consumer is not configured by default, or a removed enable variable is rendered"
 assert full '
 env = main_env()
 owner = json.loads(env["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"])
@@ -217,12 +219,12 @@ assert [c["name"] for c in spec["initContainers"]] == ["prepare-material", "prep
 assert spec["initContainers"][1]["args"] == ["--prepare-material", "/run/projected-profiles", "/run/elitea-sandbox-profiles"]
 volumes = {v["name"]: v for v in spec["volumes"]}
 assert volumes["projected-material"]["secret"]["secretName"] == "elitea-sandbox-material"
-assert volumes["projected-profiles"]["configMap"]["name"] == "elitea-sandbox-profiles"
+assert volumes["projected-profiles"]["configMap"]["name"] == "t-sandbox-profiles"  # release-prefixed
 assert spec["containers"][0]["image"] == "registry.example/elitea-sandbox-supervisor@sha256:" + "3" * 64
 ' && ok "the supervisor Deployment starts seven profiles from the rendered ConfigMap, material from elitea-sandbox-material" \
   || bad "the supervisor Deployment is not the seven-profile default"
 assert full '
-configs = {k[:-5]: json.loads(v) for k, v in by("ConfigMap", "elitea-sandbox-profiles")["data"].items()}
+configs = {k[:-5]: json.loads(v) for k, v in by("ConfigMap", "t-sandbox-profiles")["data"].items()}
 MIB = 1048576
 table = {  # name: port, service, purpose, languages, policy, runner digest, timeout, memory MiB, native MiB
     "deno": (9446, "elitea-sandbox-deno", "execution", ["python"], "deno-v1", "1", 60, 512, None),
@@ -347,6 +349,23 @@ refuses 'worker.runtime.agentModelCheckpointRecovery was removed: model-checkpoi
 refuses 'main.runtime.codeOwnerRecovery.enabled was removed: Code owner recovery is always on with Agent dispatch' --set main.runtime.codeOwnerRecovery.enabled=true \
   && ok "main.runtime.codeOwnerRecovery.enabled: refused as removed" \
   || bad "main.runtime.codeOwnerRecovery.enabled was accepted"
+refuses 'main.runtime.codeWorkspace.enabled was removed: the Code consumers are always on with Agent dispatch' --set main.runtime.codeWorkspace.enabled=false \
+  && ok "main.runtime.codeWorkspace.enabled: refused as removed" \
+  || bad "main.runtime.codeWorkspace.enabled was accepted"
+refuses 'main.runtime.codePlatform.enabled was removed: the Code consumers are always on with Agent dispatch' --set main.runtime.codePlatform.enabled=false \
+  && ok "main.runtime.codePlatform.enabled: refused as removed" \
+  || bad "main.runtime.codePlatform.enabled was accepted"
+refuses 'main.runtime.codeDebugArtifacts.enabled was removed: the Code consumers are always on with Agent dispatch' --set main.runtime.codeDebugArtifacts.enabled=true \
+  && ok "main.runtime.codeDebugArtifacts.enabled: refused as removed" \
+  || bad "main.runtime.codeDebugArtifacts.enabled was accepted"
+
+echo "== dbInit splices only plain identifiers into SQL =="
+refuses 'dbInit.appRole "elitea\"; DROP ROLE x; --" must be empty or a plain PostgreSQL identifier' --set-string 'dbInit.appRole=elitea"; DROP ROLE x; --' \
+  && ok "a dbInit.appRole that is not a plain identifier: refused" \
+  || bad "a dbInit.appRole with SQL in it was accepted"
+refuses 'dbInit.agentStateDatabase "agent'"'"'state" must be a plain PostgreSQL identifier' --set-string "dbInit.agentStateDatabase=agent'state" \
+  && ok "a dbInit.agentStateDatabase that is not a plain identifier: refused" \
+  || bad "a dbInit.agentStateDatabase with a quote in it was accepted"
 
 echo "== no worker: Main still composes its Code consumers, and needs no sandbox material =="
 "$HELM" template t "$CHART" -f "$CHART/values-standalone.yaml" --namespace platform \

@@ -1991,7 +1991,9 @@ main:
     # with runtime.enabled and agentExecutionDispatch.enabled, elitea-main
     # composes original-Code owner recovery, the Code workspace, the Code
     # platform broker and Code debug artifacts, exactly as the standalone
-    # compose stack does. They need no value beyond the material below, and
+    # compose stack does. None has an enable bit: a values file that still sets
+    # codeOwnerRecovery/codeWorkspace/codePlatform/codeDebugArtifacts.enabled
+    # fails the render. They need no value beyond the material below, and
     # each empty setting means the canonical one (the same table as
     # deploy/scripts/code-material.py). Without agent dispatch there is no Code
     # node to serve and they stay off; an explicit setting there is refused as
@@ -2035,7 +2037,6 @@ main:
     # max_acquisition_seconds 300}. Set them to exact host:port rules and the
     # bounded CodeWorkspacePolicy fields to override.
     codeWorkspace:
-      enabled: true
       repositoryCapabilities: []
       egressAllowlist: []
       policy: {}
@@ -2044,13 +2045,12 @@ main:
     # operations. Empty means [{revision 1, max_calls 32, max_total_bytes
     # 1048576}], which the derived worker platform_client uses too.
     codePlatform:
-      enabled: true
       brokerPolicies: []
 
     # The same receipt pool serves debug and compiled snapshots when both use
-    # it (four AgentState connections per replica, counted in the budget).
-    codeDebugArtifacts:
-      enabled: true
+    # it (four AgentState connections per replica, counted in the budget). No
+    # setting: the DSN is agent-checkpoint-connection in the material.
+    codeDebugArtifacts: {}
 
     # OFF by default. Every consumer must receive identical pinned manifest bytes.
     # Existing material Secrets must add rust-compiled-profiles.json.
@@ -4250,7 +4250,9 @@ worker:
 
   # One Secret carrying every file the worker reads. Keys (all required;
   # agent-checkpoint-connection is the AgentState DSN behind the node journal
-  # and model-checkpoint recovery, which are always on):
+  # and model-checkpoint recovery, which are always on). That DSN must point
+  # DIRECTLY at PostgreSQL, never at pgbouncer or another pooler: the worker
+  # sends tcp_keepalives_* startup options (FU-221), which poolers refuse.
   #   runtime-ca.crt                 agent-worker-client.crt
   #   agent-worker-client.key        command-signing-keyring.json
   #   worker-output-spool-key        agent-checkpoint-connection
@@ -4903,7 +4905,11 @@ sandboxKubernetes:
     #   runtime-ca.crt                 the runtime CA: client CA of every
     #                                  profile and CA of Main's content listener
     #   command-signing-keyring.json   Main's command signing keyring
-    #   database-url                   the AgentState DSN for job receipts
+    #   database-url                   the AgentState DSN for job receipts,
+    #                                  DIRECTLY at PostgreSQL, never at
+    #                                  pgbouncer or another pooler (the
+    #                                  supervisor sends tcp_keepalives_*
+    #                                  startup options, which poolers refuse)
     #   database-ca.crt                the AgentState server's CA
     #   <serviceName>.crt / .key                  each profile's server leaf
     #   <serviceName>-content-client.crt / .key   each profile's content client

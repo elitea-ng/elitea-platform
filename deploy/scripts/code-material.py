@@ -99,7 +99,7 @@ def owner_certificate_valid(runtime, crt, key):
         return False
     checks = [
         ["openssl", "verify", "-purpose", "sslclient", "-CAfile", str(runtime / "runtime-ca.crt"), str(crt)],
-        ["openssl", "x509", "-in", str(crt), "-checkend", "86400", "-noout"],
+        ["openssl", "x509", "-in", str(crt), "-checkend", str(LEAF_RENEW_SECONDS), "-noout"],
     ]
     if any(subprocess.run(c, capture_output=True, check=False).returncode for c in checks):
         return False
@@ -130,12 +130,33 @@ def issue_owner_certificate(runtime):
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+# A sandbox or PostgreSQL leaf is re-issued when it expires within this window or no longer
+# chains to the current runtime CA (gen-runtime-certs.sh rotates the CA): gen-sandbox-certs.sh
+# keeps valid leaves and refuses invalid ones, so a stale pair is retired here first.
+LEAF_RENEW_SECONDS = 3 * 86400
+
+
+def retire_stale_leaves(runtime, issued):
+    if not issued.is_dir():
+        return
+    for crt in sorted(issued.glob("*.crt")):
+        key = crt.with_suffix(".key")
+        valid = all(subprocess.run(c, capture_output=True, check=False).returncode == 0 for c in (
+            ["openssl", "verify", "-CAfile", str(runtime / "runtime-ca.crt"), str(crt)],
+            ["openssl", "x509", "-in", str(crt), "-checkend", str(LEAF_RENEW_SECONDS), "-noout"],
+        )) and key.is_file()
+        if not valid:
+            crt.unlink()
+            key.unlink(missing_ok=True)
+
+
 def cmd_certs(args):
     certs = pathlib.Path(args.certs)
     runtime = certs / "runtime"
     for need in ("runtime-ca.crt", "runtime-ca.key", "command-signing-keyring.json", "agent-checkpoint-connection"):
         if not (runtime / need).is_file():
             fail(f"{runtime / need} missing; run deploy/scripts/gen-runtime-certs.sh first")
+    retire_stale_leaves(runtime, certs / "sandbox")
     run(["bash", str(ROOT / "deploy/scripts/gen-sandbox-certs.sh"), str(runtime), str(certs / "sandbox"), "--native"])
     issue_owner_certificate(runtime)
     keys = runtime / "code-platform-content-keys.json"
@@ -237,6 +258,11 @@ def cmd_render(args):
     worker = json.loads((ROOT / "deploy/runtime/worker-runtime.rust.json").read_text())
     worker["sandbox_runtimes"] = sandbox_runtimes(digests, native_platform)
     write(out / "worker-runtime.json", json.dumps(worker, indent=2) + "\n", 0o644)
+    # The same runtime over the secured command bus (docker-compose.nats-secure-worker.yml):
+    # only the NATS endpoint and its client identity differ.
+    secure = json.loads((ROOT / "deploy/runtime/worker-runtime.nats-secure.json").read_text())
+    nats = {k: secure[k] for k in ("nats_url", "nats_ca_path", "nats_certificate_path", "nats_private_key_path")}
+    write(out / "worker-runtime.nats-secure.json", json.dumps({**worker, **nats}, indent=2) + "\n", 0o644)
     print(f"Code runtime material rendered: 7 supervisor profiles, 4 languages with preparation "
           f"(deno={digests['deno'][:19]} rust={digests['rust'][:19]} arch={args.arch}).")
 

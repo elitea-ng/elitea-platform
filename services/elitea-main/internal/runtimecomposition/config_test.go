@@ -130,7 +130,7 @@ func TestConfigAgentExecutionDispatchIsOptionalAndMayShareTheIndexStream(t *test
 
 	environment := validEnvironment()
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	withCodeOwnerRecovery(environment)
+	withCodeRuntime(environment)
 	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	config, err := ConfigFromEnv(mapLookup(environment))
@@ -152,7 +152,7 @@ func TestConfigAgentExecutionDispatchIsOptionalAndMayShareTheIndexStream(t *test
 	environment["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
 	environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	withCodeOwnerRecovery(environment)
+	withCodeRuntime(environment)
 	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	if _, err := ConfigFromEnv(mapLookup(environment)); err != nil {
@@ -182,7 +182,7 @@ func TestConfigExecutionInterruptsAPIIsExplicitAndRequiresAgentDispatch(t *testi
 	withDispatch := func() map[string]string {
 		environment := validEnvironment()
 		environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-		withCodeOwnerRecovery(environment)
+		withCodeRuntime(environment)
 		environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
 		environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 		return environment
@@ -237,7 +237,7 @@ func TestConfigAgentExecutionCurrentMainOriginFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			environment := validEnvironment()
 			environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-			withCodeOwnerRecovery(environment)
+			withCodeRuntime(environment)
 			environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 			environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = value
 			if _, err := ConfigFromEnv(mapLookup(environment)); err == nil {

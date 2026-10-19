@@ -152,7 +152,7 @@ Add `preparation` only to the Python entry in a private copy of the current work
 Replace both example digests with the operator-selected images.
 Match the execution image and policy to the private Deno supervisor configuration.
 Preserve the current worker identity, checkpoint connection, and trust paths.
-Point `ELITEA_SANDBOX_WORKER_CONFIG` to the resulting private configuration.
+On the standalone stack `code-material.py render` writes this configuration to `deploy/certs/code/worker-runtime.json`.
 Keep JavaScript, TypeScript, and Rust entries under their existing profiles.
 This optional deployment profile admits Python preparation only.
 

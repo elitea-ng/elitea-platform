@@ -22,12 +22,11 @@ func codeMaterialDeployment(t *testing.T) deployment {
 	pod.environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
 	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	pod.environment["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = "spiffe://elitea/supervisor/one"
-	pod.environment["ELITEA_RUNTIME_CODE_PLATFORM_ENABLED"] = "true"
-	pod.environment["ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED"] = "true"
 	pod.environment[runtimecomposition.CodeDebugAgentStateDSNFileEnv] = pod.path("agent-checkpoint-connection")
 	owner := runtimecomposition.CodeOwnerConfig{MainWorkloadIdentity: "spiffe://elitea/main", CertificateChainPath: pod.path("owner-client.crt"), PrivateKeyPath: pod.path("owner-client.key"), ServerCAPath: pod.path(caName), Supervisors: []runtimecomposition.CodeOwnerSupervisor{{Audience: "spiffe://elitea/supervisor/one", HTTPSOrigin: "https://supervisor.invalid"}}}
 	platform := runtimecomposition.CodePlatformDeploymentConfig{Revision: 1, ContentKeysFile: pod.path("code-platform-content-keys.json"), BrokerPolicies: []storage.CodeBrokerPolicy{{Revision: 1, MaxCalls: 32, MaxTotalBytes: 1048576}}}
-	for name, value := range map[string]any{"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG": owner, "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG": platform} {
+	workspace := runtimecomposition.CodeWorkspaceConfig{Revision: 1, RepositoryCapabilities: []string{"github"}, EgressAllowlist: []string{"api.github.com:443"}, Policy: storage.DefaultCodeWorkspacePolicy()}
+	for name, value := range map[string]any{"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG": owner, "ELITEA_RUNTIME_CODE_WORKSPACE_CONFIG": workspace, "ELITEA_RUNTIME_CODE_PLATFORM_CONFIG": platform} {
 		raw, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)

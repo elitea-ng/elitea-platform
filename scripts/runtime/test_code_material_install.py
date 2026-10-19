@@ -18,8 +18,8 @@ BASE_FILES = (
     "platform-edge.crt platform-edge.key"
 ).split()
 CODE_FILES = ("code-owner-client.crt", "code-owner-client.key", "code-platform-content-keys.json")
-ENABLED = {"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "true",
-           "ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED": "true"}
+REMOVED_FLAGS = ("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED", "ELITEA_RUNTIME_CODE_PLATFORM_ENABLED",
+                 "ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED", "ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED")
 
 
 class InstallerTests(unittest.TestCase):
@@ -49,17 +49,18 @@ class InstallerTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10, check=False)
         return root, result
 
-    def test_without_code_material_nothing_code_is_installed(self):
+    def test_without_code_material_only_the_checkpoint_connection_reaches_main(self):
         def remove(source):
             for name in CODE_FILES:
                 (source / name).unlink()
         root, result = self.run_install(change=remove)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for name in CODE_FILES + ("agent-checkpoint-connection",):
+        for name in CODE_FILES:
             self.assertFalse((root / "dst/main" / name).exists())
+        self.assertTrue((root / "dst/main/agent-checkpoint-connection").exists())
 
-    def test_enabled_material_is_scoped_to_main_with_private_modes(self):
-        root, result = self.run_install(ENABLED)
+    def test_code_material_has_no_switch_and_is_scoped_to_main_with_private_modes(self):
+        root, result = self.run_install()
         self.assertEqual(result.returncode, 0, result.stderr)
         main = root / "dst/main"
         log = (root / "chown.log").read_text()
@@ -73,46 +74,32 @@ class InstallerTests(unittest.TestCase):
             for name in CODE_FILES:
                 self.assertFalse((root / "dst" / consumer / name).exists())
 
-    def test_owner_identity_has_no_switch_and_is_installed_when_present(self):
-        root, result = self.run_install()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for name in CODE_FILES[:2]:
-            self.assertTrue((root / "dst/main" / name).exists(), name)
-
-    def test_removed_flag_invalid_flags_or_missing_owner_fail_before_any_copy(self):
-        def remove_owner(source):
-            for name in CODE_FILES[:2]:
-                (source / name).unlink()
+    def test_removed_flags_and_a_half_owner_pair_fail_before_any_copy(self):
         def remove_owner_key(source):
             (source / CODE_FILES[1]).unlink()
-        cases = [({"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "true"}, None),
-                 ({"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "false"}, None),
-                 ({"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "yes"}, None),
-                 ({"ELITEA_RUNTIME_CODE_PLATFORM_ENABLED": "true"}, remove_owner),
-                 ({"ELITEA_RUNTIME_CODE_DEBUG_ARTIFACTS_ENABLED": "true"}, remove_owner),
-                 ({}, remove_owner_key)]
+        cases = [({flag: value}, None) for flag in REMOVED_FLAGS for value in ("true", "false", "")]
+        cases.append(({}, remove_owner_key))
         for flags, change in cases:
             with self.subTest(flags=flags, change=getattr(change, "__name__", None)):
                 root, result = self.run_install(flags, change)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((root / "dst").exists())
 
-    def test_missing_symlink_empty_and_oversized_code_files_fail_before_copy(self):
+    def test_symlink_empty_and_oversized_code_files_fail_before_copy(self):
         for name, maximum in ((CODE_FILES[0], 1048576), (CODE_FILES[1], 1048576),
                               (CODE_FILES[2], 4096)):
-            for kind in ("missing", "symlink", "empty", "oversized"):
+            for kind in ("symlink", "empty", "oversized"):
                 with self.subTest(name=name, kind=kind):
                     def change(source):
                         path = source / name
                         path.unlink()
                         if kind == "symlink":
                             path.symlink_to(source / "runtime-ca.crt")
-                        elif kind != "missing":
+                        else:
                             path.write_bytes(b"x" * (maximum + 1) if kind == "oversized" else b"")
-                    root, result = self.run_install(ENABLED, change)
+                    root, result = self.run_install(None, change)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse((root / "dst").exists())
-
 
 if __name__ == "__main__":
     unittest.main()
