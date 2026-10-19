@@ -943,8 +943,12 @@ const GENERATED_OPERATION_COUNT = 335;
  * 275 -> 277 (ADR-0034 decision 11): admin.getAdminProjectCloudExecutor and
  * admin.setAdminProjectCloudExecutor, the admin Projects page's Send to cloud
  * dialog (pages/admin/AdminProjectCloudExecutorDialog.tsx). Generated.
+ *
+ * 277 -> 279 (ADR-0034 decision 11): settings.getProjectCloudExecutor and
+ * settings.setProjectCloudExecutor, Settings, General's Send to cloud
+ * section (features/cloud-executor-switch). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 277;
+const MANIFEST_ENTRY_COUNT = 279;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

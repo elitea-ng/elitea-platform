@@ -302,7 +302,7 @@ Send to cloud needs four switches, all on. If one is off, the desktop says which
 | Switch | Where | Reason shown when off |
 |---|---|---|
 | Cloud executor: **Enabled** | Admin, Configuration, *Cloud executor* (`cloud_executor.enabled`) | `platform_off` |
-| The project's own on/off: its explicit value, or else **Default for Projects** | Default: Admin, Configuration, *Cloud executor* (`cloud_executor.project_default_enabled`, off unless you turn it on). Explicit: the project's `cloud_executor` setting (`enabled`) | `project_off` |
+| The project's own on/off: its explicit value, or else **Default for Projects** | Default: Admin, Configuration, *Cloud executor* (`cloud_executor.project_default_enabled`, off unless you turn it on). Explicit: Admin, Projects, a project's *Send to cloud* action (any project), or the project's Settings, General, *Send to cloud* (its project admin). Both store `enabled` in the project's `cloud_executor` setting; *Use the default for projects* removes it | `project_off` |
 | Native client policy: `local_work_allowed` and `local_work_cloud_handoff` | Admin, Configuration, *Native client policy*, Local work | `device_off` |
 | A configured executor and confirmed bucket encryption | Steps 2 to 4 | `no_executor`, `storage_encryption_unconfirmed` |
 
@@ -322,6 +322,10 @@ kubectl -n elitea logs deploy/elitea-sandbox-supervisor | grep -E 'workspace_run
 # Main's view for a project: enabled true, disabled_reason null.
 curl -s -H "Authorization: Bearer $TOKEN" \
   "$DEPLOYMENT_URL/api/v2/elitea_core/workspace_handoff_policy/prompt_lib/$PROJECT_ID" | jq '{enabled, disabled_reason}'
+
+# The project's own switch: explicit true/false, or null and source "default".
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "$DEPLOYMENT_URL/api/v2/elitea_core/project_cloud_executor/prompt_lib/$PROJECT_ID" | jq
 ```
 
 Then send a Local work thread from the desktop app and start a turn. While it runs:
