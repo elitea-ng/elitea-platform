@@ -260,8 +260,8 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 	outcome, notices, err := r.materializeAgentAdmission(ctx, admission, resourceProject, projectionProject)
 	if err == nil {
 		// After commit: open tabs drop the cards a regenerate or new turn
-		// superseded.
-		r.signals.resolved(notices...)
+		// superseded, and attach to an admitted wake's execution.
+		r.signals.resolved(ctx, notices...)
 	}
 	if err != nil || !outcome.Created {
 		// The reserve committed but this call did not commit a new job: an
@@ -670,9 +670,12 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		}
 		notices = append(notices, notice)
 	} else if admission.CurrentFanoutWakeTurn != nil {
-		if err := admitCurrentFanoutWake(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID, *admission.CurrentFanoutWakeTurn); err != nil {
+		notice, err := admitCurrentFanoutWake(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+			admission.Record.Job.Generation, *admission.CurrentFanoutWakeTurn)
+		if err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
+		notices = append(notices, notice)
 	} else if admission.CurrentContinueTurn != nil {
 		turn := *admission.CurrentContinueTurn
 		var resumeErr error

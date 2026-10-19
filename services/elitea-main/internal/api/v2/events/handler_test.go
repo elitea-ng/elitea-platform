@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -223,7 +224,8 @@ func waitForBody(t *testing.T, rec *lockedRecorder, want string) {
 }
 
 func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
-	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff"} {
+	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff",
+		"agent_hitl_resolved", "agent_fanout_wake_admitted"} {
 		if !Forwarded(eventType) {
 			t.Errorf("Forwarded(%q) = false, want true", eventType)
 		}
@@ -243,8 +245,8 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 		t.Errorf("streamFamilies has %d entries, want 3; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
 	}
 	for _, f := range streamFamilies {
-		if f.audience != (f.eventType == WorkspaceHandoffEventType) {
-			t.Errorf("family %q audience scoping = %v", f.eventType, f.audience)
+		if f.audience != slices.Contains(f.eventTypes, WorkspaceHandoffEventType) {
+			t.Errorf("family %v audience scoping = %v", f.eventTypes, f.audience)
 		}
 	}
 	// And each from its own family only.
@@ -262,6 +264,12 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 		{"project:7:presence", "workspace.handoff", false},
 		{"project:7:events", "workspace.handoff", false},
 		{"project:7:workspace", "canvas.editors", false},
+		{"project:7:workspace", "agent_hitl_resolved", true},
+		{"project:7:workspace", "agent_fanout_wake_admitted", true},
+		{"project:7:presence", "agent_hitl_resolved", false},
+		{"project:7:events", "agent_hitl_resolved", false},
+		{"project:7:events", "agent_fanout_wake_admitted", false},
+		{"project:8:workspace", "agent_hitl_resolved", false},
 	} {
 		if got := ForwardedOn("7", c.channel, c.eventType); got != c.want {
 			t.Errorf("ForwardedOn(7, %q, %q) = %v, want %v", c.channel, c.eventType, got, c.want)
@@ -612,6 +620,59 @@ func TestStream_WorkspaceHandoffReachesOnlyItsAudience(t *testing.T) {
 	} {
 		if body := stream(user); strings.Contains(body, "workspace.handoff") {
 			t.Fatalf("%s got a workspace frame: %q", name, body)
+		}
+	}
+}
+
+// The ledger's live frames ride the audience-scoped family: a reader of the
+// conversation gets each one, without the audience; another project viewer,
+// an anonymous caller and a token without an owner get nothing.
+func TestStream_InterruptFramesReachOnlyConversationReaders(t *testing.T) {
+	stream := func(user *auth.User) string {
+		t.Helper()
+		src := newFakeSource()
+		h := NewHandlerFromSource(src)
+		ctx, cancel := context.WithCancel(context.Background())
+		if user != nil {
+			ctx = auth.ContextWithUser(ctx, *user)
+		}
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			h.Stream(rec, newRequestWithProjectID(ctx, "7"))
+			close(done)
+		}()
+		frames := []natsbus.Event{
+			{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"action":"approve","conversation_id":"c-1","interrupt_id":"ask:1","interrupt_key":"k1","revision":2,"root_response_id":"r-1","schema":"elitea.pipeline.fanout-interrupt-resolved.v1","state":"DECIDED","audience":[7,8]}`)},
+			{Type: "agent_fanout_wake_admitted", Payload: json.RawMessage(`{"conversation_id":"c-1","execution_id":"e-1","generation":1,"root_response_id":"r-1","audience":[8]}`)},
+			{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"conversation_id":"c-2","root_response_id":"r-2","audience":[9]}`)},
+			{Type: "agent_hitl_resolved", Payload: json.RawMessage(`{"conversation_id":"c-3","root_response_id":"r-3"}`)},
+		}
+		for _, frame := range frames {
+			src.stream("project:7:workspace") <- frame
+		}
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		<-done
+		return rec.Body.String()
+	}
+	reader := stream(&auth.User{ID: "8", UserID: "8"})
+	if strings.Count(reader, "event: agent_hitl_resolved") != 1 || strings.Count(reader, "event: agent_fanout_wake_admitted") != 1 ||
+		!strings.Contains(reader, `"interrupt_key":"k1"`) || !strings.Contains(reader, `"execution_id":"e-1"`) {
+		t.Fatalf("the reader did not get the conversation's frames: %q", reader)
+	}
+	for _, leaked := range []string{"c-2", "c-3", "audience"} {
+		if strings.Contains(reader, leaked) {
+			t.Fatalf("the reader's stream carries %q: %q", leaked, reader)
+		}
+	}
+	for name, user := range map[string]*auth.User{
+		"a project viewer outside the conversation": {ID: "13", UserID: "13"},
+		"no user":           nil,
+		"a token, no owner": {ID: "t-1", TokenID: "t-1", AuthType: "token"},
+	} {
+		if body := stream(user); strings.Contains(body, "agent_") {
+			t.Fatalf("%s got an interrupt frame: %q", name, body)
 		}
 	}
 }

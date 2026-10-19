@@ -140,13 +140,16 @@ func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64,
 	notice := resolvedNotice{projectID: projectID}
 	var executionID, streamID, executionGeneration, sioEvent string
 	var generation int64
+	// The conversation's readers ride on the same statement (no extra round
+	// trip): the live project-plane copy goes to them only.
 	err := tx.QueryRow(ctx, `
-SELECT binding.execution_id, binding.generation, binding.client_stream_id, binding.client_execution_generation, binding.sio_event
+SELECT binding.execution_id, binding.generation, binding.client_stream_id, binding.client_execution_generation, binding.sio_event,
+       `+conversationReadersSQL("binding.client_stream_id")+`
 FROM elitea_runtime.agent_execution_jobs binding
 JOIN elitea_runtime.execution_jobs job USING (execution_id, generation)
 WHERE binding.client_message_id = $1 AND job.projection_project_id = $2 AND job.resource_project_id = $2
 ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
-LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent)
+LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent, &notice.audience)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return resolvedNotice{}, domain.ErrLedgerFault
 	}
@@ -193,16 +196,81 @@ SELECT event_bytes, cursor, FALSE FROM elitea_runtime.execution_replay_events WH
 		if inserted && cursor > notice.cursor {
 			notice.executionID, notice.cursor = executionID, cursor
 		}
+		if inserted {
+			event, err := liveEventData(metadata, streamID, rootResponseID)
+			if err != nil {
+				return resolvedNotice{}, err
+			}
+			notice.live = append(notice.live, liveEvent{eventType: interruptResolvedEventType, data: event})
+		}
 	}
+	notice.conversationID = streamID
 	return notice, nil
 }
 
-// resolvedNotice is one replay wake owed after commit: the execution whose
-// replay log received agent_hitl_resolved frames and the highest cursor.
+// LiveFanoutWakeAdmittedEventType tells open tabs that a wake job was
+// admitted for a parked response, so they attach to its execution stream.
+const LiveFanoutWakeAdmittedEventType = "agent_fanout_wake_admitted"
+
+// maxLiveAudience bounds the readers one live frame names. A conversation
+// with more readers gets no live copy (the durable replay copy remains).
+const maxLiveAudience = 256
+
+// conversationReadersSQL selects, as a bigint[] in id order, the users who
+// may read the conversation whose uuid text is in streamExpression: its
+// author and its user participants. At most maxLiveAudience+1 ids, so an
+// oversized audience is detectable without an unbounded read. A stream id
+// that is not a conversation uuid yields an empty array.
+func conversationReadersSQL(streamExpression string) string {
+	return `COALESCE((
+  SELECT array_agg(readers.user_id ORDER BY readers.user_id) FROM (
+    SELECT DISTINCT reader.user_id FROM chat_conversations conversation
+    CROSS JOIN LATERAL (
+      SELECT conversation.author_id::bigint AS user_id
+      UNION
+      SELECT (participant.entity_meta ->> 'id')::bigint
+      FROM chat_participant_mapping mapping
+      JOIN chat_participants participant ON participant.id = mapping.participant_id AND participant.entity_name = 'user'
+      WHERE mapping.conversation_id = conversation.id AND participant.entity_meta ->> 'id' ~ '^[1-9][0-9]{0,17}$'
+    ) reader
+    WHERE conversation.uuid = CASE WHEN ` + streamExpression + ` ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                                    THEN (` + streamExpression + `)::uuid END
+      AND reader.user_id > 0
+    ORDER BY reader.user_id
+    LIMIT ` + strconv.Itoa(maxLiveAudience+1) + `
+  ) readers), '{}'::bigint[])`
+}
+
+// liveEventData is the project-plane payload of agent_hitl_resolved: the
+// fanout-interrupt-resolved object (never a decision value) plus the
+// conversation and root response it belongs to.
+func liveEventData(metadata []byte, conversationID, rootResponseID string) (map[string]any, error) {
+	var data map[string]any
+	if err := json.Unmarshal(metadata, &data); err != nil {
+		return nil, domain.ErrLedgerFault
+	}
+	data["conversation_id"] = conversationID
+	data["root_response_id"] = rootResponseID
+	return data, nil
+}
+
+// liveEvent is one project-plane event owed after commit.
+type liveEvent struct {
+	eventType string
+	data      map[string]any
+}
+
+// resolvedNotice is what one committed change owes open tabs: the replay
+// wake of the execution whose replay log received agent_hitl_resolved frames
+// (highest cursor), and the project-plane events for the conversation's
+// readers (audience), computed in the committing transaction.
 type resolvedNotice struct {
-	projectID   int64
-	executionID string
-	cursor      int64
+	projectID      int64
+	executionID    string
+	cursor         int64
+	conversationID string
+	audience       []int64
+	live           []liveEvent
 }
 
 func (n resolvedNotice) valid() bool {
@@ -220,6 +288,14 @@ type FanoutWakeKicker interface {
 	Kick()
 }
 
+// InterruptLiveEvents publishes one event on the project SSE plane's
+// audience-scoped family. The payload carries an "audience" member (the user
+// ids allowed to receive it); the SSE relay delivers the frame only to those
+// callers and strips the member.
+type InterruptLiveEvents interface {
+	PublishInterruptEvent(ctx context.Context, projectID int64, eventType string, payload map[string]any)
+}
+
 // ExecutionInterruptSignals are the ledger's after-commit signals. Every
 // method is called only after the transaction that made the change visible
 // has committed, and both are advisory: a lost signal costs latency (the
@@ -229,15 +305,33 @@ type FanoutWakeKicker interface {
 type ExecutionInterruptSignals struct {
 	Replay InterruptReplayNotifier
 	Wakes  FanoutWakeKicker
+	Live   InterruptLiveEvents
 }
 
-func (s *ExecutionInterruptSignals) resolved(notices ...resolvedNotice) {
-	if s == nil || s.Replay == nil {
+func (s *ExecutionInterruptSignals) resolved(ctx context.Context, notices ...resolvedNotice) {
+	if s == nil {
 		return
 	}
 	for _, notice := range notices {
-		if notice.valid() {
+		if s.Replay != nil && notice.valid() {
 			s.Replay.Notify(strconv.FormatInt(notice.projectID, 10), notice.executionID, uint64(notice.cursor))
+		}
+		if s.Live == nil || len(notice.live) == 0 || notice.projectID <= 0 {
+			continue
+		}
+		if len(notice.audience) == 0 || len(notice.audience) > maxLiveAudience {
+			// No live copy; the durable replay copy and a reload still show it.
+			slog.Info("execution interrupt live event not published", "reason", "audience_out_of_bounds",
+				"readers", len(notice.audience))
+			continue
+		}
+		for _, event := range notice.live {
+			payload := make(map[string]any, len(event.data)+1)
+			for key, value := range event.data {
+				payload[key] = value
+			}
+			payload["audience"] = notice.audience
+			s.Live.PublishInterruptEvent(context.WithoutCancel(ctx), notice.projectID, event.eventType, payload)
 		}
 	}
 }

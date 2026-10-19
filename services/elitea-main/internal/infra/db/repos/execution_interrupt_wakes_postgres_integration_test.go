@@ -33,6 +33,7 @@ import (
 // wakeHarness adds the real agent admission path to the ledger harness.
 type wakeHarness struct {
 	*interruptHarness
+	jobs         *AgentExecutionJobsRepository
 	admissions   *agentexecutionapp.AdmissionService
 	admitter     *agentexecutionapp.FanoutWakeAdmitter
 	logs         *lockedBuffer
@@ -90,7 +91,7 @@ func newWakeHarness(t *testing.T) *wakeHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &wakeHarness{interruptHarness: h, admissions: admissions, admitter: admitter, logs: logs, generations: map[string]string{}}
+	w := &wakeHarness{interruptHarness: h, jobs: jobs, admissions: admissions, admitter: admitter, logs: logs, generations: map[string]string{}}
 	if err := h.pool.QueryRow(t.Context(), `SELECT uuid::text FROM p_1.chat_conversations WHERE id = $1`, h.conversationID).Scan(&w.conversation); err != nil {
 		t.Fatal(err)
 	}
@@ -704,5 +705,120 @@ func TestWakeAdmissionLogsCarryNoValues(t *testing.T) {
 		if strings.Contains(logs, secret) {
 			t.Errorf("log carries %q: %s", secret, logs)
 		}
+	}
+}
+
+// liveRecorder records project-plane events and checks, as each fires, that
+// the change it announces is committed (read through another connection).
+type liveRecorder struct {
+	t      *testing.T
+	h      *interruptHarness
+	mu     sync.Mutex
+	events []map[string]any
+}
+
+func (l *liveRecorder) PublishInterruptEvent(_ context.Context, projectID int64, eventType string, payload map[string]any) {
+	committed := 0
+	switch eventType {
+	case "agent_hitl_resolved":
+		_ = l.h.pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.execution_interrupts
+WHERE root_response_id = $1::uuid AND interrupt_key = $2 AND revision = $3`,
+			payload["root_response_id"], payload["interrupt_key"], payload["revision"]).Scan(&committed)
+	case LiveFanoutWakeAdmittedEventType:
+		_ = l.h.pool.QueryRow(context.Background(), `SELECT count(*) FROM elitea_runtime.execution_interrupt_wakes
+WHERE wake_execution_id = $1 AND state = 'ADMITTED'`, payload["execution_id"]).Scan(&committed)
+	}
+	recorded := map[string]any{"project": projectID, "type": eventType, "committed": committed}
+	for key, value := range payload {
+		recorded[key] = value
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, recorded)
+}
+
+func (l *liveRecorder) take() []map[string]any {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := l.events
+	l.events = nil
+	return out
+}
+
+// TestLiveProjectEventsAfterCommitToReadersOnly: each resolution publishes one
+// agent_hitl_resolved on the project plane, after commit, addressed to the
+// conversation's readers (author and user participants; a project member
+// outside the conversation is not in the audience), carrying the action but
+// never the value. A replay publishes nothing. Admitting the wake publishes
+// one agent_fanout_wake_admitted naming the new execution.
+func TestLiveProjectEventsAfterCommitToReadersOnly(t *testing.T) {
+	w := newWakeHarness(t)
+	live := &liveRecorder{t: t, h: w.interruptHarness}
+	signals := &ExecutionInterruptSignals{Live: live}
+	w.repo.SetSignals(signals)
+	w.jobs.SetInterruptSignals(signals)
+	response := w.newResponse()
+	w.parkable(response)
+	ask := w.raise(response, "fanout-interrupt-card-v1.map-ask-user.json")
+	guard := w.raise(response, "fanout-interrupt-card-v1.json")
+	if _, err := w.park(response, 0); err != nil {
+		t.Fatal(err)
+	}
+	const answer = "the private answer text"
+	if _, err := w.decide(interruptOwner, response, ask, "live-a", "answer", answer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.decide(interruptOwner, response, ask, "live-a", "answer", answer); err != nil { // replay
+		t.Fatal(err)
+	}
+	events := live.take()
+	if len(events) != 1 {
+		t.Fatalf("events after a decision and its replay = %v", events)
+	}
+	event := events[0]
+	audience, _ := event["audience"].([]int64)
+	if event["type"] != "agent_hitl_resolved" || event["committed"] != 1 || event["project"] != int64(1) ||
+		event["conversation_id"] != w.conversation || event["root_response_id"] != response ||
+		event["interrupt_key"] != ask || event["state"] != "DECIDED" || event["action"] != "answer" ||
+		fmt.Sprint(audience) != "[7 8 11]" {
+		t.Fatalf("resolved event = %v", event)
+	}
+	if strings.Contains(fmt.Sprint(event), answer) {
+		t.Fatalf("the live event carries the decision value: %v", event)
+	}
+
+	// The wake for this response (queued by the decision) is admitted.
+	if created := w.sweep(); created != 1 {
+		t.Fatalf("created %d", created)
+	}
+	events = live.take()
+	var wakeExecution string
+	if err := w.pool.QueryRow(t.Context(), `SELECT wake_execution_id FROM elitea_runtime.execution_interrupt_wakes
+WHERE root_response_id = $1::uuid AND state = 'ADMITTED'`, response).Scan(&wakeExecution); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0]["type"] != LiveFanoutWakeAdmittedEventType || events[0]["committed"] != 1 ||
+		events[0]["execution_id"] != wakeExecution || events[0]["generation"] != uint64(1) ||
+		events[0]["conversation_id"] != w.conversation || events[0]["root_response_id"] != response ||
+		fmt.Sprint(events[0]["audience"]) != "[7 8 11]" {
+		t.Fatalf("wake admitted events = %v", events)
+	}
+
+	// A reader who leaves the conversation is no longer addressed.
+	w.exec(`DELETE FROM p_1.chat_participant_mapping WHERE conversation_id = $1 AND participant_id IN (
+  SELECT id FROM p_1.chat_participants WHERE entity_name = 'user' AND entity_meta->>'id' = '11')`, w.conversationID)
+	if _, err := w.decide(interruptOwner, response, guard, "live-b", "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	events = live.take()
+	if len(events) != 1 || fmt.Sprint(events[0]["audience"]) != "[7 8]" || events[0]["committed"] != 1 {
+		t.Fatalf("events after a reader left = %v", events)
+	}
+	// A refused decision publishes nothing.
+	if _, err := w.decide(interruptOwner, response, guard, "live-c", "approve", ""); !errors.Is(err, domain.ErrAlreadyResolved) {
+		t.Fatalf("second decision: %v", err)
+	}
+	if events := live.take(); len(events) != 0 {
+		t.Fatalf("a refused decision published %v", events)
 	}
 }

@@ -97,3 +97,18 @@ func TestHandoffLiveEventsPublishTheStateWithItsAudience(t *testing.T) {
 		t.Fatalf("payload = %s", bus.payload)
 	}
 }
+
+// The per-interrupt ledger's live frames go onto the same audience-scoped
+// family, so the SSE relay delivers them to the conversation's readers only.
+func TestInterruptLiveEventsPublishOnTheAudienceFamily(t *testing.T) {
+	if newInterruptLiveEvents(nil) != nil {
+		t.Fatal("no bus must publish nothing")
+	}
+	bus := &capturedBus{}
+	newInterruptLiveEvents(bus).PublishInterruptEvent(context.Background(), 7, "agent_hitl_resolved",
+		map[string]any{"conversation_id": "c-1", "root_response_id": "r-1", "audience": []int64{11}})
+	if bus.channel != "project:7:workspace" || bus.eventType != "agent_hitl_resolved" ||
+		string(bus.payload) != `{"audience":[11],"conversation_id":"c-1","root_response_id":"r-1"}` {
+		t.Fatalf("published %q %q %s", bus.channel, bus.eventType, bus.payload)
+	}
+}

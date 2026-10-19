@@ -407,9 +407,20 @@ the pending fan-out node and fetches.
   `DECIDED`. An `ADMITTED` wake becomes `DONE` when its execution parks again, or lazily when its job is terminal.
 - **New turn.** Admitting a new user turn in a conversation supersedes every open card of the conversation's earlier
   responses in the same transaction (queued wakes `FAILED` `response_superseded`, `agent_hitl_resolved` per card).
-- **Live delivery of `agent_hitl_resolved`.** After the deciding, stopping, regenerating or new-turn transaction commits,
-  Main wakes the replay stream of the response's latest execution through the replay wake bus (never before commit);
-  a lost wake falls back to the replay poll.
+- **Live delivery of `agent_hitl_resolved`.** A park is terminal for the execution stream, and Web does not hold it
+  open. After the deciding, stopping, regenerating or new-turn transaction commits (never before), Main:
+  - publishes one `agent_hitl_resolved` event per resolution on the project SSE plane
+    (`GET /api/v2/events/prompt_lib/{projectId}`), data = the `fanout-interrupt-resolved` object (never a value) plus
+    `conversation_id` (the conversation uuid) and `root_response_id`;
+  - publishes `agent_fanout_wake_admitted` `{conversation_id, root_response_id, execution_id, generation}` when a wake
+    job is admitted, so open tabs attach to that execution's stream;
+  - also wakes the replay stream of the response's latest execution, and keeps the durable replay-log copy for reload.
+
+  Both project-plane events use the plane's audience-scoped family (subject `elitea.events.project.<id>.workspace`, the
+  workspace handoff's): each frame names the conversation's readers (its author and user participants, computed in the
+  committing transaction, at most 256), the relay delivers it only to a caller in that list and strips the list.
+  A conversation with more readers gets no live copy. Live delivery is at most once; a lost event costs latency only
+  (reload or the next frame reconciles).
 
 ## 8a. Fan-out join and On Error (v1.1, binding user decision 2026-10-12)
 

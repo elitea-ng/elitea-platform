@@ -218,7 +218,21 @@ var _ agentexecutionapp.FanoutWakeStore = (*ExecutionInterruptRepository)(nil)
 // continue the response, and that the response is still parked; then it
 // resumes the response for the new execution and moves the wake to ADMITTED
 // with the job's id, so the job and ADMITTED commit together or not at all.
-func admitCurrentFanoutWake(ctx context.Context, tx sqlExecutor, executionID string, turn agentexecutionapp.CurrentFanoutWakeTurn) error {
+// The returned notice is the agent_fanout_wake_admitted project-plane event
+// for the conversation's readers, owed after commit.
+func admitCurrentFanoutWake(ctx context.Context, tx sqlExecutor, executionID string, generation uint64, turn agentexecutionapp.CurrentFanoutWakeTurn) (resolvedNotice, error) {
+	notice, err := admitCurrentFanoutWakeRows(ctx, tx, executionID, turn)
+	if err != nil {
+		return resolvedNotice{}, err
+	}
+	notice.live = []liveEvent{{eventType: LiveFanoutWakeAdmittedEventType, data: map[string]any{
+		"conversation_id": turn.ConversationUUID, "root_response_id": turn.ResponseMessageID,
+		"execution_id": executionID, "generation": generation,
+	}}}
+	return notice, nil
+}
+
+func admitCurrentFanoutWakeRows(ctx context.Context, tx sqlExecutor, executionID string, turn agentexecutionapp.CurrentFanoutWakeTurn) (resolvedNotice, error) {
 	var responseGroupID int64
 	err := tx.QueryRow(ctx, `
 SELECT response.id
@@ -227,19 +241,19 @@ JOIN chat_conversations conversation ON conversation.id = response.conversation_
 WHERE response.uuid = $1::uuid AND conversation.uuid = $2::uuid
 FOR UPDATE OF response`, turn.ResponseMessageID, turn.ConversationUUID).Scan(&responseGroupID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return agentexecutionapp.ErrFanoutWakeTargetGone
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeTargetGone
 	}
 	if err != nil {
-		return fmt.Errorf("lock fanout wake response: %w", err)
+		return resolvedNotice{}, fmt.Errorf("lock fanout wake response: %w", err)
 	}
 	var held int
 	err = tx.QueryRow(ctx, `SELECT 1 FROM elitea_runtime.execution_interrupt_responses
 WHERE root_response_id = $1::uuid AND project_id = $2 FOR UPDATE`, turn.ResponseMessageID, turn.ProjectID).Scan(&held)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return agentexecutionapp.ErrFanoutWakeTargetGone
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeTargetGone
 	}
 	if err != nil {
-		return fmt.Errorf("lock fanout wake ledger response: %w", err)
+		return resolvedNotice{}, fmt.Errorf("lock fanout wake ledger response: %w", err)
 	}
 	var state, parkedExecution string
 	var parkedGeneration int64
@@ -249,22 +263,22 @@ FROM elitea_runtime.execution_interrupt_wakes
 WHERE root_response_id = $1::uuid AND decision_revision = $2 AND project_id = $3
 FOR UPDATE`, turn.ResponseMessageID, turn.DecisionRevision, turn.ProjectID).Scan(&state, &parkedExecution, &parkedGeneration)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && state != "QUEUED") {
-		return agentexecutionapp.ErrFanoutWakeNotQueued
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeNotQueued
 	}
 	if err != nil {
-		return fmt.Errorf("lock fanout wake: %w", err)
+		return resolvedNotice{}, fmt.Errorf("lock fanout wake: %w", err)
 	}
 	if parkedExecution != turn.ParkedExecutionID || parkedGeneration != turn.ParkedGeneration {
-		return agentexecutionapp.ErrFanoutWakeTargetGone
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeTargetGone
 	}
 	// Authorization inside the effect transaction, after the locks: a
 	// revocation that committed while this waited is seen.
 	var failure error
 	if fanoutWakeActorRefused(ctx, tx, checkInterruptPermission, turn, &failure) {
-		return agentexecutionapp.ErrFanoutWakeActorNotAllowed
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeActorNotAllowed
 	}
 	if failure != nil {
-		return fmt.Errorf("recheck fanout wake actor: %w", failure)
+		return resolvedNotice{}, fmt.Errorf("recheck fanout wake actor: %w", failure)
 	}
 	tag, err := tx.Exec(ctx, `
 UPDATE chat_message_group
@@ -275,10 +289,10 @@ WHERE id = $1 AND NOT is_streaming AND task_id = $3
   AND meta ->> 'execution_generation' = $4 AND meta ->> 'thread_id' = $5`,
 		responseGroupID, executionID, turn.ParkedExecutionID, turn.ExecutionGeneration, turn.ThreadID)
 	if err != nil {
-		return fmt.Errorf("resume fanout wake response: %w", err)
+		return resolvedNotice{}, fmt.Errorf("resume fanout wake response: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return agentexecutionapp.ErrFanoutWakeTargetGone
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeTargetGone
 	}
 	tag, err = tx.Exec(ctx, `
 UPDATE elitea_runtime.execution_interrupt_wakes
@@ -286,12 +300,16 @@ SET state = 'ADMITTED', wake_execution_id = $3, updated_at = clock_timestamp()
 WHERE root_response_id = $1::uuid AND decision_revision = $2 AND state = 'QUEUED'`,
 		turn.ResponseMessageID, turn.DecisionRevision, executionID)
 	if err != nil {
-		return fmt.Errorf("admit fanout wake: %w", err)
+		return resolvedNotice{}, fmt.Errorf("admit fanout wake: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return agentexecutionapp.ErrFanoutWakeNotQueued
+		return resolvedNotice{}, agentexecutionapp.ErrFanoutWakeNotQueued
 	}
-	return nil
+	notice := resolvedNotice{projectID: turn.ProjectID, conversationID: turn.ConversationUUID}
+	if err := tx.QueryRow(ctx, `SELECT `+conversationReadersSQL("$1::text"), turn.ConversationUUID).Scan(&notice.audience); err != nil {
+		return resolvedNotice{}, fmt.Errorf("load fanout wake readers: %w", err)
+	}
+	return notice, nil
 }
 
 // retireSettledWakes moves ADMITTED wakes of the response whose execution

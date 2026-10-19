@@ -93,17 +93,30 @@ const StreamPermission = "models.project_context.view"
 //     thread (a Local work thread is its owner's alone), the stream relays it
 //     only to a caller in that list, and strips the list. The payload is the
 //     conversation, its state, epoch and reclaim_pending; never stats or
-//     paths.
+//     paths. The same audience-scoped family also carries the per-interrupt
+//     HITL ledger's live frames (fanout-interrupt-decisions v1.1 §9), each
+//     addressed to the conversation's readers (its author and user
+//     participants): agent_hitl_resolved (the fanout-interrupt-resolved
+//     object, never a decision value, plus conversation_id and
+//     root_response_id) and agent_fanout_wake_admitted (conversation_id,
+//     root_response_id, execution_id, generation).
 var streamFamilies = []struct {
-	channel   func(projectID string) string
-	eventType string
+	channel    func(projectID string) string
+	eventTypes []string
 	// audience: relay only to a caller named in the frame's `audience`.
 	audience bool
 }{
-	{events.ProjectChannel, events.EventBudgetSoftAlert, false},
-	{events.PresenceChannel, canvaspresence.EventType, false},
-	{events.WorkspaceChannel, WorkspaceHandoffEventType, true},
+	{events.ProjectChannel, []string{events.EventBudgetSoftAlert}, false},
+	{events.PresenceChannel, []string{canvaspresence.EventType}, false},
+	{events.WorkspaceChannel, []string{WorkspaceHandoffEventType, InterruptResolvedEventType, FanoutWakeAdmittedEventType}, true},
 }
+
+// InterruptResolvedEventType and FanoutWakeAdmittedEventType are the
+// per-interrupt HITL ledger's live frames (repos.ExecutionInterruptSignals).
+const (
+	InterruptResolvedEventType  = "agent_hitl_resolved"
+	FanoutWakeAdmittedEventType = "agent_fanout_wake_admitted"
+)
 
 // WorkspaceHandoffEventType is workspacehandoff.EventType, named here so the
 // relay table does not depend on the handoff application package.
@@ -150,7 +163,7 @@ func audienceFrame(payload []byte, userID int64, known bool) ([]byte, bool) {
 // family; see ForwardedOn).
 func Forwarded(eventType string) bool {
 	for _, f := range streamFamilies {
-		if f.eventType == eventType {
+		if slices.Contains(f.eventTypes, eventType) {
 			return true
 		}
 	}
@@ -162,7 +175,7 @@ func Forwarded(eventType string) bool {
 func ForwardedOn(projectID, channel, eventType string) bool {
 	for _, f := range streamFamilies {
 		if f.channel(projectID) == channel {
-			return f.eventType == eventType
+			return slices.Contains(f.eventTypes, eventType)
 		}
 	}
 	return false

@@ -181,7 +181,7 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 	if err != nil {
 		return agentexecutionapp.CurrentAgentCancelOutcome{}, err
 	}
-	repository.signals.resolved(notice)
+	repository.signals.resolved(ctx, notice)
 	return outcome, nil
 }
 

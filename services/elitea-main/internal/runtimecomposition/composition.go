@@ -163,6 +163,11 @@ type Dependencies struct {
 	// concrete type, the same "declared locally" shape
 	// pipelinetriggers.EventEmitter uses.
 	DomainEvents pipelineruns.EventEmitter
+	// InterruptLiveEvents publishes the per-interrupt ledger's live frames
+	// (agent_hitl_resolved, agent_fanout_wake_admitted) on the project SSE
+	// plane's audience-scoped family. Nil without a live-update plane: the
+	// durable replay copy remains.
+	InterruptLiveEvents repos.InterruptLiveEvents
 	// Workspace is the cloud executor's handoff seam (ADR-0034, workspace.go
 	// in this package). Every field may be nil: the workspace-store calls then
 	// answer UNSUPPORTED_CAPABILITY and the runtime context serves no
@@ -688,6 +693,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct fanout wake admitter: %w", recoveryErr)
 		}
 		interruptSignals.Wakes = fanoutWakes
+		interruptSignals.Live = dependencies.InterruptLiveEvents
 		executionInterrupts.SetSignals(interruptSignals)
 		agentCancellation.SetInterruptSignals(interruptSignals)
 		agentJobs.SetInterruptSignals(interruptSignals)

@@ -347,6 +347,27 @@ func (h handoffLiveEvents) HandoffChanged(ctx context.Context, projectID int64, 
 	}{StateEvent: event, Audience: audience})
 }
 
+// interruptLiveEvents publishes the per-interrupt HITL ledger's live frames
+// (agent_hitl_resolved, agent_fanout_wake_admitted) on the same audience-
+// scoped project subject (events.WorkspaceChannel): every payload names its
+// audience, the conversation's readers, which the SSE relay filters on and
+// strips. Reusing the subject keeps the NATS permission table unchanged.
+type interruptLiveEvents struct {
+	publisher *events.Publisher
+}
+
+// newInterruptLiveEvents answers nil without a live-update bus.
+func newInterruptLiveEvents(bus events.Bus) dbrepos.InterruptLiveEvents {
+	if bus == nil {
+		return nil
+	}
+	return interruptLiveEvents{publisher: events.NewWorkspacePublisher(bus)}
+}
+
+func (e interruptLiveEvents) PublishInterruptEvent(ctx context.Context, projectID int64, eventType string, payload map[string]any) {
+	e.publisher.Emit(ctx, strconv.FormatInt(projectID, 10), eventType, payload)
+}
+
 // deferredAgentCanceller is the handoff's turn canceller, bound to the
 // runtime's stop use case once the runtime plane is composed (the handoff is
 // composed first: the executor adapters are runtime dependencies). Unbound,

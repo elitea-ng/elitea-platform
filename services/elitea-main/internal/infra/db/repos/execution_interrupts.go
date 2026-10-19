@@ -438,7 +438,7 @@ SELECT decided.revision, bumped.decision_revision, bumped.parked_execution_id, b
 		return domain.DecideResult{}, fmt.Errorf("execution interrupt decide: %w", err)
 	}
 	// After commit only: the frame and the wake row are durable now.
-	r.signals.resolved(notice)
+	r.signals.resolved(ctx, notice)
 	r.signals.wakeQueued(wakeQueued)
 	return result, nil
 }
