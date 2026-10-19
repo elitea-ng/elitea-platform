@@ -3253,6 +3253,26 @@
         "shared/ui/ThemeModeToggle.tsx",
         "app/ThemePreferenceSync.tsx"
       ]
+    },
+    {
+      "id": "admin.getAdminProjectCloudExecutor",
+      "method": "GET",
+      "path": "/admin/project_cloud_executor/administration/{project_id}",
+      "operationId": "getAdminProjectCloudExecutor",
+      "source": "generated",
+      "responseSchema": "ProjectCloudExecutorSwitch",
+      "fixture": null,
+      "usedBy": ["pages/admin/AdminProjectCloudExecutorDialog.tsx"]
+    },
+    {
+      "id": "admin.setAdminProjectCloudExecutor",
+      "method": "PUT",
+      "path": "/admin/project_cloud_executor/administration/{project_id}",
+      "operationId": "setAdminProjectCloudExecutor",
+      "source": "generated",
+      "responseSchema": "ProjectCloudExecutorSwitch",
+      "fixture": null,
+      "usedBy": ["pages/admin/AdminProjectCloudExecutorDialog.tsx"]
     }
   ]
 }

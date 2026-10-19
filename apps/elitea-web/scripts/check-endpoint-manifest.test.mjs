@@ -939,8 +939,12 @@ const GENERATED_OPERATION_COUNT = 335;
  * shared/api/themePreference.ts calls `eliteaFetch` directly so both requests
  * can be `background` (a 401 on a theme sync must not open the re-auth
  * window), which the generated functions cannot ask for.
+ *
+ * 275 -> 277 (ADR-0034 decision 11): admin.getAdminProjectCloudExecutor and
+ * admin.setAdminProjectCloudExecutor, the admin Projects page's Send to cloud
+ * dialog (pages/admin/AdminProjectCloudExecutorDialog.tsx). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 275;
+const MANIFEST_ENTRY_COUNT = 277;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

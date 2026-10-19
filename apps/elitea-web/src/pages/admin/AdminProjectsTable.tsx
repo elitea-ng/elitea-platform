@@ -23,6 +23,7 @@
  */
 import BlockOutlinedIcon from '@mui/icons-material/BlockOutlined';
 import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import PersonAddAlt1OutlinedIcon from '@mui/icons-material/PersonAddAlt1Outlined';
 import TimelineOutlinedIcon from '@mui/icons-material/TimelineOutlined';
 import Box from '@mui/material/Box';
@@ -56,6 +57,8 @@ export interface AdminProjectsTableProps {
   onOpenMembers: ((project: AdminProjectRow) => void) | undefined;
   /** Always present: the activity drawer is a read. */
   onOpenActivity: (project: AdminProjectRow) => void;
+  /** The project's Send to cloud switch. Absent ⇒ no control (callers that only pick projects). */
+  onOpenCloudExecutor?: ((project: AdminProjectRow) => void) | undefined;
   /** Ids whose mutation is in flight — their per-row controls are disabled. */
   pendingIds: ReadonlySet<number>;
   /** The currently selected ids. Meaningless without `onSelectionChange`. */
@@ -105,6 +108,7 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
   onToggleSuspended,
   onOpenMembers,
   onOpenActivity,
+  onOpenCloudExecutor,
   pendingIds,
   selectedIds,
   onSelectionChange,
@@ -192,7 +196,7 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
       {
         field: 'actions',
         headerName: t('pages.admin.projects.column.actions', 'Actions'),
-        width: 140,
+        width: 172,
         sortable: false,
         disableColumnMenu: true,
         renderCell: (params: GridRenderCellParams<AdminProjectRow>) => {
@@ -203,6 +207,7 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
             : t('pages.admin.projects.action.suspend', 'Suspend project');
           const activityLabel = t('pages.admin.projects.action.activity', 'Project activity');
           const membersLabel = t('pages.admin.projects.action.members', 'Manage project member');
+          const cloudLabel = t('features.cloudExecutorSwitch.admin.action', 'Send to cloud (cloud executor)');
           return (
             <Box sx={{ display: 'flex', gap: 0.25 }} onClick={(event) => event.stopPropagation()}>
               {onOpenMembers ? (
@@ -241,12 +246,22 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
                   </IconButton>
                 </span>
               </Tooltip>
+
+              {onOpenCloudExecutor ? (
+                <Tooltip title={cloudLabel}>
+                  <span>
+                    <IconButton size="small" aria-label={cloudLabel} onClick={() => onOpenCloudExecutor(row)}>
+                      <CloudOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              ) : null}
             </Box>
           );
         },
       },
     ],
-    [onToggleSuspended, onOpenMembers, onOpenActivity, pendingIds],
+    [onToggleSuspended, onOpenMembers, onOpenActivity, onOpenCloudExecutor, pendingIds],
   );
 
   if (!isLoading && projects.length === 0) {
