@@ -1401,6 +1401,11 @@ main:
     S3_ENDPOINT_URL: ""
     S3_REGION: ""
     S3_FORCE_PATH_STYLE: ""
+    # The AWS SDK's own AWS_REQUEST_CHECKSUM_CALCULATION also applies (add it
+    # here as a key). "when_required" stops the CRC32 the SDK sends on every
+    # upload part by default; RustFS 1.0.0-beta.8 refuses a checksummed
+    # UploadPart into a bucket with default encryption, so a RustFS bucket
+    # with SSE needs it (Cloud executor on Kubernetes, step 2).
     # Azure-only. AZURE_STORAGE_KEY is NOT here — see the secrets: block below;
     # leaving it unset (empty string, the Secret's `optional: true`) makes the
     # backend use workload identity via serviceAccount.annotations instead of a
