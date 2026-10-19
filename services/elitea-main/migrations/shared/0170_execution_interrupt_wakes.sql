@@ -75,3 +75,10 @@ CREATE INDEX execution_interrupt_wakes_parked_execution
 -- The claim path asks whether an execution is a wake (claim opt-in, §8.1).
 CREATE INDEX execution_interrupt_wakes_wake_execution
     ON elitea_runtime.execution_interrupt_wakes (wake_execution_id) WHERE wake_execution_id IS NOT NULL;
+
+-- A new turn supersedes the open cards of the conversation's earlier
+-- responses in its admission transaction; this keeps that lookup to the open
+-- cards of one conversation.
+CREATE INDEX execution_interrupts_open_by_conversation
+    ON elitea_runtime.execution_interrupts (project_id, conversation_id)
+    WHERE state IN ('PENDING', 'DECIDED');

@@ -128,10 +128,16 @@ type interruptResolvedFrame struct {
 // caller's transaction (contract §9). The frame carries the action of a
 // decision and never its value. A response with no agent execution in this
 // project (impossible for a raised card) is a ledger fault.
-func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, resolved []domain.Resolved) error {
+//
+// The returned notice names the highest replay cursor this call inserted; the
+// caller hands it to ExecutionInterruptSignals after its transaction commits,
+// so open tabs read the frames without waiting for the replay poll. A frame
+// that already existed (a replayed write) produces no notice.
+func emitInterruptResolved(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, resolved []domain.Resolved) (resolvedNotice, error) {
 	if len(resolved) == 0 {
-		return nil
+		return resolvedNotice{}, nil
 	}
+	notice := resolvedNotice{projectID: projectID}
 	var executionID, streamID, executionGeneration, sioEvent string
 	var generation int64
 	err := tx.QueryRow(ctx, `
@@ -142,15 +148,15 @@ WHERE binding.client_message_id = $1 AND job.projection_project_id = $2 AND job.
 ORDER BY job.admitted_at DESC, binding.generation DESC, binding.execution_id DESC
 LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, &executionGeneration, &sioEvent)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.ErrLedgerFault
+		return resolvedNotice{}, domain.ErrLedgerFault
 	}
 	if err != nil {
-		return fmt.Errorf("execution interrupt resolved frame: %w", err)
+		return resolvedNotice{}, fmt.Errorf("execution interrupt resolved frame: %w", err)
 	}
 	for _, card := range resolved {
 		metadata, err := card.ResolvedMetadataJSON()
 		if err != nil {
-			return err
+			return resolvedNotice{}, err
 		}
 		frame, err := json.Marshal(interruptResolvedFrame{
 			Type: interruptResolvedEventType, StreamID: streamID, MessageID: rootResponseID,
@@ -159,31 +165,87 @@ LIMIT 1`, rootResponseID, projectID).Scan(&executionID, &generation, &streamID, 
 			SIOEvent:         sioEvent, ExecutionGeneration: executionGeneration,
 		})
 		if err != nil {
-			return fmt.Errorf("execution interrupt resolved frame: %w", err)
+			return resolvedNotice{}, fmt.Errorf("execution interrupt resolved frame: %w", err)
 		}
 		eventID := interruptResolvedEventIDPrefix + rootResponseID + ":" + card.InterruptKey + ":" + strconv.FormatInt(card.Revision, 10)
 		digest := runtimedomain.SHA256(frame)
 		var stored []byte
+		var cursor int64
+		var inserted bool
 		err = tx.QueryRow(ctx, `
 WITH inserted AS (
   INSERT INTO elitea_runtime.execution_replay_events (
       event_id, execution_id, generation, projection_project_id, event_type, event_bytes, event_digest)
   VALUES ($1, $2, $3, $4, $5, $6, $7)
   ON CONFLICT (event_id) DO NOTHING
-  RETURNING event_bytes
+  RETURNING event_bytes, cursor
 )
-SELECT event_bytes FROM inserted
+SELECT event_bytes, cursor, TRUE FROM inserted
 UNION ALL
-SELECT event_bytes FROM elitea_runtime.execution_replay_events WHERE event_id = $1 AND NOT EXISTS (SELECT 1 FROM inserted)`,
-			eventID, executionID, generation, projectID, replayEventNodeEvent, frame, digest[:]).Scan(&stored)
+SELECT event_bytes, cursor, FALSE FROM elitea_runtime.execution_replay_events WHERE event_id = $1 AND NOT EXISTS (SELECT 1 FROM inserted)`,
+			eventID, executionID, generation, projectID, replayEventNodeEvent, frame, digest[:]).Scan(&stored, &cursor, &inserted)
 		if err != nil {
-			return fmt.Errorf("execution interrupt resolved frame: %w", err)
+			return resolvedNotice{}, fmt.Errorf("execution interrupt resolved frame: %w", err)
 		}
 		if !bytes.Equal(stored, frame) {
-			return domain.ErrLedgerFault
+			return resolvedNotice{}, domain.ErrLedgerFault
+		}
+		if inserted && cursor > notice.cursor {
+			notice.executionID, notice.cursor = executionID, cursor
 		}
 	}
-	return nil
+	return notice, nil
+}
+
+// resolvedNotice is one replay wake owed after commit: the execution whose
+// replay log received agent_hitl_resolved frames and the highest cursor.
+type resolvedNotice struct {
+	projectID   int64
+	executionID string
+	cursor      int64
+}
+
+func (n resolvedNotice) valid() bool {
+	return n.projectID > 0 && n.executionID != "" && n.cursor > 0
+}
+
+// InterruptReplayNotifier wakes live replay streams of one execution (the
+// replay wake bus, runtimecomposition/execution_replay_wake.go).
+type InterruptReplayNotifier interface {
+	Notify(projectID, executionID string, cursor uint64)
+}
+
+// FanoutWakeKicker starts wake admission (agentexecution.FanoutWakeAdmitter).
+type FanoutWakeKicker interface {
+	Kick()
+}
+
+// ExecutionInterruptSignals are the ledger's after-commit signals. Every
+// method is called only after the transaction that made the change visible
+// has committed, and both are advisory: a lost signal costs latency (the
+// replay poll, the wake sweep), never correctness. The zero value and a nil
+// pointer are silent. Fields are set once during composition, before any
+// request or output is served.
+type ExecutionInterruptSignals struct {
+	Replay InterruptReplayNotifier
+	Wakes  FanoutWakeKicker
+}
+
+func (s *ExecutionInterruptSignals) resolved(notices ...resolvedNotice) {
+	if s == nil || s.Replay == nil {
+		return
+	}
+	for _, notice := range notices {
+		if notice.valid() {
+			s.Replay.Notify(strconv.FormatInt(notice.projectID, 10), notice.executionID, uint64(notice.cursor))
+		}
+	}
+}
+
+func (s *ExecutionInterruptSignals) wakeQueued(queued bool) {
+	if queued && s != nil && s.Wakes != nil {
+		s.Wakes.Kick()
+	}
 }
 
 func wakeClosedFailureCode(state domain.State) string {
@@ -197,6 +259,9 @@ func wakeClosedFailureCode(state domain.State) string {
 // partial unique index allows one active wake per response; the caller holds
 // the per-response row lock, so a second active wake is a ledger fault.
 func insertWake(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string, decisionRevision int64, parkedExecution string, parkedGeneration int64) error {
+	if err := retireSettledWakes(ctx, tx, rootResponseID); err != nil {
+		return err
+	}
 	var queued int
 	err := tx.QueryRow(ctx, `
 WITH unparked AS (
@@ -242,6 +307,10 @@ type ParkSettlement struct {
 //   - otherwise the response is recorded parked, and the next decision
 //     queues the wake.
 func (r *ExecutionInterruptRepository) SettleParkedResponse(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID, executionID string, generation, decisionRevisionSeen int64) (ParkSettlement, error) {
+	return settleParkedResponse(ctx, tx, projectID, rootResponseID, executionID, generation, decisionRevisionSeen)
+}
+
+func settleParkedResponse(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID, executionID string, generation, decisionRevisionSeen int64) (ParkSettlement, error) {
 	if tx == nil || projectID <= 0 || !domain.ValidResponseMessageID(rootResponseID) || !domain.ValidExecutionID(executionID) ||
 		generation <= 0 || decisionRevisionSeen < 0 {
 		return ParkSettlement{}, domain.ErrInvalidRaise
@@ -272,6 +341,9 @@ WHERE root_response_id = $1::uuid AND state = 'ADMITTED' AND wake_execution_id =
 	}
 	settlement := ParkSettlement{DecisionRevision: current}
 	if current > decisionRevisionSeen || decided {
+		if err := retireSettledWakes(ctx, tx, rootResponseID); err != nil {
+			return ParkSettlement{}, err
+		}
 		var active bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM elitea_runtime.execution_interrupt_wakes
 WHERE root_response_id = $1::uuid AND state IN ('QUEUED', 'ADMITTED'))`, rootResponseID).Scan(&active); err != nil {

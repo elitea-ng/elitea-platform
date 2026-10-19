@@ -14,6 +14,13 @@ import (
 
 type CurrentAgentCancelRepository struct {
 	projects projectStore
+	signals  *ExecutionInterruptSignals
+}
+
+// SetInterruptSignals installs the after-commit live wake for the
+// agent_hitl_resolved frames a stop emits. Call it during composition.
+func (repository *CurrentAgentCancelRepository) SetInterruptSignals(signals *ExecutionInterruptSignals) {
+	repository.signals = signals
 }
 
 func NewCurrentAgentCancelRepository(pool *pgxpool.Pool) (*CurrentAgentCancelRepository, error) {
@@ -63,11 +70,13 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 	}
 
 	var outcome agentexecutionapp.CurrentAgentCancelOutcome
+	var notice resolvedNotice
 	err = repository.projects.WithinProjectTx(
 		ctx,
 		request.ProjectID,
 		pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite},
 		func(tx sqlExecutor) error {
+			notice = resolvedNotice{}
 			queries, ok := tx.(currentAgentCancelQuerier)
 			if !ok {
 				return errors.New("current agent cancellation query is unavailable")
@@ -138,7 +147,9 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 					return errors.New("current agent cancellation deleted an incomplete pair")
 				}
 				outcome.Deleted = true
-				return cancelOpenInterruptCards(ctx, tx, request)
+				var closeErr error
+				notice, closeErr = cancelOpenInterruptCards(ctx, tx, request)
+				return closeErr
 			}
 			if !projection.Deleted && !projection.Retained && !projection.Salvaged &&
 				!projection.QuestionDeleted {
@@ -162,12 +173,15 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				return errors.New("current agent cancellation projection did not settle")
 			}
 			outcome.Salvaged = projection.Salvaged
-			return cancelOpenInterruptCards(ctx, tx, request)
+			var closeErr error
+			notice, closeErr = cancelOpenInterruptCards(ctx, tx, request)
+			return closeErr
 		},
 	)
 	if err != nil {
 		return agentexecutionapp.CurrentAgentCancelOutcome{}, err
 	}
+	repository.signals.resolved(notice)
 	return outcome, nil
 }
 
@@ -177,10 +191,11 @@ var _ agentexecutionapp.CurrentAgentCancellationStore = (*CurrentAgentCancelRepo
 // the stop transaction (fanout-interrupt-decisions §5: atomic with the stop),
 // after the response row lock is held, and emits agent_hitl_resolved for each.
 // The cancelled fence then refuses any late ACK.
-func cancelOpenInterruptCards(ctx context.Context, tx sqlExecutor, request agentexecutionapp.CurrentAgentCancelRequest) error {
-	if _, err := closeOpenExecutionInterrupts(ctx, tx, request.ResponseMessageID, interruptdomain.StateCancelled,
-		interruptdomain.Closer{ActorUserID: request.ActorUserID}); err != nil {
-		return fmt.Errorf("cancel open interrupt cards: %w", err)
+func cancelOpenInterruptCards(ctx context.Context, tx sqlExecutor, request agentexecutionapp.CurrentAgentCancelRequest) (resolvedNotice, error) {
+	_, notice, err := closeOpenExecutionInterrupts(ctx, tx, request.ResponseMessageID, interruptdomain.StateCancelled,
+		interruptdomain.Closer{ActorUserID: request.ActorUserID})
+	if err != nil {
+		return resolvedNotice{}, fmt.Errorf("cancel open interrupt cards: %w", err)
 	}
-	return nil
+	return notice, nil
 }

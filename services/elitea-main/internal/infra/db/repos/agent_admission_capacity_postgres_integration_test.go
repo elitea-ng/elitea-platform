@@ -470,7 +470,7 @@ WHERE idempotency_key = $1`, slow.Record.IdempotencyKey); err != nil {
 	assertPostgresAgentAdmissionState(t, ctx, pool, 2, 2, 0, 2)
 
 	// The slow start's materialize must refuse rather than admit a third job.
-	_, err = repository.materializeAgentAdmission(ctx, slow, 1, 1)
+	_, _, err = repository.materializeAgentAdmission(ctx, slow, 1, 1)
 	assertPostgresAgentCapacityError(t, err, maxOutstanding)
 	assertPostgresAgentAdmissionState(t, ctx, pool, 2, 2, 0, 2)
 
@@ -483,7 +483,7 @@ SET state = 'SUCCEEDED'
 WHERE execution_id = $1`, postgresAgentCapacityAdmission(1).Record.Job.ID); err != nil {
 		t.Fatalf("settle agent execution: %v", err)
 	}
-	outcome, err := repository.materializeAgentAdmission(ctx, slow, 1, 1)
+	outcome, _, err := repository.materializeAgentAdmission(ctx, slow, 1, 1)
 	if err != nil || !outcome.Created {
 		t.Fatalf("reaped materialize under the cap must commit: created=%v err=%v", outcome.Created, err)
 	}

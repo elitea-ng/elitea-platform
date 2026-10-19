@@ -558,6 +558,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var nodeRecovery *recoveryapp.Service
 	var nodeRecoveryStore *repos.NodeRecoveryRepository
 	var executionInterrupts *repos.ExecutionInterruptRepository
+	// The ledger's after-commit signals: the replay wake for
+	// agent_hitl_resolved and the wake-admission kick. Filled below, before
+	// anything is served.
+	interruptSignals := &repos.ExecutionInterruptSignals{}
+	var fanoutWakes *agentexecutionapp.FanoutWakeAdmitter
 	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
 	var originalCodeIntents *repos.CodeIntentRepository
 	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
@@ -676,6 +681,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation repository: %w", cancelErr)
 		}
+		// fanout-interrupt-decisions v1.1 §8.1: a QUEUED wake row becomes one
+		// fanout_wake continuation through the ordinary agent admission.
+		fanoutWakes, recoveryErr = agentexecutionapp.NewFanoutWakeAdmitter(executionInterrupts, agentAdmissions, dependencies.Logger)
+		if recoveryErr != nil {
+			return nil, fmt.Errorf("construct fanout wake admitter: %w", recoveryErr)
+		}
+		interruptSignals.Wakes = fanoutWakes
+		executionInterrupts.SetSignals(interruptSignals)
+		agentCancellation.SetInterruptSignals(interruptSignals)
+		agentJobs.SetInterruptSignals(interruptSignals)
 		agentCancel, cancelErr = agentexecutionapp.NewCurrentAgentCancellationService(agentCancellation)
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation service: %w", cancelErr)
@@ -943,6 +958,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("compose agent admission reservation reaper: %w", err)
 		}
+		if fanoutWakes != nil {
+			publisherRoot, err = newPublisherSet(publisherRoot, fanoutWakes)
+			if err != nil {
+				return nil, fmt.Errorf("compose fanout wake admitter: %w", err)
+			}
+		}
 	}
 	var replayMaintenance *executionReplayRetentionJanitor
 	var nodeEvents *repos.NodeEventsRepository
@@ -964,6 +985,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("compose execution replay wake bus: %w", err)
 		}
 		replayWaiter = replayWake
+		interruptSignals.Replay = replayWake
 		replayRetention, retentionErr := newExecutionReplayRetentionJanitor(
 			nodeEvents,
 			executionReplayRetentionPollInterval,
@@ -1284,6 +1306,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct agent execution result repository: %w", err)
 		}
+		agentResults.SetInterruptSignals(interruptSignals)
 		agentOutput, err = outputapp.NewAgentExecutionService(
 			agentJobs,
 			outputClaims,
