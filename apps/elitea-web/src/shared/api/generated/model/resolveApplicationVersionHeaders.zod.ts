@@ -43,6 +43,7 @@ import * as zod from "zod";
 
 export const ResolveApplicationVersionHeaders = zod.object({
   "X-Client-Version": zod.string().optional(),
+  "If-None-Match": zod.string().optional(),
 });
 
 export type ResolveApplicationVersionHeaders = zod.input<

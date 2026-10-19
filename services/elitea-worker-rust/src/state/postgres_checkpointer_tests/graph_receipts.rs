@@ -36,7 +36,7 @@ async fn required_database() -> Option<IsolatedPostgres> {
         "receipt PG proofs require the disposable-PG18 guard"
     );
     let url = url.expect("required receipt PG proof has no ELITEA_TEST_DATABASE_URL");
-    let options = PgConnectOptions::from_str(&url).expect("parse required fixture URL");
+    let options = crate::test_pg::connect_options(&url).expect("parse required fixture URL");
     assert!(
         matches!(options.get_host(), "localhost" | "127.0.0.1" | "::1"),
         "required receipt fixture must use the loopback disposable server"

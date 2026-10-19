@@ -41,9 +41,6 @@
  *  - A fall-through to the direct-agent assembler. It would answer too,
  *    treating the YAML as a system prompt, and its thinking step carries
  *    `attrs: {}` — measured in `chat.pipeline.spec.ts`'s own step 6.
- *  - A direct agent under the SDK worker, which writes this same key but
- *    fills it with the langgraph node name `"agent"`, never a pipeline node
- *    id (same measurement, recorded in that file's skip note).
  *  - A coincidence. The id is renamed to something no model would emit and
  *    no default would produce, through the node card's own rename box.
  *
@@ -277,15 +274,6 @@ async function latchPerformingHighlight(page: Page): Promise<void> {
 }
 
 test('a pipeline authored on the canvas runs its graph and answers in the editor’s own chat pane', async ({ page }) => {
-  // Same leg restriction as `chat.pipeline.spec.ts`, and for the same two
-  // measured reasons: the SDK worker rejects a bare `state` type name, and
-  // its pipeline run publishes no execution-trace step naming the node this
-  // file reads. Without that step the central assertion here cannot tell a
-  // compiled graph from a fall-through to the direct-agent runtime.
-  test.skip(
-    (process.env['E2E_WORKER'] ?? 'rust') !== 'rust',
-    'the SDK worker emits no pipeline trace step naming the node this spec reads',
-  );
   // Create, author, save, admit, compile, one model call and the stream
   // back. Every wait below is bounded well under this.
   test.setTimeout(300_000);

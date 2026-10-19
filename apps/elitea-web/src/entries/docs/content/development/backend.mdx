@@ -93,19 +93,9 @@ GOWORK=off go test ./...
 
 `ci-gateway.yml` runs its own pipeline for this module; `task test`/`task vet`/`task lint` at the repository root never open it, and a green root-level run is not evidence about it.
 
-## Worker test recipes
+## Worker test recipe
 
-<Tabs>
-<Tab title="Python worker">
-
-```bash
-task worker:test
-```
-
-Runs `python -m pytest services/elitea-worker-python/tests` against whatever `elitea-sdk` build is installed in your environment. Plain `pip`, no `uv` lockfile. `ci-python.yml` runs a stricter recipe for SDK-conformance coverage: it clones `elitea-sdk` at a pinned revision, verifies that revision's archive checksum, cherry-picks four named patches onto it, and installs the result with one `pip install` pass — reproduce that only if you are changing SDK-compatibility behavior, not for an ordinary worker change.
-
-</Tab>
-<Tab title="Rust worker">
+The agent worker is the native Rust runtime:
 
 ```bash
 cd services/elitea-worker-rust
@@ -114,7 +104,4 @@ cargo test --locked --all-targets --all-features
 
 The toolchain is pinned in `rust-toolchain.toml`; `rustup` picks it up automatically inside the directory. `ci-rust.yml` runs the same command, plus `cargo build --locked --release`.
 
-</Tab>
-</Tabs>
-
-{/* source: services/elitea-main/internal/infra/pgvector/pgx_integration_test.go:19-23 (ELITEA_TEST_DATABASE_URL skip pattern); services/elitea-main/internal/infra/db/migrate/manifest.go:22-60 (three scopes, checksum, filename regex); services/elitea-main/internal/infra/db/migrate/manifest_test.go:93 (TestEmbeddedHistoriesHaveExpectedHeads); Taskfile.yml:9-30 (build/test/run), 187-200 (migrations:check); services/elitea-main/internal/api/main_public_rules_test.go:31-32 (TestCurrentMainRoutePublicRulesMatchPinnedCatalog); .github/workflows/ci-go.yml:228-234 (oapi-codegen verify step); apps/elitea-web/scripts/check-generated-client.mjs:3-25 (orval regeneration); services/elitea-llm-gateway/go.mod:3 (Go 1.26); deploy/docker-compose.standalone-full.yml:425-433 (GOWORK=off build); services/elitea-worker-python/README.md:11-16 (pinned SDK admission); .github/workflows/ci-python.yml:279-299 (pinned SDK clone, checksum, four cherry-picks, single pip install); services/elitea-worker-rust/rust-toolchain.toml:1-4; .github/workflows/ci-rust.yml:84,143 (cargo build/test --locked) */}
+{/* source: services/elitea-main/internal/infra/pgvector/pgx_integration_test.go:19-23 (ELITEA_TEST_DATABASE_URL skip pattern); services/elitea-main/internal/infra/db/migrate/manifest.go:22-60 (three scopes, checksum, filename regex); services/elitea-main/internal/infra/db/migrate/manifest_test.go:93 (TestEmbeddedHistoriesHaveExpectedHeads); Taskfile.yml:9-30 (build/test/run), 187-200 (migrations:check); services/elitea-main/internal/api/main_public_rules_test.go:31-32 (TestCurrentMainRoutePublicRulesMatchPinnedCatalog); .github/workflows/ci-go.yml:228-234 (oapi-codegen verify step); apps/elitea-web/scripts/check-generated-client.mjs:3-25 (orval regeneration); services/elitea-llm-gateway/go.mod:3 (Go 1.26); deploy/docker-compose.standalone-full.yml:425-433 (GOWORK=off build); services/elitea-worker-rust/rust-toolchain.toml:1-4; .github/workflows/ci-rust.yml:84,143 (cargo build/test --locked) */}

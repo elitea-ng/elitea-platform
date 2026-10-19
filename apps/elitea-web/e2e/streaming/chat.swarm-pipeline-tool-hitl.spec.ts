@@ -36,12 +36,6 @@
  * The fixture it builds — attach a pipeline to an agent as a tool and read the
  * reference back off the PARENT version — is the capability #939 group 3 asked
  * for.
- *
- * RUST ONLY, like its sibling, and gated rather than merely claimed: the
- * python (SDK) worker SERVES Swarm mode, so assertion 2's precondition is a
- * fact about this leg and not about that one (measured — see the `test.skip`
- * on the test itself). What the SDK worker does with a child pipeline's
- * `hitl` pause is a separate question this file makes no claim about.
  */
 import { expect, test, type Page } from '@playwright/test';
 
@@ -181,7 +175,7 @@ async function attachPipelineAsTool(
 
   return {
     pipeline,
-    toolName: agentAsToolName({ agentId: pipeline.id, versionId: pipeline.versionId, name: 'pipeline' }),
+    toolName: agentAsToolName({ agentId: pipeline.id, versionId: pipeline.versionId }),
   };
 }
 
@@ -214,18 +208,6 @@ async function openAgentChat(page: Page, agentId: string): Promise<string> {
  * card → decision → answer — once, through the browser.
  */
 test('a Swarm-mode agent can invoke an attached pipeline, and its HITL prompt reaches the chat', async ({ page }) => {
-  // RUST LEG ONLY, and measured rather than assumed. On the python (SDK) leg
-  // `/runtime_capabilities` reports `internal_tools.swarm` TRUE — that worker
-  // SERVES Swarm mode — so assertion 2 below, which pins the NATIVE runtime's
-  // honest "recognized and skipped" degrade (#866) as a fact, is a statement
-  // about this leg alone and fails there before the pipeline is ever reached.
-  // The pipeline half is NOT the reason for the gate: the SDK worker builds
-  // pipeline children through its own application toolkit, and what it does
-  // with a child's `hitl` pause is simply not measured by this file.
-  test.skip(
-    (process.env['E2E_WORKER'] ?? 'rust') !== 'rust',
-    'the SDK worker serves Swarm mode, so this file’s swarm precondition is a rust-leg fact',
-  );
   test.setTimeout(420_000);
 
   const projectId = await readCallerPersonalProjectId(page.request);

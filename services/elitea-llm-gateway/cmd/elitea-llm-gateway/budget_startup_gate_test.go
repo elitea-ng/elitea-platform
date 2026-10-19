@@ -419,6 +419,9 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 			// Still running, which is the documented opt-out posture.
 		}
 		cancel()
-		<-done
+		// cancel() kills the process (exec.CommandContext), so Wait reports the
+		// kill signal: the value only marks that it has exited, which is all
+		// this wait is for. Logged, not asserted.
+		t.Logf("the gateway exited after cancel: %v", <-done)
 	})
 }

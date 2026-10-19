@@ -8,7 +8,7 @@
 # statement about the wrong caller.
 #
 # WHY THIS IS A SHARED FUNCTION AND NOT A QUERY REPEATED THREE TIMES.
-# standalone-stack.sh, sdk-client-check.sh and embedding-path-check.sh each
+# standalone-stack.sh and embedding-path-check.sh each
 # carried their own copy of that query, and every copy ended
 # `ORDER BY t.user_id LIMIT 1`. That named the SEEDED persona only by accident:
 # nothing in this stack created a personal project for anybody else, so the

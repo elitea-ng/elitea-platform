@@ -72,6 +72,11 @@ struct SensitiveToolIdentity {
 struct SensitiveToolEntry {
     policy: SensitiveToolPolicy,
     read_only: bool,
+    /// Confirmed only when an argument check asks (the cloud workspace's
+    /// `run_command`, ADR-0034): not a name-wide confirmation, and an
+    /// approved call replays, because its effect is confined to the
+    /// workspace the continuation hydrates from the published commit.
+    conditional: bool,
 }
 
 impl SensitiveToolCatalog {
@@ -80,8 +85,30 @@ impl SensitiveToolCatalog {
         self.scoped_entries.is_empty()
     }
 
+    /// The names confirmed on every call (conditional entries excluded).
     pub(crate) fn tool_names(&self) -> impl Iterator<Item = &str> {
-        self.provider_entries.keys().map(AsRef::as_ref)
+        self.provider_entries
+            .iter()
+            .filter(|(_, entry)| !entry.conditional)
+            .map(|(name, _)| name.as_ref())
+    }
+
+    /// Add the cloud workspace's conditional `run_command` (ADR-0034).
+    ///
+    /// # Errors
+    ///
+    /// The catalog already holds a `local.run_command` entry.
+    pub(crate) fn with_workspace_command(mut self) -> Result<Self, NativeAgentAssemblyError> {
+        self.insert_scoped(
+            "local",
+            "run_command",
+            SensitiveToolEntry {
+                policy: SensitiveToolPolicy::workspace_command(),
+                read_only: false,
+                conditional: true,
+            },
+        )?;
+        Ok(self)
     }
 
     #[must_use]
@@ -201,7 +228,11 @@ impl SensitiveToolCatalog {
         catalog.insert_scoped(
             "fixture",
             tool_name,
-            SensitiveToolEntry { policy, read_only },
+            SensitiveToolEntry {
+                policy,
+                read_only,
+                conditional: false,
+            },
         )?;
         Ok(catalog)
     }
@@ -260,6 +291,7 @@ pub(crate) async fn sensitive_tools_for_kind(
                 SensitiveToolEntry {
                     policy: sensitive,
                     read_only: tool.is_read_only(),
+                    conditional: false,
                 },
             )?;
         }
@@ -418,6 +450,7 @@ mod tests {
                     SensitiveToolEntry {
                         policy: sensitive,
                         read_only: true,
+                        conditional: false,
                     },
                 )
                 .expect("scoped sensitive tool");

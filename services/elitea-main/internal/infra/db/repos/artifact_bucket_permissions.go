@@ -139,6 +139,47 @@ WHERE project_id = $1 AND user_id = $2 AND bucket = $3`,
 	return permissions, true, nil
 }
 
+// BucketGate is what a bucket route needs before it reads the bucket: whether
+// the name is the project's hidden workspace bucket (by type), and the
+// caller's exception for it.
+type BucketGate struct {
+	Workspace   bool
+	Permissions []string
+	// Found is false when the caller has no exception for the bucket (the
+	// legacy default: ALLOW).
+	Found bool
+}
+
+// BucketGate answers the workspace check and the caller's exception in ONE
+// query (userID 0: no caller, no exception).
+func (r *ArtifactBucketPermissionsRepository) BucketGate(
+	ctx context.Context, projectID, userID int64, bucket string,
+) (BucketGate, error) {
+	var (
+		gate        BucketGate
+		permissions []string
+	)
+	err := r.pool.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM elitea_storage.buckets
+               WHERE project_id = $1 AND name = $3 AND bucket_type = 'workspace' AND deleted_at IS NULL),
+       p.user_id IS NOT NULL,
+       p.permissions
+FROM (SELECT 1) AS one
+LEFT JOIN elitea_storage.bucket_permissions AS p
+       ON p.project_id = $1 AND p.user_id = $2 AND p.bucket = $3`,
+		projectID, userID, bucket).Scan(&gate.Workspace, &gate.Found, &permissions)
+	if err != nil {
+		return BucketGate{}, fmt.Errorf("read artifact bucket gate: %w", err)
+	}
+	if gate.Found {
+		if permissions == nil {
+			permissions = []string{}
+		}
+		gate.Permissions = permissions
+	}
+	return gate, nil
+}
+
 // ListUserBucketPermissions reads one member's whole exception map. The
 // bucket LISTING route needs it, because it must decide visibility for every
 // bucket in one pass rather than per bucket.

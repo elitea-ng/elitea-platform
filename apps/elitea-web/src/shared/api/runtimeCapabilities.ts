@@ -12,9 +12,7 @@ import type { RuntimeCapabilities } from '@/shared/api/generated/model';
  * versus this module's cross-feature placement.
  *
  * Before this endpoint existed, neither surface had any signal for which
- * worker was deployed at all — `internalTools.ts`'s own `pyodide` entry
- * documented the gap directly ("the app has no signal anywhere for which
- * worker a deployment is running"). A toolkit type the worker could not
+ * worker was deployed at all. A toolkit type the worker could not
  * build was OMITTED from the type picker with no explanation
  * (`toolkitTypeMenuEntries`'s `metadata['hidden'] !== true` filter), and an
  * internal tool the worker could not run answered as if nothing had
@@ -32,14 +30,12 @@ export function useRuntimeCapabilities(): RuntimeCapabilities | undefined {
 /**
  * Whether the CONFIGURED worker runs one of the toggleable internal chat
  * tools (`features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST`
- * names) for real, per #866. The Rust worker serves `planner`,
- * `lazy_tools_mode` and `attachments` itself, so they read available on either
- * worker; only what it still skips (`image_generation`, `data_analysis`,
- * `internal_mcp`, `swarm`) reads unavailable there.
+ * names) for real, per #866. What the Rust worker skips (`image_generation`,
+ * `internal_mcp`, `swarm`) reads unavailable.
  *
  * Returns `true` — available — for a tool name this deployment's
- * capabilities response does not mention at all (`pyodide`, any tool this
- * endpoint has not been taught yet) and while the query has
+ * capabilities response does not mention at all (any tool this endpoint has
+ * not been taught yet) and while the query has
  * not resolved, matching this app's existing "unset means offered, not
  * withheld" convention (`ToolkitCapabilitySource`'s own nil case, the
  * generated `metadata.hidden` default) — never disable a toggle on missing

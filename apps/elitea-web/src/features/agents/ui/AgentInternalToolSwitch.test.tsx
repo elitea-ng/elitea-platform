@@ -9,14 +9,14 @@ describe('AgentInternalToolSwitch', () => {
   it('renders the title and the resolved icon', () => {
     renderWithProviders(
       <AgentInternalToolSwitch
-        name="pyodide"
-        title="Python sandbox"
-        icon="PythonIcon"
+        name="planner"
+        title="Planner"
+        icon="CalendarIcon"
         checked={false}
         onCheckedChange={vi.fn()}
       />,
     );
-    expect(screen.getByText('Python sandbox')).toBeInTheDocument();
+    expect(screen.getByText('Planner')).toBeInTheDocument();
   });
 
   it('renders without crashing for an unknown icon key', () => {
@@ -35,9 +35,9 @@ describe('AgentInternalToolSwitch', () => {
   it('reflects the checked prop', () => {
     renderWithProviders(
       <AgentInternalToolSwitch
-        name="pyodide"
-        title="Python sandbox"
-        icon="PythonIcon"
+        name="planner"
+        title="Planner"
+        icon="CalendarIcon"
         checked
         onCheckedChange={vi.fn()}
       />,
@@ -49,9 +49,9 @@ describe('AgentInternalToolSwitch', () => {
     const onCheckedChange = vi.fn();
     renderWithProviders(
       <AgentInternalToolSwitch
-        name="pyodide"
-        title="Python sandbox"
-        icon="PythonIcon"
+        name="planner"
+        title="Planner"
+        icon="CalendarIcon"
         checked={false}
         onCheckedChange={onCheckedChange}
       />,
@@ -63,9 +63,9 @@ describe('AgentInternalToolSwitch', () => {
   it('disables the switch when disabled is true', () => {
     renderWithProviders(
       <AgentInternalToolSwitch
-        name="pyodide"
-        title="Python sandbox"
-        icon="PythonIcon"
+        name="planner"
+        title="Planner"
+        icon="CalendarIcon"
         checked={false}
         onCheckedChange={vi.fn()}
         disabled
@@ -96,9 +96,9 @@ describe('AgentInternalToolSwitch', () => {
   it('renders an info tooltip when infoTooltip.text is supplied', () => {
     renderWithProviders(
       <AgentInternalToolSwitch
-        name="pyodide"
-        title="Python sandbox"
-        icon="PythonIcon"
+        name="planner"
+        title="Planner"
+        icon="CalendarIcon"
         checked={false}
         onCheckedChange={vi.fn()}
         infoTooltip={{ text: 'Runs code in a sandbox' }}

@@ -24,12 +24,13 @@ use crate::d0::approvals::UiDecision;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
 use crate::d0::turn::{
-    AgentHost, PolicySource, RestorePreview, TurnError, TurnRequest, TurnStarted, TurnStatus,
+    AgentHost, PolicySource, PrewarmRequest, Prewarmed, RestorePreview, TurnError, TurnRequest,
+    TurnStarted, TurnStatus,
 };
 use crate::error::HostError;
 use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
-use crate::workspaces::{Workspace, WorkspaceStore};
+use crate::workspaces::{AgentSettings, STEP_LIMIT_RANGE, Workspace, WorkspaceStore};
 use elitea_local_tools::find::FoundPath;
 
 pub struct LocalState {
@@ -39,6 +40,9 @@ pub struct LocalState {
     pub index: Arc<crate::index::IndexRegistry>,
     /// The thread history, flushed at exit (`None` runs without one).
     pub history: Option<Arc<crate::history::HistoryStore>>,
+    /// The cloud handoff (`src/handoff.rs`): a thread in the cloud runs no
+    /// local turn.
+    pub handoff: Option<Arc<crate::handoff::HandoffHost>>,
 }
 
 /// The Doctor's repairs through the app's own paths: the agent host's (see
@@ -452,7 +456,47 @@ pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, Ip
 /// drops the agent host's session and turns of it.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), IpcError> {
-    Ok(state.agents.remove_workspace(&id).await?)
+    let path = state.workspaces.get(&id)?.map(|workspace| workspace.path);
+    state.agents.remove_workspace(&id).await?;
+    // Its linked worktrees (a take-back's) are no longer trusted by host git.
+    if let Some(path) = path {
+        elitea_local_tools::git::forget_worktree_parent(std::path::Path::new(&path));
+    }
+    Ok(())
+}
+
+/// The workspace's agent settings (`step_limit`: its turns' steps per run,
+/// over the agent's own; `null` for the agent's value, else the default).
+#[tauri::command(rename_all = "snake_case")]
+pub fn workspace_agent_settings_get(
+    state: State<'_, LocalState>,
+    id: String,
+) -> Result<AgentSettings, IpcError> {
+    Ok(state.workspaces.agent_settings(&id)?)
+}
+
+/// Store the workspace's agent settings; they apply from the next turn.
+/// `invalid_request` for a step limit outside 10 to 200.
+#[tauri::command(rename_all = "snake_case")]
+pub fn workspace_agent_settings_set(
+    state: State<'_, LocalState>,
+    id: String,
+    settings: AgentSettings,
+) -> Result<AgentSettings, IpcError> {
+    if settings
+        .step_limit
+        .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
+    {
+        return Err(IpcError::new(
+            "invalid_request",
+            format!(
+                "The step limit must be {} to {}.",
+                STEP_LIMIT_RANGE.start(),
+                STEP_LIMIT_RANGE.end()
+            ),
+        ));
+    }
+    Ok(state.workspaces.set_agent_settings(&id, settings)?)
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace.
@@ -479,6 +523,16 @@ pub async fn agent_turn_start(
     mentions: Option<Vec<String>>,
     skills: Option<Vec<String>>,
 ) -> Result<TurnStarted, IpcError> {
+    // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
+    // platform refuses it too).
+    if let (Some(handoff), Some(conversation)) = (&state.handoff, conversation_id.as_str())
+        && handoff.is_away(conversation)
+    {
+        return Err(IpcError::new(
+            "thread_executor_is_cloud",
+            "This thread is running in the cloud. Take it back to continue here.",
+        ));
+    }
     Ok(state
         .agents
         .start(TurnRequest {
@@ -493,6 +547,38 @@ pub async fn agent_turn_start(
             skills: skills.unwrap_or_default(),
         })
         .await?)
+}
+
+/// Read ahead what a turn to this agent version (and conversation) reads
+/// first, while the person is still typing: the turn then makes one serial
+/// request before the model, its start. Starts nothing.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn agent_prewarm(
+    state: State<'_, LocalState>,
+    project_id: i64,
+    application_id: i64,
+    version_id: i64,
+    conversation_id: Option<Value>,
+) -> Result<Prewarmed, IpcError> {
+    Ok(state
+        .agents
+        .prewarm(PrewarmRequest {
+            project_id,
+            application_id,
+            version_id,
+            conversation_id,
+        })
+        .await?)
+}
+
+/// Send a turn's commit again after `commit_failed` (same execution, same
+/// body, in its conversation's order); resolves once it settled.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn turn_commit_retry(
+    state: State<'_, LocalState>,
+    execution_id: String,
+) -> Result<(), IpcError> {
+    Ok(state.agents.retry_commit(&execution_id).await?)
 }
 
 /// The "@" picker: files and folders of the workspace matching `query`
@@ -576,6 +662,16 @@ pub async fn thread_history(
             .thread_history(&workspace_id, &conversation_id)
             .await?,
     })
+}
+
+/// The size and state of a conversation's agent session, or `null` without
+/// one (`sessions.rs`): for the Doctor and the context meter.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn session_info(
+    state: State<'_, LocalState>,
+    conversation_uuid: String,
+) -> Result<Option<crate::sessions::SessionInfo>, IpcError> {
+    Ok(state.agents.session_info(&conversation_uuid).await?)
 }
 
 #[derive(Serialize)]

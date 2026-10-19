@@ -90,8 +90,31 @@ deltas:
     # How long JetStream waits for an ack before redelivering. Must exceed the
     # scheduler's worst-case batch apply time (design §8.6 at-least-once).
     ackWait: "30s"
-    # Redelivery attempts for a delta that keeps failing to apply.
-    maxDeliver: 10
+    # Redelivery attempts for a delta that cannot be applied yet. -1 (no cap),
+    # [human decision] 2026-10-16. The scheduler defers with a growing delay
+    # (5s doubling to 60s, budgetwriteback.redeliverDelay), not a bare Nak.
+    # A delta waits while its accumulator row is outage-owned. That lasts
+    # until the gateway's recovery sweep (30s), and longer in a real NATS
+    # outage. A finite cap only decides when that money is dropped: 10 bare
+    # Naks were spent in about a second. The bound is the stream's maxAge
+    # (72h). Undecodable or invalid deltas are terminated, never redelivered.
+    maxDeliver: -1
+    # How many deltas may be delivered and not yet acked (MaxAckPending).
+    # Set explicitly: --defaults gives 1000. A delayed redelivery keeps its
+    # slot for the whole delay (up to 60s), so a deferral burst used to fill
+    # 1000 slots and stall write-back for EVERY scope. A delayed Nak keeps its
+    # slot across EVERY redelivery until the delta is acked or terminated, so
+    # during an outage the slots held = deferred deltas/s x outage SECONDS (not
+    # x the 60s delay). A billed /llm request publishes one delta per scope it
+    # bills: the project, and the member too when the caller carries a member
+    # id (llmproxy budget_gate.go), so up to TWO. At the 5k-user scale target
+    # the peak is about 50 requests/s, so about 100 deltas/s: 40000 slots
+    # cover about 400s (6.7 min) of an outage that defers every delta. The
+    # cost is server memory for the pending list, nothing on the money path.
+    # A full window only DELAYS delivery: the deltas wait in the stream (72h
+    # MaxAge) and none is lost. The scheduler chart's PrometheusRule pages at
+    # 80% (EliteaBudgetWriteBackAckPendingNearlyFull), before the stall.
+    maxAckPending: 40000
 
 # ELITEA_CANVAS_PRESENCE KV TTL. At least elitea-main's 120s roster TTL, or a
 # heartbeat's entry is collected before its own deadline.

@@ -25,10 +25,10 @@ use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
 use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::files;
-use crate::git::{Repo, capped, check_revision};
+use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
-use crate::sandbox::SandboxRequest;
+use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
@@ -80,6 +80,15 @@ pub struct LocalSession {
     checkpoints: Checkpoints,
     shell: ShellConfig,
     turn: Mutex<Turn>,
+}
+
+/// How a command would be confined (see [`LocalSession::command_confinement`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Confinement {
+    pub enforcement: Enforcement,
+    /// Whether the sandbox hides everything the session denies; when not,
+    /// every such command is asked.
+    pub hides_denied: bool,
 }
 
 /// A tool this crate offers: its name, kind, description and schema.
@@ -663,6 +672,46 @@ impl LocalSession {
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.is_read_only())
             .collect()
+    }
+
+    /// What a command in `mode` would run under now, decided as
+    /// `run_command` decides it but without running anything: for the
+    /// host's note to the model. `Err` when such a command is refused (the
+    /// sandbox cannot be enforced and the host does not allow that).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::SandboxUnavailable`], or the temporary directory cannot
+    /// be created.
+    pub fn command_confinement(&self, mode: SandboxMode, network: bool) -> ToolResult<Confinement> {
+        let request = self.sandbox_request(mode, network)?;
+        let prepared = sandbox::prepare(&request, &["true".to_owned()], &self.shell.sandbox)?;
+        Ok(Confinement {
+            enforcement: prepared.enforcement,
+            hides_denied: prepared.hides_denied,
+        })
+    }
+
+    /// The branch and the number of changed paths, from the same hardened
+    /// `git status` the `git_status` tool runs. Asked by the host for its
+    /// note to the model, so no approval is asked; only those two facts
+    /// leave. `None` outside git, for a repository git refuses, or when git
+    /// fails.
+    pub async fn git_summary(self: &Arc<Self>) -> Option<StatusSummary> {
+        self.blocking(|this| {
+            let Some(repo) = this.checkpoints.repo() else {
+                return Err(ToolError::new(ErrorCode::Git, "the folder is not in git"));
+            };
+            repo.git(this.workspace.root()).worktree().run(&[
+                "status",
+                "--porcelain=v1",
+                "--branch",
+                "--ignore-submodules=all",
+            ])
+        })
+        .await
+        .ok()
+        .map(|output| parse_status_summary(&output))
     }
 
     /// Run one tool call; the JSON result the model sees.

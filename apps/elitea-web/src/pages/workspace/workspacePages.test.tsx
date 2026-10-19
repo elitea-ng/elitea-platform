@@ -5,10 +5,10 @@
  * `routes/__tests__/workspacesRoute.test.tsx`.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
@@ -54,6 +54,26 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (w
   );
   return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
 }
+
+/*
+ * Deadlines sized for a busy machine. These tests drive whole pages with
+ * real timers (MUI selects, typing, dialogs): "runs a whole turn" takes
+ * 0.6 s alone, with a cold or a warm transform cache alike (no lazy import
+ * is loaded mid-test, and the page's only intervals are 15 s and longer), but
+ * 5.4 s while `vitest run src/features` runs beside it: CPU contention,
+ * which broke both the 5 s test timeout and testing-library's 1 s
+ * `waitFor`/`findBy` deadline. Measured 2026-10-15; see DEVIATIONS
+ * "desktop-followup".
+ */
+vi.setConfig({ testTimeout: 30_000 });
+let asyncUtilTimeout = 1000;
+beforeAll(() => {
+  asyncUtilTimeout = getConfig().asyncUtilTimeout;
+  configure({ asyncUtilTimeout: 10_000 });
+});
+afterAll(() => {
+  configure({ asyncUtilTimeout });
+});
 
 beforeEach(() => {
   resetConfigForTests();
@@ -535,6 +555,8 @@ describe('WorkspaceSessionPage', () => {
         busy: false,
         startError: null,
         start: () => Promise.resolve(started),
+        prewarm: () => undefined,
+        retryCommit: () => Promise.resolve(),
         cancel: () => Promise.resolve(),
         answer: () => Promise.resolve(),
         clear: () => undefined,
@@ -637,11 +659,80 @@ describe('WorkspaceSessionPage', () => {
           }),
         ),
         http.get(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ rows: [], total: 0 })),
+        // What the "Local coding agent" offer checks: may this person create agents here, and with which model.
+        http.get(`${BASE}/auth/permissions/prompt_lib/42`, () =>
+          HttpResponse.json(mayCreate ? [{ name: 'models.applications.applications.create', enabled: true }] : []),
+        ),
+        http.get(`${BASE}/configurations/models/42`, () =>
+          HttpResponse.json({ items: [{ name: 'gpt-5', project_id: '1', default: true }], default_model_name: 'gpt-5' }),
+        ),
       );
     }
+    let mayCreate = true;
 
     afterEach(() => {
       window.localStorage.clear();
+      mayCreate = true;
+    });
+
+    it('offers a Local coding agent in an empty project, creates it there on a click, and a turn runs on it', async () => {
+      const rows: { id: string; name: string }[] = [];
+      serveAgents(rows);
+      const created: unknown[] = [];
+      server.use(
+        http.post(`${BASE}/elitea_core/applications/prompt_lib/42`, async ({ request }) => {
+          created.push(await request.json());
+          rows.push({ id: '5', name: 'Local coding agent' });
+          return HttpResponse.json({ id: 5, name: 'Local coding agent' }, { status: 201 });
+        }),
+        http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/51`, () =>
+          HttpResponse.json({ items: [], total: 0, page: 1, page_size: 0, total_pages: 1 }),
+        ),
+        http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 3, name: 'Me' })),
+        http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ id: 77, name: 'fix the build' })),
+        http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => HttpResponse.json([])),
+      );
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      const empty = await screen.findByTestId('workspace-no-agents');
+      expect(await within(empty).findByText(/^Create a Local coding agent\?/)).toBeInTheDocument();
+      // Nothing is created until the person clicks.
+      expect(created).toEqual([]);
+      await user.click(within(empty).getByRole('button', { name: 'Create a Local coding agent' }));
+
+      await waitFor(() => expect(created).toHaveLength(1));
+      const body = created[0] as { name: string; versions: { instructions: string; llm_settings: unknown; meta: unknown; tools?: unknown }[] };
+      expect(body.name).toBe('Local coding agent');
+      expect(body.versions).toHaveLength(1);
+      const [version] = body.versions;
+      expect(version?.instructions).toContain('Explore before you edit');
+      expect(version?.instructions).toContain('never invent file contents');
+      expect(version?.llm_settings).toEqual({ model_name: 'gpt-5', model_project_id: 1 });
+      expect(version?.meta).toEqual({ step_limit: 100 });
+      expect(version?.tools).toBeUndefined();
+
+      // The list reads again: the new agent is picked and a turn runs on it.
+      await waitFor(() => expect(screen.queryByTestId('workspace-no-agents')).toBeNull());
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveTextContent('Local coding agent'));
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+      await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]).toEqual(expect.objectContaining({ application_id: 5, version_id: 51 }));
+    });
+
+    it('explains who can create an agent when the person may not', async () => {
+      mayCreate = false;
+      serveAgents([]);
+      mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1');
+      const empty = await screen.findByTestId('workspace-no-agents');
+      expect(await within(empty).findByText(/You cannot create agents in this project/)).toBeInTheDocument();
+      expect(within(empty).queryByRole('button', { name: 'Create a Local coding agent' })).toBeNull();
+      expect(within(empty).queryByRole('button', { name: 'Create an agent' })).toBeNull();
+      expect(within(empty).getByRole('button', { name: 'Use another project' })).toBeInTheDocument();
     });
 
     it('explains an empty project and offers to create an agent there or bind another project', async () => {
@@ -762,6 +853,17 @@ describe('WorkspaceSessionPage', () => {
       await user.keyboard('{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.mentions).toEqual([]);
+    });
+
+    it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      expect(ipc.calls.prewarmed).toEqual([]);
+      await user.click(screen.getByTestId('chat-message-input'));
+      await waitFor(() => expect(ipc.calls.prewarmed.length).toBeGreaterThan(0));
+      // A new thread has no conversation yet: only the agent version is read ahead.
+      expect(ipc.calls.prewarmed[0]).toEqual({ project_id: 42, application_id: 5, version_id: 9 });
+      expect(ipc.calls.started).toHaveLength(0);
     });
 
     it('Shift+Enter breaks the line and Enter sends', async () => {

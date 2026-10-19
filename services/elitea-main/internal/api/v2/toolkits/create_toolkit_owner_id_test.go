@@ -3,12 +3,13 @@ package toolkits
 import (
 	"context"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"

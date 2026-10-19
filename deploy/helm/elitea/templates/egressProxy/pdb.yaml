@@ -1,0 +1,13 @@
+{{- if and .Values.egressProxy.enabled .Values.egressProxy.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "elitea-egress-proxy.fullname" . }}
+  labels:
+    {{- include "elitea-egress-proxy.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.egressProxy.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "elitea-egress-proxy.selectorLabels" . | nindent 6 }}
+{{- end }}

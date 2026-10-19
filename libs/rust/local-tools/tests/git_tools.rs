@@ -97,3 +97,49 @@ async fn git_diff_leaves_out_path_deny_files() {
     assert!(!output.contains("SECRET-AFTER app/config/.env"), "{output}");
     assert!(!output.contains("id.pem"), "{output}");
 }
+
+/// The host's summary (for its note to the model) is the branch and a
+/// count: no path, and no approval asked (the prompt here defers all).
+#[tokio::test]
+async fn the_git_summary_is_the_branch_and_a_count() {
+    let dir = tempfile::tempdir().expect("dir");
+    let root = std::fs::canonicalize(dir.path())
+        .expect("canonical")
+        .join("repo");
+    std::fs::create_dir_all(&root).expect("repo");
+    git(&root, &["init", "-q"]);
+    std::fs::write(root.join("a.txt"), "a\n").expect("a");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "init"]);
+    std::fs::write(root.join("a.txt"), "changed\n").expect("change");
+    std::fs::write(root.join("new.txt"), "new\n").expect("new");
+    let open = |root: std::path::PathBuf| {
+        LocalSession::open(SessionConfig {
+            root,
+            session_id: "s".to_owned(),
+            policy: LocalWorkPolicy {
+                allowed: true,
+                ..LocalWorkPolicy::default()
+            },
+            settings: WorkspaceSettings::default(),
+            choices: Arc::new(MemoryChoices::default()),
+            prompt: Arc::new(DeferringPrompt),
+            data_dir: dir.path().join("data"),
+            shell: None,
+            deny_read: Vec::new(),
+            app_id: None,
+        })
+        .expect("session")
+    };
+    let summary = open(root).git_summary().await.expect("in git");
+    assert_eq!(summary.branch.as_deref(), Some("main"));
+    assert_eq!(summary.changed, 2);
+    let plain = dir.path().join("plain");
+    std::fs::create_dir_all(&plain).expect("plain");
+    assert!(
+        open(std::fs::canonicalize(plain).expect("canonical"))
+            .git_summary()
+            .await
+            .is_none()
+    );
+}

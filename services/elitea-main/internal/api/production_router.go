@@ -22,6 +22,7 @@ import (
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	promptcontextreadsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
 	v2social "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
+	workspacehandoffapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/workspacehandoff"
 )
 
 var ErrInvalidProductionAuthRoutes = errors.New("invalid production authentication routes")
@@ -242,6 +243,11 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.CurrentLocalTurns != nil {
 		r.Method(http.MethodPost, localturnsapi.StartPath, cfg.CurrentLocalTurns)
 		r.Method(http.MethodPost, localturnsapi.CommitPath, cfg.CurrentLocalTurns)
+	}
+	if cfg.CurrentWorkspaceHandoff != nil {
+		for _, route := range workspacehandoffapi.Methods {
+			r.Method(route.Method, route.Pattern, cfg.CurrentWorkspaceHandoff)
+		}
 	}
 	if cfg.CurrentResolvedVersion != nil {
 		r.Method(http.MethodGet, desktopopsapi.ResolvedVersionPath, cfg.CurrentResolvedVersion)

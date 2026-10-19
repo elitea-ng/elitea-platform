@@ -596,12 +596,11 @@ test('an agent in the conversation is offered to a bare-model turn as a tool, an
     // ── …and the agent WAS offered, as a callable tool ────────────────────
     // The other half of the same behaviour, and the one a stored answer cannot
     // show. The runtime presents a saved agent to the model under a name it
-    // derives itself; `agentAsToolName` carries both runtimes' rules, and the
-    // failure prints what was really offered so a naming change reads as one.
+    // derives itself; `agentAsToolName` carries that rule, and the failure
+    // prints what was really offered so a naming change reads as one.
     const expected = agentAsToolName({
       agentId: agent.id,
       versionId: agent.versionId,
-      name: agentName,
     });
     const journal = await readMockLlmJournal(page);
     const offers = journal.filter((entry) => entry.tools.length > 0).flatMap((entry) => entry.tools);

@@ -31,21 +31,6 @@ type currentIndexScheduleFailureRecorder struct {
 	now           func() time.Time
 }
 
-func newCurrentIndexScheduleFailureRecorder(
-	toolkits indexingapp.CurrentToolkitReader,
-	settings indexingapp.CurrentToolkitSettingsValidator,
-	history currentScheduleFailureHistory,
-	notifications currentScheduleFailureNotifications,
-) (*currentIndexScheduleFailureRecorder, error) {
-	return newCurrentIndexScheduleFailureRecorderWithClock(
-		toolkits,
-		settings,
-		history,
-		notifications,
-		time.Now,
-	)
-}
-
 func newCurrentIndexScheduleFailureRecorderWithClock(
 	toolkits indexingapp.CurrentToolkitReader,
 	settings indexingapp.CurrentToolkitSettingsValidator,

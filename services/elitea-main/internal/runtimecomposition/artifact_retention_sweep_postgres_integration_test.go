@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"

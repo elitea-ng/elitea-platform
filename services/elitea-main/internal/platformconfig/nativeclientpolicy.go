@@ -52,6 +52,10 @@ const (
 	KeyNativeLocalWorkLocalIndex     = "local_work_local_index"
 	KeyNativeLocalWorkCloudSync      = "local_work_cloud_sync"
 	KeyNativeLocalWorkMemoryWrite    = "local_work_memory_write"
+	// KeyNativeLocalWorkCloudHandoff is the device switch of the desktop ⇄
+	// cloud handoff (ADR-0034 decision 11). It is not local_work_cloud_sync,
+	// which ADR-0029 decision 7 ties to DeepWiki and Inventory.
+	KeyNativeLocalWorkCloudHandoff = "local_work_cloud_handoff"
 )
 
 // The values of KeyNativeLocalWorkMaxSandboxMode, from the most to the least
@@ -132,6 +136,10 @@ type LocalWorkPolicy struct {
 	CloudSync bool `json:"cloud_sync"`
 	// MemoryWrite: local turns may save to cloud memory. Recall stays allowed.
 	MemoryWrite bool `json:"memory_write"`
+	// CloudHandoff: a Local work thread may be sent to the cloud executor
+	// (ADR-0034). The server also refuses a send while it is false; the
+	// platform and project settings can narrow it further.
+	CloudHandoff bool `json:"cloud_handoff"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -151,6 +159,7 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		LocalIndex:     true,
 		CloudSync:      false,
 		MemoryWrite:    true,
+		CloudHandoff:   false,
 	}
 }
 
@@ -169,6 +178,7 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.LocalIndex = values.Bool(KeyNativeLocalWorkLocalIndex, policy.LocalIndex)
 	policy.CloudSync = values.Bool(KeyNativeLocalWorkCloudSync, policy.CloudSync)
 	policy.MemoryWrite = values.Bool(KeyNativeLocalWorkMemoryWrite, policy.MemoryWrite)
+	policy.CloudHandoff = values.Bool(KeyNativeLocalWorkCloudHandoff, policy.CloudHandoff)
 	return policy
 }
 

@@ -78,6 +78,11 @@ const PresenceSubjectRoot = "elitea.events"
 // presenceSuffix marks a channel of the presence family.
 const presenceSuffix = ":presence"
 
+// workspaceSuffix marks a channel of the workspace handoff family
+// (ADR-0034): project:<id>:workspace → elitea.events.project.<id>.workspace,
+// elitea-main's own account, like presence.
+const workspaceSuffix = ":workspace"
+
 // ConnectTimeout bounds the initial dial and every request the client makes so
 // a NATS partition fails fast rather than hanging (design §8.5, matches the
 // gateway NATS client's 1s Timeout).
@@ -164,7 +169,8 @@ func subjectFor(channel string) string {
 	if channel == "" {
 		return SubjectRoot
 	}
-	if strings.HasSuffix(channel, presenceSuffix) && !strings.Contains(channel, "*") {
+	if (strings.HasSuffix(channel, presenceSuffix) || strings.HasSuffix(channel, workspaceSuffix)) &&
+		!strings.Contains(channel, "*") {
 		return PresenceSubjectRoot + "." + strings.ReplaceAll(channel, ":", ".")
 	}
 	// Bare "*" Redis catch-all matches every channel → NATS "root.>".

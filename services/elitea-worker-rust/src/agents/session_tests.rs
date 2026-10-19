@@ -2082,7 +2082,7 @@ fn output_continuation_keeps_the_session_and_replaces_the_user_turn_with_a_bound
     assert!(
         reasoning_only
             .user_text()
-            .contains("before it produced visible output")
+            .contains("produced no visible output. Answer now, directly.")
     );
 }
 

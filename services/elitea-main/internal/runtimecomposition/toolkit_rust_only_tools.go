@@ -161,17 +161,3 @@ func validateRustOnlyNewType(toolkitType string, entry rustOnlyNewType) error {
 	}
 	return nil
 }
-
-// rustOnlyToolkitToolNames is, per toolkit type, the set of tool names only the
-// Rust worker serves: what a Python deployment must mark unavailable in the
-// catalogue (WorkerToolkitCapability.SupportsTool), through the same
-// metadata.unavailable_tools mechanism a partial Rust family uses.
-func rustOnlyToolkitToolNames() map[string]map[string]struct{} {
-	return rustonly.ToolNames()
-}
-
-// rustOnlyToolkitTypeNames is the set of toolkit types only the Rust worker
-// serves: what a Python deployment must withhold whole.
-func rustOnlyToolkitTypeNames() map[string]struct{} {
-	return rustonly.TypeNames()
-}

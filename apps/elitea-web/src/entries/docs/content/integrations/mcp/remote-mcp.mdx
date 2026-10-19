@@ -32,7 +32,7 @@ Once authorized, Elitea calls the remote server's `tools/list` and shows the too
 ## Common issues
 
 <Note>
-Remote MCP is a built-in Elitea type, not part of the SDK worker-capability catalogue. Both the Rust and Python workers can call a Remote MCP toolkit's tools — the Rust worker's MCP client only speaks streamable HTTP, which is the only transport a remote server can use here anyway.
+Remote MCP is a built-in Elitea type, not part of the toolkit catalogue. The worker's MCP client speaks streamable HTTP, which is the only transport a remote server can use here anyway.
 </Note>
 
 <Note>
@@ -44,7 +44,7 @@ If you set an `Authorization` header (for example a personal access token) on th
 </Note>
 
 <Note>
-On the Rust worker, with caching enabled, the tool list is reused for **Cache TTL** seconds (60 to 3600, default 300) before the server is asked again. Each run still opens its own connection with its own credentials; only the list of tools is reused. When an agent first calls one of that server's tools in a run, the worker lists the tools on that run's connection once, so the call behaves exactly as an uncached one.
+With caching enabled, the tool list is reused for **Cache TTL** seconds (60 to 3600, default 300) before the server is asked again. Each run still opens its own connection with its own credentials; only the list of tools is reused. When an agent first calls one of that server's tools in a run, the worker lists the tools on that run's connection once, so the call behaves exactly as an uncached one.
 </Note>
 
 <Note>

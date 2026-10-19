@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# render-worker.sh — the agent worker renders correctly for BOTH implementations.
+# render-worker.sh — the agent worker (the Rust worker, the only one) renders
+# correctly.
 #
 # ── Why this file exists ─────────────────────────────────────────────────────
 #
@@ -8,18 +9,16 @@
 # rendered by NOTHING: `helm lint` walks the chart, but a `{{- if
 # .Values.worker.enabled }}` body it never enters is a body it never checks.
 #
-# That was survivable while the worker had one image and one argument list. It
-# stopped being survivable when `worker.implementation` arrived (the default is
-# python since #865/#866; rust is one values override away), because the two
-# implementations do not accept each other's command lines:
-#
 #   * services/elitea-worker-rust/src/lib.rs matches an EXACT five-token slice.
-#     `serve --config <path>` — the Python shape — is not a degraded mode. It is
-#     `worker_cli.invalid_arguments` and an immediate exit, which reaches an
-#     operator as a CrashLoopBackOff with no configuration error anywhere.
+#     Any other command line is `worker_cli.invalid_arguments` and an immediate
+#     exit, which reaches an operator as a CrashLoopBackOff with no
+#     configuration error anywhere.
 #   * The Rust worker refuses a toolkit-security document without a
 #     `toolkit_security` key (src/execution/production.rs), so the second file
 #     is mandatory, not optional hardening.
+#   * The retired `worker.implementation: python` must fail the render rather
+#     than silently render the Rust worker for a values file that asks for the
+#     removed one.
 #
 # Both of those are render-time facts, and a render test is the cheapest place
 # to hold them. The alternative is finding out at the first chat turn.
@@ -58,24 +57,15 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # reserved by RFC 2606 and never resolves.
 RENDER=(
   -f "$CHART/values-standalone.yaml"
-  --set worker.enabled=true --set worker.indexingRuntime=python
+  --set worker.enabled=true
+  --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
 
-# Unrolled on purpose, not a loop. The assertion floor counts accepting SITES
-# in this file and requires each to run exactly once, so a loop that reuses one
-# site for two implementations reports more results than the file holds — which
-# is a floor failure, and was one when this file was first written.
-render() {
-  "$HELM" template t "$CHART" "${RENDER[@]}" --set "worker.implementation=$1" \
-    >"$TMP/$1.yaml" 2>"$TMP/$1.err"
-}
-
-render rust   && ok "the chart renders with worker.implementation=rust" \
-              || bad "rust does not render: $(tail -1 "$TMP/rust.err")"
-render python && ok "the chart renders with worker.implementation=python" \
-              || bad "python does not render: $(tail -1 "$TMP/python.err")"
+"$HELM" template t "$CHART" "${RENDER[@]}" >"$TMP/rust.yaml" 2>"$TMP/rust.err" \
+  && ok "the chart renders the worker" \
+  || bad "the worker does not render: $(tail -1 "$TMP/rust.err")"
 
 echo "== the Rust worker gets the argument list and files it requires =="
 python3 - "$TMP/rust.yaml" <<'PY' && ok "rust: five-token serve, both files mounted, rust image" || bad "rust worker shape"
@@ -104,52 +94,25 @@ assert "/run/elitea/runtime.json" in mounts, sorted(mounts)
 policy = json.loads(cm["data"]["toolkit-security.json"])
 # production.rs refuses a document without this key, even an empty one.
 assert "toolkit_security" in policy, policy
-# The same rule the Python worker reads from ELITEA_SENSITIVE_TOOLS, decoded.
-# `remove_index` (the indexing families' index delete, ADR-0030 I1) needs a
+# worker.runtime.sensitiveTools, decoded. `remove_index` (the indexing families' index delete, ADR-0030 I1) needs a
 # human's approval like `delete_file` does.
 assert policy["toolkit_security"]["sensitive_tools"] == {"*": ["delete_file", "remove_index"]}, policy
 
-# The environment is the OTHER half of the branch, and asserting only the
-# argument list left it uncovered: a first draft of this file passed while the
-# Rust container was handed the Python env block in full.
+# The environment: only what the Rust worker reads.
 env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["SSL_CERT_FILE"] == "/run/elitea-runtime/trust-bundle.crt", env
 assert env["ELITEA_RUST_LOG"] == "info", env
 assert env["ELITEA_RUST_TRACE"] == "info", env
-# Nothing in the Rust worker reads these three names. Present, they are dead
-# configuration that reads as governing something — and ELITEA_SENSITIVE_TOOLS
-# would look like the policy while the file beside it is what actually applies.
+# The retired Python worker's SDK settings. Nothing in the Rust worker reads
+# these names; present, they are dead configuration that reads as governing
+# something — and ELITEA_SENSITIVE_TOOLS would look like the policy while the
+# file beside it is what actually applies.
 for absent in ("ELITEA_DISABLE_SYSTEM_CA", "REQUESTS_CA_BUNDLE", "ELITEA_SENSITIVE_TOOLS"):
     assert absent not in env, f"{absent} is an SDK setting the Rust worker never reads"
 PY
 
-echo "== the Python worker is unchanged by any of this =="
-python3 - "$TMP/python.yaml" <<'PY' && ok "python: four-token serve, env-carried policy, python image" || bad "python worker shape"
-import sys, yaml
-
-docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
-dep = next(d for d in docs
-           if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
-cm = next(d for d in docs
-          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
-c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
-
-assert c["args"] == ["serve", "--config", "/run/elitea/runtime.json"], c["args"]
-assert c["image"].startswith("ghcr.io/elitea-ng/elitea-worker-python:"), c["image"]
-
-env = {e["name"]: e.get("value") for e in c["env"]}
-assert env["ELITEA_SENSITIVE_TOOLS"] == '{"*":["delete_file","remove_index"]}', env
-# SDK settings. The Rust worker reads neither name, so they must not follow it.
-assert env["ELITEA_DISABLE_SYSTEM_CA"] == "1", env
-assert "REQUESTS_CA_BUNDLE" in env, env
-
-# The second file is Rust-only: writing it for Python would put an unread
-# document in the release and invite it to drift from the env var above.
-assert "toolkit-security.json" not in cm["data"], sorted(cm["data"])
-PY
-
-echo "== runtime.json is the SAME document for both, and complete =="
-python3 - "$TMP/rust.yaml" "$TMP/python.yaml" <<'PY' && ok "runtime.json is byte-identical across implementations" || bad "runtime.json differs between implementations"
+echo "== runtime.json is complete =="
+python3 - "$TMP/rust.yaml" <<'PY' && ok "runtime.json carries exactly the required fields" || bad "runtime.json fields"
 import json, sys, yaml
 
 def runtime(path):
@@ -158,8 +121,7 @@ def runtime(path):
               if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
     return cm["data"]["runtime.json"]
 
-rust, python = runtime(sys.argv[1]), runtime(sys.argv[2])
-assert rust == python, "the two implementations were given different runtime.json"
+rust = runtime(sys.argv[1])
 
 # RuntimeDeployConfig in services/elitea-worker-rust/src/config.rs is
 # deny_unknown_fields and every field below is required, so a chart that stops
@@ -189,7 +151,7 @@ echo "== the Rust worker binds the configuration-validation route =="
 # release of this chart whose worker is pointed at that route. The pair is
 # fixed by the command bus, and the Rust worker's own pair check
 # (valid_route_pair) must accept exactly what is rendered here.
-"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust \
+"$HELM" template t "$CHART" "${RENDER[@]}" \
     --set worker.runtime.natsStream=ELITEA_RT_V1_VALIDATE \
     --set worker.runtime.natsConsumer=elitea-configuration-worker-v1 \
     >"$TMP/rust-validate.yaml" 2>"$TMP/rust-validate.err" \
@@ -230,26 +192,28 @@ refuses() {
   return 1
 }
 
-# A typo must not silently render the Python shape into the Rust image.
-refuses 'worker.implementation must be' --set worker.implementation=golang \
+# The removed Python worker must not silently become the Rust one.
+refuses 'worker.implementation=python is no longer supported' --set worker.implementation=python \
+  && ok "the retired worker.implementation=python is refused" \
+  || bad "the retired worker.implementation=python is not refused"
+refuses 'is no longer supported' --set worker.implementation=golang \
   && ok "an unknown worker.implementation is refused" \
   || bad "an unknown worker.implementation is not refused"
+"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust >/dev/null 2>"$TMP/explicit-rust.err" \
+  && ok "an explicit worker.implementation=rust still renders (old values files)" \
+  || bad "worker.implementation=rust does not render: $(tail -1 "$TMP/explicit-rust.err")"
 
 # The Rust worker validates its log levels at startup and exits; a values typo
 # must not become a CrashLoopBackOff.
-refuses 'worker.logLevel must be one of' --set worker.implementation=rust --set worker.logLevel=verbose \
+refuses 'worker.logLevel must be one of' --set worker.logLevel=verbose \
   && ok "an invalid worker.logLevel is refused" \
   || bad "an invalid worker.logLevel is not refused"
 
-refuses 'worker.traceLevel must be one of' --set worker.implementation=rust --set worker.traceLevel=loud \
+refuses 'worker.traceLevel must be one of' --set worker.traceLevel=loud \
   && ok "an invalid worker.traceLevel is refused" \
   || bad "an invalid worker.traceLevel is not refused"
 
-refuses 'worker.runtime.publicBaseUrl requires the Rust worker' --set worker.implementation=python --set-string worker.runtime.publicBaseUrl=https://elitea.example.com \
-  && ok "worker.runtime.publicBaseUrl is refused for the Python worker" \
-  || bad "worker.runtime.publicBaseUrl is not refused for the Python worker"
-
-"$HELM" template t "$CHART" "${RENDER[@]}" --set worker.implementation=rust --set-string worker.runtime.publicBaseUrl=https://elitea.example.com >"$TMP/public.yaml" 2>/dev/null
+"$HELM" template t "$CHART" "${RENDER[@]}" --set-string worker.runtime.publicBaseUrl=https://elitea.example.com >"$TMP/public.yaml" 2>/dev/null
 python3 - "$TMP/public.yaml" <<'PY' && ok "rust: worker.runtime.publicBaseUrl reaches runtime.json as public_base_url, beside the untouched platform_origin" || bad "publicBaseUrl rendering"
 import json, sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]

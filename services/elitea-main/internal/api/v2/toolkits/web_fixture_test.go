@@ -52,7 +52,7 @@ var fixtureSchemaKeys = []string{
 func TestTheWebPerTypeSettingsFixtureMatchesTheServedCatalogue(t *testing.T) {
 	t.Parallel()
 
-	catalogue := getToolkitTypeCatalogue(t, catalogueOptions(t, "python")...)
+	catalogue := getToolkitTypeCatalogue(t, catalogueOptions(t, "rust")...)
 	projected := make(map[string]any, len(catalogue))
 	for _, toolkitType := range sortedKeys(catalogue) {
 		typeSchema, ok := catalogue[toolkitType].(map[string]any)

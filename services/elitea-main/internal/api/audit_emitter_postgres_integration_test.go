@@ -40,6 +40,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 const auditEmitterDeadline = 60 * time.Second
@@ -425,6 +426,12 @@ func newAuditEmitterPool(t *testing.T) *pgxpool.Pool {
 	}
 	if existing != 0 {
 		t.Fatalf("centry.audit_events starts with %d rows; the assertions below assume none", existing)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

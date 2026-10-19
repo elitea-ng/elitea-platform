@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"github.com/go-chi/chi/v5"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -51,6 +54,49 @@ type ToolkitSettingsValidator interface {
 // ToolkitSettingsValidator.
 func WithSettingsValidator(validator ToolkitSettingsValidator) Option {
 	return func(h *Handler) { h.settingsValidator = validator }
+}
+
+// toolkitSave names the save a settings refusal is about, so its log line says
+// what was refused and where: the action, the project, the toolkit (its id on
+// an update, the body's name when it sends one) and, beside it, the type.
+type toolkitSave struct {
+	action    string // create_toolkit | update_toolkit
+	projectID string
+	toolkitID string // empty on create: nothing exists yet
+	name      string // the body's name; empty when the body sends none
+}
+
+func newToolkitSave(r *http.Request, action string, body map[string]any) toolkitSave {
+	name, _ := body["name"].(string)
+	return toolkitSave{
+		action:    action,
+		projectID: chi.URLParam(r, "projectID"),
+		toolkitID: chi.URLParam(r, "toolkitID"),
+		name:      name,
+	}
+}
+
+// maxLoggedToolkitNameBytes bounds the caller's name in a refusal's log line.
+const maxLoggedToolkitNameBytes = 128
+
+// logAttrs is the refusal's slog attributes: the save's identity, the type,
+// then the caller's own key/value pairs.
+func (s toolkitSave) logAttrs(toolkitType string, extra ...any) []any {
+	attrs := []any{"action", s.action, "project_id", s.projectID, "toolkit_type", toolkitType}
+	if s.toolkitID != "" {
+		attrs = append(attrs, "toolkit_id", s.toolkitID)
+	}
+	if name := s.name; name != "" {
+		if len(name) > maxLoggedToolkitNameBytes {
+			cut := maxLoggedToolkitNameBytes
+			for cut > 0 && !utf8.RuneStart(name[cut]) {
+				cut--
+			}
+			name = name[:cut]
+		}
+		attrs = append(attrs, "toolkit_name", name)
+	}
+	return append(attrs, extra...)
 }
 
 // toolkitSettingsViolationMessages turns a resolver violation code into the
@@ -185,8 +231,7 @@ func toolkitSettingsFieldErrors(violations []configurationapp.CurrentToolkitSett
 func (h *Handler) refuseUnresolvableToolkitSettings(
 	w http.ResponseWriter,
 	r *http.Request,
-	action string,
-	projectID string,
+	save toolkitSave,
 	toolkitType string,
 	settings map[string]any,
 ) bool {
@@ -200,25 +245,25 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 	// CurrentFrozenConfigurationMarker's own doc comment exists to prevent. A
 	// deployment with ELITEA_CONFIGURATIONS_ENABLED unset composes no validator
 	// and still writes to the same column the claim-time materializer reads.
-	if h.refuseFrozenConfigurationMarker(w, r, action, settings) {
+	if h.refuseFrozenConfigurationMarker(w, r, save, toolkitType, settings) {
 		return true
 	}
 	// A memory toolkit's two own settings, which no configuration graph
 	// judges: unconditional like the marker, so a deployment without the
 	// validator still refuses a namespace or scope the worker would skip.
-	if h.refuseMalformedMemorySettings(w, action, toolkitType, settings) {
+	if h.refuseMalformedMemorySettings(w, r, save, toolkitType, settings) {
 		return true
 	}
 	// The bucket the file-store toolkits keep their files in, which their
 	// schema declares required and nothing else enforces on save: like the
 	// memory rules, unconditional.
-	if h.refuseMissingToolkitBucket(w, action, toolkitType, settings) {
+	if h.refuseMissingToolkitBucket(w, r, save, toolkitType, settings) {
 		return true
 	}
 	if h.settingsValidator == nil || toolkitType == "" {
 		return false
 	}
-	projectNumber, err := tenantOwnerID(projectID)
+	projectNumber, err := tenantOwnerID(save.projectID)
 	if err != nil || projectNumber > math.MaxInt32 {
 		return false
 	}
@@ -238,7 +283,7 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 		UserID:      int32(ownerID),
 		Mode:        configurationapp.CurrentToolkitSettingsReferenceMode,
 	}); err != nil {
-		return h.answerToolkitSettingsFailure(w, r, action, toolkitType, err)
+		return h.answerToolkitSettingsFailure(w, r, save, toolkitType, err)
 	}
 	return false
 }
@@ -248,7 +293,7 @@ func (h *Handler) refuseUnresolvableToolkitSettings(
 func (h *Handler) answerToolkitSettingsFailure(
 	w http.ResponseWriter,
 	r *http.Request,
-	action string,
+	save toolkitSave,
 	toolkitType string,
 	err error,
 ) bool {
@@ -271,6 +316,8 @@ func (h *Handler) answerToolkitSettingsFailure(
 		// contract workflow, the passthrough-marker rule and a pinned operation
 		// count, for a body no generated client reads. Recorded here so the
 		// omission is a stated choice rather than silence.
+		slog.WarnContext(r.Context(), "toolkit save refused: its settings reference a configuration that is not available",
+			save.logAttrs(toolkitType, "violations", len(entries))...)
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error":           "toolkit settings reference a configuration that is not available in this project",
 			"valid":           false,
@@ -335,8 +382,8 @@ func (h *Handler) answerToolkitSettingsFailure(
 		// silently there (toolkitForm.helpers.ts's locFieldKey). An empty body
 		// is what makes the page fall back to its generic banner, which is the
 		// only place this can be shown.
-		slog.WarnContext(r.Context(), "toolkit settings were refused as unresolvable input",
-			"action", action, "toolkit_type", toolkitType, "err", err)
+		slog.WarnContext(r.Context(), "toolkit save refused: its settings are unresolvable input",
+			save.logAttrs(toolkitType, "err", err)...)
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "toolkit settings are not in a form this project can store",
 			"valid": false,
@@ -347,8 +394,8 @@ func (h *Handler) answerToolkitSettingsFailure(
 	// request. Proceeding here would silently reintroduce exactly the hole this
 	// gate closes; refusing with a distinct status keeps it visible in logs and
 	// on the screen instead of hiding inside a 400 about the user's input.
-	slog.ErrorContext(r.Context(), "toolkit settings validation is unavailable",
-		"action", action, "toolkit_type", toolkitType, "err", err)
+	slog.ErrorContext(r.Context(), "toolkit save refused: settings validation is unavailable",
+		save.logAttrs(toolkitType, "err", err)...)
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 		"error": "toolkit settings validation is unavailable",
 	})
@@ -394,14 +441,15 @@ func (h *Handler) answerToolkitSettingsFailure(
 func (h *Handler) refuseFrozenConfigurationMarker(
 	w http.ResponseWriter,
 	r *http.Request,
-	action string,
+	save toolkitSave,
+	toolkitType string,
 	settings map[string]any,
 ) bool {
 	if !carriesFrozenConfigurationMarker(settings) {
 		return false
 	}
-	slog.WarnContext(r.Context(), "toolkit settings carried the reserved frozen-configuration marker",
-		"action", action, "reserved_key", configurationapp.CurrentFrozenConfigurationMarker)
+	slog.WarnContext(r.Context(), "toolkit save refused: its settings carry the reserved frozen-configuration marker",
+		save.logAttrs(toolkitType, "reserved_key", configurationapp.CurrentFrozenConfigurationMarker)...)
 	writeJSON(w, http.StatusBadRequest, map[string]any{
 		"error": "toolkit settings may not contain the reserved key " +
 			configurationapp.CurrentFrozenConfigurationMarker,
@@ -499,7 +547,8 @@ func memorySettingsProblems(settings map[string]any) []map[string]any {
 // response.
 func (h *Handler) refuseMalformedMemorySettings(
 	w http.ResponseWriter,
-	action string,
+	r *http.Request,
+	save toolkitSave,
 	toolkitType string,
 	settings map[string]any,
 ) bool {
@@ -510,7 +559,8 @@ func (h *Handler) refuseMalformedMemorySettings(
 	if len(problems) == 0 {
 		return false
 	}
-	slog.Warn("a memory toolkit's settings were refused", "action", action, "problems", len(problems))
+	slog.WarnContext(r.Context(), "toolkit save refused: the memory toolkit's settings are not valid",
+		save.logAttrs(toolkitType, "problems", len(problems))...)
 	writeJSON(w, http.StatusBadRequest, map[string]any{
 		"error":           "the memory toolkit's settings are not valid",
 		"valid":           false,
@@ -543,7 +593,8 @@ var toolkitBucketSetting = map[string]string{
 // the form enforces, and the worker skips a toolkit whose name breaks it.
 func (h *Handler) refuseMissingToolkitBucket(
 	w http.ResponseWriter,
-	action string,
+	r *http.Request,
+	save toolkitSave,
 	toolkitType string,
 	settings map[string]any,
 ) bool {
@@ -554,7 +605,11 @@ func (h *Handler) refuseMissingToolkitBucket(
 	if bucket, isText := settings[field].(string); isText && strings.TrimSpace(bucket) != "" {
 		return false
 	}
-	slog.Warn("a toolkit was saved without a bucket", "action", action, "toolkit_type", toolkitType)
+	// The save is REFUSED and nothing is written. Live 4.45.1: this line used
+	// to read "a toolkit was saved without a bucket", which reads as a
+	// bucketless toolkit having been stored.
+	slog.WarnContext(r.Context(), "toolkit save refused: a file-store toolkit needs a bucket",
+		save.logAttrs(toolkitType, "missing_setting", field)...)
 	writeJSON(w, http.StatusBadRequest, map[string]any{
 		"error": "the toolkit needs a bucket",
 		"valid": false,

@@ -178,6 +178,30 @@ cargo test --manifest-path services/elitea-worker-rust/Cargo.toml \
 This checks the adapter and four language runtimes. It does not replace supervisor durability or browser acceptance tests.
 Failed workloads remain available for diagnosis. Delete them only after confirming termination and preserving required evidence.
 
+### Run the Kubernetes resource-limit fixtures
+
+The same module holds six more cluster tests. CI cannot run them: hosted runners have no cluster with the `elitea-code` RuntimeClass, the NetworkPolicy-enforcing CNI, and the kubelet `podPidsLimit` they verify. Their Docker counterparts (`live_docker_workspace_exhaustion_has_terminal_receipt`, `live_docker_process_limit`) run in `ci-rust.yml`.
+
+| Test | Verifies | Needs beyond the language fixture |
+| --- | --- | --- |
+| `live_memory_exhaustion_has_terminal_receipt` | 512 MiB touched against a 256 MiB limit ends in a `memory_limit` receipt | Deno image |
+| `live_deadline_exhaustion_has_terminal_receipt` | a 10 s wait under a 2 s job deadline ends in a `timeout` receipt | Deno image |
+| `live_output_flood_has_bounded_terminal_receipt` | 2 MiB of stderr ends in a bounded `output_limit` receipt | Deno image |
+| `live_workspace_exhaustion_has_terminal_receipt` | filling the 256 MiB workspace ends in a `failed` receipt reporting `No space left on device` | Deno image |
+| `live_cpu_quota_throttles_execution` | a 250m CPU limit raises `nr_throttled` in the Pod's `cpu.stat` | Deno image, cgroup v2 nodes |
+| `live_kubernetes_process_limit` | forking stops with `EAGAIN` below 128 children | Rust image (`rust-runtime` target), `podPidsLimit: 128` on the node (see [Kubernetes boundary preparation](#kubernetes-boundary-preparation)) |
+
+Use the same prepared namespace and environment as the language fixture, then run the six together:
+
+```sh
+cd services/elitea-worker-rust
+cargo test --features sandbox-supervisor --lib sandbox::kubernetes::live_tests:: \
+  -- --ignored --nocapture \
+  --skip live_four_language_state_chain --skip live_docker_
+```
+
+For an isolated Minikube profile, start it with `--extra-config=kubelet.pod-max-pids=128` and cgroup v2, label the node `elitea.ai/sandbox=true`, and create the `elitea-code` RuntimeClass for its container runtime handler before installing the chart's boundary. Each test creates and deletes its own execution Pod.
+
 ### Verify supervisor recovery
 
 Deploy the supervisor chart and its private material first.

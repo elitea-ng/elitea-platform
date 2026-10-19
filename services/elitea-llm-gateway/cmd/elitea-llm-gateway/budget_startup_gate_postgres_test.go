@@ -50,11 +50,11 @@ func openBudgetProbePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	raw := os.Getenv(budgetProbeDatabaseURLEnv)
 	if raw == "" {
-		t.Skipf("set %s to run the budget-probe integration test", budgetProbeDatabaseURLEnv)
+		skipPostgresTest(t, "set %s to run the budget-probe integration test", budgetProbeDatabaseURLEnv)
 	}
 	base, err := url.Parse(raw)
 	if err != nil || base.Scheme == "" {
-		t.Skipf("%s is not a URL DSN, so this test cannot create its own database: %v",
+		skipPostgresTest(t, "%s is not a URL DSN, so this test cannot create its own database: %v",
 			budgetProbeDatabaseURLEnv, err)
 	}
 
@@ -63,7 +63,7 @@ func openBudgetProbePool(t *testing.T) *pgxpool.Pool {
 	path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", budgetProbeMigration)
 	migration, rerr := os.ReadFile(path) //nolint:gosec // a fixed in-repo path
 	if rerr != nil {
-		t.Skipf("cannot read the shipped migration %s: %v", budgetProbeMigration, rerr)
+		skipPostgresTest(t, "cannot read the shipped migration %s: %v", budgetProbeMigration, rerr)
 	}
 
 	ctx := t.Context()
@@ -78,7 +78,7 @@ func openBudgetProbePool(t *testing.T) *pgxpool.Pool {
 	// the identifier.
 	name := fmt.Sprintf("elitea_budget_probe_%d_%d", os.Getpid(), time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, `CREATE DATABASE `+pgIdentifier(name)); err != nil {
-		t.Skipf("cannot create a private database for this test (%v). "+
+		skipPostgresTest(t, "cannot create a private database for this test (%v). "+
 			"Point %s at a server where the user may CREATE DATABASE", err, budgetProbeDatabaseURLEnv)
 	}
 	target := *base

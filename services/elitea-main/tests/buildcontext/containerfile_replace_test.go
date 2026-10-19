@@ -40,7 +40,7 @@ var modulesUnderTest = []struct {
 	goMod         string
 	containerfile string
 	// contextDir is the build context, repository-root relative. Every COPY
-	// source resolves against it. All three modules build from the repository
+	// source resolves against it. Every module here builds from the repository
 	// root: docker-bake.hcl, the compose files, publish.yml and
 	// ci-image-scan.yml all state `context: .`.
 	contextDir string
@@ -61,6 +61,12 @@ var modulesUnderTest = []struct {
 		name:          "elitea-llm-gateway",
 		goMod:         "services/elitea-llm-gateway/go.mod",
 		containerfile: "services/elitea-llm-gateway/Containerfile",
+		contextDir:    ".",
+	},
+	{
+		name:          "elitea-egress-proxy",
+		goMod:         "services/elitea-egress-proxy/go.mod",
+		containerfile: "services/elitea-egress-proxy/Containerfile",
 		contextDir:    ".",
 	},
 }
