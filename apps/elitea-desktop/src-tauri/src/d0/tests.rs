@@ -3218,3 +3218,203 @@ async fn a_second_turn_is_refused_before_it_can_wipe_a_running_seed() {
         "the late groups were folded in: {second_body}"
     );
 }
+
+/// The agent of the step-limit tests: two model steps per run.
+fn two_step_details() -> Value {
+    let mut details = agent_details();
+    details["meta"] = json!({"step_limit": 2});
+    details
+}
+
+/// The platform of [`platform`] with a model that calls `list_tree` for its
+/// first `tool_calls` requests (every request when `None`), then answers.
+async fn looping_platform(tool_calls: Option<usize>) -> MockServer {
+    let inner = platform(two_step_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            if tool_calls.is_none_or(|limit| call < limit) {
+                return tool_call(&format!("call-{call}"), "list_tree", &json!({}));
+            }
+            return say("Done.");
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn of_kind(events: &[AgentEvent], kind: &str) -> Vec<Value> {
+    events
+        .iter()
+        .filter(|e| e.kind == kind)
+        .map(|e| e.payload.clone())
+        .collect()
+}
+
+fn commit_bodies(server: &MockServer) -> Vec<Value> {
+    seen(
+        server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )
+    .iter()
+    .map(|req| serde_json::from_str(&req.body).unwrap())
+    .collect()
+}
+
+#[tokio::test]
+async fn step_limit_asks_to_continue_and_continues_same_session() {
+    let h = harness(
+        looping_platform(Some(3)).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+
+    // At the limit (2 steps), the person is asked; never remembered.
+    let questions = of_kind(&events, "approval_request");
+    assert_eq!(questions.len(), 1, "{:?}", h.emitter.kinds());
+    assert_eq!(questions[0]["kind"], "continue");
+    assert_eq!(questions[0]["title"], "The agent used its 2 steps");
+    assert_eq!(questions[0]["steps"], 2);
+    assert_eq!(questions[0]["can_remember"], false);
+    // The run goes on, from the host's prompt (marked so), not a new start.
+    let continued: Vec<Value> = of_kind(&events, "status")
+        .into_iter()
+        .filter(|s| s.get("continued").is_some())
+        .collect();
+    assert_eq!(continued.len(), 1);
+    assert_eq!(continued[0]["phase"], "running");
+    assert_eq!(
+        continued[0]["host_prompt"],
+        "Continue from where you stopped."
+    );
+
+    // The second run's first request carries the first run whole: the
+    // prompt, both tool calls and their results, then the host's prompt.
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 4);
+    let second_run = shape(&bodies[2]);
+    assert_eq!(
+        second_run
+            .iter()
+            .map(|(role, _, _)| role.as_str())
+            .collect::<Vec<_>>(),
+        ["user", "assistant", "tool", "assistant", "tool", "user"],
+        "{second_run:?}"
+    );
+    assert!(second_run[0].1.contains("Write notes and file a bug"));
+    assert_eq!(second_run[1].2, ["list_tree"]);
+    assert_eq!(second_run[5].1, "Continue from where you stopped.");
+    let call_ids: Vec<&str> = bodies[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["tool_calls"][0]["id"].as_str())
+        .collect();
+    assert_eq!(call_ids, ["call-0", "call-1"]);
+
+    // One execution, one commit: the server sees one turn with every step.
+    assert_eq!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .len(),
+        1
+    );
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    let body = &commits[0];
+    assert_eq!(
+        body["user_message"]["content"],
+        "Write notes and file a bug"
+    );
+    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(body["tool_calls"].as_object().unwrap().len(), 3);
+    assert_eq!(body["hitl_exchanges"][0]["kind"], "continue");
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "approve");
+    assert!(body["hitl_exchanges"][0].get("tool_run_id").is_none());
+    let statuses = of_kind(&events, "status");
+    assert!(
+        statuses.iter().all(|s| s.get("note").is_none()),
+        "{statuses:?}"
+    );
+    assert_eq!(of_kind(&events, "done")[0]["committed"], true);
+}
+
+#[tokio::test]
+async fn continue_is_capped() {
+    let h = harness(
+        looping_platform(None).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    // Asked three times, each time anew; a fourth limit is not asked.
+    assert_eq!(of_kind(&events, "approval_request").len(), 3);
+    assert_eq!(llm_bodies(&h.server).len(), 8, "4 runs of 2 steps");
+    // The turn is committed as it is, once, noted as stopped at the limit.
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["tool_calls"].as_object().unwrap().len(), 8);
+    assert_eq!(commits[0]["hitl_exchanges"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        commits[0]["assistant_message"],
+        json!({"content": "The agent stopped after using its 2 steps."})
+    );
+    let done_status = of_kind(&events, "status")
+        .into_iter()
+        .find(|s| s["phase"] == "done")
+        .unwrap();
+    assert_eq!(done_status["note"], "step_limit_reached");
+    assert_eq!(of_kind(&events, "done")[0]["committed"], true);
+}
+
+#[tokio::test]
+async fn stop_here_commits_the_turn_at_its_limit() {
+    let h = harness(looping_platform(None).await, allowed(), UiDecision::Deny).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    assert_eq!(of_kind(&events, "approval_request").len(), 1);
+    assert_eq!(llm_bodies(&h.server).len(), 2);
+    let commits = commit_bodies(&h.server);
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0]["hitl_exchanges"][0]["decision"], "reject");
+    let done_status = of_kind(&events, "status")
+        .into_iter()
+        .find(|s| s["phase"] == "done")
+        .unwrap();
+    assert_eq!(done_status["note"], "step_limit_reached");
+}
+
+/// The workspace's own step limit wins over the agent's `meta.step_limit`.
+#[tokio::test]
+async fn the_workspace_step_limit_wins_over_the_agents() {
+    let inner = platform(two_step_details(), &[]);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return tool_call("call", "list_tree", &json!({}));
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.workspaces
+        .set_agent_settings(
+            &h.workspace_id,
+            crate::workspaces::AgentSettings {
+                step_limit: Some(10),
+            },
+        )
+        .unwrap();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h.emitter).await;
+    let question = &of_kind(&events, "approval_request")[0];
+    assert_eq!(question["title"], "The agent used its 10 steps");
+    assert_eq!(llm_bodies(&h.server).len(), 10);
+}

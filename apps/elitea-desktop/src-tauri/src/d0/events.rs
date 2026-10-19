@@ -108,6 +108,29 @@ impl TurnEvents {
         self.send("status", payload);
     }
 
+    /// `status` `running` again: the run goes on past its step limit
+    /// (`continued`: the how-many-th time), from the host's own prompt
+    /// (`host_prompt`), which is never the person's message.
+    pub fn continued(&self, steps: u32, continued: u32) {
+        self.send(
+            "status",
+            json!({
+                "phase": Phase::Running.as_str(),
+                "message": format!("Continuing for {steps} more steps."),
+                "continued": continued,
+                "host_prompt": elitea_agent_runtime::step_limit::CONTINUE_PROMPT,
+            }),
+        );
+    }
+
+    /// `status` with a machine-readable `note` (`step_limit_reached`).
+    pub fn noted(&self, phase: Phase, message: &str, note: &str) {
+        self.send(
+            "status",
+            json!({ "phase": phase.as_str(), "message": message, "note": note }),
+        );
+    }
+
     pub fn text_delta(&self, text: &str) {
         if !text.is_empty() {
             self.send("text_delta", json!({ "text": text }));

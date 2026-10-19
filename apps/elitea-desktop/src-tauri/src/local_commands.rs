@@ -29,7 +29,7 @@ use crate::d0::turn::{
 use crate::error::HostError;
 use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
-use crate::workspaces::{Workspace, WorkspaceStore};
+use crate::workspaces::{AgentSettings, STEP_LIMIT_RANGE, Workspace, WorkspaceStore};
 use elitea_local_tools::find::FoundPath;
 
 pub struct LocalState {
@@ -462,6 +462,40 @@ pub async fn workspace_remove(state: State<'_, LocalState>, id: String) -> Resul
         elitea_local_tools::git::forget_worktree_parent(std::path::Path::new(&path));
     }
     Ok(())
+}
+
+/// The workspace's agent settings (`step_limit`: its turns' steps per run,
+/// over the agent's own; `null` for the agent's value, else the default).
+#[tauri::command(rename_all = "snake_case")]
+pub fn workspace_agent_settings_get(
+    state: State<'_, LocalState>,
+    id: String,
+) -> Result<AgentSettings, IpcError> {
+    Ok(state.workspaces.agent_settings(&id)?)
+}
+
+/// Store the workspace's agent settings; they apply from the next turn.
+/// `invalid_request` for a step limit outside 10 to 200.
+#[tauri::command(rename_all = "snake_case")]
+pub fn workspace_agent_settings_set(
+    state: State<'_, LocalState>,
+    id: String,
+    settings: AgentSettings,
+) -> Result<AgentSettings, IpcError> {
+    if settings
+        .step_limit
+        .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
+    {
+        return Err(IpcError::new(
+            "invalid_request",
+            format!(
+                "The step limit must be {} to {}.",
+                STEP_LIMIT_RANGE.start(),
+                STEP_LIMIT_RANGE.end()
+            ),
+        ));
+    }
+    Ok(state.workspaces.set_agent_settings(&id, settings)?)
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace.

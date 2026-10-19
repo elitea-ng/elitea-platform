@@ -132,6 +132,8 @@ type Workspace = {
 | `workspace_list` | — | `Workspace[]` |
 | `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
+| `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
+| `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
@@ -894,11 +896,11 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[]}` — `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "committing" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], continued?: number, host_prompt?: string, note?: string}` — `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `approval_request` | `{request_id, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` |
+| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, conversation_id, message_ids: string[], changed_files: number}` |
 
@@ -914,6 +916,26 @@ until it is sent, so the UI is busy until `done`, not until `error`.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.
+
+**Step limit.** Each run of the agent takes at most its step limit of
+model steps: the workspace's own setting (`workspace_agent_settings_set`)
+when the person set one, else the agent's `meta.step_limit`, else 100; never
+more than 200. The workspace setting wins because it is the person's choice
+on this machine, while an agent's value is often the platform's default
+(an agent created without one is stamped 25).
+When a run ends because it used them (adk's own end of the run, not a
+count), the host asks `approval_request {kind: "continue", title: "The agent
+used its N steps", detail: <the start of the agent's last text>, steps: N,
+can_remember: false}`. It is asked through the prompt only: no workspace
+rule or remembered choice answers it, and `allow_always` answers once.
+`allow_once` / `allow_always` continue: the same agent runs again on the same
+session, within the same execution, from the host's prompt "Continue from
+where you stopped." (`status` `running` with `continued`), at most 3 times a
+turn. `deny`, no answer within 10 minutes, or a fourth limit end the turn
+normally: what happened is committed as one turn (its `hitl_exchanges` hold
+each question as kind `continue`), and `status` `done` carries
+`note: "step_limit_reached"`. Cancelling while the question is open cancels
+the turn.
 
 `message_ids` are the question's and the answer's message UUIDs, in that
 order, when committed. `approval_request.can_remember` is true when

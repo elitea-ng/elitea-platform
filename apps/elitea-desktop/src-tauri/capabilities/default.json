@@ -16,6 +16,8 @@
     "allow-workspace-list",
     "allow-workspace-remove",
     "allow-workspace-bind-project",
+    "allow-workspace-agent-settings-get",
+    "allow-workspace-agent-settings-set",
     "allow-workspace-files",
     "allow-agent-turn-start",
     "allow-agent-turn-cancel",

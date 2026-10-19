@@ -30,6 +30,24 @@ pub struct Workspace {
     pub is_git: bool,
 }
 
+/// The step limits a workspace may set for its turns (inclusive).
+pub const STEP_LIMIT_RANGE: std::ops::RangeInclusive<u32> = 10..=200;
+
+/// The file in a workspace's host data that holds its [`AgentSettings`].
+const AGENT_SETTINGS_FILE: &str = "agent_settings.json";
+
+/// The person's agent settings for one workspace (IPC
+/// `workspace_agent_settings_*`), kept in its host data next to its
+/// remembered choices, never in the folder.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSettings {
+    /// Model steps per run of this workspace's turns, within
+    /// [`STEP_LIMIT_RANGE`]; it wins over the agent's `meta.step_limit`.
+    /// `None`: the agent's value, else the default (100).
+    #[serde(default)]
+    pub step_limit: Option<u32>,
+}
+
 pub struct WorkspaceStore {
     dir: PathBuf,
     lock: Mutex<()>,
@@ -197,6 +215,86 @@ impl WorkspaceStore {
         Ok(())
     }
 
+    /// A workspace's agent settings (the defaults when none were saved).
+    ///
+    /// # Errors
+    ///
+    /// No such workspace, or the file cannot be read: a symlink, another
+    /// user's file, or one that does not parse.
+    pub fn agent_settings(&self, id: &str) -> Result<AgentSettings, HostError> {
+        self.with(|| {
+            self.known(id)?;
+            let path = self.data_dir(id).join(AGENT_SETTINGS_FILE);
+            let file = match crate::credentials_file::open_no_follow(&path) {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(AgentSettings::default());
+                }
+                Err(e) => return Err(io(&e)),
+            };
+            check_private(&file)?;
+            let settings: AgentSettings = serde_json::from_reader(file).map_err(|_| {
+                HostError::Storage("the workspace's agent settings are unreadable".into())
+            })?;
+            Ok(AgentSettings {
+                step_limit: settings
+                    .step_limit
+                    .filter(|limit| STEP_LIMIT_RANGE.contains(limit)),
+            })
+        })
+    }
+
+    /// Store a workspace's agent settings; a step limit outside
+    /// [`STEP_LIMIT_RANGE`] is refused.
+    ///
+    /// # Errors
+    ///
+    /// No such workspace, an invalid limit, or the file cannot be written.
+    pub fn set_agent_settings(
+        &self,
+        id: &str,
+        settings: AgentSettings,
+    ) -> Result<AgentSettings, HostError> {
+        if settings
+            .step_limit
+            .is_some_and(|limit| !STEP_LIMIT_RANGE.contains(&limit))
+        {
+            return Err(HostError::Unsupported(format!(
+                "the step limit must be {} to {}",
+                STEP_LIMIT_RANGE.start(),
+                STEP_LIMIT_RANGE.end()
+            )));
+        }
+        self.with(|| {
+            self.known(id)?;
+            let dir = self.data_dir(id);
+            crate::credentials_file::create_private_dir(&dir)?;
+            let bytes =
+                serde_json::to_vec(&settings).map_err(|e| HostError::Internal(e.to_string()))?;
+            let temp = dir.join(format!(".{AGENT_SETTINGS_FILE}.{}.tmp", std::process::id()));
+            let _ = fs::remove_file(&temp);
+            {
+                use std::io::Write as _;
+                let mut file =
+                    crate::credentials_file::create_private_file(&temp).map_err(|e| io(&e))?;
+                file.write_all(&bytes)
+                    .and_then(|()| file.sync_all())
+                    .map_err(|e| io(&e))?;
+            }
+            fs::rename(&temp, dir.join(AGENT_SETTINGS_FILE)).map_err(|e| io(&e))?;
+            Ok(settings)
+        })
+    }
+
+    /// `id` is a workspace of the store (and so names its own data folder).
+    fn known(&self, id: &str) -> Result<(), HostError> {
+        if self.read()?.iter().any(|w| w.id == id) {
+            Ok(())
+        } else {
+            Err(HostError::Storage("no such workspace".into()))
+        }
+    }
+
     /// Bind a workspace to a project.
     ///
     /// # Errors
@@ -221,9 +319,84 @@ impl WorkspaceStore {
     }
 }
 
+/// A settings file this user owns, readable by nobody else.
+fn check_private(file: &fs::File) -> Result<(), HostError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta = file.metadata().map_err(|e| io(&e))?;
+        if !meta.is_file()
+            || meta.uid() != rustix::process::geteuid().as_raw()
+            || meta.mode() & 0o077 != 0
+        {
+            return Err(HostError::Storage(
+                "the workspace's agent settings file is not private to you; it was not used".into(),
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_settings_are_kept_private_in_the_workspaces_data() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let store = WorkspaceStore::new(app.path().to_owned());
+        let id = store.add(folder.path()).unwrap().id;
+        assert_eq!(store.agent_settings(&id).unwrap(), AgentSettings::default());
+        let saved = store
+            .set_agent_settings(
+                &id,
+                AgentSettings {
+                    step_limit: Some(150),
+                },
+            )
+            .unwrap();
+        assert_eq!(saved.step_limit, Some(150));
+        assert_eq!(store.agent_settings(&id).unwrap().step_limit, Some(150));
+        let file = store.data_dir(&id).join(AGENT_SETTINGS_FILE);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&file), 0o600);
+            assert_eq!(mode(&store.data_dir(&id)), 0o700);
+            // A file others can read is not used.
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(store.agent_settings(&id).is_err());
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        // Outside 10..=200 is refused; `None` goes back to the default.
+        for wrong in [9, 201] {
+            assert!(
+                store
+                    .set_agent_settings(
+                        &id,
+                        AgentSettings {
+                            step_limit: Some(wrong)
+                        }
+                    )
+                    .is_err()
+            );
+        }
+        store
+            .set_agent_settings(&id, AgentSettings { step_limit: None })
+            .unwrap();
+        assert_eq!(store.agent_settings(&id).unwrap().step_limit, None);
+        assert!(!folder.path().join(AGENT_SETTINGS_FILE).exists());
+        assert!(store.agent_settings("nope").is_err());
+        assert!(
+            store
+                .set_agent_settings("../x", AgentSettings::default())
+                .is_err()
+        );
+    }
 
     #[test]
     fn workspaces_are_added_once_bound_and_removed() {

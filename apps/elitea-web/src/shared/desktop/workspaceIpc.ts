@@ -80,6 +80,10 @@ export type TurnPhase = 'resolving' | 'starting' | 'running' | 'committing' | 'd
 
 export interface ApprovalRequestPayload {
   request_id: string;
+  /** `continue`: the run used its steps; asked every time, shown as a card in the transcript. Absent for a tool's approval. */
+  kind?: 'continue';
+  /** For `continue`: the steps each run takes (and the next one would). */
+  steps?: number;
   tool: string;
   title: string;
   detail: string;
@@ -109,7 +113,19 @@ export interface TurnStatus {
 }
 
 export type AgentEvent =
-  | (EventBase & { kind: 'status'; payload: { phase: TurnPhase; message?: string; project_instructions?: string[] } })
+  | (EventBase & {
+      kind: 'status';
+      payload: {
+        phase: TurnPhase;
+        message?: string;
+        project_instructions?: string[];
+        /** On `running` again: the run went on past its step limit, for the n-th time, from the host's own `host_prompt` (never the person's message). */
+        continued?: number;
+        host_prompt?: string;
+        /** On `done`: `step_limit_reached` when the turn stopped at its limit. */
+        note?: string;
+      };
+    })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })

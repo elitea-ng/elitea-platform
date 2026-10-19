@@ -341,6 +341,8 @@ pub fn run() {
             local_commands::workspace_list,
             local_commands::workspace_remove,
             local_commands::workspace_bind_project,
+            local_commands::workspace_agent_settings_get,
+            local_commands::workspace_agent_settings_set,
             local_commands::workspace_files,
             local_commands::agent_turn_start,
             local_commands::agent_turn_cancel,

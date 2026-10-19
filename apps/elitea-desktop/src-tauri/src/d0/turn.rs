@@ -37,6 +37,7 @@ use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
 };
+use elitea_agent_runtime::step_limit::{self, StepBudget};
 use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{JsonFileChoices, WorkspaceSettings};
 use elitea_local_tools::find::FoundPath;
@@ -725,6 +726,18 @@ impl AgentHost {
             .expect("request")
     }
 
+    /// The step limit the workspace's settings set, if any (unreadable
+    /// settings are logged and ignored: the turn runs on the default).
+    fn workspace_step_limit(&self, workspace_id: &str) -> Option<u32> {
+        match self.deps.workspaces.agent_settings(workspace_id) {
+            Ok(settings) => settings.step_limit,
+            Err(error) => {
+                log::warn!("the workspace's agent settings were not used: {error}");
+                None
+            }
+        }
+    }
+
     /// The request's workspace, bound to the request's project. A turn runs
     /// only in a bound workspace (`workspace_unbound`): the UI binds a
     /// folder before it offers a session, and the binding is what keeps a
@@ -1021,7 +1034,8 @@ impl AgentHost {
             .chain(INDEX_TOOLS)
             .collect();
         let admitted = definition::admit(&resolved, &local_names)
-            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
+            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
+            .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
         // A picked skill must be one of this version's own, as the platform
         // answered it to this person: refused here, before the turn starts.
         let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
@@ -1205,9 +1219,22 @@ impl AgentHost {
             );
             return;
         };
-        let (answer, failure) = match result {
-            Ok(answer) => (answer, None),
-            Err(error) => (sink.last_text(), Some(error)),
+        let (answer, stopped_at_limit, failure) = match result {
+            Ok(AgentAnswer {
+                text,
+                step_limit_reached,
+            }) => (text, step_limit_reached, None),
+            Err(error) => (sink.last_text(), false, Some(error)),
+        };
+        // A turn that stopped at its limit is committed as it is, with what
+        // the agent last said (or that it stopped there).
+        let answer = if stopped_at_limit && answer.trim().is_empty() {
+            format!(
+                "The agent stopped after using its {} steps.",
+                admitted.step_limit
+            )
+        } else {
+            answer
         };
         let _ = sink
             .finish(match &failure {
@@ -1270,6 +1297,12 @@ impl AgentHost {
             Ok(_) => {
                 if failure.is_some() {
                     events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
+                } else if stopped_at_limit {
+                    events.noted(
+                        Phase::Done,
+                        "Stopped at the step limit.",
+                        step_limit::STEP_LIMIT_REACHED,
+                    );
                 } else {
                     events.status(Phase::Done, None);
                 }
@@ -1317,7 +1350,7 @@ impl AgentHost {
         api: &Arc<PlatformApi>,
         memory: &SessionPlan,
         folder: &str,
-    ) -> Result<String, TurnError> {
+    ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
         // closing tag carrying it (d0/framing.rs).
@@ -1477,23 +1510,51 @@ impl AgentHost {
             .run_config(run_config)
             .build()
             .map_err(|_| failed("internal", "The agent runner could not be built."))?;
-        let mut stream = runner
-            .run_str(
-                USER_ID,
-                &session_id,
-                Content::new("user").with_text(request.prompt.clone()),
-            )
-            .await
-            .map_err(|e| failed("agent_failed", &e.to_string()))?;
-        while let Some(event) = stream.next().await {
-            let event = event.map_err(|e| model_failure(&e.to_string()))?;
-            sink.emit(&event)
-                .await
-                .map_err(|e| failed("agent_failed", &e.to_string()))?;
+        // At the step limit the person is asked whether to go on (never a
+        // rule or a remembered choice: the prompt, not the session's
+        // approvals); on "continue" the same runner runs again on the same
+        // session, within this execution, from the host's own prompt.
+        let mut budget = StepBudget::new(admitted.step_limit);
+        let mut content = Content::new("user").with_text(request.prompt.clone());
+        loop {
+            match run_once(&runner, &session_id, content, sink).await? {
+                RunEnd::Answered => {
+                    return Ok(AgentAnswer {
+                        text: bound
+                            .take_completed_text()
+                            .unwrap_or_else(|_| sink.last_text()),
+                        step_limit_reached: false,
+                    });
+                }
+                RunEnd::StepLimit => {
+                    let go_on = budget.may_continue()
+                        && step_limit::ask_to_continue(
+                            workspace.prompt.as_ref(),
+                            "step_limit",
+                            budget.limit(),
+                            &sink.last_said(),
+                        )
+                        .await;
+                    let next = if go_on {
+                        budget.continue_content()
+                    } else {
+                        None
+                    };
+                    match next {
+                        Some(next) => {
+                            events.continued(budget.limit(), budget.continues());
+                            content = next;
+                        }
+                        None => {
+                            return Ok(AgentAnswer {
+                                text: sink.last_text(),
+                                step_limit_reached: true,
+                            });
+                        }
+                    }
+                }
+            }
         }
-        Ok(bound
-            .take_completed_text()
-            .unwrap_or_else(|_| sink.last_text()))
     }
 
     /// `agent_turn_cancel`: stop a running turn; it then commits nothing.
@@ -2115,6 +2176,46 @@ struct Prepared {
     folder: String,
 }
 
+/// What the agent's runs ended with.
+struct AgentAnswer {
+    text: String,
+    /// The last run stopped at the step limit and the turn did not go on
+    /// (the person said stop, did not answer, or the continues ran out).
+    step_limit_reached: bool,
+}
+
+/// How one run of the agent ended.
+enum RunEnd {
+    /// The model answered (or the run ended without an error).
+    Answered,
+    /// adk's own end: the run used its `max_iterations` steps.
+    StepLimit,
+}
+
+/// One run of `runner` on the session from `content`, its events to `sink`.
+async fn run_once(
+    runner: &Runner,
+    session_id: &str,
+    content: Content,
+    sink: &TurnSink,
+) -> Result<RunEnd, TurnError> {
+    let mut stream = runner
+        .run_str(USER_ID, session_id, content)
+        .await
+        .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;
+    while let Some(event) = stream.next().await {
+        let event = match event {
+            Ok(event) => event,
+            Err(error) if step_limit::reached(&error) => return Ok(RunEnd::StepLimit),
+            Err(error) => return Err(model_failure(&error.to_string())),
+        };
+        sink.emit(&event)
+            .await
+            .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;
+    }
+    Ok(RunEnd::Answered)
+}
+
 fn model_failure(text: &str) -> TurnError {
     // `model_gateway.<code>: message` from the model adapter keeps its code,
     // whatever prefix the adk error's display adds.
@@ -2214,12 +2315,22 @@ fn execution_request(
 #[derive(Default)]
 pub struct TurnSink {
     last_text: Mutex<String>,
+    /// The model's last text, with tool calls or without (what it said it
+    /// was doing): the "Continue?" question shows it.
+    last_said: Mutex<String>,
     outcome: Mutex<Option<RunOutcome>>,
 }
 
 impl TurnSink {
     fn last_text(&self) -> String {
         self.last_text
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default()
+    }
+
+    fn last_said(&self) -> String {
+        self.last_said
             .lock()
             .map(|text| text.clone())
             .unwrap_or_default()
@@ -2245,6 +2356,12 @@ impl EventSink for TurnSink {
                     _ => None,
                 })
                 .collect();
+            if !text.is_empty()
+                && content.role == "model"
+                && let Ok(mut said) = self.last_said.lock()
+            {
+                said.clone_from(&text);
+            }
             if !has_calls
                 && !text.is_empty()
                 && content.role == "model"
