@@ -39,7 +39,8 @@ import { STORAGE_STATE } from '../../../playwright.config';
 test.use({ storageState: STORAGE_STATE.admin });
 
 // The toggleable internal chat tools this endpoint reports on —
-// `features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST` (see
+// `features/agents/lib/internalTools.ts`'s `INTERNAL_TOOLS_LIST`, minus
+// `pyodide`, which is not reported (see
 // `internal/api/v2/toolkits/capabilities_handler.go`'s own doc comment). Three
 // are skipped by the Rust worker; the rest it serves natively.
 const RUST_SKIPPED_INTERNAL_TOOLS = ['image_generation', 'internal_mcp', 'swarm'] as const;
