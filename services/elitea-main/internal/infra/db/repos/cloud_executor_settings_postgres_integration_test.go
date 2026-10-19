@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -128,5 +129,62 @@ VALUES (gen_random_uuid(), 1, 'Cloud executor', 'cloud_executor', 'cloud_executo
 	unencrypted, _ := workspacehandoff.NewPolicyService(repo, repo, devicePolicy{cloudHandoff: true}, false, platformconfig.CloudExecutorResources{})
 	if got, _ := unencrypted.Effective(ctx, 1); got.Enabled {
 		t.Fatalf("an unconfirmed bucket encryption left the executor on")
+	}
+}
+
+// The project switch's write: merge, remove, create once, and refuse an
+// unknown project.
+func TestPostgresCloudExecutorProjectSwitchWrite(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	repo, err := NewCloudExecutorSettingsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	on, off := true, false
+	// nil without a row writes nothing.
+	if err := repo.SetCloudExecutorProjectEnabled(ctx, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := repo.CloudExecutorSetting(ctx, 1); err != nil || found {
+		t.Fatalf("nil created a row: found %v, %v", found, err)
+	}
+	// Concurrent first writes create exactly one row.
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() { errs <- repo.SetCloudExecutorProjectEnabled(ctx, 1, &on) }()
+	}
+	for i := 0; i < 8; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.configuration WHERE type = 'cloud_executor'`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows = %d, %v; want one", rows, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE p_1.configuration SET data = data || '{"network": false}'::jsonb WHERE type = 'cloud_executor'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetCloudExecutorProjectEnabled(ctx, 1, &off); err != nil {
+		t.Fatal(err)
+	}
+	setting, _, err := repo.CloudExecutorSetting(ctx, 1)
+	if err != nil || setting.Enabled == nil || *setting.Enabled || setting.Network == nil || *setting.Network {
+		t.Fatalf("after off = %+v, %v; want enabled false and network kept", setting, err)
+	}
+	if err := repo.SetCloudExecutorProjectEnabled(ctx, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	setting, found, err := repo.CloudExecutorSetting(ctx, 1)
+	if err != nil || !found || setting.Enabled != nil || setting.Network == nil {
+		t.Fatalf("after nil = %+v, %v, %v; want enabled unset and the row kept", setting, found, err)
+	}
+	// A project with no tenant schema.
+	if err := repo.SetCloudExecutorProjectEnabled(ctx, 424242, &on); !errors.Is(err, workspacehandoff.ErrProjectNotFound) {
+		t.Fatalf("unknown project write = %v", err)
+	}
+	if _, _, err := repo.CloudExecutorSetting(ctx, 424242); !errors.Is(err, workspacehandoff.ErrProjectNotFound) {
+		t.Fatalf("unknown project read = %v", err)
 	}
 }

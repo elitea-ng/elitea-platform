@@ -3504,7 +3504,8 @@ components:
           description: >-
             Null while enabled. Otherwise why the cloud executor is off, the
             first that applies: `platform_off` (the platform cloud_executor
-            section), `project_off` (the project setting), `device_off` (the
+            section), `project_off` (the project's explicit off, or no value
+            under a platform project default that is off), `device_off` (the
             native client policy's local_work switches), `no_executor` (the
             deployment runs no workspace-run supervisor) or
             `storage_encryption_unconfirmed` (the object store's default
@@ -3544,6 +3545,42 @@ components:
           $ref: '#/components/schemas/WorkspaceHandoffLimits'
         env_limits:
           $ref: '#/components/schemas/WorkspaceHandoffEnvLimits'
+    ProjectCloudExecutorSwitch:
+      type: object
+      description: >-
+        A project's Send to cloud switch with the layers that decide it.
+        NOTE(W2): internal/application/workspacehandoff/project_switch.go:39.
+      required: [project_id, platform_enabled, project_default_enabled, explicit, source, enabled]
+      properties:
+        project_id: { type: integer, format: int64 }
+        platform_enabled:
+          type: boolean
+          description: cloud_executor.enabled. While false the project is off whatever it says.
+        project_default_enabled:
+          type: boolean
+          description: cloud_executor.project_default_enabled, what a project that set nothing gets.
+        explicit:
+          type: boolean
+          nullable: true
+          description: The project's own value; null follows the default.
+        source:
+          type: string
+          description: '`explicit` or `default`: where the project''s value comes from.'
+        enabled:
+          type: boolean
+          description: >-
+            The platform switch and the project's value together. The handoff
+            policy still adds the device switch and the storage and executor
+            checks (see getWorkspaceHandoffPolicy).
+    ProjectCloudExecutorSwitchUpdate:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          nullable: true
+          description: true or false sets the project's value; null goes back to the platform default.
     WorkspaceHandoffLimits:
       type: object
       description: The effective caps of the send.
@@ -14354,6 +14391,93 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /admin/project_cloud_executor/administration/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getAdminProjectCloudExecutor
+      summary: Read a project's Send to cloud switch
+      description: |
+        The admin Projects page, for any project. The project's own cloud executor on/off (ADR-0034
+        decision 11): its explicit value, or unset to follow the platform's
+        `cloud_executor.project_default_enabled`, with the platform switch
+        that always wins. Requires `projects.projects.projects.view` in the administration mode. NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+      tags: [admin]
+      responses:
+        '200':
+          description: The switch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCloudExecutorSwitch'
+        '400':
+          description: A bad project id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: No database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: setAdminProjectCloudExecutor
+      summary: Turn a project's Send to cloud on or off, or back to the default
+      description: |
+        The admin Projects page, for any project. Stores `enabled` in the project's `cloud_executor`
+        setting and keeps its other fields; null removes it so the project
+        follows the platform default. On is refused (409) while the platform
+        has the cloud executor off. Requires `projects.projects.projects.edit` in the administration mode. NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCloudExecutorSwitchUpdate'
+      responses:
+        '200':
+          description: The switch after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCloudExecutorSwitch'
+        '400':
+          description: A bad project id, or a body that is not one `enabled` of true, false or null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The body turns it on while the platform has the cloud executor off.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: No database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /elitea_core/mcp_oauth_proxy/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -17808,6 +17932,93 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
 
+  /elitea_core/project_cloud_executor/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getProjectCloudExecutor
+      summary: Read a project's Send to cloud switch
+      description: |
+        The project settings page. The project's own cloud executor on/off (ADR-0034
+        decision 11): its explicit value, or unset to follow the platform's
+        `cloud_executor.project_default_enabled`, with the platform switch
+        that always wins. Requires `models.project_context.view` in the project. NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+      tags: [settings]
+      responses:
+        '200':
+          description: The switch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCloudExecutorSwitch'
+        '400':
+          description: A bad project id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: No database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: setProjectCloudExecutor
+      summary: Turn a project's Send to cloud on or off, or back to the default
+      description: |
+        The project settings page. Stores `enabled` in the project's `cloud_executor`
+        setting and keeps its other fields; null removes it so the project
+        follows the platform default. On is refused (409) while the platform
+        has the cloud executor off. Requires `models.project_settings.edit` in the project (the project admin). NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCloudExecutorSwitchUpdate'
+      responses:
+        '200':
+          description: The switch after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectCloudExecutorSwitch'
+        '400':
+          description: A bad project id, or a body that is not one `enabled` of true, false or null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The body turns it on while the platform has the cloud executor off.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: No database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

@@ -740,7 +740,13 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 330 -> 331 (client contract 1.8, ADR-0034 amendment of 2026-10-15):
 // getWorkspaceHandoffPolicy, the effective policy the desktop's send dialog
 // reads. The manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 331;
+// 331 -> 335 (ADR-0034 decision 11, owner decision 2026-10-19): a project's
+// Send to cloud switch, read and written from the project settings page
+// (getProjectCloudExecutor, setProjectCloudExecutor) and from the admin
+// Projects page for any project (getAdminProjectCloudExecutor,
+// setAdminProjectCloudExecutor). Their manifest entries land with the pages
+// that call them (see MANIFEST_ENTRY_COUNT).
+const GENERATED_OPERATION_COUNT = 335;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
