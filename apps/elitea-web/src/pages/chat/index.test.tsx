@@ -586,7 +586,7 @@ describe('ChatPage MCP authorization continuation', () => {
         );
       });
 
-      await user.click(await screen.findByRole('button', { name: 'Skip Auth' }));
+      await user.click(await screen.findByRole('button', { name: 'Skip' }));
 
       await waitFor(() => expect(continuations).toHaveLength(1), { timeout: 5000 });
       expect(continuations[0]?.contract).toBe('agent.continue.authorization.v1');

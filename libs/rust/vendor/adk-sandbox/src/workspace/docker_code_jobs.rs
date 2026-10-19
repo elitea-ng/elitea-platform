@@ -414,6 +414,89 @@ impl DockerClient {
     }
 }
 
+/// How a Code job's runtime ended, from the container runtime itself. The
+/// caller decides what it proves; nothing here is read from code output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeJobExit {
+    /// No container carries the job's name.
+    Absent,
+    /// The container is still running.
+    Running,
+    /// The container stopped. `wrote_output` says whether its main process
+    /// wrote anything to stdout, where the runner writes its one envelope.
+    Exited {
+        exit_code: Option<i64>,
+        oom_killed: bool,
+        wrote_output: bool,
+    },
+}
+
+impl DockerClient {
+    /// Observe a Code job's exit after its envelope could not be read. Reads at
+    /// most one log chunk, never the output itself.
+    pub async fn observe_code_job_exit(
+        &self,
+        identity: &CodeJobIdentity,
+    ) -> Result<CodeJobExit, SandboxError> {
+        let Some(job) = self.observe_code_job(identity).await? else {
+            return Ok(CodeJobExit::Absent);
+        };
+        if job.running {
+            return Ok(CodeJobExit::Running);
+        }
+        let observe = async {
+            let info = self
+                .client
+                .inspect_container(&job.container_id, None)
+                .await
+                .map_err(|_| {
+                    SandboxError::ExecutionFailed(
+                        "Code job exit observation failed; state remains unknown".into(),
+                    )
+                })?;
+            let state = info.state.ok_or_else(|| {
+                SandboxError::ExecutionFailed("Code job runtime state is unknown".into())
+            })?;
+            if state.running != Some(false) || info.id.as_deref() != Some(&job.container_id) {
+                return Err(SandboxError::ExecutionFailed(
+                    "Code job exit is unconfirmed; state remains unknown".into(),
+                ));
+            }
+            let mut stream = self.client.logs(
+                &job.container_id,
+                Some(bollard::container::LogsOptions::<String> {
+                    stdout: true,
+                    stderr: false,
+                    follow: false,
+                    tail: "all".into(),
+                    ..Default::default()
+                }),
+            );
+            let wrote_output = match stream.next().await {
+                None => false,
+                Some(Ok(chunk)) => !chunk.into_bytes().is_empty(),
+                Some(Err(_)) => {
+                    return Err(SandboxError::ExecutionFailed(
+                        "Code job log observation failed; state remains unknown".into(),
+                    ));
+                }
+            };
+            Ok(CodeJobExit::Exited {
+                exit_code: state.exit_code,
+                oom_killed: state.oom_killed == Some(true),
+                wrote_output,
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), observe)
+            .await
+            .map_err(|_| {
+                SandboxError::ExecutionFailed(
+                    "Code job exit observation timed out; reconciliation required".into(),
+                )
+            })?
+    }
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReceiptEnvelope {

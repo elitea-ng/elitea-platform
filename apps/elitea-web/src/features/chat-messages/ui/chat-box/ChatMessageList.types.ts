@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 
 import type { AnswerCanvasSelection } from './AnswerContent';
 import type { UserMessageUpdatedItem } from './UserMessage';
-import type { ApplicationAnswerContinuation } from './ApplicationAnswer.types';
+import type { ApplicationAnswerContinuation, ApplicationAnswerStaticPause } from './ApplicationAnswer.types';
 import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
 import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 
@@ -75,6 +75,8 @@ export interface ChatMessageListContinuation {
   readonly hideHitlActions?: boolean;
   /** A13 (ELITEA-0725): passed straight through to `ApplicationAnswer`'s `continuation.renderAuthModal` — see that group's own doc comment. */
   readonly renderAuthModal?: ApplicationAnswerContinuation['renderAuthModal'];
+  /** The current authored pause; its inline cards render on the answer it belongs to. */
+  readonly staticPause?: ApplicationAnswerStaticPause | undefined;
 }
 
 /** Older-messages pagination props, grouped to stay under the component-props budget. */

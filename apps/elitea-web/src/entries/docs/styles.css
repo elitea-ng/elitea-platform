@@ -129,10 +129,20 @@ pre code {
   padding: 0;
 }
 
+.docs-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;
   margin: 1em 0;
+}
+
+.docs-table-wrap > table {
+  margin: 0;
 }
 
 th,
@@ -140,6 +150,12 @@ td {
   border: 1px solid var(--docs-border);
   padding: 6px 10px;
   text-align: left;
+}
+
+/* A long token (a SPIFFE id, a Secret name, a URL) in a cell breaks rather
+ * than forcing the whole table wider than the column. */
+td code {
+  overflow-wrap: anywhere;
 }
 
 /* ── Shell layout ─────────────────────────────────────────────────────── */

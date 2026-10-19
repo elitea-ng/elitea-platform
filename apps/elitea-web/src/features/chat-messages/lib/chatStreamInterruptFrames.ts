@@ -7,7 +7,14 @@
  * broke the §3.5 400-line budget, which has no warning tier — nothing about
  * these two cases changed; they and their comments are the originals.
  */
-import { mergeHitlInterrupts, normalizeHitlInterrupt, type NormalizedHitlInterrupt } from './hitlInterrupts';
+import {
+  firstAnswerableInterrupt,
+  isParallelAggregateInterrupt,
+  normalizeHitlInterrupt,
+  parallelAggregateMemberIds,
+  reconcileHitlInterrupts,
+  type NormalizedHitlInterrupt,
+} from './hitlInterrupts';
 import { replaceAt, threadIdOf, type ChatStreamContext } from './chatStreamShared';
 
 import type { ChatMessage } from './convertMessagesToChatHistory';
@@ -47,32 +54,36 @@ function singlePauseRaw(frame: ChatStreamFrame): Record<string, unknown> {
   };
 }
 
-/** Which of the three pause shapes an `agent_hitl_interrupt` frame carries. */
-interface HitlPauseShape {
-  /** One child of a fan-out paused; its siblings keep running on the same stream. */
-  readonly isFanoutChild: boolean;
-  /** N paused sub-agents in ONE frame, each labelled with its parent. */
-  readonly isParallelAggregate: boolean;
-}
+/**
+ * The marker a pause-progress frame would carry (proposed Worker contract).
+ *
+ * TODAY THE WEB CANNOT TELL a per-card progress frame from the terminal
+ * aggregate. The Worker publishes every card through `publish_pause_progress`
+ * and the aggregate through `publish_result_event`
+ * (`services/elitea-worker-rust/src/execution/native_agent_lifecycle.rs`
+ * `publish_batch` / `NativeStreamOutcome::Paused`), but both reach the browser
+ * as the same `execution.node_event` with the same `type`, and for one card the
+ * same `response_metadata` (`AgentPauseAccumulator::finish_hitl` clones the
+ * first card's event). Main adds no marker either: its replay only HIDES every
+ * pause frame until the terminal `AGENT_EXECUTION_RESULT` is projected
+ * (`services/elitea-main/internal/infra/db/repos/replay_events.go`).
+ *
+ * So a pause frame is terminal unless it says it is progress. A Worker that
+ * stamps `pause_progress: true` on each progress card (and strips it from the
+ * aggregate) makes the N-card case exact; until then the first card ends the
+ * observation, which is today's behaviour.
+ */
+const PAUSE_PROGRESS_MARKER = 'pause_progress';
 
 /**
- * Classify an `agent_hitl_interrupt` frame.
- *
- * The reducer below needs the shape to decide the message's streaming state,
- * and `isTerminalPauseFrame` needs it to decide whether the run has ended. Both
- * read it from here, because a second copy of the rule drifts from this one.
+ * A fan-out CHILD pause (Track-2 indexer shape): it stamps the child's own
+ * thread and its parent's name into event metadata, and its siblings keep
+ * streaming on the same connection.
  */
-function classifyHitlPause(frame: ChatStreamFrame): HitlPauseShape {
-  const responseMetadata = frame.response_metadata;
-  const hitlMeta = (responseMetadata?.metadata ?? {}) as Record<string, unknown>;
+function isFanoutChildPause(frame: ChatStreamFrame): boolean {
+  const hitlMeta = (frame.response_metadata?.metadata ?? {}) as Record<string, unknown>;
   const childThreadId = typeof hitlMeta['child_thread_id'] === 'string' ? hitlMeta['child_thread_id'] : '';
-  // Fan-out child: the indexer stamped the child's own thread and its parent's
-  // name into event metadata.
-  const isFanoutChild = Boolean(hitlMeta['parent_agent_name'] && childThreadId);
-  const rawInterrupts = Array.isArray(responseMetadata?.hitl_interrupts) ? responseMetadata.hitl_interrupts : [];
-  // In-process parallel aggregate: no child thread of its own.
-  const isParallelAggregate = !isFanoutChild && rawInterrupts.some((raw) => Boolean(raw?.['parent_agent_name']));
-  return { isFanoutChild, isParallelAggregate };
+  return Boolean(hitlMeta['parent_agent_name'] && childThreadId);
 }
 
 /**
@@ -87,26 +98,54 @@ function classifyHitlPause(frame: ChatStreamFrame): HitlPauseShape {
  * Neither type is terminal on its own, so a blanket type test would truncate a
  * live stream:
  *
- * - `mcp_authorization_required` is emitted twice for one run — once as
- *   progress from the tool-error path, once as the execution terminal. Only
- *   the terminal one carries the `authorization_requests` array.
- * - a FAN-OUT CHILD pause keeps the stream open. The child runs as its own
- *   task and streams onto the PARENT's message. Its siblings still send
+ * - `mcp_authorization_required` is published per card as progress, then once
+ *   as the aggregate. Only the aggregate carries `authorization_requests`.
+ * - `agent_hitl_interrupt` is published per card as progress, then once as the
+ *   aggregate (which also carries `authorization_requests` for a mixed pause).
+ *   See `PAUSE_PROGRESS_MARKER` for why only a marked frame is progress.
+ * - a legacy FAN-OUT CHILD pause keeps the stream open: its siblings still send
  *   frames on the SAME stream, and only the reconciled parent ends the run.
  *
- * An in-process PARALLEL AGGREGATE is terminal, unlike a fan-out child.
- * One invoke spawns the sub-agents in one process. It returns their pauses in
- * one frame, and the worker then emits that frame as the execution terminal
- * (`emit_terminal`, agent_events.py:293-330). Nothing follows it. Vetoing it
- * here left the composer disabled for the rest of the session — the very
- * defect this predicate exists to remove.
+ * The reducer reads this same predicate for the message's streaming state, so
+ * "the run is parked" and "the observer is released" cannot disagree.
  */
 export function isTerminalPauseFrame(frame: ChatStreamFrame): boolean {
   if (frame.type === SocketMessageType.McpAuthorizationRequired) {
     return Array.isArray(frame.response_metadata?.['authorization_requests']);
   }
   if (frame.type !== SocketMessageType.AgentHitlInterrupt) return false;
-  return !classifyHitlPause(frame).isFanoutChild;
+  if (frame.response_metadata?.[PAUSE_PROGRESS_MARKER] === true) return false;
+  return !isFanoutChildPause(frame);
+}
+
+/**
+ * The raw interrupts a frame names, with the reconcile-only parallel aggregate
+ * split out. A single pause does not always send `hitl_interrupts`; its one
+ * card is then assembled from the legacy fields (`singlePauseRaw`).
+ */
+function frameInterrupts(frame: ChatStreamFrame): {
+  readonly cards: readonly Record<string, unknown>[];
+  readonly memberIds: readonly string[];
+  /** The cards are the frame's own `hitl_interrupts` entries, each complete. */
+  readonly listed: boolean;
+} {
+  const responseMetadata = frame.response_metadata;
+  const listed = Array.isArray(responseMetadata?.hitl_interrupts) ? responseMetadata.hitl_interrupts : [];
+  const nested = responseMetadata?.hitl_interrupt;
+  // A frame whose only pause IS the aggregate (nested, or the metadata itself)
+  // names no card: assembling one from its legacy fields would invent it.
+  const aggregateOnly = isParallelAggregateInterrupt(nested) || isParallelAggregateInterrupt(responseMetadata);
+  const raws: readonly Record<string, unknown>[] =
+    listed.length > 0 ? listed : aggregateOnly ? [] : [singlePauseRaw(frame)];
+  const candidates: readonly (Readonly<Record<string, unknown>> | undefined)[] = [...listed, nested, responseMetadata];
+  const aggregates = candidates.filter(
+    (raw): raw is Readonly<Record<string, unknown>> => raw !== undefined && isParallelAggregateInterrupt(raw),
+  );
+  return {
+    cards: raws.filter((raw) => !isParallelAggregateInterrupt(raw)),
+    memberIds: aggregates.flatMap((raw) => parallelAggregateMemberIds(raw)),
+    listed: listed.length > 0,
+  };
 }
 
 /**
@@ -148,8 +187,9 @@ export function reduceInterruptFrame(
       });
     }
 
-    // Execution paused for a human decision. Three shapes, and which one it is
-    // decides both the streaming state and how the entries accumulate.
+    // Execution paused for a human decision. Every shape folds into ONE list
+    // by identity, so a card announced as progress and again in the aggregate
+    // is one card, and the user's local queued/decided state survives both.
     case SocketMessageType.AgentHitlInterrupt: {
       if (index === -1) return history;
       const current = history[index];
@@ -157,53 +197,30 @@ export function reduceInterruptFrame(
       const responseMetadata = frame.response_metadata;
       const hitlMeta = (responseMetadata?.metadata ?? {}) as Record<string, unknown>;
       const childThreadId = typeof hitlMeta['child_thread_id'] === 'string' ? hitlMeta['child_thread_id'] : '';
-      const rawInterrupts = Array.isArray(responseMetadata?.hitl_interrupts) ? responseMetadata.hitl_interrupts : [];
-      // `classifyHitlPause` owns the three shapes. `isTerminalPauseFrame`
-      // reads the same classification, but only its `isFanoutChild` half.
-      const { isFanoutChild, isParallelAggregate } = classifyHitlPause(frame);
-
-      // Only a plain single pause ends the run's activity. Both parallel shapes
-      // keep `isStreaming` true, and that is load-bearing rather than cosmetic:
-      // flipping it off collapses the live thinking view into its history
-      // accordion, hiding every sibling that has not independently rendered an
-      // approval card — including ones that finished without pausing.
-      const streamingState =
-        isFanoutChild || isParallelAggregate
-          ? { isStreaming: true, isLoading: false, isRegenerating: false }
-          : { isStreaming: false, isLoading: false, isRegenerating: false };
+      const isFanoutChild = isFanoutChildPause(frame);
+      // A parked run is not streaming. Only a progress frame — siblings still
+      // running behind it — keeps the live view open.
+      const streamingState = {
+        isStreaming: !isTerminalPauseFrame(frame),
+        isLoading: false,
+        isRegenerating: false,
+      };
 
       const fallbackMessage =
         (typeof responseMetadata?.message === 'string' ? responseMetadata.message : '') || current.content;
+      const { cards, memberIds, listed } = frameInterrupts(frame);
+      // The event metadata overlays ONLY a card the frame synthesises from its
+      // legacy fields, or a legacy fan-out child's. A listed entry is complete:
+      // the aggregate clones the FIRST card's metadata, and overlaying it would
+      // file a coordinator card under that card's sub-agent — live only, so a
+      // reload would render it differently.
+      const overlay = !listed || isFanoutChild ? { ...hitlMeta, child_thread_id: childThreadId, thread_id: childThreadId } : {};
       const build = (raw: Record<string, unknown>): NormalizedHitlInterrupt =>
-        normalizeHitlInterrupt(
-          { ...raw, message: raw['message'] ?? fallbackMessage },
-          { ...hitlMeta, child_thread_id: childThreadId, thread_id: childThreadId },
-        );
-
-      const incoming: readonly NormalizedHitlInterrupt[] =
-        rawInterrupts.length > 0
-          ? rawInterrupts.map(build)
-          : // Single pause: the detail is split between legacy top-level fields
-            // and the nested `hitl_interrupt`, so one entry is synthesised from
-            // both rather than from either alone.
-            [build(singlePauseRaw(frame))];
-
+        normalizeHitlInterrupt({ ...raw, message: raw['message'] ?? fallbackMessage }, overlay);
       const existing = (current.hitlInterrupts ?? []) as readonly NormalizedHitlInterrupt[];
-      let hitlInterrupts: readonly NormalizedHitlInterrupt[] | undefined;
-      if (isFanoutChild) {
-        // Children announce one frame at a time, so these ACCUMULATE; merging by
-        // identity is what stops a re-announcement duplicating a pending card.
-        hitlInterrupts = mergeHitlInterrupts(existing, incoming);
-      } else if (rawInterrupts.length > 0) {
-        hitlInterrupts = incoming;
-      } else {
-        // Left UNSET deliberately: the consumer detects "parallel" from the mere
-        // presence of the array, so populating it for a single pause would route
-        // resume through the parallel `hitl_decisions` shape instead of the
-        // sequential one the backend expects. The renderer falls back to
-        // `[hitlInterrupt]`.
-        hitlInterrupts = undefined;
-      }
+      // Always the array, including for one card: the resume path decides the
+      // body from the size of the pending set, not from the array's presence.
+      const hitlInterrupts = reconcileHitlInterrupts(existing, cards.map(build), memberIds);
 
       const threadId =
         current.threadId ??
@@ -216,10 +233,9 @@ export function reduceInterruptFrame(
       return replaceAt(history, index, {
         ...streamingState,
         hitlInterrupts,
-        // Kept populated for consumers that read the singular field, and it is
-        // the SOLE carrier on the single-pause path above. The merged head is
-        // preferred so it tracks the first still-pending child.
-        hitlInterrupt: hitlInterrupts?.[0] ?? incoming[0],
+        // Kept for consumers that read the singular field: the first card still
+        // owed an answer.
+        hitlInterrupt: firstAnswerableInterrupt(hitlInterrupts),
         // A fan-out child resumes on its own thread, carried per entry — parking
         // the whole message on whichever child paused last would misroute it.
         ...(!isFanoutChild && threadId !== undefined ? { threadId } : {}),

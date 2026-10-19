@@ -1013,7 +1013,7 @@ pub(crate) fn runtime_error_policy(
     }
 }
 
-fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
+pub(crate) fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
     let (code, safe_message, retryable) = runtime_error_policy(kind);
     RuntimeErrorV1 {
         code: code as i32,

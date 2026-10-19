@@ -1,153 +1,142 @@
 /**
- * Ported from `apps/elitea-ui/src/[fsd]/features/chat/ui/sub-agent-section/
- * SubAgentAccordion.jsx` — renders a sub-agent execution accordion with
- * grouped tool actions and live status indicator.
+ * Port of EliteaUI `features/chat/ui/sub-agent-section/SubAgentAccordion.jsx`.
  *
- * Uses `partitionActionsIntoBlocks` from `../../lib/subAgentGrouping`
- * for grouping actions by sub-agent invocation.
- *
- * Port of `apps/elitea-ui/src/[fsd]/features/chat/ui/sub-agent-section/
- * SubAgentAccordion.jsx`.
+ * One collapsible group for one sub-agent instance: a pill summary with the
+ * header icon and the breadcrumb label, collapsed by default, a
+ * left-to-right shimmer plus a spinner while the instance runs, and no
+ * shimmer while it is `paused`. Callers opt into `defaultExpanded` (the
+ * approval buckets do); after mount the reader owns the state. `transparent`
+ * drops the accordion's own surface so only the wrapped card carries styling.
  */
-import type { ReactNode } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
+import { useCallback, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
 import type { Theme } from '@mui/material/styles';
 import { useTheme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import { BasicAccordion } from '@/shared/ui/BasicAccordion';
-import type { ToolActionDraft } from '@/entities/message/lib/toolActions';
-
-import type { PartitionedBlock, SubAgentGroupable } from '../../lib/subAgentGrouping';
-import { subAgentActionOutputText } from '../../lib/subAgentActionOutput';
-import { ActionView, type ActionViewProps } from '../ActionView';
+import { StyledAccordion } from '@/shared/ui/StyledAccordion';
+import { StyledAccordionDetails } from '@/shared/ui/StyledAccordionDetails';
+import { StyledAccordionSummary } from '@/shared/ui/StyledAccordionSummary';
+import { ArrowRightIcon } from '@/shared/ui/icons/arrow-right-icon';
 
 import type { SubAgentTool } from './subAgentIcon.helpers';
 import { resolveSubAgentIcon } from './subAgentIcon.helpers';
 
-/** @public Props for `SubAgentAccordion`. */
+/** @public Props for `SubAgentAccordion` — the reference's own prop set. */
 export interface SubAgentAccordionProps {
-  /** The partitioned sub-agent blocks to render. */
-  readonly blocks: readonly PartitionedBlock[];
-  /** Whether the accordion is expanded by default. */
+  readonly name: string;
+  /** Breadcrumb label (`Parent (1) ▸ Sub`); falls back to `name`. */
+  readonly label?: string | undefined;
+  readonly tools?: readonly SubAgentTool[] | undefined;
+  readonly agentType?: string | undefined;
+  readonly running?: boolean;
+  readonly paused?: boolean;
   readonly defaultExpanded?: boolean;
-  /** Called when a tool action is clicked. */
-  readonly onActionClick?: ((action: unknown) => void) | undefined;
-  /** The invoking participant's tool list — resolves each block's header icon (baseline: `SubAgentAccordion.jsx:55`'s `resolveSubAgentIcon(name, tools, theme, agentType)`). */
-  readonly tools?: readonly SubAgentTool[];
+  readonly transparent?: boolean;
+  readonly children?: ReactNode;
 }
 
-/** Renders a block's header: its resolved icon (if any) followed by its display name. */
-function BlockTitle({ block, tools, theme }: { readonly block: PartitionedBlock; readonly tools: readonly SubAgentTool[] | undefined; readonly theme: Theme }): ReactNode {
-  const name = block.kind === 'sub' ? block.name : '';
-  const icon = resolveSubAgentIcon(name, tools, theme);
-  const Icon = icon?.component;
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      {Icon && <Box sx={icon.sx}><Icon /></Box>}
-      {name || 'Sub-agent'}
-    </Box>
-  );
-}
+const styles = {
+  accordion: (theme: Theme) => ({
+    width: '100%',
+    paddingBottom: '0.5rem',
+    borderBottom: `0.0625rem solid ${theme.vars.palette.border.lines}`,
+    '&.Mui-expanded': { margin: 0 },
+    '& .MuiAccordion-heading': { display: 'inline-block' },
+  }),
+  transparent: {
+    backgroundColor: 'transparent',
+    backgroundImage: 'none',
+    border: 'none',
+    // eslint-disable-next-line elitea/ad-hoc-radius — reference `transparent` resets the radius to 0
+    borderRadius: 0,
+    boxShadow: 'none',
+  },
+  summary: (theme: Theme) => ({
+    width: 'auto',
+    // eslint-disable-next-line elitea/ad-hoc-radius — reference pill summary
+    borderRadius: '1rem',
+    minHeight: '1.5rem',
+    '&.Mui-expanded': { minHeight: '1.5rem' },
+    padding: '0 0.5rem',
+    '&:hover': { backgroundColor: theme.vars.palette.background.chatContinueBackground },
+  }),
+  summaryContent: { display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '0.5rem' },
+  label: (theme: Theme) => ({ color: theme.vars.palette.text.secondary, fontWeight: 600, whiteSpace: 'nowrap' }),
+  labelRunning: (theme: Theme) => ({
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+    background: `linear-gradient(90deg, ${theme.vars.palette.text.secondary} 0%, ${theme.vars.palette.text.secondary} 35%, ${theme.vars.palette.text.primary} 50%, ${theme.vars.palette.text.secondary} 65%, ${theme.vars.palette.text.secondary} 100%)`,
+    backgroundSize: '200% auto',
+    color: 'transparent',
+    WebkitBackgroundClip: 'text',
+    backgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    animation: 'subAgentNameShimmer 1.8s linear infinite',
+    '@keyframes subAgentNameShimmer': {
+      '0%': { backgroundPosition: '200% center' },
+      '100%': { backgroundPosition: '-200% center' },
+    },
+  }),
+  spinner: (theme: Theme) => ({ color: theme.vars.palette.text.secondary, flexShrink: 0 }),
+  details: {
+    paddingTop: '0.5rem',
+    paddingBottom: '0.5rem',
+    paddingLeft: '1.75rem',
+    paddingRight: '0.5rem',
+    gap: '0.75rem',
+    width: '100%',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+} as const;
 
-/** Code receipts retain the shared modal and its project-scoped artifact reader inside a group. */
-function codeDebugAction(action: SubAgentGroupable): ActionViewProps['action'] | undefined {
-  const draft = action as unknown as ToolActionDraft;
-  if (!draft.toolMeta || !Object.hasOwn(draft.toolMeta, 'code_debug_v1')) return undefined;
-  return {
-    type: draft.type, toolMeta: draft.toolMeta,
-    ...(draft.name !== undefined ? { name: draft.name } : {}),
-    ...(draft.traceStepId !== undefined ? { traceStepId: draft.traceStepId } : {}),
-    ...(draft.traceMessageGroupId !== undefined ? { traceMessageGroupId: draft.traceMessageGroupId } : {}),
-  };
-}
-
-/**
- * `SubAgentAccordion` — renders sub-agent execution as expandable accordions.
- * Each sub-agent invocation gets its own accordion with grouped tool actions.
- */
 export function SubAgentAccordion({
-  blocks,
-  defaultExpanded = false,
-  onActionClick,
+  name,
+  label,
   tools,
+  agentType,
+  running = false,
+  paused = false,
+  defaultExpanded = false,
+  transparent = false,
+  children,
 }: SubAgentAccordionProps): ReactNode {
   const theme = useTheme();
-
-  if (!blocks?.length) return null;
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const onChange = useCallback((_event: SyntheticEvent, value: boolean) => setExpanded(value), []);
+  const shimmer = running && !paused;
+  const icon = resolveSubAgentIcon(name, tools, theme, agentType);
+  const Icon = icon?.component;
 
   return (
-    <Box sx={{ mt: 1 }}>
-      {blocks.map((block, index) => {
-        if (block.kind === 'coord') {
-          return null; // Coordinator actions rendered inline
-        }
-
-        const isExpanded = defaultExpanded || block.pausedForResume;
-
-        return (
-          <BasicAccordion
-            key={`${block.instanceKey}-${index}`}
-            items={[
-              {
-                title: <BlockTitle block={block} tools={tools} theme={theme} />,
-                content: (
-                  <Box sx={{ px: 2, pb: 1 }}>
-                    {block.actions.map((action, actionIndex) => {
-                      const key = `${String((action as unknown as Record<string, unknown>).id)}-${actionIndex}`;
-                      const debug = codeDebugAction(action);
-                      if (debug) return <ActionView key={key} action={debug} onClick={() => onActionClick?.(action)} />;
-                      return (
-                      <Box
-                        key={key}
-                        component="pre"
-                        onClick={() => onActionClick?.(action)}
-                        sx={{
-                          fontFamily: theme.typography.fontFamilyMono,
-                          fontSize: theme.typography.bodySmall.fontSize,
-                          p: 1,
-                          mb: 0.5,
-                          backgroundColor: 'action.hover',
-                          // eslint-disable-next-line elitea/ad-hoc-radius — inline code border radius
-                          borderRadius: 0.5,
-                          cursor: 'pointer',
-                          // A saved child's result can be large: the preview scrolls instead of growing the card.
-                          maxHeight: '20rem',
-                          overflow: 'auto',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        <Typography
-                          variant="bodySmall"
-                          sx={{
-                            display: 'block',
-                            color: 'text.secondary',
-                            mb: 0.5,
-                          }}
-                        >
-                          {(action.name as string) || action.type || 'Action'}
-                        </Typography>
-                        {subAgentActionOutputText(action.toolOutputs)}
-                      </Box>
-                      );
-                    })}
-                    {block.pausedForResume && (
-                      <Typography
-                        variant="bodySmall"
-                        sx={{ color: 'warning.dark', fontStyle: 'italic' }}
-                      >
-                        Paused — awaiting resume
-                      </Typography>
-                    )}
-                  </Box>
-                ),
-              },
-            ]}
-            defaultExpanded={isExpanded}
-          />
-        );
-      })}
-    </Box>
+    <StyledAccordion
+      expanded={expanded}
+      onChange={onChange}
+      sx={[styles.accordion, transparent && styles.transparent]}
+      slotProps={{ transition: { unmountOnExit: true } }}
+    >
+      <StyledAccordionSummary
+        data-testid={`chat-answer-nested-agent-accordion-summary-${name}`}
+        expandIcon={<ArrowRightIcon style={{ width: '1rem', height: '1rem' }} />}
+        showMode="left"
+        sx={styles.summary}
+      >
+        <Box sx={styles.summaryContent}>
+          {Icon && <Box sx={icon.sx}><Icon /></Box>}
+          <Typography variant="bodySmall" sx={shimmer ? styles.labelRunning : styles.label}>
+            {label || name}
+          </Typography>
+          {shimmer && <CircularProgress size={12} thickness={5} sx={styles.spinner} />}
+        </Box>
+      </StyledAccordionSummary>
+      <StyledAccordionDetails data-testid={`chat-answer-nested-agent-accordion-details-${name}`} sx={styles.details}>
+        {children}
+      </StyledAccordionDetails>
+    </StyledAccordion>
   );
 }

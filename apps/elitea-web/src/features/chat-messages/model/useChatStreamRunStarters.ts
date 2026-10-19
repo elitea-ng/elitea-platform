@@ -50,9 +50,35 @@ export type AgentStreamStartAttempt =
   | { readonly started: false; readonly reason: "retry-later" }
   | {
       readonly started: false;
+      readonly reason: "already-resolved";
+      readonly code: AlreadyResolvedCode;
+    }
+  | {
+      readonly started: false;
       readonly reason: "rejected";
       readonly message: string;
     };
+
+/**
+ * The two 409s that mean "this pending set was consumed elsewhere" — another
+ * tab, a replayed request, a double click
+ * (`services/elitea-main/internal/api/v2/agentexecution/route.go`, the
+ * `ErrCurrentAgent*AlreadyResolved` arms, both `retryable: false`). Nothing is left to resume, so the caller settles
+ * quietly instead of showing an error or trying another transport.
+ */
+type AlreadyResolvedCode = "agent_hitl_already_resolved" | "agent_authorization_already_resolved";
+
+function alreadyResolvedCode(error: unknown): AlreadyResolvedCode | undefined {
+  if (!(error instanceof EliteaApiError)) return undefined;
+  const failure = error.failure;
+  if (failure.kind !== "http" || failure.status !== 409) return undefined;
+  const body = failure.body;
+  if (typeof body !== "object" || body === null) return undefined;
+  const code = (body as Readonly<Record<string, unknown>>)["error"];
+  return code === "agent_hitl_already_resolved" || code === "agent_authorization_already_resolved"
+    ? code
+    : undefined;
+}
 
 const STARTED: AgentStreamStartAttempt = { started: true };
 const NO_TRANSPORT: AgentStreamStartAttempt = {
@@ -260,6 +286,8 @@ export function useChatStreamRunStarters(
         if (resumeParams.contract === 'agent.continue.static.v1' && !(error instanceof EliteaApiError)) {
           return { started: false, reason: 'rejected', message: 'Reload to refresh the original static pause.' };
         }
+        const resolved = alreadyResolvedCode(error);
+        if (resolved) return { started: false, reason: 'already-resolved', code: resolved };
         return classifyStartFailure(error);
       }
       // The route ACCEPTED the resume. The run is live again whether or not the
