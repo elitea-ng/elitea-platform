@@ -36,7 +36,7 @@ func (p *partRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		p.initiate = r.Header.Get("X-Amz-Checksum-Algorithm")
 		p.mu.Unlock()
-		fmt.Fprint(w, `<InitiateMultipartUploadResult><Bucket>physical</Bucket><Key>k</Key><UploadId>u1</UploadId></InitiateMultipartUploadResult>`)
+		_, _ = fmt.Fprint(w, `<InitiateMultipartUploadResult><Bucket>physical</Bucket><Key>k</Key><UploadId>u1</UploadId></InitiateMultipartUploadResult>`)
 	case r.Method == http.MethodPut && query.Has("partNumber"):
 		var names []string
 		for name := range r.Header {
@@ -52,7 +52,7 @@ func (p *partRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.mu.Unlock()
 		w.Header().Set("ETag", `"etag-`+query.Get("partNumber")+`"`)
 	case r.Method == http.MethodPost && query.Has("uploadId"):
-		fmt.Fprint(w, `<CompleteMultipartUploadResult><Bucket>physical</Bucket><Key>k</Key><ETag>"done"</ETag></CompleteMultipartUploadResult>`)
+		_, _ = fmt.Fprint(w, `<CompleteMultipartUploadResult><Bucket>physical</Bucket><Key>k</Key><ETag>"done"</ETag></CompleteMultipartUploadResult>`)
 	default:
 		http.Error(w, "unexpected "+r.Method+" "+r.URL.String(), http.StatusBadRequest)
 	}
