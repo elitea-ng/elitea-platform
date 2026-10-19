@@ -2813,7 +2813,7 @@ WITH resolved AS MATERIALIZED (
            FALSE,
            (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
-    RETURNING id, uuid, conversation_id, sent_to_id
+    RETURNING id, uuid, conversation_id, sent_to_id, created_at
 ), question_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id, created_at
@@ -2844,7 +2844,14 @@ WITH resolved AS MATERIALIZED (
                sqlc.arg(execution_generation)::text
            ),
            TRUE,
-           (clock_timestamp() AT TIME ZONE 'UTC') + interval '1 second',
+           -- Strictly after its question, and NEVER in the future (#1082).
+           -- The old `+ interval '1 second'` let a follow-up question that
+           -- arrived within a second sort before this answer, and hid the
+           -- answer from the next turn's `created_at < now` history window.
+           GREATEST(
+               clock_timestamp() AT TIME ZONE 'UTC',
+               question_group.created_at + interval '1 microsecond'
+           ),
            sqlc.arg(execution_id)::text
     FROM question_group
     RETURNING id, uuid, reply_to_id
@@ -3170,7 +3177,7 @@ WITH resolved AS MATERIALIZED (
            FALSE,
            (clock_timestamp() AT TIME ZONE 'UTC')
     FROM resolved
-    RETURNING id, uuid, conversation_id, sent_to_id
+    RETURNING id, uuid, conversation_id, sent_to_id, created_at
 ), question_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id, created_at
@@ -3201,7 +3208,14 @@ WITH resolved AS MATERIALIZED (
                sqlc.arg(execution_generation)::text
            ),
            TRUE,
-           (clock_timestamp() AT TIME ZONE 'UTC') + interval '1 second',
+           -- Strictly after its question, and NEVER in the future (#1082).
+           -- The old `+ interval '1 second'` let a follow-up question that
+           -- arrived within a second sort before this answer, and hid the
+           -- answer from the next turn's `created_at < now` history window.
+           GREATEST(
+               clock_timestamp() AT TIME ZONE 'UTC',
+               question_group.created_at + interval '1 microsecond'
+           ),
            sqlc.arg(execution_id)::text
     FROM question_group
     RETURNING id, uuid, reply_to_id
