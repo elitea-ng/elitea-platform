@@ -112,6 +112,19 @@ target "elitea-subapp-host" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# The egress proxy (ADR-0034 decision 9): the host-allowlist boundary for
+# cloud-executor sandboxes. Repo-root context, because the module replaces
+# libs/go/egresslib; standard library otherwise.
+target "elitea-egress-proxy" {
+  context    = "."
+  dockerfile = "services/elitea-egress-proxy/Containerfile"
+  target     = "final"
+  tags       = ["${REGISTRY}/elitea-egress-proxy:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-egress-proxy-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-egress-proxy-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 # The Rust-native DeepWiki engine (ADR-0026), the only engine sidecar the
 # chart runs (`deepwiki.engine.runner: native` or `fixture`). One binary on
 # distroless base-nossl-debian13 plus libgcc_s, built with cargo-auditable.
@@ -190,6 +203,23 @@ target "elitea-doc-extractor" {
 # libs/go/egresslib, which lives outside the service directory. go.work is not
 # copied into the image and the build sets GOWORK=off, so the module still
 # builds off the workspace.
+# The cloud executor's workspace sandbox image (ADR-0034 decision 9): one
+# container per cloud turn runs `elitea-workspace-runner` over a disk-backed
+# /workspace. Debian 13 (trixie-slim) with git and a build toolchain, because
+# the agent's `run_command` builds the user's project: a Debian userland, so
+# its scan is exempt (.github/image-scan-exempt.txt), not distroless.
+# Repo-root context: the Containerfile COPYs libs/rust.
+#
+# Not in `group "default"`: it compiles from source.
+target "elitea-workspace-runner" {
+  context    = "."
+  dockerfile = "libs/rust/workspace-runner/Containerfile"
+  tags       = ["${REGISTRY}/elitea-workspace-runner:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-workspace-runner-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-workspace-runner-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 target "elitea-llm-gateway" {
   context    = "."
   dockerfile = "services/elitea-llm-gateway/Containerfile"

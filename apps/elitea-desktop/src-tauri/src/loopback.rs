@@ -442,10 +442,21 @@ mod tests {
         let _ = listener
             .wait_for_callback(Duration::from_millis(50), "s")
             .await;
-        assert!(
-            TcpStream::connect((Ipv4Addr::LOCALHOST, port))
-                .await
-                .is_err()
-        );
+        // Closed: nothing there. Another test's server may take the freed
+        // ephemeral port at once (the suite runs them in parallel), so a
+        // connection that succeeds must still not be this listener: it must
+        // not accept the callback it was waiting for.
+        if let Ok(mut stream) = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+            // Whoever answers may reset the connection: only a 200 is wrong.
+            let mut response = String::new();
+            let _ = stream
+                .write_all(b"GET /callback?code=x&state=s HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .await;
+            let _ = stream.read_to_string(&mut response).await;
+            assert!(
+                !response.starts_with("HTTP/1.1 200"),
+                "the closed listener still answers"
+            );
+        }
     }
 }

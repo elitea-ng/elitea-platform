@@ -48,6 +48,7 @@ import (
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 /* ── harness ───────────────────────────────────────────────────────────── */
@@ -854,6 +855,12 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.workspace_segments (
     project_id integer NOT NULL, conversation_uuid uuid NOT NULL, byte_length bigint NOT NULL,
     superseded_at timestamptz)`); err != nil {
 		t.Fatalf("create the workspace segments: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

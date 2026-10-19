@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-handoff-apply"
+description = "Enables the handoff_apply command without any pre-configured scope."
+commands.allow = ["handoff_apply"]
+
+[[permission]]
+identifier = "deny-handoff-apply"
+description = "Denies the handoff_apply command without any pre-configured scope."
+commands.deny = ["handoff_apply"]

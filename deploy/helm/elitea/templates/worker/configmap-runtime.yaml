@@ -80,6 +80,21 @@ data:
     {{- if gt (len $r.sandboxRuntimes) 0 }}
     {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
     {{- end }}
+    {{- /* ADR-0034: the cloud executor's workspace runs (Rust worker only). */}}
+    {{- with ($r.workspaceRuns | default dict) }}
+    {{- if ne (include "elitea-worker.isRust" $) "true" }}
+    {{- fail "worker.runtime.workspaceRuns requires the Rust worker" }}
+    {{- end }}
+    {{- range $key := list "target" "audience" "scratch_root" "cpu_millis" "memory_bytes" "max_disk_bytes" "turn_wall_seconds" }}
+    {{- if not (hasKey $.Values.worker.runtime.workspaceRuns $key) }}
+    {{- fail (printf "worker.runtime.workspaceRuns.%s is required" $key) }}
+    {{- end }}
+    {{- end }}
+    {{- if not (has .audience ($.Values.main.runtime.sandboxAudiences | default list)) }}
+    {{- fail "worker.runtime.workspaceRuns.audience must be in main.runtime.sandboxAudiences" }}
+    {{- end }}
+    {{- $_ := set $config "workspace_runs" (dict "target" .target "audience" .audience "scratch_root" .scratch_root "cpu_millis" (int64 .cpu_millis) "memory_bytes" (int64 .memory_bytes) "max_disk_bytes" (int64 .max_disk_bytes) "turn_wall_seconds" (int64 .turn_wall_seconds)) }}
+    {{- end }}
     {{- /* The model completions one claim's toolkits may make in total (the
     step-back index tools, the Office prompts, image generation). Written
     only when set; unset, the worker's default (200) applies. Validated like

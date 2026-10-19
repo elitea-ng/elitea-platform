@@ -79,12 +79,15 @@ jobs:
     # the whole job in under 15 min with the three images warm from the
     # shared cache, seven side-loads (three built, four third-party).
     timeout-minutes: 40
-    env:
-      # The cache-write policy, stated once: a push to main exports every
-      # layer, everything else (pull requests, the weekly schedule — which
-      # also carries the main ref — and a dispatch) exports final layers only.
-      # Same rule as .github/actions/build-stack-images' `cache-write` input.
-      LAYER_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'max' || 'min' }}
+    # The cache-write policy: a push to main exports every layer; everything
+    # else (pull requests, the weekly schedule — which also carries the main
+    # ref — and a dispatch) exports NOTHING. An empty `<target>.cache-to=`
+    # clears the target's cache-to in bake (docker-bake.hcl's own mode=max
+    # line included). The condition is spelled on each `cache-to=` line below,
+    # not through an env indirection, so scripts/ci/check_workflow_cache_writes.py
+    # can read it. Same rule as .github/actions/build-stack-images'
+    # `cache-write` input: pull-request mode=min exports were evicted before
+    # the next push could read them, and evicted main's on the way.
     steps:
       - uses: actions/checkout@v7
 
@@ -125,13 +128,13 @@ jobs:
             elitea-main.target=e2e
             elitea-main.tags=ghcr.io/elitea-ng/elitea-main:kind
             elitea-main.cache-from=type=gha,scope=elitea-main-linux-amd64
-            elitea-main.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-main-linux-amd64,ignore-error=true
+            elitea-main.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-main-linux-amd64,ignore-error=true' || '' }}
             elitea-subapp-host.tags=ghcr.io/elitea-ng/elitea-subapp-host:kind
             elitea-subapp-host.cache-from=type=gha,scope=elitea-subapp-host-linux-amd64
-            elitea-subapp-host.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-subapp-host-linux-amd64,ignore-error=true
+            elitea-subapp-host.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-subapp-host-linux-amd64,ignore-error=true' || '' }}
             elitea-deepwiki-engine-native.tags=ghcr.io/elitea-ng/elitea-deepwiki-engine-native:kind
             elitea-deepwiki-engine-native.cache-from=type=gha,scope=elitea-deepwiki-engine-native-linux-amd64
-            elitea-deepwiki-engine-native.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true
+            elitea-deepwiki-engine-native.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true' || '' }}
 
       - name: Pin Helm to the version helm-lint renders with
         # Same pin as helm-lint.yml, so the chart is INSTALLED by the Helm

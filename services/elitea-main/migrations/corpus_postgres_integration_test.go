@@ -49,6 +49,7 @@ import (
 
 	migrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 )
 
@@ -76,8 +77,9 @@ LIMIT 1`
 		defer cancel()
 
 		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.elitea_tools (id, name, type, description, owner_id, author_id, meta, settings)
-VALUES (4242, 'corpus-probe', 'artifact', 'migration corpus probe', 1, 1, '{}'::jsonb, '{}'::jsonb)`,
+INSERT INTO p_1.elitea_tools (id, name, type, description, owner_id, author_id, meta, settings, created_at)
+VALUES (4242, 'corpus-probe', 'artifact', 'migration corpus probe', 1, 1, '{}'::jsonb, '{}'::jsonb,
+        now() AT TIME ZONE 'UTC')`,
 		); err != nil {
 			t.Fatalf("seed toolkit row: %v", err)
 		}
@@ -128,8 +130,9 @@ VALUES (4242, 'corpus-probe', 'artifact', 'migration corpus probe', 1, 1, '{}'::
 		defer cancel()
 
 		const insertNotification = `
-INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
-VALUES ($1::text::uuid, FALSE, 1, 1, '{}'::jsonb, 'index_data_changed')
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES ($1::text::uuid, FALSE, 1, 1, '{}'::jsonb, 'index_data_changed',
+        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
 ON CONFLICT (uuid) DO NOTHING`
 		const notificationUUID = "00000000-0000-4000-8000-000000000042"
 
@@ -416,6 +419,12 @@ func newMigratedPool(t *testing.T) *pgxpool.Pool {
 	}
 	if err := runner.ApplyTenant(ctx, 1); err != nil {
 		t.Fatalf("apply tenant migrations to p_1: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

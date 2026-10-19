@@ -79,7 +79,13 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-main/go.sum
 
       - name: Vet contract tests
@@ -121,7 +127,13 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
           go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
           cache-dependency-path: services/elitea-main/go.sum
 
       # Preflight, before a single test runs. Both halves of this job's premise

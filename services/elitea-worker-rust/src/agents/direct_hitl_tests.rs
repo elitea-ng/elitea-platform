@@ -1272,3 +1272,633 @@ fn a_denial_comment_survives_into_the_next_resume_of_the_same_message() {
         "the first card's own words were lost on the way to the second resume"
     );
 }
+
+/// The cloud workspace's sandbox, as the HITL gate sees it: a destructive
+/// command is classified as asked; every call is recorded with whether it
+/// arrived approved.
+#[derive(Default)]
+pub(super) struct GateSandbox {
+    pub(super) calls: Mutex<Vec<(String, Value, bool)>>,
+}
+
+#[async_trait::async_trait]
+impl crate::workspace_run::sandbox::WorkspaceSandbox for GateSandbox {
+    async fn push_tree(
+        &self,
+        _worktree: &std::path::Path,
+    ) -> Result<(), crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(())
+    }
+
+    async fn call_tool(
+        &self,
+        tool: &str,
+        call_id: &str,
+        args: Value,
+    ) -> Result<Value, crate::workspace_run::sandbox::SandboxRunError> {
+        self.call_tool_approved(tool, call_id, args, false).await
+    }
+
+    async fn call_tool_approved(
+        &self,
+        _tool: &str,
+        call_id: &str,
+        args: Value,
+        approved: bool,
+    ) -> Result<Value, crate::workspace_run::sandbox::SandboxRunError> {
+        let mut calls = self.calls.lock().expect("calls");
+        calls.push((call_id.to_owned(), args, approved));
+        // Each run answers differently, so a test can tell which run a
+        // result came from.
+        Ok(json!({"status": "ok", "run": calls.len()}))
+    }
+
+    async fn classify_command(
+        &self,
+        command: &str,
+        _cwd: Option<&str>,
+    ) -> Result<bool, crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(command.starts_with("rm -rf") || command.starts_with("git push"))
+    }
+
+    async fn pull_tree(
+        &self,
+        _worktree: &std::path::Path,
+    ) -> Result<(), crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(())
+    }
+
+    async fn destroy(&self) -> Result<(), crate::workspace_run::sandbox::SandboxRunError> {
+        Ok(())
+    }
+}
+
+/// The model's one call, then a final text once results are back.
+pub(super) struct CommandLlm {
+    pub(super) command: String,
+    pub(super) turns: Mutex<u32>,
+}
+
+#[async_trait::async_trait]
+impl adk_rust::Llm for CommandLlm {
+    fn name(&self) -> &'static str {
+        "fixture-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: adk_rust::LlmRequest,
+        _stream: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        let mut turns = self.turns.lock().expect("turns");
+        *turns += 1;
+        let content = if *turns == 1 {
+            Content {
+                role: "model".to_owned(),
+                parts: vec![Part::FunctionCall {
+                    name: "run_command".to_owned(),
+                    args: json!({"command": self.command}),
+                    id: Some("call-1".to_owned()),
+                    thought_signature: None,
+                }],
+            }
+        } else {
+            Content::new("model").with_text("done")
+        };
+        Ok(Box::pin(adk_rust::futures::stream::once(async move {
+            Ok(adk_rust::LlmResponse::new(content))
+        })))
+    }
+}
+
+async fn workspace_turn(
+    sessions: Arc<InMemorySessionService>,
+    model: Arc<dyn adk_rust::Llm>,
+    sandbox: Arc<GateSandbox>,
+    run_config: adk_rust::RunConfig,
+    user_content: Content,
+) -> Vec<Event> {
+    let sandbox: Arc<dyn crate::workspace_run::sandbox::WorkspaceSandbox> = sandbox;
+    let gate = Arc::new(crate::workspace_run::tools::WorkspaceCommandGate::new(
+        Arc::clone(&sandbox),
+    ));
+    let agent = LlmAgentBuilder::new("elitea-agent")
+        .model(model)
+        .toolset(crate::workspace_run::tools::provider(sandbox, true).toolset())
+        .tool_call_confirmation(gate)
+        .build()
+        .expect("agent");
+    let runner = Runner::builder()
+        .app_name("elitea-agent-v1")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .run_config(run_config)
+        .build()
+        .expect("runner");
+    let mut stream = runner
+        .run(
+            adk_rust::UserId::new("user-1").expect("user"),
+            adk_rust::SessionId::new("session-1").expect("session"),
+            user_content,
+        )
+        .await
+        .expect("stream");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.expect("event"));
+    }
+    events
+}
+
+async fn workspace_sessions() -> Arc<InMemorySessionService> {
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("session-1".to_owned()),
+            state: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("session");
+    sessions
+}
+
+/// Item 2 (ADR-0034 decision 9, ADR-0029 addendum item 3): a destructive
+/// `run_command` in the cloud is a HITL interrupt BEFORE anything runs; the
+/// approved call replays in the continuation and reaches the runner marked
+/// approved; a routine command never asks. The workspace command's catalog
+/// entry is conditional (not a name-wide confirmation) and replays approved.
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one pause and its resume, end to end"
+)]
+async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approved() {
+    // Routine: runs, unasked, unapproved.
+    let routine = Arc::new(GateSandbox::default());
+    let events = workspace_turn(
+        workspace_sessions().await,
+        Arc::new(CommandLlm {
+            command: "cargo test".to_owned(),
+            turns: Mutex::new(0),
+        }),
+        Arc::clone(&routine),
+        adk_rust::RunConfig::default(),
+        Content::new("user").with_text("test it"),
+    )
+    .await;
+    assert!(
+        events
+            .iter()
+            .all(|event| event.actions.tool_confirmation.is_none())
+    );
+    assert_eq!(routine.calls.lock().expect("calls").len(), 1);
+    assert!(!routine.calls.lock().expect("calls")[0].2);
+
+    // Destructive: an interrupt, and the runner never saw the call.
+    let sessions = workspace_sessions().await;
+    let sandbox = Arc::new(GateSandbox::default());
+    let events = workspace_turn(
+        Arc::clone(&sessions),
+        Arc::new(CommandLlm {
+            command: "rm -rf build".to_owned(),
+            turns: Mutex::new(0),
+        }),
+        Arc::clone(&sandbox),
+        adk_rust::RunConfig::default(),
+        Content::new("user").with_text("clean up"),
+    )
+    .await;
+    let card = events
+        .iter()
+        .find_map(|event| event.actions.tool_confirmation.as_ref())
+        .expect("a HITL interrupt");
+    assert_eq!(card.tool_name, "run_command");
+    assert_eq!(card.function_call_id.as_deref(), Some("call-1"));
+    assert!(
+        sandbox.calls.lock().expect("calls").is_empty(),
+        "nothing ran"
+    );
+
+    // The catalog the worker composes for a workspace turn.
+    let catalog = SensitiveToolCatalog::default()
+        .with_workspace_command()
+        .expect("workspace catalog");
+    assert_eq!(
+        catalog.tool_names().count(),
+        0,
+        "not a name-wide confirmation"
+    );
+    assert_eq!(catalog.replays_approved("run_command"), Some(true));
+    assert!(catalog.policy_for("run_command").is_some());
+
+    // The person approves: the continuation replays the call, approved.
+    let stored = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("stored");
+    let all = stored.events().all();
+    let confirmation = all
+        .iter()
+        .rev()
+        .find(|event| event.actions.tool_confirmation.is_some())
+        .expect("persisted card");
+    let request = confirmation
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .expect("card");
+    let (interrupt_id, _) = sensitive_call_identity(
+        &confirmation.invocation_id,
+        "call-1",
+        &request.tool_name,
+        &request.args,
+    )
+    .expect("identity");
+    let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+        "approve",
+        "",
+        &interrupt_id,
+        "call-1",
+    ))
+    .expect("decision")
+    .resolve(stored.as_ref())
+    .expect("resolved")
+    .into_direct_replay(&catalog)
+    .expect("an approved workspace command replays");
+    let prepared = replay.bind(Arc::new(CommandLlm {
+        command: "unused".to_owned(),
+        turns: Mutex::new(1),
+    }));
+    let (model, input, _) = prepared.into_parts(Vec::new());
+    let (user_content, run_config) = input.into_parts();
+    let resumed = workspace_turn(
+        Arc::clone(&sessions),
+        model,
+        Arc::clone(&sandbox),
+        run_config,
+        user_content,
+    )
+    .await;
+    assert!(
+        resumed
+            .iter()
+            .all(|event| event.actions.tool_confirmation.is_none())
+    );
+    let calls = sandbox.calls.lock().expect("calls").clone();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].0, "call-1");
+    assert_eq!(calls[0].1["command"], "rm -rf build");
+    assert!(calls[0].2, "the runner is told the person approved it");
+}
+
+/// A session store that loses the persist of the `call-1` tool result once
+/// when armed: the approved command ran, then the turn failed before ADK
+/// stored the result (a crash, a lost lease, a database error).
+pub(super) struct ResultLossSessions {
+    pub(super) inner: Arc<dyn SessionService>,
+    pub(super) armed: std::sync::atomic::AtomicBool,
+}
+
+impl ResultLossSessions {
+    pub(super) fn drops(&self, event: &Event) -> bool {
+        event
+            .tool_results()
+            .iter()
+            .any(|result| result.call_id == Some("call-1"))
+            && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionService for ResultLossSessions {
+    async fn create(
+        &self,
+        req: CreateRequest,
+    ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.inner.create(req).await
+    }
+
+    async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.inner.get(req).await
+    }
+
+    async fn list(
+        &self,
+        req: adk_rust::session::ListRequest,
+    ) -> adk_rust::Result<Vec<Box<dyn adk_rust::session::Session>>> {
+        self.inner.list(req).await
+    }
+
+    async fn delete(&self, req: adk_rust::session::DeleteRequest) -> adk_rust::Result<()> {
+        self.inner.delete(req).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
+        if self.drops(&event) {
+            return Err(adk_rust::AdkError::session("injected: the result was lost"));
+        }
+        self.inner.append_event(session_id, event).await
+    }
+
+    async fn append_event_for_identity(
+        &self,
+        req: adk_rust::session::AppendEventRequest,
+    ) -> adk_rust::Result<()> {
+        if self.drops(&req.event) {
+            return Err(adk_rust::AdkError::session("injected: the result was lost"));
+        }
+        self.inner.append_event_for_identity(req).await
+    }
+}
+
+pub(super) fn workspace_identity() -> adk_rust::AdkIdentity {
+    adk_rust::AdkIdentity::new(
+        adk_rust::AppName::new("elitea-agent-v1").expect("app"),
+        adk_rust::UserId::new("user-1").expect("user"),
+        adk_rust::SessionId::new("session-1").expect("session"),
+    )
+}
+
+/// As [`workspace_turn`], with the worker's approval ledger bound and a turn
+/// failure returned instead of a panic.
+pub(super) async fn ledger_workspace_turn(
+    sessions: Arc<dyn SessionService>,
+    model: Arc<dyn adk_rust::Llm>,
+    sandbox: Arc<GateSandbox>,
+    run_config: adk_rust::RunConfig,
+    user_content: Content,
+) -> (Vec<Event>, Option<adk_rust::AdkError>) {
+    let sandbox: Arc<dyn crate::workspace_run::sandbox::WorkspaceSandbox> = sandbox;
+    let gate = Arc::new(crate::workspace_run::tools::WorkspaceCommandGate::new(
+        Arc::clone(&sandbox),
+    ));
+    let ledger = Arc::new(super::approved_calls::SessionApprovedCallLedger::new(
+        Arc::clone(&sessions),
+        workspace_identity(),
+    ));
+    let agent = LlmAgentBuilder::new("elitea-agent")
+        .model(model)
+        .toolset(
+            crate::workspace_run::tools::provider(sandbox, true)
+                .with_approved_calls(ledger)
+                .toolset(),
+        )
+        .tool_call_confirmation(gate)
+        .build()
+        .expect("agent");
+    let runner = Runner::builder()
+        .app_name("elitea-agent-v1")
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .run_config(run_config)
+        .build()
+        .expect("runner");
+    let mut stream = runner
+        .run(
+            adk_rust::UserId::new("user-1").expect("user"),
+            adk_rust::SessionId::new("session-1").expect("session"),
+            user_content,
+        )
+        .await
+        .expect("stream");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(event) => events.push(event),
+            Err(error) => return (events, Some(error)),
+        }
+    }
+    (events, None)
+}
+
+pub(super) async fn stored_workspace_session(
+    sessions: &dyn SessionService,
+) -> Box<dyn adk_rust::session::Session> {
+    sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: "session-1".to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("stored")
+}
+
+/// The approval of the paused `git push`, resolved against the stored session
+/// and bound for a resume, exactly as the worker does on every attempt.
+pub(super) async fn approved_push_resume(
+    sessions: &dyn SessionService,
+) -> (Arc<dyn adk_rust::Llm>, adk_rust::RunConfig, Content) {
+    let stored = stored_workspace_session(sessions).await;
+    let all = stored.events().all();
+    let confirmation = all
+        .iter()
+        .rev()
+        .find(|event| event.actions.tool_confirmation.is_some())
+        .expect("persisted card");
+    let request = confirmation
+        .actions
+        .tool_confirmation
+        .as_ref()
+        .expect("card");
+    let (interrupt_id, _) = sensitive_call_identity(
+        &confirmation.invocation_id,
+        "call-1",
+        &request.tool_name,
+        &request.args,
+    )
+    .expect("identity");
+    let catalog = SensitiveToolCatalog::default()
+        .with_workspace_command()
+        .expect("workspace catalog");
+    let replay = DirectHitlDecision::from_payload(&multi_call_payload(
+        "approve",
+        "",
+        &interrupt_id,
+        "call-1",
+    ))
+    .expect("decision")
+    .resolve(stored.as_ref())
+    .expect("resolved")
+    .into_direct_replay(&catalog)
+    .expect("an approved workspace command replays");
+    let (model, input, _) = replay
+        .bind(Arc::new(CommandLlm {
+            command: "unused".to_owned(),
+            turns: Mutex::new(1),
+        }))
+        .into_parts(Vec::new());
+    let (user_content, run_config) = input.into_parts();
+    (model, run_config, user_content)
+}
+
+/// Pause on a destructive `git push`; nothing has run yet.
+pub(super) async fn paused_push(sessions: &Arc<ResultLossSessions>, sandbox: &Arc<GateSandbox>) {
+    let (events, error) = ledger_workspace_turn(
+        Arc::clone(sessions) as Arc<dyn SessionService>,
+        Arc::new(CommandLlm {
+            command: "git push origin main".to_owned(),
+            turns: Mutex::new(0),
+        }),
+        Arc::clone(sandbox),
+        adk_rust::RunConfig::default(),
+        Content::new("user").with_text("ship it"),
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.actions.tool_confirmation.is_some()),
+        "a HITL interrupt"
+    );
+    assert!(sandbox.calls.lock().expect("calls").is_empty());
+}
+
+async fn result_loss_sessions() -> Arc<ResultLossSessions> {
+    Arc::new(ResultLossSessions {
+        inner: workspace_sessions().await,
+        armed: std::sync::atomic::AtomicBool::new(false),
+    })
+}
+
+/// ADR-0034 decision 9: an approved call with a remote effect runs at most
+/// once. The resumed turn runs the approved `git push`, then fails before its
+/// result is stored; the retry of the same approval does not push again and
+/// gives the model the first run's result.
+#[tokio::test]
+async fn an_approved_push_runs_once_when_the_resumed_turn_fails_and_is_retried() {
+    let sessions = result_loss_sessions().await;
+    let sandbox = Arc::new(GateSandbox::default());
+    paused_push(&sessions, &sandbox).await;
+
+    // Attempt 1: the push runs, then the turn fails before the result is
+    // persisted.
+    let (model, run_config, user_content) = approved_push_resume(sessions.as_ref()).await;
+    sessions
+        .armed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (_, error) = ledger_workspace_turn(
+        Arc::clone(&sessions) as Arc<dyn SessionService>,
+        model,
+        Arc::clone(&sandbox),
+        run_config,
+        user_content,
+    )
+    .await;
+    assert!(error.is_some(), "the injected failure fails the turn");
+    assert_eq!(sandbox.calls.lock().expect("calls").len(), 1, "pushed once");
+    let stored = stored_workspace_session(sessions.as_ref()).await;
+    assert!(
+        stored
+            .events()
+            .all()
+            .iter()
+            .all(|event| event.tool_results().is_empty()),
+        "the result never reached the session"
+    );
+
+    // Attempt 2: the same approval, resolved again from the session.
+    let (model, run_config, user_content) = approved_push_resume(sessions.as_ref()).await;
+    let (events, error) = ledger_workspace_turn(
+        Arc::clone(&sessions) as Arc<dyn SessionService>,
+        model,
+        Arc::clone(&sandbox),
+        run_config,
+        user_content,
+    )
+    .await;
+    assert!(error.is_none(), "{error:?}");
+    let calls = sandbox.calls.lock().expect("calls").clone();
+    assert_eq!(calls.len(), 1, "the push did not run again: {calls:?}");
+    assert!(calls[0].2, "the one run was the approved one");
+    let result = events
+        .iter()
+        .flat_map(Event::tool_results)
+        .find(|result| result.call_id == Some("call-1"))
+        .map(|result| result.response.clone())
+        .expect("the retry answers the call");
+    assert_eq!(
+        result,
+        json!({"status": "ok", "run": 1}),
+        "the earlier result"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event.llm_response.content.as_ref().is_some_and(|content| {
+                content
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, Part::Text { text } if text == "done"))
+            })
+        }),
+        "the turn continues to the model"
+    );
+}
+
+/// The ledger consumes an approval: the first claim runs the call, a second
+/// claim of the same approval does not (its outcome is unknown until the
+/// result is recorded), and after the record it returns that result. A call
+/// with no persisted card is never run.
+#[tokio::test]
+async fn an_approval_is_consumed_by_its_first_claim() {
+    use elitea_agent_runtime::workspace_tools::{
+        ApprovedCall, ApprovedCallClaim, ApprovedCallLedger as _,
+    };
+    let sessions = result_loss_sessions().await;
+    let sandbox = Arc::new(GateSandbox::default());
+    paused_push(&sessions, &sandbox).await;
+    let ledger = super::approved_calls::SessionApprovedCallLedger::new(
+        Arc::clone(&sessions) as Arc<dyn SessionService>,
+        workspace_identity(),
+    );
+    let args = json!({"command": "git push origin main"});
+    let call = |call_id| ApprovedCall {
+        tool: "run_command",
+        call_id,
+        args: &args,
+        invocation_id: "resume-invocation",
+    };
+
+    let ApprovedCallClaim::Run { key } = ledger.claim(call("call-1")).await.expect("claim") else {
+        panic!("the first claim runs the call");
+    };
+    assert_eq!(
+        ledger.claim(call("call-1")).await.expect("second claim"),
+        ApprovedCallClaim::Started,
+        "a second replay of the same approval does not run the call"
+    );
+    let result = json!({"status": "ok", "run": 1});
+    ledger.complete(&key, &result).await.expect("complete");
+    assert_eq!(
+        ledger.claim(call("call-1")).await.expect("third claim"),
+        ApprovedCallClaim::Completed(result)
+    );
+    assert!(
+        ledger.claim(call("call-2")).await.is_err(),
+        "no persisted card, no run"
+    );
+
+    // The records are invisible to the model and to the replay proof.
+    let stored = stored_workspace_session(sessions.as_ref()).await;
+    let records = stored
+        .events()
+        .all()
+        .into_iter()
+        .filter(|event| event.author == super::approved_calls::APPROVED_CALL_AUTHOR)
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|event| {
+        event.llm_response.content.is_none() && event.actions.state_delta.is_empty()
+    }));
+}

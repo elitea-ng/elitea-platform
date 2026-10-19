@@ -61,7 +61,7 @@ impl CodeWorkspaceFailure {
             SandboxCallError::Authorization(ControlGrpcError::Unavailable(_)) => {
                 NodeFailureClass::DependencyUnavailable
             }
-            SandboxCallError::Submission { code } => match code {
+            SandboxCallError::Submission { code, .. } => match code {
                 tonic::Code::Unauthenticated => NodeFailureClass::AuthenticationDenied,
                 tonic::Code::PermissionDenied => NodeFailureClass::AuthorizationDenied,
                 tonic::Code::Cancelled => NodeFailureClass::Cancelled,

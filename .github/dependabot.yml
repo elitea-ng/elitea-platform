@@ -66,6 +66,14 @@
 #     the SDK is NOT covered by this configuration and stays a manual bump.
 #   - The Debian base layers. Those are the majority of every image-scan
 #     finding, and they move with the Containerfile's FROM line.
+#   - The Rust toolchain, deliberately. There is no `docker` and no
+#     `rust-toolchain` entry, so neither the `rust:<version>-trixie@sha256:`
+#     images nor the rust-toolchain.toml files are ever bumped one at a time.
+#     They are ONE value (scripts/ci/check-rust-toolchain.sh holds all nine
+#     toolchain files, every Rust image stage and its digest, and every
+#     crate's rust-version together), so a bump is a single reviewed change
+#     that follows that script's "HOW TO RAISE THE VERSION". Adding either
+#     ecosystem here would open per-file PRs the gate must refuse.
 version: 2
 
 multi-ecosystem-groups:
@@ -89,6 +97,7 @@ updates:
       - /services/elitea-main
       - /services/elitea-scheduler
       - /services/elitea-subapp-host
+      - /services/elitea-egress-proxy
       - /libs/go/authlib
       - /libs/go/egresslib
       - /libs/go/eventslib

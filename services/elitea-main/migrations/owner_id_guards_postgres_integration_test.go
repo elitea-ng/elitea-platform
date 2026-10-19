@@ -112,8 +112,9 @@ func TestAProjectKindOwnerIDRefusesANumberThatNamesNoProject(t *testing.T) {
 	}
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('wrong-kind', 'an owner_id that names no project', 987654)`)
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('wrong-kind', 'an owner_id that names no project', 987654,
+		        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`)
 	if err == nil {
 		t.Fatal("p_1.applications accepted an owner_id that names no project")
 	}
@@ -125,8 +126,9 @@ func TestAProjectKindOwnerIDRefusesANumberThatNamesNoProject(t *testing.T) {
 	// The same statement with the project of the schema is accepted, so the
 	// constraint refuses the wrong number and not every number.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_1.applications (name, description, owner_id)
-		VALUES ('right-kind', 'the project of this schema', 1)`); err != nil {
+		INSERT INTO p_1.applications (name, description, owner_id, created_at, updated_at)
+		VALUES ('right-kind', 'the project of this schema', 1,
+		        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("p_1.applications refused the project of its own schema: %v", err)
 	}
 }
@@ -155,15 +157,17 @@ func TestTheMigrationRepairsExistingRowsAndKeepsThem(t *testing.T) {
 
 	// The shape this service wrote before #533: the caller's user id in
 	// owner_id. User 1 is seeded by 001_initial, so the number is a real user
-	// and a wrong project.
+	// and a wrong project. The legacy shape is the owner_id value; the clock
+	// columns are named in UTC because their DEFAULT now() is the session clock.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_2.applications (id, name, description, owner_id)
-		VALUES (1, 'legacy-shaped', 'owner_id holds the caller user id', 1)`); err != nil {
+		INSERT INTO p_2.applications (id, name, description, owner_id, created_at, updated_at)
+		VALUES (1, 'legacy-shaped', 'owner_id holds the caller user id', 1,
+		        now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("write the legacy-shaped application row: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO p_2.skills (id, name, description, owner_id, author_id)
-		VALUES (1, 'legacy-shaped skill', 'owner_id holds the literal 1', 1, 1)`); err != nil {
+		INSERT INTO p_2.skills (id, name, description, owner_id, author_id, created_at)
+		VALUES (1, 'legacy-shaped skill', 'owner_id holds the literal 1', 1, 1, now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatalf("write the legacy-shaped skill row: %v", err)
 	}
 

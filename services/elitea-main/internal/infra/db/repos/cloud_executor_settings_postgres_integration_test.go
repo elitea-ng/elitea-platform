@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS centry.platform_config (
 	}
 	for key, value := range map[string]string{"enabled": "true", "max_segment_mb": "100", "network_allowlist": `["github.com","pypi.org"]`} {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO centry.platform_config (section, key, value) VALUES ('cloud_executor', $1, $2::jsonb)`, key, value); err != nil {
+INSERT INTO centry.platform_config (section, key, value, updated_at) VALUES ('cloud_executor', $1, $2::jsonb, now() AT TIME ZONE 'UTC')`, key, value); err != nil {
 			t.Fatalf("seed platform %s: %v", key, err)
 		}
 	}

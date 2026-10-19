@@ -342,6 +342,7 @@ func TestPostgresNaiveClockProbeRefusesASessionLocalStamp(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	skipWhenSessionHasNoOffset(t, ctx, pool)
 	insert := func(name, value string) error {
 		_, err := pool.Exec(ctx, `
 INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
@@ -359,6 +360,76 @@ VALUES (gen_random_uuid(), $1, 1, 'elitea', `+value+`)`, name)
 	}
 	if err := insert("back-dated", "(now() AT TIME ZONE 'UTC') - interval '3 days'"); err != nil {
 		t.Fatalf("a deliberately back-dated value was refused: %v", err)
+	}
+}
+
+// The probe watches tables that did not exist when it was installed: one
+// created afterwards, a naive column added by ALTER TABLE, a table created
+// inside plpgsql EXECUTE (create_tenant_schema's path), a table dropped and
+// recreated, and a partitioned table whose partition takes the write.
+func TestPostgresNaiveClockProbeWatchesTablesCreatedAfterTheInstall(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	skipWhenSessionHasNoOffset(t, ctx, pool)
+	exec := func(statement string) error {
+		_, err := pool.Exec(ctx, statement)
+		return err
+	}
+	refused := func(err error) bool { return err != nil && strings.Contains(err.Error(), "session-local clock") }
+	for _, statement := range []string{
+		`CREATE TABLE public.late_probe (id int, created_at timestamp NOT NULL DEFAULT now())`,
+		`CREATE TABLE public.late_altered (id int)`,
+		`ALTER TABLE public.late_altered ADD COLUMN stamped_at timestamp DEFAULT now()`,
+		`DO $$ BEGIN EXECUTE 'CREATE TABLE public.late_dynamic (id int, created_at timestamp DEFAULT now())'; END $$`,
+		`CREATE TABLE public.late_parted (id int, created_at timestamp DEFAULT now()) PARTITION BY RANGE (id)`,
+		`CREATE TABLE public.late_parted_1 PARTITION OF public.late_parted FOR VALUES FROM (0) TO (100)`,
+	} {
+		if err := exec(statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	for _, table := range []string{"late_probe", "late_altered", "late_dynamic", "late_parted"} {
+		if err := exec(`INSERT INTO public.` + table + ` (id) VALUES (1)`); !refused(err) {
+			t.Errorf("DEFAULT now() into the late table %s was accepted: %v", table, err)
+		}
+	}
+	// Recreated: the new table is watched, not left bare by the old trigger's drop.
+	if err := exec(`DROP TABLE public.late_probe`); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec(`CREATE TABLE public.late_probe (id int, created_at timestamp DEFAULT now())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec(`INSERT INTO public.late_probe (id) VALUES (1)`); !refused(err) {
+		t.Errorf("DEFAULT now() into the recreated table was accepted: %v", err)
+	}
+	if err := exec(`INSERT INTO public.late_probe (id, created_at) VALUES (1, now() AT TIME ZONE 'UTC')`); err != nil {
+		t.Errorf("the UTC stamp into a late table was refused: %v", err)
+	}
+	// A column dropped from the table leaves the trigger valid.
+	if err := exec(`ALTER TABLE public.late_altered DROP COLUMN stamped_at`); err != nil {
+		t.Fatalf("drop the watched column: %v", err)
+	}
+	if err := exec(`INSERT INTO public.late_altered (id) VALUES (1)`); err != nil {
+		t.Errorf("insert after the only naive column was dropped: %v", err)
+	}
+}
+
+// skipWhenSessionHasNoOffset skips a probe test on a session zone with no UTC
+// offset (ELITEA_TEST_SESSION_TIMEZONE=UTC): the probe cannot tell the two
+// clocks apart there and accepts by design. The default zone always has one,
+// which TestPostgresIntegrationSessionTimeZoneIsNotUTC pins.
+func skipWhenSessionHasNoOffset(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	var offsetSeconds float64
+	if err := pool.QueryRow(ctx, `
+SELECT extract(epoch FROM (now() AT TIME ZONE current_setting('TimeZone')) - (now() AT TIME ZONE 'UTC'))`).
+		Scan(&offsetSeconds); err != nil {
+		t.Fatal(err)
+	}
+	if offsetSeconds == 0 {
+		t.Skipf("session zone %q has no UTC offset; the naive clock probe is inert by design", testpg.TimeZone())
 	}
 }
 

@@ -51,7 +51,11 @@ shlex = "2"
 # (ci-deepwiki-engine.yml, "Engine core and code parsers — normal build
 # without preserve_order": a `cargo tree` of their normal features).
 elitea-agent-runtime = { path = "../../../libs/rust/agent-runtime" }
-elitea-local-tools = { path = "../../../libs/rust/local-tools" }
+# `handoff`: the desktop ⇄ cloud handoff (ADR-0034, src/handoff.rs).
+elitea-local-tools = { path = "../../../libs/rust/local-tools", features = ["handoff"] }
+# The workspace store client of the handoff and its REST transport, on
+# the app's one reqwest 0.12 client. serde_json default features only.
+elitea-workspace-store = { path = "../../../libs/rust/workspace-store", features = ["rest"] }
 # The local workspace index (decision 7): the folder source, its owner-only
 # SQLite store and the index tools. It brings engine-core, code-parsers and
 # inventory-core, all order-free in their normal builds (see above).
@@ -61,6 +65,8 @@ elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.
 adk-agent = { version = "~2.2.0", default-features = false }
 adk-core = { version = "~2.2.0", default-features = false }
+# The in-memory checkpointer of `sessions::DesktopStateStore` (until pipelines run locally); the runtime links the same crate.
+adk-graph = { version = "~2.2.0", default-features = false }
 adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
 adk-session = { version = "~2.2.0", default-features = false }
 adk-tool = { version = "~2.2.0", default-features = false }

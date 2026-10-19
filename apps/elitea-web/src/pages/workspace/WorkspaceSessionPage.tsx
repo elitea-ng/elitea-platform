@@ -31,11 +31,14 @@ import { t } from '@/shared/i18n';
 import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { AgentPickers, NoAgents } from './AgentPickers';
+import { CloudTranscript } from './CloudTranscript';
+import { HandoffBanner, HandoffDialogs, HandoffHeader } from './HandoffControls';
 import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
 import { UnboundFolder } from './UnboundFolder';
 import { useAgentSkills } from './useAgentSkills';
 import { useStickToBottom } from './useStickToBottom';
+import { useThreadHandoff, type ThreadHandoff } from './useThreadHandoff';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
 import { WorkspaceComposer } from './WorkspaceComposer';
 
@@ -43,6 +46,7 @@ const LIST_KEY = ['workspace', 'list'] as const;
 
 interface HeaderProps {
   session: ThreadSession;
+  handoff: ThreadHandoff;
   workspace: Workspace;
   projectId: number;
   conversationId: string;
@@ -52,7 +56,7 @@ interface HeaderProps {
 }
 
 /** The folder, its project and agent, the folder's code index, "Open in chat" for a started thread, and the panel toggle. */
-function SessionHeader({ session, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
+function SessionHeader({ session, handoff, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   const attention = session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
@@ -63,6 +67,7 @@ function SessionHeader({ session, workspace, projectId, conversationId, busy, pr
         logo={false}
         trailing={
           <>
+            <HandoffHeader handoff={handoff} />
             <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} open />
             {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
             {!changesOpen && <PanelToggle count={attention} />}
@@ -100,6 +105,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   // The intro stands in for a thread with nothing to show: new, or its history unreadable.
   const nothingEarlier = session.history.kind === 'none' || session.history.kind === 'unavailable';
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
+  const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -108,6 +114,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <SessionHeader
           session={session}
+          handoff={handoff}
           workspace={workspace}
           projectId={projectId}
           conversationId={conversationId}
@@ -117,25 +124,33 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {raw.empty && <NoAgents busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
-            {!raw.empty && !started && nothingEarlier && (
-              <ThreadIntro
-                workspace={workspace}
-                conversationId={conversationId}
-                unavailable={session.history.kind === 'unavailable'}
-                title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
-              />
+            {handoff.offLaptop ? (
+              <CloudTranscript projectId={projectId} conversationId={conversationId} />
+            ) : (
+              <>
+              {raw.empty && <NoAgents busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
+              {!raw.empty && !started && nothingEarlier && (
+                <ThreadIntro
+                  workspace={workspace}
+                  conversationId={conversationId}
+                  unavailable={session.history.kind === 'unavailable'}
+                  title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
+                />
+              )}
+              <EarlierTurns history={session.history} shown={session.shown} />
+              <Exchanges turn={turn} prompts={session.prompts} />
+              </>
             )}
-            <EarlierTurns history={session.history} shown={session.shown} />
-            <Exchanges turn={turn} prompts={session.prompts} />
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <HandoffBanner handoff={handoff} />
           <SessionNotices error={firstError(turn.startError, session.sendError, session.rebind.error)} commands={commands} />
           <WorkspaceComposer
             ipc={ipc}
             workspaceId={workspace.id}
-            canSend={session.canSend}
+            canSend={session.canSend && !handoff.offLaptop}
+            readOnly={handoff.offLaptop}
             busy={turn.busy}
             planMode={commands.planMode}
             onPlanModeChange={commands.setPlanMode}
@@ -158,6 +173,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           decided={session.decided}
         />
       )}
+      <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>
   );

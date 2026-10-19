@@ -186,7 +186,7 @@ function RecordedTurn({ stored }: { stored: StoredTurn }): React.JSX.Element {
   );
 }
 
-function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
+export function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
   if (message.role === 'user') return <YourPrompt text={message.content} />;
   return (
     // The chat's own renderer; raw HTML from the model is dropped, not rendered.
