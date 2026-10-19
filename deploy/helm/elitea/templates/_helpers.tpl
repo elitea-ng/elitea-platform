@@ -248,3 +248,31 @@ value for a deployment that did not ask for one.
 {{- end -}}
 {{- join "\n" $missing -}}
 {{- end }}
+
+{{/*
+elitea.integer — a values number rendered as a base-10 integer, or a refusal
+naming the field. Helm reads every number in a values file as a float64, and
+a bare toString prints one of a million or more in scientific notation
+("2.147483648e+09"), which the consuming service refuses. Accepts a whole
+number or a base-10 digit string (no leading zero, no 0x: sprig's int64 would
+read those as octal or hex), and refuses anything else instead of letting
+int64 turn it into 0. Pass: dict "field" "a.b.c" "value" $v "min" 1.
+*/}}
+{{- define "elitea.integer" -}}
+{{- $value := .value -}}
+{{- $text := "" -}}
+{{- if or (kindIs "float64" $value) (kindIs "int64" $value) (kindIs "int" $value) -}}
+{{- if ne (float64 $value) (float64 (int64 $value)) -}}
+{{- fail (printf "%s must be a whole number, and it is %v" .field $value) -}}
+{{- end -}}
+{{- $text = printf "%d" (int64 $value) -}}
+{{- else if and (kindIs "string" $value) (regexMatch "^(0|-?[1-9][0-9]*)$" $value) -}}
+{{- $text = $value -}}
+{{- else -}}
+{{- fail (printf "%s must be a whole number, and it is %v" .field $value) -}}
+{{- end -}}
+{{- if lt (int64 $text) (int64 .min) -}}
+{{- fail (printf "%s must be at least %d, and it is %s" .field (int64 .min) $text) -}}
+{{- end -}}
+{{- $text -}}
+{{- end }}

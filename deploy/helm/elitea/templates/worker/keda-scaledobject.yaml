@@ -123,7 +123,7 @@ spec:
         # AND commands a replica holds (running, or in its small prefetch).
         # The threshold is one replica's in-flight capacity (see above).
         lagThreshold: {{ $lag | toString | quote }}
-        activationLagThreshold: {{ $a.activationLagThreshold | quote }}
+        activationLagThreshold: {{ include "elitea.integer" (dict "field" "worker.autoscaling.activationLagThreshold" "value" $a.activationLagThreshold "min" 0) | quote }}
         useHttps: "false"
 {{- end }}
 {{- end }}

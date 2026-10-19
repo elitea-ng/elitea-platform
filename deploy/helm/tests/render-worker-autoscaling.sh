@@ -46,6 +46,23 @@ else
   fail "autoscaling was refused even with keda.sh/v1alpha1 available; the guard rejects a valid deployment"
 fi
 
+# A values-file number is a float64 to Helm, and a bare quote printed one of a
+# million or more as "1e+06", which KEDA cannot parse. --set would hand the
+# chart an int64 and hide it, hence the file.
+printf 'worker:\n  autoscaling:\n    activationLagThreshold: 1000000\n' > "$work/big.yaml"
+if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true -f "$work/big.yaml" \
+    | grep -qF 'activationLagThreshold: "1000000"'; then
+  pass "a values-file activationLagThreshold of 1000000 renders as an integer"
+else
+  fail "activationLagThreshold 1000000 from a values file did not render as \"1000000\""
+fi
+if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true \
+    --set worker.autoscaling.activationLagThreshold=-1 >/dev/null 2>&1; then
+  fail "a negative activationLagThreshold rendered"
+else
+  pass "a negative activationLagThreshold is refused"
+fi
+
 # ---------------------------------------------------------------- the trigger
 helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" \
   --set worker.autoscaling.enabled=true > "$work/on.yaml"
