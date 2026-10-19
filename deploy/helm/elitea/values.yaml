@@ -4467,6 +4467,10 @@ worker:
     # directory on the worker's disk for segments and checkouts),
     # cpu_millis, memory_bytes, max_disk_bytes, turn_wall_seconds.
     workspaceRuns: {}
+    # The disk the worker gives workspaceRuns.scratch_root (segments and
+    # checkouts of handed-off threads): a dedicated emptyDir of this size,
+    # mounted there whenever workspaceRuns is set.
+    workspaceScratchSizeLimit: 20Gi
     # The model completions ONE claim's toolkits may make in total (Rust
     # worker): the step-back index tools, the Office/document tools' prompts
     # and image generation/editing (one unit per call, n images included).
@@ -4721,13 +4725,60 @@ sandboxKubernetes:
   # ADR-0034: the RuntimeClass workspace-run Pods run under. The supervisor
   # reads it (a ClusterRole grants `get` on this one name) and refuses every
   # workspace run unless its handler is runsc or gvisor (gVisor) or kata*.
+  # This chart never creates it and never touches nodes; the platform or a
+  # separate chart provides it:
+  #   GKE Sandbox node pool (sandbox_config gvisor):   gvisor
+  #   AKS Pod Sandboxing node pool (KataVmIsolation): kata-vm-isolation
+  #     (kata-mshv-vm-isolation on older clusters)
+  #   EKS / k3s: deploy/helm/elitea-sandbox-runtime:   gvisor (handler runsc)
   runtimeClass:
     name: gvisor
   # ADR-0034: the cloud executor's workspace runs, one Pod per cloud turn in
   # the execution namespace (disk-backed /workspace, the workspace runner
   # image). Toolkit Code Pods are not affected by anything below.
   workspaceRuns:
+    # Needs sandboxKubernetes.enabled, supervisor.enabled, a runtimeClass.name
+    # and worker.runtime.workspaceRuns (the worker's side); the render fails
+    # on any half-enabled shape. Main is told (ELITEA_CLOUD_EXECUTOR_CONFIGURED)
+    # so a deployment without it reports `no_executor`, not "turned off".
     enabled: false
+    # Where the run Pods land: the sandbox nodes. Required, non-empty (the
+    # supervisor refuses an empty selector). Examples:
+    #   k3s / EKS (elitea-sandbox-runtime chart): {elitea.ai/sandbox: "true"}
+    #   GKE Sandbox: {sandbox.gke.io/runtime: gvisor}
+    #   AKS Pod Sandboxing: the label of the Kata node pool.
+    nodeSelector:
+      elitea.ai/sandbox: "true"
+    # The sandbox nodes' taints, tolerated by every run Pod. Example:
+    #   [{key: elitea.ai/sandbox, operator: Equal, value: "true", effect: NoSchedule}]
+    tolerations: []
+    # The supervisor's `workspace` profile, rendered by the chart into a
+    # ConfigMap and projected beside the material Secret (the supervisor
+    # reads profiles only from its private material directory). The secret
+    # parts stay in sandboxKubernetes.supervisor.materialSecret under the
+    # file names below; that Secret must not carry a key named workspace.json.
+    profile:
+      port: 9470
+      # The Service the worker dials (worker.runtime.workspaceRuns.target is
+      # <serviceName>:<port>); the supervisor certificate's SAN names it.
+      serviceName: elitea-sandbox-workspace
+      owner: workspace-runs
+      # The grant audience: also worker.runtime.workspaceRuns.audience and an
+      # entry of main.runtime.sandboxAudiences.
+      audience: dns:elitea-sandbox-workspace
+      # The workspace runner image, by digest (elitea-workspace-runner).
+      image: ""
+      concurrency: 16
+      maxWorkspaceBytes: 10737418240
+      maxCpuMillis: 4000
+      maxMemoryBytes: 8589934592
+      maxWallSeconds: 3600
+      # Key names in the material Secret.
+      material:
+        ca: workspace-client-ca.pem
+        certificate: workspace-server.crt
+        privateKey: workspace-server.key
+        keyring: workspace-grant-keyring.json
     # Egress for workspace runs whose project has the network on (the Pod
     # carries sandbox.elitea.ai/egress=public). Off: every workspace run is
     # as denied as a Code Pod, whatever the project says.
@@ -4777,7 +4828,10 @@ sandboxKubernetes:
     # Existing Secret: flat configuration, certificate, keyring, and database files.
     materialSecret: ""
     # Admit one to eight profiles with distinct files, ports, and durable owners.
-    # All-language acquisition requires seven independent profiles.
+    # All-language acquisition requires seven independent profiles. The
+    # workspace profile (sandboxKubernetes.workspaceRuns) counts toward the
+    # eight; with it, this list may be empty ([]) for a cloud-executor-only
+    # supervisor.
     profiles:
       - file: deno.json
         port: 9446

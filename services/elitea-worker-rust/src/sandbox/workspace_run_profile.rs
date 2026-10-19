@@ -17,6 +17,10 @@
 //!              "egress_dns": ["1.1.1.1"],
 //!              "proxy_network": "elitea-workspace-proxy"}}
 //! ```
+//!
+//! On Kubernetes the backend is `{"kind": "kubernetes", "namespace": ...,
+//! "runtime_class": "gvisor", "node_selector": {...}, "tolerations": [...]}`;
+//! the chart renders it from `sandboxKubernetes.workspaceRuns`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -58,6 +62,9 @@ enum BackendConfig {
         namespace: String,
         runtime_class: String,
         node_selector: BTreeMap<String, String>,
+        /// The sandbox nodes' taints the run Pods tolerate (at most 16).
+        #[serde(default)]
+        tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
     },
 }
 
@@ -162,8 +169,13 @@ impl WorkspaceProfileConfig {
                 namespace,
                 runtime_class,
                 node_selector,
+                tolerations,
             } => {
-                if namespace.is_empty() || runtime_class.is_empty() || node_selector.is_empty() {
+                if namespace.is_empty()
+                    || runtime_class.is_empty()
+                    || node_selector.is_empty()
+                    || tolerations.len() > 16
+                {
                     return Err(StartupError("validate Kubernetes workspace placement"));
                 }
             }
@@ -210,6 +222,7 @@ async fn backend(
             namespace,
             runtime_class,
             node_selector,
+            tolerations,
         } => {
             let cluster = kube::Config::incluster()
                 .map_err(|_| StartupError("load in-cluster Kubernetes identity"))?;
@@ -223,6 +236,7 @@ async fn backend(
                     node_selector.clone(),
                 )
                 .await
+                .map(|runs| runs.with_tolerations(tolerations.clone()))
                 .map_err(|_| {
                     StartupError(
                         "verify the workspace RuntimeClass isolates (handler runsc, gvisor or kata*; see workspace_run_runtime_class_refused)",
@@ -340,6 +354,16 @@ mod tests {
             r#"{"kind":"kubernetes","namespace":"elitea-execution","runtime_class":"gvisor","node_selector":{"sandbox":"true"}}"#,
         );
         assert!(WorkspaceProfileConfig::parse(kube.as_bytes()).is_ok());
+        // Tolerations for a tainted sandbox node; at most 16.
+        let tolerated = profile(
+            r#"{"kind":"kubernetes","namespace":"elitea-execution","runtime_class":"gvisor","node_selector":{"elitea.ai/sandbox":"true"},"tolerations":[{"key":"elitea.ai/sandbox","operator":"Equal","value":"true","effect":"NoSchedule"}]}"#,
+        );
+        assert!(WorkspaceProfileConfig::parse(tolerated.as_bytes()).is_ok());
+        let many = format!(
+            r#"{{"kind":"kubernetes","namespace":"e","runtime_class":"gvisor","node_selector":{{"a":"b"}},"tolerations":[{}]}}"#,
+            vec![r#"{"operator":"Exists"}"#; 17].join(",")
+        );
+        assert!(WorkspaceProfileConfig::parse(profile(&many).as_bytes()).is_err());
         // An egress network without resolvers, or a mutable image, is refused.
         let no_dns = profile(r#"{"kind":"docker","egress_network":"elitea-workspace-egress"}"#);
         assert!(WorkspaceProfileConfig::parse(no_dns.as_bytes()).is_err());

@@ -40,6 +40,7 @@ pub struct KubernetesWorkspaceRuns {
     namespace: String,
     runtime_class: String,
     node_selector: BTreeMap<String, String>,
+    tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
     /// When the `RuntimeClass` was last verified as isolating.
     verified_at: tokio::sync::Mutex<Option<tokio::time::Instant>>,
 }
@@ -58,8 +59,19 @@ impl KubernetesWorkspaceRuns {
             namespace,
             runtime_class,
             node_selector,
+            tolerations: Vec::new(),
             verified_at: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// The sandbox nodes' taints every run Pod tolerates.
+    #[must_use]
+    pub fn with_tolerations(
+        mut self,
+        tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+    ) -> Self {
+        self.tolerations = tolerations;
+        self
     }
 
     /// The backend, once its `RuntimeClass` is verified to isolate
@@ -119,12 +131,17 @@ impl KubernetesWorkspaceRuns {
     ///
     /// As `WorkspaceRunContainer::kubernetes_pod`.
     pub fn pod(&self, launch: &WorkspaceRunLaunch) -> Result<serde_json::Value, BackendError> {
-        render_pod(
+        let mut pod = render_pod(
             launch,
             &self.namespace,
             &self.runtime_class,
             &self.node_selector,
-        )
+        )?;
+        if !self.tolerations.is_empty() {
+            pod["spec"]["tolerations"] =
+                serde_json::to_value(&self.tolerations).map_err(|_| BackendError::Refused)?;
+        }
+        Ok(pod)
     }
 
     async fn running(&self, name: &str) -> Result<(), BackendError> {
@@ -470,6 +487,34 @@ mod tests {
         assert!(runs.start(&launch()).await.expect("starts"));
         assert_eq!(creates.load(Ordering::SeqCst), 2);
         assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_pod_tolerates_the_sandbox_taint() {
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::convert::Infallible>(http::Response::new(http_body_util::Full::new(
+                    bytes::Bytes::new(),
+                )))
+            }),
+            "elitea-execution",
+        );
+        let toleration: k8s_openapi::api::core::v1::Toleration = serde_json::from_value(
+            serde_json::json!({"key":"elitea.ai/sandbox","operator":"Equal","value":"true","effect":"NoSchedule"}),
+        )
+        .expect("toleration");
+        let pod = backend(client.clone())
+            .with_tolerations(vec![toleration])
+            .pod(&launch())
+            .expect("pod");
+        assert_eq!(pod["spec"]["tolerations"][0]["key"], "elitea.ai/sandbox");
+        assert_eq!(pod["spec"]["tolerations"][0]["effect"], "NoSchedule");
+        assert_eq!(pod["spec"]["runtimeClassName"], "gvisor");
+        assert!(
+            backend(client).pod(&launch()).expect("pod")["spec"]
+                .get("tolerations")
+                .is_none()
+        );
     }
 
     /// Item 5 on Kubernetes: the declared workspace is the `emptyDir`

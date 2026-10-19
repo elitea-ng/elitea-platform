@@ -1,0 +1,53 @@
+{{- /*
+ADR-0034: the cloud executor's `workspace` supervisor profile, rendered from
+sandboxKubernetes.workspaceRuns so operators do not hand-write it
+(services/elitea-worker-rust/src/sandbox/workspace_run_profile.rs is the
+schema). It holds no secret: the TLS identity, the client CA and the grant
+keyring stay in the material Secret, and the profile names them by path.
+
+The supervisor reads profiles only from its private material directory
+(/run/elitea-sandbox, filled by `--prepare-material` from one projected
+revision), so this ConfigMap is projected into the same volume as the
+Secret (sandbox/supervisor.yaml) and nothing in the supervisor changes.
+
+Every half-enabled shape fails the render here: workspace runs without the
+Kubernetes sandbox, without the supervisor, without a RuntimeClass, or
+without the worker's side (worker.runtime.workspaceRuns) would admit a
+handoff whose cloud turn can never run.
+*/ -}}
+{{- $s := .Values.sandboxKubernetes }}
+{{- $w := $s.workspaceRuns }}
+{{- if $w.enabled }}
+{{- $p := $w.profile }}
+{{- if not $s.enabled }}{{ fail "sandboxKubernetes.workspaceRuns.enabled requires sandboxKubernetes.enabled" }}{{ end }}
+{{- if not $s.supervisor.enabled }}{{ fail "sandboxKubernetes.workspaceRuns.enabled requires sandboxKubernetes.supervisor.enabled: the supervisor runs the workspace profile" }}{{ end }}
+{{- if not ($s.runtimeClass | default dict).name }}{{ fail "sandboxKubernetes.workspaceRuns.enabled requires sandboxKubernetes.runtimeClass.name (gvisor, kata-vm-isolation, ...)" }}{{ end }}
+{{- $wr := .Values.worker.runtime.workspaceRuns | default dict }}
+{{- if not $wr }}{{ fail "sandboxKubernetes.workspaceRuns.enabled requires worker.runtime.workspaceRuns: without it the worker cannot start a workspace run" }}{{ end }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" (default "" $p.image)) }}{{ fail "sandboxKubernetes.workspaceRuns.profile.image must be the workspace runner image by registry SHA-256 digest" }}{{ end }}
+{{- if not $w.nodeSelector }}{{ fail "sandboxKubernetes.workspaceRuns.nodeSelector must place run Pods on the sandbox nodes" }}{{ end }}
+{{- if gt (len ($w.tolerations | default list)) 16 }}{{ fail "sandboxKubernetes.workspaceRuns.tolerations admits at most 16 entries" }}{{ end }}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $p.port))) (lt (int $p.port) 1024) (gt (int $p.port) 65535) }}{{ fail "sandboxKubernetes.workspaceRuns.profile.port must be between 1024 and 65535" }}{{ end }}
+{{- range $s.supervisor.profiles }}{{ if eq (toString .port) (toString $p.port) }}{{ fail "sandboxKubernetes.workspaceRuns.profile.port is taken by a supervisor profile" }}{{ end }}{{ if eq .file "workspace.json" }}{{ fail "supervisor profile file workspace.json is reserved for sandboxKubernetes.workspaceRuns" }}{{ end }}{{ end }}
+{{- if or (not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" (default "" $p.serviceName))) (not (hasPrefix "elitea-sandbox-" $p.serviceName)) (eq $p.serviceName "elitea-sandbox-supervisor") }}{{ fail "sandboxKubernetes.workspaceRuns.profile.serviceName must be an elitea-sandbox- DNS label" }}{{ end }}
+{{- range $s.supervisor.profiles }}{{ if eq (default "" .serviceName) $p.serviceName }}{{ fail "sandboxKubernetes.workspaceRuns.profile.serviceName is taken by a supervisor profile" }}{{ end }}{{ end }}
+{{- if ne (toString $wr.audience) (toString $p.audience) }}{{ fail "worker.runtime.workspaceRuns.audience must equal sandboxKubernetes.workspaceRuns.profile.audience" }}{{ end }}
+{{- if not (has $p.audience (.Values.main.runtime.sandboxAudiences | default list)) }}{{ fail "sandboxKubernetes.workspaceRuns.profile.audience must be in main.runtime.sandboxAudiences" }}{{ end }}
+{{- $target := toString $wr.target }}
+{{- if or (not (hasPrefix $p.serviceName $target)) (not (hasSuffix (printf ":%v" $p.port) $target)) }}{{ fail (printf "worker.runtime.workspaceRuns.target must be %s:%v (or its namespace-qualified name), the workspace profile's Service" $p.serviceName $p.port) }}{{ end }}
+{{- range $key := list "concurrency" "maxWorkspaceBytes" "maxCpuMillis" "maxMemoryBytes" "maxWallSeconds" }}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString (int64 (get $p $key)))) }}{{ fail (printf "sandboxKubernetes.workspaceRuns.profile.%s must be a positive integer" $key) }}{{ end }}
+{{- end }}
+{{- range $key := list "ca" "certificate" "privateKey" "keyring" }}
+{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" (default "" (get $p.material $key))) }}{{ fail (printf "sandboxKubernetes.workspaceRuns.profile.material.%s must be a flat key name of the material Secret" $key) }}{{ end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elitea-sandbox-workspace-profile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: sandbox-supervisor
+data:
+  workspace.json: {{ include "elitea-sandbox.workspaceProfile" . | quote }}
+{{- end }}

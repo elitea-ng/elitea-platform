@@ -123,3 +123,32 @@ spec:
         {{- include "elitea.netpol.mainPeer" .ctx | nindent 8 }}
     {{- end }}
 {{- end }}
+
+{{- /*
+The cloud executor's `workspace` supervisor profile JSON (ADR-0034), from
+sandboxKubernetes.workspaceRuns. Paths name files the material Secret
+carries; sandbox/workspace-profile.yaml validates the values first.
+*/ -}}
+{{- define "elitea-sandbox.workspaceProfile" -}}
+{{- $s := .Values.sandboxKubernetes -}}
+{{- $w := $s.workspaceRuns -}}
+{{- $p := $w.profile -}}
+{{- $dir := "/run/elitea-sandbox" -}}
+{{- $backend := dict "kind" "kubernetes" "namespace" $s.executionNamespace "runtime_class" $s.runtimeClass.name "node_selector" $w.nodeSelector -}}
+{{- with $w.tolerations }}{{ $_ := set $backend "tolerations" . }}{{ end -}}
+{{- dict
+  "revision" 1 "purpose" "workspace"
+  "listen_address" (printf "0.0.0.0:%v" $p.port)
+  "owner" $p.owner "audience" $p.audience
+  "ca_path" (printf "%s/%s" $dir $p.material.ca)
+  "certificate_path" (printf "%s/%s" $dir $p.material.certificate)
+  "private_key_path" (printf "%s/%s" $dir $p.material.privateKey)
+  "verification_keyring_path" (printf "%s/%s" $dir $p.material.keyring)
+  "image" $p.image
+  "concurrency" (int64 $p.concurrency)
+  "max_workspace_bytes" (int64 $p.maxWorkspaceBytes)
+  "max_cpu_millis" (int64 $p.maxCpuMillis)
+  "max_memory_bytes" (int64 $p.maxMemoryBytes)
+  "max_wall_seconds" (int64 $p.maxWallSeconds)
+  "backend" $backend | toJson -}}
+{{- end -}}

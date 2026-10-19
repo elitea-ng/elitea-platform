@@ -12,14 +12,14 @@ base=(-f "$chart/values-standalone.yaml" --namespace platform
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
   --set sandboxKubernetes.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
-on=(--set sandboxKubernetes.workspaceRuns.enabled=true
+on=(-f deploy/helm/tests/fixtures/cloud-executor-values.yaml --set sandboxKubernetes.workspaceRuns.enabled=true
   --set sandboxKubernetes.workspaceRuns.egress.enabled=true
   --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.244.0.0/16'
   --set 'sandboxKubernetes.workspaceRuns.egress.serviceCidrs[0]=10.96.0.0/12')
 
 # Network off (the default, and egress disabled with runs enabled): no policy.
 helm template sandbox "$chart" "${base[@]}" > "$work/off.yaml"
-helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.workspaceRuns.enabled=true > "$work/off-runs.yaml"
+helm template sandbox "$chart" "${base[@]}" -f deploy/helm/tests/fixtures/cloud-executor-values.yaml > "$work/off-runs.yaml"
 # Network on.
 helm template sandbox "$chart" "${base[@]}" "${on[@]}" > "$work/on.yaml"
 python3 - "$work/off.yaml" "$work/off-runs.yaml" "$work/on.yaml" <<'PY'
@@ -57,7 +57,7 @@ for cidr in ['fc00::/7', 'fe80::/10', '::1/128']:
 assert 'ports' not in internet, 'any port on the public internet'
 PY
 # Missing cluster ranges are refused, not rendered open.
-if helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.workspaceRuns.enabled=true \
+if helm template sandbox "$chart" "${base[@]}" -f deploy/helm/tests/fixtures/cloud-executor-values.yaml \
     --set sandboxKubernetes.workspaceRuns.egress.enabled=true > "$work/invalid" 2>&1; then
   echo "workspace egress without the cluster ranges was accepted" >&2; exit 1
 fi

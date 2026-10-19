@@ -319,7 +319,7 @@ else
 fi
 
 echo "== a proxy-mode workspace run reaches only the proxy port"
-runs=(--set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
+runs=(-f deploy/helm/tests/fixtures/cloud-executor-values.yaml --set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true --set sandboxKubernetes.executionNamespace=code-execution)
 helm template t "$chart" "${base[@]}" -f "$fixture" "${runs[@]}" > "$work/runs.yaml"
 helm template t "$chart" "${base[@]}" "${runs[@]}" > "$work/runs-noproxy.yaml"
 # Direct mode alongside: both policies, each selecting its own label.
@@ -375,7 +375,7 @@ else
   fail "the workspace-run proxy-mode policy is wrong (assertion above)"
 fi
 expect_refusal "different cluster ranges in the two places" "name different cluster ranges" \
-  --set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true \
+  -f deploy/helm/tests/fixtures/cloud-executor-values.yaml --set sandboxKubernetes.enabled=true --set sandboxKubernetes.workspaceRuns.enabled=true \
   --set 'sandboxKubernetes.workspaceRuns.egress.podCidrs[0]=10.0.0.0/16'
 
 echo "== clientNamespace overrides the execution namespace"
