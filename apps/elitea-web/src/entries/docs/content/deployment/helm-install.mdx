@@ -191,6 +191,6 @@ Every sensitive value is a Kubernetes Secret you provision out of band — see "
 </Accordion>
 </AccordionGroup>
 
-Continue to [GitOps with ArgoCD](/deployment/argocd) to run this same install declaratively, or [Configuration](/deployment/configuration) for the operator-facing settings after the pods are Ready.
+Continue to [GitOps with ArgoCD](/deployment/argocd) to run this same install declaratively, or [Configuration](/deployment/configuration) for the operator-facing settings after the pods are Ready. To run desktop threads sent to the cloud, add [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes).
 
 {/* source: deploy/README.md:232-341 (values table, first admin), deploy/README.md:389-431 (distribution), deploy/README.md:433-605 (capability flags), deploy/README.md:607-730 (runtime + auth material), deploy/README.md:859-918 (what K8s does not give you); deploy/helm/elitea/values-standalone.yaml:1-30, 105-260; deploy/helm/elitea/values-auth-minimal.yaml:1-70; deploy/helm/elitea/values-staging.yaml:1-25; deploy/helm/elitea/values.yaml:344-360, 2306-2358 (secrets); deploy/argocd/applications/elitea.yaml:11-18 (hook ordering); deploy/helm/elitea/templates/main/migrate-job.yaml, templates/worker/runtime-session-job.yaml, templates/dbInit/job.yaml (hook weights) */}

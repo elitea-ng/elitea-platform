@@ -279,6 +279,7 @@ address. Those copies had already drifted apart.
 | `nats` | `applications/nats.yaml` | -2 | `elitea` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. mTLS-only with its own CA Issuer (#1076), so it shares the platform's namespace. |
 | `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea` | **Production reference.** Idempotent Helm hook Job that owns every stream and KV bucket; HA needs `replicas=3`. |
 | `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
+| `elitea-sandbox-runtime` | none (optional, installed on purpose) | — | its own, privileged (`elitea-sandbox-runtime`) | **Optional node installer** for the cloud executor (ADR-0034): pinned gVisor on the labelled sandbox nodes of EKS or k3s, plus the `gvisor` RuntimeClass. GKE Sandbox and AKS Pod Sandboxing need none. See its [README](helm/elitea-sandbox-runtime/README.md) and the runbook [Cloud executor on Kubernetes](../apps/elitea-web/src/entries/docs/content/deployment/cloud-executor-kubernetes.mdx). |
 
 Components of the `elitea` chart are switched by `<component>.enabled`, and
 `deploy/helm/elitea/values.yaml` holds every one of them. Ordering inside the

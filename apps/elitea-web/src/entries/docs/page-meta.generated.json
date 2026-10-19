@@ -65,6 +65,11 @@
     "description": "The app-of-apps root, sync-wave order, per-environment value overrides, image promotion, and rollback."
   },
   {
+    "slug": "deployment/cloud-executor-kubernetes",
+    "title": "Cloud executor on Kubernetes",
+    "description": "Run desktop threads sent to the cloud in gVisor or Kata sandboxes: the sandbox nodes on GKE, AKS, EKS and k3s, the encrypted bucket, the keys and certificates, the values, the admin switches and how to verify each one."
+  },
+  {
     "slug": "deployment/configuration",
     "title": "Post-install configuration",
     "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."

@@ -17,6 +17,7 @@ on:
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
       - "deploy/runtime/install-material.sh"
+      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
       # The derived-document gate below renders the validate worker's runtime
       # document from the agent worker's; an edit to either, or to the
       # renderer, must run it.
@@ -50,6 +51,7 @@ on:
       - "deploy/docker-compose.standalone-full.yml"
       - "deploy/docker-compose.code-consumers.yml"
       - "deploy/runtime/install-material.sh"
+      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
       - "deploy/runtime/worker-runtime.rust.json"
       - "deploy/runtime/worker-runtime.rust-validate.json"
       - "deploy/scripts/render-validate-worker-runtime.py"

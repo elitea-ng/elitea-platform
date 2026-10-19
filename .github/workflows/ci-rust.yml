@@ -7,6 +7,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
+      # The chart-rendered workspace profile the supervisor test parses.
+      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
@@ -52,6 +54,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-worker-rust/**"
+      # The chart-rendered workspace profile the supervisor test parses.
+      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"

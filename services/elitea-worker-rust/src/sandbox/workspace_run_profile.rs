@@ -338,6 +338,23 @@ mod tests {
         )
     }
 
+    /// The profile the chart renders (deploy/helm/tests/render-cloud-executor.sh
+    /// holds the chart's output equal to this file) is one the supervisor
+    /// accepts.
+    #[test]
+    fn the_chart_rendered_profile_parses() {
+        let raw =
+            include_str!("../../../../deploy/runtime/sandbox-workspace.kubernetes.example.json");
+        assert!(is_workspace_profile(raw.as_bytes()));
+        let config = WorkspaceProfileConfig::parse(raw.as_bytes()).expect("the chart's profile");
+        assert_eq!(config.endpoint(), ("workspace-runs", 9470));
+        assert!(matches!(
+            &config.backend,
+            BackendConfig::Kubernetes { runtime_class, tolerations, .. }
+                if runtime_class == "gvisor" && tolerations.len() == 1
+        ));
+    }
+
     #[test]
     fn a_workspace_profile_is_recognised_and_validated() {
         let docker = profile(

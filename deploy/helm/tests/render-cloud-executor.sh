@@ -67,6 +67,9 @@ assert set(profile) == {'revision', 'purpose', 'listen_address', 'owner', 'audie
     'certificate_path', 'private_key_path', 'verification_keyring_path', 'image', 'concurrency',
     'max_workspace_bytes', 'max_cpu_millis', 'max_memory_bytes', 'max_wall_seconds', 'backend'}, profile
 assert profile['purpose'] == 'workspace' and profile['revision'] == 1
+# The supervisor's own test parses this file (workspace_run_profile.rs), so
+# the chart and the Rust schema cannot drift apart.
+assert profile == json.load(open('deploy/runtime/sandbox-workspace.kubernetes.example.json')), 'regenerate deploy/runtime/sandbox-workspace.kubernetes.example.json'
 assert profile['listen_address'] == '0.0.0.0:9470'
 assert profile['audience'] == 'dns:elitea-sandbox-workspace'
 assert profile['ca_path'] == '/run/elitea-sandbox/workspace-client-ca.pem'
