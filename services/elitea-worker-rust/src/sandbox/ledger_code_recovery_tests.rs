@@ -17,16 +17,13 @@ async fn ledger() -> Arc<JobLedger> {
             .unwrap(),
     ))
 }
-#[allow(
-    clippy::format_collect,
-    reason = "Keep independent hexadecimal fixture generation separate from production helpers."
-)]
 fn fixture() -> crate::protocol::sandbox_grant::CodeOwnerFixture {
-    {
-        let mut identity = [0_u8; 16];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut identity).unwrap();
-        code_owner_fixture(identity.iter().map(|byte| format!("{byte:02x}")).collect())
-    }
+    code_owner_fixture(crate::test_pg::unique_hex())
+}
+/// A lease owner of this test alone. Owner-scoped discovery
+/// (`pending_code_no_effect_cleanup`) must never see another test's rows.
+fn owner(label: &str) -> String {
+    format!("{label}-{}", crate::test_pg::unique_hex())
 }
 async fn cleanup(ledger: &JobLedger, scope: &JobScope) {
     sqlx::query("DELETE FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
@@ -46,7 +43,7 @@ async fn code_owner_actual_dispatch_versus_seal_has_one_winner_and_never_replays
             .await
             .unwrap();
         let lease = ledger
-            .claim(&f.scope, "race-owner".to_owned(), 30)
+            .claim(&f.scope, owner("race-owner"), 30)
             .await
             .unwrap()
             .unwrap();
@@ -81,7 +78,7 @@ async fn code_owner_actual_dispatch_versus_seal_has_one_winner_and_never_replays
             );
             assert!(
                 ledger
-                    .claim(&f.scope, "new-owner".to_owned(), 30)
+                    .claim(&f.scope, owner("new-owner"), 30)
                     .await
                     .unwrap()
                     .is_none()
@@ -136,7 +133,7 @@ async fn code_owner_missing_cancelled_and_ambiguous_rows_issue_no_evidence() {
             .await
             .unwrap();
         let lease = ledger
-            .claim(&f.scope, "terminal-owner".to_owned(), 30)
+            .claim(&f.scope, owner("terminal-owner"), 30)
             .await
             .unwrap()
             .unwrap();
@@ -176,7 +173,7 @@ async fn code_owner_completed_exact_receipt_is_immutable_and_unbound_history_is_
         .await
         .unwrap();
     let lease = ledger
-        .claim(&f.scope, "completed-owner".to_owned(), 30)
+        .claim(&f.scope, owner("completed-owner"), 30)
         .await
         .unwrap()
         .unwrap();
@@ -206,7 +203,7 @@ async fn code_owner_completed_exact_receipt_is_immutable_and_unbound_history_is_
     let unbound = fixture();
     ledger.reserve(&unbound.scope).await.unwrap();
     let lease = ledger
-        .claim(&unbound.scope, "old-owner".to_owned(), 30)
+        .claim(&unbound.scope, owner("old-owner"), 30)
         .await
         .unwrap()
         .unwrap();
