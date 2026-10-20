@@ -424,6 +424,7 @@ pub fn run() {
             local_commands::turn_changes,
             local_commands::thread_history,
             local_commands::thread_history_delete,
+            local_commands::thread_history_fork,
             local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,

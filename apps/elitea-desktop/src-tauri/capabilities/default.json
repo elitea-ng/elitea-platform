@@ -28,6 +28,7 @@
     "allow-turn-changes",
     "allow-thread-history",
     "allow-thread-history-delete",
+    "allow-thread-history-fork",
     "allow-session-info",
     "allow-checkpoint-restore",
     "allow-checkpoint-preview",

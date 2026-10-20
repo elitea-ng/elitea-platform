@@ -49,6 +49,8 @@ export interface ThreadToolbarProps {
   /** Items the inspector's badge counts. */
   attention: number;
   onIndexSettings?: (() => void) | undefined;
+  /** ⋯ ▸ Fork Thread: the whole thread into a new one in this folder. Absent: not offered. */
+  onFork?: (() => void) | undefined;
 }
 
 function PathCard({ workspace, projectId, projects, busy, onChangeProject, onClose }: Pick<ThreadToolbarProps, 'workspace' | 'projectId' | 'projects' | 'busy' | 'onChangeProject'> & { onClose: () => void }): React.JSX.Element {
@@ -174,7 +176,7 @@ function ThreadTitle(props: ThreadToolbarProps): React.JSX.Element {
 }
 
 /** Trailing ⋯: what the thread offers that has no toolbar button of its own. */
-function Overflow({ conversationId, onIndexSettings }: Pick<ThreadToolbarProps, 'conversationId' | 'onIndexSettings'>): React.JSX.Element {
+function Overflow({ conversationId, onIndexSettings, onFork, busy }: Pick<ThreadToolbarProps, 'conversationId' | 'onIndexSettings' | 'onFork' | 'busy'>): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const navigate = useNavigate();
   const link = conversationLink(conversationId);
@@ -206,6 +208,17 @@ function Overflow({ conversationId, onIndexSettings }: Pick<ThreadToolbarProps, 
         >
           {t('workspace.copyLink', 'Copy Link')}
         </MenuItem>
+        {onFork !== undefined && (
+          <MenuItem
+            disabled={conversationId === '' || busy}
+            onClick={() => {
+              close();
+              onFork();
+            }}
+          >
+            {t('workspace.fork.thread', 'Fork Thread')}
+          </MenuItem>
+        )}
         {onIndexSettings !== undefined && <Divider />}
         {onIndexSettings !== undefined && (
           <MenuItem
@@ -233,7 +246,7 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
         trailing={
           <>
             {!changesOpen && <PanelToggle count={props.attention} />}
-            <Overflow conversationId={props.conversationId} onIndexSettings={props.onIndexSettings} />
+            <Overflow conversationId={props.conversationId} onIndexSettings={props.onIndexSettings} onFork={props.onFork} busy={props.busy} />
           </>
         }
       >

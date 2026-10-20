@@ -74,6 +74,19 @@ describe('createWorkspaceIpc', () => {
     ]);
   });
 
+  it('copies a thread into a fork, with or without a fork point turn', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce({ copied: 2 }).mockResolvedValueOnce({ copied: 3 });
+    const ipc = createWorkspaceIpc(invoke, noListen);
+    const request = { workspaceId: 'w1', sourceConversationId: '42', targetConversationId: '88', targetConversationUuid: 'u-88' };
+    expect(await ipc.forkThreadHistory({ ...request, upToTurnId: 't2' })).toBe(2);
+    expect(await ipc.forkThreadHistory(request)).toBe(3);
+    const args = { workspace_id: 'w1', source_conversation_id: '42', target_conversation_id: '88', target_conversation_uuid: 'u-88' };
+    expect(invoke.mock.calls).toEqual([
+      ['thread_history_fork', { ...args, up_to_turn_id: 't2' }],
+      ['thread_history_fork', args],
+    ]);
+  });
+
   it("rejects with the host's {code, message} as a WorkspaceIpcError", async () => {
     const invoke = vi.fn().mockRejectedValueOnce({ code: 'workspace_busy', message: 'A turn is already running in this workspace.' });
     const ipc = createWorkspaceIpc(invoke, noListen);

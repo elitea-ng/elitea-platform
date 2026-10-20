@@ -32,12 +32,13 @@ import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
 import { HandoffDialogs } from './HandoffControls';
-import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
+import { COLUMN, EarlierTurns, Exchanges, ForkNotices, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
 import { useCloudChat } from './useCloudChat';
+import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
 import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
@@ -75,6 +76,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
 
   useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index') });
+  const forking = useSessionFork({ ipc, workspaceId: workspace.id, projectId, conversationId, offLaptop: handoff.offLaptop });
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -92,6 +94,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           onPathOpenChange={setProjectMenuOpen}
           attention={attentionOf(session)}
           onIndexSettings={indexSettingsOpener(hasIndex)}
+          onFork={forking.onForkThread}
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -110,8 +113,9 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                   title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
                 />
               )}
-              <EarlierTurns history={session.history} shown={session.shown} />
-              <Exchanges turn={turn} prompts={session.prompts} />
+              <ForkNotices fork={forking} />
+              <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
+              <Exchanges turn={turn} prompts={session.prompts} onFork={forking.onFork} />
               <ApprovalDialog request={continueRequest} queued={0} onRespond={session.answer} />
               </>
             )}

@@ -19,7 +19,7 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -71,7 +71,7 @@ use super::remote_tools::{
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
 use super::tools::{ObservedToolset, ToolObserver};
-use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, TurnTap};
+use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, TurnTap};
 use crate::index::IndexRegistry;
 use crate::sessions::DesktopStateStore;
 use crate::workspaces::{Workspace, WorkspaceStore};
@@ -2489,6 +2489,96 @@ impl AgentHost {
             .forget_thread(owner, workspace_id.to_owned(), conversation)
             .await
             .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// `thread_history_fork`: copy the stored turns of one thread of the
+    /// signed-in account into the new conversation a server fork made
+    /// (`forkConversation`), in the same workspace: the turns up to and
+    /// including `up_to_turn` (all when `None`), never one still running.
+    /// The new thread's agent session is not copied: the first turn there
+    /// seeds it from the server conversation, which holds the copied
+    /// messages. The number of turns copied; 0 without a history store.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request` (a malformed id, or `target_uuid` not a UUID),
+    /// `turn_unknown` (`up_to_turn` is not a turn of the thread),
+    /// `turn_running` (it has not ended), `thread_not_empty` (the target
+    /// already has turns), `not_signed_in`, the user lookup failed, or
+    /// `storage`.
+    pub async fn fork_thread_history(
+        &self,
+        workspace_id: &str,
+        source_conversation_id: &str,
+        target: (&str, &str),
+        up_to_turn: Option<&str>,
+    ) -> Result<usize, TurnError> {
+        let source = conversation_key(&Value::String(source_conversation_id.to_owned()))?;
+        let target_id = conversation_key(&Value::String(target.0.to_owned()))?;
+        let target_uuid = uuid::Uuid::parse_str(target.1)
+            .map_err(|_| {
+                TurnError::new(
+                    "invalid_request",
+                    "target_uuid must be the new conversation's UUID",
+                )
+            })?
+            .to_string();
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(0);
+        };
+        let owner = self.owner(&self.api).await?;
+        // A turn that has not ended is never copied half-way.
+        let running: HashSet<String> = {
+            let table = self
+                .turns
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            table
+                .entries
+                .iter()
+                .filter(|(_, entry)| {
+                    entry
+                        .done
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_none()
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        if let Some(last) = up_to_turn
+            && running.contains(last)
+        {
+            return Err(TurnError::new(
+                "turn_running",
+                "This turn is still running. Fork it once it ends.",
+            ));
+        }
+        let (workspace, last) = (workspace_id.to_owned(), up_to_turn.map(str::to_owned));
+        let copied = tokio::task::spawn_blocking(move || {
+            history.copy_thread(
+                &owner,
+                &workspace,
+                &source,
+                (&target_id, &target_uuid),
+                last.as_deref(),
+                &running,
+            )
+        })
+        .await
+        .map_err(|e| TurnError::new("internal", format!("the history copy stopped: {e}")))?
+        .map_err(|e| TurnError::new("storage", e.to_string()))?;
+        match copied {
+            ThreadCopy::Copied(count) => Ok(count),
+            ThreadCopy::UnknownTurn => Err(TurnError::new(
+                "turn_unknown",
+                "That turn is not in this thread's history on this computer.",
+            )),
+            ThreadCopy::TargetNotEmpty => Err(TurnError::new(
+                "thread_not_empty",
+                "The new thread already has turns, so nothing was copied.",
+            )),
+        }
     }
 
     /// Forget one conversation's agent session (best effort: a cache).

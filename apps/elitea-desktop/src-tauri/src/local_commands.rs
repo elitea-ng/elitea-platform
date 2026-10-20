@@ -701,6 +701,36 @@ pub async fn thread_history_delete(
 }
 
 #[derive(Serialize)]
+pub struct HistoryForked {
+    copied: usize,
+}
+
+/// Copy one thread's stored turns into the conversation a server fork
+/// made (`forkConversation`), in the same workspace: up to and including
+/// `up_to_turn_id`, or all of them. The signed-in account's rows only.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_history_fork(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    source_conversation_id: String,
+    target_conversation_id: String,
+    target_conversation_uuid: String,
+    up_to_turn_id: Option<String>,
+) -> Result<HistoryForked, IpcError> {
+    Ok(HistoryForked {
+        copied: state
+            .agents
+            .fork_thread_history(
+                &workspace_id,
+                &source_conversation_id,
+                (&target_conversation_id, &target_conversation_uuid),
+                up_to_turn_id.as_deref(),
+            )
+            .await?,
+    })
+}
+
+#[derive(Serialize)]
 pub struct TurnChanges {
     files: Vec<FileChange>,
     /// The newest turn of its workspace whose changes stand: "Undo" is

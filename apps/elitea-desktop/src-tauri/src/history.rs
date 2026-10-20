@@ -148,6 +148,17 @@ pub struct NewTurn {
     pub started_at: i64,
 }
 
+/// What [`HistoryStore::copy_thread`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadCopy {
+    /// The number of turns copied (0 when the source has none here).
+    Copied(usize),
+    /// `up_to_turn` is not a turn of the source thread.
+    UnknownTurn,
+    /// The target thread already has turns: nothing was copied.
+    TargetNotEmpty,
+}
+
 /// One stored event, in the `agent://event` shape.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct StoredEvent {
@@ -886,6 +897,97 @@ impl HistoryStore {
                     uuid
                 ],
             )
+        })
+    }
+
+    /// Copy one thread of `owner` into a new, empty thread of the same
+    /// workspace (a fork, `thread_history_fork`): the source's turns, oldest
+    /// first, up to and including `up_to_turn` (all of them when `None`),
+    /// less those in `skip` (a turn still running), each under a new turn
+    /// id and keyed by `target_id` / `target_uuid`, with every event. One
+    /// transaction: the target gets all of the turns or none. The source is
+    /// not changed. Only `owner`'s rows are read, so another account's or
+    /// deployment's thread copies nothing.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read or written.
+    pub fn copy_thread(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        source: &str,
+        target: (&str, &str),
+        up_to_turn: Option<&str>,
+        skip: &HashSet<String>,
+    ) -> Result<ThreadCopy, HostError> {
+        let (target_id, target_uuid) = target;
+        self.flush();
+        self.with("could not copy the thread history", |conn| {
+            let tx = conn.transaction()?;
+            let source_uuid = thread_uuid(&tx, owner, workspace_id, source)?;
+            let target_known = thread_uuid(&tx, owner, workspace_id, target_id)?;
+            let occupied: i64 = tx.query_row(
+                &format!("SELECT count(*) FROM turns WHERE {THREAD}"),
+                params![
+                    owner.origin,
+                    owner.user_id,
+                    workspace_id,
+                    target_uuid,
+                    target_known
+                ],
+                |row| row.get(0),
+            )?;
+            if occupied > 0 {
+                return Ok(ThreadCopy::TargetNotEmpty);
+            }
+            let ids: Vec<String> = {
+                let mut statement = tx.prepare(&format!(
+                    "SELECT turn_id FROM turns WHERE {THREAD} ORDER BY started_at, rowid"
+                ))?;
+                statement
+                    .query_map(
+                        params![
+                            owner.origin,
+                            owner.user_id,
+                            workspace_id,
+                            source,
+                            source_uuid
+                        ],
+                        |row| row.get(0),
+                    )?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            let ids: Vec<String> = match up_to_turn {
+                None => ids,
+                Some(last) => match ids.iter().position(|id| id == last) {
+                    Some(index) => ids[..=index].to_vec(),
+                    None => return Ok(ThreadCopy::UnknownTurn),
+                },
+            };
+            let mut copied = 0;
+            for old in ids.iter().filter(|id| !skip.contains(*id)) {
+                let new = uuid::Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id,
+                         conversation_uuid, prompt, mentions, started_at, finished_at, changes,
+                         events_bytes, events_truncated, turn_origin)
+                     SELECT ?1, origin, user_id, workspace_id, ?2, ?3, prompt, mentions,
+                            started_at, finished_at, changes, events_bytes, events_truncated,
+                            turn_origin
+                     FROM turns WHERE turn_id = ?4",
+                    params![new, target_id, target_uuid, old],
+                )?;
+                tx.execute(
+                    "INSERT INTO events (turn_id, seq, kind, payload)
+                     SELECT ?1, seq, kind, payload FROM events WHERE turn_id = ?2",
+                    params![new, old],
+                )?;
+                copied += 1;
+            }
+            prune_thread(&tx, owner, workspace_id, target_id, Some(target_uuid))?;
+            tx.commit()?;
+            Ok(ThreadCopy::Copied(copied))
         })
     }
 
@@ -1987,6 +2089,110 @@ mod tests {
         // Nor can it delete it.
         assert_eq!(store.delete_thread(&owner(2), "w1", "42").unwrap(), 0);
         assert_eq!(store.thread(&owner(1), "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_fork_copies_the_turns_up_to_the_fork_point_into_the_new_thread() {
+        let (_root, store) = store();
+        let mut first = new_turn(owner(1), "t1", "42");
+        first.started_at = 1;
+        let mut second = new_turn(owner(1), "t2", "42");
+        second.started_at = 2;
+        let mut third = new_turn(owner(1), "t3", "42");
+        third.started_at = 3;
+        play(&store, first);
+        play(&store, second);
+        play(&store, third);
+        play(&store, new_turn(owner(1), "other", "43"));
+        play(&store, new_turn(owner(2), "foreign", "42"));
+        let none = HashSet::new();
+
+        // Up to and including t2, addressed by the source's UUID.
+        let copied = store
+            .copy_thread(
+                &owner(1),
+                "w1",
+                "uuid-42",
+                ("50", "uuid-50"),
+                Some("t2"),
+                &none,
+            )
+            .unwrap();
+        assert_eq!(copied, ThreadCopy::Copied(2));
+        let fork = store.thread(&owner(1), "w1", "50").unwrap();
+        assert_eq!(fork.len(), 2);
+        assert!(fork.iter().all(|turn| turn.conversation_id == "50"
+            && turn.conversation_uuid.as_deref() == Some("uuid-50")));
+        assert!(
+            fork.iter()
+                .all(|turn| !["t1", "t2", "t3"].contains(&turn.turn_id.as_str()))
+        );
+        assert_eq!(fork[0].started_at, 1);
+        assert_eq!(fork[1].started_at, 2);
+        let source = store.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(
+            fork[0].events,
+            source[0]
+                .events
+                .iter()
+                .map(|e| StoredEvent {
+                    turn_id: fork[0].turn_id.clone(),
+                    ..e.clone()
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(fork[0].changes, source[0].changes);
+        assert_eq!(fork[0].state, "done");
+        // The source and the other threads are as they were.
+        assert_eq!(source.len(), 3);
+        assert_eq!(store.thread(&owner(1), "w1", "43").unwrap().len(), 1);
+        assert_eq!(store.thread(&owner(2), "w1", "42").unwrap().len(), 1);
+        assert_eq!(store.thread(&owner(1), "w1", "uuid-50").unwrap().len(), 2);
+
+        // A second copy into a thread with turns copies nothing.
+        assert_eq!(
+            store
+                .copy_thread(&owner(1), "w1", "42", ("50", "uuid-50"), None, &none)
+                .unwrap(),
+            ThreadCopy::TargetNotEmpty
+        );
+        assert_eq!(store.thread(&owner(1), "w1", "50").unwrap().len(), 2);
+        // The whole thread, less a running turn.
+        let running: HashSet<String> = ["t3".to_owned()].into();
+        assert_eq!(
+            store
+                .copy_thread(&owner(1), "w1", "42", ("51", "uuid-51"), None, &running)
+                .unwrap(),
+            ThreadCopy::Copied(2)
+        );
+        // A fork point of another thread, or another account's thread.
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(1),
+                    "w1",
+                    "42",
+                    ("52", "uuid-52"),
+                    Some("other"),
+                    &none
+                )
+                .unwrap(),
+            ThreadCopy::UnknownTurn
+        );
+        assert_eq!(
+            store
+                .copy_thread(&owner(3), "w1", "42", ("53", "uuid-53"), None, &none)
+                .unwrap(),
+            ThreadCopy::Copied(0)
+        );
+        assert_eq!(
+            store
+                .copy_thread(&owner(2), "w1", "42", ("54", "uuid-54"), Some("t1"), &none)
+                .unwrap(),
+            ThreadCopy::UnknownTurn
+        );
+        assert!(store.thread(&owner(1), "w1", "52").unwrap().is_empty());
+        assert!(store.thread(&owner(3), "w1", "53").unwrap().is_empty());
     }
 
     #[test]
