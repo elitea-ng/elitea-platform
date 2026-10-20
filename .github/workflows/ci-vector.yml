@@ -91,6 +91,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Registry and git only. Measured 2026-10-20: the target directory
+          # made this entry 0.75 GB and saved ~2 minutes on a cached run
+          # (~6 -> ~4 min), the worst minutes-per-GB of any Rust job;
+          # in a 10 GB cache it evicted entries worth far more.
+          cache-targets: false
           workspaces: services/elitea-vector
 
       - name: Check formatting

@@ -96,6 +96,9 @@ jobs:
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          # Not the job id (`engine`): ci-deepwiki-engine.yml's job has the
+          # same id, and the two entries restored each other's targets.
+          shared-key: inventory-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: services/elitea-inventory-engine
 

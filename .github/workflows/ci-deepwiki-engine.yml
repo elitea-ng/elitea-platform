@@ -116,9 +116,16 @@ jobs:
 
       # Read everywhere, write on main only: a pull request's target
       # directory duplicated per branch would crowd the 10 GB Actions cache.
+      #
+      # `shared-key` because rust-cache otherwise keys on the JOB ID, and
+      # ci-inventory-engine.yml's job is also called `engine`: the two shared
+      # the restore prefix `v0-rust-engine-Linux-x64-<env>-`, so each restored
+      # the other's 2-3 GB target on a miss and re-saved it inflated (the
+      # entry measured 3.15 GB on 2026-10-20).
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: deepwiki-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             services/elitea-deepwiki-engine
