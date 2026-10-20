@@ -212,11 +212,169 @@ async fn postgres_a_fenced_resume_does_not_run_the_approved_call() {
     db.pool.close().await;
 }
 
+/// The two ways a racing resume may legitimately end without completing.
+///
+/// * `superseded`: the other racer activated a newer claim, so the store
+///   fences this one (at activation, or at its next write). The newer claim
+///   is the current writer; the older one never writes again.
+/// * `already_answered`: the replay proof refuses an approval whose call
+///   already has a persisted result, because the other racer stored it.
+fn racer_outcome(error: &adk_rust::AdkError) -> Option<&'static str> {
+    match error.code {
+        "session.writer_not_current" => Some("superseded"),
+        "agent.legacy"
+            if error.message
+                == "the persisted direct tool call is unavailable for exact replay" =>
+        {
+            Some("already_answered")
+        }
+        _ => None,
+    }
+}
+
+/// The results of the approved call held by the store, read under a fresh
+/// claim once every racer is done.
+async fn stored_call_results(pool: &sqlx::PgPool) -> Vec<serde_json::Value> {
+    let reader = claim_sessions(pool, 9).await.expect("claim 9");
+    stored_workspace_session(reader.as_ref())
+        .await
+        .events()
+        .all()
+        .iter()
+        .flat_map(Event::tool_results)
+        .filter(|result| result.call_id == Some("call-1"))
+        .map(|result| result.response.clone())
+        .collect()
+}
+
+/// A session store that activates a newer claim the moment this claim's
+/// result for `call-1` is durable: the exact interleaving where one resume
+/// runs the call and stores its result, then is superseded before its turn
+/// ends.
+struct SupersededAfterResult {
+    inner: Arc<ResultLossSessions>,
+    pool: sqlx::PgPool,
+    newer: tokio::sync::Mutex<Option<Arc<ResultLossSessions>>>,
+}
+
+impl SupersededAfterResult {
+    async fn after_append(&self, event: &Event) {
+        let stores_result = event
+            .tool_results()
+            .iter()
+            .any(|result| result.call_id == Some("call-1"));
+        let mut newer = self.newer.lock().await;
+        if stores_result && newer.is_none() {
+            *newer = Some(claim_sessions(&self.pool, 4).await.expect("claim 4"));
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionService for SupersededAfterResult {
+    async fn create(
+        &self,
+        req: CreateRequest,
+    ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.inner.create(req).await
+    }
+
+    async fn get(
+        &self,
+        req: adk_rust::session::GetRequest,
+    ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.inner.get(req).await
+    }
+
+    async fn list(
+        &self,
+        req: adk_rust::session::ListRequest,
+    ) -> adk_rust::Result<Vec<Box<dyn adk_rust::session::Session>>> {
+        self.inner.list(req).await
+    }
+
+    async fn delete(&self, req: adk_rust::session::DeleteRequest) -> adk_rust::Result<()> {
+        self.inner.delete(req).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
+        self.inner.append_event(session_id, event.clone()).await?;
+        self.after_append(&event).await;
+        Ok(())
+    }
+
+    async fn append_event_for_identity(
+        &self,
+        req: adk_rust::session::AppendEventRequest,
+    ) -> adk_rust::Result<()> {
+        let event = req.event.clone();
+        self.inner.append_event_for_identity(req).await?;
+        self.after_append(&event).await;
+        Ok(())
+    }
+}
+
+/// The interleaving CI hit in `postgres_two_concurrent_resumes_…`, made
+/// deterministic: claim 3 runs the approved push and stores its result, then
+/// claim 4 activates and fences it before its turn ends. Neither resume
+/// completes, and that is the correct outcome: claim 3 is no longer the
+/// writer, and claim 4 is resuming an approval that is already answered.
+/// The push still ran exactly once and its one result is durable.
+#[tokio::test]
+async fn postgres_a_resume_superseded_after_storing_its_result_runs_the_call_once() {
+    let Some((db, sandbox)) = paused_database().await else {
+        return;
+    };
+    let reader = claim_sessions(&db.pool, 2).await.expect("claim 2");
+    let older_resume = approved_push_resume(reader.as_ref()).await;
+    let newer_resume = approved_push_resume(reader.as_ref()).await;
+    let older = Arc::new(SupersededAfterResult {
+        inner: claim_sessions(&db.pool, 3).await.expect("claim 3"),
+        pool: db.pool.clone(),
+        newer: tokio::sync::Mutex::new(None),
+    });
+    let (model, run_config, user_content) = older_resume;
+    let (_, error) = ledger_workspace_turn(
+        Arc::clone(&older) as Arc<dyn SessionService>,
+        model,
+        Arc::clone(&sandbox),
+        run_config,
+        user_content,
+    )
+    .await;
+    let error = error.expect("the superseded resume fails");
+    assert_eq!(racer_outcome(&error), Some("superseded"), "{error:?}");
+    assert_eq!(runs(&sandbox), 1, "the push ran once");
+
+    let newer = older
+        .newer
+        .lock()
+        .await
+        .take()
+        .expect("claim 4 activated after the result was stored");
+    let (_, error) = resume_turn(&newer, &sandbox, newer_resume).await;
+    let error = error.expect("an answered approval is not replayed");
+    assert_eq!(racer_outcome(&error), Some("already_answered"), "{error:?}");
+    assert_eq!(runs(&sandbox), 1, "the push did not run again");
+    assert_eq!(
+        stored_call_results(&db.pool).await,
+        vec![json!({"status": "ok", "run": 1})],
+        "the one run's result is durable"
+    );
+    db.pool.close().await;
+}
+
 /// Two concurrent resumes of one approval, each activating its own claim and
 /// running at once: whichever interleaving the database produces, the call
-/// runs exactly once and at least one resume completes. (A resume that starts
-/// after the other finished is refused by the replay proof itself, which
-/// rejects an approval whose call already has a result.)
+/// runs exactly once and the store holds exactly one result for it.
+///
+/// A racer that does not complete must have been superseded by the other's
+/// newer claim, or refused by the replay proof because the call already had
+/// a result. Usually one racer completes, but not always: when the older
+/// claim runs the call and stores its result and the newer claim activates
+/// before the older turn ends, the older is fenced and the newer is refused
+/// (`postgres_a_resume_superseded_after_storing_its_result_runs_the_call_once`
+/// pins that interleaving).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn postgres_two_concurrent_resumes_run_the_approved_call_exactly_once() {
     for round in 0..6 {
@@ -240,19 +398,23 @@ async fn postgres_two_concurrent_resumes_run_the_approved_call_exactly_once() {
                 let sessions = match claim_sessions(&pool, claim).await {
                     Ok(sessions) => sessions,
                     Err(error) => {
+                        // Activation refused: the other racer's newer claim
+                        // was already current.
+                        let error = error.into_adk();
+                        let outcome = racer_outcome(&error);
                         failures
                             .lock()
                             .expect("failures")
-                            .push(format!("claim {claim} activation: {error:?}"));
+                            .push((outcome, format!("claim {claim} activation: {error:?}")));
                         return None;
                     }
                 };
                 let (_, error) = resume_turn(&sessions, &sandbox, resume).await;
                 if let Some(error) = &error {
-                    failures
-                        .lock()
-                        .expect("failures")
-                        .push(format!("claim {claim} turn: {error:?}"));
+                    failures.lock().expect("failures").push((
+                        racer_outcome(error),
+                        format!("claim {claim} turn: {error:?}"),
+                    ));
                 }
                 Some(error.is_none())
             }));
@@ -263,15 +425,40 @@ async fn postgres_two_concurrent_resumes_run_the_approved_call_exactly_once() {
                 completed += 1;
             }
         }
-        let failures = failures.lock().expect("failures").join("; ");
+        let failures = std::mem::take(&mut *failures.lock().expect("failures"));
+        let described = failures
+            .iter()
+            .map(|(_, failure)| failure.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
         assert_eq!(
             runs(&sandbox),
             1,
-            "round {round}: exactly one run; {failures}"
+            "round {round}: exactly one run; {described}"
         );
+        assert_eq!(completed + failures.len(), 2, "round {round}: {described}");
         assert!(
-            completed >= 1,
-            "round {round}: one resume completes; {failures}"
+            failures.iter().all(|(outcome, _)| outcome.is_some()),
+            "round {round}: a racer failed for a reason other than the race; {described}"
+        );
+        if completed == 0 {
+            let mut outcomes = failures
+                .iter()
+                .filter_map(|(outcome, _)| *outcome)
+                .collect::<Vec<_>>();
+            outcomes.sort_unstable();
+            assert_eq!(
+                outcomes,
+                ["already_answered", "superseded"],
+                "round {round}: with no resume completing, one was superseded after \
+                 storing the result and the other found it answered; {described}"
+            );
+        }
+        let results = stored_call_results(&db.pool).await;
+        assert_eq!(
+            results.len(),
+            1,
+            "round {round}: exactly one stored result; {results:?}; {described}"
         );
         db.pool.close().await;
     }
