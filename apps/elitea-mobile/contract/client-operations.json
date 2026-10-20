@@ -1,5 +1,5 @@
 {
-  "$comment": "The app's declared API surface: the operationIds (upstream or overlay) kept in the generated client. Everything else in the pinned contract is pruned. After ADR-0025 WP5 this becomes a tag selector.",
+  "$comment": "The app's declared API surface: the operationIds kept in the generated client. Everything else in services/elitea-main/api/openapi/v2.yaml is pruned. After ADR-0025 WP5 this becomes a tag selector.",
   "operations": [
     "listProjects",
     "listConversations",

@@ -1,58 +1,34 @@
 # contract/
 
-The server API contract this app is built against. It is the **only** coupling
-between Agent Zefir and the Elitea project: no Elitea source code is copied into
-this repository.
+The app's API surface. The mobile client is generated from the server's OpenAPI document in
+this repository, `services/elitea-main/api/openapi/v2.yaml`: there is no pinned copy and no
+overlay. When the app needs an operation or a field the spec does not define, add it to the spec
+(and the server) in the same change.
 
 | File | What it is |
 |------|------------|
-| `elitea-v2.yaml` | Verbatim copy of the server's published OpenAPI document. **Never edit it.** |
-| `elitea-v2.yaml.sha256` | `shasum -a 256` of the copy; `npm run contract:verify` fails on any change. |
-| `LICENSE.elitea` | The upstream Apache-2.0 license text and NOTICE, required to redistribute the copy. |
-| `client-operations.json` | The app's declared API surface: the operationIds kept in the generated client. |
-| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). It is empty since v4.11.0 (client contract 1.4); it carried the unreleased 1.4 gap (rename, `is_pinned`) before that release and the unreleased 1.3 gap before v4.7.0, and was empty from v4.2.0 (1.1) to v4.3.2 (1.2) and from v4.7.0 (1.3) until the 1.4 work. |
+| `client-operations.json` | The operationIds kept in the generated client. Everything else in the spec is pruned. |
 
 ## Generated client
 
-`scripts/contract.mjs` turns these inputs into `src/api/generated/elitea.gen.ts`
-(committed, types only, consumed by `openapi-fetch`):
+`scripts/contract.mjs` turns the spec into `src/api/generated/elitea.gen.ts` (committed, types
+only, consumed by `openapi-fetch`):
 
 | Command | What it does |
 |---------|--------------|
-| `npm run contract:verify` | sha256 check of the upstream copy |
-| `npm run contract:build` | verify, merge the overlay, prune to `client-operations.json` plus the `$ref` closure, write `contract/.build/merged.yaml` (git-ignored) |
+| `npm run contract:build` | prune the spec to `client-operations.json` plus the `$ref` closure, write `contract/.build/pruned.yaml` (ignored) |
 | `npm run contract:gen` | build, then run `openapi-typescript` (pinned `7.13.0`) and write the generated file |
-| `npm run contract:check` | regenerate in memory and fail if the committed file differs (CI) |
+| `npm run check:generated-client` | regenerate in memory and fail if the committed file differs (CI, `.github/workflows/ci-mobile.yml`); `--write` regenerates |
 
-The build **fails** when the overlay defines an operation or component that
-upstream already defines. When the server publishes the missing operations
-(ADR-0025 WP5), bump the pin, delete the overlay entries the build names, and
-regenerate. Server-sent-event endpoints are typed by hand in `src/api/sse/`.
+The generated file depends only on the PRUNED document (and `info.x-elitea-client-contract`), so
+editing a spec operation the app does not use does not make it stale. Server-sent-event
+endpoints are typed by hand in `src/api/sse/`.
 
-## Provenance
+Until the app moved into this repository (2026-10) it pinned a verbatim copy of the spec, with
+an overlay for operations the pin lacked; the history below records which client contract version
+brought each operation the app uses.
 
-| | |
-|---|---|
-| Repository | `elitea-ng/elitea-platform` |
-| Commit | `604a49e102f40f322fb1f41ac1ce45b634e29bfa` (tag `v4.11.0`, 2026-10-08; the file is byte-identical to its introduction in that commit, PR #1139) |
-| Path | `services/elitea-main/api/openapi/v2.yaml` |
-| Client contract | `1.4` (`info.x-elitea-client-contract`) |
-| SHA-256 | `4b0307162a8f95fb401f64dfb4c71eb8ac2abde2dacdb06502b72d7a26ca21b1` |
-| Size | 26,542 lines |
-| License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged between v4.3.2 and v4.11.0) |
-| Copied | 2026-10-08 |
-
-## Bumping the pinned contract
-
-1. Copy the new file verbatim:
-   `git -C <elitea-platform> show <commit>:services/elitea-main/api/openapi/v2.yaml > contract/elitea-v2.yaml`
-2. Update the hash: `(cd contract && shasum -a 256 elitea-v2.yaml > elitea-v2.yaml.sha256)`.
-3. Update the provenance table above (commit, date, hash, line count), and
-   `LICENSE.elitea` if the upstream LICENSE or NOTICE changed.
-4. Run `npm run contract:verify`, then regenerate and review the diff of the
-   generated client.
-
-## Client contract 1.1 (no overlay)
+## Client contract 1.1
 
 Every operation the app uses is defined upstream and tagged `client`. Two were
 renamed when they moved from the overlay: `startApplicationTurn` is now
@@ -83,11 +59,9 @@ The route and the trace fields exist on a 1.1 server too; a 1.1 server sends
 `agent_tool_error` with the interrupt's repr for a pause, which the app still
 recognises.
 
-## Client contract 1.3 (no overlay)
+## Client contract 1.3
 
-The server's 1.3 work (elitea-platform PR #1090) is released in v4.7.0 and
-pinned above; the overlay that carried its gap before the release is empty
-again. Every 1.3 operation the app uses is tagged `client`:
+The server's 1.3 work (elitea-platform PR #1090) is released in v4.7.0. Every 1.3 operation the app uses is tagged `client`:
 
 | Area | operationIds |
 |---|---|
@@ -115,10 +89,9 @@ the public project and `entity_settings.version_id` to the published version
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).
 
-## Client contract 1.4 (pinned, no overlay)
+## Client contract 1.4
 
-The server's 1.4 work (elitea-platform PR #1139) is released in v4.11.0 and pinned above; the
-overlay that carried its gap before the release is empty again. The Chats list (agent-zefir
+The server's 1.4 work (elitea-platform PR #1139) is released in v4.11.0. The Chats list (elitea-mobile
 issue #6) uses:
 
 | Area | What |
@@ -134,8 +107,3 @@ although the 1.4 type says it is required, so the app reads it as `row.is_pinned
 
 There is no server-side conversation search in 1.3 or the planned 1.4; the list's search is
 the on-device FTS5 index (`src/db/search.ts`).
-
-## Non-affiliation
-
-Elitea is a trademark of its respective owner. Agent Zefir is an independent
-client and is not affiliated with or endorsed by it.

@@ -1,6 +1,6 @@
 /**
  * Wire fixtures for the client contract 1.1 chat reads, shaped after the
- * schemas of the pinned contract (contract/elitea-v2.yaml @ 06a490427):
+ * schemas of services/elitea-main/api/openapi/v2.yaml (as of 06a490427):
  * ApplicationDetail, ConversationParticipant, ParticipantCandidatesPage.
  * Ids are numeric strings where the schema says so. Restated as data.
  */

@@ -1,12 +1,10 @@
 /**
  * GENERATED FILE: do not edit. Regenerate with `npm run contract:gen`.
  *
- * Types derived from the pinned server contract (contract/elitea-v2.yaml,
- * Apache-2.0, see contract/LICENSE.elitea) merged with the Agent Zefir
- * native-gap overlay and pruned to contract/client-operations.json.
+ * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
+ * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * upstream sha256:    4b0307162a8f95fb401f64dfb4c71eb8ac2abde2dacdb06502b72d7a26ca21b1
- * overlay sha256:     5cc6ac6ff6b28f3719b507f7850a0e4be538d51952716b1c2989e0b21eb7538c
+ * client contract:    1.9
  * operations sha256:  3565355ea2be2b8a03d2e07d7da128a5b5d10560e645af834eef981f2ebd87b2
  */
 export interface paths {
@@ -262,6 +260,11 @@ export interface paths {
          *     The app calls this through a hand-written client today, and four
          *     separate slices re-derived that client independently. It is described
          *     here so one generated client replaces all four.
+         *
+         *     Client contract 1.9: the desktop app reads
+         *     `?section=embedding&include_shared=true` to offer the project's
+         *     embedding models for its workspace index (each item's `name` is the
+         *     model a `/llm/v1/embeddings` request names).
          */
         get: operations["listConfigurationModels"];
         put?: never;
@@ -1157,6 +1160,21 @@ export interface paths {
          *     documented [1,1000]/default 20; offset<0 resets to 0 (:521-523).
          *     The caller must be a member of {project_id} (or a super-admin), and a
          *     repository failure is returned as a safe 500 error.
+         *
+         *     `mcp` and `query` filter on the server
+         *     (internal/api/v2/toolkits/handler.go, parseInstanceListFilter and
+         *     instanceWhere), so a picker can page MCP servers and plain toolkits
+         *     separately. `total` is the filtered total. Rows are ordered by name,
+         *     then id, so offset paging reaches every row once. A bad `mcp` or an
+         *     over-long `query` returns 400 `{"error": ...}`. That body has no
+         *     `error_description`, so it is not the InvalidClientVersionError the 400
+         *     entry below names: the client-contract lock allows no change to that
+         *     entry within this major.
+         *
+         *     When `mcp` is present (true or false) the list is the typed listing:
+         *     it also leaves out the `application` rows (agent-as-tool links), as the
+         *     legacy toolkits_listing does. When `mcp` is absent the raw listing is
+         *     unchanged and still holds them.
          */
         get: operations["listToolkitInstances"];
         put?: never;
@@ -1228,7 +1246,9 @@ export interface paths {
         put?: never;
         /**
          * Ask the owner's desktop to take a thread back
-         * @description Sends the owner a notification (`workspace_reclaim_requested`) and changes no state. The owner only.
+         * @description Client contract 1.8 (ADR-0034 decision 7). The web or mobile Take
+         *     back: it sends the owner a notification (`workspace_reclaim_requested`)
+         *     and changes no state. The owner only, cookie or token.
          */
         post: operations["requestWorkspaceHandoffReclaim"];
         delete?: never;
@@ -1251,14 +1271,20 @@ export interface paths {
         };
         /**
          * Read a thread's handoff state
-         * @description The banner state. A thread with no handoff answers `{"state": "LOCAL", "epoch": 0}`.
+         * @description Client contract 1.8 (ADR-0034 decision 14). The banner state. A thread
+         *     with no handoff answers `{"state": "LOCAL", "epoch": 0}`. Any caller who
+         *     may read the conversation (cookie or token, with
+         *     `models.chat.conversation.details`).
          */
         get: operations["getWorkspaceHandoff"];
         put?: never;
         post?: never;
         /**
          * Erase a thread's cloud copy
-         * @description Ends the handoff in any state, cancels a running cloud turn and sets the state to LOCAL. The owner, or a caller with `models.project_settings.edit`. Idempotent.
+         * @description Client contract 1.8 (ADR-0034 decision 12). Ends the handoff in any
+         *     state (a send in HANDING_OFF is cancelled), cancels a running cloud
+         *     turn, sets the state to LOCAL and erases the cloud copy's objects. The
+         *     owner, or a caller with `models.project_settings.edit`. Idempotent.
          */
         delete: operations["eraseWorkspaceHandoff"];
         options?: never;
@@ -1948,7 +1974,7 @@ export interface components {
              */
             max_total_bytes: number;
         };
-        /** @description The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:65 (`PublicPolicy`). */
+        /** @description The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:100 (`PublicPolicy`). */
         ClientPublicPolicy: {
             /** @description Client contract 1.3. Dictation may use a recogniser that sends audio off the device (the platform's server recogniser or the workspace's transcription model). False means on-device recognition only. Default false. */
             allow_cloud_stt: boolean;
@@ -1960,6 +1986,8 @@ export interface components {
             allow_share_out: boolean;
             /** @description Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false. */
             allow_system_surfaces: boolean;
+            /** @description Client contract 1.5 (ADR-0029 decision 6). The token policy's `local_work.allowed`: a desktop app may offer local work. The rest of the `local_work` group travels only with a token. Default false. */
+            local_work_allowed: boolean;
             /** @description Deployment-wide minimum client version; empty means none. The document's per-client `min_client_version` entry, when present, is never lower than this. */
             min_client_version: string;
             /** @description Client contract 1.3. What a notification shows on the lock screen: `none` (a generic text only, the default) or `title` (the conversation or item title). Message content is never shown. Treat an unknown value as `none`. */
@@ -2104,7 +2132,7 @@ export interface components {
             updated_at: string;
             /** Format: uuid */
             uuid?: string;
-            /** @description Who runs a Local work thread now: `local`, `cloud` or `returning`. */
+            /** @description Who runs the thread's turns now (ADR-0034): `local` (also when the thread was never sent), `cloud` (the cloud executor owns a handed-off Local work thread) or `returning` (a take back is under way). */
             workspace_executor?: string;
         };
         /** @description The `format=json` body. The Markdown document is rendered from this same model, so the two formats cannot describe different conversations. */
@@ -2272,7 +2300,7 @@ export interface components {
             } | null;
             name: string;
             updated_at: string;
-            /** @description Who runs a Local work thread now: `local`, `cloud` or `returning`. */
+            /** @description Client contract 1.8 (ADR-0034). Who runs the thread's turns now: `local`, `cloud` or `returning`. A handoff transition re-delivers the row in the `changes_since` delta. */
             workspace_executor?: string;
         };
         /** @description A conversation as the create route answers it (201). `id` is the numeric id AS A STRING; `uuid` is the id the chat send path takes. NOTE(W2): internal/api/v2/conversations/handler.go:32 (`Conversation`), written at :740 (201). */
@@ -2411,6 +2439,39 @@ export interface components {
             top_p?: number;
         } & {
             [key: string]: unknown;
+        };
+        /** @description Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`). */
+        LocalWorkPolicy: {
+            /** @description Local work is permitted. Default false. */
+            allowed: boolean;
+            /** @description Client contract 1.8 (ADR-0034 decision 11). A Local work thread may be sent to the cloud executor. Default false. The server refuses a send while it is false; the platform and project settings narrow it further. */
+            cloud_handoff: boolean;
+            /** @description A workspace folder may be synced to an artifact bucket. Default false. */
+            cloud_sync: boolean;
+            /** @description Command patterns that run without asking the user. At most 200 patterns of at most 512 bytes. Applied before workspace and user rules. */
+            command_allow: string[];
+            /** @description Command patterns that never run. A deny wins over an allow. Same bounds. */
+            command_deny: string[];
+            /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */
+            index_local_embeddings: boolean;
+            /** @description Client contract 1.9. Where the app downloads the on-device embedding models from instead of Hugging Face: an https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Empty (the default) is Hugging Face. Every file is checked against the SHA-256 the app pins. */
+            index_model_mirror_url: string;
+            /** @description Client contract 1.9. The user may embed a local index through this deployment's /llm/v1/embeddings route, which receives the workspace's text. Default false. While it is false the app drops the vectors made that way. */
+            index_remote_embeddings: boolean;
+            /** @description The app may build a local index of a workspace. Default true. */
+            local_index: boolean;
+            /** @description The user may configure local (stdio) MCP servers. Default false. */
+            local_mcp: boolean;
+            /** @description The widest sandbox mode a local command may use: `read-only`, `workspace-write` (the default) or `full-access`. A user may always choose a narrower one. Treat an unknown value as `read-only`. */
+            max_sandbox_mode: string;
+            /** @description Local turns may save to the user's cloud memory. Recall is always allowed. Default true. */
+            memory_write: boolean;
+            /** @description Sandboxed local commands may reach the network. Default false. */
+            network: boolean;
+            /** @description Path patterns local tools must not read or write. Same bounds. */
+            path_deny: string[];
+            /** @description Local turns may run shell commands. Default true. */
+            shell: boolean;
         };
         /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in pylon's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
         MemoryContextManagement: {
@@ -2564,7 +2625,7 @@ export interface components {
             revocation_endpoint: string;
             token_endpoint: string;
         };
-        /** @description The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`). */
+        /** @description The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:219 (`NativeClientPolicy`). */
         NativeClientPolicy: {
             /** @description Client contract 1.3. Dictation may use a recogniser that sends audio off the device (the platform's server recogniser or the workspace's transcription model). False means on-device recognition only. Default false. */
             allow_cloud_stt: boolean;
@@ -2583,6 +2644,7 @@ export interface components {
              * @description Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.
              */
             idle_lock_seconds: number;
+            local_work: components["schemas"]["LocalWorkPolicy"];
             /** @description The lowest version this deployment serves this client; empty means none. MAJOR.MINOR.PATCH with an optional -prerelease. */
             min_client_version: string;
             /** @description Client contract 1.3. What a notification shows on the lock screen: `none` (a generic text only, the default) or `title` (the conversation or item title). Message content is never shown. Treat an unknown value as `none`. */
@@ -3149,23 +3211,70 @@ export interface components {
             name?: string | null;
             value?: string | null;
         };
+        /** @description An empty object. */
+        WorkspaceHandoffEmpty: Record<string, never>;
+        /** @description NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`). */
         WorkspaceHandoffErased: {
             /** Format: int64 */
             epoch: number;
             state: string;
         };
-        /** @description The banner state; only `state` and `epoch` when the thread has no handoff. */
+        /** @description A refused handoff or store call. `error` is a machine code (the operations name theirs); `details` is set for `ref_conflict`, `env_name_denied`, `path_denied` and `cloud_handoff_disabled`. NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`). */
+        WorkspaceHandoffError: {
+            details?: components["schemas"]["WorkspaceHandoffErrorDetails"];
+            error: string;
+            message?: string;
+        };
+        /** @description `current` for `ref_conflict` (the stored value, null when absent, of every ref the publish named), `names` for `env_name_denied`, `paths` for `path_denied`, `reason` for `cloud_handoff_disabled`. */
+        WorkspaceHandoffErrorDetails: {
+            current?: components["schemas"]["WorkspaceNullableRefMap"];
+            names?: string[];
+            paths?: string[];
+            /** @description `cloud_handoff_disabled`: one of `platform_off`, `project_off`, `device_off`, `no_executor`, `storage_encryption_unconfirmed`. */
+            reason?: string;
+        };
+        /** @description The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`). */
         WorkspaceHandoffState: {
+            cloud_sha?: string | null;
             /** Format: date-time */
             delete_after?: string | null;
             device_name?: string;
             /** Format: int64 */
             epoch: number;
+            /** Format: uuid */
+            handoff_id?: string;
+            has_upstream?: boolean;
+            history_mode?: string;
             reclaim_pending?: boolean;
             /** @description LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING. */
             state: string;
+            stats?: components["schemas"]["WorkspaceHandoffStats"];
             /** Format: date-time */
             updated_at?: string;
+            /** Format: int64 */
+            workspace_bytes?: number;
+        };
+        /** @description What the desktop declares at send. `excluded` lists `./path` strings left on the laptop. NOTE(W2): internal/application/workspacehandoff/types.go:119 (`Stats`). */
+        WorkspaceHandoffStats: {
+            /** Format: int64 */
+            bytes?: number;
+            /** @description Paths on the owner's computer. The state route returns them to the thread's owner only. */
+            excluded?: string[];
+            /**
+             * Format: int64
+             * @description The number of excluded paths. Set by the state route for every reader; ignored on send.
+             */
+            excluded_count?: number;
+            /** Format: int64 */
+            files?: number;
+            /** Format: int64 */
+            scan_findings?: number;
+            /** Format: int64 */
+            unpacked_bytes?: number;
+        };
+        /** @description Ref name to commit sha, null when the ref does not exist. */
+        WorkspaceNullableRefMap: {
+            [key: string]: string | null;
         };
     };
     responses: {
@@ -3198,15 +3307,6 @@ export interface components {
         };
         /** @description Not found */
         404: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ErrorResponse"];
-            };
-        };
-        /** @description Conflict */
-        409: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3596,7 +3696,10 @@ export interface operations {
                 include_shared?: boolean;
                 section?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -3614,8 +3717,10 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigurationModelListResponse"];
                 };
             };
+            400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
@@ -5183,8 +5288,23 @@ export interface operations {
             query?: {
                 /** @description Maximum number of items to return */
                 limit?: components["parameters"]["Limit"];
+                /**
+                 * @description `true` keeps MCP toolkits only, `false` drops them. A toolkit is an
+                 *     MCP toolkit when its type is `mcp` or starts with `mcp_`, or its
+                 *     `meta.mcp` is the boolean true (the web `isMcpToolkit` rule).
+                 *     Absent means no MCP filter. Any other value returns 400.
+                 *     A present `mcp` also excludes `application` rows.
+                 */
+                mcp?: boolean;
                 /** @description Number of items to skip before starting to collect results */
                 offset?: components["parameters"]["Offset"];
+                /**
+                 * @description Case-insensitive substring of the toolkit name or description.
+                 *     The text is matched literally (`%`, `_` and `\` are not wildcards).
+                 *     The server trims it; empty means no text filter. More than 128
+                 *     characters returns 400.
+                 */
+                query?: string;
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
@@ -5278,12 +5398,58 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["WorkspaceHandoffEmpty"];
+                };
+            };
+            /** @description A malformed body (`invalid_handoff`), or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"] | components["schemas"]["InvalidClientVersionError"];
                 };
             };
             401: components["responses"]["401"];
-            403: components["responses"]["403"];
-            404: components["responses"]["404"];
+            /** @description No project permission, a credential the route does not serve (`handoff_requires_token`), or another refusal named in `error`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description No such thread or handoff for this caller (`handoff_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description `handoff_not_in_cloud`: the cloud executor does not own the thread. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A dependency is unavailable (`handoff_unavailable`); retry with the same body. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
         };
     };
     getWorkspaceHandoff: {
@@ -5312,9 +5478,46 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceHandoffState"];
                 };
             };
+            /** @description A malformed body (`invalid_handoff`), or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
             401: components["responses"]["401"];
-            403: components["responses"]["403"];
-            404: components["responses"]["404"];
+            /** @description No project permission, a credential the route does not serve (`handoff_requires_token`), or another refusal named in `error`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description No such thread or handoff for this caller (`handoff_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A dependency is unavailable (`handoff_unavailable`); retry with the same body. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
         };
     };
     eraseWorkspaceHandoff: {
@@ -5343,10 +5546,55 @@ export interface operations {
                     "application/json": components["schemas"]["WorkspaceHandoffErased"];
                 };
             };
+            /** @description A malformed body (`invalid_handoff`), or an `X-Client-Version` that does not parse. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
             401: components["responses"]["401"];
-            403: components["responses"]["403"];
-            404: components["responses"]["404"];
-            409: components["responses"]["409"];
+            /** @description No project permission, a credential the route does not serve (`handoff_requires_token`), or another refusal named in `error`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description No such thread or handoff for this caller (`handoff_not_found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            /** @description `stale_epoch`: the state changed under the call; retry. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description A dependency is unavailable (`handoff_unavailable`); retry with the same body. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffError"];
+                };
+            };
         };
     };
     markNotificationSeen: {

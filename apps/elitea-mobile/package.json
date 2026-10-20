@@ -79,10 +79,10 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:scripts && jest",
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
-    "contract:verify": "node scripts/contract.mjs verify",
     "contract:build": "node scripts/contract.mjs build",
     "contract:gen": "node scripts/contract.mjs gen",
     "contract:check": "node scripts/contract.mjs check",
+    "check:generated-client": "node scripts/check-generated-client.mjs",
     "check:release-config": "node scripts/assert-release-config.mjs"
   },
   "private": true,

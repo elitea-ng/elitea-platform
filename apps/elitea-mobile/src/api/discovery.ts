@@ -103,7 +103,10 @@ type DataControlKey =
   | 'allow_cloud_stt'
   | 'notification_preview'
   | 'allow_notification_actions'
-  | 'allow_system_surfaces';
+  | 'allow_system_surfaces'
+  // Client contract 1.5: the desktop's local-work switch. The mobile app neither reads nor
+  // validates it (it runs no local work), so the runtime schema leaves it out.
+  | 'local_work_allowed';
 const contractCheck: Assignable<
   DiscoveryDocument,
   Omit<WireDiscovery, 'attachments' | 'client_policy'> & {

@@ -1,44 +1,26 @@
 // Tests for scripts/contract.mjs. Run with `npm run test:scripts` (node:test).
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import YAML from 'yaml';
 
-import {
-  ContractError,
-  UPSTREAM_SPEC,
-  buildContract,
-  mergeOverlay,
-  parseShaFile,
-  prune,
-  sha256Hex,
-  verifyPin,
-} from './contract.mjs';
+import { ContractError, SPEC, buildContract, generateTypes, prune } from './contract.mjs';
 
-describe('verifyPin', () => {
-  it('accepts the committed upstream copy', () => {
-    assert.match(verifyPin(), /^[0-9a-f]{64}$/);
+describe('the spec source', () => {
+  it('is the server document in this repository, not a pinned copy', () => {
+    assert.match(SPEC.replaceAll('\\', '/'), /services\/elitea-main\/api\/openapi\/v2\.yaml$/);
+    assert.ok(readFileSync(SPEC, 'utf8').startsWith('openapi:'));
   });
 
-  it('fails on a single-byte change', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'contract-'));
-    const bytes = readFileSync(UPSTREAM_SPEC);
-    const spec = join(dir, 'spec.yaml');
-    const sha = join(dir, 'spec.yaml.sha256');
-    writeFileSync(sha, `${sha256Hex(bytes)}  spec.yaml\n`);
-    writeFileSync(spec, bytes);
-    verifyPin(spec, sha);
-
-    const tampered = Buffer.from(bytes);
-    tampered[tampered.length - 2] ^= 0x01;
-    writeFileSync(spec, tampered);
-    assert.throws(() => verifyPin(spec, sha), ContractError);
+  it('fails with a reason when the spec is missing', () => {
+    assert.throws(() => buildContract({ specPath: '/nonexistent/v2.yaml' }), (error) => error instanceof ContractError && /missing/.test(error.message));
   });
 
-  it('rejects a malformed sha256 file', () => {
-    assert.throws(() => parseShaFile('not a hash'), ContractError);
+  it('keeps only title and client contract from info, so a server version bump does not churn the client', async () => {
+    const { doc, inputs } = buildContract();
+    assert.deepEqual(Object.keys(doc.info).sort(), ['title', 'version', 'x-elitea-client-contract']);
+    assert.equal(doc.info.version, 'monorepo');
+    const source = await generateTypes(doc, inputs);
+    assert.ok(source.startsWith('/**\n * GENERATED FILE'));
   });
 });
 
@@ -88,144 +70,6 @@ const upstreamFixture = () => ({
   },
 });
 
-const overlayOp = (operationId) => ({
-  operationId,
-  'x-zefir-source': 'observed: fixture',
-  'x-zefir-until': 'ADR-0025 WP5',
-  responses: { 204: { description: 'gone' } },
-});
-
-describe('mergeOverlay', () => {
-  it('adds a new method to an existing upstream path', () => {
-    const merged = mergeOverlay(upstreamFixture(), { paths: { '/things/{id}': { delete: overlayOp('deleteThing') } } });
-    assert.equal(merged.paths['/things/{id}'].delete.operationId, 'deleteThing');
-    assert.equal(merged.paths['/things/{id}'].get.operationId, 'getThing');
-  });
-
-  it('fails when upstream already defines the overlay operation', () => {
-    assert.throws(
-      () => mergeOverlay(upstreamFixture(), { paths: { '/things/{id}': { get: overlayOp('getThing2') } } }),
-      (error) => error instanceof ContractError && /upstream now defines GET \/things\/\{id\}/.test(error.message),
-    );
-  });
-
-  it('fails on a component name collision', () => {
-    assert.throws(
-      () => mergeOverlay(upstreamFixture(), { components: { schemas: { Thing: { type: 'string' } } } }),
-      ContractError,
-    );
-  });
-
-  it('requires provenance on every overlay operation', () => {
-    const op = overlayOp('newOp');
-    delete op['x-zefir-source'];
-    assert.throws(() => mergeOverlay(upstreamFixture(), { paths: { '/new': { post: op } } }), /x-zefir-source/);
-  });
-
-  it('rejects a duplicate operationId', () => {
-    assert.throws(
-      () => mergeOverlay(upstreamFixture(), { paths: { '/new': { post: overlayOp('getThing') } } }),
-      /operationId getThing/,
-    );
-  });
-
-  it('never mutates its inputs', () => {
-    const upstream = upstreamFixture();
-    const before = JSON.stringify(upstream);
-    mergeOverlay(upstream, { paths: { '/new': { post: overlayOp('newOp') } } });
-    assert.equal(JSON.stringify(upstream), before);
-  });
-});
-
-const extension = (body) => ({
-  'x-zefir-source': 'observed: fixture',
-  'x-zefir-until': 'ADR-0025 WP5',
-  ...body,
-});
-
-describe('x-zefir-extend', () => {
-  it('adds parameters, responses and properties to upstream definitions', () => {
-    const merged = mergeOverlay(upstreamFixture(), {
-      'x-zefir-extend': {
-        operations: {
-          getThing: extension({
-            parameters: [{ name: 'since', in: 'query', schema: { type: 'string' } }],
-            responses: { 410: { description: 'gone' } },
-          }),
-        },
-        schemas: { Thing: extension({ properties: { cursor: { type: 'string' } } }) },
-      },
-    });
-    const op = merged.paths['/things/{id}'].get;
-    assert.deepEqual(op.parameters, [{ name: 'since', in: 'query', schema: { type: 'string' } }]);
-    assert.deepEqual(op.responses[410], { description: 'gone' });
-    assert.deepEqual(merged.components.schemas.Thing.properties.cursor, { type: 'string' });
-  });
-
-  it('fails once upstream defines the same parameter, status or property', () => {
-    const upstream = upstreamFixture();
-    upstream.paths['/things/{id}'].get.parameters = [{ name: 'since', in: 'query' }];
-    assert.throws(
-      () =>
-        mergeOverlay(upstream, {
-          'x-zefir-extend': {
-            operations: { getThing: extension({ parameters: [{ name: 'since', in: 'query' }] }) },
-          },
-        }),
-      /upstream now defines query parameter since on getThing/,
-    );
-    assert.throws(
-      () =>
-        mergeOverlay(upstreamFixture(), {
-          'x-zefir-extend': { operations: { getThing: extension({ responses: { 404: { description: 'x' } } }) } },
-        }),
-      /upstream now defines response 404 on getThing/,
-    );
-    assert.throws(
-      () =>
-        mergeOverlay(upstreamFixture(), {
-          'x-zefir-extend': { schemas: { Thing: extension({ properties: { part: { type: 'string' } } }) } },
-        }),
-      /upstream now defines Thing.part/,
-    );
-  });
-
-  it('only extends upstream definitions, with provenance and known keys', () => {
-    assert.throws(
-      () => mergeOverlay(upstreamFixture(), { 'x-zefir-extend': { operations: { nope: extension({}) } } }),
-      /target operation nope does not exist/,
-    );
-    assert.throws(
-      () =>
-        mergeOverlay(upstreamFixture(), {
-          paths: { '/new': { post: overlayOp('newOp') } },
-          'x-zefir-extend': { operations: { newOp: extension({}) } },
-        }),
-      /target operation newOp does not exist/,
-    );
-    assert.throws(
-      () => mergeOverlay(upstreamFixture(), { 'x-zefir-extend': { schemas: { Thing: { properties: {} } } } }),
-      /missing x-zefir-source/,
-    );
-    assert.throws(
-      () =>
-        mergeOverlay(upstreamFixture(), {
-          'x-zefir-extend': { operations: { getThing: extension({ requestBody: {} }) } },
-        }),
-      /may not set "requestBody"/,
-    );
-  });
-
-  it('never mutates its inputs', () => {
-    const upstream = upstreamFixture();
-    const before = JSON.stringify(upstream);
-    mergeOverlay(upstream, {
-      'x-zefir-extend': { schemas: { Thing: extension({ properties: { cursor: { type: 'string' } } }) } },
-    });
-    assert.equal(JSON.stringify(upstream), before);
-  });
-});
-
 describe('prune', () => {
   it('keeps the transitive $ref closure of the allowlisted operations only', () => {
     const out = prune(upstreamFixture(), ['getThing']);
@@ -249,7 +93,7 @@ describe('prune', () => {
 });
 
 describe('buildContract (real inputs)', () => {
-  it('merges the overlay and keeps exactly the declared operations', () => {
+  it('keeps exactly the declared operations', () => {
     const { doc } = buildContract();
     const ids = [];
     for (const item of Object.values(doc.paths)) {
@@ -277,18 +121,16 @@ describe('buildContract (real inputs)', () => {
   });
 });
 
-describe('client contract 1.4 (pinned upstream)', () => {
-  it('pins a server that speaks client contract 1.4; the overlay carries only the 1.8 handoff gap', () => {
+describe('client contract 1.8+ (the spec in this repository)', () => {
+  it('speaks client contract 1.8 or later and defines the Local work handoff the thread screen uses', () => {
     const { doc } = buildContract();
-    assert.equal(doc.info['x-elitea-client-contract'], '1.4');
-    const overlay = YAML.parse(readFileSync(new URL('../contract/overlay/native-gap.yaml', import.meta.url), 'utf8'));
-    assert.deepEqual(Object.keys(overlay.paths).sort(), [
-      '/elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}',
-      '/elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}',
-    ]);
-    assert.deepEqual(Object.keys(overlay['x-zefir-extend'].schemas).sort(), ['ConversationDetail', 'ConversationSummary']);
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 8), doc.info['x-elitea-client-contract']);
     const ids = Object.values(doc.paths).flatMap((item) => Object.values(item).map((op) => op?.operationId));
     for (const id of ['getWorkspaceHandoff', 'eraseWorkspaceHandoff', 'requestWorkspaceHandoffReclaim', 'permissionList']) assert.ok(ids.includes(id), id);
+    for (const schema of ['ConversationSummary', 'ConversationDetail']) {
+      assert.equal(doc.components.schemas[schema].properties.workspace_executor.type, 'string', schema);
+    }
   });
 
   it('defines rename (updateConversation, name alone), pin/unpin and is_pinned upstream, tagged client', () => {
@@ -311,7 +153,7 @@ describe('client contract 1.4 (pinned upstream)', () => {
   });
 });
 
-describe('client contract 1.3 (still served by the 1.4 pin)', () => {
+describe('client contract 1.3 (still served)', () => {
   it('keeps the 1.3 operations the app uses, every one tagged client', () => {
     const { doc } = buildContract();
     const ops = {};

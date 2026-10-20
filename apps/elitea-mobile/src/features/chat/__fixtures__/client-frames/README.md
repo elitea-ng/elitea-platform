@@ -4,7 +4,7 @@
 workers emit, **captured by the workers' own unit tests** and committed
 upstream as `testdata/client-frames/{python,rust}.json` in
 `elitea-ng/elitea-platform` at `a9cada5eff87b5b56ff5fae91ca092534d2ad0ae`
-(tag `v4.3.2`, Apache-2.0; see `contract/LICENSE.elitea`; `python.json` gained
+(tag `v4.3.2`; `python.json` gained
 `tool_paused` in #1067, `rust.json` is unchanged since `v4.2.0`). The server's
 `TestClientFrameCatalogueAcceptsWorkerFrames` validates the same files
 against the `x-elitea-client-frames` catalogue, so they are the frames a
