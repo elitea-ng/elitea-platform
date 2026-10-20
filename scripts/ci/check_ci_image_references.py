@@ -36,6 +36,7 @@ ALLOWED = {
     "deploy/ci/bake-cache.hcl": "the CI layer-cache refs",
     "deploy/ci/bake-cache-rust.hcl": "the CI layer-cache ref for the Rust worker",
     "scripts/ci/test_stack_images.py": "fixtures",
+    "scripts/ci/test_prune_ci_images.py": "fixtures",
     "scripts/ci/check_ci_image_references.py": "this check's own description",
 }
 

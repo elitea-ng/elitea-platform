@@ -5,9 +5,10 @@ name: CI Image Cleanup
 # each main push strands in `ci-cache-<image>`. The policy, and the rule that
 # no other package is ever touched, live in scripts/ci/prune_ci_images.py.
 #
-# WHEN. Daily. On a pull request that edits this workflow or the script, it
-# runs as a DRY RUN, so a change to the policy shows what it would delete
-# before it can delete anything.
+# WHEN. Daily, and on dispatch — from main only. Never on a pull request: a
+# change to the policy is held by scripts/ci/test_prune_ci_images.py in the
+# static gates (no-binaries.yml), and a dispatch with dry_run shows what it
+# would delete before anything is.
 
 on:
   schedule:
@@ -22,11 +23,6 @@ on:
         description: List what would be deleted, delete nothing.
         type: boolean
         default: false
-  pull_request:
-    paths:
-      - ".github/workflows/ci-image-cleanup.yml"
-      - "scripts/ci/prune_ci_images.py"
-      - "scripts/ci/test_prune_ci_images.py"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -37,6 +33,8 @@ permissions: {}
 jobs:
   prune:
     name: Prune CI-only images older than the window
+    # A dispatch from another branch would run another branch's policy.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -52,8 +50,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DAYS: ${{ inputs.days || 7 }}
-          # Only a schedule or an explicit dispatch deletes.
-          DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run == true }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
           ORG: ${{ github.repository_owner }}
         run: |
           set -euo pipefail

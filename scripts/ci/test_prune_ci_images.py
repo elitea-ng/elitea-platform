@@ -44,5 +44,15 @@ class PruneTest(unittest.TestCase):
         self.assertEqual(p.select("ci-elitea-web", [v(1, 6), v(2, 1)], NOW, 7), [])
 
 
+    def test_package_names_come_from_the_cache_refs(self):
+        hcl = 'target "a" {\n  cache-from = ["type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-main:linux-amd64"]\n}\n'
+        hcl += 'target "b" {\n  cache-from = ["type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-main:linux-amd64"]\n}\n'
+        self.assertEqual(p.ci_packages([hcl]), ["ci-cache-elitea-main", "ci-elitea-main"])
+        root = pathlib.Path(__file__).resolve().parents[2]
+        names = p.ci_packages([f.read_text() for f in (root / "deploy" / "ci").glob("*.hcl")])
+        self.assertIn("ci-elitea-worker-rust", names)
+        self.assertTrue(all(n.startswith("ci-") for n in names))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,17 @@
 
     prune_ci_images.py --org elitea-ng --days 7 [--dry-run]
 
+WHICH PACKAGES. Not an org listing: `GET /orgs/{org}/packages` needs an
+org-level read:packages token, and the job's GITHUB_TOKEN cannot enumerate
+the organisation's packages (measured: the first run of this workflow
+failed there). The names come from the image list itself instead — every
+`ci-cache-<image>` ref in deploy/ci/*.hcl, the one-ref-per-image list the
+stack images are built from — giving `ci-<image>` and `ci-cache-<image>`
+for each. Those packages are linked to this repository (each push labels
+`org.opencontainers.image.source`), so the token may read and delete their
+versions. A package that does not exist yet (a cache main has not written)
+is skipped.
+
 ci-web-e2e.yml pushes every stack image it builds to `ci-<image>:<sha>` (one
 version per commit) and, on a push to main, the layer cache to
 `ci-cache-<image>:linux-amd64` (the tag moves; every move strands the previous
@@ -29,6 +40,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import pathlib
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -62,12 +75,26 @@ def select(name: str, versions: list[dict], now: dt.datetime, days: int) -> list
     return doomed
 
 
+CACHE_REF = re.compile(r"ghcr\.io/[A-Za-z0-9_.-]+/" + CACHE_PREFIX + r"([A-Za-z0-9_.-]+):")
+
+
+def ci_packages(hcl_texts: list[str]) -> list[str]:
+    """`ci-<image>` and `ci-cache-<image>` for every cache ref in the HCL."""
+    images = sorted({m.group(1) for text in hcl_texts for m in CACHE_REF.finditer(text)})
+    return sorted([PREFIX + image for image in images] + [CACHE_PREFIX + image for image in images])
+
+
 def gh_api(path: str, method: str = "GET") -> list | dict | None:
     args = ["gh", "api", "-X", method, "-H", "Accept: application/vnd.github+json", path]
     if method == "GET":
         args.insert(2, "--paginate")
         args += ["--jq", ".[]"]
-    out = subprocess.run(args, check=True, stdout=subprocess.PIPE, text=True).stdout
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        if "404" in result.stderr or "Not Found" in result.stderr:
+            return None
+        raise SystemExit(f"gh api {method} {path} failed: {result.stderr.strip()}")
+    out = result.stdout
     if method != "GET":
         return None
     return [json.loads(line) for line in out.splitlines() if line.strip()]
@@ -85,13 +112,19 @@ def main(argv=None) -> int:
 
     now = dt.datetime.now(dt.timezone.utc)
     org = urllib.parse.quote(args.org)
-    packages = gh_api(f"/orgs/{org}/packages?package_type=container&per_page=100")
-    ci = sorted(p["name"] for p in packages if is_ci_package(p["name"]))
-    print(f"{len(packages)} container package(s) in {args.org}; {len(ci)} are CI-only ({PREFIX}*): {', '.join(ci) or 'none'}")
+    root = pathlib.Path(__file__).resolve().parents[2]
+    ci = ci_packages([p.read_text() for p in sorted((root / "deploy" / "ci").glob("*.hcl"))])
+    if len(ci) < 20:
+        print(f"::error::derived {len(ci)} CI package name(s) from deploy/ci/*.hcl, expected at least 20 — the ref pattern stopped matching")
+        return 1
+    print(f"{len(ci)} CI-only package name(s) from deploy/ci/*.hcl: {', '.join(ci)}")
     deleted = 0
     for name in ci:
         quoted = urllib.parse.quote(name, safe="")
         versions = gh_api(f"/orgs/{org}/packages/container/{quoted}/versions?per_page=100")
+        if versions is None:
+            print(f"{name}: no such package yet; skipped")
+            continue
         doomed = select(name, versions, now, args.days)
         print(f"{name}: {len(versions)} version(s), {len(doomed)} older than {args.days} day(s) to delete")
         for version in doomed:
