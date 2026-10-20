@@ -200,6 +200,16 @@ aws s3api get-bucket-encryption --bucket "$BUCKET"
 RustFS 1.0.0-beta.8 implements default SSE-S3 without a KMS, but its master key is a built-in all-zero key unless you set `RUSTFS_SSE_S3_MASTER_KEY` (base64 of 32 random bytes) in the RustFS container. Set the key **before** you add the bucket rule: objects written under one key cannot be read after it changes, so back the key up with your other secrets. The same release also refuses a multipart upload part that carries a checksum into an encrypted bucket. Set `main.env.AWS_REQUEST_CHECKSUM_CALCULATION: when_required`. Main then sends a checksum only where it asks for one (the presigned SHA-256 uploads of workspace segments), so its other uploads go without a per-request integrity check. Leave it empty on AWS S3 and on any store that accepts checksummed parts.
 </Warning>
 
+<Note title="A store the desktop cannot reach">
+By default the desktop app uploads and downloads workspace segments with presigned URLs on `S3_ENDPOINT_URL`. That works for AWS S3, or for a store behind an HTTPS ingress. For an in-cluster store with no public address, such as `http://rustfs:9000`, the desktop refuses the URL with "the store handed out a URL this client does not use". Set `main.env.S3_PRESIGN: "false"`, and the desktop streams segments through Main instead. The switch covers the whole store, so artifact transfer grants also go through Main. The worker is not affected: it always reaches the store through Main.
+
+Three things follow:
+
+- Each segment goes up in one request, with no multipart upload. Main's ingress must accept a body as large as the largest segment. Traefik has no limit by default. On ingress-nginx, set `nginx.ingress.kubernetes.io/proxy-body-size` on Main's ingress.
+- Main writes those segments to the store as multipart uploads of its own. On RustFS with default encryption, also set `AWS_REQUEST_CHECKSUM_CALCULATION: when_required` (see the warning above).
+- Bytes move through Main, so size Main's network and CPU for them.
+</Note>
+
 The platform's IAM policy needs `s3:GetEncryptionConfiguration` on the bucket, in addition to the object permissions it already has. A bucket without a default rule is refused. Some S3-compatible stores do not implement `GetBucketEncryption`. For those only, an operator can attest the encryption with `main.env.ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED: "true"`. Main logs the attestation at startup and records it in the audit trail.
 
 ## Step 3: keys, certificates and the supervisor material

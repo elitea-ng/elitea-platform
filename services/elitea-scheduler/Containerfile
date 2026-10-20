@@ -30,17 +30,10 @@ WORKDIR /src/services/elitea-scheduler
 # layer cache — it cannot make a stale layer be reused, and the module cache is
 # content-addressed and verified against go.sum — so it does not weaken
 # ci-web-e2e.yml's recorded "no buildx/gha layer cache here on purpose".
-# `go build` below mounts the same cache; without that the modules this step
-# fetched would not be visible to it.
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    for attempt in 1 2 3 4 5; do \
-        go mod download && exit 0; \
-        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
-        sleep $((attempt * 5)); \
-    done; \
-    echo "go mod download failed after 5 attempts" >&2; \
-    exit 1
+# The retry runs in the SAME step as `go build`. A separate download step
+# writes only into the cache mount, so its layer is empty: when CI's
+# cache-from imports that layer, the step never runs, the mount starts empty,
+# and `go build` fetches the whole graph itself with no retry (seen in CI).
 COPY services/elitea-scheduler/ ./
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -49,6 +42,12 @@ ARG TARGETARCH=amd64
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    for attempt in 1 2 3 4 5; do \
+        go mod download && break; \
+        [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }; \
+        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
+        sleep $((attempt * 5)); \
+    done; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-scheduler ./cmd/elitea-scheduler
 

@@ -37,6 +37,19 @@ use crate::transport::{
     UploadGrant, UploadRequest,
 };
 
+/// The slowest upload rate an object PUT's deadline allows for.
+const SLOW_LINK_BYTES_PER_SECOND: u64 = 256 * 1024;
+
+/// An object PUT's deadline: the API timeout, or longer for a body that
+/// needs it at a slow link's rate. A segment that streams through Main (a
+/// store without presign) goes up in one request of up to the segment
+/// ceiling.
+fn transfer_timeout(base: Duration, bytes: usize) -> Duration {
+    base.max(Duration::from_secs(
+        (bytes as u64).div_ceil(SLOW_LINK_BYTES_PER_SECOND),
+    ))
+}
+
 /// Where the bearer comes from.
 #[async_trait]
 pub trait TokenSource: Send + Sync {
@@ -339,7 +352,10 @@ impl StoreTransport for RestStore {
     }
 
     async fn put(&self, target: &PutTarget, bytes: &[u8]) -> Result<(), StoreError> {
-        let mut request = self.object_request(Method::PUT, &target.url).await?;
+        let mut request = self
+            .object_request(Method::PUT, &target.url)
+            .await?
+            .timeout(transfer_timeout(self.timeout, bytes.len()));
         for (name, value) in &target.headers {
             request = request.header(name, value);
         }
@@ -359,6 +375,7 @@ impl StoreTransport for RestStore {
         let response = self
             .object_request(Method::PUT, url)
             .await?
+            .timeout(transfer_timeout(self.timeout, bytes.len()))
             .body(bytes.to_vec())
             .send()
             .await
@@ -446,7 +463,17 @@ impl StoreTransport for RestStore {
 
 #[cfg(test)]
 mod tests {
-    use super::error_of;
+    use super::{error_of, transfer_timeout};
+    use std::time::Duration;
+
+    #[test]
+    fn a_large_object_put_gets_time_for_a_slow_link() {
+        let base = Duration::from_mins(5);
+        assert_eq!(transfer_timeout(base, 64 << 20), base);
+        // 2 GiB at 256 KiB/s.
+        assert_eq!(transfer_timeout(base, 2 << 30), Duration::from_secs(8192));
+    }
+
     use serde_json::json;
 
     #[test]
