@@ -361,33 +361,31 @@ jobs:
           # The walk needs the trunk. The checker REFUSES a shallow clone
           # rather than reporting a short walk as a pass.
           fetch-depth: 0
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
       # The suite builds throwaway bare repositories with git plumbing. It
-      # reads only the standard library, so there is nothing to install.
+      # reads only node's standard library (the runner's node), so there is
+      # nothing to install.
       #
-      # Read the COUNT of scenarios, not the exit status alone. `unittest`
+      # Read the COUNT of scenarios, not the exit status alone. A test runner
       # exits 0 when it collects nothing, so a renamed file or a renamed method
       # would turn this step into a silent no-op (#534). The number comes from
       # the suite file itself, so adding a scenario raises it.
       - name: The checker still sees the deletion it exists for
         run: |
           set -euo pipefail
-          expected="$(grep -c '^    def test_' scripts/ci/test_check_landed_line_survival.py)"
+          expected="$(grep -c '^test(' scripts/ci/check-landed-line-survival.test.mjs)"
           if [ "${expected}" -lt 8 ]; then
             echo "::error::found ${expected} scenario(s) in the suite, expected at least 8 — the pattern stopped matching, so this step checked nothing"
             exit 1
           fi
-          output="$(python -m unittest discover -s scripts/ci -p 'test_check_landed_line_survival.py' -v 2>&1)"
+          output="$(node --test --test-reporter=tap scripts/ci/check-landed-line-survival.test.mjs 2>&1)"
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ]; then
-            echo "::error::unittest printed no result line, so the number of scenarios it ran was never reported"
+            echo "::error::node --test printed no pass line, so the number of scenarios it ran was never reported"
             exit 1
           fi
           if [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::the suite file holds ${expected} scenario(s) and unittest ran ${ran}; a scenario that does not run is not a passed scenario"
+            echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran}; a scenario that does not run is not a passed scenario"
             exit 1
           fi
           echo "line-survival checker: ${ran} of ${expected} scenarios ran"
@@ -421,7 +419,7 @@ jobs:
               tip="${folded}"
             fi
           fi
-          python scripts/ci/check_landed_line_survival.py --tip "${tip}"
+          node scripts/ci/check-landed-line-survival.mjs --tip "${tip}"
 
   # The 10 GB Actions cache. Measured 2026-10-16 it held 10.7 GB in 809
   # entries, GitHub evicted entries within minutes, and the largest writers
