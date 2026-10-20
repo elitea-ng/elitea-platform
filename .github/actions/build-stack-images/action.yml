@@ -489,7 +489,6 @@ runs:
     # context; `workdir: deploy` puts bake where the compose files are, so their
     # relative contexts resolve as compose resolves them.
     - name: Bake the stack images
-      id: bake
       uses: docker/bake-action@v6
       with:
         source: .
@@ -509,18 +508,29 @@ runs:
           *.platform=linux/amd64
           ${{ steps.push.outputs.set }}
 
+    # The digest of each tag just pushed, read back from the registry. Not
+    # from bake's `metadata` output: for a multi-target leg it exceeds the
+    # 128 KiB a single environment variable may hold ("Argument list too
+    # long", measured on the mocks leg). The tag is this commit's SHA, so it
+    # names exactly what this step's bake pushed.
     - name: Record the pushed digests
       if: inputs.push-prefix != ''
       shell: bash
       env:
-        METADATA: ${{ steps.bake.outputs.metadata }}
         DIGESTS_FILE: ${{ inputs.digests-file }}
       run: |
         set -euo pipefail
-        printf '%s' "$METADATA" > "${RUNNER_TEMP}/stack-bake-metadata.json"
+        plan="${RUNNER_TEMP}/stack-push-plan.json"
+        meta="${RUNNER_TEMP}/stack-pushed-digests.json"
+        echo '{}' > "$meta"
+        python3 -c 'import json,sys; [print(e["service"], e["ref"] + ":" + e["tag"]) for e in json.load(open(sys.argv[1]))]' "$plan" \
+          | while read -r service image; do
+              digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+              python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m[sys.argv[2]]={"containerimage.digest": sys.argv[3]}; json.dump(m, open(sys.argv[1], "w"))' \
+                "$meta" "$service" "$digest"
+            done
         mkdir -p "$(dirname "$DIGESTS_FILE")"
-        python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" record \
-          "${RUNNER_TEMP}/stack-push-plan.json" "${RUNNER_TEMP}/stack-bake-metadata.json" > "$DIGESTS_FILE"
+        python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" record "$plan" "$meta" > "$DIGESTS_FILE"
         cat "$DIGESTS_FILE"
 
     # The guard. Reads the image tags compose would build from the SAME files
