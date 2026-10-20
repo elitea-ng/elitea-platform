@@ -485,6 +485,17 @@ and checks the folder for what changed while it was closed, on
 `index_enable` / `index_refresh`. Refreshes run one at a time across every
 folder; a waiting one reports `queued`.
 
+**Watched.** While an index is open and turned on, its folder is watched
+for changes made outside the app (an editor, `git pull`, a build): once the
+folder has been quiet for 3 s, and at most every 30 s, an incremental
+refresh runs under the policy then, as after a turn (no event is sent for
+the watch itself; the refresh reports as any other). A change only counts
+where a build would look: not under `.git`, not denied (`path_deny`, the
+host's deny list), not ignored by a `.gitignore` (or `.git/info/exclude`);
+a changed `.gitignore` always counts. Turning the index off, closing it,
+or a policy change stops (or restarts) the watch. The watch never reads a
+file.
+
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `index_status` | `{workspace_id}` | `IndexStatus` — never opens an index that is not open (above); `policy_off` instead of rejecting. |

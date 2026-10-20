@@ -18,6 +18,9 @@
 //! * [`tools`] — the read-only `workspace_index` toolset, named and shaped
 //!   as the cloud Inventory tools, plus `search_workspace`.
 //!
+//! * [`watch`] — the folder watch that refreshes it after changes made
+//!   outside the app.
+//!
 //! Nothing here talks to the network: the index is code structure parsed
 //! locally.
 //!
@@ -52,3 +55,4 @@ pub mod service;
 pub mod source;
 pub mod sqlite_store;
 pub mod tools;
+pub mod watch;

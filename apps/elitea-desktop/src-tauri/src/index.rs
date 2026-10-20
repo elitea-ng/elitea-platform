@@ -34,6 +34,13 @@
 //! reopened under the new one, which rebuilds before it is served. No
 //! refresh ever runs with the `Workspace` of an older policy.
 //!
+//! **Watched.** While an index is open and turned on, its folder is
+//! watched for changes made outside the app (the person's editor, a
+//! `git pull`): once the folder has been quiet for 3 s, and at most every
+//! 30 s, the index refreshes incrementally — under the policy then, as
+//! after a turn. Changes to ignored, denied or `.git` paths are not
+//! changes (`elitea_local_index::watch`).
+//!
 //! Indexes are kept across sign-out and `host_wipe`: they hold code
 //! structure parsed from the person's own folders, no account data. The
 //! person removes one with `index_remove` (or by removing the workspace);
@@ -42,7 +49,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
 use elitea_local_index::service::{
@@ -50,6 +57,7 @@ use elitea_local_index::service::{
     limit_parser_threads, policy_fingerprint,
 };
 use elitea_local_index::sqlite_store::{FILE_NAME, Peek, SqliteGraphStore};
+use elitea_local_index::watch::{FolderWatcher, WatchConfig};
 use elitea_local_tools::deny::DenyList;
 use elitea_local_tools::policy::LocalWorkPolicy;
 use tauri::State;
@@ -93,6 +101,9 @@ async fn blocking<T: Send + 'static>(
 /// How long after a turn's last change its index refreshes.
 pub const DEFAULT_REFRESH_DELAY: Duration = Duration::from_secs(3);
 
+/// How long a refresh that found another one running waits to try again.
+const BUSY_RETRY: Duration = Duration::from_secs(1);
+
 /// What one workspace's slot knows.
 #[derive(Default)]
 struct Slot {
@@ -110,6 +121,9 @@ struct Open {
     service: Arc<IndexService>,
     /// The `enabled` setting, as last written or read.
     enabled: bool,
+    /// The folder's watch while the index is turned on; dropped (stopped)
+    /// with the service.
+    watcher: Option<FolderWatcher>,
 }
 
 impl Open {
@@ -214,6 +228,11 @@ pub struct IndexRegistry {
     /// What no index lists, reads or keeps, wherever the workspace sits:
     /// the credentials and the app's own data (the agent's deny list).
     deny: Option<Arc<DenyList>>,
+    /// How folders are watched (`None`: they are not).
+    watch: Option<WatchConfig>,
+    /// The registry itself, for the watchers' callbacks (set by
+    /// [`Self::shared`]; a registry made otherwise watches nothing).
+    me: Weak<Self>,
 }
 
 impl IndexRegistry {
@@ -231,6 +250,58 @@ impl IndexRegistry {
             entries: Mutex::new(HashMap::new()),
             refresh_delay: Some(DEFAULT_REFRESH_DELAY),
             deny: None,
+            watch: Some(WatchConfig::default()),
+            me: Weak::new(),
+        }
+    }
+
+    /// The registry, shared: the only form that watches folders (a watch
+    /// reaches the registry through it).
+    #[must_use]
+    pub fn shared(self) -> Arc<Self> {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
+            ..self
+        })
+    }
+
+    /// How folders are watched (`None`: not at all).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_watch(mut self, watch: Option<WatchConfig>) -> Self {
+        self.watch = watch;
+        self
+    }
+
+    /// Start watching the folder of `service` (turned on): its changes
+    /// refresh the index the way a turn's do, without the debounce (the
+    /// watch waited for the folder to be quiet). `None` when the registry
+    /// does not watch, or the system refused (logged; the index still
+    /// refreshes on open and after turns).
+    async fn watch(
+        &self,
+        workspace_id: &str,
+        service: &Arc<IndexService>,
+    ) -> Option<FolderWatcher> {
+        let config = self.watch?;
+        self.me.upgrade()?;
+        let runtime = tokio::runtime::Handle::try_current().ok()?;
+        let me = self.me.clone();
+        let id = workspace_id.to_owned();
+        let workspace = service.workspace().clone();
+        let on_change = Box::new(move |files: u64| {
+            if let Some(registry) = me.upgrade() {
+                let _context = runtime.enter();
+                registry.changed(&id, files, Some(Duration::ZERO));
+            }
+        });
+        match blocking(move || FolderWatcher::start(workspace, config, on_change)).await {
+            Ok(Ok(watcher)) => Some(watcher),
+            Ok(Err(error)) => {
+                log::warn!("a workspace folder could not be watched: {error}");
+                None
+            }
+            Err(_) => None,
         }
     }
 
@@ -413,9 +484,15 @@ impl IndexRegistry {
         })
         .await??;
         slot.peeked = None;
+        let watcher = if enabled {
+            self.watch(&workspace.id, &service).await
+        } else {
+            None
+        };
         slot.open = Some(Open {
             service: service.clone(),
             enabled,
+            watcher,
         });
         entry.set_current(Some(service.clone()));
         if catch_up
@@ -503,8 +580,15 @@ impl IndexRegistry {
         blocking(move || writer.store().set_setting(ENABLED, "true"))
             .await?
             .map_err(IndexError::from)?;
+        let watcher = match slot.open.as_ref() {
+            Some(open) if open.watcher.is_none() => self.watch(workspace_id, &service).await,
+            _ => None,
+        };
         if let Some(open) = slot.open.as_mut() {
             open.enabled = true;
+            if watcher.is_some() {
+                open.watcher = watcher;
+            }
         }
         match service.start_refresh(false) {
             Ok(()) => {}
@@ -691,6 +775,16 @@ impl IndexRegistry {
     /// (closed if the policy turned the index off, reopened if `path_deny`
     /// changed).
     pub fn mark_changed(self: &Arc<Self>, workspace_id: &str, files: usize) {
+        self.changed(
+            workspace_id,
+            u64::try_from(files).unwrap_or(u64::MAX),
+            self.refresh_delay,
+        );
+    }
+
+    /// `files` changed in the workspace's folder (a turn's writes, or the
+    /// watch): mark the open service and refresh after `delay`.
+    fn changed(self: &Arc<Self>, workspace_id: &str, files: u64, delay: Option<Duration>) {
         if files == 0 {
             return;
         }
@@ -698,12 +792,10 @@ impl IndexRegistry {
             return;
         };
         if let Some(service) = entry.current() {
-            service.mark_changed(u64::try_from(files).unwrap_or(u64::MAX));
+            service.mark_changed(files);
         }
         let change = entry.changes.fetch_add(1, Ordering::SeqCst) + 1;
-        if let (Some(delay), Ok(runtime)) =
-            (self.refresh_delay, tokio::runtime::Handle::try_current())
-        {
+        if let (Some(delay), Ok(runtime)) = (delay, tokio::runtime::Handle::try_current()) {
             let this = Arc::clone(self);
             let id = workspace_id.to_owned();
             runtime
@@ -753,7 +845,7 @@ impl IndexRegistry {
             drop(slot);
             match service.start_refresh(false) {
                 Err(error) if error.code == "index_busy" => {
-                    tokio::time::sleep(delay).await;
+                    tokio::time::sleep(delay.max(BUSY_RETRY)).await;
                 }
                 _ => return,
             }
@@ -1251,6 +1343,40 @@ mod tests {
         release.send(()).unwrap();
         holder.await.unwrap().unwrap();
         assert!(took < Duration::from_millis(500), "waited {took:?}");
+    }
+
+    /// A change made outside the app (no turn, no command) refreshes a
+    /// turned-on index once the folder is quiet; turned off, the folder is
+    /// no longer watched.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_folder_watch_refreshes_a_turned_on_index() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let id = workspaces.add(folder.path()).unwrap().id;
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let registry = IndexRegistry::new(workspaces, policy, Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(Some(WatchConfig {
+                quiet: Duration::from_millis(200),
+                min_interval: Duration::from_millis(500),
+            }))
+            .shared();
+        registry.enable(&id).await.unwrap();
+        let built = until_built(&registry, &id).await;
+        std::fs::write(folder.path().join("b.py"), "class B:\n    pass\n").unwrap();
+        let status = until(&registry, &id, |status| {
+            status.state == IndexState::Ready && status.files > built.files
+        })
+        .await;
+        assert_eq!(status.files, built.files + 1);
+        registry.disable(&id).await.unwrap();
+        std::fs::write(folder.path().join("c.py"), "class C:\n    pass\n").unwrap();
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let dir = registry.index_dir(&id);
+        let peek = SqliteGraphStore::peek(&dir).unwrap().unwrap();
+        assert_eq!(peek.documents, status.files, "not refreshed while off");
     }
 
     /// `workspace_remove`'s path (`with_closed`) drops the workspace's

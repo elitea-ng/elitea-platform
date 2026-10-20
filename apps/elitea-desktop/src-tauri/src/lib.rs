@@ -246,14 +246,13 @@ pub fn run() {
             let handoff_policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on
             // first use; kept across sign-out and wipe (src/index.rs).
-            let index = Arc::new(
-                IndexRegistry::new(
-                    workspaces.clone(),
-                    policy.clone(),
-                    Arc::new(MainWindowIndexEvents(app.handle().clone())),
-                )
-                .with_deny_list(host_deny),
-            );
+            let index = IndexRegistry::new(
+                workspaces.clone(),
+                policy.clone(),
+                Arc::new(MainWindowIndexEvents(app.handle().clone())),
+            )
+            .with_deny_list(host_deny)
+            .shared();
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
                     http: http.clone(),
