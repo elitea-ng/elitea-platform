@@ -1177,6 +1177,9 @@ jobs:
             ci/bake-cache-rust.hcl
           targets: standalone-rust
           mount-cache-suffix: rust
+          # The ONE job that saves the rust mount cache on a push to main
+          # (build-stack-images: mount-cache-writer). Every other rust caller reads.
+          mount-cache-writer: "true"
       - name: Run the journey and lifecycle specs against a fresh Rust-only stack
         # The script owns the whole lifecycle: runtime PKI, build, compose up,
         # four seed steps, the embedding-path assertions, then Playwright. It
@@ -1272,6 +1275,9 @@ jobs:
             ci/bake-cache.hcl
           targets: e2e
           mount-cache-suffix: e2e
+          # The ONE job that saves the e2e mount cache on a push to main
+          # (build-stack-images: mount-cache-writer). Every other e2e caller reads.
+          mount-cache-writer: "true"
       - name: Bring up the E2E stack (host)
         env:
           COMPOSE_BIN: docker compose

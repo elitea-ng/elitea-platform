@@ -54,6 +54,20 @@ class CacheWriteChecks(unittest.TestCase):
                 code = checker.main(["--root", str(root)])
             return code, out.getvalue()
 
+    def check_raw(self, subject: str):
+        """Like check(), with the whole subject workflow given verbatim."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            wf = root / ".github" / "workflows"
+            wf.mkdir(parents=True)
+            for i in range(checker.MINIMUM_WORKFLOWS):
+                (wf / f"filler{i}.yml").write_text(workflow("- uses: actions/cache/restore@v4\n  with: {path: x, key: k}\n- uses: actions/cache/restore@v4\n  with: {path: x, key: k}\n"))
+            (wf / "subject.yml").write_text(subject)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                code = checker.main(["--root", str(root)])
+            return code, out.getvalue()
+
     def assertWrites(self, steps, needle, **kw):
         code, out = self.check(steps, **kw)
         self.assertEqual(code, 1, out)
@@ -184,6 +198,64 @@ class CacheWriteChecks(unittest.TestCase):
         self.assertClean("- uses: ./.github/actions/build-stack-images\n  with: {cache-write: 'false'}\n", action=action)
 
     # ── the floors ────────────────────────────────────────────────────────
+    def test_stack_images_two_mount_writers_for_one_suffix_are_refused(self):
+        two = PR_AND_PUSH + textwrap.dedent("""\
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: rust, mount-cache-writer: "true"}
+              b:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: rust, mount-cache-writer: "true"}
+            """)
+        code, out = self.check_raw(two)
+        self.assertEqual(code, 1, out)
+        self.assertIn("exactly one may save the mounts", out)
+
+    def test_stack_images_one_mount_writer_per_suffix_passes(self):
+        ok = PR_AND_PUSH + textwrap.dedent("""\
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: rust, mount-cache-writer: "true"}
+              b:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: e2e, mount-cache-writer: "true"}
+              c:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: rust}
+            """)
+        code, out = self.check_raw(ok)
+        self.assertEqual(code, 0, out)
+
+    def test_stack_images_mount_writer_on_a_matrix_job_is_refused(self):
+        matrix = PR_AND_PUSH + textwrap.dedent("""\
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                strategy:
+                  matrix: {leg: [1, 2]}
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: rust, mount-cache-writer: "true"}
+            """)
+        code, out = self.check_raw(matrix)
+        self.assertEqual(code, 1, out)
+        self.assertIn("matrix job", out)
+
+    def test_stack_images_mount_writer_expression_is_refused(self):
+        self.assertWrites("- uses: ./.github/actions/build-stack-images\n  with: {mount-cache-writer: '${{ strategy.job-index == 0 }}'}\n", "literal")
+
     def test_an_empty_tree_is_refused_not_passed(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = io.StringIO()

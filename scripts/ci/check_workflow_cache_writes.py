@@ -34,7 +34,11 @@ WHAT IT CHECKS, in every .github/workflows/*.yml and .github/actions/*/action.ym
                           builds (not `--print`) must clear `*.cache-to=`,
                           because docker-bake.hcl declares mode=max exports.
   build-stack-images      its `cache-write` default is a push to main, and no
-                          caller passes anything but "false"
+                          caller passes anything but "false"; `mount-cache-writer`
+                          is "true" or "false", "true" on at most ONE job per
+                          mount-cache-suffix in a workflow, and never on a
+                          matrix job (one job, not N legs, saves the mounts:
+                          N writers raced for one key, measured 2026-10-20)
   deploy/ci/*.hcl         declares no cache-to (it is merged into every bake)
 
 A workflow whose ONLY trigger is a push to main/next (publish.yml, the release)
@@ -149,6 +153,7 @@ class Report:
 
 def check_document(name: str, doc: dict, report: Report) -> None:
     release_only = _release_only(doc) if "runs" not in doc else False
+    mount_writers: dict[str, list[str]] = {}
     for job_id, step in _steps(doc):
         if not isinstance(step, dict):
             continue
@@ -195,6 +200,15 @@ def check_document(name: str, doc: dict, report: Report) -> None:
             report.cache_steps += 1
             if "cache-write" in with_ and not _is_false(with_["cache-write"]):
                 report.fail(where, "build-stack-images `cache-write` may only be omitted (a push to main writes) or \"false\"")
+            writer = str(with_.get("mount-cache-writer", "false")).strip().lower()
+            if writer not in ("true", "false"):
+                report.fail(where, f"build-stack-images `mount-cache-writer` must be the literal \"true\" or \"false\", got {with_.get('mount-cache-writer')!r}; an expression can make every leg a writer")
+            elif writer == "true":
+                job = (doc.get("jobs") or {}).get(job_id) or {}
+                if (job.get("strategy") or {}).get("matrix"):
+                    report.fail(where, "build-stack-images `mount-cache-writer: \"true\"` on a matrix job makes every leg a writer racing for one cache key; designate one non-matrix job")
+                suffix = str(with_.get("mount-cache-suffix", ""))
+                mount_writers.setdefault(suffix, []).append(job_id)
 
         # BuildKit layer exports.
         if not release_only:
@@ -223,6 +237,10 @@ def check_document(name: str, doc: dict, report: Report) -> None:
                     if not re.search(r"--set[= ]['\"]?\*\.cache-to=['\"]?(\s|$)", line):
                         report.fail(where, "a `docker buildx bake` run inherits docker-bake.hcl's mode=max cache-to; add `--set '*.cache-to='`")
                     break
+
+    for suffix, jobs in mount_writers.items():
+        if len(jobs) > 1:
+            report.fail(name, f"{len(jobs)} jobs ({', '.join(jobs)}) pass mount-cache-writer: \"true\" for mount-cache-suffix {suffix!r}; exactly one may save the mounts")
 
     # The composite action's own write default.
     if "runs" in doc and name.endswith("build-stack-images/action.yml"):
