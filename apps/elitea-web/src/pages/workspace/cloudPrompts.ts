@@ -21,13 +21,19 @@ export interface HitlDecision {
   readonly interruptId?: string | undefined;
 }
 
-interface Card {
+export interface Card {
   readonly interrupt_id?: string;
   readonly tool_call_id?: string;
   readonly child_thread_id?: string;
   readonly decided?: boolean;
   readonly tool_name?: string;
+  readonly action_label?: string;
   readonly message?: string;
+  readonly policy_message?: string;
+  readonly tool_args?: unknown;
+  readonly guardrail_type?: string;
+  readonly available_actions?: readonly string[];
+  readonly questions?: unknown;
   readonly [key: string]: unknown;
 }
 
@@ -51,6 +57,13 @@ function pendingCards(message: ChatMessage): Card[] {
   return all.filter((card) => card.decided !== true);
 }
 
+/** An approve / reject card: no questions to answer, no MCP sign-in, and a way to approve or reject. */
+function answerableHere(card: Card): boolean {
+  if (card.guardrail_type === 'mcp_auth' || card.guardrail_type === 'clarifying_question' || (Array.isArray(card.questions) && card.questions.length > 0)) return false;
+  const actions = card.available_actions ?? ['approve', 'reject'];
+  return actions.includes('approve') || actions.includes('reject');
+}
+
 /** The pause the newest message is in, if any. */
 export function cloudPrompt(history: readonly ChatMessage[], labels: { approve: (tool: string) => string; continuePrompt: string; chat: string }): CloudPrompt | null {
   const message = history[history.length - 1];
@@ -60,7 +73,12 @@ export function cloudPrompt(history: readonly ChatMessage[], labels: { approve: 
     return { message, kind: 'chat', label: labels.chat, cards };
   }
   const [card] = cards;
-  if (card !== undefined) return { message, kind: 'approval', label: labels.approve(card.tool_name ?? 'tool'), cards };
+  if (card !== undefined) {
+    // Only an approve / reject card is answered here; a question, an edit or an MCP sign-in needs the chat.
+    return answerableHere(card)
+      ? { message, kind: 'approval', label: labels.approve(card.tool_name ?? 'tool'), cards }
+      : { message, kind: 'chat', label: labels.chat, cards };
+  }
   if (message.requiresConfirmation !== undefined) return { message, kind: 'continue', label: labels.continuePrompt, cards };
   return null;
 }

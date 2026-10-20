@@ -1,6 +1,6 @@
 /**
  * Above the composer of a thread that is not running here: a compact inline
- * notice (a native "this document is read-only" strip, not an alert card). It
+ * notice in the shell's neutral banner style (message, then plain buttons). It
  * says where the thread runs, that changes made here are not seen by the
  * cloud, and offers Take back and Erase cloud copy. A take back that is
  * already asked for (a cloud turn is finishing) and a hand-back in progress
@@ -48,7 +48,6 @@ function Details({ status }: { status: HandoffStatus }): React.JSX.Element {
 }
 
 export function CloudThreadBanner({ status, onTakeBack, onErase }: CloudThreadBannerProps): React.JSX.Element {
-  const returning = status.executor === 'returning';
   return (
     <Box
       component="output"
@@ -58,13 +57,14 @@ export function CloudThreadBanner({ status, onTakeBack, onErase }: CloudThreadBa
         display: 'flex',
         alignItems: 'center',
         gap: 1,
-        flexWrap: 'wrap',
-        minHeight: 28,
-        paddingX: 1.25,
+        minHeight: 32,
+        paddingX: 1.5,
         paddingY: 0.5,
-        borderRadius: '8px',
-        fontSize: '0.75rem',
-        background: `color-mix(in srgb, ${returning ? theme.vars.palette.warning.main : theme.vars.palette.primary.main} 10%, transparent)`,
+        borderRadius: theme.vars.shape.radiusMd,
+        fontSize: '0.8125rem',
+        color: theme.vars.palette.text.primary,
+        // Neutral, like the shell's other banners: a hairline and a faint tint, no accent.
+        background: `color-mix(in srgb, ${theme.vars.palette.text.primary} 5%, transparent)`,
         boxShadow: `inset 0 0 0 0.5px color-mix(in srgb, ${theme.vars.palette.text.primary} 14%, transparent)`,
       })}
     >
@@ -75,11 +75,12 @@ export function CloudThreadBanner({ status, onTakeBack, onErase }: CloudThreadBa
         </Typography>
         <Details status={status} />
       </Box>
+      {/* Plain buttons after the message, as in the other banners. */}
+      <Button size="small" onClick={onTakeBack} disabled={!status.sent_from_here}>
+        {t('workspace.handoff.takeBack', 'Take back')}
+      </Button>
       <Button size="small" onClick={onErase}>
         {t('workspace.handoff.erase', 'Erase cloud copy')}
-      </Button>
-      <Button size="small" variant="outlined" disabled={!status.sent_from_here} onClick={onTakeBack}>
-        {t('workspace.handoff.takeBack', 'Take back')}
       </Button>
     </Box>
   );

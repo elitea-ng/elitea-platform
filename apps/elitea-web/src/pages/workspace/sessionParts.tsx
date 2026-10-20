@@ -64,12 +64,12 @@ export function firstError(startError: string | null, sendError: string | null, 
 }
 
 /** The native context menu of a message: Copy. */
-function useCopyMenu(): (text: string, event: React.MouseEvent) => void {
+export function useCopyMenu(): (text: string, event: React.MouseEvent) => void {
   const showMenu = useContextMenu();
   return (text, event) => showMenu(event, [{ id: 'copy', label: t('workspace.copy', 'Copy'), run: () => copyText(text) }]);
 }
 
-function YourPrompt({ text }: { text: string }): React.JSX.Element {
+export function YourPrompt({ text }: { text: string }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   return (
     <Box

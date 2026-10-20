@@ -442,5 +442,11 @@
   "workspace.cloud.answerInChat": "Answer in chat",
   "workspace.cloud.cannotAnswer": "This cannot be answered here. Answer it in the chat.",
   "workspace.cloud.continue": "Continue?",
-  "workspace.cloud.waiting": "The cloud copy is waiting for an answer that only the chat can take."
+  "workspace.cloud.waiting": "The cloud copy is waiting for an answer that only the chat can take.",
+  "workspace.approval.params": "Parameters",
+  "workspace.cloud.approvalTitle": "The cloud copy asks to continue",
+  "workspace.cloud.approve": "Approve",
+  "workspace.cloud.continueButton": "Continue",
+  "workspace.cloud.continueTitle": "The cloud copy stopped at its output limit",
+  "workspace.cloud.deny": "Deny"
 }

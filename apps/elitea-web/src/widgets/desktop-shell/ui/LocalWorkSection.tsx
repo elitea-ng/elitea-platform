@@ -29,7 +29,7 @@ import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
 import { readThreadUuids, useHandoffIpc, useHandoffLiveEvents, useHandoffStatusMany } from '@/features/workspace-handoff';
-import { readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceThread } from '@/features/workspace';
+import { readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
 import type { HandoffStatus } from '@/shared/desktop/handoffIpc';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -57,6 +57,9 @@ interface SectionProps {
 const threadsQuery = (workspaceId: string) => ({ queryKey: threadsQueryKey(workspaceId), queryFn: () => readThreads(workspaceId) });
 
 /** The threads a folder shows: all of them, or the first few. */
+/** One remembered thread of a folder. */
+type WorkspaceThread = ReturnType<typeof readThreads>[number];
+
 const shownThreads = (list: readonly WorkspaceThread[], all: boolean): readonly WorkspaceThread[] => (all ? list : list.slice(0, THREADS_SHOWN));
 
 interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {

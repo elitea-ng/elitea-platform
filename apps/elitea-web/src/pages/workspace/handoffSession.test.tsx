@@ -175,6 +175,14 @@ describe('a thread running in the cloud', () => {
     // The transcript is the server's, and it is the only one shown.
     // Looked up again on every try: the session may re-render while the first reads settle.
     await waitFor(() => expect(within(screen.getByTestId('cloud-transcript')).getByText('Done in the cloud.')).toBeInTheDocument());
+    // Drawn like the local transcript: your prompt, the agent's text; no avatars, reactions or timestamps.
+    const transcript = screen.getByTestId('cloud-transcript');
+    expect(within(transcript).getByTestId('your-prompt')).toHaveTextContent('Fix the build');
+    expect(within(transcript).getByTestId('turn-transcript')).toBeInTheDocument();
+    expect(within(transcript).queryByTestId('chat-message-time')).toBeNull();
+    expect(within(transcript).queryByText(/ago$/)).toBeNull();
+    expect(within(transcript).queryByRole('img')).toBeNull();
+    expect(within(transcript).queryByRole('button', { name: /like|bookmark/i })).toBeNull();
     // The composer stays on, for the cloud copy: no plan mode, the agent picker disabled.
     const composer = screen.getByTestId('workspace-composer');
     expect(within(composer).getByRole('textbox')).toBeEnabled();
@@ -398,15 +406,19 @@ describe('chatting with the cloud copy', () => {
 
     it('shows the approval inline and raises the attention state (island, tray, Dock) for it', async () => {
       await pausedOn([card('int-1', 'call-1')]);
-      const transcript = await screen.findByTestId('cloud-transcript');
-      expect(await within(transcript).findByTestId('sensitive-action-authorize-button')).toBeInTheDocument();
+      const approval = await screen.findByTestId('cloud-approval-card');
+      // The local approvals' look: the tool, its parameters behind a disclosure, Approve (default) and Deny (destructive).
+      expect(within(approval).getByText('Delete file')).toBeInTheDocument();
+      expect(within(approval).getByRole('button', { name: 'Parameters' })).toHaveAttribute('aria-expanded', 'false');
+      expect(within(approval).getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+      expect(within(approval).getByRole('button', { name: 'Deny' })).toBeInTheDocument();
       await waitFor(() => expect(useActivityFeed.getState().cloudRuns[UUID]).toMatchObject({ running: false, waiting: 'Approve: delete_file' }));
     });
 
     it('answers the approval through the chat\'s resume route, and the turn resumes and finishes', async () => {
       const user = await pausedOn([card('int-1', 'call-1')]);
       const transcript = await screen.findByTestId('cloud-transcript');
-      await user.click(await within(transcript).findByTestId('sensitive-action-authorize-button'));
+      await user.click(await within(transcript).findByRole('button', { name: 'Approve' }));
       await waitFor(() => expect(resumed).toHaveLength(1));
       expect(resumed[0]?.query).toBe('agent.continue.hitl.v1');
       expect(resumed[0]?.body).toEqual({
@@ -428,9 +440,9 @@ describe('chatting with the cloud copy', () => {
       server.use(
         http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/42/${UUID}`, () => HttpResponse.json({ message: 'This pause is no longer open.' }, { status: 422 })),
       );
-      await user.click(await within(await screen.findByTestId('cloud-transcript')).findByTestId('sensitive-action-authorize-button'));
+      await user.click(await within(await screen.findByTestId('cloud-transcript')).findByRole('button', { name: 'Approve' }));
       expect(await screen.findByText('This pause is no longer open.')).toBeInTheDocument();
-      expect(await within(screen.getByTestId('cloud-transcript')).findByTestId('sensitive-action-authorize-button')).toBeInTheDocument();
+      expect(await within(screen.getByTestId('cloud-transcript')).findByRole('button', { name: 'Approve' })).toBeInTheDocument();
     });
 
     it('sends the person to the chat in one click for a pause only the chat can answer (several approvals at once)', async () => {
