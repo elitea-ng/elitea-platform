@@ -750,7 +750,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // unarchiveConversation, the per-user conversation archive the chat lists
 // of the web, desktop and mobile apps share. Their manifest entries land
 // with the screens that call them (see MANIFEST_ENTRY_COUNT).
-const GENERATED_OPERATION_COUNT = 337;
+// 337 -> 338 (client contract 1.11): forkConversation, "Fork from here" in
+// the chat and Local work views of the web, desktop and mobile apps. Its
+// manifest entries land with the screens that call it.
+const GENERATED_OPERATION_COUNT = 338;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

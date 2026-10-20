@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConversationForkedFrom } from "./conversationForkedFrom.zod";
 import { ConversationParticipant } from "./conversationParticipant.zod";
 import { EditorTestContext } from "./editorTestContext.zod";
 import { EditorTestRunsPage } from "./editorTestRunsPage.zod";
@@ -70,6 +71,7 @@ export const ConversationDetail = zod
     is_private: zod
       .boolean()
       .describe("Always present; a row that cannot say reads as private."),
+    forked_from: ConversationForkedFrom.optional(),
     meta: zod.object({
       editor_test: EditorTestContext.optional(),
       is_hidden: zod.boolean().optional(),
