@@ -34,7 +34,7 @@ RUN cd /cc-lib && \
 FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
 COPY --from=runtime-libraries /runtime-files/ /
 
-FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS toolchain
 # A transient GitHub/crates.io failure must not fail the build: cargo's
 # built-in libgit2 fetch gave up on one TLS error ("SSL error: unknown error",
 # then "revision ... not found") for a pinned tree-sitter git dependency in
@@ -52,34 +52,48 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     flock /usr/local/cargo/registry/.elitea-fetch.lock cargo install cargo-auditable --locked --version 0.7.5
 
 WORKDIR /src/services/elitea-inventory-engine
+
+# The dependency skeleton: every local manifest, the lockfile, no sources
+# (libs/rust/scripts/cargo-dependency-skeleton.py; the worker's Containerfile
+# carries the full note). It is a function of the manifests alone, so the
+# dependency layer below is reused across every source-only change.
+FROM toolchain AS planner
 # The shared engine crates are path dependencies at ../../libs/rust, so the
 # repository layout is kept under /src (ADR-0027).
 COPY libs/rust /src/libs/rust
 COPY services/elitea-inventory-engine ./
-
-# /cargo-target is shared with every other build on the host, and cargo judges
-# a path crate fresh by mtime, so a context older than another checkout's build
-# would ship that build's binary. Touching /src under the lock recompiles the
-# engine and its libs/rust crates from this context while registry crates stay
-# cached (see the worker's Containerfile).
-# The registry/git mounts are SHARED between images (sharing=locked on the
-# target only). cargo's own package lock lives in $CARGO_HOME/.package-cache,
-# OUTSIDE those mounts, so two images building at once used to unpack the same
-# crate into the shared registry together ("failed to unpack package ...
-# .cargo-ok", run 39433053742 on PR #1328). `flock` on a file INSIDE the mount
-# serialises the download/unpack only; the compile then runs --frozen (no
-# network, no registry writes) in parallel with the other images.
-# `id=` gives this image's target directory a cache of its own. With the
-# default id (the path) every Rust image's `sharing=locked` /cargo-target was ONE
-# lock, so five images' cargo builds ran one after another inside a single bake.
-# .github/actions/build-stack-images maps the same id in its cache-map.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,id=elitea-inventory-engine-cargo-target,target=/cargo-target,sharing=locked \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock python3 /src/libs/rust/scripts/cargo-dependency-skeleton.py . /skeleton
+
+FROM toolchain AS builder
+# Optional build-only concurrency bound for shared development hosts.
+ARG CARGO_BUILD_JOBS
+# Every registry and git dependency, compiled into THIS layer from the
+# lockfile, by the same `cargo auditable build --locked --release` as the real
+# build below, so the real build finds them fresh.
+COPY --from=planner /skeleton/ /src/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
+    CARGO_TARGET_DIR=/build-target cargo auditable build --frozen --release
+
+COPY libs/rust /src/libs/rust
+COPY services/elitea-inventory-engine ./
+
+# Cargo judges a path crate fresh by mtime, and COPY keeps the build context's
+# mtimes, which can be OLDER than the placeholder build above: a placeholder
+# would then look up to date and ship. Touching /src first recompiles every
+# local crate from this context; the registry crates stay as built. The target
+# directory is removed in the same step, so this layer holds the binary and
+# not a second copy of the dependency build.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     find /src -type f -exec touch {} + && \
     flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
-    CARGO_TARGET_DIR=/cargo-target cargo auditable build --frozen --release && \
-    cp /cargo-target/release/elitea-inventory-engine /usr/local/bin/elitea-inventory-engine
+    CARGO_TARGET_DIR=/build-target cargo auditable build --frozen --release && \
+    cp /build-target/release/elitea-inventory-engine /usr/local/bin/elitea-inventory-engine && \
+    rm -rf /build-target
 
 # Resolve every library the binary needs against the runtime image, without
 # starting it: no system OpenSSL linked or shipped, CA roots present, and the
