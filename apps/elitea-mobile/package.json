@@ -1,0 +1,122 @@
+{
+  "name": "agent-zefir",
+  "main": "expo-router/entry",
+  "version": "0.1.0",
+  "dependencies": {
+    "@expo-google-fonts/material-symbols-rounded": "^0.4.61",
+    "@expo/ui": "~58.0.14",
+    "@tanstack/react-query": "^5.104.1",
+    "expo": "~58.0.6",
+    "expo-alternate-app-icons": "^8.0.0",
+    "expo-app-intents": "~0.5.3",
+    "expo-application": "~58.0.4",
+    "expo-clipboard": "~58.0.3",
+    "expo-constants": "~58.0.9",
+    "expo-crypto": "~58.0.5",
+    "expo-dev-client": "~58.0.11",
+    "expo-document-picker": "~58.0.4",
+    "expo-file-system": "~58.0.5",
+    "expo-font": "~58.0.6",
+    "expo-glass-effect": "~58.0.3",
+    "expo-haptics": "~58.0.5",
+    "expo-image-manipulator": "~58.0.13",
+    "expo-image-picker": "~58.0.10",
+    "expo-linear-gradient": "~58.0.3",
+    "expo-linking": "~58.0.11",
+    "expo-local-authentication": "~58.0.2",
+    "expo-network": "~58.0.3",
+    "expo-quick-actions": "^6.0.2",
+    "expo-router": "~58.0.16",
+    "expo-screen-capture": "~58.0.5",
+    "expo-secure-store": "~58.0.2",
+    "expo-sharing": "~58.0.15",
+    "expo-speech": "~58.0.3",
+    "expo-speech-recognition": "57.1.0",
+    "expo-splash-screen": "~58.0.6",
+    "expo-sqlite": "~58.0.10",
+    "expo-status-bar": "~58.0.3",
+    "expo-symbols": "~58.0.4",
+    "expo-system-ui": "~58.0.5",
+    "expo-updates": "~58.0.15",
+    "expo-web-browser": "~58.0.6",
+    "expo-widgets": "~58.0.14",
+    "openapi-fetch": "0.17.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.0-rc.3",
+    "react-native-gesture-handler": "~3.2.1",
+    "react-native-keyboard-controller": "1.22.4",
+    "react-native-marked": "8.3.2",
+    "react-native-reanimated": "4.7.0",
+    "react-native-safe-area-context": "~5.9.1",
+    "react-native-screens": "~4.28.0",
+    "react-native-svg": "15.15.5",
+    "react-native-web": "~0.21.3",
+    "react-native-worklets": "0.13.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@react-native/jest-preset": "0.88.0-rc.3",
+    "@react-native/metro-config": "0.88.0-rc.3",
+    "@testing-library/react-native": "14.0.1",
+    "@types/jest": "~30.0.0",
+    "@types/react": "~19.3.0",
+    "eslint-config-expo": "~58.0.4",
+    "jest": "~30.5.2",
+    "jest-expo": "~58.0.8",
+    "openapi-typescript": "7.13.0",
+    "patch-package": "8.0.1",
+    "test-renderer": "1.3.0",
+    "typescript": "~6.0.3",
+    "yaml": "^2.9.1"
+  },
+  "scripts": {
+    "postinstall": "patch-package",
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "lint": "expo lint",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:scripts && jest",
+    "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
+    "contract:verify": "node scripts/contract.mjs verify",
+    "contract:build": "node scripts/contract.mjs build",
+    "contract:gen": "node scripts/contract.mjs gen",
+    "contract:check": "node scripts/contract.mjs check",
+    "check:release-config": "node scripts/assert-release-config.mjs"
+  },
+  "private": true,
+  "jest": {
+    "preset": "jest-expo",
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/.expo/",
+      "/scripts/"
+    ],
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|marked|@jsamr|github-slugger))",
+      "/node_modules/react-native-reanimated/plugin/",
+      "/node_modules/@react-native/babel-preset/"
+    ],
+    "setupFiles": [
+      "<rootDir>/src/test/setupExpoConfig.ts",
+      "<rootDir>/src/test/setupUiMocks.ts"
+    ]
+  },
+  "overrides": {
+    "openapi-typescript": {
+      "typescript": "$typescript"
+    },
+    "react-native": "$react-native",
+    "react-native-worklets": "$react-native-worklets"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "jest",
+        "@types/jest"
+      ]
+    }
+  }
+}

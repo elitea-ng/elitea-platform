@@ -1,0 +1,148 @@
+# Agent Zefir native-gap overlay.
+#
+# Written by the Agent Zefir authors (not copied from any Elitea file). It
+# describes REST operations the app needs that the pinned upstream document
+# (contract/elitea-v2.yaml) does not define yet, each with where its shape was
+# observed (`x-zefir-source`) and what will replace it (`x-zefir-until`).
+#
+# It carries the client contract 1.8 gap (ADR-0034, Local work threads handed
+# to the cloud executor): the three handoff routes the thread screen uses and
+# `workspace_executor` on the conversation rows. Shapes are copied by hand from
+# elitea-platform services/elitea-main/api/openapi/v2.yaml (origin/main,
+# 2026-10), operations getWorkspaceHandoff, eraseWorkspaceHandoff and
+# requestWorkspaceHandoffReclaim. Delete the entries when the pin is bumped to
+# a release that defines them (the build names each one).
+# Before this it was EMPTY since the pin moved to v4.11.0 (client contract 1.4).
+#
+# Rules enforced by scripts/contract.mjs build:
+#   - an operation (path + method) that upstream already defines is a hard
+#     error ("upstream now defines X; delete it from the overlay");
+#   - a component name that upstream already defines is a hard error;
+#   - every operation must carry `operationId`, `x-zefir-source` and
+#     `x-zefir-until`;
+#   - `x-zefir-extend` may only ADD a parameter, a status or a property to an
+#     upstream operation or schema, and fails once upstream defines it.
+#
+# Server-sent-event endpoints are NOT described here (OpenAPI 3.0 cannot model
+# text/event-stream usefully); they are typed by hand in src/api/sse/.
+openapi: 3.0.3
+info:
+  title: Agent Zefir native-gap overlay
+  version: 0.7.0
+paths:
+  /elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    get:
+      operationId: getWorkspaceHandoff
+      x-zefir-source: elitea-platform v2.yaml (client contract 1.8) getWorkspaceHandoff
+      x-zefir-until: the pin includes client contract 1.8
+      summary: Read a thread's handoff state
+      description: >-
+        The banner state. A thread with no handoff answers
+        `{"state": "LOCAL", "epoch": 0}`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffState'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+    delete:
+      operationId: eraseWorkspaceHandoff
+      x-zefir-source: elitea-platform v2.yaml (client contract 1.8) eraseWorkspaceHandoff
+      x-zefir-until: the pin includes client contract 1.8
+      summary: Erase a thread's cloud copy
+      description: >-
+        Ends the handoff in any state, cancels a running cloud turn and sets
+        the state to LOCAL. The owner, or a caller with
+        `models.project_settings.edit`. Idempotent.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The thread is LOCAL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceHandoffErased'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+  /elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_uuid
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The Local work thread's conversation UUID, lowercase canonical.
+    post:
+      operationId: requestWorkspaceHandoffReclaim
+      x-zefir-source: elitea-platform v2.yaml (client contract 1.8) requestWorkspaceHandoffReclaim
+      x-zefir-until: the pin includes client contract 1.8
+      summary: Ask the owner's desktop to take a thread back
+      description: >-
+        Sends the owner a notification (`workspace_reclaim_requested`) and
+        changes no state. The owner only.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '202':
+          description: The notification is sent.
+          content:
+            application/json:
+              schema:
+                type: object
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+components:
+  schemas:
+    WorkspaceHandoffState:
+      type: object
+      description: The banner state; only `state` and `epoch` when the thread has no handoff.
+      required: [state, epoch]
+      properties:
+        state: { type: string, description: 'LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING.' }
+        epoch: { type: integer, format: int64 }
+        reclaim_pending: { type: boolean }
+        device_name: { type: string }
+        updated_at: { type: string, format: date-time }
+        delete_after: { type: string, format: date-time, nullable: true }
+    WorkspaceHandoffErased:
+      type: object
+      required: [state, epoch]
+      properties:
+        state: { type: string }
+        epoch: { type: integer, format: int64 }
+x-zefir-extend:
+  schemas:
+    ConversationSummary:
+      x-zefir-source: elitea-platform v2.yaml (client contract 1.8) ConversationSummary.workspace_executor
+      x-zefir-until: the pin includes client contract 1.8
+      properties:
+        workspace_executor:
+          type: string
+          description: 'Who runs a Local work thread now: `local`, `cloud` or `returning`.'
+    ConversationDetail:
+      x-zefir-source: elitea-platform v2.yaml (client contract 1.8) ConversationDetail.workspace_executor
+      x-zefir-until: the pin includes client contract 1.8
+      properties:
+        workspace_executor:
+          type: string
+          description: 'Who runs a Local work thread now: `local`, `cloud` or `returning`.'

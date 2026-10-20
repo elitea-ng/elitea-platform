@@ -1,0 +1,18 @@
+: fixture hitl-fanout-child.sse: a fan-out child pause is NOT terminal; siblings keep streaming on the same stream
+
+id: 1
+event: execution.node_event
+data: {"type":"agent_start","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:00Z","response_metadata":{}}
+
+id: 2
+event: execution.node_event
+data: {"type":"agent_hitl_interrupt","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:01Z","content":"[child approval prompt]","response_metadata":{"metadata":{"parent_agent_name":"planner","child_thread_id":"child-1"}}}
+
+id: 3
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:02Z","content":"Sibling output."}
+
+id: 4
+event: execution.node_event
+data: {"type":"pipeline_finish","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:03Z","response_metadata":{}}
+

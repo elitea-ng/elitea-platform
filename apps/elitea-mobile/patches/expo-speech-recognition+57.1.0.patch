@@ -1,0 +1,54 @@
+diff --git a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift
+index 9dc9082..f017040 100644
+--- a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift
++++ b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift
+@@ -204,6 +204,19 @@ public class ExpoSpeechRecognitionModule: Module {
+             )
+           }
+ 
++          // Patched (agent-zefir SEC-2): supportsOnDeviceRecognition() checks the
++          // system default language; the language asked for here may have no
++          // on-device model. Refuse rather than recognise on Apple's servers.
++          if options.requiresOnDeviceRecognition,
++            await self.speechRecognizer?.supportsOnDeviceRecognition() != true
++          {
++            sendErrorAndStop(
++              error: "language-not-supported",
++              message: "Locale \(options.lang) has no on-device recognition model on this device."
++            )
++            return
++          }
++
+           if !options.requiresOnDeviceRecognition {
+             guard await SFSpeechRecognizer.hasAuthorizationToRecognize() else {
+               sendErrorAndStop(
+diff --git a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift
+index b278425..6574d54 100644
+--- a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift
++++ b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift
+@@ -123,6 +123,11 @@ actor ExpoSpeechRecognizer: ObservableObject {
+     return recognizer?.locale.identifier
+   }
+ 
++  /// Patched (agent-zefir SEC-2): on-device support of THIS recognizer's language.
++  func supportsOnDeviceRecognition() -> Bool {
++    return recognizer?.supportsOnDeviceRecognition ?? false
++  }
++
+   // Update the start method signature to include volumeChangeHandler
+   @MainActor func start(
+     options: SpeechRecognitionOptions,
+@@ -585,9 +590,10 @@ actor ExpoSpeechRecognizer: ObservableObject {
+     // These won't get emitted to the user, however
+     request.shouldReportPartialResults = options.interimResults || !options.continuous
+ 
+-    if recognizer.supportsOnDeviceRecognition {
+-      request.requiresOnDeviceRecognition = options.requiresOnDeviceRecognition
+-    }
++    // Patched (agent-zefir SEC-2): always pass the flag. Unpatched, a language
++    // without an on-device model silently fell back to Apple's servers; with the
++    // flag set, iOS fails the task instead of sending audio off the device.
++    request.requiresOnDeviceRecognition = options.requiresOnDeviceRecognition
+ 
+     if let taskHint = options.iosTaskHint {
+       request.taskHint = taskHint.sfSpeechRecognitionTaskHint

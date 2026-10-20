@@ -1,0 +1,14 @@
+: fixture budget-refusal.sse: the member budget refused the turn before any output.
+: the failed frame is the shape elitea-main v4.7.0 projects for a worker MODEL_BUDGET_EXHAUSTED
+: (application/output/runtime_failure.go {code,safe_message,retryable}; codes and safe messages
+: from transport/runtimegrpc/output/server.go budgetScopePolicy, #6732). Not captured: the
+: zefir-wave mock model is not billed through the gateway budget.
+
+id: 1
+event: execution.node_event
+data: {"type":"agent_start","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:00Z","response_metadata":{}}
+
+id: 2
+event: execution.failed
+data: {"code":"MEMBER_BUDGET_EXHAUSTED","safe_message":"Your budget in this project is exhausted. Requests are unavailable until the budget resets or an administrator raises your limit.","retryable":false}
+
