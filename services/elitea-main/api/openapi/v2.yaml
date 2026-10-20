@@ -16967,17 +16967,21 @@ paths:
         the conversation. It stays open by id, it keeps its project pin, and
         new turns work as before.
 
-        Needs `models.chat.conversation.details` and access to the
-        conversation itself (the chat authority's detail rule, the same one
-        the conversation pin passes). A conversation the caller cannot see
+        Needs `models.chat.conversation.edit`, because an archive changes
+        every member's default list (a default-mode viewer does not hold
+        it), and access to the conversation itself (the chat authority's
+        detail rule, the same one the conversation pin passes). A
+        conversation the caller cannot see
         answers 404 and archives nothing. A repeated request succeeds and
         keeps the FIRST archive: its `archived_by` and `archived_at` do not
         change, and nothing is re-delivered.
 
         The archive re-delivers the conversation's list row, with
         `is_archived: true`, in the `changes_since` delta of every member who
-        can see the conversation. It does not change `updated_at`. It never
-        writes a tombstone: a tombstone means a deletion or a loss of access.
+        can see the conversation. It does not change `updated_at`. It writes
+        no tombstone: a tombstone means a deletion or a loss of access. Only
+        a delta call without `archived` (a client before contract 1.10) gets
+        the archived row as an `access_lost` tombstone; see listConversations.
       tags:
         - chat
         - client
@@ -17179,10 +17183,15 @@ paths:
             Client contract 1.10. The project's archived conversations (archiveConversation): `exclude` (the
             default; absent or any other value means `exclude`) leaves them out, `only` lists only them, and
             `include` lists both. In delta mode
-            (`changes_since`) the value narrows `total` and the first page of a full sync (`changes_since` empty
-            or `0`). The rows of every later delta are NOT narrowed by it: an archive or unarchive re-delivers the
-            row with its new `is_archived`, and the client keeps the rows that match its list and drops the
-            others. An archive is never a tombstone.
+            (`changes_since`) the value narrows `total` and every page of a full sync (`changes_since` empty
+            or `0`, then the `next_cursor` of each page while `has_more`): the rows stamped before the full sync
+            started. A row that changed during the full sync, and the rows of every later delta, are NOT narrowed
+            by it: an archive or unarchive re-delivers the row with its new `is_archived`, and the client keeps
+            the rows that match its list and drops the others. A client at contract 1.10 or later sends
+            `archived` on every delta call, `exclude` included. A delta call without `archived` gets the shape a
+            client before 1.10 reads: an archived conversation is an `access_lost` tombstone (with the archive
+            time as `deleted_at`) and not a row, and an unarchived conversation is a row again. These tombstones
+            count against the rows' `limit`.
         - name: limit
           in: query
           required: false

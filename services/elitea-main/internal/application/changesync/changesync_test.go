@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,6 +26,30 @@ func TestCursorRoundTrip(t *testing.T) {
 	if out.Full || !out.Rows.At.Equal(in.Rows.At) || out.Rows.ID != 9 ||
 		!out.Tombs.At.Equal(in.Tombs.At) || out.Tombs.ID != 3 {
 		t.Fatalf("round trip: got %+v, want %+v", out, in)
+	}
+	if !out.Snapshot.IsZero() {
+		t.Fatalf("a cursor without a snapshot decoded one: %+v", out)
+	}
+}
+
+// The snapshot of a full sync in progress round-trips, and a cursor without
+// one encodes no `fs` key (so the cursors issued before it decode the same).
+func TestCursorSnapshotRoundTrip(t *testing.T) {
+	in := Cursor{
+		Stream:   StreamConversations,
+		Scope:    "1/x/member",
+		Rows:     Position{At: dbNow.Add(-time.Minute), ID: 9},
+		Tombs:    Position{At: dbNow.Add(-time.Minute), ID: 0},
+		Snapshot: dbNow.Add(-5 * time.Second),
+	}
+	out, err := Decode(Encode(in), StreamConversations, "1/x/member")
+	if err != nil || !out.Snapshot.Equal(in.Snapshot) || out.Full {
+		t.Fatalf("round trip: got %+v, %v; want %+v", out, err, in)
+	}
+	in.Snapshot = time.Time{}
+	body, _ := base64.RawURLEncoding.DecodeString(Encode(in))
+	if strings.Contains(string(body), `"fs"`) {
+		t.Fatalf("a cursor without a snapshot encodes fs: %s", body)
 	}
 }
 

@@ -169,23 +169,6 @@ describe('foldersList', () => {
     expect(result.folders[0]).toMatchObject({ id: 'f1', total: 9, offset: 1 });
   });
 
-  it('drops a row the project archived from every section (client contract 1.10)', async () => {
-    server.use(
-      http.get(`${BASE}/elitea_core/folder/prompt_lib/7`, () =>
-        HttpResponse.json({
-          pinned: { conversations: [{ id: 'p1', is_archived: true }, { id: 'p2', is_archived: false }] },
-          date_groups: [{ name: 'Today', conversations: [{ id: 't1', is_archived: true }, { id: 't2' }] }],
-          folders: [{ id: 'f1', name: 'Folder', conversations: [{ id: 'c1', is_archived: true }] }],
-          total_folders: 1,
-        }),
-      ),
-    );
-    const result = await foldersList({ projectId: 7 });
-    expect(result.pinned.conversations.map((row) => row.id)).toEqual(['p2']);
-    expect(result.dateGroups[0]?.conversations.map((row) => row.id)).toEqual(['t2']);
-    expect(result.folders[0]?.conversations).toEqual([]);
-  });
-
   it('forces grouped=true even when a caller-supplied params object tries to override it', async () => {
     let capturedUrl: URL | undefined;
     server.use(

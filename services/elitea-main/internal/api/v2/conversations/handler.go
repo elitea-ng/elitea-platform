@@ -556,9 +556,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			filters:      filters,
 			archived:     archived,
 			archivedMode: mode,
-			args:         args,
-			admin:        access.Admin,
-			raw:          raw,
+			// A client at contract 1.10 or later states `archived`.
+			archivedStated: r.URL.Query().Has("archived"),
+			args:           args,
+			admin:          access.Admin,
+			raw:            raw,
 		})
 		return
 	}
@@ -587,7 +589,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	result := []map[string]any{}
 	for rows.Next() {
-		row, _, err := scanConversationRow(rows, false)
+		row, _, _, err := scanConversationRow(rows, false)
 		if err != nil {
 			apierr.Write(w, err)
 			return

@@ -622,7 +622,14 @@ func (h *Handler) selectedConversationID(ctx context.Context, projectID string) 
 	visibility, args := access.Predicate(schema, "c", 1, chatauthority.FolderListing)
 	// A user has at most one selection row now (#6674), but rows written by
 	// an older race may still be duplicated. The newest row wins.
-	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %s.chat_selected_conversations selected JOIN %s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %s ORDER BY selected.id DESC LIMIT 1`, schema, schema, visibility)
+	//
+	// An archived conversation (client contract 1.10) is left out of this
+	// listing, so it is not the listing's selection either: the answer is
+	// null, as for no selection, and the client does not select a row it
+	// cannot show.
+	q := fmt.Sprintf(`SELECT selected.conversation_id FROM %[1]s.chat_selected_conversations selected JOIN %[1]s.chat_conversations c ON c.id=selected.conversation_id WHERE selected.user_id=$1 AND %[2]s
+		AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_conversation_archives ca WHERE ca.conversation_id = c.id)
+		ORDER BY selected.id DESC LIMIT 1`, schema, visibility)
 	var selID int
 	if err := h.pool.QueryRow(ctx, q, args...).Scan(&selID); err != nil {
 		return nil

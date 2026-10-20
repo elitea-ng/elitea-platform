@@ -58,14 +58,7 @@ interface FolderConversationRefWire {
   readonly created_at?: string;
   readonly isPlayback?: boolean;
   readonly source?: string;
-  /** Client contract 1.10: the project archived it. The listing leaves such rows out; a row that still says so is dropped here. */
-  readonly is_archived?: boolean;
   readonly [key: string]: unknown;
-}
-
-/** The rows a chat list shows: an archived one belongs to the archived chats page only. */
-function listedRefs(wires: readonly FolderConversationRefWire[] | undefined): FolderConversationRef[] {
-  return (wires ?? []).filter((wire) => wire.is_archived !== true).map(normaliseFolderConversationRef);
 }
 
 function normaliseFolderConversationRef(wire: FolderConversationRefWire): FolderConversationRef {
@@ -100,7 +93,7 @@ function normaliseFolder(wire: FolderWire): Folder {
   return {
     id: wire.id,
     name: wire.name,
-    conversations: listedRefs(wire.conversations),
+    conversations: (wire.conversations ?? []).map(normaliseFolderConversationRef),
     ...(wire.total !== undefined ? { total: wire.total } : {}),
     ...(wire.offset !== undefined ? { offset: wire.offset } : {}),
     ...(wire.meta?.is_pinned !== undefined ? { isPinned: wire.meta.is_pinned } : {}),
@@ -130,10 +123,10 @@ interface GroupedFoldersResponseWire {
 
 function normaliseGroupedFoldersResponse(wire: GroupedFoldersResponseWire): GroupedFoldersResponse {
   return {
-    pinned: { conversations: listedRefs(wire.pinned?.conversations) },
+    pinned: { conversations: (wire.pinned?.conversations ?? []).map(normaliseFolderConversationRef) },
     dateGroups: (wire.date_groups ?? []).map((group) => ({
       name: group.name,
-      conversations: listedRefs(group.conversations),
+      conversations: (group.conversations ?? []).map(normaliseFolderConversationRef),
       ...(group.total !== undefined ? { total: group.total } : {}),
       ...(group.offset !== undefined ? { offset: group.offset } : {}),
     })),
@@ -159,7 +152,7 @@ export interface FolderConversationsPage {
 
 function normaliseFolderConversationsPage(wire: FolderConversationsPageWire): FolderConversationsPage {
   return {
-    conversations: listedRefs(wire.conversations),
+    conversations: (wire.conversations ?? []).map(normaliseFolderConversationRef),
     ...(wire.total !== undefined ? { total: wire.total } : {}),
     ...(wire.offset !== undefined ? { offset: wire.offset } : {}),
   };

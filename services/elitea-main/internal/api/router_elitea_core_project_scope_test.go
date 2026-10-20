@@ -153,6 +153,11 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/conversation/prompt_lib/7/1", "/api/v2/elitea_core/conversation/prompt_lib/8/1", "models.chat.conversation.details"},
 	{http.MethodPut, "/api/v2/elitea_core/conversation/prompt_lib/7/1", "/api/v2/elitea_core/conversation/prompt_lib/8/1", "models.chat.conversation.update"},
 	{http.MethodDelete, "/api/v2/elitea_core/conversation/prompt_lib/7/1", "/api/v2/elitea_core/conversation/prompt_lib/8/1", "models.chat.conversations.delete"},
+	// The project's conversation archive (client contract 1.10) changes every
+	// member's default list: the conversation EDIT permission, which a
+	// default-mode viewer does not hold (shared 0068).
+	{http.MethodPut, "/api/v2/elitea_core/conversation_archive/prompt_lib/7/1", "/api/v2/elitea_core/conversation_archive/prompt_lib/8/1", "models.chat.conversation.edit"},
+	{http.MethodDelete, "/api/v2/elitea_core/conversation_archive/prompt_lib/7/1", "/api/v2/elitea_core/conversation_archive/prompt_lib/8/1", "models.chat.conversation.edit"},
 	{http.MethodGet, "/api/v2/elitea_core/messages/prompt_lib/7/1", "/api/v2/elitea_core/messages/prompt_lib/8/1", "models.chat.messages.list"},
 	{http.MethodDelete, "/api/v2/elitea_core/messages/prompt_lib/7/1", "/api/v2/elitea_core/messages/prompt_lib/8/1", "models.chat.messages.delete"},
 	{http.MethodPost, "/api/v2/elitea_core/participants/prompt_lib/7/1", "/api/v2/elitea_core/participants/prompt_lib/8/1", "models.chat.participants.create"},

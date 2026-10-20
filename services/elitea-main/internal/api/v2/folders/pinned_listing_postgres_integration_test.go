@@ -117,6 +117,7 @@ CREATE TABLE p_1.chat_conversations (
 CREATE TABLE p_1.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
 -- tenant/0151: an archived conversation leaves this listing (client contract 1.10).
 CREATE TABLE p_1.chat_conversation_archives(conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,archived_by bigint NOT NULL,archived_at timestamp NOT NULL DEFAULT now());
+CREATE TABLE p_1.chat_selected_conversations(id serial PRIMARY KEY,user_id integer NOT NULL,conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE);
 INSERT INTO p_1.chat_participants VALUES (7,'user','{"id":7}'),(8,'user','{"id":8}');
 CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
 CREATE TABLE centry.social_pins (
@@ -150,7 +151,8 @@ func seedPinnedListingConversation(t *testing.T, pool *pgxpool.Pool, name string
 }
 
 type groupedListing struct {
-	Pinned struct {
+	SelectedConversationID *int `json:"selected_conversation_id"`
+	Pinned                 struct {
 		Conversations []struct {
 			ID        int    `json:"id"`
 			Name      string `json:"name"`
@@ -251,6 +253,35 @@ func TestGroupedListingLeavesOutArchivedConversations(t *testing.T) {
 		if seen[archived] || !seen[kept] {
 			t.Fatalf("reader %s's date groups = %v, want %d and not %d", reader, seen, kept, archived)
 		}
+	}
+}
+
+// Client contract 1.10: an archived conversation is not the listing's
+// selection. The listing leaves it out, so `selected_conversation_id` is
+// null; an unarchived selection is named as before.
+func TestGroupedListingSelectionIsNullForAnArchivedConversation(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	selected := seedPinnedListingConversation(t, pool, "autotest_selected", false)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO p_1.chat_selected_conversations (user_id, conversation_id) VALUES (7, $1)`, selected); err != nil {
+		t.Fatalf("select the conversation: %v", err)
+	}
+	if got := readGroupedListing(t, pool, "7").SelectedConversationID; got == nil || *got != selected {
+		t.Fatalf("selected_conversation_id = %v, want %d before the archive", got, selected)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO p_1.chat_conversation_archives (conversation_id, archived_by) VALUES ($1, 8)`, selected); err != nil {
+		t.Fatalf("archive the conversation: %v", err)
+	}
+	if got := readGroupedListing(t, pool, "7").SelectedConversationID; got != nil {
+		t.Fatalf("selected_conversation_id = %d, want null for an archived conversation", *got)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`DELETE FROM p_1.chat_conversation_archives WHERE conversation_id = $1`, selected); err != nil {
+		t.Fatal(err)
+	}
+	if got := readGroupedListing(t, pool, "7").SelectedConversationID; got == nil || *got != selected {
+		t.Fatalf("selected_conversation_id = %v, want %d after the unarchive", got, selected)
 	}
 }
 

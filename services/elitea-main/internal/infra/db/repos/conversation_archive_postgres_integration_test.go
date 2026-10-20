@@ -8,7 +8,9 @@ package repos
 // who archived it and when. Any member who can see the conversation may
 // unarchive it. Archive and unarchive re-deliver the row in the
 // `changes_since` delta of every member who can see it, never as a
-// tombstone.
+// tombstone, to a client that states `archived` (contract 1.10 or later).
+// A client that does not state it (older than 1.10) gets an archive as an
+// `access_lost` tombstone, and an unarchive as the row again.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -311,13 +313,13 @@ func TestConversationArchiveReachesEveryMemberThroughTheDelta(t *testing.T) {
 	publicID := strconv.FormatInt(public, 10)
 
 	// User 7's device and user 9 each finish a full sync of the default list.
-	full := mustArchiveList(t, pool, "7", url.Values{"changes_since": {""}})
+	full := mustArchiveList(t, pool, "7", url.Values{"changes_since": {""}, "archived": {"exclude"}})
 	if pinSyncRow(full, public) == nil || pinSyncRow(full, private) == nil {
 		t.Fatalf("full sync = %+v, want both rows", full.Rows)
 	}
 	deviceB := full.NextCursor
-	other := mustArchiveList(t, pool, "9", url.Values{"changes_since": {""}}).NextCursor
-	private9 := mustArchiveList(t, pool, "9", url.Values{"changes_since": {""}})
+	other := mustArchiveList(t, pool, "9", url.Values{"changes_since": {""}, "archived": {"exclude"}}).NextCursor
+	private9 := mustArchiveList(t, pool, "9", url.Values{"changes_since": {""}, "archived": {"exclude"}})
 	if pinSyncRow(private9, private) != nil {
 		t.Fatalf("user 9 lists user 7's private conversation: %+v", private9.Rows)
 	}
@@ -330,7 +332,7 @@ func TestConversationArchiveReachesEveryMemberThroughTheDelta(t *testing.T) {
 		t.Fatalf("Archive private: %v", err)
 	}
 	for caller, cursor := range map[string]string{"7": deviceB, "9": other} {
-		page := mustArchiveList(t, pool, caller, url.Values{"changes_since": {cursor}})
+		page := mustArchiveList(t, pool, caller, url.Values{"changes_since": {cursor}, "archived": {"exclude"}})
 		r := pinSyncRow(page, public)
 		if r == nil || r["is_archived"] != true {
 			t.Fatalf("user %s's delta = %+v, want the public row with is_archived true", caller, page.Rows)
@@ -345,12 +347,12 @@ func TestConversationArchiveReachesEveryMemberThroughTheDelta(t *testing.T) {
 			t.Fatalf("user 9's delta mentions the private conversation: %+v", page.Rows)
 		}
 	}
-	if total := mustArchiveList(t, pool, "7", url.Values{"changes_since": {deviceB}}).Total; total != 0 {
+	if total := mustArchiveList(t, pool, "7", url.Values{"changes_since": {deviceB}, "archived": {"exclude"}}).Total; total != 0 {
 		t.Fatalf("delta total = %d, want 0 (both rows are out of the default list)", total)
 	}
 	// `archived` absent and `exclude` are the same list: the cursor is valid.
-	if code, _, body := archiveList(t, pool, "7", url.Values{"changes_since": {deviceB}, "archived": {"exclude"}}); code != http.StatusOK {
-		t.Fatalf("the default cursor with archived=exclude answered %d: %s", code, body)
+	if code, _, body := archiveList(t, pool, "7", url.Values{"changes_since": {deviceB}}); code != http.StatusOK {
+		t.Fatalf("the default cursor without archived answered %d: %s", code, body)
 	}
 
 	// A new device's full sync leaves the archived rows out of the default
@@ -370,7 +372,7 @@ func TestConversationArchiveReachesEveryMemberThroughTheDelta(t *testing.T) {
 			t.Fatalf("the default cursor with archived=%s answered %d: %s, want 400", value, code, body)
 		}
 	}
-	if code, _, _ := archiveList(t, pool, "7", url.Values{"changes_since": {archivedSync.NextCursor}}); code != http.StatusBadRequest {
+	if code, _, _ := archiveList(t, pool, "7", url.Values{"changes_since": {archivedSync.NextCursor}, "archived": {"exclude"}}); code != http.StatusBadRequest {
 		t.Fatalf("the archived cursor on the default list answered %d, want 400", code)
 	}
 
@@ -380,7 +382,7 @@ func TestConversationArchiveReachesEveryMemberThroughTheDelta(t *testing.T) {
 	if err := repo.UnarchiveConversation(asUser("9"), "1", publicID); err != nil {
 		t.Fatalf("Unarchive: %v", err)
 	}
-	if r := pinSyncRow(mustArchiveList(t, pool, "7", url.Values{"changes_since": {deviceB}}), public); r == nil || r["is_archived"] != false || r["archived_by"] != nil {
+	if r := pinSyncRow(mustArchiveList(t, pool, "7", url.Values{"changes_since": {deviceB}, "archived": {"exclude"}}), public); r == nil || r["is_archived"] != false || r["archived_by"] != nil {
 		t.Fatalf("user 7's delta after the unarchive = %v", r)
 	}
 	gone := mustArchiveList(t, pool, "7", url.Values{"changes_since": {archivedSync.NextCursor}, "archived": {"only"}})
@@ -406,5 +408,142 @@ func TestDeletingAnArchivedConversationRemovesItsArchiveRow(t *testing.T) {
 	}
 	if rows := readArchive(t, pool, public); len(rows) != 1 {
 		t.Fatalf("the other conversation's archive rows = %v, want one", rows)
+	}
+}
+
+// A client older than contract 1.10 states no `archived` and reads no
+// `is_archived`. Its delta tells it of an archive with an `access_lost`
+// tombstone, so the row leaves its list, and of an unarchive with the row.
+func TestConversationArchiveReachesAPre110ClientAsATombstone(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo, private, public, _ := seedArchiveChats(t, pool)
+	publicID := strconv.FormatInt(public, 10)
+
+	legacy := mustArchiveList(t, pool, "9", url.Values{"changes_since": {""}}).NextCursor
+	stated := mustArchiveList(t, pool, "9", url.Values{"changes_since": {""}, "archived": {"exclude"}}).NextCursor
+	if err := repo.ArchiveConversation(asUser("7"), "1", publicID); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	page := mustArchiveList(t, pool, "9", url.Values{"changes_since": {legacy}})
+	if pinSyncRow(page, public) != nil {
+		t.Fatalf("the pre-1.10 delta re-delivered the archived row: %+v", page.Rows)
+	}
+	if len(page.Tombstones) != 1 || page.Tombstones[0].ID != public || page.Tombstones[0].Reason != "access_lost" {
+		t.Fatalf("the pre-1.10 delta tombstones = %+v, want one access_lost for %d", page.Tombstones, public)
+	}
+	if page.Total != 0 {
+		t.Fatalf("the pre-1.10 delta total = %d, want 0", page.Total)
+	}
+	// The 1.10 client of the same list gets the row, not a tombstone.
+	if got := mustArchiveList(t, pool, "9", url.Values{"changes_since": {stated}, "archived": {"exclude"}}); pinSyncRow(got, public) == nil ||
+		pinSyncRow(got, public)["is_archived"] != true || len(got.Tombstones) != 0 {
+		t.Fatalf("the 1.10 delta = %+v, want the archived row and no tombstone", got)
+	}
+	// The private conversation user 9 cannot see is in neither stream.
+	for _, tomb := range page.Tombstones {
+		if tomb.ID == private {
+			t.Fatalf("user 9 is told about user 7's private conversation: %+v", page.Tombstones)
+		}
+	}
+
+	// An unarchive is the row again.
+	if err := repo.UnarchiveConversation(asUser("8"), "1", publicID); err != nil {
+		t.Fatalf("Unarchive: %v", err)
+	}
+	back := mustArchiveList(t, pool, "9", url.Values{"changes_since": {page.NextCursor}})
+	if r := pinSyncRow(back, public); r == nil || r["is_archived"] != false || len(back.Tombstones) != 0 {
+		t.Fatalf("the pre-1.10 delta after the unarchive = %+v, want the row", back)
+	}
+}
+
+// The `archived` filter narrows every page of a full sync, not only its
+// first: a client that pages a full sync with a small limit gets exactly
+// the rows of its list.
+func TestConversationArchiveFullSyncNarrowsEveryPage(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	grantPinMembership(t, pool, 1, 7, 8, 9)
+	repo := NewConversationsRepo(pool)
+	var all []int64
+	for i := 0; i < 7; i++ {
+		var id int64
+		if err := pool.QueryRow(context.Background(), `INSERT INTO p_1.chat_conversations (uuid, name, author_id, is_private, source, created_at)
+			VALUES (gen_random_uuid(), $1, 8, false, 'elitea', now() AT TIME ZONE 'UTC') RETURNING id`, "c"+strconv.Itoa(i)).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, id)
+	}
+	// Archive every other one, then settle all of them a minute ago in an
+	// interleaved order, so each page holds rows of both states.
+	archived := map[int64]bool{}
+	for i, id := range all {
+		if i%2 == 0 {
+			if err := repo.ArchiveConversation(asUser("8"), "1", strconv.FormatInt(id, 10)); err != nil {
+				t.Fatal(err)
+			}
+			archived[id] = true
+		}
+	}
+	for i, id := range all {
+		backdate(t, pool, "p_1.chat_conversations", id, time.Minute-time.Duration(i)*time.Second)
+	}
+
+	sync := func(query url.Values) (rows map[int64]bool, tombstones int, pages int) {
+		t.Helper()
+		rows = map[int64]bool{}
+		cursor := ""
+		for {
+			q := url.Values{"changes_since": {cursor}, "limit": {"2"}}
+			for key, values := range query {
+				q[key] = values
+			}
+			page := mustArchiveList(t, pool, "9", q)
+			pages++
+			tombstones += len(page.Tombstones)
+			for _, row := range page.Rows {
+				rows[int64(row["id"].(float64))] = row["is_archived"] == true
+			}
+			cursor = page.NextCursor
+			if !page.HasMore {
+				return rows, tombstones, pages
+			}
+			if pages > 20 {
+				t.Fatal("the full sync does not end")
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		query        url.Values
+		wantArchived bool
+	}{
+		{"default stated", url.Values{"archived": {"exclude"}}, false},
+		{"default unstated (pre-1.10)", url.Values{}, false},
+		{"only", url.Values{"archived": {"only"}}, true},
+	} {
+		rows, tombstones, pages := sync(tc.query)
+		if pages < 2 {
+			t.Fatalf("%s: the full sync took %d page(s), want several", tc.name, pages)
+		}
+		if tombstones != 0 {
+			t.Fatalf("%s: a full sync carried %d tombstone(s)", tc.name, tombstones)
+		}
+		want := 0
+		for _, id := range all {
+			if archived[id] == tc.wantArchived {
+				want++
+				if _, ok := rows[id]; !ok {
+					t.Fatalf("%s: the full sync misses %d: %v", tc.name, id, rows)
+				}
+			}
+		}
+		if len(rows) != want {
+			t.Fatalf("%s: the full sync has %d rows, want %d: %v", tc.name, len(rows), want, rows)
+		}
+		for id, isArchived := range rows {
+			if isArchived != tc.wantArchived {
+				t.Fatalf("%s: row %d is_archived = %v leaked into the list", tc.name, id, isArchived)
+			}
+		}
 	}
 }
