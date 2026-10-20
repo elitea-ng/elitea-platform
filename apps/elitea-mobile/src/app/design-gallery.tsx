@@ -5,7 +5,7 @@ import { DesignGallery, parseGalleryParams } from '@/features/designGallery/Desi
 /**
  * Development builds only: the design gallery (src/features/designGallery/). The root stack
  * registers this route behind `Stack.Protected guard={__DEV__}`, and a release build that is
- * sent here anyway goes to the app's start. `?scheme=light|dark&brand=zefir|magenta|green|lemon`
+ * sent here anyway goes to the app's start. `?scheme=light|dark&brand=default|magenta|green|lemon`
  * preselects the preview (used for screenshots).
  */
 export default function DesignGalleryRoute() {

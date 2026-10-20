@@ -10,10 +10,10 @@ jest.mock('@/theme/brandStore', () => ({ useBrandTheme: () => null }));
 jest.mock('@/theme/brandFonts', () => ({ useBrandFontFamily: () => undefined }));
 
 describe('design gallery', () => {
-  it('reads the preview from the link, defaulting to the system scheme and Zefir', () => {
+  it('reads the preview from the link, defaulting to the system scheme and Elitea', () => {
     expect(parseGalleryParams({ scheme: 'dark', brand: 'magenta' })).toEqual({ scheme: 'dark', brand: 'magenta' });
-    expect(parseGalleryParams({ scheme: 'sepia', brand: 'acme' })).toEqual({ scheme: 'system', brand: 'zefir' });
-    expect(parseGalleryParams({})).toEqual({ scheme: 'system', brand: 'zefir' });
+    expect(parseGalleryParams({ scheme: 'sepia', brand: 'acme' })).toEqual({ scheme: 'system', brand: 'default' });
+    expect(parseGalleryParams({})).toEqual({ scheme: 'system', brand: 'default' });
   });
 
   it.each(Object.keys(GALLERY_BRANDS).flatMap((brand) => (['light', 'dark'] as const).map((scheme) => [brand, scheme] as const)))(

@@ -11,9 +11,9 @@ final class AppIntentsSetup: Module {
       // The agent catalog (AgentEntity) is published from JS; retrain the phrases when it changes.
       Task {
         await AppIntentDispatcher.shared.setShortcutsRefreshHandler {
-          ZefirShortcuts.updateAppShortcutParameters()
+          EliteaShortcuts.updateAppShortcutParameters()
         }
-        ZefirShortcuts.updateAppShortcutParameters()
+        EliteaShortcuts.updateAppShortcutParameters()
       }
     }
   }

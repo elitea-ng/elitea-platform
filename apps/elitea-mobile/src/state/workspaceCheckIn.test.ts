@@ -35,7 +35,7 @@ function nativeSlot(id: string, origin: string) {
     JSON.stringify({
       v: 1,
       origin,
-      clientId: 'ca.zefir.agent',
+      clientId: 'ca.mlops.elitea',
       tokenEndpoint: `${origin}/api/v2/auth/native/token`,
       revocationEndpoint: `${origin}/api/v2/auth/native/revoke`,
       refreshToken: opaqueToken('elnrt_', 1),

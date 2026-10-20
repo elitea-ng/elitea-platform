@@ -79,7 +79,7 @@ describe('regeneration body', () => {
   });
 });
 
-describe('a regeneration replaces the answer (captured on the zefir-wave stack)', () => {
+describe('a regeneration replaces the answer (captured on the mobile-wave stack)', () => {
   it('the rewritten answer keeps its uuid, gets a new item and carries the regeneration id as its generation', () => {
     expect(answerGroupAfterRegenerate.uuid).toBe(answerGroupBefore.uuid);
     expect(answerGroupAfterRegenerate.task_id).not.toBe(answerGroupBefore.task_id);

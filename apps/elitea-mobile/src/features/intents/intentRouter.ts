@@ -1,9 +1,9 @@
 /**
- * Siri / Shortcuts invocations (app-intents/ZefirIntents.swift) to app
+ * Siri / Shortcuts invocations (app-intents/EliteaIntents.swift) to app
  * screens. Every intent is OPEN-APP only: it opens a screen behind the device
  * lock and returns nothing to Siri. "Ask <agent>" puts the question typed into
  * a Shortcut in the composer; it is never sent without the user tapping Send.
- * Siri never collects the question by voice (app-intents/ZefirIntents.swift):
+ * Siri never collects the question by voice (app-intents/EliteaIntents.swift):
  * by voice the intent carries no text and the composer opens empty.
  *
  * Agent ids are `<workspace slot>:<project id>:<agent id>`

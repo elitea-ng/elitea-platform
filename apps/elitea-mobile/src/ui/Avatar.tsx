@@ -1,6 +1,6 @@
 import { Image, StyleSheet, View, type ViewProps } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { useDesign } from '@/design/DesignProvider';
 import type { Scheme } from '@/design/tokens';
 
@@ -54,10 +54,10 @@ export interface AvatarProps {
   /** A vetted image (a `data:` URI or a same-origin file the caller already checked). */
   imageUri?: string | null;
   /**
-   * An agent with no icon of its own shows the mascot (design-system §5): only for the
+   * An agent with no icon of its own shows the Elitea mark (design-system §5): only for the
    * conversation's primary agent, and never twice on one screen. Others get a monogram.
    */
-  mascot?: boolean;
+  mark?: boolean;
   size?: number;
   /** Hidden from screen readers when the row next to it already says the name. */
   decorative?: boolean;
@@ -65,11 +65,11 @@ export interface AvatarProps {
 }
 
 /**
- * A person or agent avatar: their own image; else, for an agent, the mascot (fallback only,
+ * A person or agent avatar: their own image; else, for an agent, the Elitea mark (fallback only,
  * labelled with the AGENT's name) or a monogram on `secondarySoft`; else initials on a pastel
- * tone. The mascot never replaces an agent's own icon or the workspace logo.
+ * tone. The Elitea mark never replaces an agent's own icon or the workspace logo.
  */
-export function Avatar({ name, kind = 'person', imageUri, mascot = false, size = 36, decorative = false, style }: AvatarProps) {
+export function Avatar({ name, kind = 'person', imageUri, mark = false, size = 36, decorative = false, style }: AvatarProps) {
   const { colors, scheme } = useDesign();
   const a11y = decorative
     ? ({ accessible: false, importantForAccessibility: 'no-hide-descendants', accessibilityElementsHidden: true } as const)
@@ -82,8 +82,8 @@ export function Avatar({ name, kind = 'person', imageUri, mascot = false, size =
       </View>
     );
   }
-  if (kind === 'agent' && mascot) {
-    return <Mascot variant="avatar" size={size} label={name} decorative={decorative} style={style} />;
+  if (kind === 'agent' && mark) {
+    return <EliteaMark variant="avatar" size={size} label={name} decorative={decorative} style={style} />;
   }
   const [fill, text] = kind === 'agent' ? [colors.secondarySoft, colors.secondarySoftOn] : AVATAR_TONES[scheme][toneIndex(name)];
   return (

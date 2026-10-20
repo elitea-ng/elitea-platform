@@ -18,7 +18,7 @@ export const lockController = new LockController({
   // A switch resets the policy to the strict defaults in passing: not a tightening.
   isSessionEnding: () => isEndingSession() || isSuspendingWorkspace() || isSwitchingWorkspace(),
   onLockedChange: (locked) => appActivity.setLocked(locked),
-  promptMessage: 'Unlock Agent Zefir',
+  promptMessage: 'Unlock Elitea AI',
 });
 
 // A server policy change (token response, discovery) applies immediately.

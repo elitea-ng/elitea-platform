@@ -46,7 +46,7 @@ type Level = 'debug' | 'info' | 'warn' | 'error';
 
 function write(level: Level, message: string, fields?: Record<string, unknown>) {
   if (level === 'debug' && !__DEV__) return;
-  const line = `[agent-zefir] ${redactString(message)}`;
+  const line = `[elitea-mobile] ${redactString(message)}`;
   const args = fields === undefined ? [line] : [line, redact(fields)];
   switch (level) {
     case 'debug':

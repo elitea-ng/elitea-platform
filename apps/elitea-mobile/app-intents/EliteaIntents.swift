@@ -1,14 +1,14 @@
 import AppIntents
 internal import ExpoAppIntents
 
-// Agent Zefir's App Intents are OPEN-APP intents only: each one opens the app and hands a
+// Elitea AI's App Intents are OPEN-APP intents only: each one opens the app and hands a
 // small invocation to JS (src/features/intents/), which opens a screen behind the device
 // lock. Nothing is answered to Siri or Shortcuts: no dialog, no value, no workspace data.
 // `authenticationPolicy` also asks iOS for an unlocked device before the intent runs.
 
 struct NewChatIntent: AppIntent {
   static let title: LocalizedStringResource = "New Chat"
-  static let description = IntentDescription("Opens Agent Zefir on a new chat, with the agent you pick.")
+  static let description = IntentDescription("Opens Elitea AI on a new chat, with the agent you pick.")
   static let openAppWhenRun: Bool = true
   static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
@@ -37,7 +37,7 @@ struct NewChatIntent: AppIntent {
 struct AskAgentIntent: AppIntent {
   static let title: LocalizedStringResource = "Ask Agent"
   static let description = IntentDescription(
-    "Opens Agent Zefir on a new chat, with the question from your shortcut in the composer. Nothing is sent until you tap Send."
+    "Opens Elitea AI on a new chat, with the question from your shortcut in the composer. Nothing is sent until you tap Send."
   )
   static let openAppWhenRun: Bool = true
   static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
@@ -64,7 +64,7 @@ struct AskAgentIntent: AppIntent {
 
 struct OpenNotificationsIntent: AppIntent {
   static let title: LocalizedStringResource = "Open Notifications"
-  static let description = IntentDescription("Opens your Agent Zefir notifications.")
+  static let description = IntentDescription("Opens your Elitea AI notifications.")
   static let openAppWhenRun: Bool = true
   static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
@@ -75,7 +75,7 @@ struct OpenNotificationsIntent: AppIntent {
   }
 }
 
-struct ZefirShortcuts: AppShortcutsProvider {
+struct EliteaShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     AppShortcut(
       intent: NewChatIntent(),

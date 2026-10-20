@@ -21,11 +21,11 @@ function play(name: FixtureName): TurnState {
   return state;
 }
 const streaming = { ...INITIAL_TURN, phase: 'streaming' as const };
-const ctx = { author: 'Zefir Tool Agent', regeneration: false };
+const ctx = { author: 'Elitea Tool Agent', regeneration: false };
 
 describe('turn announcements', () => {
   it('says once that the answer is done, stopped, regenerated or failed', () => {
-    expect(turnAnnouncement(streaming, play('simple-answer'), ctx)).toBe('Zefir Tool Agent answered.');
+    expect(turnAnnouncement(streaming, play('simple-answer'), ctx)).toBe('Elitea Tool Agent answered.');
     expect(turnAnnouncement(streaming, play('cancelled'), ctx)).toBe('Answer stopped.');
     expect(turnAnnouncement(streaming, play('regenerate-answer'), { ...ctx, regeneration: true })).toBe('New answer ready.');
     expect(turnAnnouncement(streaming, play('execution-failed'), ctx)).toBe('The answer failed. The execution deadline was exceeded.');
@@ -107,7 +107,7 @@ describe('announcer', () => {
 
 describe('useTurnAnnouncements', () => {
   function Probe({ live, enabled }: { live: LiveTurn | null; enabled?: boolean }) {
-    useTurnAnnouncements(live, 'Zefir Helper', enabled);
+    useTurnAnnouncements(live, 'Elitea Helper', enabled);
     return <Text>probe</Text>;
   }
   const live = (turn: Partial<TurnState>): LiveTurn =>
@@ -125,7 +125,7 @@ describe('useTurnAnnouncements', () => {
     await act(async () => {
       jest.advanceTimersByTime(1000);
     });
-    expect(spy.mock.calls).toEqual([['Zefir Helper answered.']]);
+    expect(spy.mock.calls).toEqual([['Elitea Helper answered.']]);
     await view.unmount();
     jest.useRealTimers();
   });

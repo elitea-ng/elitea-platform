@@ -6,7 +6,7 @@ import { registerWipeHook } from '@/security/endSession';
  * What a Siri / Shortcuts intent asks of /new (an agent to start, a question
  * for the composer), handed over IN MEMORY under a random one-time id
  * (`?intent=<id>`), never as route params. Any web page or app can open
- * `agentzefir://new?...`: only an intent the app itself routed
+ * `elitea://new?...`: only an intent the app itself routed
  * (src/features/intents/useAppIntentHandler.ts, which checks the workspace)
  * can start a conversation or put text in a composer.
  */

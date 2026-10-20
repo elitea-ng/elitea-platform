@@ -60,8 +60,8 @@ export interface DiscoverViewProps {
  * grid (2 columns on a phone, up to 4 on an iPad; a single column at accessibility text sizes)
  * or as an inset-grouped list, with category filter chips when the catalogue has more than one
  * category. Each card is ONE button (its arrow is a visual), labelled by the agent. The tab route
- * and its `__DEV__` preview both render this (D2). The mascot appears only in the empty state:
- * a catalogue full of icon-less agents gets monograms, never a wall of Zefircas (§5).
+ * and its `__DEV__` preview both render this (D2). The Elitea mark appears only in the empty state:
+ * a catalogue full of icon-less agents gets monograms, never a wall of Elitea marks (§5).
  */
 export function DiscoverView({
   agents,
@@ -109,15 +109,15 @@ export function DiscoverView({
       <ActivityIndicator style={styles.state} color={colors.accent} />
     ) : status === 'error' ? (
       <EmptyState
-        mascot="none"
+        mark="none"
         title="Couldn't load public agents"
         body="Check your connection and try again."
         action={{ title: 'Try again', onPress: onRetry }}
       />
     ) : query !== '' ? (
-      <EmptyState mascot="bust" title={`Nothing found for “${query}”`} body="Try another name or a word from the description." />
+      <EmptyState mark="small" title={`Nothing found for “${query}”`} body="Try another name or a word from the description." />
     ) : (
-      <EmptyState mascot="bust" title="No public agents yet" body="This workspace has no public agents yet. Agents your team shares appear here." />
+      <EmptyState mark="small" title="No public agents yet" body="This workspace has no public agents yet. Agents your team shares appear here." />
     );
 
   const data = status === 'ready' ? shown : [];

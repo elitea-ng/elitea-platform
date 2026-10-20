@@ -125,7 +125,7 @@ function useResolvedDesign(preference: SchemePreference, a11y: AccessibilityModi
  * Provides the design to a subtree. The app root mounts one with the system scheme (Settings →
  * Appearance applies its choice through `Appearance.setColorScheme`, src/state/appearance.ts).
  * `scheme` forces a scheme for a subtree; `brand` replaces the workspace brand for a subtree
- * (`null`: unbranded Zefir), which the design gallery uses to show a branded preview.
+ * (`null`: unbranded product), which the design gallery uses to show a branded preview.
  */
 export function DesignProvider({
   scheme = 'system',

@@ -2,7 +2,7 @@ import { router, Stack } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, View } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { DesignProvider, useDesign } from '@/design/DesignProvider';
 import type { BrandInput } from '@/design/brand';
 import type { SchemePreference } from '@/design/resolve';
@@ -44,7 +44,7 @@ import {
  * never dropped.
  */
 export const GALLERY_BRANDS = {
-  zefir: null,
+  default: null,
   magenta: { productDefault: false, lightAccent: '#C428DD', darkAccent: '#6AE8FA' },
   green: { productDefault: false, lightAccent: '#14B8A6', darkAccent: '#14B8A6' },
   lemon: { productDefault: false, lightAccent: '#FFD400', darkAccent: '#FFD400' },
@@ -61,13 +61,13 @@ export function parseGalleryParams(params: { scheme?: string | string[]; brand?:
   const brand = one(params.brand);
   return {
     scheme: scheme === 'light' || scheme === 'dark' ? scheme : 'system',
-    brand: brand !== undefined && brand in GALLERY_BRANDS ? (brand as GalleryBrand) : 'zefir',
+    brand: brand !== undefined && brand in GALLERY_BRANDS ? (brand as GalleryBrand) : 'default',
   };
 }
 
 const ROLES: TypeRole[] = ['display', 'title1', 'title2', 'title3', 'headline', 'body', 'callout', 'subheadline', 'footnote', 'caption', 'label', 'code'];
 
-export function DesignGallery({ initialScheme = 'system', initialBrand = 'zefir' }: { initialScheme?: SchemePreference; initialBrand?: GalleryBrand }) {
+export function DesignGallery({ initialScheme = 'system', initialBrand = 'default' }: { initialScheme?: SchemePreference; initialBrand?: GalleryBrand }) {
   const chrome = useDesign();
   const [scheme, setScheme] = useState<SchemePreference>(initialScheme);
   const [brand, setBrand] = useState<GalleryBrand>(initialBrand);
@@ -120,7 +120,7 @@ function GalleryBody({
       keyboardDismissMode="on-drag"
       style={{ backgroundColor: colors.background }}
       contentContainerStyle={[styles.content, { paddingHorizontal: design.space.screenGutterCompact }]}>
-      <ListSection title="Preview" footer={`Accent ${colors.accent} on ${colors.accentOn}${design.branded ? ' (corrected brand)' : ' (Zefir rose)'}`}>
+      <ListSection title="Preview" footer={`Accent ${colors.accent} on ${colors.accentOn}${design.branded ? ' (corrected brand)' : ' (product rose)'}`}>
         <View style={styles.pad}>
           <SegmentedControl
             accessibilityLabel="Preview scheme"
@@ -139,7 +139,7 @@ function GalleryBody({
             value={brand}
             onChange={setBrand}
             segments={[
-              { value: 'zefir', label: 'Zefir' },
+              { value: 'default', label: 'Default' },
               { value: 'magenta', label: 'Magenta' },
               { value: 'green', label: 'Green' },
               { value: 'lemon', label: 'Lemon' },
@@ -244,7 +244,7 @@ function GalleryBody({
         <Section title="Cards">
           <Card>
             <View style={styles.cardRow}>
-              <Avatar kind="agent" name="Research" mascot size={36} />
+              <Avatar kind="agent" name="Research" mark size={36} />
               <View style={styles.flex}>
                 <Text variant="headline" numberOfLines={1}>
                   Make my website after the launch
@@ -265,18 +265,18 @@ function GalleryBody({
         </Section>
       ) : null}
 
-      {show('avatars mascot') ? (
-        <Section title="Avatars and mascot">
+      {show('avatars mark') ? (
+        <Section title="Avatars and Elitea mark">
           <View style={styles.row}>
-            {['Alex Smith', 'Bob Zefir', 'Chen Li', 'Dana Ortiz', 'Eve Moss', 'Femi Ade'].map((n) => (
+            {['Alex Smith', 'Bob Elitea', 'Chen Li', 'Dana Ortiz', 'Eve Moss', 'Femi Ade'].map((n) => (
               <Avatar key={n} name={n} size={36} />
             ))}
           </View>
           <View style={styles.row}>
-            <Avatar kind="agent" name="Research" mascot size={48} />
+            <Avatar kind="agent" name="Research" mark size={48} />
             <Avatar kind="agent" name="HR helper" size={48} />
-            <Mascot variant="bust" size={96} decorative />
-            <Mascot variant="full" size={80} decorative />
+            <EliteaMark size={96} decorative />
+            <EliteaMark size={80} decorative />
           </View>
           <View style={styles.row}>
             <Badge count={3} />

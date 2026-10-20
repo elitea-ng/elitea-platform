@@ -5,7 +5,7 @@ import { fromOklch, toOklch } from './oklch';
 import { BRAND_TARGETS, colors as baseColors, type BrandOverridableKey, type Scheme, type SemanticColors } from './tokens';
 
 /**
- * Workspace brand → Agent Zefir token overrides (docs/design-system.md §3).
+ * Workspace brand → Elitea AI token overrides (docs/design-system.md §3).
  *
  * A brand only *accents* the app: it changes the accent family, the user
  * bubble, the selected chip and a tint of the gradient and orb. Neutrals,
@@ -150,7 +150,7 @@ function solid(value: string | null | undefined): Rgba | null {
 /**
  * Overrides for both schemes (§3.4): each scheme reads its own accent; when
  * only one scheme has one, the other is derived from it; else `hue`; else
- * nothing (Zefir rose stays). `productDefault` means no colour override at all.
+ * nothing (product rose stays). `productDefault` means no colour override at all.
  */
 export function resolveBrand(input: BrandInput | null): Record<Scheme, BrandOverrides> {
   const none = { light: {}, dark: {} };

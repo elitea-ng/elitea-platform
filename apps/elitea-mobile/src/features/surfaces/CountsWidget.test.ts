@@ -34,9 +34,9 @@ it('is registered with the name app.config.ts declares, with the signed-out snap
 
 it('small: the three counts, no title or host by default', () => {
   const tree = render(snap(false), 'systemSmall');
-  expect(texts(tree)).toEqual(['Agent Zefir', '2', 'waiting for you', '3', 'unread', '1', 'running']);
+  expect(texts(tree)).toEqual(['Elitea AI', '2', 'waiting for you', '3', 'unread', '1', 'running']);
   // A decision waiting wins the tap.
-  expect(widgetUrls(tree)).toEqual(['agentzefir://surface/home?ws=aaaaaaaaaaaa']);
+  expect(widgetUrls(tree)).toEqual(['elitea://surface/home?ws=aaaaaaaaaaaa']);
 });
 
 it('medium: names the waiting conversations and the host only when titles are allowed', () => {
@@ -51,16 +51,16 @@ it('lock screen: inline and circular counts; a tap opens the inbox when nothing 
   expect(texts(render(snap(false, 0, 0, 0), 'accessoryInline'))).toEqual(['All caught up']);
   const circular = render(snap(false, 0, 4, 0), 'accessoryCircular');
   expect(texts(circular)).toEqual(['4']);
-  expect(widgetUrls(circular)).toEqual(['agentzefir://surface/notifications?ws=aaaaaaaaaaaa']);
+  expect(widgetUrls(circular)).toEqual(['elitea://surface/notifications?ws=aaaaaaaaaaaa']);
   expect(texts(render(snap(false, 1, 0, 2), 'accessoryRectangular'))).toEqual(['1', 'waiting for you', '0', 'unread', '2', 'running']);
 });
 
 it('signed out (wiped, switching): no counts, asks to open the app', () => {
   for (const family of ['systemSmall', 'systemMedium', 'accessoryRectangular']) {
-    expect(texts(render(signedOutSnapshot(NOW), family))).toEqual(['Agent Zefir', 'Open the app to sign in.']);
+    expect(texts(render(signedOutSnapshot(NOW), family))).toEqual(['Elitea AI', 'Open the app to sign in.']);
   }
-  expect(texts(render(signedOutSnapshot(NOW), 'accessoryInline'))).toEqual(['Agent Zefir']);
-  expect(widgetUrls(render(signedOutSnapshot(NOW), 'systemSmall'))).toEqual(['agentzefir://surface/home']);
+  expect(texts(render(signedOutSnapshot(NOW), 'accessoryInline'))).toEqual(['Elitea AI']);
+  expect(widgetUrls(render(signedOutSnapshot(NOW), 'systemSmall'))).toEqual(['elitea://surface/home']);
 });
 
 it('draws before the app ever wrote a snapshot', () => {
@@ -75,7 +75,7 @@ describe('the design system on the home screen (redesign)', () => {
   const tree = (env: Record<string, unknown>) =>
     renderWidgetSource<WidgetNode>(layouts.get(COUNTS_WIDGET), snap(true), { widgetFamily: 'systemMedium', ...env });
 
-  it('wears the pastel gradient and Zefir rose in full colour, per scheme (the tokens)', () => {
+  it('wears the pastel gradient and product rose in full colour, per scheme (the tokens)', () => {
     const { colors: color } = jest.requireActual('@/design/tokens') as typeof import('@/design/tokens');
     for (const scheme of ['light', 'dark'] as const) {
       const mods = modifiersOf(tree({ colorScheme: scheme, widgetRenderingMode: 'fullColor' }));

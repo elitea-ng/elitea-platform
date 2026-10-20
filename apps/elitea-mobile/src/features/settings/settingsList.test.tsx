@@ -39,10 +39,10 @@ it('Signed-in devices and About are rows only when the screen can open them', as
   const onAbout = jest.fn();
   const view = await render(<SettingsList {...base} />);
   expect(screen.queryByText('Signed-in devices')).toBeNull();
-  expect(screen.queryByText('About Agent Zefir')).toBeNull();
+  expect(screen.queryByText('About Elitea AI')).toBeNull();
   await view.rerender(<SettingsList {...base} onDevices={onDevices} onAbout={onAbout} appVersion="0.1.0" />);
   await fireEvent.press(screen.getByText('Signed-in devices'));
-  await fireEvent.press(screen.getByRole('button', { name: 'About Agent Zefir, 0.1.0' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'About Elitea AI, 0.1.0' }));
   expect(onDevices).toHaveBeenCalled();
   expect(onAbout).toHaveBeenCalled();
 });

@@ -22,9 +22,9 @@ export interface DevicesViewProps {
 
 const PLATFORM_NAME: Record<NativeDevice['platform'], string> = { ios: 'iOS', android: 'Android', other: 'Other' };
 
-/** "iOS · Agent Zefir 0.1.0". */
+/** "iOS · Elitea AI 0.1.0". */
 export function deviceMeta(device: Pick<NativeDevice, 'platform' | 'clientVersion'>): string {
-  return [PLATFORM_NAME[device.platform], device.clientVersion ? `Agent Zefir ${device.clientVersion}` : null].filter(Boolean).join(' · ');
+  return [PLATFORM_NAME[device.platform], device.clientVersion ? `Elitea AI ${device.clientVersion}` : null].filter(Boolean).join(' · ');
 }
 
 /**
@@ -32,7 +32,7 @@ export function deviceMeta(device: Pick<NativeDevice, 'platform' | 'clientVersio
  * does that, with its wipe), then every other device signed in to the workspace with this account.
  * Each other device has a visible Sign out button; swiping the row left is the shortcut (and its
  * accessibility action, S9). The route confirms first. The
- * route and the `__DEV__` preview both render this (D2). No mascot: a security surface (§5).
+ * route and the `__DEV__` preview both render this (D2). No Elitea mark: a security surface (§5).
  */
 export function DevicesView({ status, devices, host, age, banner, onRevoke, onRetry, refreshControl }: DevicesViewProps) {
   const { colors, radius } = useDesign();
@@ -61,7 +61,7 @@ export function DevicesView({ status, devices, host, age, banner, onRevoke, onRe
         </View>
       ) : null}
       {status.kind === 'error' && devices.length === 0 ? (
-        <EmptyState mascot="none" title="Couldn't load your devices" body={status.message} action={{ title: 'Try again', onPress: onRetry }} />
+        <EmptyState mark="none" title="Couldn't load your devices" body={status.message} action={{ title: 'Try again', onPress: onRetry }} />
       ) : (
         <>
           {current.length > 0 ? (

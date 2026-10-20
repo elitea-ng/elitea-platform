@@ -85,7 +85,7 @@ function Preview({ screen }: { screen: Screen }) {
       return (
         <>
           <Stack.Screen options={{ title: 'Discover', ...largeTitleOptions(design) }} />
-          <StatusScreen mascot="bust" title="Discover isn't available" body="This workspace does not offer public agents to mobile yet." />
+          <StatusScreen mark="small" title="Discover isn't available" body="This workspace does not offer public agents to mobile yet." />
         </>
       );
     case 'notifications':
@@ -159,7 +159,7 @@ function Preview({ screen }: { screen: Screen }) {
       return (
         <>
           <Stack.Screen options={{ title: 'Chats' }} />
-          <StatusScreen mascot="bust" title={OFFLINE_EMPTY.title} body={OFFLINE_EMPTY.body}>
+          <StatusScreen mark="small" title={OFFLINE_EMPTY.title} body={OFFLINE_EMPTY.body}>
             <Button title="Try again" size="small" variant="tonal" onPress={noop} />
           </StatusScreen>
         </>

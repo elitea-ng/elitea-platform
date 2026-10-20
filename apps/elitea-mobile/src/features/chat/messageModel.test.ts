@@ -73,7 +73,7 @@ describe('agentParticipant', () => {
   });
 });
 
-// DEF-3 (Agent Zefir E2E): a conversation with no agent (a plain model chat)
+// DEF-3 (mobile E2E): a conversation with no agent (a plain model chat)
 // could not be messaged from mobile. It is addressed as a model turn.
 describe('chatTarget', () => {
   const user = { id: 1, entity_name: 'user', entity_meta: { id: 7 } };
@@ -138,13 +138,13 @@ describe('chatTarget', () => {
   });
 
   it('an agent participant whose ids come as digit strings (the server stores what the create sent) still names its agent', () => {
-    // GET conversation on the zefir-wave stack (main 22403f640): a chat the app started with Zefir Helper.
+    // GET conversation on the mobile-wave stack (main 22403f640): a chat the app started with Elitea Helper.
     const helper = {
       id: 3,
       entity_name: 'application',
-      entity_meta: { id: '2', name: 'Zefir Helper', project_id: '90504' },
+      entity_meta: { id: '2', name: 'Elitea Helper', project_id: '90504' },
       entity_settings: { version_id: '2' },
-      meta: { name: 'Zefir Helper' },
+      meta: { name: 'Elitea Helper' },
     };
     // The contract types these ids as numbers; the wire carries strings.
     const detail = { participants: [user, helper] } as unknown as Parameters<typeof chatTarget>[0];

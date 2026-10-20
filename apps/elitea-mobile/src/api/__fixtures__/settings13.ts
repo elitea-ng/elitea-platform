@@ -1,5 +1,5 @@
 /**
- * Client contract 1.3 settings shapes, CAPTURED 2026-10-06 from the zefir-wave
+ * Client contract 1.3 settings shapes, CAPTURED 2026-10-06 from the mobile-wave
  * stack (elitea-platform client contract 1.3, the same document as the v4.7.0
  * pin) as the admin persona (user 3) in its personal project 90503, and, for
  * usage, as Alice (owner) and Bob (editor) in the team project 90504. The
@@ -20,7 +20,7 @@ export const notificationsDeltaFull = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq",
+        "source": "mobile-sq",
         "message": "Your project request was approved"
       },
       "created_at": "2026-10-06T23:37:01Z",
@@ -34,8 +34,8 @@ export const notificationsDeltaFull = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq",
-        "initiator_name": "Bob Zefir",
+        "source": "mobile-sq",
+        "initiator_name": "Bob Elitea",
         "conversation_id": "35a5538d-993d-4c66-bf5f-ad8509c581d4"
       },
       "created_at": "2026-10-06T23:37:01Z",
@@ -49,7 +49,7 @@ export const notificationsDeltaFull = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq"
+        "source": "mobile-sq"
       },
       "created_at": "2026-10-06T23:37:01Z",
       "updated_at": "2026-10-06T23:37:01Z",
@@ -72,7 +72,7 @@ export const notificationsPage = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq"
+        "source": "mobile-sq"
       },
       "created_at": "2026-10-06T23:37:01Z",
       "updated_at": "2026-10-06T23:37:01Z",
@@ -85,8 +85,8 @@ export const notificationsPage = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq",
-        "initiator_name": "Bob Zefir",
+        "source": "mobile-sq",
+        "initiator_name": "Bob Elitea",
         "conversation_id": "35a5538d-993d-4c66-bf5f-ad8509c581d4"
       },
       "created_at": "2026-10-06T23:37:01Z",
@@ -100,7 +100,7 @@ export const notificationsPage = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq",
+        "source": "mobile-sq",
         "message": "Your project request was approved"
       },
       "created_at": "2026-10-06T23:37:01Z",
@@ -138,7 +138,7 @@ export const notificationsDeltaAfterDelete = {
       "project_id": 90503,
       "user_id": 3,
       "meta": {
-        "source": "zefir-sq"
+        "source": "mobile-sq"
       },
       "created_at": "2026-10-06T23:37:01Z",
       "updated_at": "2026-10-06T23:37:01Z",

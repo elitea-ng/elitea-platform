@@ -42,7 +42,7 @@ const AGENTS = [
  * real thread (`/c/[id]`) renders (`ThreadLayout`, `PersistedMessage`, `LiveReply`,
  * `AnswerActions`, `PauseCard`, `ChatEmptyState`, `Composer`; D2), so it can be checked and
  * screenshot without a server.
- * `?state=conversation|empty|thinking|streaming|approval|dictation|compose|scan&brand=zefir|magenta|green|lemon`.
+ * `?state=conversation|empty|thinking|streaming|approval|dictation|compose|scan&brand=default|magenta|green|lemon`.
  * `state=scan`: the attach menu's "Scan document" runs the real scan pipeline (VisionKit on a
  * device, the sample pages on the simulator; PDF and on-device text recognition) into a real
  * tray (nothing is uploaded); `&scan=pdf|text` starts it at once with that format.
@@ -74,12 +74,12 @@ function ChatPreview({ state, autoScan }: { state: PreviewState; autoScan: ScanF
   const rows: Row[] = [];
   if (state === 'thinking' || state === 'streaming') rows.push({ kind: 'live', live: sampleLive(state) });
   if (state !== 'empty') for (const message of [...SAMPLE_MESSAGES].reverse()) rows.push({ kind: 'message', message });
-  const avatar = <AssistantAvatar name={SAMPLE_AGENT} imageUri={null} mascot />;
+  const avatar = <AssistantAvatar name={SAMPLE_AGENT} imageUri={null} mark />;
   return (
     <>
       <Stack.Screen
         options={{
-          title: 'Zefir launch planning',
+          title: 'Elitea launch planning',
           headerShown: true,
           ...headerActionOptions(
             [

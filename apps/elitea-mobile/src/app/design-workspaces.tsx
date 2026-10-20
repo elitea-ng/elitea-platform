@@ -11,7 +11,7 @@ import type { WorkspaceSummary } from '@/state/workspaceList';
  */
 const SAMPLE_WORKSPACES: readonly WorkspaceSummary[] = [
   { id: 'aaaaaaaaaaaa', origin: SAMPLE_ORIGIN, name: 'Acme Corp AI', logoMark: null, brand: GALLERY_BRANDS.magenta, signedIn: true, requiresLock: false },
-  { id: 'bbbbbbbbbbbb', origin: 'https://zefir.elitea.ai', name: 'Zefir Two', logoMark: null, brand: GALLERY_BRANDS.green, signedIn: true, requiresLock: true },
+  { id: 'bbbbbbbbbbbb', origin: 'https://mobile.elitea.ai', name: 'Elitea Two', logoMark: null, brand: GALLERY_BRANDS.green, signedIn: true, requiresLock: true },
   { id: 'cccccccccccc', origin: 'https://ai.example.org', name: null, logoMark: null, brand: null, signedIn: false, requiresLock: false },
 ];
 

@@ -6,7 +6,7 @@ index 37558e0..d07d8ad 100644
    }
  
    public func application(_ application: UIApplication, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
-+    // Patched (agent-zefir): under the scene life cycle a cold-start quick action
++    // Patched (elitea-mobile): under the scene life cycle a cold-start quick action
 +    // comes here (ExpoAppSceneDelegate forwards connectionOptions.shortcutItem)
 +    // before JS listens, and launch options carry none. Keep it for takeInitial().
 +    if !quickActionObserved {
@@ -23,7 +23,7 @@ index 252da49..7806585 100644
  }
  
  var initialAction: UIApplicationShortcutItem?
-+// Patched (agent-zefir): a quick action performed before JS listened (scene cold start).
++// Patched (elitea-mobile): a quick action performed before JS listened (scene cold start).
 +var pendingAction: UIApplicationShortcutItem?
 +var quickActionObserved = false
  
@@ -33,7 +33,7 @@ index 252da49..7806585 100644
              }
          }.runOnQueue(.main)
          
-+        // Patched (agent-zefir): the action that launched the app, once (then nil).
++        // Patched (elitea-mobile): the action that launched the app, once (then nil).
 +        Function("takeInitial") { () -> [String: Any]? in
 +            let item = pendingAction ?? initialAction
 +            pendingAction = nil

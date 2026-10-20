@@ -32,7 +32,7 @@ the background token from docs/design-tokens.json.
 
 | # | Screen (docs/screens.md) | State to stage | Caption |
 |---|---|---|---|
-| 1 | Home (§2) | greeting, action cards, recent chats, Zefirca | "Your workspace's AI agents, on the go" |
+| 1 | Home (§2) | greeting, action cards, recent chats | "Your workspace's AI agents, on the go" |
 | 2 | Chat thread (§4) | a finished answer with formatting and a code block, action row visible | "Answers stream in live" |
 | 3 | Chat thread, tool steps / approval (§4) | an agent waiting for approval (HITL card) | "Approve what your agents do" |
 | 4 | Discover (§6) | categories, search, agent cards | "Find the right agent" |
@@ -45,8 +45,8 @@ iPad: frames 1, 2, 4, 7 in portrait (the layout is the phone layout scaled;
 revisit if a split view is built).
 
 Android: frames 1, 2, 3, 4, 6, 7 (no widget or Live Activity frame until the
-Android surfaces exist). Feature graphic: Zefirca bust (assets/images/mascot/)
-left, app name and "AI agents for your workspace" right, on the brand gradient.
+Android surfaces exist). Feature graphic: the Elitea mark
+(apps/elitea-web/public/brand/logo-mark.svg) left, app name and "AI agents for your workspace" right, on the brand gradient.
 
 ## Data hygiene
 
@@ -55,7 +55,6 @@ left, app name and "AI agents for your workspace" right, on the brand gradient.
 - No real tokens, server addresses of customers, or internal hostnames in
   frame.
 - Status bar: 9:41, full battery, full signal (`xcrun simctl status_bar <udid> override --time 9:41 --batteryState charged --batteryLevel 100 --cellularBars 4`).
-- No "Elitea" logo or wordmark in any frame (trademark, docs/open-questions.md §2).
 
 ## How to capture
 

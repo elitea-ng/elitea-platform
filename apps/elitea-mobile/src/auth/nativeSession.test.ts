@@ -23,7 +23,7 @@ const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
 const BASE = {
   origin: FIXTURE_ORIGIN,
-  clientId: 'ca.zefir.agent',
+  clientId: 'ca.mlops.elitea',
   tokenEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/token`,
   revocationEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/revoke`,
 };
@@ -154,7 +154,7 @@ describe('ensureFresh', () => {
     expect(await getCredentialRefresher()!.ensureFresh()).toEqual({ ok: true, token: opaqueToken('elnat_', 2) });
     expect(refresh).toHaveBeenCalledWith(BASE.origin, BASE.tokenEndpoint, {
       refreshToken: opaqueToken('elnrt_', 1),
-      clientId: 'ca.zefir.agent',
+      clientId: 'ca.mlops.elitea',
       clientVersion: '0.1.0',
     });
   });
@@ -257,7 +257,7 @@ describe('sign out', () => {
     expect(revoke).toHaveBeenCalledWith(
       FIXTURE_ORIGIN,
       BASE.revocationEndpoint,
-      { token: opaqueToken('elnrt_', 1), clientId: 'ca.zefir.agent' },
+      { token: opaqueToken('elnrt_', 1), clientId: 'ca.mlops.elitea' },
       expect.objectContaining({ signal: expect.anything() }),
     );
     expect(getNativeTokenSet()).toBeNull();

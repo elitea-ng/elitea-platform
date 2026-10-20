@@ -78,7 +78,7 @@ describe('answers and the live reply', () => {
         tools={[]}
         onOpenTool={jest.fn()}
         onActions={jest.fn()}
-        avatar={<AssistantAvatar name="Research" imageUri={null} mascot />}
+        avatar={<AssistantAvatar name="Research" imageUri={null} mark />}
         actions={<AnswerActions message={answer} plan={plan()} {...handlers} />}
       />,
     );
@@ -110,7 +110,7 @@ describe('answers and the live reply', () => {
 });
 
 describe('the empty conversation (§4.9)', () => {
-  it('shows the mascot when the agent has no icon, and a suggestion goes into the composer, unsent', async () => {
+  it('shows the Elitea mark when the agent has no icon, and a suggestion goes into the composer, unsent', async () => {
     const onSuggestion = jest.fn();
     await render(<ChatEmptyState agentName="Research" iconUri={null} welcome={null} suggestions={['Find open bugs']} onSuggestion={onSuggestion} bottomInset={80} />);
     expect(screen.getByText('Ask Research anything')).toBeTruthy();
@@ -126,7 +126,7 @@ describe('the empty conversation (§4.9)', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it('the agent icon wins over the mascot', async () => {
+  it('the agent icon wins over the Elitea mark', async () => {
     await render(<ChatEmptyState agentName="Research" iconUri="data:image/png;base64,AAAA" welcome="Hi" suggestions={[]} onSuggestion={jest.fn()} bottomInset={80} />);
     expect(screen.getByText('Hi')).toBeTruthy();
     expect(JSON.stringify(screen.toJSON())).toContain('data:image/png;base64,AAAA');

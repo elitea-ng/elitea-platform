@@ -106,7 +106,7 @@ export interface ResolveInput {
   a11y?: AccessibilityModifiers;
 }
 
-/** Composes scheme + Zefir tokens + corrected brand overrides + accessibility modifiers. */
+/** Composes scheme + product tokens + corrected brand overrides + accessibility modifiers. */
 export function resolveDesign({ scheme, platform, brand = null, brandFont = null, a11y = DEFAULT_A11Y }: ResolveInput): Design {
   const overrides = resolveBrand(brand)[scheme];
   const branded = Object.keys(overrides).length > 0;

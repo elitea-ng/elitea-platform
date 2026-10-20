@@ -26,7 +26,7 @@ import { maySurfaceWorkspace } from '@/features/surfaces/surfaceGate';
  * removes, disables or relabels a pinned one, so a pinned title would outlive
  * the wipe, a revocation and the policy turning titles off. Android gets the
  * two fixed actions until the clear path also disables pinned chat shortcuts
- * (ShortcutManager.disableShortcuts; zefir-ca/agent-zefir#35).
+ * (ShortcutManager.disableShortcuts; mobile-repo#35).
  */
 
 export const MAX_RECENT_CHATS = 2;
@@ -47,7 +47,7 @@ export interface QuickActionInput {
   recent: readonly RecentChat[];
 }
 
-export type ZefirAction = QuickActions.Action & { params: { href: string; workspace: string; project?: string } };
+export type EliteaAction = QuickActions.Action & { params: { href: string; workspace: string; project?: string } };
 
 function cleanTitle(name: string): string | null {
   const one = name.replace(/\s+/g, ' ').trim();
@@ -55,10 +55,10 @@ function cleanTitle(name: string): string | null {
   return one.length > MAX_TITLE ? `${one.slice(0, MAX_TITLE - 1)}…` : one;
 }
 
-export function buildQuickActions(input: QuickActionInput): ZefirAction[] {
+export function buildQuickActions(input: QuickActionInput): EliteaAction[] {
   const workspace = input.workspaceId;
   const unread = Math.max(0, Math.floor(input.unread));
-  const actions: ZefirAction[] = [
+  const actions: EliteaAction[] = [
     { id: 'new-chat', title: 'New chat', icon: 'compose', params: { href: '/new', workspace } },
     {
       id: 'notifications',

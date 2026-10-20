@@ -36,7 +36,7 @@ describe('project switcher touch target (F5)', () => {
 
 describe('project label', () => {
   it('names the project, never its internal id ("Project #90504")', () => {
-    expect(projectLabel(90504, 'Zefir Team', 90501)).toBe('Zefir Team');
+    expect(projectLabel(90504, 'Elitea Team', 90501)).toBe('Elitea Team');
     expect(projectLabel(90501, 'project_user_8', 90501)).toBe('My project');
     expect(projectLabel(90504, null, 90501)).toBe('Project');
     expect(projectLabel(90504, '  ', null)).toBe('Project');

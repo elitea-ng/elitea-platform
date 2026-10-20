@@ -10,11 +10,11 @@ import type { TurnActivityProps } from '@/features/surfaces/turnActivityModel';
  * Rendered in the widget extension's runtime: only `@expo/ui/swift-ui`
  * views and the props (the 'widget' directive serialises the function).
  */
-export const TURN_ACTIVITY = 'ZefirTurn';
+export const TURN_ACTIVITY = 'EliteaTurn';
 
 const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityEnvironment) => {
   'widget';
-  // Zefir rose per scheme (design-tokens.json accent: light #B4306A, dark #FF8CB8); white on the
+  // product rose per scheme (design-tokens.json accent: light #B4306A, dark #FF8CB8); white on the
   // dimmed Always-On lock screen. Grounds are the app's own: cream (light) and night surface (dark).
   const dark = environment.colorScheme === 'dark';
   const accent = environment.isLuminanceReduced ? '#FFFFFF' : dark ? '#FF8CB8' : '#B4306A';

@@ -1,21 +1,19 @@
-# Agent Zefir
+# Elitea AI
 
-Agent Zefir is an independent native mobile client (iOS and Android) for
-Elitea AI-agent platform servers, whether SaaS or
-self-hosted. Connect to your organization's workspace, sign in through your
+Elitea AI is the native mobile app (iOS and Android) of the Elitea platform, for
+SaaS and self-hosted workspaces alike. Connect to your organization's workspace, sign in through your
 organization's usual SSO, and chat with your workspace's agents on the go.
 
 Built with Expo (React Native) and TypeScript.
 
-> **Non-affiliation notice.** Elitea is a trademark of its respective owner. Agent
-> Zefir is an independent client and is not affiliated with or endorsed by it.
->
-> This repository contains no code from the Elitea projects. The only coupling is
-> a pinned copy of the server's published OpenAPI contract (`contract/`, Apache-2.0,
-> see `contract/LICENSE.elitea`), from which this app generates its own client.
+It lives in the Elitea platform monorepo at `apps/elitea-mobile` and generates its typed API
+client from the server's OpenAPI document in the same repository
+(`services/elitea-main/api/openapi/v2.yaml`, see [contract/README.md](contract/README.md)).
+Until 2026-10 it was developed in a separate repository; its history was imported with
+it. References of the form `mobile-repo#N` in comments and docs are issues and pull
+requests of that former repository.
 
-**Status:** MVP foundation (B1–B3). The app pins the server contract, generates a
-typed client, wraps it with an origin-guarded bearer fetch, and can sign in with a
+**Status:** MVP foundation (B1–B3). The app generates a typed client from the server spec, wraps it with an origin-guarded bearer fetch, and can sign in with a
 developer personal access token in builds that enable it. It lists conversations,
 reads threads, sends messages with live SSE streaming and safe Markdown, switches
 projects, starts new chats and shows in-app notifications. The security baseline is
@@ -49,7 +47,7 @@ Native behaviour is verified by hand with
 See [docs/design.md](docs/design.md) for the planned product and
 [docs/open-questions.md](docs/open-questions.md) for decisions still open.
 
-**License:** TBD (private).
+**License:** Apache-2.0, as the rest of this repository (see the root `LICENSE` and `NOTICE`).
 
 ## Identifiers
 
@@ -59,20 +57,22 @@ hardcode them anywhere else.
 
 | What | Value |
 |------|-------|
-| Display name | `Agent Zefir` (the same for every customer; there are no per-customer builds) |
-| Expo slug | `agent-zefir` |
-| iOS bundle identifier | `ca.zefir.agent` (permanent) |
-| Android application id | `ca.zefir.agent` (permanent) |
-| Connect-link scheme | `agentzefir`, as in `agentzefir://connect?server=https://ai.example.com` |
-| OAuth redirect (RFC 8252) | `ca.zefir.agent:/oauth/callback` |
-| Website | https://agent.zefir.ca (privacy: `/privacy`, support: `/support`) |
-| App Group (widget extension) | `group.ca.zefir.agent` |
-| Widget extension bundle id | `ca.zefir.agent.widgets` |
+| Display name | `Elitea AI` (the same for every customer; there are no per-customer builds) |
+| Expo slug | `elitea-mobile` |
+| iOS bundle identifier | `ca.mlops.elitea` (permanent) |
+| Android application id | `ca.mlops.elitea` (permanent) |
+| Connect-link scheme | `elitea`, as in `elitea://connect?server=https://ai.example.com` |
+| OAuth redirect (RFC 8252) | `ca.mlops.elitea:/oauth/callback` |
+| Website | https://elitea.ai (privacy: `/privacy`, support: `/support`) |
+| App Group (widget extension) | `group.ca.mlops.elitea` |
+| Widget extension bundle id | `ca.mlops.elitea.widgets` |
 
 ## Running it
 
 You need Node.js and npm. This is a standalone npm project with its own
-`package-lock.json`. It is not part of any surrounding npm workspace.
+`package-lock.json` (the monorepo has no npm workspace); run every command from
+`apps/elitea-mobile`. CI: `.github/workflows/ci-mobile.yml` (typecheck, lint, tests and the
+generated-client check).
 
 ```bash
 npm install
@@ -110,7 +110,8 @@ Cloud builds, TestFlight, Play testing and over-the-air updates go through EAS
 `production`). The runbook, including the one-time account setup the owner
 still has to do, is [docs/release.md](docs/release.md); store listing, privacy
 and export-compliance drafts are in [docs/store/](docs/store/README.md). The
-`EAS build` and `EAS submit` GitHub workflows run only when dispatched by hand.
+`Mobile EAS build` and `Mobile EAS submit` workflows (`.github/workflows/mobile-eas-*.yml`)
+run only when dispatched by hand.
 
 ## Repository layout
 
@@ -160,11 +161,11 @@ src/
     privacy/               app-switcher blur, screenshot policy, privacy cover
   state/                   session store, launch hydration, workspace adapter, project selection, splash gate
   lib/                     redacting logger, abort registry, app activity (AppState + lock), network state
-assets/                    placeholder icons and splash
+assets/                    app icons and splash (the Elitea logo mark, docs/assets.md)
 docs/
   design.md                product and security design
   device-verification.md   manual checklist for native behaviour (first EAS dev build)
   open-questions.md        unresolved decisions
-contract/                  pinned OpenAPI v2.yaml of the server (verbatim, sha256-checked; see contract/README.md)
-scripts/contract.mjs       contract tooling (`npm run contract:*`)
+contract/                  client-operations.json: the operations kept from the server spec (contract/README.md)
+scripts/contract.mjs       client generation (`npm run contract:*`); scripts/check-generated-client.mjs is the CI drift gate
 ```

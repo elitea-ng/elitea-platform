@@ -77,8 +77,8 @@ describe('eas.json', () => {
   it('submits the production app to Play internal testing and to TestFlight', () => {
     const submit = eas.submit.production;
     assert.equal(submit.android.track, 'internal');
-    assert.equal(submit.android.applicationId, 'ca.zefir.agent');
-    assert.equal(submit.ios.bundleIdentifier, 'ca.zefir.agent');
+    assert.equal(submit.android.applicationId, 'ca.mlops.elitea');
+    assert.equal(submit.ios.bundleIdentifier, 'ca.mlops.elitea');
   });
 
   it('holds no credential or key path (EAS-managed credentials only)', () => {
@@ -100,16 +100,16 @@ describe('Expo config for EAS', () => {
 
   it('linked: project id and owner from the environment, update URL for that project', () => {
     const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
-    const config = expoConfig({ EAS_PROJECT_ID: projectId, EXPO_OWNER: 'zefir-ca' });
-    assert.equal(config.owner, 'zefir-ca');
+    const config = expoConfig({ EAS_PROJECT_ID: projectId, EXPO_OWNER: 'elitea-ng' });
+    assert.equal(config.owner, 'elitea-ng');
     assert.equal(config.extra.eas.projectId, projectId);
     assert.equal(config.updates.enabled, true);
     assert.equal(config.updates.url, `https://u.expo.dev/${projectId}`);
     assert.equal(config.updates.fallbackToCacheTimeout, 0);
     // expo-widgets' extension entry survives the merge (EAS signs the extension from it).
-    assert.equal(config.extra.eas.build.experimental.ios.appExtensions[0].bundleIdentifier, 'ca.zefir.agent.widgets');
-    assert.equal(config.ios.bundleIdentifier, 'ca.zefir.agent');
-    assert.equal(config.android.package, 'ca.zefir.agent');
+    assert.equal(config.extra.eas.build.experimental.ios.appExtensions[0].bundleIdentifier, 'ca.mlops.elitea.widgets');
+    assert.equal(config.ios.bundleIdentifier, 'ca.mlops.elitea');
+    assert.equal(config.android.package, 'ca.mlops.elitea');
   });
 
   it('refuses a malformed project id instead of building an unreachable update URL', () => {

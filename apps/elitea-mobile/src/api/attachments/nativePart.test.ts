@@ -42,14 +42,14 @@ function deviceForm(parts: [string, unknown][]): FormData {
 it('encodes the default part with the upload name, its type and the file bytes', async () => {
   mockDisk['file:///cache/ImageManipulator/EB43.jpg'] = new TextEncoder().encode('JPEGBYTES');
   const form = deviceForm([
-    ['file', nativePart('file:///cache/ImageManipulator/EB43.jpg', 'zefir-photo-a4fd.jpg', 'image/jpeg')],
-    ['file_name', 'zefir-photo-a4fd.jpg'],
+    ['file', nativePart('file:///cache/ImageManipulator/EB43.jpg', 'elitea-photo-a4fd.jpg', 'image/jpeg')],
+    ['file_name', 'elitea-photo-a4fd.jpg'],
   ]);
 
   const { body } = await convertFormDataAsync(form, 'BOUNDARY');
   const text = new TextDecoder().decode(body);
 
-  expect(text).toContain('content-disposition: form-data; name="file"; filename="zefir-photo-a4fd.jpg"\r\n');
+  expect(text).toContain('content-disposition: form-data; name="file"; filename="elitea-photo-a4fd.jpg"\r\n');
   expect(text).toContain('content-type: image/jpeg\r\n\r\nJPEGBYTES\r\n');
-  expect(text).toContain('name="file_name"\r\n\r\nzefir-photo-a4fd.jpg\r\n');
+  expect(text).toContain('name="file_name"\r\n\r\nelitea-photo-a4fd.jpg\r\n');
 });

@@ -2,7 +2,7 @@
  * #29: a Stop before any output makes the server delete the question
  * (cancelChatExecution); the files that went with it come back to the tray
  * for a one-tap resend instead of being named only. Shapes: the captured
- * cancelChatExecution 204 and the first frame of cancelled.sse (zefir-wave,
+ * cancelChatExecution 204 and the first frame of cancelled.sse (mobile-wave,
  * main 22403f640); the send answer as stop.test.ts.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

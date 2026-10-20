@@ -2,7 +2,7 @@
 const { withAppDelegate, withMainApplication } = require('expo/config-plugins');
 
 /**
- * Agent Zefir keeps nothing it fetched outside the encrypted offline store.
+ * Elitea AI keeps nothing it fetched outside the encrypted offline store.
  *
  * iOS's default URL sessions (React Native's networking module and
  * `expo/fetch` both use `URLSessionConfiguration.default`) write every
@@ -28,7 +28,7 @@ const { withAppDelegate, withMainApplication } = require('expo/config-plugins');
  * created), and delete an `http-cache` directory left by an earlier build.
  */
 
-const TAG = 'agent-zefir-no-http-cache';
+const TAG = 'elitea-mobile-no-http-cache';
 const BEGIN = `// @generated begin ${TAG}`;
 const END = `// @generated end ${TAG}`;
 

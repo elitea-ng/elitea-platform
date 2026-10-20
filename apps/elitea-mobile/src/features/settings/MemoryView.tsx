@@ -30,7 +30,7 @@ export function memoryLabel(memory: Pick<Memory, 'content' | 'enabled' | 'tags'>
  * Settings → Memory (client contract 1.3): what the workspace recalls about the caller in this
  * project, as one inset-grouped section; each row has a visible Delete button, and swiping it left
  * is the shortcut (also its accessibility action, S9); "Clear all memories" is a destructive row of its own at the end (it confirms first).
- * The mascot appears only on the empty state, never on an error. The route and the `__DEV__`
+ * The Elitea mark appears only on the empty state, never on an error. The route and the `__DEV__`
  * preview both render this (D2).
  */
 export function MemoryView({ status, rows, banner, selectable, onDelete, onClearAll, onRetry, refreshControl }: MemoryViewProps) {
@@ -40,7 +40,7 @@ export function MemoryView({ status, rows, banner, selectable, onDelete, onClear
   if (status.kind === 'unavailable') {
     return (
       <View style={[styles.flex, { backgroundColor: colors.background }]}>
-        <EmptyState mascot="bust" title="Memory isn't available" body={status.message} />
+        <EmptyState mark="small" title="Memory isn't available" body={status.message} />
       </View>
     );
   }
@@ -55,7 +55,7 @@ export function MemoryView({ status, rows, banner, selectable, onDelete, onClear
   const content =
     rows.length === 0 ? (
       status.kind === 'error' ? (
-        <EmptyState mascot="none" title="Couldn't load your memories" body={status.message} action={{ title: 'Try again', onPress: onRetry }} />
+        <EmptyState mark="none" title="Couldn't load your memories" body={status.message} action={{ title: 'Try again', onPress: onRetry }} />
       ) : (
         <EmptyState
           title="Nothing remembered yet"

@@ -37,7 +37,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 
 const BASE = {
   origin: FIXTURE_ORIGIN,
-  clientId: 'ca.zefir.agent',
+  clientId: 'ca.mlops.elitea',
   tokenEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/token`,
   revocationEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/revoke`,
 };
@@ -217,7 +217,7 @@ describe('wiring', () => {
   });
 });
 
-// DEF-R1 (Agent Zefir E2E run 2): the workspace turned require_device_lock on
+// DEF-R1 (mobile E2E run 2): the workspace turned require_device_lock on
 // while the app was signed in with a policy that did not require it. Two cold
 // relaunches opened straight into the list; the lock appeared only after the
 // 15-minute access token had refreshed AND the app was relaunched.
@@ -292,16 +292,16 @@ describe('minimum client version', () => {
   });
 
   it('shows the update screen from discovery (pre-check before any 426)', () => {
-    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.zefir.agent': '1.0.0' } })), '0.1.0');
+    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '1.0.0' } })), '0.1.0');
     expect(getSession().upgradeRequired).toEqual({ minVersion: '1.0.0' });
   });
 
-  // DEF-R4 (Agent Zefir E2E run 2): min_client_version went 9.0.0 → '' and the
+  // DEF-R4 (mobile E2E run 2): min_client_version went 9.0.0 → '' and the
   // update screen stayed until a relaunch.
   it('clears the update screen when discovery lowers or removes the minimum', () => {
-    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.zefir.agent': '9.0.0' } })), '0.1.0');
+    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '9.0.0' } })), '0.1.0');
     expect(getSession().upgradeRequired).toEqual({ minVersion: '9.0.0' });
-    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.zefir.agent': '0.1.0' } })), '0.1.0');
+    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '0.1.0' } })), '0.1.0');
     expect(getSession().upgradeRequired).toBeNull();
     setSession({ upgradeRequired: {} }); // a 426 that named no version
     applyDiscoveryPolicy(discovery(discoveryDocument()), '0.1.0'); // no minimum
@@ -316,7 +316,7 @@ describe('minimum client version', () => {
 
   it('keeps the update screen while discovery still names a higher minimum', () => {
     setSession({ upgradeRequired: { minVersion: '9.0.0' } });
-    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.zefir.agent': '9.0.0' } })), '0.1.0');
+    applyDiscoveryPolicy(discovery(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '9.0.0' } })), '0.1.0');
     expect(getSession().upgradeRequired).toEqual({ minVersion: '9.0.0' });
   });
 

@@ -19,7 +19,7 @@ jest.mock('react-native-safe-area-context', () => require('react-native-safe-are
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-crypto', () => ({ randomUUID: () => '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b' }));
 
-// DEF-3 (Agent Zefir E2E): in a project with a chat model and no agent, New
+// DEF-3 (mobile E2E): in a project with a chat model and no agent, New
 // conversation said "No agents found." and a model-only conversation said
 // "This conversation has no agent you can message from mobile."
 

@@ -149,10 +149,10 @@ export default function ConversationsScreen() {
   }
   if (conversations.error && all.length === 0) {
     // No connection and nothing saved on the device yet (§4.9 "offline with no cache"): say so,
-    // with the mascot (no data was lost), instead of a generic failure.
+    // with the Elitea mark (no data was lost), instead of a generic failure.
     if (isOfflineError(conversations.error)) {
       return (
-        <StatusScreen mascot="bust" title={OFFLINE_EMPTY.title} body={OFFLINE_EMPTY.body}>
+        <StatusScreen mark="small" title={OFFLINE_EMPTY.title} body={OFFLINE_EMPTY.body}>
           <Button title="Try again" size="small" variant="tonal" onPress={() => void conversations.refetch()} />
         {localWorkOnly ? <Button title="Show chats" size="small" variant="plain" onPress={() => setFilter('chats')} /> : null}
         </StatusScreen>
@@ -258,7 +258,7 @@ export default function ConversationsScreen() {
         }}
         empty={
           searching ? (
-            <EmptyState mascot="bust" title={`Nothing found for “${query.trim()}”`} body="Try another word from the chat's title or its messages." />
+            <EmptyState mark="small" title={`Nothing found for “${query.trim()}”`} body="Try another word from the chat's title or its messages." />
           ) : localWorkOnly ? (
             <EmptyState
               title="No Local work yet"
@@ -306,7 +306,7 @@ export default function ConversationsScreen() {
             <ThreadView key={`${workspaceId ?? ''}:${projectId}:${selectedId}`} id={String(selectedId)} chrome="pane" inFront={focused} />
           ) : (
             <EmptyState
-              mascot="none"
+              mark="none"
               title="No chat selected"
               body="Choose a chat from the list, or start a new one."
               action={{ title: 'New chat', onPress: () => router.push('/new') }}

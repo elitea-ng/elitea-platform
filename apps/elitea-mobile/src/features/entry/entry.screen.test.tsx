@@ -82,7 +82,7 @@ describe('lock screen (docs/screens.md §9; audit 2.5)', () => {
     await render(
       <LockView state={LOCKED} workspace={{ origin: ORIGIN, name: null, logoMark: null, brand: null }} biometry="face" onUnlock={onUnlock} onReset={onReset} />,
     );
-    expect(screen.getByRole('header', { name: 'Agent Zefir is locked' })).toBeTruthy();
+    expect(screen.getByRole('header', { name: 'Elitea AI is locked' })).toBeTruthy();
     expect(screen.getByLabelText('Workspace acme.elitea.ai')).toBeTruthy();
     await fireEvent.press(screen.getByTestId('unlock'));
     expect(onUnlock).toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('entry frame (docs/screens.md §1)', () => {
     await render(
       <ConnectWelcome
         adding
-        backTo={{ host: 'zefir.elitea.ai', onPress: onBack }}
+        backTo={{ host: 'mobile.elitea.ai', onPress: onBack }}
         address=""
         onAddressChange={jest.fn()}
         error={null}

@@ -50,7 +50,7 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
-// DEF-4 (Agent Zefir E2E): a remote revoke wiped the app and landed on the
+// DEF-4 (mobile E2E): a remote revoke wiped the app and landed on the
 // connect screen with no word of why. Every end of a session removes that
 // workspace, so the connect screen is where the reason has to be said.
 describe('connect screen after a session ended', () => {

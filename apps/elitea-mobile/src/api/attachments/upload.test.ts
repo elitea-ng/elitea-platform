@@ -56,7 +56,7 @@ describe('single-shot upload', () => {
     const disk = memoryDisk({ 'file:///a.pdf': text('x') });
     server.on('POST', ROUTE, { status: 426, body: { error: 'client_upgrade_required', min_client_version: '9.0.0' } });
     const error = await uploadAttachment(7, UUID, source('file:///a.pdf', 1), 10, { client: server.client, ...disk.deps }).catch((e: unknown) => e);
-    expect(uploadErrorText(error, 'x')).toBe('Update Agent Zefir to attach files.');
+    expect(uploadErrorText(error, 'x')).toBe('Update Elitea AI to attach files.');
   });
 });
 

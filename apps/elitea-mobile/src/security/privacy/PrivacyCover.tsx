@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppState, Platform, StyleSheet, View } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { identity } from '@/config/identity';
 import { coverVisible } from '@/security/privacy/privacyProtection';
 import { GradientBackground, Text } from '@/ui';
@@ -12,7 +12,7 @@ import { GradientBackground, Text } from '@/ui';
  * the belt to the native braces (iOS app-switcher blur, Android FLAG_SECURE),
  * and the only protection on Android when the policy allows screenshots.
  * It renders above everything, including the lock screen. It matches the
- * splash (Agent Zefirca's bust on the ground, the app name) so the app-switcher
+ * splash (the Elitea mark on the ground, the app name) so the app-switcher
  * card is recognisable, and carries no content of any workspace (audit 2.7).
  */
 export function PrivacyCover() {
@@ -27,7 +27,7 @@ export function PrivacyCover() {
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.cover]}>
       <GradientBackground style={styles.center}>
-        <Mascot variant="bust" size={96} decorative />
+        <EliteaMark size={96} decorative />
         <Text variant="title3" tone="secondary" emphasized>
           {identity.displayName}
         </Text>

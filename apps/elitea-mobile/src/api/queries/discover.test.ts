@@ -39,8 +39,8 @@ beforeEach(() => {
 const travel: PublicAgent = {
   id: 2,
   publicProjectId: 1,
-  name: 'Zefir Travel Planner',
-  description: 'Zefir Travel Planner: a public agent anyone can find in Discover.',
+  name: 'Elitea Travel Planner',
+  description: 'Elitea Travel Planner: a public agent anyone can find in Discover.',
   versionId: 2,
   versionName: 'v1',
   agentType: 'openai',
@@ -62,8 +62,8 @@ describe('Discover catalogue (client contract 1.3, captured shapes)', () => {
       {
         id: 1,
         publicProjectId: 1,
-        name: 'Zefir Concierge',
-        description: 'Zefir Concierge: a public agent anyone can find in Discover.',
+        name: 'Elitea Concierge',
+        description: 'Elitea Concierge: a public agent anyone can find in Discover.',
         versionId: 1,
         versionName: 'v1',
         agentType: 'openai',
@@ -149,7 +149,7 @@ describe('agent details', () => {
     const server = fakeServer();
     server.on('GET', '/elitea_core/public_application/prompt_lib/2/v1', { status: 200, body: publicDetail });
     await expect(fetchPublicAgentDetail(travel, server.client)).resolves.toEqual({
-      welcomeMessage: 'Welcome to Zefir Travel Planner!',
+      welcomeMessage: 'Welcome to Elitea Travel Planner!',
       starters: ['What can you do?', 'Give me three ideas'],
     });
   });
@@ -174,11 +174,11 @@ describe('starting a chat (createConversation, then addConversationParticipants)
       uuid: createdConversation.uuid,
     });
     expect(server.requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([`POST /api/v2${CREATE}`, `POST /api/v2${ADD}`]);
-    expect(JSON.parse(server.requests[0].body!)).toEqual({ name: 'Zefir Travel Planner', is_private: true, participants: [] });
+    expect(JSON.parse(server.requests[0].body!)).toEqual({ name: 'Elitea Travel Planner', is_private: true, participants: [] });
     expect(JSON.parse(server.requests[1].body!)).toEqual([
       {
         entity_name: 'application',
-        entity_meta: { id: 2, project_id: 1, name: 'Zefir Travel Planner' },
+        entity_meta: { id: 2, project_id: 1, name: 'Elitea Travel Planner' },
         entity_settings: { version_id: 2 },
       },
     ]);

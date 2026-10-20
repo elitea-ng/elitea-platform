@@ -1,5 +1,5 @@
 /**
- * Agent Zefir design tokens v1 (docs/design-system.md, docs/design-tokens.json).
+ * Elitea AI design tokens v1 (docs/design-system.md, docs/design-tokens.json).
  *
  * This module is the typed copy of `docs/design-tokens.json`; `tokens.test.ts`
  * fails when the two drift and re-proves every WCAG pair in `PROOFS`. Screens

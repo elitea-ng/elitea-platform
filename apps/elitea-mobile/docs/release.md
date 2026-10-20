@@ -1,6 +1,6 @@
 # Release runbook: EAS Build, Submit, TestFlight and Play
 
-How Agent Zefir goes from `main` to testers and the stores. The repository is
+How Elitea AI goes from `main` to testers and the stores. The repository is
 ready for this; the accounts are not. Sections 1 to 6 are one-time setup that
 only the owner can do (they need a legal entity, payment and identity checks).
 Sections 7 onwards are the repeatable release work.
@@ -13,7 +13,7 @@ Store copy, privacy answers and the export-compliance reasoning live in
 | Build, submit and update profiles | [`eas.json`](../eas.json) | ready |
 | EAS project link, OTA config, privacy manifest, export-compliance key | [`app.config.ts`](../app.config.ts) | ready; project id empty until `eas init` |
 | Widget extension privacy manifest | [`plugins/withExtensionPrivacyManifest.js`](../plugins/withExtensionPrivacyManifest.js) | ready |
-| Manual build and submit workflows | [`.github/workflows/eas-build.yml`](../.github/workflows/eas-build.yml), [`eas-submit.yml`](../.github/workflows/eas-submit.yml) | ready; need `EXPO_TOKEN` |
+| Manual build and submit workflows | [`.github/workflows/mobile-eas-build.yml`](../../../.github/workflows/mobile-eas-build.yml), [`mobile-eas-submit.yml`](../../../.github/workflows/mobile-eas-submit.yml) (repository root) | ready; need `EXPO_TOKEN` |
 | Structural checks of all of the above | [`scripts/eas-config.test.mjs`](../scripts/eas-config.test.mjs) (runs in CI) | ready |
 | Expo account, Apple organization, Play Console | owner | **to do** (sections 1 to 6) |
 
@@ -38,7 +38,7 @@ D-U-N-S number, and both take days to verify.
    lookup (developer.apple.com, enrolment, "Look up your D-U-N-S number").
    The name and address must match the entity's registration exactly.
    Allow one to two weeks for a new number, plus a few days before Apple sees it.
-3. Have a website on the entity's domain (agent.zefir.ca or zefir.ca). Apple
+3. Have a website on the entity's domain (elitea.ai). Apple
    checks it; the privacy and support pages in section 8 go there.
 
 ### 1.2 Apple Developer Program (organization)
@@ -59,7 +59,7 @@ D-U-N-S number, and both take days to verify.
 
 1. Sign up at expo.dev (free plan is enough to start; see the note on build
    minutes below).
-2. Create an **organization** (for example `zefir-ca`) so the project does not
+2. Create an **organization** (for example `elitea-ng`) so the project does not
    belong to one person, and invite the release team.
 3. Under the organization, **Settings, Access tokens**: create a **robot user**
    (role: Developer) and an access token for it. That token is the GitHub
@@ -82,28 +82,28 @@ the first external TestFlight round.
 ## 2. App Store Connect app record (owner)
 
 1. **Certificates, Identifiers and Profiles** (developer.apple.com): EAS
-   registers `ca.zefir.agent`, the widget extension `ca.zefir.agent.widgets`
-   and the App Group `group.ca.zefir.agent` on the first build (section 4), so
+   registers `ca.mlops.elitea`, the widget extension `ca.mlops.elitea.widgets`
+   and the App Group `group.ca.mlops.elitea` on the first build (section 4), so
    nothing is needed here first. If you prefer to create them by hand, enable
    the App Groups capability on both identifiers and attach the group.
 2. App Store Connect, **Apps, +, New App**:
    - Platform: iOS
-   - Name: `Agent Zefir` (docs/store/listing.md)
+   - Name: `Elitea AI` (docs/store/listing.md)
    - Primary language: English (U.S.) or English (Canada)
-   - Bundle ID: `ca.zefir.agent` (permanent: it can never change)
-   - SKU: `agent-zefir-ios`
+   - Bundle ID: `ca.mlops.elitea` (permanent: it can never change)
+   - SKU: `elitea-mobile-ios`
    - User access: Full access
 3. Open the new app, **App Information**: copy the numeric **Apple ID** (for
    example `6740000000`) into [`eas.json`](../eas.json) as
    `submit.production.ios.ascAppId` and merge that one-line change. The submit
    workflow refuses to run until it is there.
 4. Fill in **App Privacy** from docs/store/privacy.md, **Age Rating** from
-   docs/store/listing.md, the privacy policy URL `https://agent.zefir.ca/privacy`,
+   docs/store/listing.md, the privacy policy URL `https://elitea.ai/privacy`,
    and the category.
 
 ## 3. Google Play app (owner)
 
-1. Play Console, **Create app**: name `Agent Zefir`, default language English,
+1. Play Console, **Create app**: name `Elitea AI`, default language English,
    App, Free, accept the declarations.
 2. **App content**: privacy policy URL, Data safety (docs/store/privacy.md),
    content rating questionnaire, target audience (18 and over, or 13 and over
@@ -139,7 +139,7 @@ prints the project id. Put the id and the organization name into `easLink` in
 ```ts
 const easLink = {
   projectId: '<uuid from eas init>',
-  owner: 'zefir-ca',
+  owner: 'elitea-ng',
 };
 ```
 
@@ -177,7 +177,7 @@ eas build --platform ios --profile production
 
 Answer yes to logging in to Apple and to letting EAS generate everything. It
 creates the distribution certificate, the App Store provisioning profiles for
-`ca.zefir.agent` and `ca.zefir.agent.widgets`, and the App Group. Then create
+`ca.mlops.elitea` and `ca.mlops.elitea.widgets`, and the App Group. Then create
 the App Store Connect API key EAS uses to submit:
 
 ```bash
@@ -202,7 +202,7 @@ build includes it.
 1. Create the robot token (1.3, step 3). Expo shows it once.
 2. Add it to the repository: Settings, Secrets and variables, Actions,
    New repository secret, name `EXPO_TOKEN`; or
-   `gh secret set EXPO_TOKEN --repo zefir-ca/agent-zefir` and paste it.
+   `gh secret set EXPO_TOKEN --repo elitea-ng/elitea-platform` and paste it.
 3. Rotate it by creating a new robot token, replacing the secret, and deleting
    the old token in Expo. Revoke it at once if it leaks: it can publish OTA
    updates to every installed app.
@@ -218,7 +218,7 @@ Nothing else goes into GitHub: Apple and Google credentials stay on EAS.
 | `preview` | QA and stakeholders before TestFlight: release build, installed from the EAS link | ad hoc, registered devices | release APK | `preview` |
 | `production` | TestFlight, Play internal testing, then the stores | App Store signed | app bundle (`.aab`) | `production` |
 
-From GitHub: **Actions, EAS build, Run workflow**, pick the profile and
+From GitHub: **Actions, Mobile EAS build, Run workflow**, pick the profile and
 platform; tick "submit" with `production` to send the build to TestFlight and
 Play internal testing when it finishes. The job queues the build and prints
 its EAS page; the native build itself runs on EAS. From a terminal:
@@ -243,7 +243,7 @@ belongs in a mobile binary.
    minutes; Apple emails if the upload is rejected, for example ITMS-91053 for
    a missing privacy-manifest reason).
 4. Android: upload that first `.aab` by hand (section 3, step 5).
-5. From then on: the EAS build workflow with `production` and "submit".
+5. From then on: the Mobile EAS build workflow with `production` and "submit".
 
 ## 8. TestFlight and Play testing
 
@@ -373,4 +373,4 @@ after.
 | Age rating / target audience | docs/store/listing.md | 13+ (Apple) / Teen, 18+ audience (Play) |
 | Demo workspace and reviewer test account | docs/store/listing.md, "Review notes" | none: must exist before the first external TestFlight round |
 | OTA code signing; OTA for MDM-managed installs | section 10 | not enabled |
-| Trademark clearance for the name | open-questions §2 | pending |
+| Trademark clearance for the name | open-questions §2 | closed (Elitea's own app) |

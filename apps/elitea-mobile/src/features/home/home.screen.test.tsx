@@ -19,11 +19,11 @@ function props(over: Partial<HomeViewProps> = {}): HomeViewProps {
   return {
     firstName: 'Alex',
     workspace: { origin: ORIGIN, name: 'Acme Corp AI', logoMark: null, brand: null },
-    project: 'Zefir Team',
+    project: 'Elitea Team',
     onWorkspace: jest.fn(),
     offline: false,
     recents: [
-      { id: 1, title: 'Zefir launch planning', age: '12m' },
+      { id: 1, title: 'Elitea launch planning', age: '12m' },
       { id: 2, title: '', age: '3h' },
     ],
     recentsFailed: false,
@@ -46,16 +46,16 @@ describe('Home (docs/screens.md §2)', () => {
     await render(<HomeView {...props()} />);
     expect(screen.getByTestId('home-greeting')).toHaveTextContent('Hello, Alex\nWhat can I help with?');
     expect(screen.getByText('acme.elitea.ai')).toBeTruthy();
-    expect(screen.getByText('Acme Corp AI · Zefir Team')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Workspace Acme Corp AI, acme\.elitea\.ai, project Zefir Team/ })).toBeTruthy();
+    expect(screen.getByText('Acme Corp AI · Elitea Team')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Workspace Acme Corp AI, acme\.elitea\.ai, project Elitea Team/ })).toBeTruthy();
   });
 
   it('never puts the project where the workspace name goes on an unbranded workspace (EH-3)', async () => {
     await render(<HomeView {...props({ workspace: { origin: ORIGIN, name: null, logoMark: null, brand: null } })} />);
-    expect(screen.getByText('acme.elitea.ai · Zefir Team')).toBeTruthy();
-    expect(screen.queryByText('Zefir Team')).toBeNull();
-    expect(workspacePillLines('acme.elitea.ai', 'Acme Corp AI', 'Zefir Team')).toEqual({ title: 'Acme Corp AI · Zefir Team', caption: 'acme.elitea.ai' });
-    expect(workspacePillLines('acme.elitea.ai', null, 'Zefir Team')).toEqual({ title: 'acme.elitea.ai · Zefir Team', caption: null });
+    expect(screen.getByText('acme.elitea.ai · Elitea Team')).toBeTruthy();
+    expect(screen.queryByText('Elitea Team')).toBeNull();
+    expect(workspacePillLines('acme.elitea.ai', 'Acme Corp AI', 'Elitea Team')).toEqual({ title: 'Acme Corp AI · Elitea Team', caption: 'acme.elitea.ai' });
+    expect(workspacePillLines('acme.elitea.ai', null, 'Elitea Team')).toEqual({ title: 'acme.elitea.ai · Elitea Team', caption: null });
     expect(workspacePillLines('acme.elitea.ai', null, null)).toEqual({ title: null, caption: 'acme.elitea.ai' });
     expect(workspacePillLines('acme.elitea.ai', 'Acme Corp AI', null)).toEqual({ title: 'Acme Corp AI', caption: 'acme.elitea.ai' });
   });
@@ -101,7 +101,7 @@ describe('Home (docs/screens.md §2)', () => {
     expect(p.onSeeAll).toHaveBeenCalled();
   });
 
-  it('with no chats yet shows the mascot empty state, without a second New chat under the tab bar (and no See all)', async () => {
+  it('with no chats yet shows the Elitea mark empty state, without a second New chat under the tab bar (and no See all)', async () => {
     await render(<HomeView {...props({ recents: [] })} />);
     expect(screen.getByRole('header', { name: 'Ask me anything' })).toBeTruthy();
     // Only the New chat card: the empty state has no button of its own (EH-4).

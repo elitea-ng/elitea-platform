@@ -17,7 +17,7 @@ function dir(names: string[], failing: string[] = []) {
 
 describe('wipeCachesDirectory (DEF-R2)', () => {
   it('deletes every entry, the NSURLCache folder included', () => {
-    const { directory, left } = dir(['ca.zefir.agent', 'fsCachedData', 'expo-image']);
+    const { directory, left } = dir(['ca.mlops.elitea', 'fsCachedData', 'expo-image']);
     wipeCachesDirectory(directory, 'ios');
     expect([...left]).toEqual([]);
   });

@@ -44,7 +44,7 @@ describe('Settings → Appearance', () => {
 });
 
 describe('the legacy palette is a view of the design tokens', () => {
-  it.each(['light', 'dark'] as const)('%s: Zefir neutrals and the accent family, never the pack neutrals', (scheme) => {
+  it.each(['light', 'dark'] as const)('%s: product neutrals and the accent family, never the pack neutrals', (scheme) => {
     const c = colors[scheme];
     expect(paletteFromDesign(c)).toEqual({
       text: c.textPrimary,

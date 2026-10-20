@@ -3,10 +3,7 @@
 Drafts for App Store Connect and Google Play Console. Character limits are the
 stores'; counts are given where they are tight. Wording rules:
 
-- "Elitea" appears only **nominatively** (what the app works with), never in
-  the name, subtitle, keywords or short description, and always with the
-  non-affiliation sentence (docs/open-questions.md §2: trademark clearance is
-  still pending; drop the Elitea lines entirely if counsel prefers).
+- The app is Elitea's own: "Elitea AI" is the name, and the Elitea logo mark is the icon.
 - No claims the app cannot back: no "end-to-end encrypted", no "HIPAA", no
   specific model names (the workspace decides the models).
 
@@ -14,11 +11,11 @@ stores'; counts are given where they are tight. Wording rules:
 
 | Field | Value |
 |---|---|
-| App name (App Store 30, Play 30) | `Agent Zefir` (11) |
-| Bundle ID / package | `ca.zefir.agent` |
-| Privacy policy URL | `https://agent.zefir.ca/privacy` |
-| Support URL | `https://agent.zefir.ca/support` |
-| Marketing URL | `https://agent.zefir.ca` |
+| App name (App Store 30, Play 30) | `Elitea AI` (11) |
+| Bundle ID / package | `ca.mlops.elitea` |
+| Privacy policy URL | `https://elitea.ai/privacy` |
+| Support URL | `https://elitea.ai/support` |
+| Marketing URL | `https://elitea.ai` |
 | Price | Free, no in-app purchases, no ads |
 | Copyright (App Store) | `2026 [legal entity name]` |
 
@@ -35,7 +32,7 @@ Alternative: `AI agents for your workspace` (28)
 
 **Description** (4000):
 
-> Agent Zefir brings your organization's AI-agent workspace to iPhone and iPad.
+> Elitea AI brings your organization's AI-agent workspace to iPhone and iPad.
 > Connect to your workspace, sign in with your company account, and work with
 > the agents your team has built, wherever you are.
 >
@@ -70,11 +67,8 @@ Alternative: `AI agents for your workspace` (28)
 > SEVERAL WORKSPACES
 > Switch between workspaces and projects without signing out.
 >
-> Agent Zefir works with Elitea-compatible workspace servers, hosted or
-> self-hosted. You need a workspace account from your organization to use it.
->
-> Agent Zefir is an independent app. Elitea is a trademark of its respective
-> owner; Agent Zefir is not affiliated with or endorsed by it.
+> Elitea AI works with Elitea workspaces, hosted or self-hosted. You need a
+> workspace account from your organization to use it.
 
 **Keywords** (100, comma-separated, no spaces after commas, no trademark of
 others, no words already in the name):
@@ -119,7 +113,7 @@ workplace use"); a higher rating never causes a rejection, a lower one can.
 
 ## Google Play
 
-**Title** (30): `Agent Zefir`
+**Title** (30): `Elitea AI`
 
 **Short description** (80): `Chat with your organization's AI agents. Secure sign-in, widgets, offline copy.` (80)
 
@@ -133,7 +127,7 @@ publishing.
 **Category**: Productivity. **Tags**: Productivity, Business tools, AI
 assistant (pick from Play's list).
 
-**Contact details**: support email, website `https://agent.zefir.ca`.
+**Contact details**: support email, website `https://elitea.ai`.
 
 **Content rating (IARC questionnaire)**: category "All other app types";
 user-generated content and user interaction: **yes** (users communicate with
@@ -158,8 +152,8 @@ or demo mode. The owner must create, **before the first external TestFlight
 round and before each review**:
 
 1. **A demo workspace** reachable from the internet (for example
-   `https://demo.agent.zefir.ca`, or the existing demo server), with native
-   clients enabled for `ca.zefir.agent`, a public agent or two in Discover, a
+   `https://demo.elitea.ai`, or the existing demo server), with native
+   clients enabled for `ca.mlops.elitea`, a public agent or two in Discover, a
    project with a few sample conversations, and models that answer.
 2. **A reviewer test account** on that workspace's identity provider: a
    username and password sign-in that needs **no** MFA app, SMS, hardware key or
@@ -172,7 +166,7 @@ round and before each review**:
 App Store Connect, App Review Information (and the same text in Play's App
 access and TestFlight's Test Information):
 
-> **Sign-in required.** Agent Zefir is a client for an organization's AI-agent
+> **Sign-in required.** Elitea AI is a client for an organization's AI-agent
 > workspace; accounts are issued by the organization, so the app has no sign-up.
 >
 > 1. Open the app and tap "Enter workspace address".

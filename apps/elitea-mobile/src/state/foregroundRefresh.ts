@@ -12,7 +12,7 @@ import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
  *  - a workspace that starts requiring a device lock locks a running app on
  *    its next foreground instead of after the next access-token refresh and a
  *    relaunch;
- *  - a lowered minimum version clears the "Update Agent Zefir" screen.
+ *  - a lowered minimum version clears the "Update Elitea AI" screen.
  *
  * Only a real return from 'background' counts: iOS passes through 'inactive'
  * for Control Center and the Face ID sheet, which must not refetch. Uses the

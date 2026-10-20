@@ -1,4 +1,4 @@
-: fixture regenerate-answer.sse: CAPTURED 2026-10-06 from the zefir-wave stack (elitea-platform main 22403f640, Python worker, mock LLM): regenerateChatMessage of an answer, every frame carries execution_generation = the regeneration_id
+: fixture regenerate-answer.sse: CAPTURED 2026-10-06 from the mobile-wave stack (elitea-platform main 22403f640, Python worker, mock LLM): regenerateChatMessage of an answer, every frame carries execution_generation = the regeneration_id
 
 : connected
 

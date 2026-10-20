@@ -55,7 +55,7 @@ afterEach(() => {
 describe('getRecommendations (captured)', () => {
   it('reads the envelope with string ids as agents', () => {
     expect(recommendationsOf(recommendationsPersonal)).toEqual([
-      { id: 1, name: 'Zefir Tool Agent', description: 'Calls the mock tool; every call needs your approval (HITL).' },
+      { id: 1, name: 'Elitea Tool Agent', description: 'Calls the mock tool; every call needs your approval (HITL).' },
     ]);
     expect(recommendationsOf(recommendationsTeam).map((a) => a.id)).toEqual([2, 1, 5]);
   });
@@ -76,7 +76,7 @@ describe('Suggested agents on the new-chat screen', () => {
     const server = install('1.3');
     await renderWithQueries(<NewConversationScreen />);
     expect(await screen.findByText('Suggested')).toBeTruthy();
-    await fireEvent.press(screen.getByRole('button', { name: 'Zefir Concierge, Zefir Concierge: a public agent anyone can find in Discover.' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Elitea Concierge, Elitea Concierge: a public agent anyone can find in Discover.' }));
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith({ pathname: '/c/[id]', params: { id: '9' } }));
     const created = JSON.parse(server.requests.find((r) => r.method === 'POST')!.body!);
     expect(created.participants).toEqual([{ entity_name: 'application', entity_meta: { id: 5, project_id: P }, entity_settings: { version_id: 6 } }]);

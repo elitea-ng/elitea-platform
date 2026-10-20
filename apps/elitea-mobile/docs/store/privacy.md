@@ -5,7 +5,7 @@ whenever a native module, a network destination or a stored field is added.
 
 ## The data flows
 
-Agent Zefir has **no backend of its own**. It talks to exactly two kinds of
+Elitea AI has **no backend of its own**. It talks to exactly two kinds of
 host:
 
 1. **The workspace server the user connects to** (an Elitea-compatible server
@@ -23,7 +23,7 @@ host in the code.
 
 | Data | When | Code |
 |---|---|---|
-| Device label (`Agent Zefir on iPhone` / `on iPad` / `on <Android model>`), platform, app version | at sign-in, shown on the consent page and in the user's device list | src/auth/deviceInfo.ts, src/auth/nativeAuth.ts |
+| Device label (`Elitea AI on iPhone` / `on iPad` / `on <Android model>`), platform, app version | at sign-in, shown on the consent page and in the user's device list | src/auth/deviceInfo.ts, src/auth/nativeAuth.ts |
 | Access and refresh tokens (bearer) | every request | src/auth/, src/api/ |
 | Messages the user writes, regenerate and stop requests | when sending | src/api/queries/sendMessage.ts |
 | Photos, camera pictures, document scans (PDF with its recognised text, or the text alone) and files the user attaches | only when picked and sent | src/features/chat/attachments/ |

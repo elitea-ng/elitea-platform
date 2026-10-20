@@ -1,36 +1,34 @@
 import type { ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { MaxContentWidth } from '@/constants/theme';
 import { useDesign } from '@/design/DesignProvider';
 import { ButtonAlignmentContext, GradientBackground, Text } from '@/ui';
 
 /**
- * Full-screen neutral state: launch, "Signing out…", blocking notices. `mascot` adds Agent
- * Zefirca above the title on the gradient ground (an update, a friendly blocking state); never
+ * Full-screen neutral state: launch, "Signing out…", blocking notices. `mark` adds the
+ * Elitea mark above the title on the gradient ground (an update, a friendly blocking state); never
  * for errors that lose data, security or approval states (design-system §5).
  */
 export function StatusScreen({
   title,
   body,
   busy = false,
-  mascot,
+  mark,
   children,
 }: {
   title?: string;
   body?: string;
   busy?: boolean;
-  mascot?: 'bust' | 'full';
+  mark?: 'small' | 'large';
   children?: ReactNode;
 }) {
   const design = useDesign();
   const content = (
     <View style={[styles.container, { padding: design.space.screenGutter }]}>
       <View style={styles.content}>
-        {mascot ? (
-          <Mascot variant={design.accessibilityLayout ? 'bust' : mascot} size={mascot === 'full' && !design.accessibilityLayout ? 140 : 96} decorative />
-        ) : null}
+        {mark ? <EliteaMark size={mark === 'large' && !design.accessibilityLayout ? 96 : 72} decorative /> : null}
         {busy ? <ActivityIndicator size="large" color={design.colors.accent} /> : null}
         {title ? (
           <Text variant="title2" heading style={styles.center}>
@@ -46,7 +44,7 @@ export function StatusScreen({
       </View>
     </View>
   );
-  if (mascot) return <GradientBackground>{content}</GradientBackground>;
+  if (mark) return <GradientBackground>{content}</GradientBackground>;
   return <View style={[styles.flex, { backgroundColor: design.colors.background }]}>{content}</View>;
 }
 

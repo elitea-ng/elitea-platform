@@ -23,7 +23,7 @@ export default function DesignProjectsRoute() {
       onRetry={() => {}}
       personal={{ id: 90501, name: 'project_user_8', suspended: false }}
       team={[
-        { id: 90504, name: 'Zefir Team', suspended: false },
+        { id: 90504, name: 'Elitea Team', suspended: false },
         { id: 90510, name: 'Marketing', suspended: false },
         { id: 90511, name: 'Customer Success EMEA', suspended: false },
       ]}

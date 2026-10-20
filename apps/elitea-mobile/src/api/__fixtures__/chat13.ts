@@ -1,5 +1,5 @@
 /**
- * Client contract 1.3 chat shapes, CAPTURED 2026-10-06 from the zefir-wave
+ * Client contract 1.3 chat shapes, CAPTURED 2026-10-06 from the mobile-wave
  * stack (elitea-platform main 22403f640, Python worker, mock LLM echoing the
  * prompt as `MOCK: …`) as Alice (user 8) in her personal project 90501. The
  * bodies are verbatim; only the variable names are ours. The 1.3 branch
@@ -25,7 +25,7 @@ export const participants13 = [
     },
     "entity_settings": {},
     "meta": {
-      "user_name": "Alice Zefir"
+      "user_name": "Alice Elitea"
     }
   },
   {
@@ -42,20 +42,20 @@ export const participants13 = [
     "entity_name": "application",
     "entity_meta": {
       "id": "1",
-      "name": "Zefir Tool Agent",
+      "name": "Elitea Tool Agent",
       "project_id": 90501
     },
     "entity_settings": {
       "version_id": 1
     },
     "meta": {
-      "name": "Zefir Tool Agent",
+      "name": "Elitea Tool Agent",
       "tools": [
         {
           "id": 1,
-          "name": "Zefir Mock Tools personal",
+          "name": "Elitea Mock Tools personal",
           "selected_tools": [],
-          "toolkit_name": "Zefir Mock Tools personal",
+          "toolkit_name": "Elitea Mock Tools personal",
           "type": "openapi"
         }
       ],
@@ -190,7 +190,7 @@ export const feedbackBadRating = {
 };
 
 /** exportConversation `format=md` (200, text/markdown) and an unsupported format (400). */
-export const exportMarkdown = "# Quick wins capture\n\n- Conversation: 3\n- Project: 90501\n- Messages: 2\n- Exported: 2026-10-06T20:58:55Z\n\n---\n\n## Alice Zefir — 2026-10-06T20:58:51Z\n\nShow me code:\n```python\nprint('hi')\n```\nthanks\n\n---\n\n## Zefir Tool Agent — 2026-10-06T20:58:52Z\n\nMOCK: Show me code:\n```python\nprint('hi')\n```\nthanks \n\n";
+export const exportMarkdown = "# Quick wins capture\n\n- Conversation: 3\n- Project: 90501\n- Messages: 2\n- Exported: 2026-10-06T20:58:55Z\n\n---\n\n## Alice Elitea — 2026-10-06T20:58:51Z\n\nShow me code:\n```python\nprint('hi')\n```\nthanks\n\n---\n\n## Elitea Tool Agent — 2026-10-06T20:58:52Z\n\nMOCK: Show me code:\n```python\nprint('hi')\n```\nthanks \n\n";
 export const exportHeaders = {
   "Content-Disposition": "attachment; filename=Quick_wins_capture.md",
   "Content-Type": "text/markdown; charset=utf-8"
@@ -206,7 +206,7 @@ export const recommendationsPersonal = {
       "description": "Calls the mock tool; every call needs your approval (HITL).",
       "id": "1",
       "likes": 0,
-      "name": "Zefir Tool Agent"
+      "name": "Elitea Tool Agent"
     }
   ],
   "total": 1
@@ -217,19 +217,19 @@ export const recommendationsTeam = {
       "description": "Friendly team helper agent.",
       "id": "2",
       "likes": 0,
-      "name": "Zefir Helper"
+      "name": "Elitea Helper"
     },
     {
       "description": "Calls the mock tool; every call needs your approval (HITL).",
       "id": "1",
       "likes": 0,
-      "name": "Zefir Ops Agent"
+      "name": "Elitea Ops Agent"
     },
     {
-      "description": "Zefir Concierge: a public agent anyone can find in Discover.",
+      "description": "Elitea Concierge: a public agent anyone can find in Discover.",
       "id": "5",
       "likes": 0,
-      "name": "Zefir Concierge"
+      "name": "Elitea Concierge"
     }
   ],
   "total": 3
@@ -318,7 +318,7 @@ export const conversationDetail13 = {
     "single_participant": {
       "entity_meta": {
         "id": 1,
-        "name": "Zefir Tool Agent",
+        "name": "Elitea Tool Agent",
         "project_id": 90501
       },
       "entity_name": "application",
@@ -337,7 +337,7 @@ export const conversationDetail13 = {
       },
       "entity_settings": {},
       "meta": {
-        "user_name": "Alice Zefir"
+        "user_name": "Alice Elitea"
       }
     },
     {
@@ -354,20 +354,20 @@ export const conversationDetail13 = {
       "entity_name": "application",
       "entity_meta": {
         "id": "1",
-        "name": "Zefir Tool Agent",
+        "name": "Elitea Tool Agent",
         "project_id": 90501
       },
       "entity_settings": {
         "version_id": 1
       },
       "meta": {
-        "name": "Zefir Tool Agent",
+        "name": "Elitea Tool Agent",
         "tools": [
           {
             "id": 1,
-            "name": "Zefir Mock Tools personal",
+            "name": "Elitea Mock Tools personal",
             "selected_tools": [],
-            "toolkit_name": "Zefir Mock Tools personal",
+            "toolkit_name": "Elitea Mock Tools personal",
             "type": "openapi"
           }
         ],

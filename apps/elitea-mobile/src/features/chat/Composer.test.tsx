@@ -172,11 +172,11 @@ describe('Composer and a keyboard autocorrection committed after Send (#56)', ()
   it('clears the input when only the last word was corrected between submit and settle', async () => {
     const send = deferredSend();
     await render(<Composer busy={false} onSend={send.onSend} />);
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir');
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello elitea');
     await fireEvent.press(screen.getByLabelText('Send'));
-    expect(send.onSend).toHaveBeenCalledWith({ text: 'hello zefir', mentions: null });
-    // The keyboard commits "zefir" → "Zefir" (and its trailing space) while the send is in flight.
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello Zefir ');
+    expect(send.onSend).toHaveBeenCalledWith({ text: 'hello elitea', mentions: null });
+    // The keyboard commits "elitea" → "Elitea" (and its trailing space) while the send is in flight.
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello Elitea ');
     send.accept();
     await waitFor(() => expect(screen.getByLabelText('Message').props.value).toBe(''));
   });
@@ -184,23 +184,23 @@ describe('Composer and a keyboard autocorrection committed after Send (#56)', ()
   it('keeps a real edit made while the send was in flight', async () => {
     const send = deferredSend();
     await render(<Composer busy={false} onSend={send.onSend} />);
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir');
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello elitea');
     await fireEvent.press(screen.getByLabelText('Send'));
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir and one more thing');
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello elitea and one more thing');
     send.accept();
     await waitFor(() => expect(send.onSend).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByLabelText('Send')).not.toBeDisabled());
-    expect(screen.getByLabelText('Message').props.value).toBe('hello zefir and one more thing');
+    expect(screen.getByLabelText('Message').props.value).toBe('hello elitea and one more thing');
   });
 
   it('keeps the corrected text when the send was refused (nothing was sent)', async () => {
     const send = deferredSend();
     await render(<Composer busy={false} onSend={send.onSend} />);
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir');
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello elitea');
     await fireEvent.press(screen.getByLabelText('Send'));
-    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello Zefir');
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello Elitea');
     send.accept('This message could not be sent.');
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-    expect(screen.getByLabelText('Message').props.value).toBe('hello Zefir');
+    expect(screen.getByLabelText('Message').props.value).toBe('hello Elitea');
   });
 });

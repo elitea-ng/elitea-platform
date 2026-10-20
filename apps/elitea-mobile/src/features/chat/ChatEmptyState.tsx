@@ -1,6 +1,6 @@
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { useDesign } from '@/design/DesignProvider';
 import { Avatar, GradientBackground, Icon, Text } from '@/ui';
 
@@ -9,10 +9,10 @@ export const MODEL_CHAT_SUGGESTIONS = ['Summarise this for me', 'Draft a short e
 
 /**
  * An empty conversation (docs/design-system.md §4.9, screens.md §4): on the pastel ground, the
- * agent's own icon (48) or, when it has none, Agent Zefirca (the bust, decorative), "Ask
+ * agent's own icon (48) or, when it has none, the Elitea mark (decorative), "Ask
  * {agent} anything", the agent's welcome message, and its conversation starters as glass
  * suggestion cards. A suggestion goes into the composer to edit or send; nothing is sent on
- * its own. The mascot is on screen once: the answers below it get monograms (§5).
+ * its own. The Elitea mark is on screen once: the answers below it get monograms (§5).
  */
 export function ChatEmptyState({
   agentName,
@@ -23,7 +23,7 @@ export function ChatEmptyState({
   bottomInset,
 }: {
   agentName: string;
-  /** The agent's own icon (checked `data:` URI); null shows the mascot. */
+  /** The agent's own icon (checked `data:` URI); null shows the Elitea mark. */
   iconUri: string | null;
   welcome: string | null;
   suggestions: readonly string[];
@@ -46,7 +46,7 @@ export function ChatEmptyState({
           {iconUri ? (
             <Avatar name={agentName} kind="agent" imageUri={iconUri} size={design.size.avatar.lg} decorative />
           ) : (
-            <Mascot variant="bust" size={design.accessibilityLayout ? 72 : 112} decorative />
+            <EliteaMark size={design.accessibilityLayout ? 72 : 112} decorative />
           )}
           <Text variant="title2" heading style={styles.center}>
             {`Ask ${agentName} anything`}

@@ -117,7 +117,7 @@ function pressHandlerOf(element: { unstable_fiber?: unknown }): () => void {
 /** Renders the list and waits for the catalogue, so the details screen finds the agent in the cache. */
 async function openCatalogue() {
   const view = await render(withQueries(<DiscoverScreen />));
-  expect(await screen.findByText('Zefir Travel Planner')).toBeTruthy();
+  expect(await screen.findByText('Elitea Travel Planner')).toBeTruthy();
   return view;
 }
 
@@ -131,7 +131,7 @@ describe('Discover is client contract 1.3', () => {
     expect(screen.queryByText("Discover isn't available")).toBeNull();
     expect(server.requests).toHaveLength(0);
     await act(async () => setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13()) }));
-    expect(await screen.findByText('Zefir Travel Planner')).toBeTruthy();
+    expect(await screen.findByText('Elitea Travel Planner')).toBeTruthy();
   });
 
   it('on a 1.1 workspace the screen says it is not available without asking the server', async () => {
@@ -146,8 +146,8 @@ describe('Discover list', () => {
   it('shows each public agent with its description, category, tags and icon (workspace origin only)', async () => {
     install('1.3');
     await openCatalogue();
-    expect(screen.getByText('Zefir Concierge')).toBeTruthy();
-    expect(screen.getByText('Zefir Concierge: a public agent anyone can find in Discover.')).toBeTruthy();
+    expect(screen.getByText('Elitea Concierge')).toBeTruthy();
+    expect(screen.getByText('Elitea Concierge: a public agent anyone can find in Discover.')).toBeTruthy();
     // On its card, and as a filter chip (two categories in the catalogue).
     expect(screen.getAllByText('Project Management')).toHaveLength(2);
     expect(screen.getByText('#planning')).toBeTruthy();
@@ -161,7 +161,7 @@ describe('Discover list', () => {
     expect(url).toBe(`${FAKE_ORIGIN}/icons/1/076958cfcd17545b.png`);
     expect(init.redirect).toBe('error');
     expect(new Headers(init.headers).get('Authorization')).toBeNull();
-    expect(screen.getByText('ZC')).toBeTruthy();
+    expect(screen.getByText('EC')).toBeTruthy();
   });
 
   it('an icon path that redirects (or answers anything but a vetted image) shows the monogram; <Image> never gets a URL', async () => {
@@ -174,7 +174,7 @@ describe('Discover list', () => {
     await act(async () => {});
     // AgentIcon is the only <Image> on the list: none is rendered, so none was given the URL.
     expect(screen.queryByTestId('agent-icon-image')).toBeNull();
-    expect(screen.getByText('ZT')).toBeTruthy();
+    expect(screen.getByText('ET')).toBeTruthy();
   });
 
   it('searches on the server once typing pauses', async () => {
@@ -202,10 +202,10 @@ describe('Discover list', () => {
     await openCatalogue();
     expect(screen.getByRole('tab', { name: 'All' }).props.accessibilityState).toMatchObject({ selected: true });
     await fireEvent.press(screen.getByRole('tab', { name: 'Other' }));
-    expect(screen.queryByText('Zefir Travel Planner')).toBeNull();
-    expect(screen.getByText('Zefir Concierge')).toBeTruthy();
+    expect(screen.queryByText('Elitea Travel Planner')).toBeNull();
+    expect(screen.getByText('Elitea Concierge')).toBeTruthy();
     await fireEvent.press(screen.getByRole('tab', { name: 'All' }));
-    expect(screen.getByText('Zefir Travel Planner')).toBeTruthy();
+    expect(screen.getByText('Elitea Travel Planner')).toBeTruthy();
   });
 
   it('the bar button switches between the card grid and the list, and says what it will do', async () => {
@@ -216,7 +216,7 @@ describe('Discover list', () => {
     await act(async () => headerAction().onPress());
     expect(screen.getByTestId('discover-list')).toBeTruthy();
     expect(headerAction().label).toBe('Show as grid');
-    expect(screen.getByRole('button', { name: /^Zefir Travel Planner, Project Management/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Elitea Travel Planner, Project Management/ })).toBeTruthy();
   });
 
   it("the list keeps each agent's category and tags on the row, and in what VoiceOver reads (F5)", async () => {
@@ -228,7 +228,7 @@ describe('Discover list', () => {
     expect(row.getByText('#travel')).toBeTruthy();
     // The category: once on the row, once as its filter chip above the list.
     expect(screen.getAllByText('Project Management')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /^Zefir Travel Planner, Project Management, .*tags (travel, planning|planning, travel)$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Elitea Travel Planner, Project Management, .*tags (travel, planning|planning, travel)$/ })).toBeTruthy();
   });
 
   it('a row opens the agent', async () => {
@@ -246,9 +246,9 @@ describe('Agent details', () => {
     await list.unmount();
     mockParams = { id: '2' };
     await render(withQueries(<PublicAgentScreen />));
-    expect(screen.getByText('Zefir Travel Planner')).toBeTruthy();
+    expect(screen.getByText('Elitea Travel Planner')).toBeTruthy();
     expect(screen.getByText('Agent · version v1')).toBeTruthy();
-    expect(await screen.findByText('Welcome to Zefir Travel Planner!')).toBeTruthy();
+    expect(await screen.findByText('Welcome to Elitea Travel Planner!')).toBeTruthy();
     expect(screen.getByText('What can you do?')).toBeTruthy();
     expect(screen.getByText('The conversation is created in My project.')).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'Start a chat in My project' }));
@@ -257,7 +257,7 @@ describe('Agent details', () => {
     expect(writes.map((r) => r.url.pathname)).toEqual([`/api/v2${CREATE}`, `/api/v2${ADD}`]);
     expect(JSON.parse(writes[1].body!)[0]).toEqual({
       entity_name: 'application',
-      entity_meta: { id: 2, project_id: 1, name: 'Zefir Travel Planner' },
+      entity_meta: { id: 2, project_id: 1, name: 'Elitea Travel Planner' },
       entity_settings: { version_id: 2 },
     });
   });
@@ -343,7 +343,7 @@ describe('Agent details', () => {
     await render(withQueries(<PublicAgentScreen />));
     expect(screen.getByText('Agent · version v1')).toBeTruthy();
     // Settled: nothing else on the page re-renders it from here on.
-    expect(await screen.findByText('Welcome to Zefir Travel Planner!')).toBeTruthy();
+    expect(await screen.findByText('Welcome to Elitea Travel Planner!')).toBeTruthy();
     // The list query refetched (app focus, reconnect) and the agent now has a new published version.
     await act(async () => {
       queries.setQueriesData<InfiniteData<PublicAgentPage, number>>({ queryKey: ['p', P, 'discover', 'list'] }, (data) =>
@@ -376,7 +376,7 @@ describe('Agent details', () => {
         pageParams: [0],
       });
     });
-    expect(await screen.findByText('Zefir Travel Planner')).toBeTruthy();
+    expect(await screen.findByText('Elitea Travel Planner')).toBeTruthy();
     expect(screen.queryByText('Agent not found')).toBeNull();
   });
 
@@ -391,7 +391,7 @@ describe('Agent details', () => {
 });
 
 it('monograms', () => {
-  expect(monogramOf('Zefir Travel Planner')).toBe('ZT');
+  expect(monogramOf('Elitea Travel Planner')).toBe('ET');
   expect(monogramOf('  solo ')).toBe('S');
   expect(monogramOf('')).toBe('?');
 });

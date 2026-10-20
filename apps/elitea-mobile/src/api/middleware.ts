@@ -29,7 +29,7 @@ import { getBearerToken, getSession, setSession } from '@/state/session';
  *  4. Response classification: an answer whose final URL is on another origin
  *     (a followed redirect) is rejected unread; 401 ends the session
  *     (`device_revoked` or `credential_rejected`); 426 raises the blocking
- *     "Update Agent Zefir" state without wiping anything (or locking); a
+ *     "Update Elitea AI" state without wiping anything (or locking); a
  *     later 2xx for a signed-in request re-checks the minimum version.
  *  5. Native sign-in: the access token is refreshed before it expires, and a
  *     401 for it (other than `device_revoked`) refreshes once (single-flight)
@@ -252,7 +252,7 @@ function answersAnotherWorkspace(workspaceId: string | null | undefined): boolea
  * and the event-stream client:
  *  - 401 for the session credential: `device_revoked` or `credential_rejected`,
  *    which ends the session (unless the token has since been replaced);
- *  - 426: the blocking "Update Agent Zefir" state, nothing wiped.
+ *  - 426: the blocking "Update Elitea AI" state, nothing wiped.
  * Returns the error to throw, or null when the response is not one of these.
  */
 export async function classifySessionFailure(

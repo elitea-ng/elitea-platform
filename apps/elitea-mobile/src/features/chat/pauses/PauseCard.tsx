@@ -117,7 +117,7 @@ function Frame({
 }) {
   const { colors, radius, space, elevation } = useDesign();
   // §4.7: a surface card with a warning leading edge, inline at the end of the transcript.
-  // Never the mascot, never branded chrome: only the buttons take the (corrected) accent.
+  // Never the Elitea mark, never branded chrome: only the buttons take the (corrected) accent.
   return (
     <View
       accessibilityRole="summary"

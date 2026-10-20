@@ -141,7 +141,7 @@ it('starts only once a turn has run for five seconds, with a link to its thread'
   expect(env.started).toHaveLength(0);
   env.advance(1);
   expect(env.started).toHaveLength(1);
-  expect(env.started[0]!.url).toBe('agentzefir://surface/c/0b9c5d2e-1f3a-4c6b-8d7e-9f0a1b2c3d4e?ws=aaaaaaaaaaaa&p=7');
+  expect(env.started[0]!.url).toBe('elitea://surface/c/0b9c5d2e-1f3a-4c6b-8d7e-9f0a1b2c3d4e?ws=aaaaaaaaaaaa&p=7');
   expect(env.started[0]!.props).toMatchObject({ phase: 'working', title: GENERIC_TITLE, approximate: false });
 });
 

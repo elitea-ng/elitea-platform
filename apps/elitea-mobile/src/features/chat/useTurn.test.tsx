@@ -324,7 +324,7 @@ describe('useTurn.canStop', () => {
 
   // On the server a regeneration stopped before any output is removed with
   // its question, and that deletes the original exchange (question and the
-  // old answer), captured on zefir-wave main d6f572dbd.
+  // old answer), captured on mobile-wave main d6f572dbd.
   it('a regeneration cannot be stopped before its first output', async () => {
     live({ regeneration: REGEN });
     const { result } = await renderTurn();

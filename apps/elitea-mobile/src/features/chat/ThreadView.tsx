@@ -570,13 +570,13 @@ export function ThreadView({
   };
 
   // Who answers, drawn left of every answer (§4.6, §5): the addressed agent's own icon; else, for
-  // it (or a model chat), Agent Zefirca; another agent of the conversation gets a monogram.
+  // it (or a model chat), the Elitea mark; another agent of the conversation gets a monogram.
   const agentIcon = useAgentIconUri(targetAgent ? (targetAgent.agentProjectId ?? projectId) : null, agentVersion.data?.iconPath ?? null);
   const primaryParticipant = target.ok ? target.participantId : null;
   const avatarFor = (participantId: number | null, name: string | null) => {
     const primary = participantId === null || participantId === primaryParticipant;
     const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
-    return <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mascot={primary} />;
+    return <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mark={primary} />;
   };
   const [draft, setDraft] = useState<{ text: string; key: number } | null>(null);
   const list = useRef<ComponentRef<typeof FlatList<Row>>>(null);

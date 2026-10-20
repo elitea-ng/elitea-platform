@@ -15,7 +15,7 @@ import { Button, Icon, ListRow, ListSection, Text } from '@/ui';
  * hero (its logo, else a monogram tile; its product name), and the host is the largest text on
  * the screen: it is the one thing a phishing link cannot fake, so the user checks it before
  * anything is stored or any sign-in page opens. The workspace's accent is NOT applied yet (the
- * buttons are Zefir's), so a workspace cannot style its own trust decision.
+ * buttons are the product's), so a workspace cannot style its own trust decision.
  */
 export function ConnectConfirm({
   check,
@@ -61,7 +61,7 @@ export function ConnectConfirm({
           <Button title="Use a different address" variant="plain" onPress={onBack} />
         </>
       }>
-      {/* No mascot here: the workspace's identity is the hero of the trust decision (§3.5, §5). */}
+      {/* No Elitea mark here: the workspace's identity is the hero of the trust decision (§3.5, §5). */}
       <View style={styles.identity}>
         <View style={[styles.logoTile, { backgroundColor: colors.surface, borderColor: colors.separator }]}>
           {logo ? <BrandLogo image={logo} size={56} /> : <WorkspaceMark origin={check.origin} image={null} size={56} />}

@@ -6,7 +6,6 @@ import { getClientVersion } from '@/api/clientVersion';
 import { speaksContract } from '@/api/discovery';
 import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
-import { appIconSupported, setAppIcon, useAppIcon } from '@/features/appIcon/appIcon';
 import { displayHost } from '@/features/connect/connectFlow';
 import { useProjectLabel } from '@/features/projects/ProjectChip';
 import { useActiveWorkspace } from '@/features/workspaces/activeWorkspace';
@@ -28,7 +27,6 @@ export default function SettingsScreen() {
   const credentialKind = useSession((s) => s.credential?.kind ?? null);
   const projectId = useSession((s) => s.projectId);
   const projectName = useProjectLabel();
-  const appIcon = useAppIcon();
   const { policy, source, managed } = usePolicy();
   const brand = useBrandTheme();
   const workspaceCount = useWorkspaceList().length;
@@ -83,7 +81,6 @@ export default function SettingsScreen() {
         projectId={projectId}
         projectName={projectName}
         onProject={() => router.push('/projects')}
-        appIcon={appIconSupported() ? { workspace: appIcon === 'workspace', onChange: (next) => void setAppIcon(next ? 'workspace' : 'default') } : null}
         workspaceCount={workspaceCount}
         developerSignIn={credentialKind === 'pat'}
         scheme={scheme}

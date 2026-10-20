@@ -1,5 +1,5 @@
 /**
- * The Agent Zefir component kit (docs/design-system.md §4). Every screen builds from these and
+ * The Elitea AI component kit (docs/design-system.md §4). Every screen builds from these and
  * reads tokens through `useDesign()`; nothing here hard-codes a colour, a font size or a target.
  */
 export { Avatar, AVATAR_TONES, initialsOf, toneIndex, type AvatarProps } from './Avatar';

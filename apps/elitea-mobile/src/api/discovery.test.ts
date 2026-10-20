@@ -63,7 +63,7 @@ describe('DiscoveryDocumentSchema', () => {
     ['a missing key', (d: Record<string, unknown>) => delete d.client_policy],
     ['an unknown deployment kind', (d: Record<string, unknown>) => (d.deployment_kind = 'cloud')],
     ['a null min_client_version map', (d: Record<string, unknown>) => (d.min_client_version = null)],
-    ['a non-string version', (d: Record<string, unknown>) => (d.min_client_version = { 'ca.zefir.agent': 2 })],
+    ['a non-string version', (d: Record<string, unknown>) => (d.min_client_version = { 'ca.mlops.elitea': 2 })],
     ['native_auth without a token endpoint', (d: Record<string, unknown>) => delete (d.native_auth as Record<string, unknown>).token_endpoint],
   ])('rejects %s', (_label, mutate) => {
     const doc = discoveryDocument() as Record<string, unknown>;
@@ -185,13 +185,13 @@ describe('assessDiscovery', () => {
     const doc = parse(
       discoveryDocument({
         client_policy: { require_device_lock: true, offline_enabled: false, min_client_version: '0.1.0' },
-        min_client_version: { 'ca.zefir.agent': '0.3.0' },
+        min_client_version: { 'ca.mlops.elitea': '0.3.0' },
       }),
     );
-    expect(minimumVersionFor(doc, 'ca.zefir.agent')).toBe('0.3.0');
+    expect(minimumVersionFor(doc, 'ca.mlops.elitea')).toBe('0.3.0');
     expect(minimumVersionFor(doc, 'other.client')).toBe('0.1.0');
-    expect(assessDiscovery(doc, '0.2.0', 'ca.zefir.agent')).toEqual({ kind: 'upgrade_required', minVersion: '0.3.0' });
-    expect(assessDiscovery(doc, '0.3.0', 'ca.zefir.agent')).toEqual({ kind: 'ready' });
+    expect(assessDiscovery(doc, '0.2.0', 'ca.mlops.elitea')).toEqual({ kind: 'upgrade_required', minVersion: '0.3.0' });
+    expect(assessDiscovery(doc, '0.3.0', 'ca.mlops.elitea')).toEqual({ kind: 'ready' });
   });
 
   it('parses contract majors', () => {

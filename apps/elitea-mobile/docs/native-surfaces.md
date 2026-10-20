@@ -7,8 +7,8 @@ the workspace's client policy (client contract 1.3, see `src/security/policy.ts`
 
 | Surface | Shows by default | Shows more when | Wiped on |
 |---|---|---|---|
-| Widgets (`ZefirCounts`) | counts: waiting for you, unread, running | `allow_system_surfaces`: the workspace host and the titles of the waiting conversations | log out, revocation, workspace switch (signed-out snapshot) |
-| Live Activity (`ZefirTurn`) | "Your agent is answering" (then "answered", "needs you" or "stopped") and the phase | `notification_preview: title` AND `allow_system_surfaces`: the conversation title | the turn ending (after a short linger), leaving memory while running, a wipe or switch; a new process ends leftovers |
+| Widgets (`EliteaCounts`) | counts: waiting for you, unread, running | `allow_system_surfaces`: the workspace host and the titles of the waiting conversations | log out, revocation, workspace switch (signed-out snapshot) |
+| Live Activity (`EliteaTurn`) | "Your agent is answering" (then "answered", "needs you" or "stopped") and the phase | `notification_preview: title` AND `allow_system_surfaces`: the conversation title | the turn ending (after a short linger), leaving memory while running, a wipe or switch; a new process ends leftovers |
 | Siri / Shortcuts | the three intents, no agent names | `allow_system_surfaces`: the first agents of the selected project as `AgentEntity` | log out, revocation, switch (empty catalog, pending invocations dropped); an invocation made while signed out is dropped at once, one older than 5 min is never acted on |
 
 Message content, tool names and credentials never reach any of them.
@@ -16,8 +16,8 @@ Message content, tool names and credentials never reach any of them.
 ## Widgets
 
 `src/features/surfaces/`. One WidgetKit extension (`ExpoWidgetsTarget`, bundle id
-`ca.zefir.agent.widgets`) built by `expo-widgets` from `app.config.ts`. The app writes
-a snapshot (`surfaceSnapshot.ts`) to the App Group `group.ca.zefir.agent`:
+`ca.mlops.elitea.widgets`) built by `expo-widgets` from `app.config.ts`. The app writes
+a snapshot (`surfaceSnapshot.ts`) to the App Group `group.ca.mlops.elitea`:
 
 - after a sync changed stored data (`subscribeSyncChanges` in `src/sync/appSync.ts`),
   when the offline store opens, when the unread count changes and when a live turn
@@ -35,7 +35,7 @@ The layout (`CountsWidget.tsx`) runs in the extension's own JS runtime: only
 `@expo/ui/swift-ui` views and its props. Families: `systemSmall`, `systemMedium`,
 `accessoryInline`, `accessoryCircular`, `accessoryRectangular`.
 
-A tap opens `agentzefir://surface/<target>?ws=<slot>` (`surfaceLinks.ts`).
+A tap opens `elitea://surface/<target>?ws=<slot>` (`surfaceLinks.ts`).
 `+native-intent` turns it into the screen when the slot is the active workspace, else
 the app's start. A conversation link also names its project (`&p=<id>`): after a
 project change it opens the start, never the thread under another project. The device lock covers it like any other route, and the conversation
@@ -68,9 +68,9 @@ app's own lock still covers the screen the intent opens.
 
 | Intent | Phrase examples | Opens |
 |---|---|---|
-| New Chat (`NewChatIntent`, optional agent) | "New chat in Agent Zefir", "New chat with <agent> in Agent Zefir" | `/new`; with an agent of the selected project, that agent's conversation once the app is unlocked |
-| Ask Agent (`AskAgentIntent`, optional agent, optional question) | "Ask Agent Zefir", "Ask <agent> in Agent Zefir" | as New Chat; a question typed into a Shortcut goes in the composer, **never sent** without the user tapping Send. By voice the composer opens empty: Siri never asks for the question (see below) |
-| Open Notifications | "Open Agent Zefir notifications" | `/notifications` |
+| New Chat (`NewChatIntent`, optional agent) | "New chat in Elitea AI", "New chat with <agent> in Elitea AI" | `/new`; with an agent of the selected project, that agent's conversation once the app is unlocked |
+| Ask Agent (`AskAgentIntent`, optional agent, optional question) | "Ask Elitea AI", "Ask <agent> in Elitea AI" | as New Chat; a question typed into a Shortcut goes in the composer, **never sent** without the user tapping Send. By voice the composer opens empty: Siri never asks for the question (see below) |
+| Open Notifications | "Open Elitea AI notifications" | `/notifications` |
 
 `AgentEntity` ids are `<workspace slot>:<project id>:<agent id>`: a shortcut saved for
 one workspace or project opens the picker of the active one instead of another
@@ -89,7 +89,7 @@ choice, and typed Shortcut text passes through the Shortcuts app.
 
 The agent and the question reach `/new` (and the thread's composer) through an
 in-memory hand-over (`intentHandoff.ts`) under a random one-time id, never as route
-params: `agentzefir://new?agent=…&prefill=…` from a web page or another app opens the
+params: `elitea://new?agent=…&prefill=…` from a web page or another app opens the
 plain picker and types nothing.
 
 ## Verifying

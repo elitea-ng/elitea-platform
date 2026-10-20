@@ -1,4 +1,4 @@
-/** The Agent Zefir design system (docs/design-system.md). Screens use `useDesign()`. */
+/** The Elitea AI design system (docs/design-system.md). Screens use `useDesign()`. */
 export { DesignProvider, useAccessibilityModifiers, useDesign } from './DesignProvider';
 export { brandOverrides, correctAccent, resolveBrand, type BrandInput, type BrandOverrides } from './brand';
 export { accentGrounds, bubbleChipVeil, minContrast, proofRatio } from './contrast';

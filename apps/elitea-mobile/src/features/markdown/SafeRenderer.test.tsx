@@ -18,7 +18,7 @@ describe('safeLinkHost', () => {
       'JavaScript:alert(1)',
       'data:text/html,<b>x</b>',
       'file:///etc/passwd',
-      'agentzefir://connect?server=x',
+      'elitea://connect?server=x',
       '//evil.example/x',
       '/relative',
       'https://evil.example/\nx',
@@ -77,7 +77,7 @@ describe('Markdown with the SafeRenderer', () => {
     expect(screen.getByText('two')).toBeTruthy();
   });
 
-  // DEF-6 (Agent Zefir E2E): inline code rendered in italic proportional type
+  // DEF-6 (mobile E2E): inline code rendered in italic proportional type
   // (react-native-marked's default codespan style), not monospace.
   it('renders inline and block code in an upright monospace face', async () => {
     await render(<Markdown value={'Hello **bold** and `code`\n\n```\nblock()\n```'} openLink={jest.fn()} />);

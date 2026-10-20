@@ -31,9 +31,9 @@ describe('buildSnapshot', () => {
   });
 
   it('a single waiting conversation is opened directly; several open the list', () => {
-    expect(buildSnapshot(input({ approvals: [{ ref: '42', name: 'x' }] })).approvalsUrl).toBe('agentzefir://surface/c/42?ws=aaaaaaaaaaaa&p=90501');
-    expect(buildSnapshot(input()).approvalsUrl).toBe('agentzefir://surface/home?ws=aaaaaaaaaaaa');
-    expect(buildSnapshot(input()).notificationsUrl).toBe('agentzefir://surface/notifications?ws=aaaaaaaaaaaa');
+    expect(buildSnapshot(input({ approvals: [{ ref: '42', name: 'x' }] })).approvalsUrl).toBe('elitea://surface/c/42?ws=aaaaaaaaaaaa&p=90501');
+    expect(buildSnapshot(input()).approvalsUrl).toBe('elitea://surface/home?ws=aaaaaaaaaaaa');
+    expect(buildSnapshot(input()).notificationsUrl).toBe('elitea://surface/notifications?ws=aaaaaaaaaaaa');
   });
 
   it("the waiting conversation's link names its project: after a project change it opens the start, never another project's thread", () => {

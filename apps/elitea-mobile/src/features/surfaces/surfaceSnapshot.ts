@@ -39,7 +39,7 @@ export interface SurfaceSnapshot {
   host: string;
   /** Conversations waiting for a decision, only when titles are allowed. */
   titles: string[];
-  /** Tap targets (agentzefir://surface/…). */
+  /** Tap targets (elitea://surface/…). */
   openUrl: string;
   approvalsUrl: string;
   notificationsUrl: string;

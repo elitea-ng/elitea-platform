@@ -33,7 +33,7 @@ export interface MessageBubbleProps {
    */
   onActions?: (() => void) | null;
   /**
-   * The answering agent's avatar, left of an answer (its own icon, else the mascot or a
+   * The answering agent's avatar, left of an answer (its own icon, else the Elitea mark or a
    * monogram: `AssistantAvatar`). Another person's initials are drawn here by default.
    */
   avatar?: ReactNode;

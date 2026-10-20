@@ -15,7 +15,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 const P = SETTINGS_CAPTURE.teamProjectId;
 const ROUTE = `/elitea_core/usage/prompt_lib/${P}/usage`;
 
-// A capped, used project as the UsageReport schema describes it (the zefir-wave
+// A capped, used project as the UsageReport schema describes it (the mobile-wave
 // stack has no billed calls, so this one is not captured): the captured owner
 // payload with a limit, spend and ledger totals filled in.
 const cappedOwner = {

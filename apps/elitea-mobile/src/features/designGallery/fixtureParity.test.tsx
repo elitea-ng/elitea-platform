@@ -74,7 +74,7 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
         serverOrigin="https://acme.elitea.ai"
         logoMark={null}
         projectId={42}
-        projectName="Zefir Team"
+        projectName="Elitea Team"
         onProject={() => {}}
         workspaceCount={1}
         developerSignIn={false}
@@ -90,7 +90,7 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
       />,
     );
     // The project by its NAME, never its internal id ("Project #90504").
-    expect(screen.getByText('Zefir Team')).toBeTruthy();
+    expect(screen.getByText('Elitea Team')).toBeTruthy();
     expect(screen.queryByText(/#42/)).toBeNull();
     expect(screen.getByText('acme.elitea.ai')).toBeTruthy();
     expect(screen.queryByText('Face ID')).toBeNull();

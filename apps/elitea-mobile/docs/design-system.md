@@ -1,9 +1,8 @@
-# Agent Zefir design system v1
+# Elitea AI design system v1
 
-Status: proposal for the mobile redesign (agent-zefir, Expo SDK 58 / RN 0.88).
+Status: proposal for the mobile redesign (elitea-mobile, Expo SDK 58 / RN 0.88).
 Companions: `design-tokens.json` (values; the source for code), `screens.md` (screen layouts).
-Inputs: `reference-ui.jpg` (pastel glass assistant UI), `mascot-zefirca-original.jpeg`
-("Agent Zefirca"), agent-zefir `origin/main` @ 654061a (`src/theme/*`,
+Inputs: `reference-ui.jpg` (pastel glass assistant UI), the app (then a separate repository) `origin/main` @ 654061a (`src/theme/*`,
 `src/constants/theme.ts`, `src/constants/use-palette.ts`, `app.config.ts`,
 `docs/design.md`), elitea-platform `origin/main` brand pack
 (`apps/elitea-web/src/shared/brand/schema.ts`, `tokens/default.pack.json`,
@@ -30,14 +29,14 @@ Read from `origin/main`. These are the issues the redesign has to fix.
 
 **Personality:** friendly, soft and calm, but competent. The reference supplies the
 *structure*: a big greeting, glass cards, circular arrow buttons, a chip row and a
-floating composer. The mascot supplies the *palette*: marshmallow pink, cream, coat blue,
+floating composer. The *palette* is pastel: marshmallow pink, cream, coat blue,
 mint pedestal and belt orange. Everything sits on a slow, very light pastel gradient. The
-saturated colours are deep "ink" versions of the mascot hues, so text and controls pass
+saturated colours are deep "ink" versions of the pastel hues, so text and controls pass
 WCAG AA.
 
-### 1.1 Palette primitives (from the mascot)
+### 1.1 Palette primitives
 
-| Family | Source on the mascot | Light use | Dark use |
+| Family | Source | Light use | Dark use |
 |---|---|---|---|
 | Marshmallow (pink) | head swirl, tie (sampled ~`#F2B4BE`) | gradient stop `#FCEBF2`, accent `#B4306A` (600), soft `#FCE4EE` | accent `#FF8CB8`, soft `#3D1E2D` |
 | Cream | face, shirt | background `#FBF7F9` | n/a (night neutrals) |
@@ -126,7 +125,7 @@ sheets/menus).
 
 Use the platform system fonts: SF Pro on iOS and Roboto on Android. The display role on
 iOS uses **SF Pro Rounded** (`fontFamily: 'ui-rounded'`, available on iOS), which matches
-the mascot's softness. Android keeps Roboto at weight 500 for display, as in M3.
+the pastel softness. Android keeps Roboto at weight 500 for display, as in M3.
 
 | Role | iOS (text style, pt) | Android (M3, sp) | Used for |
 |---|---|---|---|
@@ -181,7 +180,7 @@ the mascot's softness. Android keeps Roboto at weight 500 for display, as in M3.
   `[sfSymbol, materialSymbol]`. Components take the semantic name only.
 - **Sizes:** 20 inline, 22 in icon buttons, 24 in the tab bar. Icon-only controls always
   have an `accessibilityLabel`.
-- **No custom icon set.** The mascot and the hologram gear motif are illustrations, not
+- **No custom icon set.** The Elitea mark is an illustration, not
   icons.
 
 ### 1.9 Motion
@@ -191,7 +190,7 @@ the mascot's softness. Android keeps Roboto at weight 500 for display, as in M3.
   - M3 "standard" `(0.2,0,0,1)` for state changes
   - "emphasized decelerate" for things entering, "emphasized accelerate" for exits
   - springs (Reanimated 4, already a dependency) for user-driven motion: default
-    d20/s220, bouncy for the mascot and orb, snappy for swipe snap-back.
+    d20/s220, bouncy for the orb, snappy for swipe snap-back.
 - **Signature moments:**
   - the greeting fades up (8 px) on Home load
   - the action cards stagger in at 40 ms each
@@ -199,7 +198,7 @@ the mascot's softness. Android keeps Roboto at weight 500 for display, as in M3.
   - the send button morphs mic ↔ send ↔ stop
   - the orb breathes (2.4 s loop) and scales by mic level
   - a streaming caret pulses
-  - the mascot does a gentle 4° tilt on empty states (once, not looping).
+  - the Elitea mark does not animate.
 - **Reduced motion** (`useReducedMotion()` from Reanimated, and
   `AccessibilityInfo.isReduceMotionEnabled`):
   - springs, translations and scales become 150 ms opacity cross-fades
@@ -323,7 +322,7 @@ next to `src/theme/color.test.ts` that iterates `design-tokens.json → proofs` 
 
 ## 3. Workspace branding rules
 
-The app is always **Agent Zefir**. A workspace *accents* it. It never re-skins it.
+The app is always **Elitea AI**. A workspace *accents* it. It never re-skins it.
 
 ### 3.1 What a brand pack overrides
 
@@ -340,7 +339,7 @@ The app is always **Agent Zefir**. A workspace *accents* it. It never re-skins i
 | workspace name | `product.name` (≤ 80 chars, existing) | shown as the workspace name, never as the app name |
 | display font | `typography.fontFaces` same-origin `.ttf/.otf` (existing `mapFonts`) | display/title/headline roles only |
 
-### 3.2 What always stays Agent Zefir
+### 3.2 What always stays Elitea AI
 
 These never come from the pack:
 
@@ -349,7 +348,7 @@ These never come from the pack:
 - `focus`: it stays coat blue, so a focus ring never disappears against an accent-filled
   control
 - the status colours: `success`, `warning`, `danger`, `badge`, `secondary`
-- spacing, radii, elevation, type scale, motion, haptics, icons, the mascot, the app
+- spacing, radii, elevation, type scale, motion, haptics, icons, the Elitea mark, the app
   icon set and the app name.
 
 **Reason:** the pack's neutrals are tuned for the web app. For example, the default dark
@@ -402,7 +401,7 @@ The correction was demonstrated on real inputs (from the script):
 | navy `#0B1F44` | unchanged 14.15 / white | `#718BB9` 4.52 / black 6.10 |
 | teal `#14B8A6` | `#0B796D` 4.61 / white | unchanged 6.26 / black |
 | orange `#F97316` | `#B14F0C` 4.58 / white | unchanged 5.56 / black |
-| Zefir rose `#B4306A` | unchanged 5.13 / white 5.88 | `#E15A90` 4.50 / black 6.07 |
+| product rose `#B4306A` | unchanged 5.13 / white 5.88 | `#E15A90` 4.50 / black 6.07 |
 
 The table is the correction against the untinted grounds (`correctAccent` alone, and what
 `src/design/brand.test.ts` pins). When the brand also tints gradient stop 0, the app corrects
@@ -422,14 +421,14 @@ tinted gradient stop ≥ 4.54.
   - If only one scheme yields an accent, derive the other from its hue with the
     correction above, starting from the same colour.
   - If neither does, use `brand.hue`.
-  - If there is still nothing, keep Zefir rose.
+  - If there is still nothing, keep product rose.
 - **`productDefault: true`** (the `X-Elitea-Brand-Layers: default` header, i.e. the server
   has no brand of its own) means **no colour override at all**.
-  - The app keeps Zefir rose.
+  - The app keeps product rose.
   - The workspace name and logo still show, because they identify the server.
   - **Change from today:** `usePalette` currently applies Elitea's default web colours.
 - High contrast: the pack's optional `schemes.hc` is ignored. On iOS "Increase Contrast"
-  (`AccessibilityInfo.isHighTextContrastEnabled` on Android), use the Zefir tokens with
+  (`AccessibilityInfo.isHighTextContrastEnabled` on Android), use the product tokens with
   `textSecondary` → `textPrimary`, `separator` → `separatorStrong`, and glass → opaque.
 
 ### 3.5 Workspace identity is always visible
@@ -442,67 +441,27 @@ tinted gradient stop ≥ 4.54.
   - the Settings → Workspace row
   - the lock screen
   - every approval card ("Running on acme.elitea.ai").
-- The logo is never placed over or behind the mascot, and the mascot is never placed over
+- The logo is never placed over or behind the Elitea mark, and the Elitea mark is never placed over
   the logo (§5).
-- The workspace name is never shown as the app name. The app name stays "Agent Zefir" on
+- The workspace name is never shown as the app name. The app name stays "Elitea AI" on
   the Settings → About screen, in system prompts, and in the iOS sign-in sheet
   (`CFBundleName`).
 
-### 3.6 App icon variants (bundled, user-confirmed)
+### 3.6 App icon
 
-The rule is unchanged from `docs/design.md`: there are exactly two bundled icons, the
-switch is user-confirmed, and icons are never downloaded.
+There is exactly one bundled icon, the Elitea logo mark; icons are never downloaded and no
+customer logo can be in an icon (one store build, no per-customer builds). The earlier
+alternate "workspace" icon belonged to the app's former mascot branding and was removed when
+the app moved into the Elitea platform repository. The files and how they are made are in
+`docs/assets.md`.
 
-| Variant | Name | Artwork | When offered |
-|---|---|---|---|
-| A (default) | "Zefir" | Zefirca head mark on the pastel pink→lavender→mint gradient | SaaS and default |
-| B | "Zefir Night" (workspace / self-hosted) | the same framing on a neutral slate gradient (light `#F4F6F9`→`#D3DAE3`, dark `#3A4049`→`#16191E`); as built, see `docs/assets.md` | offered once when the connected workspace is not the SaaS host and `productDefault` is false |
-
-- **No customer logo can be in an icon** (one store build, no per-customer builds).
-- The brand pack schema has **no "suggest icon variant" field today**.
-  - v1 rule: suggest variant B when `productDefault === false`.
-  - An additive optional pack field, e.g. `product.appIconVariant: 'default' | 'workspace'`,
-    is a server change to raise separately. It is not in scope here.
-- **Formats, iOS:**
-  - an Icon Composer `.icon` (wired as `ios.icon: './assets/zefirca.icon'`)
-  - layers: background gradient (the document fill), the head mark foreground, centred
-    within 0.40 of the canvas so the squircle corners never clip it
-  - Default, Dark and Tinted (mono) appearances are produced by the system from the
-    layers
-  - variant B ships as an alternate icon (it needs a config plugin, such as
-    `expo-alternate-app-icons` or our own plugin under `plugins/`, that adds
-    `CFBundleAlternateIcons`)
-  - iOS shows its own "You have changed the icon" alert.
-- **Formats, Android:**
-  - an adaptive icon: 108 dp canvas, the head mark inside the 66 dp safe circle (reach
-    0.29 of the canvas; the safe circle is 0.306), gradient background layer
-  - a **monochrome** layer, a flat single-colour glyph of the swirl head with the eyes,
-    brows, smile and two swirl grooves cut out (reach 0.25), for themed icons on Android 13+
-  - variant B is an `activity-alias` toggled via
-    `PackageManager.setComponentEnabledSetting`
-  - switching can close the app on some launchers, so the confirm copy says so.
-- **The full-body mascot and the bust are too detailed below 60 pt.** Every icon uses the
-  **head mark**: the head swirl, eyes, smile and headset with its orange antenna light,
-  with the coat collar fading out below the chin. No hologram, no hands, no body.
-- **Asset regeneration is required.** The source is a JPEG on a painted background with
-  no alpha. Produce:
-  - a 2048 px transparent master of the full figure, and a separate bust render (not a
-    crop: the head needs to be re-centred and slightly larger)
-  - a single-colour silhouette vector.
-  - The pedestal stays only in the full-figure "hero" asset.
-- **Splash:** replace `#208AEF`. The light splash uses `#FBF7F9` and the dark splash
-  `#141118` (`expo-splash-screen` supports `dark`). The image is the bust with the
-  hologram, fitted so every pixel is within 0.30 of the canvas: Android 12+ masks the
-  splash icon to a circle of radius 1/3.
-
----
-
-## 4. Components
-
-Every component reads semantic tokens only, through a single `useTheme()` that replaces
-`usePalette()`. `useTheme()` returns `{ color, type, space, radius, elevation, motion,
-scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, using
-`hitSlop` where the visual is smaller.
+- **iOS:** an Icon Composer `.icon` (`ios.icon: './assets/elitea.icon'`): the mark layer centred
+  within 0.40 of the canvas (clear of the squircle corners) on a light gradient fill, with a
+  dark-appearance fill; the system derives the Dark, Tinted and Clear appearances.
+- **Android:** an adaptive icon (108 dp canvas, the mark inside the 66 dp safe circle: reach 0.29
+  of the canvas) on a light gradient background, and a **monochrome** layer (the mark's
+  silhouette, reach 0.25) for themed icons on Android 13+.
+- `icon.png` (1024, opaque) is the Expo fallback and the store listing source.
 
 ### 4.1 Greeting header (Home)
 
@@ -568,7 +527,7 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
 - **Section header:** "Recent chats" (title3) with a trailing "See all" text button
   (accent, subheadline), 44 pt tall.
 - **Row:** glass or surface container, radius 16, padding 12/16, min height 64.
-  - leading: a 36 pt icon tile — the agent avatar or mascot bust (§5)
+  - leading: a 36 pt icon tile — the agent avatar or Elitea mark (§5)
   - middle: the title (headline, 1 line) and below it the preview or agent name plus the
     relative time (footnote, `textSecondary`)
   - trailing: a 36 pt circular arrow button (visual only).
@@ -623,18 +582,18 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
 - **Agent avatar (28):**
   - the agent's own icon (from `icon_meta` when the client maps it; today `fetchAgents`
     does not read it)
-  - **else the mascot bust**.
+  - **else the Elitea mark**.
   - When several icon-less agents share a conversation, only the conversation's primary
-    agent gets the mascot. The others get a monogram on `secondarySoft`, so speakers stay
+    agent gets the Elitea mark. The others get a monogram on `secondarySoft`, so speakers stay
     distinguishable.
-  - The accessibility label is always the agent's name, never "Zefirca".
+  - The accessibility label is always the agent's name, never "Elitea".
   - Pinned to the top of the message, level with the name line, in every state: it does
     not move when the answer finishes and its action row appears.
 - The name line above the first bubble of a run shows the agent name (footnote,
   `textSecondary`) and the time.
 - **Streaming:**
   - a pulsing caret at the end of the text
-  - the "Thinking…" state shows the mascot bust with a 3-dot typing indicator (bouncy
+  - the "Thinking…" state shows the Elitea mark with a 3-dot typing indicator (bouncy
     spring; static dots under reduced motion)
   - the screen-reader announcement is "{Agent} is responding". The text is announced on
     completion, not token by token.
@@ -672,9 +631,9 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
     **Details**.
   - On iOS, destructive or sensitive tools use a confirmation alert. On Android, a M3
     dialog.
-  - **Never uses the mascot** (it would trivialise a security decision).
+  - **Never uses the Elitea mark** (it would trivialise a security decision).
   - The approval card stays fixed-colour even when branded: accent buttons use the
-    corrected brand accent, while the card chrome stays Zefir.
+    corrected brand accent, while the card chrome stays the product's.
 - **Ask-user / authorization / output-limit pauses** use the same card frame with their
   own forms.
 
@@ -712,19 +671,19 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
 
 ### 4.9 Empty states
 
-- **Layout:** centred column on the gradient: the mascot (full figure 160 pt, or the bust
+- **Layout:** centred column on the gradient: the Elitea mark (96 pt, or 64
   96 pt in short containers), then the title (title2), a body line (callout,
   `textSecondary`), and one primary action (a filled pill button).
-- **Copy, with the mascot's pose and prop:**
+- **Copy:**
   - **no chats:** "Ask me anything" / "Start a chat or try your voice." / [New chat]
-    (the mascot holds the gear hologram). On Home the action is left out: the New chat
+   . On Home the action is left out: the New chat
     card is already on screen (screens.md §2).
   - **no results:** "Nothing found for '{q}'"
   - **no notifications:** "You're all caught up"
-  - **offline with no cache:** "You're offline" (no mascot glow)
-  - **error:** "Something went wrong" + [Try again] (the mascot without the hologram; never
+  - **offline with no cache:** "You're offline" (no mark)
+  - **error:** "Something went wrong" + [Try again] (no mark; never
     cartoonish copy for errors with data loss).
-- The mascot is decorative here (`accessible={false}`), because the title carries the
+- The Elitea mark is decorative here (`accessible={false}`), because the title carries the
   meaning.
 
 ### 4.10 Sheets
@@ -785,47 +744,35 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
 
 ---
 
-## 5. Mascot usage rules ("Agent Zefirca")
+## 5. Elitea mark usage rules
 
-| Where | Asset | Size (pt) | Accessibility |
+The product's own identity is the Elitea logo mark (`src/components/EliteaMark.tsx`, the same
+SVG as `apps/elitea-web/public/brand/logo-mark.svg`). It is vector art, so one source serves
+every size.
+
+| Where | Variant | Size (pt) | Accessibility |
 |---|---|---|---|
-| App icon | head mark (`design/tools/build.py`) | system | n/a |
-| Splash | bust, fitted in the 1/3 circle | 200 dp image | n/a |
-| Connect / welcome hero | full | 240 (180 compact) | decorative; the heading carries the meaning |
-| Sign-in | bust | 64, next to the workspace logo **in a separate tile** | decorative |
-| Home greeting avatar | **not used.** That slot is the user's avatar | n/a | n/a |
-| Agent avatar fallback | bust | 28 (bubbles), 36 (rows), 48 (agent detail) | the label is the **agent's name** |
-| Thinking indicator | bust + dots | 28 | "{Agent} is thinking" |
-| Empty states | full / bust | 160 / 96 | decorative |
-| Settings → About | full | 160 | "Agent Zefirca, the Agent Zefir mascot" (the only place it is named) |
-| Lock screen / privacy cover | bust | 96 | decorative. The privacy cover must not show any content, and the mascot is neutral |
+| App icon, splash | raster (`docs/assets.md`) | system / 200 dp image | n/a |
+| Connect / welcome hero | mark | 160 (96 compact) | decorative; the heading carries the meaning |
+| Sign-in | mark | 64, next to the workspace logo **in a separate tile** | decorative |
+| Agent avatar fallback | avatar | 28 (bubbles), 36 (rows), 48 (agent detail) | the label is the **agent's name** |
+| Empty states | mark | 96 (`large`) / 64 (`small`) | decorative |
+| Settings → About | mark | 112 | decorative; the title "Elitea AI" is next to it |
+| Lock screen / privacy cover | mark | 96 | decorative. The privacy cover must not show any content |
 
 **Never:**
 
-- Overlap, frame or replace the **workspace logo**. They sit in separate containers with
-  at least 16 pt between them, and the logo always wins prominence on workspace-identity
-  surfaces (connect confirm, Settings → Workspace).
-- Replace an agent's own icon. The mascot is a *fallback* only.
+- Overlap, frame or replace the **workspace logo** (the runtime brand pack). They sit in
+  separate containers with at least 16 pt between them, and the workspace logo always wins
+  prominence on workspace-identity surfaces (connect confirm, Settings → Workspace).
+- Replace an agent's own icon. The mark is a *fallback* only.
 - Appear on approval cards, destructive confirmations, security or permission prompts,
   or error states that involve data loss.
-- Be recoloured, tinted with the workspace brand, inverted for dark mode, cropped
-  mid-face, stretched, given a different outfit, or animated beyond the tilt and
-  "thinking" bob.
-- Speak as the agent. Copy is never written "as Zefirca" ("I'm Zefirca!"). The agent
-  speaks for itself.
+- Be recoloured, tinted with the workspace brand, inverted for dark mode, cropped or stretched.
 - Appear in more than one place on a screen (for example, an empty state *and* an avatar
   at the same time). In that case, the avatar falls back to a monogram.
 
-**Specifics:**
-
-- **Minimum size** is 24 pt. **Clear space** is 0.15 × the rendered width.
-- **Dark mode** uses the same artwork plus a soft rim halo `rgba(255,255,255,.10)` so the
-  pastel figure separates from night backgrounds. The full figure keeps the mint pedestal
-  in both schemes.
-- **Format:** the assets need re-rendering with alpha (see §3.6). Ship WebP @2x/@3x via
-  `expo-image`, and mark the hero assets `priority="high"` on connect.
-- **Naming:** the app is "Agent Zefir" and the mascot is "Agent Zefirca". The mascot's
-  name appears only in About and in store screenshots.
+**Minimum size** is 24 pt.
 
 ---
 
@@ -839,7 +786,7 @@ These describe what the redesign touches. No code is changed by this document.
    - `Palette` widens from 8 keys to the semantic set.
    - `usePalette` becomes `useTheme`, which composes:
      - the scheme (System/Light/Dark preference)
-     - the Zefir tokens
+     - the product tokens
      - the corrected brand overrides (§3.1)
      - accessibility modifiers (reduce transparency, increase contrast, font scale).
 2. **Brand mapping:**
@@ -853,7 +800,7 @@ These describe what the redesign touches. No code is changed by this document.
 3. **New dependencies** (all Expo SDK 58 modules):
    - `expo-linear-gradient`, `expo-blur`, `expo-glass-effect`, `expo-symbols`,
      `expo-haptics`, `expo-image`, `expo-speech`
-   - an alternate-icon config plugin.
+   - (no alternate icon: one bundled icon, §3.6).
    - Optionally `react-native-keyboard-controller` for the composer.
    - Microphone permission and speech recognition need a separate privacy decision.
 4. **Navigation:** move to `(tabs)` with native tabs. Chat and voice are stack screens
@@ -876,19 +823,16 @@ The foundation landed on `feat/design-foundation` (additive only; no screen was 
 - `src/design/brand.ts` + `oklch.ts` + `contrast.ts`: the §3.3 correction and §3.4 scheme
   mapping (`resolveBrand`), with the §3.3 table as tests.
 - `src/design/typography.ts`: the §1.7 ramp per platform, brand font on display/title roles.
-- `src/design/resolve.ts` + `DesignProvider.tsx`: `useDesign()` composes scheme, Zefir
+- `src/design/resolve.ts` + `DesignProvider.tsx`: `useDesign()` composes scheme, product
   tokens, the corrected brand accent and accessibility modifiers (Reduce Transparency,
   Increase Contrast, Reduce Motion, font scale). `<DesignProvider scheme>` is optional and
   only needed to force a scheme.
-- `src/components/Mascot.tsx`: `<Mascot variant="avatar|bust|full|hero" size label decorative />`.
-- `app.config.ts`: Zefirca icon (`assets/zefirca.icon`), adaptive icon, splash light/dark.
+- `src/components/EliteaMark.tsx`: `<EliteaMark variant="mark|avatar" size label decorative />`.
+- `app.config.ts`: Elitea icon (`assets/elitea.icon`), adaptive icon, splash light/dark.
 
 Follow-ups (not in the foundation):
 
-- **F1 Alternate app icon.** Done with the entry/home redesign (§9): "Zefir Night" ships through
-  `expo-alternate-app-icons` (iOS asset-catalog alternate, Android `<activity-alias>` with
-  `plugins/withAlternateIconLinks.js`), offered once on connecting a self-hosted workspace and
-  switched in Settings (`docs/assets.md`).
+- **F1 Alternate app icon.** Shipped for the former mascot branding, then removed with it (one icon, §3.6).
 - **F2 Brand mapping in `src/theme/brandPack.ts`.** The pack mapper still applies the web
   neutrals to the old `Palette` and drops weak accents for the legacy theme. `useDesign()`
   ignores the neutrals and reads `BrandTheme.accentSource` (the pack's unfiltered accents,
@@ -907,7 +851,7 @@ Follow-ups (not in the foundation):
 
 Landed on `feat/redesign-shell`:
 
-- **One design app-wide.** `src/app/_layout.tsx` mounts `<DesignProvider>` (scheme, Zefir
+- **One design app-wide.** `src/app/_layout.tsx` mounts `<DesignProvider>` (scheme, product
   tokens, the corrected workspace accent, accessibility modifiers) above the navigation theme,
   so headers, the tab bar tint and the status bar follow the same tokens as the screens.
   `usePalette()` (`src/constants/use-palette.ts`) maps the eight legacy names onto the
@@ -935,18 +879,18 @@ Landed on `feat/redesign-shell`:
 - **Kit (`src/ui/`).** `Text`, `Icon` (SF Symbols / Material Symbols Rounded, one semantic map
   in `src/ui/icons.ts`), `haptic()`, `Button`, `IconButton`, `Badge`, `Chip`/`ChipRow`,
   `SegmentedControl`, `ListSection`/`ListRow`, `Card`, `ActionCard`, `ArrowButton`, `IconTile`,
-  `GlassSurface`, `GradientBackground`, `EmptyState` (mascot), `Avatar` (initials tones proven
-  4.5:1, agent mascot fallback), `sheetOptions` (native form sheet / M3 bottom sheet). Touch
+  `GlassSurface`, `GradientBackground`, `EmptyState` (Elitea mark), `Avatar` (initials tones proven
+  4.5:1, agent Elitea-mark fallback), `sheetOptions` (native form sheet / M3 bottom sheet). Touch
   targets are tested (`src/ui/kit.test.tsx`).
 - **Design gallery** (`/design-gallery`, `__DEV__` only, Settings → About → Design gallery):
   every component, with a preview scheme and sample brands (magenta, green, lemon) run through
-  the real correction. `agentzefir://design-gallery?scheme=dark&brand=green` opens it directly.
+  the real correction. `elitea://design-gallery?scheme=dark&brand=green` opens it directly.
   Two more `__DEV__` fixture routes: `/design-tabs/chats` (the native tab shell with sample
   chats: large title, header search, bar buttons with a badge, project switcher, workspace
   pill; the rows are the real `ConversationRow`, and `/design-tabs/settings` is the real
   `SettingsList` with sample values, so its screenshots show the shipped screens) and
   `/design-composer` (the real `Composer` on the keyboard, same keyboard handling as
-  `/c/[id]`); both take `?brand=zefir|magenta|green|lemon`. `/design-sheet` shows `sheetOptions`.
+  `/c/[id]`); both take `?brand=default|magenta|green|lemon`. `/design-sheet` shows `sheetOptions`.
 
 ## 9. Entry and Home (as built)
 
@@ -954,16 +898,16 @@ Landed on `feat/redesign-entry-home`:
 
 - **Signed-out screens** share `EntryScreen` (`src/features/entry/`): the gradient ground, every
   safe area, keyboard-controller insets, one centred column.
-  - Connect (`ConnectWelcome`): the mascot hero (bust at accessibility sizes and while typing),
-    "Meet Agent Zefir", ONE primary action. The address field opens in place, already open when
+  - Connect (`ConnectWelcome`): the Elitea mark hero (smaller at accessibility sizes and while typing),
+    "Meet Elitea AI", ONE primary action. The address field opens in place, already open when
     the address is known. The QR button is gone until a scanner exists (App Review 2.1).
-  - Confirm (`ConnectConfirm`): no mascot; the workspace logo (or a monogram tile), its name, the
+  - Confirm (`ConnectConfirm`): no Elitea mark; the workspace logo (or a monogram tile), its name, the
     host as the largest text, an inset list (connection, workspace, operated as, version). The
     pack's accent is not applied yet.
-  - Sign-in (`SignInView`): the bust and the workspace logo in SEPARATE tiles, "Sign in to
+  - Sign-in (`SignInView`): the Elitea mark and the workspace logo in SEPARATE tiles, "Sign in to
     {name}", the host in a chip, one filled button in the workspace accent. Developer sign-in sits
     behind "Other sign-in options".
-  - Lock (`LockView`): the bust, "Agent Zefir is locked", the workspace host and mark, "Unlock with
+  - Lock (`LockView`): the Elitea mark, "Elitea AI is locked", the workspace host and mark, "Unlock with
     Face ID / Touch ID / fingerprint" (`deviceAuth.biometry`), the wipe as a small plain button
     that confirms first. Update (`UpgradeView`) and the privacy cover use the same ground.
 - **Home** is the first tab (`(app)/(tabs)/(home)`, the `/` route; Chats moved to `/chats`):
@@ -974,7 +918,7 @@ Landed on `feat/redesign-entry-home`:
   greeting names the user ("who am I" `name`, kept in memory only). The chip row and four cards
   (New chat, Discover agents, Dictate a message, Ask about a file) start a chat; Dictate and
   Attach hand the new conversation a one-time action in memory (`IntentHandoff.then`), so a URL
-  can never start the microphone or a picker. Up to five recent chats; the mascot empty state
+  can never start the microphone or a picker. Up to five recent chats; the Elitea mark empty state
   when there are none.
 - **Chats** (`ConversationList`): inset-grouped sections, Pinned first (client contract 1.4), then
   by local day (Today, Yesterday, Previous 7 days, Earlier). Row actions are in §13.
@@ -1010,7 +954,7 @@ Landed on `feat/redesign-chat`:
   links reachable and carries the action row.
 - **Assistant avatar** (`AssistantAvatar`, `useAgentIconUri`): the addressed agent's own icon
   (`version_details.meta.icon_meta.url`, downloaded like Discover's: redirects refused, raster bytes
-  only), else Agent Zefirca's head for the primary agent or a model chat, else a monogram. Labelled
+  only), else the Elitea mark for the primary agent or a model chat, else a monogram. Labelled
   by the agent; decorative next to the name line.
 - **Action row** (`AnswerActions`): copy, like, dislike, read aloud | regenerate, "…". Copy needs
   `allow_share_out`; like/dislike client contract 1.3 and a persisted answer (toggles, filled
@@ -1023,7 +967,7 @@ Landed on `feat/redesign-chat`:
 - **Tool steps** (`ToolActivity`): a sunken disclosure card, 44 pt summary row, one 44 pt row per
   call with a symbol and a word for its status. **Approval** (`PauseCard`): inline at the end of
   the transcript, `surface` card with a 3 pt `warning` leading edge, a symbol tile, "On {host}",
-  Approve filled / Reject `destructiveTonal` / others tonal, approve/reject haptics; no mascot.
+  Approve filled / Reject `destructiveTonal` / others tonal, approve/reject haptics; no Elitea mark.
 - **Composer** (`Composer`): paperclip (iOS action sheet anchored to the button, Android
   `ActionMenu`), the input ("Message {agent}…"), mic, send (accent circle, sunken when disabled)
   or stop (`textPrimary` circle). The target chip and the attachment tray (56 pt thumbnails,
@@ -1037,7 +981,7 @@ Landed on `feat/redesign-chat`:
   Reduce Motion), then a pulsing caret at the end of the streaming text (`InlineCaret`: an inline
   text run after the last character, on its last line, as tall as the line at every text size;
   its dim phase stays at 3:1 on the bubble; steady under Reduce Motion; skipped by screen readers).
-- **Empty conversation** (`ChatEmptyState`): on the gradient, the agent's icon or the mascot bust,
+- **Empty conversation** (`ChatEmptyState`): on the gradient, the agent's icon or the Elitea mark,
   "Ask {agent} anything", its welcome message, and its conversation starters (model chats: four
   generic ones) as glass suggestion cards that put the text in the composer (never sent alone).
 - **#56**: a pending iOS autocorrection committed after Send (`keyboardCommit.ts`) is the keyboard
@@ -1055,47 +999,47 @@ Landed on `feat/redesign-secondary`:
   inset-grouped list (the bar's grid/list button; a list row keeps the category and up to three tags,
   and its label reads the tags). Category filter chips appear when the catalogue
   has more than one category. Search is the native field in the navigation bar (server-side,
-  debounced). Each card is ONE button labelled "name, category, description". The mascot only on the
-  empty states; an icon-less catalogue gets monograms (§5, never a wall of Zefircas).
+  debounced). Each card is ONE button labelled "name, category, description". The Elitea mark only on the
+  empty states; an icon-less catalogue gets monograms (§5, never a wall of Elitea marks).
 - **Agent sheet** (`PublicAgentView`, `/discover/[id]`): a sheet with detents and Done that opens at
   full height (`sheetOptions(design, 'detail')`: half and full detents, initial full, so Start chat is
   in view; the list switchers still open at half); icon 72,
   name (title2), "Agent · version v1", tags, the description (selectable), the welcome message on a
-  sunken card, ONE filled "Start chat" with the project it lands in, starters as list rows. No mascot.
+  sunken card, ONE filled "Start chat" with the project it lands in, starters as list rows. No Elitea mark.
 - **Notifications** (`NotificationsView`): sections by local day, a type symbol in a tinted circle
   (`notificationIcon`), the server's one-line detail, an accent dot AND "unread" in the label, link
   role plus chevron only on rows that open a conversation, swipe left to dismiss (also the row's
   accessibility action), kit filter chips, "Mark all as read" as the bar action while anything is
   unread. At accessibility sizes a row stacks (symbol, age and chevron on top, then the full-width
   title and detail). Ages older than a week are the local calendar date in the user's locale
-  ("Sep 25"), never a UTC ISO date. Empty: the bust and "You're all caught up". Error: no mascot, Try again.
+  ("Sep 25"), never a UTC ISO date. Empty: the mark and "You're all caught up". Error: no Elitea mark, Try again.
 - **Settings** (`SettingsList`): an account row (initials avatar, name, "Signed in to {host}"), the
   workspace row with its name over the host (never the name alone), Appearance, Security (device
-  lock, screenshots, **Signed-in devices**), Usage, Memory, About ("About Agent Zefir" with the
+  lock, screenshots, **Signed-in devices**), Usage, Memory, About ("About Elitea AI" with the
   version, privacy, support), and Log out & wipe as its own destructive row.
 - **Signed-in devices** (`DevicesView`, `/devices`; `listNativeDevices` / `revokeNativeDevice`): this
   device apart with no sign-out of its own, the other devices with platform, app version and last
   activity; each has a visible **Sign out** button (its own accessibility element), with the swipe
   as the shortcut and the row's accessibility action; either way a destructive confirmation names
-  the host first. Online only, in memory only. No mascot (security surface).
+  the host first. Online only, in memory only. No Elitea mark (security surface).
 - **Memory** (`MemoryView`): one inset-grouped section, a visible **Delete** button on each memory
   with swipe as the shortcut (a swipe is never the only way, HIG), an "Off" badge with a
-  symbol, "Clear all memories" as a destructive row (confirms first); the mascot on the empty state.
+  symbol, "Clear all memories" as a destructive row (confirms first); the Elitea mark on the empty state.
 - **Usage** (`UsageView`): a section with a meter per scope (accessibility value 0–100), a warning row
   with a symbol and words, the period as the footer.
-- **About** (`AboutView`, `/about`): the full mascot at 160, the only place it is named.
+- **About** (`AboutView`, `/about`): the Elitea mark at 112, decorative.
 - **New chat**: Cancel in the modal bar, a sunken search field, agents and models as inset-grouped
   sections (agent monograms, a cpu tile for models).
 - **Sheets inside the chat**: participants and tool details use the kit (header buttons, avatars,
   segmented control, code role, banners with symbols). The ask-user chips use the chip tokens.
-- **Widgets and Live Activity**: the pastel gradient and Zefir rose per scheme in full colour (pinned
+- **Widgets and Live Activity**: the pastel gradient and product rose per scheme in full colour (pinned
   to the token values by a test), the system ground and tint on accented / clear home screens, text
   styles only (Dynamic Type, capped at xLarge on the home screen so a 158 pt widget never clips its
   counts; the small widget puts unread and running on one line), the waiting count as a rounded hero
   number; the Live Activity takes the
   dark accent and night surface in dark mode.
-- **States**: Chats with no connection and nothing saved shows "You're offline" with the bust (§4.9);
-  failures never show the mascot. A status screen centres its buttons (`ButtonAlignmentContext`).
+- **States**: Chats with no connection and nothing saved shows "You're offline" with the Elitea mark (§4.9);
+  failures never show the Elitea mark. A status screen centres its buttons (`ButtonAlignmentContext`).
 - **Rows with a control at their end** (`ListRow` with `trailing` and no `onPress`): the control is its
   own accessibility element, outside the row's label group, so VoiceOver can focus it (participants'
   Remove). Rows that add in place (Add people / Add agent) pass `chevron={false}`; a row that is
@@ -1131,20 +1075,20 @@ the code and covered by a test or a preview; **open** items say why.
 | X14 | `Linking.openURL` for links | Closed for privacy and support (`WebBrowser`). **Open by decision:** "Open in web" for a toolkit sign-in still opens the system browser, where the user's web session lives. |
 | X15 | Pure-black dark | Closed (plum night tokens) |
 | X16 | Black on magenta | Closed (`correctAccent`, §3.3) |
-| X17 | Android dynamic colour | Decided: the workspace brand wins, else Zefir (§3.4); no "Match system colours" option in v1. |
+| X17 | Android dynamic colour | Decided: the workspace brand wins, else the product default (§3.4); no "Match system colours" option in v1. |
 | X18 | iPad locked to portrait | Mostly closed (#15): iPad turns every way and is resizable (`ios.requireFullScreen: false`: all four `~ipad` orientations, Split View, Stage Manager; phones stay portrait, pinned by `scripts/ipad-orientation.test.mjs`). Chats is two panes at ≥ 700 pt (`src/features/chats/twoPane.ts`), the phone stack below. **Open:** hardware-keyboard shortcuts and the ⌘-hold overlay need native `UIKeyCommand`s (#66); on-device check of rotation and the Split View sizes. |
 
 ### Per screen
 
 | Screen / surface | Status |
 |---|---|
-| 2.1 Root, splash, status | Closed (Zefirca splash light/dark, branded `StatusScreen`) |
+| 2.1 Root, splash, status | Closed (Elitea splash light/dark, branded `StatusScreen`) |
 | 2.2 Connect | Closed (§9; QR hidden until a scanner exists) |
 | 2.3 Connect confirmation | Closed (§9) |
 | 2.4 Sign in | Closed (§9; developer sign-in behind "Other sign-in options", `__DEV__` only) |
 | 2.5 Lock | Closed (§9) |
 | 2.6 Update required | Closed (§9) |
-| 2.7 Privacy cover | Closed (splash-matching ground, bust) |
+| 2.7 Privacy cover | Closed (splash-matching ground, Elitea mark) |
 | 2.8 Home / Chats | Closed (§9). **Open:** pinned chats and a context menu need contract support (no pin/rename yet). |
 | 2.9 Project switcher | Closed (sheet with detents, Done, checkmark rows) |
 | 2.10 New conversation | Closed (this package: Cancel, search field, sections, avatars). The search is an in-content field, not `headerSearchBarOptions`, because a modal's search bar hides under the iOS 26 sheet chrome. |
@@ -1182,7 +1126,7 @@ the code and covered by a test or a preview; **open** items say why.
 | Predictive back | Closed (`predictiveBackGestureEnabled: true`) |
 | Edge-to-edge insets | Closed in code (safe-area insets on every screen, IME insets on Android). **Open:** not verified on an Android 16 device or emulator; Android is not built on this machine. |
 | Splash | Closed |
-| Alternate icons | Closed (Zefir Night, #58) |
+| Alternate icons | Removed (one Elitea icon, §3.6) |
 | Microphone | Closed (on-device dictation, #60) |
 
 ### Phase-B verification checklist (audit §6)
@@ -1195,7 +1139,7 @@ the code and covered by a test or a preview; **open** items say why.
 | VoiceOver labels and rotor headings | Covered by screen tests (labels, roles, actions); not run with VoiceOver on a device |
 | Keyboard up/down on notched and home-button devices | Notched simulator only |
 | Android 16: insets, predictive back, 200 % font, themed icon | **Open:** no Android build on this machine; code paths typed and unit-tested |
-| Brands: Zefir, magenta, green, lemon (low contrast, corrected) | Done (`brand.test.ts`, previews) |
+| Brands: default, magenta, green, lemon (low contrast, corrected) | Done (`brand.test.ts`, previews) |
 | Touch targets asserted by a test | Done (`kit.test.tsx`) |
 
 ## 13. Chats list actions and offline search (as built, issue #6)

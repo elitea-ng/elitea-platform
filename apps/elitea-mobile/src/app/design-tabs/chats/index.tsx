@@ -97,7 +97,7 @@ export default function DesignChatsPreview() {
         onOpen={() => {}}
         actions={actions}
         header={<WorkspacePillView origin={SAMPLE_ORIGIN} image={null} brand={null} />}
-        empty={<EmptyState mascot="bust" title={`Nothing found for “${query.trim()}”`} body="Try another word from the chat's title or its messages." />}
+        empty={<EmptyState mark="small" title={`Nothing found for “${query.trim()}”`} body="Try another word from the chat's title or its messages." />}
       />
       <UndoToast
         text={removal.pending ? 'Chat deleted' : null}

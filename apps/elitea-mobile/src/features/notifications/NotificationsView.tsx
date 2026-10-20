@@ -100,15 +100,15 @@ export function NotificationsView({
       <ActivityIndicator style={styles.loading} color={colors.accent} />
     ) : status === 'error' ? (
       <EmptyState
-        mascot="none"
+        mark="none"
         title="Couldn't load notifications"
         body="Check your connection and try again."
         action={{ title: 'Try again', onPress: onRetry }}
       />
     ) : filter !== 'all' ? (
-      <EmptyState mascot="none" title="Nothing of this kind" body="Choose All to see every notification." />
+      <EmptyState mark="none" title="Nothing of this kind" body="Choose All to see every notification." />
     ) : (
-      <EmptyState mascot="bust" title="You're all caught up" body="Mentions and updates from your workspace appear here." />
+      <EmptyState mark="small" title="You're all caught up" body="Mentions and updates from your workspace appear here." />
     );
 
   return (

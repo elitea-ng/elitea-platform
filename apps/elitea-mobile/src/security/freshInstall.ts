@@ -19,7 +19,7 @@ import { deleteAllSecureItems } from '@/security/secureStorage';
  * memory only and has nothing to purge.
  */
 
-export const INSTALL_MARKER_NAME = '.agent-zefir-install';
+export const INSTALL_MARKER_NAME = '.elitea-mobile-install';
 
 export interface InstallMarker {
   exists(): boolean;

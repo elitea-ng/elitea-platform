@@ -27,7 +27,7 @@ export function agentMetaLine(agent: Pick<PublicAgent, 'agentType' | 'versionNam
 
 /**
  * One public agent, in a sheet over Discover (docs/screens.md §6): its icon (or monogram, never
- * the mascot: the sheet is about THIS agent), name, kind and version, category and tags, the
+ * the Elitea mark: the sheet is about THIS agent), name, kind and version, category and tags, the
  * description and welcome message, ONE filled "Start chat" and the conversation starters as list
  * rows. The route and the `__DEV__` preview both render this (D2).
  */

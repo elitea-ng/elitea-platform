@@ -21,7 +21,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn(async () => ({ type: 'cancel' })) }));
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
-const REDIRECT = 'ca.zefir.agent:/oauth/callback';
+const REDIRECT = 'ca.mlops.elitea:/oauth/callback';
 const CANCELLED = { type: 'cancel' } as WebBrowserAuthSessionResult;
 const doc = DiscoveryDocumentSchema.parse(discoveryDocument());
 const endpoints = doc.native_auth!;
@@ -89,23 +89,23 @@ describe('buildAuthorizeUrl', () => {
   it('carries every parameter the server requires', () => {
     const url = buildAuthorizeUrl({
       endpoints,
-      clientId: 'ca.zefir.agent',
+      clientId: 'ca.mlops.elitea',
       redirectUri: REDIRECT,
       codeChallenge: 'c'.repeat(43),
       state: 's t&ate',
-      deviceName: 'Agent Zefir on iPhone',
+      deviceName: 'Elitea AI on iPhone',
       platform: 'ios',
       clientVersion: '0.1.0',
     });
     expect(url.startsWith(`${endpoints.authorization_endpoint}?`)).toBe(true);
     expect(query(url)).toEqual({
       response_type: 'code',
-      client_id: 'ca.zefir.agent',
+      client_id: 'ca.mlops.elitea',
       redirect_uri: REDIRECT,
       code_challenge: 'c'.repeat(43),
       code_challenge_method: 'S256',
       state: 's t&ate',
-      device_name: 'Agent Zefir on iPhone',
+      device_name: 'Elitea AI on iPhone',
       platform: 'ios',
       client_version: '0.1.0',
     });
@@ -120,12 +120,12 @@ describe('parseRedirect', () => {
       iss: 'https://ai.example.com',
       error_description: 'not allowed',
     });
-    expect(parseRedirect('ca.zefir.agent:///oauth/callback?code=a')).toEqual({ code: 'a' });
+    expect(parseRedirect('ca.mlops.elitea:///oauth/callback?code=a')).toEqual({ code: 'a' });
   });
 
   it.each([
-    'ca.zefir.agent:/oauth/other?code=a',
-    'agentzefir://oauth/callback?code=a',
+    'ca.mlops.elitea:/oauth/other?code=a',
+    'elitea://oauth/callback?code=a',
     'https://ai.example.com/oauth/callback?code=a',
     `${REDIRECT}?code=a&code=b`,
     `${REDIRECT}?code=a#frag`,
@@ -166,20 +166,20 @@ describe('signInWithWorkspace', () => {
     const authorize = query(seen[0]);
     expect(authorize).toMatchObject({
       response_type: 'code',
-      client_id: 'ca.zefir.agent',
+      client_id: 'ca.mlops.elitea',
       redirect_uri: REDIRECT,
       code_challenge_method: 'S256',
       code_challenge: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI',
       state: STATE,
       platform: 'ios',
     });
-    expect(authorize.device_name).toMatch(/^Agent Zefir on /);
+    expect(authorize.device_name).toMatch(/^Elitea AI on /);
     expect(openAuthSession).toHaveBeenCalledWith(seen[0], REDIRECT);
     expect(exchange).toHaveBeenCalledWith(FIXTURE_ORIGIN, endpoints.token_endpoint, {
       code: 'one-time-code',
       codeVerifier: STATE, // same deterministic bytes
       redirectUri: REDIRECT,
-      clientId: 'ca.zefir.agent',
+      clientId: 'ca.mlops.elitea',
     });
     expect(getSession().credential).toEqual({ kind: 'oauth' });
     expect(getBearerToken()).toBe(tokenResponse().access_token);
@@ -217,7 +217,7 @@ describe('signInWithWorkspace', () => {
     expect(exchange).toHaveBeenCalledTimes(1);
   });
 
-  // DEF-R6 (Agent Zefir E2E run 2): a fresh install skipped the identity
+  // DEF-R6 (mobile E2E run 2): a fresh install skipped the identity
   // provider and offered consent for the user the system browser was still
   // signed in as. The sheet must be a private session that shares no cookies.
   it('opens the system sign-in sheet as an ephemeral session', async () => {
@@ -263,7 +263,7 @@ describe('signInWithWorkspace', () => {
   });
 
   it('shows the update screen instead of signing in when the app is below the minimum', async () => {
-    acceptDiscovery(FIXTURE_ORIGIN, DiscoveryDocumentSchema.parse(discoveryDocument({ min_client_version: { 'ca.zefir.agent': '9.0.0' } })));
+    acceptDiscovery(FIXTURE_ORIGIN, DiscoveryDocumentSchema.parse(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '9.0.0' } })));
     const { openAuthSession } = browser(success);
     expect(await signInWithWorkspace({ openAuthSession, pkce })).toEqual({ ok: false, error: 'upgrade_required' });
     expect(getSession().upgradeRequired).toEqual({ minVersion: '9.0.0' });
@@ -284,7 +284,7 @@ describe('signInWithWorkspace', () => {
     expect(revoke).toHaveBeenCalledWith(
       FIXTURE_ORIGIN,
       endpoints.revocation_endpoint,
-      { token: tokenResponse().refresh_token, clientId: 'ca.zefir.agent' },
+      { token: tokenResponse().refresh_token, clientId: 'ca.mlops.elitea' },
     );
   });
 

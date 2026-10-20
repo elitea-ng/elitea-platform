@@ -1,5 +1,5 @@
 /**
- * Client contract 1.3 Discover shapes, CAPTURED 2026-10-07 from the zefir-wave
+ * Client contract 1.3 Discover shapes, CAPTURED 2026-10-07 from the mobile-wave
  * stack (elitea-platform client contract 1.3, the same document as the v4.7.0
  * pin) as Alice (user 8). The public project is 1; Alice's personal project is
  * 90501. The bodies are verbatim; only the variable names are ours. For the
@@ -15,7 +15,7 @@ export const publicList = {
   "rows": [
     {
       "agent_type": "openai",
-      "description": "Zefir Travel Planner: a public agent anyone can find in Discover.",
+      "description": "Elitea Travel Planner: a public agent anyone can find in Discover.",
       "id": "2",
       "is_liked": false,
       "likes": 0,
@@ -31,7 +31,7 @@ export const publicList = {
         "source_version_id": "2",
         "step_limit": 25
       },
-      "name": "Zefir Travel Planner",
+      "name": "Elitea Travel Planner",
       "project_id": "1",
       "tags": [
         {
@@ -48,7 +48,7 @@ export const publicList = {
     },
     {
       "agent_type": "openai",
-      "description": "Zefir Concierge: a public agent anyone can find in Discover.",
+      "description": "Elitea Concierge: a public agent anyone can find in Discover.",
       "id": "1",
       "is_liked": false,
       "likes": 0,
@@ -59,7 +59,7 @@ export const publicList = {
         "source_version_id": "6",
         "step_limit": 25
       },
-      "name": "Zefir Concierge",
+      "name": "Elitea Concierge",
       "project_id": "1",
       "tags": [],
       "version_id": "1",
@@ -74,7 +74,7 @@ export const publicPage2 = {
   "rows": [
     {
       "agent_type": "openai",
-      "description": "Zefir Travel Planner: a public agent anyone can find in Discover.",
+      "description": "Elitea Travel Planner: a public agent anyone can find in Discover.",
       "id": "2",
       "is_liked": false,
       "likes": 0,
@@ -90,7 +90,7 @@ export const publicPage2 = {
         "source_version_id": "2",
         "step_limit": 25
       },
-      "name": "Zefir Travel Planner",
+      "name": "Elitea Travel Planner",
       "project_id": "1",
       "tags": [
         {
@@ -124,9 +124,9 @@ export const publicBadParam = {
 
 /** getPublicApplication `2/v1`. */
 export const publicDetail = {
-  "description": "Zefir Travel Planner: a public agent anyone can find in Discover.",
+  "description": "Elitea Travel Planner: a public agent anyone can find in Discover.",
   "id": "2",
-  "name": "Zefir Travel Planner",
+  "name": "Elitea Travel Planner",
   "version_details": {
     "agent_type": "openai",
     "application_id": "2",
@@ -160,7 +160,7 @@ export const publicDetail = {
     "status": "published",
     "tags": [],
     "tools": [],
-    "welcome_message": "Welcome to Zefir Travel Planner!"
+    "welcome_message": "Welcome to Elitea Travel Planner!"
   }
 };
 
@@ -172,7 +172,7 @@ export const createdConversation = {
   "id": "9",
   "uuid": "71bc5f54-db98-44c6-bdd0-a71fa3015f21",
   "project_id": "90501",
-  "name": "Zefir Travel Planner",
+  "name": "Elitea Travel Planner",
   "created_at": "2026-10-07T03:57:25.376984Z",
   "updated_at": "2026-10-07T03:57:25.376984Z",
   "created_by": "8",
@@ -222,14 +222,14 @@ export const addedPublicAgent = [
     "entity_name": "application",
     "entity_meta": {
       "id": 2,
-      "name": "Zefir Travel Planner",
+      "name": "Elitea Travel Planner",
       "project_id": 1
     },
     "entity_settings": {
       "version_id": 2
     },
     "meta": {
-      "name": "Zefir Travel Planner",
+      "name": "Elitea Travel Planner",
       "tools": []
     }
   }

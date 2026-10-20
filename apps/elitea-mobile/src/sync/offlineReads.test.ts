@@ -173,7 +173,7 @@ describe('offline fallback in the queries', () => {
   });
 });
 
-// DEF-R5 (Agent Zefir E2E run 2): with the workspace paused (the edge accepts
+// DEF-R5 (mobile E2E run 2): with the workspace paused (the edge accepts
 // the connection, nothing answers), an offline cold start showed a spinner for
 // 15-20 s, the full REST deadline, before the saved list; a saved thread took
 // about 23 s.

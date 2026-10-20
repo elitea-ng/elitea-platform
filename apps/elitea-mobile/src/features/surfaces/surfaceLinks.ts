@@ -2,7 +2,7 @@ import { identity } from '@/config/identity';
 
 /**
  * Deep links from the system surfaces (widgets, the Live Activity) into the
- * app: `agentzefir://surface/<target>?ws=<workspace id>`.
+ * app: `elitea://surface/<target>?ws=<workspace id>`.
  *
  * A link only opens a screen of the app; the device lock still covers it (the
  * lock gate sits above every route). Each link names the workspace it was
@@ -57,7 +57,7 @@ export interface SurfaceLink {
 
 /**
  * Reads a surface link as expo-router hands it over: the full URL
- * (`agentzefir://surface/notifications?ws=…`) or the path (`/surface/…`).
+ * (`elitea://surface/notifications?ws=…`) or the path (`/surface/…`).
  * Null for anything that is not a surface link.
  */
 export function parseSurfaceLink(raw: string): SurfaceLink | null {

@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Switch, View, type AccessibilityActionEvent } from 'react-native';
+import { StyleSheet, View, type AccessibilityActionEvent } from 'react-native';
 
 import { useDesign } from '@/design/DesignProvider';
 import type { SchemePreference } from '@/design/resolve';
 import { COPY_ADDRESS_ACTION, copyWorkspaceAddress, workspaceAddressTitle } from '@/features/workspaces/workspaceAddress';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import type { BrandImage } from '@/theme/brandPack';
-import { Avatar, hitTarget, Icon, ListRow, ListSection, pressedOverlay, ripple, SegmentedControl, Text, uiPlatform } from '@/ui';
+import { Avatar, Icon, ListRow, ListSection, SegmentedControl, Text } from '@/ui';
 
 export interface SettingsListProps {
   /** The signed-in person's display name ("who am I"), when the workspace has one: the account row. */
@@ -24,11 +24,6 @@ export interface SettingsListProps {
   projectName?: string | null;
   /** Opens the project switcher; no Project row without it. */
   onProject?: (() => void) | null;
-  /**
-   * The app icon toggle (§3.6): `workspace` = "Zefir Night" in use. Absent where the device
-   * cannot change its icon.
-   */
-  appIcon?: { workspace: boolean; onChange: (workspace: boolean) => void } | null;
   workspaceCount: number;
   /** Signed in with a personal access token (development): the warning banner. */
   developerSignIn: boolean;
@@ -43,7 +38,7 @@ export interface SettingsListProps {
   onMemory?: (() => void) | null;
   /** Opens Signed-in devices (a native sign-in, not a developer token); no row without it. */
   onDevices?: (() => void) | null;
-  /** Opens About Agent Zefir (the mascot, the version, the links). */
+  /** Opens About Elitea AI (the Elitea mark, the version, the links). */
   onAbout?: (() => void) | null;
   /** The app's version, shown on the About row ("0.1.0"). */
   appVersion?: string | null;
@@ -68,7 +63,6 @@ export function SettingsList({
   projectId,
   projectName,
   onProject,
-  appIcon,
   workspaceCount,
   developerSignIn,
   scheme,
@@ -158,14 +152,6 @@ export function SettingsList({
             ]}
           />
         </View>
-        {appIcon ? (
-          <SwitchRow
-            title="Workspace app icon"
-            subtitle={appIcon.workspace ? 'Zefir Night, the neutral icon for self-hosted workspaces' : 'Zefir, the standard icon'}
-            value={appIcon.workspace}
-            onChange={appIcon.onChange}
-          />
-        ) : null}
       </ListSection>
 
       <ListSection title="Security" footer={securityFooter}>
@@ -185,7 +171,7 @@ export function SettingsList({
       ) : null}
 
       <ListSection title="About">
-        {onAbout ? <ListRow icon="sparkles" title="About Agent Zefir" value={appVersion ?? null} onPress={onAbout} /> : null}
+        {onAbout ? <ListRow icon="sparkles" title="About Elitea AI" value={appVersion ?? null} onPress={onAbout} /> : null}
         <ListRow icon="info" title="Privacy policy" onPress={onPrivacy} />
         <ListRow icon="link" title="Support" onPress={onSupport} />
         {onDesignGallery ? <ListRow icon="palette" title="Design gallery" subtitle="Development builds only" onPress={onDesignGallery} /> : null}
@@ -198,42 +184,7 @@ export function SettingsList({
   );
 }
 
-/**
- * A row with a trailing switch: the WHOLE row is the control for VoiceOver/TalkBack (role
- * switch, its state checked), and a tap anywhere on it toggles; the switch is the visual.
- */
-function SwitchRow({ title, subtitle, value, onChange }: { title: string; subtitle: string; value: boolean; onChange: (next: boolean) => void }) {
-  const design = useDesign();
-  return (
-    <Pressable
-      accessibilityRole="switch"
-      accessibilityLabel={title}
-      accessibilityHint={subtitle}
-      accessibilityState={{ checked: value }}
-      onPress={() => onChange(!value)}
-      android_ripple={ripple(design)}
-      style={({ pressed }) => [
-        styles.switchRow,
-        { minHeight: Math.max(hitTarget(), 52) },
-        pressed && uiPlatform === 'ios' ? { backgroundColor: pressedOverlay(design) } : null,
-      ]}>
-      <Icon name="grid" size={22} tone="accent" />
-      <View style={styles.switchText}>
-        <Text variant="body">{title}</Text>
-        <Text variant="footnote" tone="secondary">
-          {subtitle}
-        </Text>
-      </View>
-      <View accessible={false} importantForAccessibility="no-hide-descendants" pointerEvents="none">
-        <Switch value={value} trackColor={{ true: design.colors.accent, false: design.colors.separatorStrong }} />
-      </View>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
-  switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
-  switchText: { flex: 1, gap: 2 },
   banner: { borderRadius: 16, borderCurve: 'continuous', padding: 16, gap: 4 },
   bannerTitle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   segmentRow: { padding: 12 },

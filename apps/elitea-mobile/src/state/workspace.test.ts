@@ -25,7 +25,7 @@ import { TEST_WORKSPACE, registryValue, wsKey, type FakeSecureStore } from '@/te
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 const fake = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
-const OPTS = { connectSchemes: ['agentzefir'], allowPrivateHttp: false };
+const OPTS = { connectSchemes: ['elitea'], allowPrivateHttp: false };
 const A = TEST_WORKSPACE;
 const B = 'bbbbbbbbbbbb';
 const ORIGIN_A = 'https://a.example.com';
@@ -72,7 +72,7 @@ function nativeSlot(id: string, origin: string) {
     JSON.stringify({
       v: 1,
       origin,
-      clientId: 'ca.zefir.agent',
+      clientId: 'ca.mlops.elitea',
       tokenEndpoint: `${origin}/api/v2/auth/native/token`,
       revocationEndpoint: `${origin}/api/v2/auth/native/revoke`,
       refreshToken: opaqueToken('elnrt_', 2),
@@ -374,7 +374,7 @@ describe('removeWorkspace', () => {
       JSON.stringify({
         v: 1,
         origin: ORIGIN_B,
-        clientId: 'ca.zefir.agent',
+        clientId: 'ca.mlops.elitea',
         tokenEndpoint: `${ORIGIN_B}/api/v2/auth/native/token`,
         revocationEndpoint: `${ORIGIN_B}/api/v2/auth/native/revoke`,
         refreshToken: opaqueToken('elnrt_', 1),
@@ -389,7 +389,7 @@ describe('removeWorkspace', () => {
     expect(revoke).toHaveBeenCalledWith(
       ORIGIN_B,
       `${ORIGIN_B}/api/v2/auth/native/revoke`,
-      { token: opaqueToken('elnrt_', 1), clientId: 'ca.zefir.agent' },
+      { token: opaqueToken('elnrt_', 1), clientId: 'ca.mlops.elitea' },
       expect.objectContaining({ signal: expect.anything() }),
     );
     expect(itemsOf(B)).toEqual({});
@@ -494,7 +494,7 @@ describe('workspace list', () => {
 });
 
 describe('classifyIncomingLink', () => {
-  const link = (server: string) => `agentzefir://connect?server=${encodeURIComponent(server)}`;
+  const link = (server: string) => `elitea://connect?server=${encodeURIComponent(server)}`;
 
   it('offers to ADD a workspace that is not connected yet (nothing is wiped)', () => {
     expect(classifyIncomingLink(link('https://b.example.com/x'), 'https://a.example.com', OPTS)).toEqual({
@@ -530,11 +530,11 @@ describe('classifyIncomingLink', () => {
   it('ignores non-connect URLs and invalid links', () => {
     for (const url of [
       null,
-      'ca.zefir.agent:/oauth/callback?code=x',
-      'exp+agent-zefir://expo-development-client/?url=x',
+      'ca.mlops.elitea:/oauth/callback?code=x',
+      'exp+elitea-mobile://expo-development-client/?url=x',
       'https://b.example.com',
       link('http://b.example.com'),
-      'agentzefir://connect',
+      'elitea://connect',
     ]) {
       expect(classifyIncomingLink(url, 'https://a.example.com', OPTS)).toEqual({ kind: 'ignore' });
     }

@@ -39,7 +39,7 @@ export default function DiscoverScreen() {
 
   if (!known) return <StatusScreen busy title="Checking this workspace" />;
   if (!available) {
-    return <StatusScreen mascot="bust" title="Discover isn't available" body="This workspace does not offer public agents to mobile yet." />;
+    return <StatusScreen mark="small" title="Discover isn't available" body="This workspace does not offer public agents to mobile yet." />;
   }
   if (projectId === null) return <StatusScreen title="No project selected" />;
 

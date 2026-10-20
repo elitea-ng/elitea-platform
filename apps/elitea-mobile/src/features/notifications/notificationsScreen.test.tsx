@@ -49,7 +49,7 @@ it('filters the inbox by type', async () => {
   await render(<NotificationsScreen />);
   expect(screen.getAllByRole('tab').map((t) => t.props.accessibilityLabel)).toEqual(['All, 3', 'Agent finished, 1', 'Mentions, 1', 'Moderation approved, 1']);
   await fireEvent.press(screen.getByTestId('filter-chat_user_mentioned'));
-  expect(screen.getByText('Bob Zefir mentioned you')).toBeTruthy();
+  expect(screen.getByText('Bob Elitea mentioned you')).toBeTruthy();
   expect(screen.queryByTestId('notification-10')).toBeNull();
   expect(screen.getByTestId('filter-chat_user_mentioned').props.accessibilityState).toMatchObject({ selected: true });
 });
@@ -102,7 +102,7 @@ it('the chip bar keeps its own height instead of growing into the list (a horizo
 it('reads each row as title, detail, age and unread, and offers Mark all as read in the bar while anything is unread', async () => {
   await render(<NotificationsScreen />);
   expect(screen.getByLabelText(/^Moderation approved, Your project request was approved, .*, unread$/)).toBeTruthy();
-  expect(screen.getByRole('link').props.accessibilityLabel).toMatch(/^Bob Zefir mentioned you, .*, unread$/);
+  expect(screen.getByRole('link').props.accessibilityLabel).toMatch(/^Bob Elitea mentioned you, .*, unread$/);
   const items = mockHeader.unstable_headerRightItems?.() ?? null;
   const label = items ? items[0].accessibilityLabel : mockHeader.headerRight().props.children[0].props.accessibilityLabel;
   expect(label).toBe('Mark all as read');

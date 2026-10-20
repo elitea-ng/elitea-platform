@@ -220,7 +220,7 @@ describe('TurnController', () => {
     h.controller.detach();
   });
 
-  // DEF-5 (Agent Zefir E2E): with the device online and the workspace
+  // DEF-5 (mobile E2E): with the device online and the workspace
   // hanging (edge accepts TCP, backend never answers), a send stayed
   // "Sending…" for minutes: every attempt waited for its deadline and was
   // retried in place. A send the workspace did not answer now goes to the
@@ -266,7 +266,7 @@ describe('TurnController', () => {
     answered.controller.detach();
   });
 
-  // DEF-R3 (Agent Zefir E2E run 2): with the workspace stopped behind a
+  // DEF-R3 (mobile E2E run 2): with the workspace stopped behind a
   // reachable proxy (traefik answers 502), a send retried in place ~6 times in
   // ~17 s, then failed for good; nothing was sent after the workspace came
   // back. A gateway answer now hands the send to the outbox, like no answer.

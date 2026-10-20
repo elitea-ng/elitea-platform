@@ -17,7 +17,7 @@ import { getWorkspaceInfo, refreshWorkspaceInfo } from '@/state/workspaceInfo';
  * the SYSTEM browser (`openAuthSessionAsync`: ASWebAuthenticationSession on
  * iOS, Custom Tabs on Android), never an embedded web view. The workspace runs
  * its usual sign-in (SSO, OIDC, SAML or password), shows a confirmation naming
- * the app and the device, and redirects to `ca.zefir.agent:/oauth/callback`
+ * the app and the device, and redirects to `ca.mlops.elitea:/oauth/callback`
  * with a single-use code (valid 60 s), the `state` and `iss`.
  *
  * Checks before the code is used: the redirect is exactly ours, `state`

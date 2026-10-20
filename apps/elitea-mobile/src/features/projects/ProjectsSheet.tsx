@@ -61,9 +61,9 @@ export function ProjectsSheet({
           <ActivityIndicator color={colors.accent} />
         </View>
       ) : failed ? (
-        <EmptyState mascot="none" title="Couldn't load projects" body="Check your connection and try again." />
+        <EmptyState mark="none" title="Couldn't load projects" body="Check your connection and try again." />
       ) : personal === null && team.length === 0 ? (
-        <EmptyState mascot="bust" title="No active projects" body="Your account has no active project in this workspace." />
+        <EmptyState mark="small" title="No active projects" body="Your account has no active project in this workspace." />
       ) : (
         <>
           {personal ? (

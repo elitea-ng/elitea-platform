@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { identity } from '@/config/identity';
 import type { BrandInput } from '@/design/brand';
 import { useDesign } from '@/design/DesignProvider';
@@ -33,8 +33,8 @@ export interface SignInViewProps {
 }
 
 /**
- * Sign-in (docs/screens.md §1c): Agent Zefir and the workspace side by side in SEPARATE tiles
- * (the mascot never overlaps, frames or replaces the workspace logo, §5), "Sign in to {name}",
+ * Sign-in (docs/screens.md §1c): Elitea AI and the workspace side by side in SEPARATE tiles
+ * (the Elitea mark never overlaps, frames or replaces the workspace logo, §5), "Sign in to {name}",
  * the host prominent in the system font, ONE filled button in the workspace's corrected accent
  * (the brand applies from here on), and where the sign-in happens. Developer sign-in is never on
  * the default path: it sits behind a disclosure, and exists in development builds only.
@@ -50,7 +50,7 @@ export function SignInView({ host, origin, name, logo, brand, native, developer,
       <View style={styles.identity}>
         <View style={styles.tiles}>
           <View style={tile}>
-            <Mascot variant="bust" size={64} decorative />
+            <EliteaMark size={64} decorative />
           </View>
           <View style={tile}>{logo ? <BrandLogo image={logo} size={48} /> : <WorkspaceMark origin={origin} image={null} brand={brand} size={48} />}</View>
         </View>

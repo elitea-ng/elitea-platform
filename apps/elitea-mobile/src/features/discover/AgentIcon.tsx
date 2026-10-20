@@ -9,7 +9,7 @@ import { monogramStyle, Text } from '@/ui';
 import { fetchPublicAgentIcon } from '@/features/discover/agentIconData';
 import { useSession } from '@/state/session';
 
-/** The first letter of the first two words: "Zefir Travel Planner" → "ZT". */
+/** The first letter of the first two words: "Elitea Travel Planner" → "ET". */
 export function monogramOf(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   const letters = words.slice(0, 2).map((w) => Array.from(w)[0] ?? '');

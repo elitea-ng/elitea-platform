@@ -1,4 +1,4 @@
-# Agent Zefir: target screens
+# Elitea AI: target screens
 
 Layouts for each main screen. The tokens are in `design-tokens.json` and the components in
 `design-system.md` (section numbers such as §4.5 refer to that file). The wireframes are
@@ -11,7 +11,7 @@ surface.
 |---|---|---|
 | Gradient | pink mist → lavender → mint | plum-black → indigo-black → green-black |
 | Glass | white α .72 | `#2A2631` α .72 |
-| Accent | Zefir rose `#B4306A` (or the corrected workspace accent) | `#FF8CB8` with dark `accentOn` |
+| Accent | product rose `#B4306A` (or the corrected workspace accent) | `#FF8CB8` with dark `accentOn` |
 | Status bar | `dark-content` | `light-content` |
 
 - The status bar is set from the scheme via `expo-status-bar` `style="auto"`.
@@ -48,10 +48,10 @@ behaviour and restyled (§9).
 G ───────────────────────────────
            (status bar)
 
-        [ mascot full, 240 ]          decorative, gentle tilt once
+        [ Elitea mark, 160 ]          decorative
            on mint pedestal
 
-        Meet Agent Zefir              title1, centred
+        Meet Elitea AI              title1, centred
    Your workspace's AI agents,        callout, textSecondary
        in your pocket.
 
@@ -72,9 +72,9 @@ G ──────────────────────────
   - The field has an inline "Continue" button.
   - Errors from `parseConnectLink` show under the field in `danger`, with an icon.
 - **MDM pre-set:** the screen skips straight to Confirm.
-- **Accessibility type sizes:** the mascot shrinks to the 96 bust and the content
+- **Accessibility type sizes:** the Elitea mark shrinks to 96 and the content
   scrolls.
-- The palette is always Zefir here, because no brand is applied before confirmation.
+- The palette is always the product's here, because no brand is applied before confirmation.
 
 ### 1b. Confirm workspace (existing `ConnectConfirm`)
 
@@ -89,7 +89,7 @@ G ──────────────────────────
                                 wraps; selectable)
  ┌────────────────────────────┐
  │ 🔒 Secure connection (TLS) │  surface card, footnote rows
- │ ✓ Supports Agent Zefir     │  (capabilities from discovery)
+ │ ✓ Supports Elitea AI     │  (capabilities from discovery)
  └────────────────────────────┘
   Only connect to workspaces you trust.   footnote, textSecondary
  ┌────────────────────────────┐
@@ -98,9 +98,9 @@ G ──────────────────────────
           Cancel                text button
 ```
 
-- **No mascot on this screen.** The workspace identity must dominate it (design-system
+- **No Elitea mark on this screen.** The workspace identity must dominate it (design-system
   §3.5 and §5).
-- The pack's accent is **not** applied yet. Buttons are Zefir rose, so the workspace
+- The pack's accent is **not** applied yet. Buttons are product rose, so the workspace
   cannot style the trust decision.
 
 ### 1c. Sign-in
@@ -108,7 +108,7 @@ G ──────────────────────────
 ```
 G ───────────────────────────────
   ┌──────┐   ┌──────┐
-  │ bust │   │ LOGO │      two separate 64 pt tiles, 16 pt apart
+  │ mark │   │ LOGO │      two separate 64 pt tiles, 16 pt apart
   └──────┘   └──────┘
    Sign in to Acme Corp AI          title2
    acme.elitea.ai                   footnote, system font
@@ -120,7 +120,7 @@ G ──────────────────────────
          Use a different workspace    text button (wipe-confirm flow)
 ```
 
-- iOS shows its own sheet: '"Agent Zefir" Wants to Use "acme.elitea.ai" to Sign In'.
+- iOS shows its own sheet: '"Elitea AI" Wants to Use "acme.elitea.ai" to Sign In'.
   Android opens a Custom Tab.
 - **Progress:** the button shows a spinner and the label "Signing in…". Cancelling
   returns here silently.
@@ -169,12 +169,12 @@ G ──────────────────────────
   Voice. Image and attach start a new chat with that picker.
 - There is **no composer on Home**. The reference's home has none, and the cards and
   chips cover the entry points. This keeps Home clear of the keyboard.
-- **Empty (no chats yet):** "Recent chats" is replaced by the empty state (mascot bust
+- **Empty (no chats yet):** "Recent chats" is replaced by the empty state (Elitea mark
   96, "Ask me anything", "Your chats show up here. Start one with New chat or your voice.").
   It has **no button of its own**: the New chat card and the chips above already start a
   chat, and a button that low sat under the floating tab bar at rest.
 - **No active project** (none, or all suspended): the greeting and the workspace pill stay;
-  the chips, cards and "Recent chats" are replaced by the mascot empty state "No active
+  the chips, cards and "Recent chats" are replaced by the Elitea mark empty state "No active
   project", because every card would end at "No project selected".
 - **Offline:** the `warningSoft` offline strip sits under the workspace pill. Cards still
   work (the outbox), Talk is disabled with the reason "Voice needs a connection", and the
@@ -204,14 +204,14 @@ G ──────────────────────────
 
 - Rows are grouped by Pinned, Today, Yesterday, This week and Older. The group headers
   use the footnote role, uppercase on iOS and sentence case on Android.
-- **Avatar:** the agent icon if it has one, else the mascot bust (with the single-use
+- **Avatar:** the agent icon if it has one, else the Elitea mark (with the single-use
   rule, design-system §4.6 and §5), else a monogram.
 - Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename and
   Delete (the contract has no Archive). Pin and Rename need client contract 1.4.
 - Search is over the titles and messages kept on the device (the encrypted store's FTS5
   index), the same online and offline: the workspace offers no conversation search. A message
   hit shows the matched passage under the title.
-- **Empty:** the full mascot with [New chat]. **No results:** the bust with
+- **Empty:** the Elitea mark with [New chat]. **No results:** the mark with
   "Nothing found for '…'".
 - **iPad (regular width, ≥ 700 pt: full screen, 2/3 Split View, a wide Stage Manager window):**
   two panes, this list on the left (about a third, 320–400 pt) and the selected chat on the
@@ -255,7 +255,7 @@ G ──────────────────────────
 - **Header "⋯" menu:** Participants, Rename, Share transcript (copy), Delete.
 - **Mentions:** `@` opens the mention picker above the composer, and `/` opens the slash
   picker (existing `SuggestionStrip`).
-- **States:** the thinking indicator (mascot bust and dots), streaming (caret), error
+- **States:** the thinking indicator (Elitea mark and dots), streaming (caret), error
   (inline `dangerSoft` row "Couldn't get a reply · Retry"), offline outbox messages
   (clock glyph and "Waiting to send"), and paused tool calls (approval card).
 - **Android:** predictive back is on (`predictiveBackGestureEnabled: true`, app shell
@@ -294,7 +294,7 @@ G ──────────────────────────
   ("Paused"), processing ("Getting that ready…"), and error ("Didn't catch that · Try
   again").
 - **Before first use:** a permission primer appears *before* the OS prompt, as a sheet
-  with the mascot bust, one line explaining why, and [Allow microphone]. If permission
+  with the Elitea mark, one line explaining why, and [Allow microphone]. If permission
   was denied, the sheet shows a deep link to Settings.
   - This is blocked today: `app.config.ts` sets `microphonePermission: false`.
 - The orb tint follows the corrected brand accent hue at stop 0 (decorative).
@@ -307,7 +307,7 @@ G ──────────────────────────
  [🔍 Search agents          ]
  [All] [Recent] [Favourites]           filter chips
  ┌──────────────┐ ┌──────────────┐
- │ [icon 48]    │ │ [bust 48]    │     agent cards (glass, r22)
+ │ [icon 48]    │ │ [mark 48]    │     agent cards (glass, r22)
  │ Research     │ │ HR helper    │     headline
  │ Finds and …  │ │ Answers pol… │     footnote, 2 lines
  │ [ Chat ]     │ │ [ Chat ]     │     tonal pill
@@ -344,7 +344,7 @@ G ──────────────────────────
 - In-app only (push is out of the MVP). The list is fed by the existing
   `notificationStream`.
 - Each row's label is "{title}, {detail}, {time}, unread".
-- **Empty:** mascot bust (96), "You're all caught up".
+- **Empty:** Elitea mark (96), "You're all caught up".
 - New items show a glass toast on any screen ("Research finished · View"). It is not
   shown while VoiceOver is focused in the composer. It is announced politely.
 
@@ -362,7 +362,6 @@ G ──────────────────────────
  │ Project            Marketing ›   │
  APPEARANCE
  │ Theme       System · Light · Dark│  segmented control (iOS) / M3 segmented button
- │ App icon          Zefir      ›   │  → icon picker (A / B previews, confirm sheet)
  SECURITY
  │ Face ID lock            [on]     │  (policy may force on → disabled + footnote)
  │ Lock after         5 minutes ›   │  (server policy shown as read-only when set)
@@ -370,17 +369,12 @@ G ──────────────────────────
  │ Keep chats offline      [on]     │
  │ Clear offline data           ›   │
  ABOUT
- │ About Agent Zefir            ›   │  mascot full 160, version, privacy, support
+ │ About Elitea AI            ›   │  Elitea mark, version, privacy, support
  ┌──────────────────────────────────┐
  │           Sign out               │  danger text; confirm sheet explains the wipe
  └──────────────────────────────────┘
 ```
 
-- **App icon picker:** two 64 pt previews ("Zefir" and "Zefir Night"), each with a
-  radio. Choosing one shows a confirm sheet, then the OS changes the icon (iOS shows its
-  alert; on Android the copy says "the app may restart").
-  - When a self-hosted workspace connects and `productDefault` is false, a one-time
-    suggestion banner offers Zefir Night.
 - **Server-enforced policy rows** show "Set by Acme Corp AI" in a footnote. That text is
   the host or name, and it never comes from the pack's free-text fields.
 - **Android:** M3 list items, with switches on the trailing edge and section headers in
@@ -412,12 +406,12 @@ G ──────────────────────────
 
 **Lock screen (`LockGate`):**
 - the gradient ground
-- the mascot bust (96)
-- "Agent Zefir is locked" (title2)
+- the Elitea mark (96)
+- "Elitea AI is locked" (title2)
 - the workspace logo and host underneath (footnote)
 - [Unlock with Face ID] / [Unlock with fingerprint] (filled pill).
 
-**Privacy cover:** the same ground with only the bust and the logo, and no text from the
+**Privacy cover:** the same ground with only the Elitea mark and the logo, and no text from the
 conversation.
 
 ---
@@ -440,4 +434,4 @@ conversation.
 - **RTL:** layouts use `start`/`end`. Arrow glyphs mirror (`arrow.up.right` →
   auto-mirrored `arrow_outward`). Bubble sides swap.
 - **Workspace host and logo** are visible on connect, sign-in, Home, Settings, the lock
-  screen and approval cards. The mascot never overlaps them.
+  screen and approval cards. The Elitea mark never overlaps them.

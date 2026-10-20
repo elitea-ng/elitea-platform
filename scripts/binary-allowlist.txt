@@ -106,3 +106,12 @@ apps/elitea-desktop/src-tauri/icons/*
 libs/rust/vendor/zavora-slide-render/fonts/*.ttf
 libs/rust/vendor/zavora-slide-pdf/fonts/*.ttf
 libs/rust/vendor/zavora-slide/tests/corpus/*.pptx
+
+# Mobile app icons and splash (apps/elitea-mobile/docs/assets.md): the Elitea
+# logo mark rasterised for the stores and the OS. Small, regenerable, required
+# by the Expo config. Exact directories; the mark inside the app is vector.
+apps/elitea-mobile/assets/images/*.png
+apps/elitea-mobile/assets/elitea.icon/Assets/*.png
+# Development-only document scan samples the scanner preview loads in __DEV__
+# builds (src/features/chat/attachments/scan/scanSamples.ts).
+apps/elitea-mobile/assets/dev/scan/*.jpg

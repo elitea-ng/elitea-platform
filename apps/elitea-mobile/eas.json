@@ -51,10 +51,10 @@
   "submit": {
     "production": {
       "ios": {
-        "bundleIdentifier": "ca.zefir.agent"
+        "bundleIdentifier": "ca.mlops.elitea"
       },
       "android": {
-        "applicationId": "ca.zefir.agent",
+        "applicationId": "ca.mlops.elitea",
         "track": "internal",
         "releaseStatus": "draft"
       }

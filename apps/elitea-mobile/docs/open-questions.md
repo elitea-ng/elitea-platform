@@ -4,7 +4,7 @@
 
 Push is out of the MVP. Three options are on the table for later:
 
-- **Relay:** an Agent Zefir-operated push relay that holds the APNs/FCM credentials.
+- **Relay:** an Elitea AI-operated push relay that holds the APNs/FCM credentials.
   Each server sends minimal, content-free wake-ups to the relay. This option needs:
   - an operated service
   - privacy terms
@@ -17,11 +17,10 @@ Push is out of the MVP. Three options are on the table for later:
 Decide whether the payload ever carries content, or is wake-up-only with the content
 fetched over the authenticated API.
 
-## 2. Trademark clearance for "Agent Zefir"
+## 2. Trademark clearance for "Elitea AI" (closed)
 
-Run a trademark search in the target jurisdictions (CA, US, EU) and the app stores before
-publishing. Also confirm that store listing copy describes compatibility with Elitea
-nominatively, without implying affiliation.
+Closed 2026-10: the app is now part of the Elitea platform (this repository) and published
+under the Elitea name, so there is no third-party mark to clear and no non-affiliation notice.
 
 ## 3. Publisher developer accounts
 
@@ -30,7 +29,7 @@ Decide which legal entity publishes the app. Then:
 - Enroll in the Apple Developer Program as an organization, which requires a D-U-N-S
   number.
 - Register a Google Play developer account as an organization.
-- Assign ownership of the `ca.zefir.agent` identifiers and the signing keys.
+- Assign ownership of the `ca.mlops.elitea` identifiers and the signing keys.
 - Decide whether EAS manages signing credentials. **Proposed: yes**, with the
   steps, the account list and the remaining owner decisions in
   [release.md](release.md) (§1 to §6, §13).

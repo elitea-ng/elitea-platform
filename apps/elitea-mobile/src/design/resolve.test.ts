@@ -72,7 +72,7 @@ describe('brand pack → design (the pack mapper feeds the unfiltered accent)', 
 });
 
 describe('resolveDesign', () => {
-  it('unbranded: the Zefir tokens as published', () => {
+  it('unbranded: the product tokens as published', () => {
     const d = resolveDesign({ scheme: 'dark', platform: 'ios' });
     expect(d.colors).toEqual(colors.dark);
     expect(d.branded).toBe(false);
@@ -80,7 +80,7 @@ describe('resolveDesign', () => {
     expect(d.elevation.e1.shadowColor).toBe('#000000');
   });
 
-  it('a brand changes only the accent family; neutrals, status and focus stay Zefir', () => {
+  it('a brand changes only the accent family; neutrals, status and focus stay the product defaults', () => {
     const d = resolveDesign({ scheme: 'light', platform: 'ios', brand: brandInputFrom(theme()) });
     expect(d.branded).toBe(true);
     expect(d.colors.accent).toBe('#08786c'); // teal, corrected incl. the tinted gradient stop
@@ -89,7 +89,7 @@ describe('resolveDesign', () => {
     }
   });
 
-  it('productDefault keeps Zefir rose', () => {
+  it('productDefault keeps product rose', () => {
     const d = resolveDesign({ scheme: 'light', platform: 'ios', brand: brandInputFrom(theme({ productDefault: true })) });
     expect(d.colors.accent).toBe(colors.light.accent);
     expect(d.branded).toBe(false);

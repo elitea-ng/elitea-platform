@@ -8,7 +8,7 @@ driven from them.
 ## Captured transcripts
 
 `regenerate-answer.sse` and `cancelled.sse` are **captured**, verbatim, from
-the zefir-wave stack on 2026-10-06 (elitea-platform main `22403f640`, the
+the mobile-wave stack on 2026-10-06 (elitea-platform main `22403f640`, the
 Python worker, the offline mock LLM that echoes the prompt as `MOCK: …`):
 
 - `regenerate-answer.sse`: the stream of a `regenerateChatMessage`. Every
@@ -22,7 +22,7 @@ Python worker, the offline mock LLM that echoes the prompt as `MOCK: …`):
 ## Budget refusal (server source shape)
 
 `budget-refusal.sse` is composed from the elitea-platform v4.7.0 source, not
-captured: the zefir-wave mock model is not billed through the gateway budget,
+captured: the mobile-wave mock model is not billed through the gateway budget,
 so a capped project still answers. The `execution.failed` body is what
 `application/output/runtime_failure.go` writes (`{code, safe_message,
 retryable}`); the code and safe message are the registered member pair of

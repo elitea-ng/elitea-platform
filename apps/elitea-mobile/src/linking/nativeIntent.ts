@@ -5,7 +5,7 @@ import { getSession } from '@/state/session';
 /**
  * expo-router hands every URL the OS opens the app with to
  * `src/app/+native-intent.tsx`. The OAuth redirect
- * (`ca.zefir.agent:/oauth/callback?code=…`) is not a screen: the system
+ * (`ca.mlops.elitea:/oauth/callback?code=…`) is not a screen: the system
  * browser session (`openAuthSessionAsync`) consumes it. On Android the same
  * intent also reaches the router, which would otherwise try to open a
  * non-existent `/oauth/callback` route.
@@ -13,7 +13,7 @@ import { getSession } from '@/state/session';
  *  - while the app is running: ignore it (null = stay on the current screen);
  *  - as the launch URL (the app was killed during sign-in, the attempt's PKCE
  *    verifier is gone): open the app's start, which routes to sign-in.
- * A widget or Live Activity link (`agentzefir://surface/…`,
+ * A widget or Live Activity link (`elitea://surface/…`,
  * src/features/surfaces/surfaceLinks.ts) becomes the screen it names when it
  * belongs to the active workspace (and, for a conversation, the selected
  * project), else the app's start.

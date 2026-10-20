@@ -30,7 +30,7 @@ beforeEach(() => {
   setCredential({ kind: 'pat', token: 't' });
 });
 
-// DEF-3 (Agent Zefir E2E): mobile could start conversations with agents only.
+// DEF-3 (mobile E2E): mobile could start conversations with agents only.
 describe('models', () => {
   it("lists the project's chat models with the default first, as the live server answers", async () => {
     const { fetch, calls } = routedFetch({

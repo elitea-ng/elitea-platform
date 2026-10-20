@@ -67,7 +67,7 @@ export function uploadErrorText(error: unknown, name: string): string {
     case 'session':
       return 'You were signed out.';
     case 'upgrade_required':
-      return 'Update Agent Zefir to attach files.';
+      return 'Update Elitea AI to attach files.';
     case 'cancelled':
       return `The upload of ${name} was cancelled.`;
     default:

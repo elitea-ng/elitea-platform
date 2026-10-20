@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
 import { EntryScreen } from '@/features/entry/EntryScreen';
@@ -28,10 +28,10 @@ export interface ConnectWelcomeProps {
 }
 
 /**
- * The connect screen (docs/screens.md §1a): Agent Zefirca on her pedestal, "Meet Agent Zefir",
+ * The connect screen (docs/screens.md §1a): the Elitea mark, "Meet Elitea AI",
  * one sentence, and ONE primary action. The address field opens in place ("Enter workspace
  * address"), already open when the address is known (a link, the last workspace, MDM). The
- * palette is always Zefir's here: no brand applies before the user confirms a workspace.
+ * palette is always the product's here: no brand applies before the user confirms a workspace.
  *
  * No QR button: a prominent control that does nothing breaks App Review 2.1, so it comes back
  * with the scanner.
@@ -92,9 +92,9 @@ export function ConnectWelcome({
       }>
       <View style={styles.hero}>
         {adding ? null : compact ? (
-          <Mascot variant="bust" size={96} decorative />
+          <EliteaMark size={96} decorative />
         ) : (
-          <Mascot variant="hero" size={heroWidth} decorative />
+          <EliteaMark size={heroWidth} decorative />
         )}
         <Text variant="title1" heading style={styles.center}>
           {adding ? 'Add a workspace' : `Meet ${identity.displayName}`}

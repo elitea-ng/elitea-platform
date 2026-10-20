@@ -36,16 +36,16 @@ const redirectModes = () => mockExpoFetch.mock.calls.map(([, init]) => (init as 
 
 it('sends refresh, code exchange and revoke with redirects refused', async () => {
   expect(
-    await refreshTokens(FIXTURE_ORIGIN, TOKEN, { refreshToken: 'elnrt_aaaaaaaaaaaaaaaa', clientId: 'ca.zefir.agent', clientVersion: '0.1.0' }),
+    await refreshTokens(FIXTURE_ORIGIN, TOKEN, { refreshToken: 'elnrt_aaaaaaaaaaaaaaaa', clientId: 'ca.mlops.elitea', clientVersion: '0.1.0' }),
   ).toMatchObject({ kind: 'ok' });
   await exchangeAuthorizationCode(FIXTURE_ORIGIN, TOKEN, {
     code: 'code',
     codeVerifier: 'verifier',
-    redirectUri: 'agentzefir://auth',
-    clientId: 'ca.zefir.agent',
+    redirectUri: 'elitea://auth',
+    clientId: 'ca.mlops.elitea',
     clientVersion: '0.1.0',
   } as never);
-  await revokeToken(FIXTURE_ORIGIN, REVOKE, { token: 'elnrt_aaaaaaaaaaaaaaaa', clientId: 'ca.zefir.agent' });
+  await revokeToken(FIXTURE_ORIGIN, REVOKE, { token: 'elnrt_aaaaaaaaaaaaaaaa', clientId: 'ca.mlops.elitea' });
   expect(redirectModes()).toEqual(['error', 'error', 'error']);
   const [, init] = mockExpoFetch.mock.calls[0] as [string, RequestInit];
   expect(String(init.body)).toContain('refresh_token=elnrt_aaaaaaaaaaaaaaaa');
@@ -57,7 +57,7 @@ it('a redirect fails the request without re-sending the body anywhere', async ()
     throw new TypeError('redirect refused');
   });
   expect(
-    await refreshTokens(FIXTURE_ORIGIN, TOKEN, { refreshToken: 'elnrt_aaaaaaaaaaaaaaaa', clientId: 'ca.zefir.agent', clientVersion: '0.1.0' }),
+    await refreshTokens(FIXTURE_ORIGIN, TOKEN, { refreshToken: 'elnrt_aaaaaaaaaaaaaaaa', clientId: 'ca.mlops.elitea', clientVersion: '0.1.0' }),
   ).toEqual({ kind: 'network' });
   expect(mockExpoFetch).toHaveBeenCalledTimes(1);
 });

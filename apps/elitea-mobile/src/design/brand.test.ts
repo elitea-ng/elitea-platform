@@ -28,7 +28,7 @@ const CASES: [string, string, Record<Scheme, [string, Rgba]>][] = [
   ['navy', '#0B1F44', { light: ['#0B1F44', WHITE], dark: ['#718BB9', BLACK] }],
   ['teal', '#14B8A6', { light: ['#0B796D', WHITE], dark: ['#14B8A6', BLACK] }],
   ['orange', '#F97316', { light: ['#B14F0C', WHITE], dark: ['#F97316', BLACK] }],
-  ['Zefir rose', '#B4306A', { light: ['#B4306A', WHITE], dark: ['#E15A90', BLACK] }],
+  ['product rose', '#B4306A', { light: ['#B4306A', WHITE], dark: ['#E15A90', BLACK] }],
 ];
 
 describe('correctAccent', () => {
@@ -110,7 +110,7 @@ describe('brandOverrides', () => {
     expect(toOklch(hex(out.bubbleUser!)).l).toBeCloseTo(0.33, 1);
   });
 
-  it('reproduces the Zefir defaults closely from Zefir rose', () => {
+  it('reproduces the product defaults closely from product rose', () => {
     const out = brandOverrides(hex('#B4306A'), 'light')!;
     expect(out.accent).toBe('#b4306a');
     expect(out.accentOn).toBe('#ffffff');

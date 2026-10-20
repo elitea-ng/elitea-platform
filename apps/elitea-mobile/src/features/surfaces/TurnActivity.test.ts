@@ -61,7 +61,7 @@ it('the timer keeps to a fixed trailing frame, so the title gets the banner widt
   }
 });
 
-it('takes Zefir rose and the app ground per scheme, white on the dimmed lock screen', () => {
+it('takes product rose and the app ground per scheme, white on the dimmed lock screen', () => {
   const props = activityProps({ phase: 'working', preview: 'none', conversationTitle: null, approximate: false, startedAt: Date.now() });
   const draw = (env: Record<string, unknown>) => renderWidgetSource<Record<string, WidgetNode | null>>(layouts.get(TURN_ACTIVITY), props, env);
   const tint = (layout: Record<string, WidgetNode | null>) =>

@@ -1,8 +1,8 @@
-# Agent Zefir: design summary
+# Elitea AI: design summary
 
-Agent Zefir is a native iOS and Android client for Elitea AI-agent platform servers,
+Elitea AI is a native iOS and Android client for Elitea AI-agent platform servers,
 covering both the SaaS offering and self-hosted installations. One store build serves
-every customer. The app is always called "Agent Zefir", and the workspace's identity
+every customer. The app is always called "Elitea AI", and the workspace's identity
 comes from the server at runtime.
 
 ## MVP scope
@@ -11,7 +11,7 @@ comes from the server at runtime.
 
 - **Connect** to a workspace in any of four ways:
   - scanning a QR code shown by the workspace (the payload is a bare `https://host` URL or a connect link)
-  - opening a connect link, `agentzefir://connect?server=https://...`
+  - opening a connect link, `elitea://connect?server=https://...`
   - typing the server address
   - MDM managed app configuration, which pre-sets the server for enterprise-managed devices
     (the module is still to be chosen; see open questions)
@@ -22,7 +22,7 @@ comes from the server at runtime.
   192.168.x.
 - **SSO** in the system browser (ASWebAuthenticationSession / Custom Tabs). The flow is
   OAuth 2.0 authorization code with PKCE, as a public client with no client secret. The
-  redirect URI is `ca.zefir.agent:/oauth/callback`, following RFC 8252. The app relies
+  redirect URI is `ca.mlops.elitea:/oauth/callback`, following RFC 8252. The app relies
   on the server's native-client support. That server-side work is tracked upstream as a
   generic "native client support" ADR in the Elitea docs, not in this repository.
 - **Biometric lock** with `expo-local-authentication`, required on launch and on resume
@@ -84,7 +84,7 @@ comes from the server at runtime.
     `<foreignObject>`, external `href` or `url()`; web
     font stacks are ignored unless the pack ships a same-origin `.ttf`/`.otf` face. The
     workspace host on the connect confirmation is always in the system font.
-  - The app name is always "Agent Zefir".
+  - The app name is always "Elitea AI".
   - There are no per-customer builds.
 - **Icons:** the app bundles exactly two icon sets.
   1. The SaaS default.
@@ -243,7 +243,8 @@ Several workspaces can be connected at once (`src/security/workspaceRegistry.ts`
 ## Chat quick wins (client contract 1.3)
 
 The server's 1.3 work is not released yet (elitea-platform PR #1090, `507a13b0c`), so
-the pin stays at 1.2 and the gap goes through the overlay (`contract/README.md`). Every
+the app (then in its own repository, pinning the spec) carried the gap in an overlay
+(`contract/README.md`). Every
 1.3 feature is shown only when discovery says `client_contract` >= 1.3; on an older
 server it is hidden, not broken.
 
@@ -271,7 +272,7 @@ server it is hidden, not broken.
   Retry-After). The new answer streams in place of the old one. Afterwards the app checks
   that the persisted answer's `meta.execution_generation` is the regeneration id (the first
   answer carries its question's id); if not, the thread says the answer was not replaced.
-  Proven on the zefir-wave stack: same uuid, new task id and item, generation = the id.
+  Proven on the mobile-wave stack: same uuid, new task id and item, generation = the id.
 - **Speech, on the device only.** Dictation uses expo-speech-recognition with
   `requiresOnDeviceRecognition`: no audio leaves the device, and a device or language
   without an on-device model has no dictation rather than a server fallback. Apple's

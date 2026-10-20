@@ -81,7 +81,7 @@ export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: 
 }
 
 /**
- * The update screen's content (audit 2.6): Agent Zefirca on the gradient, what is needed, ONE
+ * The update screen's content (audit 2.6): the Elitea mark on the gradient, what is needed, ONE
  * filled "Get the update", "Check again" tonal, and the ways out as plain buttons (the wipe in
  * danger red, last).
  */
@@ -105,7 +105,7 @@ export function UpgradeView({
   onLogOut: () => void;
 }) {
   return (
-    <StatusScreen mascot="full" title={`Update ${identity.displayName}`} body={body}>
+    <StatusScreen mark="large" title={`Update ${identity.displayName}`} body={body}>
       <View style={styles.actions}>
         <Button title="Get the update" icon="openExternal" onPress={onGetUpdate} />
         <Button title="Check again" variant="tonal" loading={checking} onPress={onCheckAgain} />

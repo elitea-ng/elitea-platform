@@ -25,7 +25,7 @@ const SAMPLE: Line[] = [
  * keyboard handling as `/c/[id]` (keyboard-controller `KeyboardAvoidingView` with
  * `automaticOffset`, the composer padded by the home-indicator inset when the keyboard is
  * down), so the composer can be checked against the keyboard without a server.
- * `?brand=zefir|magenta|green|lemon` previews a sample brand instead of the workspace's.
+ * `?brand=default|magenta|green|lemon` previews a sample brand instead of the workspace's.
  */
 export default function DesignComposerRoute() {
   const params = useLocalSearchParams<{ brand?: string }>();
@@ -45,7 +45,7 @@ function ComposerPreview() {
     <KeyboardAvoidingView style={[styles.flex, { backgroundColor: design.colors.background }]} behavior="padding" automaticOffset>
       <Stack.Screen
         options={{
-          title: 'Zefir launch planning',
+          title: 'Elitea launch planning',
           headerShown: true,
           ...headerActionOptions(
             [
@@ -63,7 +63,7 @@ function ComposerPreview() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
-          <MessageBubble role={item.role} author={item.role === 'assistant' ? 'Zefir Helper' : null}>
+          <MessageBubble role={item.role} author={item.role === 'assistant' ? 'Elitea Helper' : null}>
             {item.text}
           </MessageBubble>
         )}

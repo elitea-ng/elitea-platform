@@ -28,11 +28,11 @@ export function useAgentIconUri(projectId: number | null, iconPath: string | nul
 
 /**
  * Who is answering, left of an answer (docs/design-system.md §4.6, §5): the agent's own icon;
- * else, for the conversation's primary agent (or a model chat), Agent Zefirca's head; else a
+ * else, for the conversation's primary agent (or a model chat), the Elitea mark; else a
  * monogram, so several icon-less agents stay distinguishable. Labelled with the AGENT's name,
- * never the mascot's. The mascot never replaces an agent's icon.
+ * never "Elitea". The mark never replaces an agent's icon.
  */
-export function AssistantAvatar({ name, imageUri, mascot, size }: { name: string; imageUri: string | null; mascot: boolean; size?: number }) {
+export function AssistantAvatar({ name, imageUri, mark, size }: { name: string; imageUri: string | null; mark: boolean; size?: number }) {
   const design = useDesign();
-  return <Avatar name={name} kind="agent" imageUri={imageUri} mascot={mascot} size={size ?? design.size.avatar.sm} decorative />;
+  return <Avatar name={name} kind="agent" imageUri={imageUri} mark={mark} size={size ?? design.size.avatar.sm} decorative />;
 }

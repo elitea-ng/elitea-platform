@@ -16,8 +16,8 @@ bug against the module named in its row.
 | Workspace (origin, server version) | | |
 | Date / tester | | |
 
-Test setup: a workspace reachable from the phone with Agent Zefir registered as a
-native client (redirect URI `ca.zefir.agent:/oauth/callback`), or a personal access
+Test setup: a workspace reachable from the phone with Elitea AI registered as a
+native client (redirect URI `ca.mlops.elitea:/oauth/callback`), or a personal access
 token for developer sign-in (development profile only, `__DEV__`),
 a device passcode, and Face ID / Touch ID / fingerprint enrolled unless an item
 says otherwise.
@@ -49,9 +49,9 @@ says otherwise.
 
 ## 3. Device lock (`src/security/lock/*`)
 
-- [ ] **Launch lock.** Cold start while signed in shows "Agent Zefir is locked" and the
+- [ ] **Launch lock.** Cold start while signed in shows "Elitea AI is locked" and the
       Face ID / fingerprint prompt opens by itself.
-- [ ] **Face ID usage string.** The iOS prompt shows "Agent Zefir uses Face ID to unlock
+- [ ] **Face ID usage string.** The iOS prompt shows "Elitea AI uses Face ID to unlock
       your workspace." (Missing string = crash on first use.)
 - [ ] **Passcode fallback.** Fail biometrics until the passcode option appears; the
       passcode unlocks the app.
@@ -101,7 +101,7 @@ says otherwise.
       queue a message offline; install this build over it: the app opens signed in to
       the same workspace and project, the cached conversations and the queued message
       are still there (no new sign-in).
-- [ ] Open `agentzefir://connect?server=https://<other host>` while signed in: "Add
+- [ ] Open `elitea://connect?server=https://<other host>` while signed in: "Add
       workspace?" names both hosts; Cancel changes nothing; "Add workspace" opens the
       confirmation for the new host, and "Back to <old host>" returns to the old one
       signed in. Confirm and sign in: both are listed in Workspaces.
@@ -152,8 +152,8 @@ says otherwise.
 
 ## 8. Native sign-in (ADR-0025, `src/auth/*`, `src/app/+native-intent.tsx`)
 
-Needs a workspace with Agent Zefir registered (`client_id` `ca.zefir.agent`,
-redirect URI `ca.zefir.agent:/oauth/callback`) and `DEPLOYMENT_URL` set.
+Needs a workspace with Elitea AI registered (`client_id` `ca.mlops.elitea`,
+redirect URI `ca.mlops.elitea:/oauth/callback`) and `DEPLOYMENT_URL` set.
 
 - [ ] **Connect confirmation.** Typing the workspace address shows the host in large
       text, the workspace name and logo, "Self-hosted"/"Hosted service" and the
@@ -161,9 +161,9 @@ redirect URI `ca.zefir.agent:/oauth/callback`) and `DEPLOYMENT_URL` set.
       nothing (relaunch lands on "Connect").
 - [ ] **System browser.** "Sign in with …" opens ASWebAuthenticationSession (iOS) /
       a Custom Tab (Android), never an in-app web view; the workspace's usual sign-in
-      runs, then its one-line confirmation names Agent Zefir and this device.
+      runs, then its one-line confirmation names Elitea AI and this device.
 - [ ] **Redirect delivery.** After confirming, the browser closes and the app signs in.
-      On Android, confirm the single-slash `ca.zefir.agent:/oauth/callback?…` intent
+      On Android, confirm the single-slash `ca.mlops.elitea:/oauth/callback?…` intent
       reaches the app and the router does not show an "unmatched route" screen.
 - [ ] **Cancel.** Closing the browser sheet returns to "Sign in" without an error.
 - [ ] **Killed during sign-in.** Kill the app while the browser is open, then finish
@@ -178,7 +178,7 @@ redirect URI `ca.zefir.agent:/oauth/callback`) and `DEPLOYMENT_URL` set.
 - [ ] **Sign out.** Settings → "Log out & wipe" revokes the device session (it shows as
       `signed_out` in the workspace's device list).
 - [ ] **Minimum version.** Raise `min_client_version` above the app's version: the
-      next request (and the connect check) shows "Update Agent Zefir"; signing out
+      next request (and the connect check) shows "Update Elitea AI"; signing out
       still works.
 - [ ] **Policy.** Change `native_client_policy` on the workspace (lock required on/off,
       idle seconds, screenshots): within one access-token lifetime (or at once after
@@ -192,7 +192,7 @@ Set `native_client_policy.offline_retention_days` > 0 on the workspace first; wi
 
 - [ ] **SQLCipher is linked.** On a dev build, open a conversation, then pull the
       app container (Xcode → Devices → Download Container; `adb exec-out run-as
-      ca.zefir.agent` on Android) and run `sqlite3 az-offline.db .tables` on
+      ca.mlops.elitea` on Android) and run `sqlite3 az-offline.db .tables` on
       `SQLite/az-offline.db`: it must fail with "file is not a database" (the file is
       encrypted). `PRAGMA cipher_version` was non-empty (the app refuses to store
       anything otherwise; a warning "this build has no SQLCipher" in the log means the
@@ -351,7 +351,7 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
 
 See [native-surfaces.md](native-surfaces.md) for what each surface may show.
 
-- [ ] **Widgets, counts only.** Add the Agent Zefir widget (small and medium) and the
+- [ ] **Widgets, counts only.** Add the Elitea AI widget (small and medium) and the
       lock-screen widgets (inline, circular, rectangular). After a sync they show
       "waiting for you", "unread" and "running" counts for the active workspace, and no
       host or conversation name.
@@ -377,10 +377,10 @@ See [native-surfaces.md](native-surfaces.md) for what each surface may show.
 - [ ] **Live Activity cleanup.** Force-quit mid-answer and relaunch: the old activity is
       gone. Log out mid-answer, or with an
       answer waiting for approval: it is gone at once, while "Signing out..." still shows.
-- [ ] **Siri: New chat.** "New chat in Agent Zefir" opens the agent picker. With
-      `allow_system_surfaces` on, "New chat with <agent> in Agent Zefir" offers the
+- [ ] **Siri: New chat.** "New chat in Elitea AI" opens the agent picker. With
+      `allow_system_surfaces` on, "New chat with <agent> in Elitea AI" offers the
       selected project's agents and opens that agent's new conversation after unlock.
-- [ ] **Siri: Ask.** "Ask <agent> in Agent Zefir": Siri does NOT ask "What do you want to
+- [ ] **Siri: Ask.** "Ask <agent> in Elitea AI": Siri does NOT ask "What do you want to
       ask?"; the app opens that agent's new chat with an empty composer. In Shortcuts, an
       Ask Agent action with a typed question opens with that question in the composer;
       nothing is sent until you tap Send. Siri reads nothing back.

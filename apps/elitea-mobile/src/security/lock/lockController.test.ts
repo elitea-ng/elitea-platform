@@ -231,7 +231,7 @@ describe('LockController', () => {
       expect(h.controller.getState().status).toBe('no_device_security');
     });
 
-    // DEF-R1 (Agent Zefir E2E run 2): with the app open and unlocked, the
+    // DEF-R1 (mobile E2E run 2): with the app open and unlocked, the
     // workspace turned require_device_lock on. Discovery and the token
     // response delivered it, but the app stayed unlocked until a relaunch.
     it('locks at once and opens the prompt when a lock becomes required while unlocked', async () => {

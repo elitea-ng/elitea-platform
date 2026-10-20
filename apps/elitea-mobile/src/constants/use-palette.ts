@@ -6,7 +6,7 @@ import type { SemanticColors } from '@/design/tokens';
 import { Colors, type Palette } from './theme';
 
 /**
- * The current palette, now a view of the design system (docs/design-system.md §6.1): the Zefir
+ * The current palette, now a view of the design system (docs/design-system.md §6.1): the Elitea
  * semantic tokens of the active scheme with the workspace's CORRECTED brand accent on top
  * (`useDesign()`, src/design/). The pack's web neutrals no longer reach the app (§3.2), and a
  * weak brand accent is corrected instead of dropped (§3.3).

@@ -138,7 +138,7 @@ export default function NewConversationScreen() {
         <ActivityIndicator style={styles.loading} color={colors.accent} />
       ) : failed ? (
         <EmptyState
-          mascot="none"
+          mark="none"
           title="Couldn't load agents or models"
           body="Check your connection and try again."
           action={{
@@ -184,9 +184,9 @@ export default function NewConversationScreen() {
           }
           ListEmptyComponent={
             needle !== '' ? (
-              <EmptyState mascot="bust" title="No agents or models found" body={`Nothing matches “${search.trim()}”.`} />
+              <EmptyState mark="small" title="No agents or models found" body={`Nothing matches “${search.trim()}”.`} />
             ) : (
-              <EmptyState mascot="bust" title="No agents or models found" body="This project has no agents or models you can chat with yet." />
+              <EmptyState mark="small" title="No agents or models found" body="This project has no agents or models you can chat with yet." />
             )
           }
           renderSectionHeader={({ section }) => (

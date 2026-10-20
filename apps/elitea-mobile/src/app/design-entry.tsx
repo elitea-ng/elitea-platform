@@ -32,7 +32,7 @@ const SAMPLE_DOCUMENT = {
  * so connect, confirm, sign-in, lock and update can be checked and screenshot without a server
  * or a sign-out. Each renders the same view its real route renders (D2). `&brand=magenta|green|
  * lemon` applies a sample workspace accent where the real screen applies the workspace's (sign-in,
- * lock, update; never connect or confirm, which are always Zefir's).
+ * lock, update; never connect or confirm, which are always the product's).
  */
 export default function DesignEntryRoute() {
   const params = useLocalSearchParams<{ screen?: string; brand?: string }>();
@@ -57,12 +57,12 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
     case 'connect':
     case 'address':
     case 'add':
-      // Connect and confirm are always Agent Zefir's own palette: no workspace brand applies yet.
+      // Connect and confirm are always Elitea AI's own palette: no workspace brand applies yet.
       return (
         <DesignProvider brand={null}>
           <ConnectWelcome
             adding={screen === 'add'}
-            backTo={screen === 'add' ? { host: 'zefir.elitea.ai', onPress: noop } : null}
+            backTo={screen === 'add' ? { host: 'mobile.elitea.ai', onPress: noop } : null}
             address={address}
             onAddressChange={setAddress}
             error={null}
@@ -77,7 +77,7 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
                   <WorkspaceRow
                     workspace={{
                       id: 'aaaaaaaaaaaa',
-                      origin: 'https://zefir.elitea.ai',
+                      origin: 'https://mobile.elitea.ai',
                       name: null,
                       logoMark: null,
                       brand: GALLERY_BRANDS.green,
@@ -145,7 +145,7 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
       return (
         <DesignProvider brand={brand}>
           <UpgradeView
-            body="This workspace needs a newer version of Agent Zefir (0.2.0 or later). Update the app to continue."
+            body="This workspace needs a newer version of Elitea AI (0.2.0 or later). Update the app to continue."
             checking={false}
             stillRequired={false}
             others

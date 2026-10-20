@@ -1,8 +1,8 @@
-// DEF-2 (Agent Zefir E2E): the system sign-in sheet (ASWebAuthenticationSession)
-// read '"AgentZefir" Wants to Use "localhost" to Sign In'. iOS words that alert
+// DEF-2 (mobile E2E): the system sign-in sheet (ASWebAuthenticationSession)
+// read '"EliteaAI" Wants to Use "localhost" to Sign In'. iOS words that alert
 // with CFBundleName, which prebuild leaves as $(PRODUCT_NAME), the Xcode
 // target name without the space; only CFBundleDisplayName (home screen) said
-// "Agent Zefir". Evaluates the Info.plist the way prebuild writes it.
+// "Elitea AI". Evaluates the Info.plist the way prebuild writes it.
 // Run with `npm run test:scripts` (node:test).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

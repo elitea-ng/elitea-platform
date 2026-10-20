@@ -35,7 +35,7 @@ beforeEach(async () => {
   setSession({ hydrated: true, serverOrigin: FIXTURE_ORIGIN, projectId: 7 });
   await startNativeSession(TokenResponseSchema.parse(tokenResponse(1)), clock, {
     origin: FIXTURE_ORIGIN,
-    clientId: 'ca.zefir.agent',
+    clientId: 'ca.mlops.elitea',
     tokenEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/token`,
     revocationEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/revoke`,
   });

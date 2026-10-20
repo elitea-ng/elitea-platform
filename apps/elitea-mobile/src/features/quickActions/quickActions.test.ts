@@ -13,7 +13,7 @@ jest.mock('expo-router', () => ({ router: { navigate: jest.fn() } }));
 const setItems = QuickActions.setItems as jest.Mock;
 const W = 'aaaaaaaaaaaa';
 const recent = [
-  { ref: '41', name: 'Zefir launch planning' },
+  { ref: '41', name: 'Elitea launch planning' },
   { ref: '35a5538d-993d-4c66-bf5f-ad8509c581d4', name: '  Quarterly\nreview  ' },
   { ref: '7', name: 'Third' },
 ];
@@ -32,13 +32,13 @@ describe('buildQuickActions', () => {
       ['new-chat', 'New chat', null, '/new'],
       ['notifications', 'Notifications', '3 unread', '/notifications'],
     ]);
-    expect(JSON.stringify(actions)).not.toContain('Zefir launch planning');
+    expect(JSON.stringify(actions)).not.toContain('Elitea launch planning');
   });
 
   it('adds the two most recent chats by name when the policy allows titles', () => {
     const actions = buildQuickActions({ workspaceId: W, projectId: 7, allowTitles: true, unread: 0, recent });
     expect(actions.slice(2).map((a) => [a.title, a.params.href])).toEqual([
-      ['Zefir launch planning', '/c/41'],
+      ['Elitea launch planning', '/c/41'],
       ['Quarterly review', '/c/35a5538d-993d-4c66-bf5f-ad8509c581d4'],
     ]);
     expect(actions[1].subtitle).toBeNull();

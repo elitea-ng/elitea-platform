@@ -26,8 +26,8 @@ const agent = (id: number, name: string, description: string, category: string |
 });
 
 export const SAMPLE_PUBLIC_AGENTS: readonly PublicAgent[] = [
-  agent(1, 'Zefir Travel Planner', 'Plans trips with flights, hotels and a day-by-day schedule.', 'Project Management', ['travel', 'planning']),
-  agent(2, 'Zefir Concierge', 'Answers questions about the office, benefits and policies.', 'Other', ['hr']),
+  agent(1, 'Elitea Travel Planner', 'Plans trips with flights, hotels and a day-by-day schedule.', 'Project Management', ['travel', 'planning']),
+  agent(2, 'Elitea Concierge', 'Answers questions about the office, benefits and policies.', 'Other', ['hr']),
   agent(3, 'Release Notes Writer', 'Turns merged pull requests into readable release notes.', 'Engineering', ['git', 'docs']),
   agent(4, 'Contract Reviewer', 'Flags unusual clauses and missing terms in contracts.', 'Legal', ['review'], 'pipeline'),
   agent(5, 'Sales Call Prep', 'Builds a one-page brief before a customer call.', 'Sales', []),
@@ -49,10 +49,10 @@ export function sampleInbox(now: number): InboxRow[] {
     age: formatAge(at(minutes), now),
   });
   return [
-    row(1, 'chat_user_mentioned', 5, false, { sender: { id: 2, name: 'Bob Zefir' }, conversation_id: '35a5538d-993d-4c66-bf5f-ad8509c581d4' }),
+    row(1, 'chat_user_mentioned', 5, false, { sender: { id: 2, name: 'Bob Elitea' }, conversation_id: '35a5538d-993d-4c66-bf5f-ad8509c581d4' }),
     row(2, 'agent_finished', 50, false, { message: 'Research finished in “Q3 planning”' }),
     row(3, 'moderation_approved', 26 * 60, true, { message: 'Your project request was approved' }),
-    row(4, 'user_was_added_to_some_project_as_teammate', 3 * 24 * 60, true, { message: 'You were added to Zefir Team' }),
+    row(4, 'user_was_added_to_some_project_as_teammate', 3 * 24 * 60, true, { message: 'You were added to Elitea Team' }),
     row(5, 'chat_user_mentioned', 12 * 24 * 60, true, { sender: { id: 3, name: 'Carol Diaz' }, conversation_id: '11111111-1111-4111-8111-111111111111' }),
   ];
 }

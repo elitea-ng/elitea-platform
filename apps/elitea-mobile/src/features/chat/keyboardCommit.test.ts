@@ -2,9 +2,9 @@ import { holdsOnlySent, isKeyboardCommit, KEYBOARD_COMMIT_WINDOW_MS } from '@/fe
 
 describe('isKeyboardCommit (#56)', () => {
   it.each([
-    ['hello zefir', 'hello Zefir'],
-    ['hello zefir', 'hello Zefir '],
-    ['hello zefir ', 'hello Zefir '],
+    ['hello elitea', 'hello Elitea'],
+    ['hello elitea', 'hello Elitea '],
+    ['hello elitea ', 'hello Elitea '],
     ['see you tomorow', 'see you tomorrow'],
     ['i want alot', 'i want a lot'],
     ['cafe', 'café'],
@@ -14,11 +14,11 @@ describe('isKeyboardCommit (#56)', () => {
   });
 
   it.each([
-    ['hello zefir', 'hello zefir and more'],
-    ['hello zefir', 'goodbye zefir'],
-    ['hello zefir', 'hello'],
-    ['hello zefir', ''],
-    ['hello zefir', 'hello completelydifferent'],
+    ['hello elitea', 'hello elitea and more'],
+    ['hello elitea', 'goodbye elitea'],
+    ['hello elitea', 'hello'],
+    ['hello elitea', ''],
+    ['hello elitea', 'hello completelydifferent'],
     ['', 'typed'],
   ])('%p → %p is the user', (sent, current) => {
     expect(isKeyboardCommit(sent, current)).toBe(false);
@@ -27,9 +27,9 @@ describe('isKeyboardCommit (#56)', () => {
 
 describe('holdsOnlySent', () => {
   it('only a commit right after Send counts as the keyboard', () => {
-    expect(holdsOnlySent('hi zefir', 'hi zefir', 0, null)).toBe(true);
-    expect(holdsOnlySent('hi zefir', 'hi Zefir', 1000, 1000 + 50)).toBe(true);
-    expect(holdsOnlySent('hi zefir', 'hi Zefir', 1000, 1000 + KEYBOARD_COMMIT_WINDOW_MS + 1)).toBe(false);
-    expect(holdsOnlySent('hi zefir', 'hi Zefir', 1000, null)).toBe(false);
+    expect(holdsOnlySent('hi elitea', 'hi elitea', 0, null)).toBe(true);
+    expect(holdsOnlySent('hi elitea', 'hi Elitea', 1000, 1000 + 50)).toBe(true);
+    expect(holdsOnlySent('hi elitea', 'hi Elitea', 1000, 1000 + KEYBOARD_COMMIT_WINDOW_MS + 1)).toBe(false);
+    expect(holdsOnlySent('hi elitea', 'hi Elitea', 1000, null)).toBe(false);
   });
 });

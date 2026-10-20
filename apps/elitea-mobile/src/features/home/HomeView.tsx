@@ -260,7 +260,7 @@ export function HomeView({
 
       {noProject ? (
         <EmptyState
-          mascot="bust"
+          mark="small"
           title="No active project"
           body="Your account has no active project in this workspace. Ask your workspace admin to add you to one, or switch workspace."
         />
@@ -287,11 +287,11 @@ export function HomeView({
           {recents === null ? (
             <ActivityIndicator color={colors.accent} style={styles.loading} />
           ) : recentsFailed && recents.length === 0 ? (
-            <EmptyState mascot="none" title="Couldn't load your chats" body="Check your connection and try again." action={{ title: 'Try again', onPress: onRetry }} />
+            <EmptyState mark="none" title="Couldn't load your chats" body="Check your connection and try again." action={{ title: 'Try again', onPress: onRetry }} />
           ) : recents.length === 0 ? (
             // No action of its own (EH-4): the New chat card and the chips above already start one, and a
             // button this low sat under the floating tab bar at rest.
-            <EmptyState mascot="bust" title="Ask me anything" body="Your chats show up here. Start one with New chat or your voice." />
+            <EmptyState mark="small" title="Ask me anything" body="Your chats show up here. Start one with New chat or your voice." />
           ) : (
             <View style={styles.recents}>
               {recents.slice(0, HOME_RECENTS).map((chat) => (

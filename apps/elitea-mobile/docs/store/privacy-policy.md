@@ -1,23 +1,23 @@
-# Privacy policy (draft for https://agent.zefir.ca/privacy)
+# Privacy policy (draft for https://elitea.ai/privacy)
 
 > Draft for the owner. Replace every `[bracketed]` value, have it reviewed
 > (Canadian PIPEDA, Quebec Law 25, GDPR and the US state laws apply depending on
-> where users are), and publish it at `https://agent.zefir.ca/privacy` before
+> where users are), and publish it at `https://elitea.ai/privacy` before
 > the first external TestFlight round. It must match the App Store and Play
 > answers in privacy.md; it follows answer A ("Who collects").
 
 ---
 
-**Agent Zefir Privacy Policy**
+**Elitea AI Privacy Policy**
 
 Last updated: [date]
 
-Agent Zefir ("the app") is published by [legal entity name], [address]
+Elitea AI ("the app") is published by [legal entity name], [address]
 ("we", "us"). This policy explains what the app does with your information.
 
 ### The short version
 
-- Agent Zefir is a client for AI-agent workspaces run by your organization or
+- Elitea AI is a client for AI-agent workspaces run by your organization or
   by a hosting provider your organization chose. Your conversations go to that
   workspace, not to us.
 - We have no advertising, no analytics, no tracking and no crash reporting in
@@ -39,7 +39,7 @@ and this policy covers it too.
 Only to the workspace address you entered, scanned or opened, and only over
 encrypted connections (HTTPS):
 
-- **Sign-in and device information**: a device label such as "Agent Zefir on
+- **Sign-in and device information**: a device label such as "Elitea AI on
   iPhone", the platform (iOS or Android) and the app version, so you and your
   administrator can see and sign out your devices. No hardware identifiers.
 - **What you send**: your messages, the photos, pictures and files you choose
@@ -110,6 +110,3 @@ We will post changes here and update the date above. Questions or requests:
 [privacy contact email], [postal address]. If you are in Canada you may also
 contact the Office of the Privacy Commissioner of Canada; in the EU or UK, your
 data protection authority.
-
-Agent Zefir is an independent app. Elitea is a trademark of its respective
-owner; Agent Zefir is not affiliated with or endorsed by it.

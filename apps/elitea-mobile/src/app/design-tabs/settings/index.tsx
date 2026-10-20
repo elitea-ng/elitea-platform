@@ -17,10 +17,9 @@ import { setSchemePreference, useSchemePreference } from '@/state/appearance';
 export default function DesignSettingsPreview() {
   const design = useDesign();
   const scheme = useSchemePreference();
-  const [workspaceIcon, setWorkspaceIcon] = useState(false);
   const params = useGlobalSearchParams<{ brand?: string }>();
   // A sample brand stands for a branded workspace: its name shows over the host.
-  const [branded] = useState(() => params.brand !== undefined && params.brand !== 'zefir');
+  const [branded] = useState(() => params.brand !== undefined && params.brand !== 'default');
   return (
     <ScrollView
       contentInsetAdjustmentBehavior="automatic"
@@ -34,7 +33,6 @@ export default function DesignSettingsPreview() {
         projectId={SAMPLE_PROJECT_ID}
         projectName={SAMPLE_PROJECT_NAME}
         onProject={() => {}}
-        appIcon={{ workspace: workspaceIcon, onChange: setWorkspaceIcon }}
         workspaceCount={2}
         developerSignIn={false}
         scheme={scheme}

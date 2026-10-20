@@ -1,7 +1,7 @@
 # Managed app configuration (MDM AppConfig)
 
 An MDM (Jamf, Intune, Kandji, Workspace ONE, ...) can push a configuration
-dictionary to Agent Zefir on iOS. The app reads it from the managed
+dictionary to Elitea AI on iOS. The app reads it from the managed
 UserDefaults key `com.apple.configuration.managed` at launch and again
 whenever the MDM changes or removes it while the app runs
 (`src/security/managedConfig.ts`). Removing the AppConfig, or unenrolling

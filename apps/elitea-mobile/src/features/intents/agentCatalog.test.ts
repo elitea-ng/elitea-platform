@@ -9,7 +9,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 
 const mock = intentsMock as unknown as { catalogs: Map<string, unknown[]>; pending: { id: string; name: string; params: Record<string, unknown>; createdAt: number }[] };
 const agents = [
-  { id: 5, name: 'Zefir Concierge', description: 'Public agent' },
+  { id: 5, name: 'Elitea Concierge', description: 'Public agent' },
   { id: 6, name: '  Contract\nReviewer ', description: '' },
   { id: 5, name: 'Duplicate', description: '' },
   { id: 7, name: '   ', description: '' },
@@ -29,7 +29,7 @@ it('is EMPTY unless the workspace policy allows titles outside the app', () => {
 
 it('names the agents with workspace-scoped ids when titles are allowed', () => {
   expect(buildAgentCatalog({ workspaceId: 'aaaaaaaaaaaa', projectId: 7, allowTitles: true, agents })).toEqual([
-    { id: 'aaaaaaaaaaaa:7:5', title: 'Zefir Concierge', hideInSpotlight: true },
+    { id: 'aaaaaaaaaaaa:7:5', title: 'Elitea Concierge', hideInSpotlight: true },
     { id: 'aaaaaaaaaaaa:7:6', title: 'Contract Reviewer', hideInSpotlight: true },
   ]);
   const many = Array.from({ length: 30 }, (_, i) => ({ id: i + 1, name: `Agent ${i + 1}`, description: '' }));

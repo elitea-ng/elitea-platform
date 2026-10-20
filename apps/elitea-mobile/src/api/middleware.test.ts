@@ -260,7 +260,7 @@ describe('guarded fetch: 401 and 426', () => {
     expect(getSession().upgradeRequired).toBeNull();
   });
 
-  // DEF-R4 (Agent Zefir E2E run 2): after the workspace lowered its minimum
+  // DEF-R4 (mobile E2E run 2): after the workspace lowered its minimum
   // again, the update screen stayed until a relaunch.
   it('a signed-in 2xx while the update screen is up re-checks the minimum version', async () => {
     signIn();

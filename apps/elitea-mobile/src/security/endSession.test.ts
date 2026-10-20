@@ -80,7 +80,7 @@ const cacheEntries = jest.requireMock<{ __cacheEntries: { name: string; delete: 
 describe('endSession', () => {
   it('deletes the caches directory, where the URL cache keeps tokens and transcripts in plaintext (DEF-R2)', async () => {
     signedIn();
-    const remaining = new Set(['ca.zefir.agent', 'com.apple.nsurlsessiond']);
+    const remaining = new Set(['ca.mlops.elitea', 'com.apple.nsurlsessiond']);
     cacheEntries.splice(
       0,
       cacheEntries.length,
@@ -97,7 +97,7 @@ describe('endSession', () => {
   it('reports a cache entry it could not delete and still finishes the wipe', async () => {
     signedIn();
     const kept = { name: 'locked', delete: jest.fn(() => { throw new Error('busy'); }) };
-    const gone = { name: 'ca.zefir.agent', delete: jest.fn() };
+    const gone = { name: 'ca.mlops.elitea', delete: jest.fn() };
     cacheEntries.splice(0, cacheEntries.length, kept, gone);
 
     const result = await endSession({ reason: 'user_logout' });

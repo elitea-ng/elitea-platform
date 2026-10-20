@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 
 import { devSignInEnabled } from '@/auth/devSignIn';
 import { identity } from '@/config/identity';
-import { offerWorkspaceIconOnce } from '@/features/appIcon/appIcon';
 import { ConnectConfirm } from '@/features/connect/ConnectConfirm';
 import { ConnectWelcome } from '@/features/entry/ConnectWelcome';
 import { checkWorkspace, confirmConnection, displayHost, type ConnectCheck } from '@/features/connect/connectFlow';
@@ -45,7 +44,7 @@ const END_REASON_TEXT: Partial<Record<EndReason, (host: string) => string>> = {
 };
 
 export default function ConnectScreen() {
-  // Deep links `agentzefir://connect?server=...` land here with `server` as a search param.
+  // Deep links `elitea://connect?server=...` land here with `server` as a search param.
   const params = useLocalSearchParams<{ server?: string }>();
   const incoming = typeof params.server === 'string' ? params.server : '';
   // After a rejected credential the last origin is kept (in memory only) as a hint.
@@ -125,9 +124,7 @@ export default function ConnectScreen() {
     setBusy(true);
     const stored = await confirmConnection(check);
     setBusy(false);
-    // On success the root layout's guards route to /sign-in. A self-hosted workspace offers the
-    // neutral "Zefir Night" icon, once per device (docs/design-system.md §3.6).
-    if (stored && check.kind === 'confirm') void offerWorkspaceIconOnce(check.document);
+    // On success the root layout's guards route to /sign-in.
     if (!stored) {
       setCheck(null);
       setError('The workspace address could not be saved on this device. Try again.');

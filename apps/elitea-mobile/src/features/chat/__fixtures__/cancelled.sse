@@ -1,4 +1,4 @@
-: fixture cancelled.sse: CAPTURED 2026-10-06 from the zefir-wave stack (main 22403f640): a [[mock:slow]] answer stopped with DELETE /elitea_core/task/prompt_lib/{project}/{response_message_id} (204) after a few chunks; the stream ends with execution.failed CANCELLED
+: fixture cancelled.sse: CAPTURED 2026-10-06 from the mobile-wave stack (main 22403f640): a [[mock:slow]] answer stopped with DELETE /elitea_core/task/prompt_lib/{project}/{response_message_id} (204) after a few chunks; the stream ends with execution.failed CANCELLED
 
 : connected
 

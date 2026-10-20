@@ -9,7 +9,7 @@ import { nativeTabsProps } from '@/ui';
 /**
  * Development builds only: the signed-in shell with sample data (`/design-tabs`), so the native
  * tab bar, large titles, header search and bar buttons can be checked and screenshot without a
- * server. The bar uses the same `nativeTabsProps` as the real tabs. `?brand=zefir|magenta|green|
+ * server. The bar uses the same `nativeTabsProps` as the real tabs. `?brand=default|magenta|green|
  * lemon` (read once, when the preview opens) previews a sample brand instead of the connected
  * workspace's; without it the connected workspace's brand applies, as in the real tabs.
  */

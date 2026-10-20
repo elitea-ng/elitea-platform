@@ -16,7 +16,7 @@ import { fakeStreamTransport } from '@/test/fakeStreamTransport';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-crypto', () => ({ randomUUID: jest.fn(() => '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b') }));
 
-// The answer of the captured cancelled.sse (zefir-wave, main 22403f640).
+// The answer of the captured cancelled.sse (mobile-wave, main 22403f640).
 const ANSWER = 'aa5ea578-4aae-55a8-a361-08dae0136a9e';
 const P = 90501;
 const CONV = '9bb96505-d0fb-4473-be67-4884de5047d3';

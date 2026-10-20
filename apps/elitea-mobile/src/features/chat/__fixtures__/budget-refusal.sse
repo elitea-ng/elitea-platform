@@ -2,7 +2,7 @@
 : the failed frame is the shape elitea-main v4.7.0 projects for a worker MODEL_BUDGET_EXHAUSTED
 : (application/output/runtime_failure.go {code,safe_message,retryable}; codes and safe messages
 : from transport/runtimegrpc/output/server.go budgetScopePolicy, #6732). Not captured: the
-: zefir-wave mock model is not billed through the gateway budget.
+: mobile-wave mock model is not billed through the gateway budget.
 
 id: 1
 event: execution.node_event

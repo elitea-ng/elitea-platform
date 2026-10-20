@@ -194,7 +194,7 @@ describe('Button alignment (S1)', () => {
 
   it('is centred under the centred title and body of a status screen; a block button still stretches', async () => {
     await inScheme(
-      <StatusScreen mascot="bust" title="You're offline" body="Connect and try again.">
+      <StatusScreen mark="small" title="You're offline" body="Connect and try again.">
         <Button title="Try again" size="small" variant="tonal" onPress={() => {}} />
         <Button title="Back to Discover" variant="tonal" block={false} onPress={() => {}} />
         <Button title="Get the update" onPress={() => {}} />
@@ -432,10 +432,10 @@ describe('avatars', () => {
     }
   });
 
-  it('an agent without an icon is the mascot labelled with the AGENT name; others a monogram', async () => {
+  it('an agent without an icon is the Elitea mark labelled with the AGENT name; others a monogram', async () => {
     await inScheme(
       <>
-        <Avatar kind="agent" name="Research" mascot />
+        <Avatar kind="agent" name="Research" mark />
         <Avatar kind="agent" name="HR helper" />
       </>,
     );
@@ -445,15 +445,15 @@ describe('avatars', () => {
 });
 
 describe('empty state (§4.9)', () => {
-  it('has a heading, one action, and a decorative mascot (none for data-loss errors)', async () => {
+  it('has a heading, one action, and a decorative Elitea mark (none for data-loss errors)', async () => {
     const onPress = jest.fn();
     await inScheme(<EmptyState title="Ask me anything" body="Start a chat." action={{ title: 'New chat', onPress }} />);
     expect(screen.getByRole('header', { name: 'Ask me anything' })).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'New chat' }));
     expect(onPress).toHaveBeenCalled();
     expect(screen.queryByRole('image')).toBeNull();
-    const { toJSON } = await inScheme(<EmptyState mascot="none" title="Something went wrong" />);
-    expect(JSON.stringify(toJSON())).not.toContain('mascot');
+    const { toJSON } = await inScheme(<EmptyState mark="none" title="Something went wrong" />);
+    expect(JSON.stringify(toJSON())).not.toContain('elitea-mark');
   });
 });
 

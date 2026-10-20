@@ -6,7 +6,7 @@ index 9dc9082..f017040 100644
              )
            }
  
-+          // Patched (agent-zefir SEC-2): supportsOnDeviceRecognition() checks the
++          // Patched (elitea-mobile SEC-2): supportsOnDeviceRecognition() checks the
 +          // system default language; the language asked for here may have no
 +          // on-device model. Refuse rather than recognise on Apple's servers.
 +          if options.requiresOnDeviceRecognition,
@@ -30,7 +30,7 @@ index b278425..6574d54 100644
      return recognizer?.locale.identifier
    }
  
-+  /// Patched (agent-zefir SEC-2): on-device support of THIS recognizer's language.
++  /// Patched (elitea-mobile SEC-2): on-device support of THIS recognizer's language.
 +  func supportsOnDeviceRecognition() -> Bool {
 +    return recognizer?.supportsOnDeviceRecognition ?? false
 +  }
@@ -45,7 +45,7 @@ index b278425..6574d54 100644
 -    if recognizer.supportsOnDeviceRecognition {
 -      request.requiresOnDeviceRecognition = options.requiresOnDeviceRecognition
 -    }
-+    // Patched (agent-zefir SEC-2): always pass the flag. Unpatched, a language
++    // Patched (elitea-mobile SEC-2): always pass the flag. Unpatched, a language
 +    // without an on-device model silently fell back to Apple's servers; with the
 +    // flag set, iOS fails the task instead of sending audio off the device.
 +    request.requiresOnDeviceRecognition = options.requiresOnDeviceRecognition

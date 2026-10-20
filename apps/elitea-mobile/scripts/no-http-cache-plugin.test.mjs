@@ -1,4 +1,4 @@
-// DEF-R2 (Agent Zefir E2E run 2): API responses, the native token response
+// DEF-R2 (mobile E2E run 2): API responses, the native token response
 // (access + refresh token) included, were written by the default URL sessions
 // to the plaintext NSURLCache (Library/Caches/<bundle id>/Cache.db) and
 // survived revoke and "Log out & wipe". plugins/withNoHttpCache.js turns the
@@ -88,7 +88,7 @@ describe('no plaintext URL cache (DEF-R2)', () => {
 // their OkHttp client with OkHttpClientProvider.createClient(context), which
 // attaches a 10 MB plaintext disk cache (cacheDir/http-cache).
 // The SDK 58 template MainApplication.kt, as `expo prebuild` writes it.
-const MAIN_APPLICATION = `package ca.zefir.agent
+const MAIN_APPLICATION = `package ca.mlops.elitea
 
 import android.app.Application
 import android.content.res.Configuration

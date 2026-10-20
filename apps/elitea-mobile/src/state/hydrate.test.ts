@@ -252,7 +252,7 @@ describe('hydrateSession', () => {
       refreshToken: JSON.stringify({
         v: 1,
         origin: ORIGIN,
-        clientId: 'ca.zefir.agent',
+        clientId: 'ca.mlops.elitea',
         tokenEndpoint: `${ORIGIN}/api/v2/auth/native/token`,
         revocationEndpoint: `${ORIGIN}/api/v2/auth/native/revoke`,
         refreshToken: opaqueToken('elnrt_', 1),
@@ -279,7 +279,7 @@ describe('hydrateSession', () => {
       refreshToken: JSON.stringify({
         v: 1,
         origin: 'https://old.example.com',
-        clientId: 'ca.zefir.agent',
+        clientId: 'ca.mlops.elitea',
         tokenEndpoint: 'https://old.example.com/api/v2/auth/native/token',
         revocationEndpoint: 'https://old.example.com/api/v2/auth/native/revoke',
         refreshToken: opaqueToken('elnrt_', 1),
@@ -367,7 +367,7 @@ describe('upgrade from the single-workspace layout', () => {
     refreshToken: JSON.stringify({
       v: 1,
       origin: ORIGIN,
-      clientId: 'ca.zefir.agent',
+      clientId: 'ca.mlops.elitea',
       tokenEndpoint: `${ORIGIN}/api/v2/auth/native/token`,
       revocationEndpoint: `${ORIGIN}/api/v2/auth/native/revoke`,
       refreshToken: opaqueToken('elnrt_', 1),

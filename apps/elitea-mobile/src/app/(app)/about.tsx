@@ -5,7 +5,7 @@ import { getClientVersion } from '@/api/clientVersion';
 import { identity } from '@/config/identity';
 import { AboutView } from '@/features/settings/AboutView';
 
-/** Settings → About Agent Zefir. */
+/** Settings → About Elitea AI. */
 export default function AboutScreen() {
   return (
     <AboutView

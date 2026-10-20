@@ -69,7 +69,7 @@ export default function RootLayout() {
   usePrivacyProtection();
   return (
     <QueryClientProvider client={queryClient}>
-      {/* One design for the whole app: scheme, Zefir tokens, the corrected workspace accent,
+      {/* One design for the whole app: scheme, product tokens, the corrected workspace accent,
           accessibility modifiers (docs/design-system.md §6.1). */}
       <DesignProvider>
         <KeyboardProvider>
@@ -85,7 +85,7 @@ export default function RootLayout() {
 
 /**
  * Navigation chrome (headers, cards, the tab bar's tint) from the same tokens as the screens:
- * the Zefir neutrals of the scheme and the corrected workspace accent. The status bar follows
+ * the product neutrals of the scheme and the corrected workspace accent. The status bar follows
  * the scheme (dark content on the light grounds, light on the night ones).
  */
 function NavigationTheme({ children }: { children: ReactNode }) {

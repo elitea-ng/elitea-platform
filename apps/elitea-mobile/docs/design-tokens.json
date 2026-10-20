@@ -1,5 +1,5 @@
 {
-  "$description": "Agent Zefir design tokens v1. Semantic colour sets for light and dark, the Agent Zefir primitives they are built from, and the non-colour scales. Read with design-system.md. Contrast ratios in `proofs` are WCAG 2.x, computed with the same formula as src/theme/color.ts (glass is proven composited over every gradient stop).",
+  "$description": "Elitea AI design tokens v1. Semantic colour sets for light and dark, the Elitea AI primitives they are built from, and the non-colour scales. Read with design-system.md. Contrast ratios in `proofs` are WCAG 2.x, computed with the same formula as src/theme/color.ts (glass is proven composited over every gradient stop).",
   "version": "1.0.0",
   "primitives": {
     "marshmallow": { "50": "#FFF4F8", "100": "#FCE4EE", "200": "#F8C7DA", "300": "#F2A6C3", "400": "#E77AA4", "500": "#D04F86", "600": "#B4306A", "700": "#93244F", "800": "#6E1A3B", "900": "#3D1E2D" },
@@ -198,14 +198,14 @@
       "offline": ["wifi.slash", "wifi_off"], "search": ["magnifyingglass", "search"], "agent": ["sparkle", "smart_toy"]
     }
   },
-  "mascot": {
-    "name": "Agent Zefirca",
-    "assets": {
-      "bust": { "use": "agent avatar fallback, greeting avatar fallback, app icon foreground", "sizes": [24, 28, 36, 48, 64], "format": "PNG/WebP with alpha @1x/@2x/@3x, plus 1024 master" },
-      "full": { "use": "connect hero, empty states, About", "sizes": [96, 160, 240], "format": "PNG/WebP with alpha @2x/@3x, 2048 master" },
-      "silhouette": { "use": "Android themed (monochrome) icon, notification small icon (future)", "format": "single-colour vector (SVG -> VectorDrawable), white on transparent" }
+  "eliteaMark": {
+    "name": "Elitea",
+    "source": "apps/elitea-web/public/brand/logo-mark.svg (vector; src/components/EliteaMark.tsx)",
+    "variants": {
+      "mark": { "use": "connect hero, empty states, About, lock and privacy covers", "sizes": [64, 96, 112, 160] },
+      "avatar": { "use": "the primary agent avatar fallback, on the theme surface", "sizes": [24, 28, 36, 48] }
     },
-    "minSize": 24, "clearSpace": "0.15 x rendered width", "darkModeTreatment": "same artwork + soft rim light rgba(255,255,255,0.10) halo; never invert or recolour"
+    "minSize": 24, "treatment": "never recoloured, tinted with the workspace brand or inverted"
   },
   "branding": {
     "overridable": ["accent", "accentPressed", "accentOn", "accentSoft", "accentSoftOn", "bubbleUser", "bubbleUserText", "chipSelected", "chipSelectedText", "backgroundGradient.stops[0] (tint only)", "orb.stops[0] (tint only)", "logoMark", "logoFull", "productName", "fontFamily (display/title roles)"],

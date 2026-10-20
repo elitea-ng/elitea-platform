@@ -9,8 +9,8 @@ const C = '33333333-3333-4333-8333-333333333333';
 
 const row = (id: string, extra: Record<string, unknown> = {}) => ({
   id,
-  client_id: 'ca.zefir.agent',
-  client_name: 'Agent Zefir',
+  client_id: 'ca.mlops.elitea',
+  client_name: 'Elitea AI',
   device_name: 'iPhone',
   platform: 'ios',
   client_version: '0.1.0',
@@ -67,14 +67,14 @@ describe('DevicesView', () => {
 
   it('shows this device apart, with no sign-out of its own', async () => {
     await view();
-    const mine = screen.getByLabelText('iPhone, this device, iOS · Agent Zefir 0.1.0, Active now');
+    const mine = screen.getByLabelText('iPhone, this device, iOS · Elitea AI 0.1.0, Active now');
     expect(mine.props.accessibilityActions).toBeUndefined();
   });
 
   it('another device signs out through its row action (the swipe path), host named in the footer', async () => {
     const onRevoke = jest.fn(async () => true);
     await view(onRevoke);
-    const other = screen.getByLabelText('Pixel 9, Android · Agent Zefir 0.1.0, Last active 1d');
+    const other = screen.getByLabelText('Pixel 9, Android · Elitea AI 0.1.0, Last active 1d');
     expect(other.props.accessibilityActions).toEqual([{ name: 'delete', label: 'Sign out' }]);
     await fireEvent(other, 'accessibilityAction', { nativeEvent: { actionName: 'delete' } });
     expect(onRevoke).toHaveBeenCalledWith(expect.objectContaining({ id: A }));

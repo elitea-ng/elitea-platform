@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Mascot } from '@/components/Mascot';
+import { EliteaMark } from '@/components/EliteaMark';
 import { identity } from '@/config/identity';
 import { MaxContentWidth } from '@/constants/theme';
 import { useDesign } from '@/design/DesignProvider';
@@ -81,8 +81,8 @@ export function LockGate({ state }: { state: LockState }) {
 }
 
 /**
- * The lock screen (docs/screens.md §9; audit 2.5): the gradient ground, Agent Zefirca's bust,
- * "Agent Zefir is locked", the workspace (logo and host) under it, ONE filled unlock button named
+ * The lock screen (docs/screens.md §9; audit 2.5): the gradient ground, the Elitea mark,
+ * "Elitea AI is locked", the workspace (logo and host) under it, ONE filled unlock button named
  * for the device's biometric, and the destructive way out as a small plain button at the bottom
  * that asks first. No conversation content is ever drawn here.
  */
@@ -121,7 +121,7 @@ export function LockView({
               { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 16, paddingHorizontal: space.screenGutter },
             ]}>
             <View style={styles.content}>
-              <Mascot variant="bust" size={96} decorative />
+              <EliteaMark size={96} decorative />
               <Text variant="title2" heading style={styles.center}>
                 {noSecurity ? 'Set a device passcode' : `${identity.displayName} is locked`}
               </Text>

@@ -86,7 +86,7 @@ describe('canConnect', () => {
   });
 
   it('blocks an outdated app and an unsupported contract even in development', async () => {
-    expect(canConnect(await confirm(discoveryDocument({ min_client_version: { 'ca.zefir.agent': '9.0.0' } })), true)).toBe(false);
+    expect(canConnect(await confirm(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '9.0.0' } })), true)).toBe(false);
     expect(canConnect(await confirm(discoveryDocument({ client_contract: '2.0' })), true)).toBe(false);
   });
 

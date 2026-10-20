@@ -4,7 +4,7 @@
  *
  * Accepted inputs:
  *  - connect links: `<scheme>://connect?server=<url-encoded https URL>`, where
- *    `<scheme>` is one of the configured connect schemes (`zefir`, `agentzefir`)
+ *    `<scheme>` is one of the configured connect schemes (`elitea`)
  *  - a bare URL such as a QR payload or a typed address: `https://host[:port][/any/path]`
  *  - a typed host without a scheme (`host[:port]`), which is treated as https
  *
