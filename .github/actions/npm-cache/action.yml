@@ -29,6 +29,14 @@ runs:
         set -euo pipefail
         [ -f "$GITHUB_WORKSPACE/$LOCKFILE" ] || { echo "::error::cache-dependency-path '$LOCKFILE' is not a file"; exit 1; }
         echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+        # A cold cache makes `npm ci` fetch every tarball from the registry,
+        # and one ECONNRESET with npm's default 2 retries fails the job. Every
+        # npm call later in this job inherits these through GITHUB_ENV.
+        {
+          echo "NPM_CONFIG_FETCH_RETRIES=6"
+          echo "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000"
+          echo "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=60000"
+        } >> "$GITHUB_ENV"
         # process.arch (x64, arm64), which is what setup-node put in the key;
         # runner.arch spells it X64.
         echo "arch=$(node -p process.arch)" >> "$GITHUB_OUTPUT"
