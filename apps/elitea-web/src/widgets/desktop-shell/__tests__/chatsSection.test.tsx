@@ -36,7 +36,7 @@ const LISTING = {
   total_folders: 0,
 };
 
-function Section(): React.JSX.Element {
+function Section({ canArchive = true }: { readonly canArchive?: boolean }): React.JSX.Element {
   const location = useLocation();
   // A remount of the list over the same query cache (the sidebar collapsed and opened again).
   const [shown, setShown] = useState(true);
@@ -45,15 +45,15 @@ function Section(): React.JSX.Element {
       <button type="button" onClick={() => setShown((current) => !current)}>
         toggle list
       </button>
-      {shown && <ChatsSection projectId="42" pathname={location.pathname} />}
+      {shown && <ChatsSection projectId="42" pathname={location.pathname} canArchive={canArchive} />}
       <p data-testid="where">{location.pathname}</p>
       <Outlet />
     </>
   );
 }
 
-function mount(path = '/chat/72') {
-  const rootRoute = createRootRoute({ component: Section });
+function mount(path = '/chat/72', canArchive = true) {
+  const rootRoute = createRootRoute({ component: () => <Section canArchive={canArchive} /> });
   const page = () => null;
   const router = createRouter({
     routeTree: rootRoute.addChildren([
@@ -135,6 +135,15 @@ describe('ChatsSection', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(screen.queryByText('Postgres connection math')).not.toBeInTheDocument());
     expect(archived).toEqual(['75']);
+  });
+
+  it('disables Archive without the archive right (the server would answer 403)', async () => {
+    const user = userEvent.setup();
+    mount('/chat/72', false);
+    await screen.findByText('Postgres connection math');
+    const target = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('Postgres'));
+    await user.click(within(target as HTMLElement).getByTestId('shell-conversation-more'));
+    expect(await screen.findByRole('menuitem', { name: 'Archive' })).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('keeps an archived row out of the list when the list mounts again over the same cache', async () => {

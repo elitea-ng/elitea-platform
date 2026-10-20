@@ -291,7 +291,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
                     : {})}
                 />
                 {item.value === 'chat' && chatsOpen && (
-                  <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} />
+                  <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} canArchive={permissions.has(PERMISSIONS.chat.archive)} />
                 )}
               </li>
             ))}

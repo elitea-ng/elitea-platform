@@ -64,7 +64,7 @@ beforeEach(() => {
       unarchived.push(String(params['conversationId']));
       return HttpResponse.json({ ok: true });
     }),
-    http.get(`${BASE}/auth/permissions/prompt_lib/42`, () => HttpResponse.json([])),
+    http.get(`${BASE}/auth/permissions/prompt_lib/42`, () => HttpResponse.json([{ name: 'models.chat.conversation.edit', enabled: true }])),
   );
 });
 
@@ -95,6 +95,14 @@ describe('ArchivedChatsPage', () => {
     await waitFor(() => expect(screen.queryByText('Old sprint retro')).not.toBeInTheDocument());
     expect(unarchived).toEqual(['61']);
     expect(screen.getByText('Spike: socket.io removal')).toBeInTheDocument();
+  });
+
+  it('offers no Unarchive without the archive right (the server would answer 403)', async () => {
+    server.use(http.get(`${BASE}/auth/permissions/prompt_lib/42`, () => HttpResponse.json([])));
+    mount();
+    await screen.findByText('Old sprint retro');
+    expect(within(rowOf('Old sprint retro')).queryByTestId('archived-conversation-unarchive')).not.toBeInTheDocument();
+    expect(within(rowOf('Old sprint retro')).getByTestId('archived-conversation-delete')).toBeInTheDocument();
   });
 
   it('puts the row back when the unarchive fails', async () => {

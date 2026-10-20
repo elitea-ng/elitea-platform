@@ -37,6 +37,8 @@ export interface ConversationRowActions {
   readonly archive: (conversation: Conversation) => void;
   readonly remove: (conversation: Conversation) => void;
   readonly canModify: (conversation: Conversation) => boolean;
+  /** Holds the project's archive right (`PERMISSIONS.chat.archive`); without it the server answers 403. */
+  readonly canArchive: boolean;
   /** The project's chat folders, for Move to folder…. */
   readonly folders: readonly FolderChoice[];
   /** The folder that holds the conversation now; `null` when none does. */
@@ -74,7 +76,7 @@ function conversationActions(conversation: Conversation, actions: ConversationRo
       enabled: !pinned && (actions.folders.length > 0 || actions.folderOf(conversation) !== null),
       run: asks.move,
     },
-    { id: 'archive', label: t('desktop.chats.archive', 'Archive'), run: asks.archive },
+    { id: 'archive', label: t('desktop.chats.archive', 'Archive'), enabled: actions.canArchive, run: asks.archive },
     { separator: true },
     { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
     { separator: true },

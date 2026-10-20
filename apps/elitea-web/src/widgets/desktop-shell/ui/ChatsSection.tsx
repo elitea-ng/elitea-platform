@@ -177,13 +177,14 @@ function NewFolderField({ onDone }: { readonly onDone: (name: string | null) => 
   );
 }
 
-function useRowActions(rail: Rail, openId: string): ConversationRowActions {
+function useRowActions(rail: Rail, openId: string, canArchive: boolean): ConversationRowActions {
   const navigate = useNavigate();
   return {
     open: (conversation) => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id } }),
     pin: rail.pin,
     rename: rail.rename,
     canModify: rail.canModify,
+    canArchive,
     // The open conversation stays open when it is archived (an archive changes the lists, not the chat).
     archive: rail.archive,
     remove: (conversation) =>
@@ -203,14 +204,16 @@ export interface ChatsSectionProps {
   readonly creatingFolder?: boolean;
   /** The name field closed (created or cancelled). */
   readonly onCreatingFolderDone?: () => void;
+  /** Holds `PERMISSIONS.chat.archive` in this project. */
+  readonly canArchive?: boolean;
 }
 
-export function ChatsSection({ projectId, pathname, creatingFolder = false, onCreatingFolderDone }: ChatsSectionProps): React.JSX.Element {
+export function ChatsSection({ projectId, pathname, creatingFolder = false, onCreatingFolderDone, canArchive = false }: ChatsSectionProps): React.JSX.Element {
   const rail = useConversationRail({ projectId });
   useAnnounceSidebarChatList();
   useErrorNotice(rail);
   const openId = openConversationId(pathname);
-  const actions = useRowActions(rail, openId);
+  const actions = useRowActions(rail, openId, canArchive);
   const navigate = useNavigate();
   const groups = rail.dateGroups.filter((group) => group.conversations.length > 0);
   const empty = !rail.isLoading && rail.pinned.length === 0 && rail.folders.length === 0 && groups.length === 0;

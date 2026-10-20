@@ -112,6 +112,7 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
 
   const hasFolderCreatePermission = useHasPermission(projectId, PERMISSIONS.chat.folders.create);
   const hasFolderUpdatePermission = useHasPermission(projectId, PERMISSIONS.chat.folders.update);
+  const hasArchivePermission = useHasPermission(projectId, PERMISSIONS.chat.archive);
 
   const [isHovering, setIsHovering] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -174,7 +175,11 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
     onDuplicate(conversation);
   }, [conversation, onDuplicate]);
 
-  const handleArchive = useMemo(() => (onArchive === undefined ? undefined : () => onArchive(conversation)), [conversation, onArchive]);
+  // Without the right the server answers 403, so the item is not offered at all.
+  const handleArchive = useMemo(
+    () => (onArchive === undefined || !hasArchivePermission ? undefined : () => onArchive(conversation)),
+    [conversation, onArchive, hasArchivePermission],
+  );
 
   const handleShareConversation = useCallback(async () => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;

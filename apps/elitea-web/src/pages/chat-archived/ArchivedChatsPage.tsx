@@ -30,7 +30,9 @@ import Snackbar from '@mui/material/Snackbar';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import type { ConversationSummary } from '@/shared/api/generated/model';
+import { usePermissionList } from '@/shared/api/generated/auth/auth';
+import type { ConversationSummary, Permission } from '@/shared/api/generated/model';
+import { PERMISSIONS } from '@/shared/lib/permissions';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
@@ -47,7 +49,14 @@ function archivedLine(row: Pick<ConversationSummary, 'archived_by' | 'archived_a
   return when === '' ? who : `${who} · ${when}`;
 }
 
-function ArchivedRow({ row, onOpen, onUnarchive, onDelete }: { readonly row: ConversationSummary; readonly onOpen: () => void; readonly onUnarchive: () => void; readonly onDelete: () => void }): ReactNode {
+/** Whether the caller holds the archive right here: Unarchive answers 403 without it, so it is not offered. */
+function useCanArchive(projectId: string | undefined): boolean {
+  const query = usePermissionList(projectId ?? '', { query: { enabled: projectId !== undefined } });
+  const list = query.data?.data as Permission[] | undefined;
+  return list?.some((entry) => entry.enabled && entry.name === PERMISSIONS.chat.archive) ?? false;
+}
+
+function ArchivedRow({ row, onOpen, onUnarchive, onDelete }: { readonly row: ConversationSummary; readonly onOpen: () => void; readonly onUnarchive: (() => void) | undefined; readonly onDelete: () => void }): ReactNode {
   const unarchive = t('pages.chatArchived.unarchive', 'Unarchive');
   const remove = t('pages.chatArchived.delete', 'Delete');
   return (
@@ -56,11 +65,13 @@ function ArchivedRow({ row, onOpen, onUnarchive, onDelete }: { readonly row: Con
       data-testid="archived-conversation"
       secondaryAction={
         <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <Tooltip title={unarchive}>
-            <IconButton size="small" aria-label={`${unarchive} ${row.name}`} onClick={onUnarchive} data-testid="archived-conversation-unarchive">
-              <UnarchiveOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
+          {onUnarchive !== undefined && (
+            <Tooltip title={unarchive}>
+              <IconButton size="small" aria-label={`${unarchive} ${row.name}`} onClick={onUnarchive} data-testid="archived-conversation-unarchive">
+                <UnarchiveOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
           <Tooltip title={remove}>
             <IconButton size="small" aria-label={`${remove} ${row.name}`} onClick={onDelete} data-testid="archived-conversation-delete">
               <DeleteOutlineIcon fontSize="small" />
@@ -76,7 +87,7 @@ function ArchivedRow({ row, onOpen, onUnarchive, onDelete }: { readonly row: Con
   );
 }
 
-function ArchivedList({ archived, query, onOpen, onDelete }: { readonly archived: ArchivedConversations; readonly query: string; readonly onOpen: (row: ConversationSummary) => void; readonly onDelete: (row: ConversationSummary) => void }): ReactNode {
+function ArchivedList({ archived, query, canArchive, onOpen, onDelete }: { readonly archived: ArchivedConversations; readonly query: string; readonly canArchive: boolean; readonly onOpen: (row: ConversationSummary) => void; readonly onDelete: (row: ConversationSummary) => void }): ReactNode {
   const needle = query.trim().toLowerCase();
   const rows = needle === '' ? archived.rows : archived.rows.filter((row) => row.name.toLowerCase().includes(needle));
   if (archived.isLoading) return <Typography variant="bodyMedium" color="text.secondary">{t('pages.chatArchived.loading', 'Loading archived chats…')}</Typography>;
@@ -92,7 +103,7 @@ function ArchivedList({ archived, query, onOpen, onDelete }: { readonly archived
     <>
       <List dense data-testid="archived-list">
         {rows.map((row) => (
-          <ArchivedRow key={row.id} row={row} onOpen={() => onOpen(row)} onUnarchive={() => archived.unarchive(row)} onDelete={() => onDelete(row)} />
+          <ArchivedRow key={row.id} row={row} onOpen={() => onOpen(row)} onUnarchive={canArchive ? () => archived.unarchive(row) : undefined} onDelete={() => onDelete(row)} />
         ))}
       </List>
       {archived.hasMore && (
@@ -107,7 +118,9 @@ function ArchivedList({ archived, query, onOpen, onDelete }: { readonly archived
 export default function ArchivedChatsPage(): ReactNode {
   const navigate = useNavigate();
   const { project } = useSelectedProject();
-  const archived = useArchivedConversations(project?.id === undefined ? undefined : String(project.id));
+  const projectId = project?.id === undefined ? undefined : String(project.id);
+  const archived = useArchivedConversations(projectId);
+  const canArchive = useCanArchive(projectId);
   const [query, setQuery] = useState('');
   const [deleting, setDeleting] = useState<ConversationSummary | null>(null);
 
@@ -128,6 +141,7 @@ export default function ArchivedChatsPage(): ReactNode {
       <ArchivedList
         archived={archived}
         query={query}
+        canArchive={canArchive}
         onOpen={(row) => void navigate({ to: '/chat/$conversationId', params: { conversationId: String(row.id) } })}
         onDelete={setDeleting}
       />
