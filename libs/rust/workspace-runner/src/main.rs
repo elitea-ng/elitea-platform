@@ -109,13 +109,14 @@ async fn main() -> ExitCode {
                     Err(code) => return fail(&code),
                 };
             }
-            let Ok(session) = open_session(&RunnerConfig {
+            let session = match open_session(&RunnerConfig {
                 root: args.root,
                 data_dir: args.data_dir,
                 policy: args.policy,
                 env,
-            }) else {
-                return fail("runner.workspace_unavailable");
+            }) {
+                Ok(session) => session,
+                Err(code) => return fail(&code),
             };
             match serve_capped(session, cap, input, tokio::io::stdout()).await {
                 Ok(()) => ExitCode::SUCCESS,
