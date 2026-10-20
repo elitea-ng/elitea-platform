@@ -8,7 +8,6 @@ use adk_sandbox::{
 use sqlx::Row as _;
 use std::sync::{Arc, Mutex};
 
-const OWNER: &str = "code-no-effect-cleanup-owner";
 const INSTANCE: &str = "original-retained-instance";
 #[derive(Default)]
 struct State {
@@ -103,21 +102,30 @@ async fn ledger() -> JobLedger {
     clippy::format_collect,
     reason = "Keep independent hexadecimal fixture generation separate from production helpers."
 )]
+fn random_hex() -> String {
+    let mut identity = [0_u8; 16];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut identity).unwrap();
+    identity.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+/// Each test owns its rows under its own worker identity. Reconciliation
+/// discovers pending cleanup by `owner_id` alone (one worker reaps everything
+/// it owns), so a shared owner let one test's reconcile claim and clean the
+/// rows another test running in parallel had just sealed.
+fn unique_owner() -> String {
+    format!("code-no-effect-cleanup-owner-{}", random_hex())
+}
 async fn sealed(
     ledger: &JobLedger,
+    owner: &str,
 ) -> (crate::protocol::sandbox_grant::CodeOwnerFixture, JobLease) {
-    let fixture = {
-        let mut identity = [0_u8; 16];
-        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut identity).unwrap();
-        code_owner_fixture(identity.iter().map(|byte| format!("{byte:02x}")).collect())
-    };
+    let fixture = code_owner_fixture(random_hex());
     ledger.reserve(&fixture.scope).await.unwrap();
     ledger
         .register_code_intent(&fixture.scope, &fixture.intent)
         .await
         .unwrap();
     let lease = ledger
-        .claim(&fixture.scope, OWNER.to_owned(), 30)
+        .claim(&fixture.scope, owner.to_owned(), 30)
         .await
         .unwrap()
         .unwrap();
@@ -143,7 +151,8 @@ async fn status(ledger: &JobLedger, scope: &JobScope) -> (bool, Option<String>) 
 #[ignore = "requires explicit isolated PostgreSQL owner-schema verification window"]
 async fn crash_after_seal_retains_exact_cleanup_authority_without_dispatch() {
     let ledger = ledger().await;
-    let (fixture, old_lease) = sealed(&ledger).await;
+    let owner = unique_owner();
+    let (fixture, old_lease) = sealed(&ledger, &owner).await;
     let proof = ledger
         .observe_code_owner(&fixture.read)
         .await
@@ -155,7 +164,7 @@ async fn crash_after_seal_retains_exact_cleanup_authority_without_dispatch() {
     assert!(ledger.mark_dispatched(&old_lease).await.is_err());
     assert!(
         ledger
-            .pending_code_no_effect_cleanup("other-owner", 32)
+            .pending_code_no_effect_cleanup(&unique_owner(), 32)
             .await
             .unwrap()
             .is_empty()
@@ -166,7 +175,7 @@ async fn crash_after_seal_retains_exact_cleanup_authority_without_dispatch() {
         ..State::default()
     }));
     let supervisor =
-        DockerSupervisor::new(ledger, Runtime(state.clone()), OWNER.into(), 1).unwrap();
+        DockerSupervisor::new(ledger, Runtime(state.clone()), owner.clone(), 1).unwrap();
     supervisor.reconcile_code_no_effect_cleanup().await.unwrap();
     assert_eq!(
         status(&supervisor.ledger, &fixture.scope).await,
@@ -176,7 +185,7 @@ async fn crash_after_seal_retains_exact_cleanup_authority_without_dispatch() {
     assert!(
         supervisor
             .ledger
-            .claim(&fixture.scope, OWNER.to_owned(), 30)
+            .claim(&fixture.scope, owner.clone(), 30)
             .await
             .unwrap()
             .is_none()
@@ -202,7 +211,8 @@ async fn crash_after_seal_retains_exact_cleanup_authority_without_dispatch() {
 #[ignore = "requires explicit isolated PostgreSQL owner-schema verification window"]
 async fn uncertain_termination_then_removed_runtime_cleanup_are_durable_and_idempotent() {
     let ledger = ledger().await;
-    let (fixture, _) = sealed(&ledger).await;
+    let owner = unique_owner();
+    let (fixture, _) = sealed(&ledger, &owner).await;
     let state = Arc::new(Mutex::new(State {
         running: true,
         present: true,
@@ -211,7 +221,7 @@ async fn uncertain_termination_then_removed_runtime_cleanup_are_durable_and_idem
         ..State::default()
     }));
     let supervisor =
-        DockerSupervisor::new(ledger, Runtime(state.clone()), OWNER.into(), 1).unwrap();
+        DockerSupervisor::new(ledger, Runtime(state.clone()), owner.clone(), 1).unwrap();
     assert!(
         supervisor
             .cleanup_code_no_effect_runtime(&fixture.scope)
@@ -236,7 +246,7 @@ async fn uncertain_termination_then_removed_runtime_cleanup_are_durable_and_idem
     assert!(!state.lock().unwrap().present);
     // Replacement process observes the original missing CID but must finish its exact cleanup.
     let supervisor =
-        DockerSupervisor::new(supervisor.ledger, Runtime(state.clone()), OWNER.into(), 1).unwrap();
+        DockerSupervisor::new(supervisor.ledger, Runtime(state.clone()), owner.clone(), 1).unwrap();
     supervisor
         .cleanup_code_no_effect_runtime(&fixture.scope)
         .await
@@ -252,7 +262,7 @@ async fn uncertain_termination_then_removed_runtime_cleanup_are_durable_and_idem
     assert!(
         supervisor
             .ledger
-            .claim(&fixture.scope, OWNER.to_owned(), 30)
+            .claim(&fixture.scope, owner.clone(), 30)
             .await
             .unwrap()
             .is_none()
@@ -264,15 +274,16 @@ async fn uncertain_termination_then_removed_runtime_cleanup_are_durable_and_idem
 #[ignore = "requires explicit isolated PostgreSQL owner-schema verification window"]
 async fn cleanup_lease_expiry_fences_prior_writer_and_never_becomes_execution_authority() {
     let ledger = ledger().await;
-    let (fixture, execution_lease) = sealed(&ledger).await;
+    let owner = unique_owner();
+    let (fixture, execution_lease) = sealed(&ledger, &owner).await;
     let first = ledger
-        .claim_code_no_effect_cleanup(&fixture.scope, OWNER, 30)
+        .claim_code_no_effect_cleanup(&fixture.scope, &owner, 30)
         .await
         .unwrap()
         .unwrap();
     assert!(
         ledger
-            .claim_code_no_effect_cleanup(&fixture.scope, OWNER, 30)
+            .claim_code_no_effect_cleanup(&fixture.scope, &owner, 30)
             .await
             .unwrap()
             .is_none()
@@ -280,7 +291,7 @@ async fn cleanup_lease_expiry_fences_prior_writer_and_never_becomes_execution_au
     sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
         .bind(&fixture.scope.tenant).bind(fixture.scope.project).bind(fixture.scope.key.as_slice()).execute(&ledger.pool).await.unwrap();
     let second = ledger
-        .claim_code_no_effect_cleanup(&fixture.scope, OWNER, 30)
+        .claim_code_no_effect_cleanup(&fixture.scope, &owner, 30)
         .await
         .unwrap()
         .unwrap();
