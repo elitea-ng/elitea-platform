@@ -3609,6 +3609,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/conversation_archive/prompt_lib/{projectID}/{conversationID}", convHandler.Archive)
 					r.With(requireConversationEdit).
 						Delete("/conversation_archive/prompt_lib/{projectID}/{conversationID}", convHandler.Unarchive)
+					// Conversation fork (client contract 1.11). It creates a
+					// conversation, so it needs the create permission; it
+					// reads the source, so it needs the read permission too.
+					// The repository applies the detail rule to the source.
+					r.With(projectPermission("models.chat.conversations.create"), requireConversationRead).
+						Post("/conversation_fork/prompt_lib/{projectID}/{conversationID}", convHandler.Fork)
 					r.With(projectPermission("models.chat.messages.list")).
 						Get("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.ListMessages)
 					// Conversation export (#851). It reads the TRANSCRIPT, so
