@@ -695,6 +695,9 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     generation: u64,
     regenerate: bool,
     instruction_plan: super::instruction_authority::InstructionPlan,
+    /// This invocation's stop after a failed dispatch record, shared by every
+    /// dispatch journal and guarded model of the run (`dispatch_journal`).
+    dispatch_abort: super::dispatch_journal::DispatchAbort,
 }
 
 impl OrdinaryNativeAgentPlan {
@@ -709,6 +712,7 @@ impl OrdinaryNativeAgentPlan {
             self.definition_digest,
         )
         .with_root_identity(self.session_identity().ok())
+        .with_dispatch_abort(self.dispatch_abort.clone())
     }
 
     /// The durable conversation thread this turn belongs to.
@@ -870,7 +874,21 @@ impl OrdinaryNativeAgentPlan {
             generation: binding.generation,
             regenerate: request.payload.is_regenerate,
             instruction_plan: profile.instruction_plan().clone(),
+            dispatch_abort: super::dispatch_journal::DispatchAbort::default(),
         })
+    }
+
+    /// The fenced root-session writer for this execution's dispatch records.
+    pub(super) fn dispatch_journal(
+        &self,
+        sessions: Arc<dyn SessionService>,
+    ) -> Result<super::dispatch_journal::DispatchJournal, NativeAgentAssemblyError> {
+        Ok(super::dispatch_journal::DispatchJournal::new(
+            sessions,
+            self.session_identity()?,
+            super::dispatch_journal::DispatchOwner::new(self.execution_id.clone(), self.generation),
+            self.dispatch_abort.clone(),
+        ))
     }
 
     pub(super) fn session_id(&self) -> &str {
@@ -1793,7 +1811,7 @@ impl NativeAgentCompletionSelector for PipelineAgentCompletion {
     }
 }
 
-const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
+pub(super) const PIPELINE_RESUME_MARKER: &str = "[elitea:pipeline-resume:v1]";
 
 /// Build one admitted graph Runner with activated durable state contracts.
 #[allow(clippy::too_many_lines)] // Preserve the ordered claim, checkpoint, instruction, and Runner composition.
@@ -1875,6 +1893,7 @@ pub(super) async fn assemble_pipeline_native(
         generation: _,
         regenerate: _,
         instruction_plan,
+        dispatch_abort: _,
     } = plan;
     // Node models consume the admitted policy. The Runner never summarizes
     // deterministic graph state or introduces a pipeline-wide summary model.
@@ -1977,7 +1996,27 @@ async fn resolve_pipeline_start(
         PipelineNativeStart::StaticTools(decisions) => {
             let session = restore_pipeline_session(state, plan).await?;
             let events = session.events().all();
-            let interrupt = events.last().ok_or_else(invalid_configuration)?;
+            let journal = plan.dispatch_journal(Arc::clone(&state.sessions))?;
+            // The same bound-pause rule as a sensitive decision: the pause is the
+            // last event, or this execution's own dead continuation follows it.
+            let interrupt = super::dispatch_journal::continuation_pause(
+                &events,
+                |event| {
+                    event
+                        .provider_metadata
+                        .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
+                },
+                journal.owner(),
+                |pause| {
+                    super::graph::resume::pause_interrupt_ids(
+                        pause,
+                        ROOT_AGENT_NAME,
+                        plan.session_id.as_ref(),
+                    )
+                },
+                super::application_tools::is_pipeline_continuation_event,
+            )
+            .ok_or_else(invalid_configuration)?;
             let binding = super::events::pipeline_application_event_binding(
                 interrupt,
                 ROOT_AGENT_NAME,
@@ -1994,6 +2033,14 @@ async fn resolve_pipeline_start(
                     decisions,
                 )
                 .await?;
+            journal
+                .record_continuing(
+                    &interrupt.id,
+                    &interrupt.invocation_id,
+                    binding.interrupt_ids().iter().map(String::as_str),
+                )
+                .await
+                .map_err(|_| dependency_unavailable())?;
             Some(super::graph::resume::PipelineResume::empty())
         }
         PipelineNativeStart::Hitl(decision) => {
@@ -2012,32 +2059,19 @@ async fn resolve_pipeline_start(
                 )
                 .await
                 .map_err(|error| pipeline_resume_error(&error))?;
-            let (resume, application_decisions) = resolved.into_parts();
-            if let Some(decisions) = application_decisions {
+            let (resume, application) = resolved.into_parts();
+            if let Some(super::graph::resume::PipelineApplicationContinuation {
+                decisions,
+                pause_id,
+                pause_invocation_id,
+                binding,
+            }) = application
+            {
                 let events = session.events().all();
-                let interrupt = super::dispatch_journal::continuation_pause(
-                    &events,
-                    |event| {
-                        event
-                            .provider_metadata
-                            .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
-                    },
-                    &owner,
-                    |pause| {
-                        super::graph::resume::pause_interrupt_ids(
-                            pause,
-                            ROOT_AGENT_NAME,
-                            plan.session_id.as_ref(),
-                        )
-                    },
-                )
-                .ok_or_else(invalid_configuration)?;
-                let binding = super::events::pipeline_application_event_binding(
-                    interrupt,
-                    ROOT_AGENT_NAME,
-                    plan.session_id.as_ref(),
-                )
-                .map_err(projection_configuration)?;
+                let submitted_ids = decisions
+                    .iter()
+                    .map(|decision| decision.interrupt_id().to_owned())
+                    .collect::<Vec<_>>();
                 if let Some(scopes) = application_scopes {
                     scopes
                         .install_root_continuation(
@@ -2074,6 +2108,16 @@ async fn resolve_pipeline_start(
                     )
                     .await?;
                 }
+                // Owner proof of everything this continuation forwards before it
+                // finishes: a replacement of this execution continues behind it.
+                plan.dispatch_journal(Arc::clone(&state.sessions))?
+                    .record_continuing(
+                        &pause_id,
+                        &pause_invocation_id,
+                        submitted_ids.iter().map(String::as_str),
+                    )
+                    .await
+                    .map_err(|_| dependency_unavailable())?;
             }
             Some(resume)
         }
@@ -2351,6 +2395,7 @@ where
         generation,
         regenerate,
         instruction_plan: _,
+        dispatch_abort: _,
     } = plan;
     let durable_context_plan = match (
         &context_management,
@@ -2739,7 +2784,7 @@ async fn prepare_direct_resume(
     journal: &super::dispatch_journal::DispatchJournal,
 ) -> Result<PreparedDirectResume, NativeAgentAssemblyError> {
     let OrdinaryRuntimeBindings {
-        mut toolsets,
+        toolsets,
         sensitive_tools,
         mut delegated_authorization,
         internal_tools,
@@ -2800,23 +2845,21 @@ async fn prepare_direct_resume(
                     .into_clarifying_question_replay()
                     .map_err(|error| direct_hitl_error(&error))?
             } else {
-                let replay = (*decision)
+                (*decision)
                     .into_direct_replay(&sensitive_tools)
-                    .map_err(|error| direct_hitl_error(&error))?;
-                // Each approved call that may not simply run again journals its
-                // dispatch before its effect (one root append; the Runner
-                // persists the outcome). Read-only calls re-run and cost none.
-                let journaled = replay.journaled_call_ids(&sensitive_tools);
-                toolsets = journal.wrap(
-                    toolsets,
-                    &replay.journal_decision(),
-                    journaled,
-                    super::dispatch_journal::JournalOutcomes::ByRunner,
-                );
-                replay
+                    .map_err(|error| direct_hitl_error(&error))?
             };
-            let prepared = replay.bind(model);
-            let (replay_model, run_input, toolsets) = prepared.into_parts(toolsets);
+            // Each approved call that may not simply run again journals its
+            // dispatch before its effect (one root append; the Runner persists
+            // the outcome). Read-only calls re-run and cost none.
+            let (replay_model, run_input, toolsets) = replay
+                .bind(model)
+                .into_parts(
+                    toolsets,
+                    Some(journal),
+                    super::dispatch_journal::JournalOutcomes::ByRunner,
+                )
+                .map_err(|error| direct_hitl_error(&error))?;
             (replay_model, run_input, toolsets, false)
         }
         ResolvedDirectHitlStart::StaticTools(decisions) => {
@@ -2850,7 +2893,8 @@ async fn prepare_direct_resume(
             .await?;
             let (replay_model, user_content, run_config) = prepared.into_parts();
             (
-                replay_model,
+                // A nested call's failed dispatch record stops the root here too.
+                journal.abort().guard(replay_model),
                 DirectHitlRunInput::from_parts(user_content, run_config),
                 toolsets,
                 true,
@@ -2888,11 +2932,7 @@ async fn assemble_direct_resume_with_sessions_and_applications<M>(
 where
     M: BoundOrdinaryAgentModel,
 {
-    let journal = super::dispatch_journal::DispatchJournal::new(
-        Arc::clone(&sessions),
-        plan.session_identity()?,
-        super::dispatch_journal::DispatchOwner::new(plan.execution_id.clone(), plan.generation),
-    );
+    let journal = plan.dispatch_journal(Arc::clone(&sessions))?;
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -2912,6 +2952,7 @@ where
         generation: _,
         regenerate: _,
         instruction_plan: _,
+        dispatch_abort: _,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(model.summarization_model())?;
@@ -3439,14 +3480,7 @@ fn pipeline_resume_error(error: &PipelineResumeError) -> NativeAgentAssemblyErro
         }
         // An approved call may have run; the run ends with that registered reason.
         PipelineResumeErrorCode::MayHaveStarted => {
-            return NativeAgentAssemblyError::new(
-                NativeAgentAssemblyErrorCode::UnsupportedCapability,
-                crate::protocol::output::RECOVERY_REFUSED_DETAIL,
-            )
-            .with_cause(
-                crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
-                None,
-            );
+            return super::direct_hitl::recovery_refused_error();
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable

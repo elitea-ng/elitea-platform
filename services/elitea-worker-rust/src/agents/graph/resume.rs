@@ -636,6 +636,7 @@ impl PipelineContinuationDecision {
                     |event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY),
                     owner,
                     |pause| pause_interrupt_ids(pause, root_agent_name, thread_id),
+                    crate::agents::application_tools::is_pipeline_continuation_event,
                 )
                 .ok_or_else(PipelineResumeError::stale)?;
                 if let Ok(binding) =
@@ -690,7 +691,12 @@ impl PipelineContinuationDecision {
                     }
                     return Ok(ResolvedPipelineContinuation::application(
                         PipelineResume::empty(),
-                        decisions,
+                        PipelineApplicationContinuation {
+                            decisions,
+                            pause_id: interrupt.id.clone(),
+                            pause_invocation_id: interrupt.invocation_id.clone(),
+                            binding,
+                        },
                     ));
                 }
                 if let Some(authorization) = authorization {
@@ -723,29 +729,35 @@ pub(crate) fn pause_interrupt_ids(
 
 pub(crate) struct ResolvedPipelineContinuation {
     resume: PipelineResume,
-    application_decisions: Option<Vec<ResolvedDirectHitlDecision>>,
+    application: Option<PipelineApplicationContinuation>,
+}
+
+/// The nested Agent decisions of one pipeline Application pause, with the pause
+/// they were proven against (one scan and one decode, reused by the caller).
+pub(crate) struct PipelineApplicationContinuation {
+    pub(crate) decisions: Vec<ResolvedDirectHitlDecision>,
+    pub(crate) pause_id: String,
+    pub(crate) pause_invocation_id: String,
+    pub(crate) binding: crate::agents::events::PipelineApplicationHitlEventBinding,
 }
 
 impl ResolvedPipelineContinuation {
     fn graph(resume: PipelineResume) -> Self {
         Self {
             resume,
-            application_decisions: None,
+            application: None,
         }
     }
 
-    fn application(
-        resume: PipelineResume,
-        application_decisions: Vec<ResolvedDirectHitlDecision>,
-    ) -> Self {
+    fn application(resume: PipelineResume, application: PipelineApplicationContinuation) -> Self {
         Self {
             resume,
-            application_decisions: Some(application_decisions),
+            application: Some(application),
         }
     }
 
-    pub(crate) fn into_parts(self) -> (PipelineResume, Option<Vec<ResolvedDirectHitlDecision>>) {
-        (self.resume, self.application_decisions)
+    pub(crate) fn into_parts(self) -> (PipelineResume, Option<PipelineApplicationContinuation>) {
+        (self.resume, self.application)
     }
 }
 

@@ -1048,10 +1048,13 @@ impl SameToolReplayFixture {
         let prepared = replay.bind(Arc::new(ReplayFinalLlm {
             requests: Arc::clone(&self.requests),
         }));
-        let (model, input, toolsets) = prepared.into_parts(vec![Arc::new(BasicToolset::new(
-            "fixture-tools",
-            vec![tool],
-        ))]);
+        let (model, input, toolsets) = prepared
+            .into_parts(
+                vec![Arc::new(BasicToolset::new("fixture-tools", vec![tool]))],
+                None,
+                crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+            )
+            .expect("a read-only replay needs no journal");
         let mut agent = LlmAgentBuilder::new("elitea-agent")
             .model(model)
             .require_tool_confirmation("double");
@@ -1615,7 +1618,13 @@ async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approve
         command: "unused".to_owned(),
         turns: Mutex::new(1),
     }));
-    let (model, input, _) = prepared.into_parts(Vec::new());
+    let (model, input, _) = prepared
+        .into_parts(
+            Vec::new(),
+            None,
+            crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+        )
+        .expect("the workspace command needs no journal");
     let (user_content, run_config) = input.into_parts();
     let resumed = workspace_turn(
         Arc::clone(&sessions),
@@ -1815,7 +1824,12 @@ pub(super) async fn approved_push_resume(
             command: "unused".to_owned(),
             turns: Mutex::new(1),
         }))
-        .into_parts(Vec::new());
+        .into_parts(
+            Vec::new(),
+            None,
+            crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+        )
+        .expect("the workspace command needs no journal");
     let (user_content, run_config) = input.into_parts();
     (model, run_config, user_content)
 }

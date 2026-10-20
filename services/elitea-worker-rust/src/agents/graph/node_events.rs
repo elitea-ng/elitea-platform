@@ -226,6 +226,22 @@ impl PipelineNodeEventSender {
         })
     }
 
+    /// End the run because an approved call's dispatch record could not be
+    /// written: the call never ran, and this attempt does not run it.
+    pub(crate) async fn dispatch_unrecorded(
+        &self,
+        node: &str,
+    ) -> Option<adk_rust::graph::GraphError> {
+        self.send_execution_failure(crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE)
+            .await
+            .ok()?;
+        Some(adk_rust::graph::GraphError::NodeExecutionFailed {
+            node: node.to_owned(),
+            message: "an approved tool call's dispatch could not be recorded; it was not run"
+                .to_owned(),
+        })
+    }
+
     /// Preserve safe codes and typed continuation causes, never provider messages.
     pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
         self.inner

@@ -2433,6 +2433,57 @@ fn nested_resume_markers(events: &[Event]) -> Result<Vec<Content>, NativeAgentAs
         .collect())
 }
 
+/// Whether `content` is exactly a nested resume marker (`nested_resume_user_content`).
+fn is_nested_resume_marker(content: &Content) -> bool {
+    let [Part::Text { text }] = content.parts.as_slice() else {
+        return false;
+    };
+    text.strip_prefix("[Elitea nested HITL ")
+        .and_then(|rest| rest.strip_suffix("] Resume the exact paused saved-agent calls."))
+        .is_some_and(|ids| !ids.is_empty() && !ids.contains(char::is_whitespace))
+}
+
+/// Whether `event` is one a pipeline application continuation writes to the
+/// root session before its node finishes: its resume marker, the replayed (or
+/// answered) root application call, the children's forwarded events and
+/// content-free recovery bookkeeping. Anything else after a pause (a node's
+/// output, model text, state changes) is an advance past it.
+pub(crate) fn is_pipeline_continuation_event(event: &Event) -> bool {
+    if event.author == "elitea-recovery" && event.llm_response.content.is_none() {
+        return true;
+    }
+    if event
+        .provider_metadata
+        .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
+        || event
+            .branch
+            .strip_prefix(super::events::APPLICATION_BRANCH_ROOT)
+            .is_some_and(|rest| rest.starts_with('.'))
+    {
+        return true;
+    }
+    let Some(content) = event.llm_response.content.as_ref() else {
+        return false;
+    };
+    if event.author == "user" {
+        return is_nested_resume_marker(content)
+            || matches!(
+                content.parts.as_slice(),
+                [Part::Text { text }] if text == super::session::PIPELINE_RESUME_MARKER
+            );
+    }
+    event.branch == super::events::APPLICATION_BRANCH_ROOT
+        && event.actions.tool_confirmation.is_none()
+        && event.actions.state_delta.is_empty()
+        && !content.parts.is_empty()
+        && content.parts.iter().all(|part| {
+            matches!(
+                part,
+                Part::FunctionCall { .. } | Part::FunctionResponse { .. }
+            )
+        })
+}
+
 fn nested_resume_user_content(interrupt_ids: &HashSet<String>) -> Content {
     let mut interrupt_ids = interrupt_ids.iter().map(String::as_str).collect::<Vec<_>>();
     interrupt_ids.sort_unstable();
@@ -3713,6 +3764,12 @@ impl LazyNestedAgent {
             || model.clone(),
             |checkpoint| checkpoint.clone().delegation_model(model.clone()),
         );
+        // Every child model of the invocation stops after a failed dispatch
+        // record, so no ancestor continues past an approved call that never ran.
+        let model = match self.model_scopes.as_ref() {
+            Some(scopes) => scopes.dispatch_abort().guard(model),
+            None => model,
+        };
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())
             .model(model)
@@ -3799,23 +3856,18 @@ impl LazyNestedAgent {
                 // run again journals its dispatch in the root session first, so a
                 // later continuation never runs it twice and serves its recorded
                 // outcome instead. A call that can re-run costs no journal writes.
-                let executed = replay.journaled_call_ids(sensitive_tools);
-                let toolsets = if executed.is_empty() {
-                    self.toolsets.clone()
-                } else {
-                    self.model_scopes
-                        .as_ref()
-                        .and_then(ModelScopeSessions::dispatch_journal)
-                        .ok_or_else(agent_configuration_error)?
-                        .wrap(
-                            self.toolsets.clone(),
-                            &replay.journal_decision(),
-                            executed,
-                            super::dispatch_journal::JournalOutcomes::Recorded,
-                        )
-                };
-                let prepared = replay.bind(bound.provider_model());
-                let (model, run_input, toolsets) = prepared.into_parts(toolsets);
+                let journal = self
+                    .model_scopes
+                    .as_ref()
+                    .and_then(ModelScopeSessions::dispatch_journal);
+                let (model, run_input, toolsets) = replay
+                    .bind(bound.provider_model())
+                    .into_parts(
+                        self.toolsets.clone(),
+                        journal.as_ref(),
+                        super::dispatch_journal::JournalOutcomes::Recorded,
+                    )
+                    .map_err(|_| agent_configuration_error())?;
                 let (user_content, run_config) = run_input.into_parts();
                 let checkpoint = self
                     .context_checkpoint(&bound, Some(user_content.clone()))?

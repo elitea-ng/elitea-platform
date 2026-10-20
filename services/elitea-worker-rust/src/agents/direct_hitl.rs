@@ -1256,6 +1256,8 @@ pub(crate) struct DirectHitlReplay {
     decision_invocation_id: String,
     /// The card this replay answers.
     interrupt_id: String,
+    /// The executed calls the dispatch journal must own (see `journaled_call_ids`).
+    journaled: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1325,12 +1327,6 @@ impl ResolvedDirectHitlDecision {
     /// Whether this decision belongs to a guardrail the sensitive-tool replay
     /// does not serve — authorization, a clarifying question, or a child
     /// pipeline's graph pause, each of which has its own continuation.
-    /// Whether this decision approves a sensitive-tool call, the one decision
-    /// whose continuation may dispatch an effect.
-    pub(crate) fn approves_sensitive_call(&self) -> bool {
-        self.decision == ToolConfirmationDecision::Approve && !self.is_other_guardrail()
-    }
-
     const fn is_other_guardrail(&self) -> bool {
         self.delegated_authorization.is_some()
             || self.clarifying_question.is_some()
@@ -1480,9 +1476,10 @@ impl ResolvedDirectHitlDecision {
                 }),
             }
         }
-        Ok(DirectHitlReplay {
+        let mut replay = DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
+            journaled: BTreeSet::new(),
             calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
@@ -1491,7 +1488,10 @@ impl ResolvedDirectHitlDecision {
             resume_mode: self.resume_mode,
             approvals,
             blocked,
-        })
+        };
+        // The replay owns its journal set, so no caller can run it unjournaled.
+        replay.journaled = replay.journaled_call_ids(sensitive_tools);
+        Ok(replay)
     }
 
     pub(crate) fn into_clarifying_question_replay(
@@ -1523,6 +1523,8 @@ impl ResolvedDirectHitlDecision {
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
+            // A clarifying or authorization replay runs no approved effect.
+            journaled: BTreeSet::new(),
             approvals: vec![(self.call_id.clone(), self.fingerprint.clone())],
             blocked: vec![BlockedToolReplay {
                 call_id: self.call_id.clone(),
@@ -1577,6 +1579,8 @@ impl ResolvedDirectHitlDecision {
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
+            // A clarifying or authorization replay runs no approved effect.
+            journaled: BTreeSet::new(),
             approvals: blocked_result
                 .as_ref()
                 .map(|_| (self.call_id.clone(), self.fingerprint.clone()))
@@ -1618,14 +1622,6 @@ fn authorization_scope(
 }
 
 impl DirectHitlReplay {
-    /// What this replay's journaled calls answer: the paused message and card.
-    pub(crate) fn journal_decision(&self) -> super::dispatch_journal::JournalDecision<'_> {
-        super::dispatch_journal::JournalDecision {
-            invocation_id: &self.decision_invocation_id,
-            interrupt_id: &self.interrupt_id,
-        }
-    }
-
     /// The calls this replay will really execute: every call of the message
     /// that is not served from a local or recorded result.
     pub(crate) fn executed_call_ids(&self) -> BTreeSet<String> {
@@ -1744,9 +1740,15 @@ impl DirectHitlReplay {
                 run_config,
             },
             blocked: self.blocked,
+            journaled: self.journaled,
+            decision_invocation_id: self.decision_invocation_id,
+            interrupt_id: self.interrupt_id,
         }
     }
 }
+
+/// The replay model, its run input and the journaled, blocked toolsets.
+pub(crate) type DirectHitlReplayParts = (Arc<dyn Llm>, DirectHitlRunInput, Vec<Arc<dyn Toolset>>);
 
 /// Bound replay values consumed by the invocation/session assembler.
 ///
@@ -1756,6 +1758,9 @@ pub(crate) struct PreparedDirectHitlReplay {
     model: Arc<dyn Llm>,
     run: DirectHitlRunInput,
     blocked: Vec<BlockedToolReplay>,
+    journaled: BTreeSet<String>,
+    decision_invocation_id: String,
+    interrupt_id: String,
 }
 
 /// Opaque invocation input minted with the exact replay model.
@@ -1783,11 +1788,41 @@ impl PreparedDirectHitlReplay {
         ids
     }
 
+    /// The replay model, run input and toolsets. Each executed call that may not
+    /// simply run again is journaled before its effect, and the model stops the
+    /// run after a failed dispatch record (`journal.abort()`): neither can be
+    /// skipped by a caller.
+    ///
+    /// # Errors
+    ///
+    /// The replay journals calls and no journal is bound.
     pub(crate) fn into_parts(
         self,
         toolsets: Vec<Arc<dyn Toolset>>,
-    ) -> (Arc<dyn Llm>, DirectHitlRunInput, Vec<Arc<dyn Toolset>>) {
-        let mut toolsets = toolsets;
+        journal: Option<&super::dispatch_journal::DispatchJournal>,
+        outcomes: super::dispatch_journal::JournalOutcomes,
+    ) -> Result<DirectHitlReplayParts, DirectHitlError> {
+        let mut toolsets = match journal {
+            Some(journal) => journal.wrap(
+                toolsets,
+                &super::dispatch_journal::JournalDecision {
+                    invocation_id: &self.decision_invocation_id,
+                    interrupt_id: &self.interrupt_id,
+                },
+                self.journaled.clone(),
+                outcomes,
+            ),
+            None if self.journaled.is_empty() => toolsets,
+            None => {
+                return Err(DirectHitlError::new(
+                    DirectHitlErrorCode::UnsupportedCapability,
+                ));
+            }
+        };
+        let model = journal.map_or_else(
+            || Arc::clone(&self.model),
+            |journal| journal.abort().guard(Arc::clone(&self.model)),
+        );
         for blocked in self.blocked.iter().filter(|blocked| {
             blocked.response["type"] == "mcp_auth_decision"
                 && blocked.response["status"] == "authorized"
@@ -1816,7 +1851,7 @@ impl PreparedDirectHitlReplay {
                 })
                 .collect()
         };
-        (self.model, self.run, toolsets)
+        Ok((model, self.run, toolsets))
     }
 }
 

@@ -39,6 +39,19 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Test-only (process-replacement proofs, set in a child process only): the
+/// `dispatched` append fails as a database error would.
+#[cfg(test)]
+pub(crate) static FAIL_DISPATCHED_APPEND: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Test-only: exit the process with this code just before the `dispatched`
+/// append, once the replayed call this journal owns has been forwarded to the
+/// root session (the window between forwarding and the dispatch record).
+#[cfg(test)]
+pub(crate) static EXIT_BEFORE_DISPATCHED_RECORD: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+
 /// Provider-metadata key of one dispatch record.
 pub(crate) const DISPATCH_METADATA_KEY: &str = "elitea.direct_hitl.dispatch.v1";
 const DISPATCH_AUTHOR: &str = "elitea-dispatch-journal";
@@ -54,6 +67,9 @@ pub(crate) const MAX_DISPATCH_RECORDS: usize = 64;
 enum Phase {
     Dispatched,
     Completed,
+    /// A pipeline continuation of one card began (written before its Runner
+    /// starts): the owner proof of everything that continuation forwards.
+    Continuing,
 }
 
 /// The execution whose continuation wrote a record: stable across Main's
@@ -208,6 +224,7 @@ pub(crate) fn recorded_dispatches(
             return Err(InvalidDispatchRecord);
         }
         match (record.phase, record.result) {
+            (Phase::Continuing, None) => {}
             (Phase::Dispatched, None) => {
                 if !recorded.completed.contains_key(&record.call_id) {
                     recorded.dispatched.insert(record.call_id);
@@ -226,22 +243,28 @@ pub(crate) fn recorded_dispatches(
 /// The pause a pipeline continuation answers.
 ///
 /// Normally the pause is the session's last event. A continuation that died
-/// after it dispatched an approved call left its own suffix behind it (its
-/// marker, the replayed child events and its dispatch records). When every
-/// record of that suffix was written by THIS execution (an earlier claim of
-/// it) for one of the pause's own interrupts (`interrupt_ids` of the pause),
-/// the suffix is that dead continuation: the pause stays answerable and the
-/// decision is resolved against its records, so a recorded outcome is served
-/// and an unrecorded one is refused. Main settles an execution that finished
-/// or failed and never re-claims it, so no advance of this execution can lie
-/// behind such a suffix. Anything else is stale (`None`): no record (an
-/// ordinary advance), or a record of another execution (a duplicate or late
-/// submission) or of another interrupt.
+/// left its own suffix behind it. Every pipeline application continuation
+/// first appends a `continuing` record for its cards (before its Runner
+/// starts), then its marker, the replayed calls the child forwards and the
+/// dispatch records of approved calls. The pause stays answerable behind such
+/// a suffix only when:
+/// * its FIRST event is a `continuing` record of THIS execution (an earlier
+///   claim of it: Main re-claims a lost execution under the same identity)
+///   for one of the pause's own cards (`interrupt_ids` of the pause);
+/// * every record in it belongs to this execution and those cards; and
+/// * every other event is that continuation's own bookkeeping
+///   (`is_continuation_event`): anything else is an advance past the pause.
+///
+/// The decision is then resolved against the journal, so a recorded outcome is
+/// served, an unrecorded dispatch is refused, and a call that never dispatched
+/// runs once. Anything else is stale (`None`): an ordinary advance, or a
+/// continuation of another execution (a duplicate or late submission).
 pub(crate) fn continuation_pause<'a>(
     events: &'a [Event],
     is_pause: impl Fn(&Event) -> bool,
     owner: &DispatchOwner,
     interrupt_ids: impl FnOnce(&Event) -> Option<BTreeSet<String>>,
+    is_continuation_event: impl Fn(&Event) -> bool,
 ) -> Option<&'a Event> {
     let last = events.last()?;
     if is_pause(last) {
@@ -250,9 +273,99 @@ pub(crate) fn continuation_pause<'a>(
     let index = events.iter().rposition(&is_pause)?;
     let pause = &events[index];
     let answers = interrupt_ids(pause)?;
-    records_bound_to(&events[index + 1..], owner, |id| answers.contains(id))
-        .ok()
-        .and_then(|bound| bound.then_some(pause))
+    let suffix = &events[index + 1..];
+    let first = dispatch_record(suffix.first()?).ok()??;
+    if first.phase != Phase::Continuing
+        || &first.owner != owner
+        || !answers.contains(&first.interrupt_id)
+        || first.call_id != pause.id
+    {
+        return None;
+    }
+    records_bound_to(suffix, owner, |id| answers.contains(id)).ok()?;
+    suffix
+        .iter()
+        .all(|event| is_dispatch_record(event) || is_continuation_event(event))
+        .then_some(pause)
+}
+
+/// The code a run ends with when an approved call's `dispatched` record could
+/// not be written: the call never ran, and it is not run on this attempt.
+pub(crate) const DISPATCH_UNRECORDED_CODE: &str = "agent.dispatch_unrecorded";
+const WRITER_NOT_CURRENT_CODE: &str = "session.writer_not_current";
+
+/// One invocation's stop after a failed `dispatched` append.
+///
+/// ADK turns every tool error into a function response the model reads, so the
+/// approved call's tool error alone would let the run continue and even
+/// SUCCEED without its effect. The journal records the failure here, and every
+/// model of the invocation is guarded by it: the next model step ends the run
+/// with a typed failure. Nothing ran, so the execution's replacement (or a
+/// retry) runs the call once.
+#[derive(Clone, Default)]
+pub(crate) struct DispatchAbort(Arc<std::sync::OnceLock<&'static str>>);
+
+impl DispatchAbort {
+    fn record(&self, error: &adk_rust::AdkError) {
+        // A lost writer keeps its own code, so the run ends as a lease loss.
+        let code = if error.code == WRITER_NOT_CURRENT_CODE {
+            WRITER_NOT_CURRENT_CODE
+        } else {
+            DISPATCH_UNRECORDED_CODE
+        };
+        let _ = self.0.set(code);
+    }
+
+    fn error(&self) -> Option<adk_rust::AdkError> {
+        self.0.get().map(|code| {
+            adk_rust::AdkError::new(
+                adk_rust::ErrorComponent::Session,
+                // Not retryable: the run stops; its replacement runs the call.
+                adk_rust::ErrorCategory::Internal,
+                code,
+                "an approved tool call's dispatch could not be recorded; it was not run",
+            )
+        })
+    }
+
+    /// Wrap one model of the invocation so it refuses after a failed dispatch append.
+    pub(crate) fn guard(&self, inner: Arc<dyn adk_rust::Llm>) -> Arc<dyn adk_rust::Llm> {
+        Arc::new(AbortGuardedModel {
+            inner,
+            abort: self.clone(),
+        })
+    }
+}
+
+struct AbortGuardedModel {
+    inner: Arc<dyn adk_rust::Llm>,
+    abort: DispatchAbort,
+}
+
+#[async_trait]
+impl adk_rust::Llm for AbortGuardedModel {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn schema_adapter(&self) -> &dyn adk_rust::SchemaAdapter {
+        self.inner.schema_adapter()
+    }
+
+    fn uses_interactions_api(&self) -> bool {
+        self.inner.uses_interactions_api()
+    }
+
+    async fn generate_content(
+        &self,
+        request: adk_rust::LlmRequest,
+        stream_response: bool,
+    ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+        if let Some(error) = self.abort.error() {
+            return Err(error);
+        }
+        self.inner.generate_content(request, stream_response).await
+    }
 }
 
 /// Which records a journaled call writes.
@@ -280,6 +393,7 @@ pub(crate) struct DispatchJournal {
     sessions: Arc<dyn SessionService>,
     identity: AdkIdentity,
     owner: DispatchOwner,
+    abort: DispatchAbort,
 }
 
 impl DispatchJournal {
@@ -287,12 +401,46 @@ impl DispatchJournal {
         sessions: Arc<dyn SessionService>,
         identity: AdkIdentity,
         owner: DispatchOwner,
+        abort: DispatchAbort,
     ) -> Self {
         Self {
             sessions,
             identity,
             owner,
+            abort,
         }
+    }
+
+    /// The invocation-wide stop this journal records a failed dispatch in.
+    pub(crate) fn abort(&self) -> &DispatchAbort {
+        &self.abort
+    }
+
+    /// Record that this execution's continuation of `pause` begins, once per
+    /// card it answers, before its Runner starts (see [`continuation_pause`]).
+    ///
+    /// # Errors
+    ///
+    /// The fenced root writer refused the append.
+    pub(crate) async fn record_continuing<'a>(
+        &self,
+        pause_id: &str,
+        pause_invocation_id: &str,
+        interrupt_ids: impl IntoIterator<Item = &'a str>,
+    ) -> adk_rust::Result<()> {
+        for interrupt_id in interrupt_ids {
+            self.append(&DispatchRecord {
+                version: RECORD_VERSION,
+                phase: Phase::Continuing,
+                decision_invocation_id: pause_invocation_id.to_owned(),
+                interrupt_id: interrupt_id.to_owned(),
+                owner: self.owner.clone(),
+                call_id: pause_id.to_owned(),
+                result: None,
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     /// The execution this journal writes for.
@@ -331,6 +479,10 @@ impl DispatchJournal {
     }
 
     async fn append(&self, record: &DispatchRecord) -> adk_rust::Result<()> {
+        #[cfg(test)]
+        if record.phase == Phase::Dispatched {
+            self.test_hooks_before_dispatched(&record.call_id).await?;
+        }
         let encoded = serde_json::to_string(record).map_err(|_| journal_error())?;
         if encoded.len() > MAX_DISPATCH_RECORD_BYTES {
             return Err(journal_error());
@@ -346,6 +498,41 @@ impl DispatchJournal {
                 event,
             })
             .await
+    }
+}
+
+#[cfg(test)]
+impl DispatchJournal {
+    async fn test_hooks_before_dispatched(&self, call_id: &str) -> adk_rust::Result<()> {
+        use std::sync::atomic::Ordering;
+        if let code @ 1.. = EXIT_BEFORE_DISPATCHED_RECORD.load(Ordering::Acquire) {
+            for _ in 0..500 {
+                let forwarded = self
+                    .sessions
+                    .get_for_identity(&self.identity)
+                    .await
+                    .is_ok_and(|session| {
+                        session.events().all().iter().any(|event| {
+                            event
+                                .tool_calls()
+                                .iter()
+                                .any(|call| call.call_id == Some(call_id))
+                                && event.provider_metadata.contains_key(
+                                    crate::agents::events::DESCENDANT_CONTAINER_INVOCATION_KEY,
+                                )
+                        })
+                    });
+                if forwarded {
+                    std::process::exit(code);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            panic!("the replayed call was never forwarded to the root session");
+        }
+        if FAIL_DISPATCHED_APPEND.load(Ordering::Acquire) {
+            return Err(journal_error());
+        }
+        Ok(())
     }
 }
 
@@ -452,10 +639,17 @@ impl Tool for JournalTool {
             return self.inner.execute(context, arguments).await;
         }
         // The dispatch is durable before the effect, or the effect never starts.
-        self.scope
+        // A failed append stops the whole invocation at its next model step
+        // (`DispatchAbort`): the tool error alone would be read by the model.
+        if let Err(error) = self
+            .scope
             .journal
             .append(&self.scope.record(Phase::Dispatched, call_id.clone(), None))
-            .await?;
+            .await
+        {
+            self.scope.journal.abort.record(&error);
+            return Err(error);
+        }
         let outcome = self.inner.execute(context, arguments).await;
         if self.scope.outcomes == JournalOutcomes::ByRunner {
             return outcome;
@@ -580,6 +774,29 @@ mod tests {
         );
     }
 
+    fn continuing(pause: &Event, owner: DispatchOwner, interrupt: &str) -> Event {
+        let mut event = Event::new(&pause.invocation_id);
+        DISPATCH_AUTHOR.clone_into(&mut event.author);
+        event.provider_metadata.insert(
+            DISPATCH_METADATA_KEY.to_owned(),
+            serde_json::to_string(&DispatchRecord {
+                version: RECORD_VERSION,
+                phase: Phase::Continuing,
+                decision_invocation_id: pause.invocation_id.clone(),
+                interrupt_id: interrupt.to_owned(),
+                owner,
+                call_id: pause.id.clone(),
+                result: None,
+            })
+            .unwrap(),
+        );
+        event
+    }
+
+    /// #1321 review rounds 2–4: a pause stays answerable only behind THIS
+    /// execution's own dead continuation (its `continuing` record first, its
+    /// bookkeeping only), so a crash before any dispatch record resumes (R) and
+    /// an advance, another execution or another card is stale.
     #[test]
     fn a_pause_stays_answerable_only_behind_this_executions_dead_continuation() {
         let mut pause = Event::new("root-1");
@@ -588,34 +805,91 @@ mod tests {
             .insert("pause".to_owned(), "yes".to_owned());
         let is_pause = |event: &Event| event.provider_metadata.contains_key("pause");
         let ids = |_: &Event| Some(BTreeSet::from(["hitl-1".to_owned(), "hitl-2".to_owned()]));
+        // Bookkeeping of the dead continuation in this fixture: events marked "own".
+        let own = |event: &Event| event.provider_metadata.contains_key("own");
         let answerable = |events: &[Event], owner: &DispatchOwner| {
-            continuation_pause(events, is_pause, owner, ids).map(|event| event.id.clone())
+            continuation_pause(events, is_pause, owner, ids, own).map(|event| event.id.clone())
         };
-        let mut later = Event::new("root-2");
-        later.llm_response.content = Some(adk_rust::Content::new("model").with_text("advanced"));
+        let mut forwarded = Event::new("child-1");
+        forwarded
+            .provider_metadata
+            .insert("own".to_owned(), "forwarded call".to_owned());
+        let mut advance = Event::new("root-2");
+        advance.llm_response.content = Some(adk_rust::Content::new("model").with_text("advanced"));
+        let started = continuing(&pause, owner(), "hitl-1");
+
         assert_eq!(
             answerable(&[pause.clone()], &owner()),
             Some(pause.id.clone())
         );
         // An ordinary advance makes the pause stale.
-        assert!(answerable(&[pause.clone(), later.clone()], &owner()).is_none());
-        // This execution's continuation that dispatched an approved call keeps it
-        // answerable for this execution's replacement...
-        let dead = [
+        assert!(answerable(&[pause.clone(), advance.clone()], &owner()).is_none());
+        // Died after forwarding its replayed call, before any dispatch record
+        // (round 4 item 1): this execution's replacement continues it.
+        let forwarded_only = [pause.clone(), started.clone(), forwarded.clone()];
+        assert_eq!(
+            answerable(&forwarded_only, &owner()),
+            Some(pause.id.clone())
+        );
+        // Died after a dispatch record.
+        let dispatched = [
             pause.clone(),
-            later.clone(),
+            started.clone(),
+            forwarded.clone(),
             record("child-1", "call-1", Phase::Dispatched, None),
         ];
-        assert_eq!(answerable(&dead, &owner()), Some(pause.id.clone()));
-        // ...but not for a duplicate or late submission (another execution),
-        // even though nothing else moved (#1321 review round 2 item 3).
-        assert!(answerable(&dead, &DispatchOwner::new("execution-2", 1)).is_none());
-        assert!(answerable(&dead, &DispatchOwner::new("execution-1", 2)).is_none());
-        // A record of another execution, or for another interrupt, anywhere in
-        // the suffix makes it stale.
-        let mixed = [
+        assert_eq!(answerable(&dispatched, &owner()), Some(pause.id.clone()));
+        // A duplicate or late submission (another execution) is stale, even with
+        // nothing else moved.
+        assert!(answerable(&dispatched, &DispatchOwner::new("execution-2", 1)).is_none());
+        assert!(answerable(&dispatched, &DispatchOwner::new("execution-1", 2)).is_none());
+        // Any advance in the suffix is stale (round 4 item 2).
+        let mut advanced = dispatched.to_vec();
+        advanced.push(advance.clone());
+        assert!(answerable(&advanced, &owner()).is_none());
+        // Without a continuing record first, records alone prove nothing.
+        assert!(
+            answerable(
+                &[
+                    pause.clone(),
+                    forwarded.clone(),
+                    record("child-1", "call-1", Phase::Dispatched, None)
+                ],
+                &owner()
+            )
+            .is_none()
+        );
+        // A continuing record of another card, another pause or another
+        // execution, or a foreign record later in the suffix, is stale.
+        assert!(
+            answerable(
+                &[pause.clone(), continuing(&pause, owner(), "hitl-9")],
+                &owner()
+            )
+            .is_none()
+        );
+        let mut other_pause = Event::new("root-1");
+        other_pause.id = "another-pause".to_owned();
+        assert!(
+            answerable(
+                &[pause.clone(), continuing(&other_pause, owner(), "hitl-1")],
+                &owner()
+            )
+            .is_none()
+        );
+        assert!(
+            answerable(
+                &[
+                    pause.clone(),
+                    continuing(&pause, DispatchOwner::new("execution-2", 1), "hitl-1")
+                ],
+                &owner()
+            )
+            .is_none()
+        );
+        let foreign = [
             pause.clone(),
-            record("child-1", "call-1", Phase::Dispatched, None),
+            started.clone(),
             owned_record(
                 "child-1",
                 "call-2",
@@ -625,22 +899,17 @@ mod tests {
                 "hitl-1",
             ),
         ];
-        assert!(answerable(&mixed, &owner()).is_none());
-        let foreign_interrupt = [
-            pause.clone(),
-            owned_record(
-                "child-1",
-                "call-1",
-                Phase::Dispatched,
-                None,
-                owner(),
-                "hitl-9",
-            ),
-        ];
-        assert!(answerable(&foreign_interrupt, &owner()).is_none());
-        // A pause whose interrupts cannot be read is never answerable behind a suffix.
-        assert!(continuation_pause(&dead, is_pause, &owner(), |_| None).is_none());
+        assert!(answerable(&foreign, &owner()).is_none());
+        // A pause whose cards cannot be read is never answerable behind a suffix.
+        assert!(continuation_pause(&dispatched, is_pause, &owner(), |_| None, own).is_none());
         assert!(answerable(&[], &owner()).is_none());
+        // Continuing records are not dispatches.
+        assert!(
+            recorded_dispatches(&dispatched, &pause.invocation_id)
+                .unwrap()
+                .dispatched
+                .is_empty()
+        );
     }
 
     fn padded(invocation: &str, call: &str, target_bytes: usize) -> Event {
@@ -702,7 +971,12 @@ mod tests {
             adk_rust::UserId::new("user-1").expect("user"),
             adk_rust::SessionId::new("session-1").expect("session"),
         );
-        let journal = DispatchJournal::new(sessions.clone(), identity, owner());
+        let journal = DispatchJournal::new(
+            sessions.clone(),
+            identity,
+            owner(),
+            DispatchAbort::default(),
+        );
         (sessions, journal)
     }
 
@@ -870,6 +1144,144 @@ mod tests {
             recorded.completed.get("call-1"),
             Some(&json!({ "error": error.to_string() }))
         );
+    }
+
+    /// A session whose appends fail with `code` (a database error, or a lost writer).
+    struct FailingAppends {
+        inner: Arc<adk_rust::session::InMemorySessionService>,
+        code: &'static str,
+    }
+
+    #[async_trait]
+    impl SessionService for FailingAppends {
+        async fn create(
+            &self,
+            req: adk_rust::session::CreateRequest,
+        ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+            self.inner.create(req).await
+        }
+        async fn get(
+            &self,
+            req: adk_rust::session::GetRequest,
+        ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+            self.inner.get(req).await
+        }
+        async fn list(
+            &self,
+            req: adk_rust::session::ListRequest,
+        ) -> adk_rust::Result<Vec<Box<dyn adk_rust::session::Session>>> {
+            self.inner.list(req).await
+        }
+        async fn delete(&self, req: adk_rust::session::DeleteRequest) -> adk_rust::Result<()> {
+            self.inner.delete(req).await
+        }
+        async fn append_event(&self, _session_id: &str, _event: Event) -> adk_rust::Result<()> {
+            Err(self.failure())
+        }
+        async fn append_event_for_identity(
+            &self,
+            _req: AppendEventRequest,
+        ) -> adk_rust::Result<()> {
+            Err(self.failure())
+        }
+    }
+
+    impl FailingAppends {
+        fn failure(&self) -> adk_rust::AdkError {
+            adk_rust::AdkError::new(
+                adk_rust::ErrorComponent::Session,
+                adk_rust::ErrorCategory::Unavailable,
+                self.code,
+                "fixture append failure",
+            )
+        }
+    }
+
+    struct EchoModel;
+
+    #[async_trait]
+    impl adk_rust::Llm for EchoModel {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        async fn generate_content(
+            &self,
+            _request: adk_rust::LlmRequest,
+            _stream_response: bool,
+        ) -> adk_rust::Result<adk_rust::LlmResponseStream> {
+            Ok(Box::pin(adk_rust::futures::stream::empty()))
+        }
+    }
+
+    /// #1321 review round 4 item 3: a failed `dispatched` append never lets the
+    /// run continue past the approved call. The effect does not start, and every
+    /// guarded model of the invocation refuses with a typed code: a lost writer
+    /// keeps its own, anything else is `agent.dispatch_unrecorded`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_dispatch_record_stops_the_invocation_before_its_next_model_step() {
+        for (append_code, expected) in [
+            ("session.storage_unavailable", DISPATCH_UNRECORDED_CODE),
+            (WRITER_NOT_CURRENT_CODE, WRITER_NOT_CURRENT_CODE),
+        ] {
+            let (sessions, _) = journal_session().await;
+            let failing: Arc<dyn SessionService> = Arc::new(FailingAppends {
+                inner: sessions,
+                code: append_code,
+            });
+            let identity = AdkIdentity::new(
+                adk_rust::AppName::new("elitea-agent-v1").expect("app"),
+                adk_rust::UserId::new("user-1").expect("user"),
+                adk_rust::SessionId::new("session-1").expect("session"),
+            );
+            let abort = DispatchAbort::default();
+            let journal = DispatchJournal::new(failing, identity, owner(), abort.clone());
+            let guarded = abort.guard(Arc::new(EchoModel));
+            assert!(
+                guarded
+                    .generate_content(adk_rust::LlmRequest::new("echo", Vec::new()), false)
+                    .await
+                    .is_ok(),
+                "a model runs while no dispatch failed"
+            );
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let inner: Arc<dyn Toolset> = Arc::new(adk_rust::tool::BasicToolset::new(
+                "fixture",
+                vec![Arc::new(Counting {
+                    calls: Arc::clone(&calls),
+                    fail: false,
+                })],
+            ));
+            let tool = journal.wrap(
+                vec![inner],
+                &JournalDecision {
+                    invocation_id: "inv-1",
+                    interrupt_id: "hitl-1",
+                },
+                BTreeSet::from(["call-1".to_owned()]),
+                JournalOutcomes::Recorded,
+            )[0]
+            .tools(Arc::new(adk_rust::tool::SimpleToolContext::new("fixture")))
+            .await
+            .expect("tools")
+            .remove(0);
+            assert!(
+                tool.execute(call_context("call-1"), json!({}))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::Acquire),
+                0,
+                "the effect never starts without its dispatch record"
+            );
+            let Err(error) = guarded
+                .generate_content(adk_rust::LlmRequest::new("echo", Vec::new()), false)
+                .await
+            else {
+                panic!("the next model step must stop the run");
+            };
+            assert_eq!(error.code, expected);
+        }
     }
 
     #[test]

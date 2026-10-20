@@ -451,18 +451,20 @@ impl ApplicationNode {
     }
 
     /// A saved Agent child refused its continuation. A typed "may have started"
-    /// refusal keeps its registered reason; anything else stays a node failure.
+    /// refusal, or an approved call whose dispatch record could not be written,
+    /// keeps its registered reason; anything else stays a node failure.
     async fn child_failure(&self, error: &adk_rust::AdkError) -> GraphError {
-        if error.code != crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
-            return node_failure(self.name());
-        }
         let Some(events) = &self.failure_events else {
             return node_failure(self.name());
         };
-        match events.recovery_refused(self.name()).await {
-            Some(error) => error,
-            None => node_failure(self.name()),
-        }
+        let typed = if error.code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
+            events.recovery_refused(self.name()).await
+        } else if error.code == crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE {
+            events.dispatch_unrecorded(self.name()).await
+        } else {
+            None
+        };
+        typed.unwrap_or_else(|| node_failure(self.name()))
     }
 
     pub(super) fn new(
