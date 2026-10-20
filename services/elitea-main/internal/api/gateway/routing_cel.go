@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/google/cel-go/cel"
+	"cel.dev/cel-go/cel"
 )
 
 // The governance CEL variable set — design-governance-config-authoring §3.1.

@@ -217,6 +217,20 @@ fn set_time_zone_statement(zone: &str) -> String {
     format!("SET TimeZone = '{}'", zone.replace('\'', "''"))
 }
 
+/// A random 32-character lowercase hex id. `PostgreSQL` fixtures that share
+/// one database derive job scopes and owner ids from it, so tests running in
+/// parallel never select, claim or reap each other's rows.
+#[allow(
+    clippy::format_collect,
+    reason = "Keep independent hexadecimal fixture generation separate from production helpers."
+)]
+pub(crate) fn unique_hex() -> String {
+    let mut id = [0_u8; 16];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut id)
+        .expect("system randomness for a test id");
+    id.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

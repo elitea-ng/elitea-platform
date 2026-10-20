@@ -107,13 +107,6 @@ updates:
       # deliberate change of image, runner and gate, not a dependency bump (#653).
       - dependency-name: github.com/maximhq/bifrost/core
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
-      # cel-go moved its module path to cel.dev/cel-go; an update of the old
-      # path fails the whole go_modules job with go_module_path_mismatch. It is
-      # required only by /services/elitea-llm-gateway (internal/policy/routing.go
-      # imports it directly; bifrost does not require it today). Revisit when
-      # upstream bifrost moves to cel.dev/cel-go, or move the gateway's import
-      # to the new path as a deliberate change rather than a bump.
-      - dependency-name: github.com/google/cel-go
 
   - package-ecosystem: cargo
     directories:
