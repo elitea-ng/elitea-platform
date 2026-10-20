@@ -36,6 +36,7 @@ function context(id = 42): ConversationSummary {
     duration: 0,
     message_groups_count: 2,
     is_pinned: false,
+    is_archived: false,
     meta: { is_hidden: true, editor_test: identity },
   };
 }

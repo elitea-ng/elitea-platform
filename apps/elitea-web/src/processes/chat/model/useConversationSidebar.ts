@@ -23,6 +23,7 @@ import { conversationApi } from '@/entities/conversation';
 import { DEFAULT_FOLDER_NAME } from '@/entities/folder';
 import type { ConversationsDateGroup, ConversationsProps, FolderListItem } from '@/features/chat-conversation-list';
 import {
+  useArchiveConversation,
   useCreateFolder,
   useDeleteFolder,
   useEditFolder,
@@ -235,6 +236,10 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     [transformEveryConversationList],
   );
 
+  // Archive (client contract 1.10) leaves the open transcript open: the archive changes the lists, not the conversation.
+  const removeRow = useCallback((id: string) => transformEveryConversationList((items) => items.filter((item) => item.id !== id)), [transformEveryConversationList]);
+  const { archive } = useArchiveConversation({ projectId, removeRow, toastError });
+
   const deleteConversation = useCallback(
     (conversation: Conversation) => {
       if (projectId === undefined) return;
@@ -342,13 +347,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
   );
   const onCancelCreateConversation = useCallback(() => setActiveConversation(undefined), []);
 
-  /*
-   * Deliberately NOT memoised. `Conversations` is a plain function component (no
-   * `memo`), so a fresh props object costs nothing, and the baseline passes these
-   * ~30 values as individual JSX props with no memo either. A `useMemo` here
-   * would need all 27 in its dependency array — over the §3.5 `hook-deps` budget
-   * of 8 — and would be wrong the moment one were forgotten.
-   */
+  // Not memoised: `Conversations` is no `memo`, and a `useMemo` would need ~30 deps (§3.5 `hook-deps` is 8).
   const conversationsProps: ConversationsProps = {
     conversations,
     pinnedConversations,
@@ -368,6 +367,8 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     // (`typescript/no-misused-promises`); the hook toasts its own errors already.
     onPinConversation: (conversation, shouldPin) => void onPinConversation(conversation, shouldPin),
     onDuplicateConversation: (conversation) => void duplicateConversation(conversation),
+    onArchiveConversation: (conversation) => void archive(conversation),
+    onOpenArchived: () => void navigate({ to: '/chat/archived' }),
     onCreateConversation: createConversation,
     onCancelCreateConversation,
     onChangeActiveConversationName: renameConversation,

@@ -10,6 +10,7 @@
 // baseline's `1rem` (16px) — same substitution `ui/folders/FolderItem.tsx`'s
 // own `<DeleteOutlineIcon fontSize="small" />` already established for an
 // identical baseline `sx={{fontSize:'1rem'}}` icon.
+import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
@@ -120,6 +121,8 @@ export interface MenuItemsParams {
    * renders the entry and forwards the click.
    */
   readonly onDuplicate: () => void;
+  /** Archives the conversation in its project, for every member (client contract 1.10); absent leaves the entry out. */
+  readonly onArchive?: (() => void) | undefined;
 }
 
 /** Playback rows only ever offer Delete/Edit (`ConversationItem.jsx:264-278`). */
@@ -351,6 +354,25 @@ export function buildActiveMenuItems(params: MenuItemsParams): ControlsDropdownI
     disabled: conversation.isPinned !== true && conversation.folderId !== undefined,
     onClick: params.onPin,
   });
+
+  // The archive is the project's (as the pin is): it moves the chat out of every member's lists, so it asks first.
+  const { onArchive } = params;
+  if (onArchive !== undefined) {
+    items.push({
+      key: 'archive',
+      label: t('features.chatConversationList.conversationItem.menu.archive', 'Archive'),
+      icon: <ArchiveOutlinedIcon fontSize="small" />,
+      disabled: isEditingActive,
+      confirm: {
+        message: t(
+          'features.chatConversationList.conversationItem.menu.archiveConfirm',
+          "Move this chat to the project's Archived chats? It leaves the chat list for everyone in the project. Any member can unarchive it.",
+        ),
+        confirmLabel: t('features.chatConversationList.conversationItem.menu.archive', 'Archive'),
+        onConfirm: onArchive,
+      },
+    });
+  }
 
   return items;
 }

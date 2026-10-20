@@ -13,6 +13,8 @@ import * as slice from './index';
  */
 const PUBLIC_SURFACE = [
   'Conversations',
+  'useArchiveConversation',
+  'useConversationRail',
   'useCreateFolder',
   'useDateGroupExpansion',
   'useDeleteFolder',

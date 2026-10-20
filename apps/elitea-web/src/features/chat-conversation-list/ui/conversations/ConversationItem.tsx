@@ -103,7 +103,7 @@ function resolveConversationItemDefaults(props: ConversationItemProps): Resolved
  *    reproduced, rather than carried over as dead weight.
  */
 export const ConversationItem = memo(function ConversationItem(props: ConversationItemProps): ReactNode {
-  const { conversation, onSelectConversation, onDelete, onExport, onEdit, onPlayback, onPin, onDuplicate, onCreateConversation, onCancelCreate, onChangeActiveConversationName, onItemHover, projectId, currentUserId, personalProjectId, publicProjectId, onShareLinkCopied } = props;
+  const { conversation, onSelectConversation, onDelete, onExport, onEdit, onPlayback, onPin, onDuplicate, onArchive, onCreateConversation, onCancelCreate, onChangeActiveConversationName, onItemHover, projectId, currentUserId, personalProjectId, publicProjectId, onShareLinkCopied } = props;
   const { name, chatHistory } = conversation;
   const { isActive, moveToFoldersMenuItems, isEditingCanvas, enableDragAndDrop, isDragDisabled, isNextItemHovered, basename, isPlayback, isPinned, isNamingPending, isNew } = resolveConversationItemDefaults(props);
 
@@ -174,6 +174,8 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
     onDuplicate(conversation);
   }, [conversation, onDuplicate]);
 
+  const handleArchive = useMemo(() => (onArchive === undefined ? undefined : () => onArchive(conversation)), [conversation, onArchive]);
+
   const handleShareConversation = useCallback(async () => {
     const baseUrl = `${window.location.protocol}//${window.location.host}`;
     const destinationUrl = `${baseUrl}${basename}/${String(projectId)}/chat/${conversation.id}?${SearchParams.Name}=${conversation.name.replaceAll(' ', '+')}&${SearchParams.SharedChat}=1`;
@@ -223,8 +225,9 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
       onPlayback: handlePlayback,
       onPin: handlePin,
       onDuplicate: handleDuplicate,
+      onArchive: handleArchive,
     }),
-    [handleDelete, handleEdit, onExport, menuItemsVisibilityHandlers, handlePlayback, handlePin, handleDuplicate],
+    [handleDelete, handleEdit, onExport, menuItemsVisibilityHandlers, handlePlayback, handlePin, handleDuplicate, handleArchive],
   );
 
   const menuItems = useMemo<ControlsDropdownItem[]>(() => {
