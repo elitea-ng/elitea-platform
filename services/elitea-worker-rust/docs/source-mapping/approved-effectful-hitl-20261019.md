@@ -62,12 +62,12 @@ also found the replay marker resent on every later turn.
 
 | Concern | Code | Notes |
 |---|---|---|
-| Approved call runs once (gate deleted) | `services/elitea-worker-rust/src/agents/direct_hitl.rs:1343` `into_direct_replay` | An approved call is refused only when an earlier continuation dispatched it without a recorded outcome and it may not re-run (`services/elitea-worker-rust/src/agents/sensitive_tools.rs:110` `reruns_after_dispatch`: read-only tools, and the workspace command whose own run ledger serves its earlier result, ADR-0034 decision 9). |
-| Dispatch journal (root and nested) | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:413` `JournalTool::execute`; records `services/elitea-worker-rust/src/agents/dispatch_journal.rs:63` `DispatchOwner`; root wiring `services/elitea-worker-rust/src/agents/session.rs:2796`; nested wiring `services/elitea-worker-rust/src/agents/application_tools.rs:3790`, `services/elitea-worker-rust/src/agents/model_scope.rs:131` | Before an approved call that may not simply run again executes, a `dispatched` record is appended to the ROOT session through the claim-fenced writer. Each record names its owner (execution id and generation) and the card (interrupt) it answers. Nested calls also write a `completed` record carrying the result, because their function responses reach the root session only asynchronously. The root writes only `dispatched`: the Runner persists the function response itself. Records carry no content and no state delta. Malformed or forged records fail closed. |
-| What counts as a dispatch | `services/elitea-worker-rust/src/agents/direct_hitl.rs:2585` (root), `services/elitea-worker-rust/src/agents/direct_hitl.rs:960` (nested) | Only a journal record. A replayed call message persisted without one is not a dispatch: ADK's confirmation pre-check persists the replayed message and may then pause on an undecided sensitive sibling without running any tool (review round 2, item 2). A Deny's local adapter is never journaled, so a stopped Deny resumes and serves the same block. A recorded root result keeps `ContinueAfterResult`. Earlier cards' approved siblings are served from their recorded results. |
-| Only this execution continues behind a dead continuation | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:142` `records_bound_to`, `:208` `continuation_pause`; callers `services/elitea-worker-rust/src/agents/graph/resume.rs:634`, `services/elitea-worker-rust/src/agents/session.rs:2017` | Main re-claims a lost execution under the same execution id and generation with a higher claim attempt (`services/elitea-main/internal/infra/db/repos/claims.go:331`). A pipeline pause stays answerable behind a later suffix only when every dispatch record there was written by THIS execution for one of the pause's own cards. A duplicate or late submission (another execution) is stale even though the checkpoint has not moved. An ordinary advance (no record) is stale as before. |
-| Ordinary-root nested call with a recorded outcome | `services/elitea-worker-rust/src/agents/application_tools.rs:729` `live_nested_events`, `:667` `prepare_nested_application_resume`; `ApplicationReplayBatch.owner` | A dead root continuation of the same execution and the same card set (its marker, replay batch, the children's events and results, its journal records) is set aside, and the answer is rebuilt from the session before it. The journal then serves the recorded outcome (class R, was C). A dispatch without an outcome is still refused at assembly (`services/elitea-worker-rust/src/agents/direct_hitl.rs:1291` `has_unrecorded_dispatch`), before any parent or child call. A new pause, a retained pause, a paused child result, parent output, another execution or another card set makes the decision stale. |
-| Typed refusal | `src/protocol/output.rs:133,731,800-803`; `src/agents/direct_hitl.rs:108` `assembly_error`; `src/agents/application_tools.rs:5141`; `src/agents/graph/application.rs:448,455`; `src/agents/graph/compiler.rs:1718`; `src/execution/native_agent_lifecycle.rs:1558`; `src/agents/graph/resume.rs:1257,1340`; `src/agents/session.rs:3362` | `RuntimeFailureKind::RecoveryRefused` ↔ proto `RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED = 34` (`libs/proto/elitea/runtime/v1/errors.proto`, Go/Python regenerated). Main policy: `services/elitea-main/internal/transport/runtimegrpc/output/server.go`; `testdata/proto/runtime/v1/model_failure_policies.json`. Typed direct-HITL codes are kept as error codes instead of `invalid_resume`. |
+| Approved call runs once (gate deleted) | `services/elitea-worker-rust/src/agents/direct_hitl.rs:1351` `into_direct_replay` | An approved call is refused only when an earlier continuation dispatched it without a recorded outcome and it may not re-run (`services/elitea-worker-rust/src/agents/sensitive_tools.rs:112` `reruns_after_dispatch`: read-only tools, and the workspace command whose own run ledger serves its earlier result, ADR-0034 decision 9). |
+| Dispatch journal (root and nested) | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:445` `JournalTool::execute`; records `services/elitea-worker-rust/src/agents/dispatch_journal.rs:63` `DispatchOwner`; root wiring `services/elitea-worker-rust/src/agents/session.rs:2814`; nested wiring `services/elitea-worker-rust/src/agents/application_tools.rs:3814`, `services/elitea-worker-rust/src/agents/model_scope.rs:131` | Before an approved call that may not simply run again executes, a `dispatched` record is appended to the ROOT session through the claim-fenced writer. Each record names its owner (execution id and generation) and the card (interrupt) it answers. Nested calls also write a `completed` record carrying the result, because their function responses reach the root session only asynchronously. The root writes only `dispatched`: the Runner persists the function response itself. Records carry no content and no state delta. Malformed or forged records fail closed. |
+| What counts as a dispatch | `services/elitea-worker-rust/src/agents/direct_hitl.rs:2593` (root), `services/elitea-worker-rust/src/agents/direct_hitl.rs:968` (nested) | Only a journal record. A replayed call message persisted without one is not a dispatch: ADK's confirmation pre-check persists the replayed message and may then pause on an undecided sensitive sibling without running any tool (review round 2, item 2). A Deny's local adapter is never journaled, so a stopped Deny resumes and serves the same block. A recorded root result keeps `ContinueAfterResult`. Earlier cards' approved siblings are served from their recorded results. |
+| Only this execution continues behind a dead continuation | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:142` `records_bound_to`, `:240` `continuation_pause`; callers `services/elitea-worker-rust/src/agents/graph/resume.rs:634`, `services/elitea-worker-rust/src/agents/session.rs:2018` | Main re-claims a lost execution under the same execution id and generation with a higher claim attempt (`services/elitea-main/internal/infra/db/repos/claims.go:331`). A pipeline pause stays answerable behind a later suffix only when every dispatch record there was written by THIS execution for one of the pause's own cards. A duplicate or late submission (another execution) is stale even though the checkpoint has not moved. An ordinary advance (no record) is stale as before. |
+| Ordinary-root nested call with a recorded outcome | `services/elitea-worker-rust/src/agents/application_tools.rs:725` `live_nested_events`, `:668` `prepare_nested_application_resume`; the root batch's owner under its own metadata key `elitea.application.replay_owner.v1` (`application_tools.rs:109`), so a Worker without it still reads the strict batch | A dead root continuation of the same execution and the same card set (its marker, replay batch, the children's events and results, its journal records) is set aside, and the answer is rebuilt from the session before it. The journal then serves the recorded outcome (class R, was C). A dispatch without an outcome is still refused at assembly (`services/elitea-worker-rust/src/agents/direct_hitl.rs:1299` `has_unrecorded_dispatch`), before any parent or child call. A new pause, a retained pause, a paused child result, parent output, another execution or another card set makes the decision stale. |
+| Typed refusal | `services/elitea-worker-rust/src/protocol/output.rs:133,731,804,941`; `services/elitea-worker-rust/src/agents/direct_hitl.rs:113` `recovery_refused_error`, `:127` `assembly_error`; `services/elitea-worker-rust/src/agents/application_tools.rs:5291`; `services/elitea-worker-rust/src/agents/graph/node_events.rs:219` `recovery_refused` (used by `services/elitea-worker-rust/src/agents/graph/application.rs:455` and `services/elitea-worker-rust/src/agents/pipeline/scoped_runtime.rs:342`); `services/elitea-worker-rust/src/agents/graph/compiler.rs:1718`; `services/elitea-worker-rust/src/execution/native_agent_lifecycle.rs:1561`; `services/elitea-worker-rust/src/agents/graph/resume.rs:1271,1342`; `services/elitea-worker-rust/src/agents/session.rs:3432` | `RuntimeFailureKind::RecoveryRefused` ↔ proto `RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED = 34` (`libs/proto/elitea/runtime/v1/errors.proto`, Go/Python regenerated). Main policy: `services/elitea-main/internal/transport/runtimegrpc/output/server.go`; `testdata/proto/runtime/v1/model_failure_policies.json`. Typed direct-HITL codes are kept as error codes instead of `invalid_resume`. Every refusal carries the one internal detail `RECOVERY_REFUSED_DETAIL`; the user sees the registered message. |
 | Settlement error code | `services/elitea-main/internal/infra/db/repos/settlements.go` `settlementErrorCode` | Main decodes the verified terminal `RuntimeErrorV1` that it already selected inside the settlement transaction and stores only the registered code name. |
 | FU-236: ADK confirmation notice | `src/agents/replay_history.rs:118,134` `is_confirmation_notice` | Only that exact text for a tool the history calls is removed from the provider request. Durable session events are unchanged. |
 | FU-236: answered replay marker | `src/agents/replay_history.rs:119,153` `drop_answered_replay_markers`; `src/agents/direct_hitl.rs:2319` `is_replay_marker` | A later turn drops the runtime's replay marker once the replayed call follows it. That matches what the continuation already sent. The block result keeps any reviewer comment (`denial_reason`). A marker no call follows yet stays. Only text that parses exactly as a marker is dropped; a look-alike stays. |
@@ -89,11 +89,14 @@ also found the replay marker resent on every later turn.
 
 Worker: `cargo test --offline --locked --no-fail-fast --all-targets --all-features` against a disposable `postgres:18`
 (`ELITEA_TEST_DATABASE_URL`, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`):
-**2524 passed, 0 failed, 103 ignored** after the second review round (2514 / 0 / 103 after merging `origin/main`; 2507 / 0 / 93 before), with no PostgreSQL skips. The ignored tests are the supervisor/preparation/hydration `#[ignore]` suites that CI runs
-separately. `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings` and
-`RUSTDOCFLAGS=-D warnings cargo doc` are clean. `libs/rust` workspace: 2739 passed, 0 failed, 1 ignored.
-Main: `go test ./...` passes (215 packages). `claims_test.go` `TestExpiredClaimRecoversTerminalOutputAcrossProducerReplacement`
-now scripts the verify query's three columns. `go vet` is clean. Counts are after merging `origin/main` at `ad4988406`.
+**2548 passed, 0 failed, 103 ignored** at the final head `2cd231cc4` (merged with `origin/main` at `9eb8891f8`), with no
+PostgreSQL skips (2524 / 0 / 103 after review round 1). The ignored tests are the supervisor/preparation/hydration
+`#[ignore]` suites that CI runs separately. `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`
+and `RUSTDOCFLAGS=-D warnings cargo doc` are clean. `libs/rust` workspace: 2802 passed, 0 failed, 1 ignored (no
+`libs/rust` change after that run). Main: `go test ./...` passes (215 packages), `go vet` clean.
+`claims_test.go` `TestExpiredClaimRecoversTerminalOutputAcrossProducerReplacement` scripts the verify query's three
+columns. `approved_calls_pg_tests::postgres_two_concurrent_resumes_run_the_approved_call_exactly_once` ran 30/30 at the
+final head while an image build loaded the machine.
 
 Audits:
 
@@ -114,6 +117,13 @@ Real PostgreSQL. Each phase runs in its own OS process and claim, and the effect
 | Root Agent: approve, then repeat | `ordinary_effect_pg_tests.rs` `postgres_root_approved_effectful_call_runs_once_and_a_repeat_runs_nothing` | 1 tool call; the repeat makes 0. |
 | Root: a later user turn after an approval | `postgres_root_later_turn_after_an_approval_sends_one_call_and_result` | The third process sends a new user turn. The provider request is `system, user, assistant(call), tool, assistant, user`: the earlier answer as one string, no replay marker, no confirmation notice. 0 tool calls. |
 | Root: block / foreign decision | `postgres_root_blocked_effectful_call_never_runs`, `postgres_root_decision_for_another_interrupt_is_refused` | 0 tool calls. |
+| Root: replayed message persisted, crash before the pre-check pause on an undecided sibling | `postgres_root_replayed_message_before_a_sibling_pause_is_no_dispatch` | Nothing ran, so the replacement continues A and raises B's card (0 tool calls); after B is approved, `a` and `b` run once each. Red without the fix. |
+| Root: a duplicate submission (another execution) after a dispatch | `postgres_root_duplicate_after_a_dispatch_is_stale_and_runs_nothing` | Refused as stale (`InvalidInput`, not the recovery-refused cause), 0 tool and 0 model calls; the dead execution's replacement still refuses as `RECOVERY_REFUSED`. |
+| Root: nested Agent call, recorded outcome, process replaced | `postgres_root_nested_recorded_outcome_is_served_after_process_replacement` | The replacement's tool exits if called; it is not called, and the child model sees the recorded result (R). |
+| Pipeline: a late duplicate (another execution) after a dispatching continuation | `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale` | Refused as stale, 0 tool and 0 model calls, with the checkpoint not moved; then the dead execution's replacement finishes. Red without the fix. |
+
+Every crash and recovery pair runs as the SAME execution with a higher claim attempt, which is how Main re-claims a lost
+execution (`services/elitea-main/internal/infra/db/repos/claims.go:331`); a different execution is a separate submission.
 | Root: process replaced after dispatch | `postgres_root_worker_replaced_after_dispatch_refuses_as_may_have_started` | Refused at assembly with the recovery-refused cause, 0 tool calls. |
 | Root: recorded outcome, two Workers replaced in a row | `postgres_root_recorded_outcome_survives_two_replaced_workers_without_a_rerun` | The tool ran and its result was persisted; the next two Workers die at the model request, and the second one's tool would exit if it were ever called (it is not); the third continues with 0 tool calls. |
 | Pipeline: block after a dispatched approval | `postgres_block_after_a_dispatched_approval_is_refused_not_reported_as_blocked` | A block of a call that may have run is refused, never reported as "declined, not executed". |
@@ -168,12 +178,12 @@ An opus review of the first version found four defects. Each one is fixed and ha
 
 | # | Finding | Change | Proof |
 |---|---|---|---|
-| 1 | Ordinary root, nested call whose outcome WAS recorded: refused as `RECOVERY_REFUSED` instead of served. | `live_nested_events` sets aside this execution's dead continuation and rebuilds the answer before it; the journal serves the outcome (R). An unrecorded dispatch is still refused at assembly. | In-memory `services/elitea-worker-rust/src/agents/ordinary_tests.rs:6007` (red before: `agent.recovery_refused`). Real PG, process replacement: `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:167` `postgres_root_nested_recorded_outcome_is_served_after_process_replacement` (tool exits if called again; the child model sees the recorded result). |
-| 2 | Root: "replayed message persisted, no result" counted as dispatched, but ADK's pre-check can persist (A,B) and pause on B without running anything. | The root journals a `dispatched` record before each approved effect; only a record counts. | Real PG: `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:162` `postgres_root_replayed_message_before_a_sibling_pause_is_no_dispatch`: two sensitive calls, approve A, the Worker exits before B's pause is persisted (test hook `EXIT_BEFORE_CONFIRMATION_APPEND`); the replacement continues A and raises B's card, 0 tool calls; after B is approved, `a` and `b` run once each. Red without the fix (A refused). Unit `services/elitea-worker-rust/src/agents/direct_hitl_tests.rs:367`. |
-| 3 | `continuation_pause` accepted ANY dispatch record after the pause. | Records carry owner and card; the pause stays answerable only for this execution's own records for its own cards. | Real PG: `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:149` `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale` (another execution after a dispatching continuation: refused `InvalidInput`, 0 tool and 0 model calls, checkpoint not moved; then the dead execution's replacement finishes). Red without the fix. Unit `services/elitea-worker-rust/src/agents/dispatch_journal.rs:552`. The pipeline crash scenarios now recover with the same execution, as Main does. |
-| 4 | `with_workspace_command` rebuilt the unqualified names after binding, dropping aliased names. | It adds `local.run_command` and its provider entry directly and refuses a taken name. | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:604` `the_workspace_command_keeps_bound_aliased_names` (aliased sensitive and read-only siblings keep their bound names). |
+| 1 | Ordinary root, nested call whose outcome WAS recorded: refused as `RECOVERY_REFUSED` instead of served. | `live_nested_events` sets aside this execution's dead continuation and rebuilds the answer before it; the journal serves the outcome (R). An unrecorded dispatch is still refused at assembly. | In-memory `services/elitea-worker-rust/src/agents/ordinary_tests.rs:6007` (red before: `agent.recovery_refused`). Real PG, process replacement: `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:180` `postgres_root_nested_recorded_outcome_is_served_after_process_replacement` (tool exits if called again; the child model sees the recorded result). |
+| 2 | Root: "replayed message persisted, no result" counted as dispatched, but ADK's pre-check can persist (A,B) and pause on B without running anything. | The root journals a `dispatched` record before each approved effect; only a record counts. | Real PG: `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:175` `postgres_root_replayed_message_before_a_sibling_pause_is_no_dispatch`: two sensitive calls, approve A, the Worker exits before B's pause is persisted (test hook `EXIT_BEFORE_CONFIRMATION_APPEND`); the replacement continues A and raises B's card, 0 tool calls; after B is approved, `a` and `b` run once each. Red without the fix (A refused). Unit `services/elitea-worker-rust/src/agents/direct_hitl_tests.rs:367`. |
+| 3 | `continuation_pause` accepted ANY dispatch record after the pause. | Records carry owner and card; the pause stays answerable only for this execution's own records for its own cards. | Real PG: `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:149` `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale` (another execution after a dispatching continuation: refused `InvalidInput`, 0 tool and 0 model calls, checkpoint not moved; then the dead execution's replacement finishes). Red without the fix. Unit `services/elitea-worker-rust/src/agents/dispatch_journal.rs:584`. The pipeline crash scenarios now recover with the same execution, as Main does. |
+| 4 | `with_workspace_command` rebuilt the unqualified names after binding, dropping aliased names. | It adds `local.run_command` and its provider entry directly and refuses a taken name. | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:626` `the_workspace_command_keeps_bound_aliased_names` (aliased sensitive and read-only siblings keep their bound names). |
 | 5 | The settlement verify query read every terminal's `payload_bytes` inside `FOR UPDATE`. | `CASE WHEN o.payload_type = 'RUNTIME_FAILURE' THEN o.payload_bytes END` (`services/elitea-main/internal/infra/db/repos/settlements.go:117`). | Real PG `TestPostgresServiceBackedIndexRuntimeFailureSettlement` now asserts `error_code = 'INTERNAL'` on the settlement row. |
-| 6 | `insert_other` rebuilt the unqualified names per tool (O(N²)). | Inserts no longer rebuild; enumeration rebuilds once (`services/elitea-worker-rust/src/agents/sensitive_tools.rs:286`). | Budget `services/elitea-worker-rust/src/agents/sensitive_tools.rs:671` `enumeration_rebuilds_the_unqualified_names_once` (256 tools, 1 rebuild). |
+| 6 | `insert_other` rebuilt the unqualified names per tool (O(N²)). | Inserts no longer rebuild; enumeration rebuilds once (`services/elitea-worker-rust/src/agents/sensitive_tools.rs:303`). | Budget `services/elitea-worker-rust/src/agents/sensitive_tools.rs:762` `enumeration_rebuilds_the_unqualified_names_once` (256 tools, 1 rebuild). |
 | 7 | `direct_hitl_admission_error` duplicated `direct_hitl::assembly_error`. | It calls it. | Existing admission tests. |
 | 8 | Two copies of the RECOVERY_REFUSED send plus message. | `PipelineNodeEventSender::recovery_refused` (`services/elitea-worker-rust/src/agents/graph/node_events.rs:219`), used by `graph/application.rs:455` and `pipeline/scoped_runtime.rs:342`. | Pipeline PG crash tests. |
 | 9 | Performance section missing. | Added below. | — |
@@ -181,16 +191,39 @@ An opus review of the first version found four defects. Each one is fixed and ha
 
 A duplicate submission of a decision that a finished continuation already consumed (ordinary root, nested) is now refused as a typed stale decision (`InvalidInput`) instead of an internal configuration failure (`ordinary_tests.rs` parallel nested ask_user tests updated).
 
+### Review round 3 (`/code-review high`, heads `5fcd7e522` and `89e07c25d`, 2026-10-20)
+
+| Finding | Change | Proof |
+|---|---|---|
+| A depth-2 child's (or pipeline-tool descendant's) forwarded replay batch carries the grandchild's cards and was taken for a root consumer. | Only a batch on the root application branch consumes the root's cards. | `services/elitea-worker-rust/src/agents/application_tools.rs:5974` `only_this_executions_dead_root_continuation_is_set_aside` |
+| The new `owner` field in the strict `ApplicationReplayBatch` would break a Worker without it (rollback, rolling deploy). | The owner travels under its own metadata key `elitea.application.replay_owner.v1`; the batch schema is unchanged. | same test |
+| A root duplicate submission after a dispatch got "may have started" instead of stale. | The root checks this decision's records (`services/elitea-worker-rust/src/agents/dispatch_journal.rs:169` `decision_records_owned_by`, `services/elitea-worker-rust/src/agents/session.rs:2779`); a malformed record is a corrupt session. One session read per resume. | `postgres_root_duplicate_after_a_dispatch_is_stale_and_runs_nothing` |
+| The workspace command could take over a data-changing tool's name; a duplicate non-sensitive tool, or a sensitive and a plain tool sharing an identity, failed assembly. | Any taken name refuses the workspace command; duplicates are ambiguous (never re-run), not fatal. | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:626`, `:702`, `:744` |
+| Refusal text duplicated at four sites. | `RECOVERY_REFUSED_DETAIL` and `direct_hitl::recovery_refused_error`. | existing refusal tests |
+
+Justified, not changed:
+- A pipeline continuation that died with something persisted but before any journal record (for example a re-runnable
+  read-only call) is still stale (class F). This is pre-existing: main required the pause to be the last event. Making
+  it R needs owner-stamped pipeline continuation markers; listed under Follow-ups.
+- For pipelines, the graph checkpoint check (`services/elitea-worker-rust/src/agents/graph/resume.rs:634` onwards: checkpoint id and pending node) is the
+  advance guard behind a dead continuation. The ordinary root has no checkpoint and checks the suffix itself.
+- Internal and application tools whose read-only class the catalog does not know are journaled and, after a dispatch
+  without an outcome, refused (fail closed: no effect is repeated without a receipt).
+- Only user text in the exact runtime marker grammar, with a valid interrupt id, is dropped from later provider
+  requests (FU-236).
+- A bound tool already named `run_command` and the cloud workspace's command cannot both be offered to the model, so
+  assembly refuses. Renaming in the binding plan is a follow-up.
+
 ## Performance
 
 | Budget | Mechanism | Proof | Measured |
 |---|---|---|---|
-| Root approved call that may not re-run: exactly 1 extra fenced append (`dispatched`); 0 for read-only calls and the workspace command | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:428` (`JournalOutcomes::ByRunner`), `services/elitea-worker-rust/src/agents/direct_hitl.rs` `journaled_call_ids` | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:813` `a_root_journaled_call_costs_one_append` | 1 append |
-| Nested approved call that may not re-run: exactly 2 extra fenced appends (`dispatched` + `completed` with the result); 0 otherwise | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:413` | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:786` `a_journaled_call_costs_two_appends_and_any_other_call_none` | 2 appends; 0 for an unowned call |
+| Root approved call that may not re-run: exactly 1 extra fenced append (`dispatched`); 0 for read-only calls and the workspace command | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:460` (`JournalOutcomes::ByRunner`), `services/elitea-worker-rust/src/agents/direct_hitl.rs` `journaled_call_ids` | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:845` `a_root_journaled_call_costs_one_append` | 1 append |
+| Nested approved call that may not re-run: exactly 2 extra fenced appends (`dispatched` + `completed` with the result); 0 otherwise | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:445` | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:818` `a_journaled_call_costs_two_appends_and_any_other_call_none` | 2 appends; 0 for an unowned call |
 | No write per chunk or token; records bounded at 256 KiB each and 2 × 64 per decision | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:48,50` | `a_record_at_the_byte_limit_*`, `a_decision_reads_its_record_limit_and_refuses_one_more` | limit passes, limit+1 refused |
 | Settlement verify reads payload bytes only for a runtime-failure terminal (the only one whose code is stored) | `services/elitea-main/internal/infra/db/repos/settlements.go:117` | `TestPostgresServiceBackedIndexRuntimeFailureSettlement` | other terminals transfer no payload bytes in the `FOR UPDATE` transaction |
-| Sensitive catalog assembly is O(N), one name rebuild per enumeration | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:286` | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:671` | 1 rebuild for 256 tools (was 256) |
-| Resolution scans the session once per decision; no new query | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:161`, `services/elitea-worker-rust/src/agents/application_tools.rs:729` | existing resume tests | O(events) |
+| Sensitive catalog assembly is O(N), one name rebuild per enumeration | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:303` | `services/elitea-worker-rust/src/agents/sensitive_tools.rs:762` | 1 rebuild for 256 tools (was 256) |
+| Resolution: no new query; the root reads the session once per resume and parses only the decision's own records for the duplicate check | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:169,193`, `services/elitea-worker-rust/src/agents/application_tools.rs:725`, `services/elitea-worker-rust/src/agents/session.rs:2779` | existing resume tests | O(events) per resume, unchanged in order |
 
 The full nested result is kept rather than a digest: when the `completed` record is written, the nested function response is not yet durable in the root session, so a reference would turn the after-outcome window from R into C. A larger result (> 256 KiB) is still returned to the model but not stored; a crash before the parent continues then ends as `RECOVERY_REFUSED`.
 
@@ -202,7 +235,7 @@ The full nested result is kept rather than a digest: when the `completed` record
 | After the durable dispatch record, before the outcome | The outcome is unknown. The call is never repeated and the run ends `RECOVERY_REFUSED`; an operator reconciles (C). | `…after_dispatch…` (pipeline and root) |
 | After the recorded outcome, before the parent continues | The recorded outcome is served (R): pipeline `agent` nodes and, since round 2, an ordinary root Agent's nested call. | `…after_the_recorded_outcome…`, `postgres_root_nested_recorded_outcome_is_served_after_process_replacement` |
 | Root: replayed message persisted, ADK pauses on an undecided sibling, crash before the pause | No journal record, so nothing ran: the replacement continues and raises the sibling's card; each call runs once after its approval (R). | `postgres_root_replayed_message_before_a_sibling_pause_is_no_dispatch` |
-| A duplicate or late submission (another execution) after a dispatching continuation | Stale, nothing runs; the dead execution's own replacement continues (R/C as above). | `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale` |
+| A duplicate or late submission (another execution) after a dispatching continuation | Stale, nothing runs; the dead execution's own replacement continues (R/C as above). | `postgres_late_duplicate_approval_after_a_dispatching_continuation_is_stale`, `postgres_root_duplicate_after_a_dispatch_is_stale_and_runs_nothing` |
 | The `completed` append fails after the effect | The model still gets the result. Only a crash before the parent continues degrades to `RECOVERY_REFUSED`. | By construction (`dispatch_journal.rs:277`) |
 
 ## Resilience
@@ -216,7 +249,7 @@ The full nested result is kept rather than a digest: when the `completed` record
 | Category | Applies | Check |
 |---|---|---|
 | Identity / trust | No new identity source | Records are written only through the claim-fenced root writer. A record with a forged author, content or state delta is refused. |
-| Object authorization | Yes | A decision binds to the exact persisted call (invocation, call id, arguments digest). A foreign interrupt is refused (root and pipeline PG tests). |
+| Object authorization | Yes | A decision binds to the exact persisted call (invocation, call id, arguments digest). A foreign interrupt is refused (root and pipeline PG tests). Dispatch records are bound to the writing execution (from the claim-bound plan, never from the browser or model) and the card; a duplicate or late submission is stale, and a forged or malformed record fails closed. |
 | Input bounds | Yes | Record size and count limits; strict `deny_unknown_fields` record schema. |
 | Injection | No string-built SQL | Main reads its typed code from proto; the existing parameterized insert gains one parameter. |
 | Egress | No change | — |
@@ -228,16 +261,43 @@ The full nested result is kept rather than a digest: when the `completed` record
 
 | Component × phase | Class | Enforcing code | Proof |
 |---|---|---|---|
-| Worker × tool call (effectful, approved), crash before dispatch (including a replayed message before a sibling's pause) | R | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:413`, `services/elitea-worker-rust/src/agents/direct_hitl.rs:2585` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:139`, `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:162` |
-| Worker × tool call (effectful, approved), crash after dispatch | C (typed refusal, never repeated) | `services/elitea-worker-rust/src/agents/direct_hitl.rs:1343`, `services/elitea-worker-rust/src/agents/application_tools.rs:667`, `services/elitea-worker-rust/src/protocol/output.rs:731` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:144`, `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:152` |
-| Worker × tool call (effectful, approved), crash after the recorded outcome | R | `services/elitea-worker-rust/src/agents/direct_hitl.rs:1343` (served result), `services/elitea-worker-rust/src/agents/application_tools.rs:729` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:154`, `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:157,167` |
-| Worker × HITL decision (P07), duplicate or late submission | I (stale, no effect) | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:208`, `services/elitea-worker-rust/src/agents/application_tools.rs:729` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:149` |
+| Worker × tool call (effectful, approved), crash before dispatch (including a replayed message before a sibling's pause) | R | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:445`, `services/elitea-worker-rust/src/agents/direct_hitl.rs:2593` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:139`, `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:175` |
+| Worker × tool call (effectful, approved), crash after dispatch | C (typed refusal, never repeated) | `services/elitea-worker-rust/src/agents/direct_hitl.rs:1351`, `services/elitea-worker-rust/src/agents/application_tools.rs:668`, `services/elitea-worker-rust/src/protocol/output.rs:731` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:144`, `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:160` |
+| Worker × tool call (effectful, approved), crash after the recorded outcome | R | `services/elitea-worker-rust/src/agents/direct_hitl.rs:1351` (served result), `services/elitea-worker-rust/src/agents/application_tools.rs:725` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:154`, `services/elitea-worker-rust/src/agents/ordinary_effect_pg_tests.rs:170,180` |
+| Worker × HITL decision (P07), duplicate or late submission | I (stale, no effect) | `services/elitea-worker-rust/src/agents/dispatch_journal.rs:240`, `services/elitea-worker-rust/src/agents/application_tools.rs:725` | `services/elitea-worker-rust/src/agents/pipeline_effect_pg_tests.rs:149` |
 | Worker × HITL decision (P07) | R / C (was F for an approved effect) | as above | as above; `docs/recovery-guarantees.md` row updated |
 
 ## Browser evidence
 
 Real Chrome (Claude in Chrome), stack `scoped`, signed in through the stack's mock OIDC as `admin@centry.user`.
 The models are real: `gpt-5.4-mini` through the gateway to the shared model endpoint.
+
+### Final head (`2cd231cc4`, 2026-10-20)
+
+Images built from `2cd231cc4` (contains #1160), binary-checked per §3b (`stack.sh binary-check`, `docker create` +
+`docker cp` + `strings`):
+
+- Worker `ghcr.io/elitea-ng/elitea-worker-rust:fu226-2cd231cc4` (`sha256:d4c2938504f2…`): contains
+  `elitea.application.replay_owner.v1` and `the nested decision was already answered` (both new in review rounds 2–3).
+- Main `ghcr.io/elitea-ng/elitea-main:fu226-2cd231cc4` (`sha256:412a60fd596f…`): contains `THEN o.payload_bytes END`
+  (the round-2 settlement query).
+- Gateway `gwreason-d5b3e88dd` (#1320); the other services as before.
+
+`stack.sh verify-profile --name scoped`: 49 passed, 1 failed (the shared migration head, ledger 169 vs worktree 166: the
+stack's compose worktree is the 2a-1 branch; no migration changes here).
+
+Tool runs are the MCP mock's `jsonrpc tools/call` lines (baseline 4). Each case was reloaded; the answer persisted and no
+card remained. The gateway logged no `llm_provider_refusal`, and the Worker logged no error.
+
+| Case | Chat | Executions (job and settlement state) | Tool calls | Result |
+|---|---|---|---|---|
+| Root Agent 157, Approve | 911 | `a28076e94d0d…` pause, `4200a1e6c303…` continuation (SUCCEEDED / SUCCEEDED) | 4 → 5 | "reverse returned ESREVER-1C." |
+| Root, later turn after the approval | 911 | `2a3f02202f42…` (SUCCEEDED) | 5 → 5 | "It returned ESREVER-1C." |
+| Root Agent 157, Reject | 912 | `1c44677c003a…`, `ebf47a424e14…` (SUCCEEDED) | 5 → 5 | "The call was declined." |
+| Pipeline 158 (`agent` node running Agent 157), Approve | 913 | `f169013f6943…`, `8b8ea56637a5…` (SUCCEEDED) | 5 → 6 | "reverse returned ESREVER-1C." |
+| Pipeline 158, Reject | 914 | `82b324908b0f…`, `b1bc382952ef…` (SUCCEEDED) | 6 → 6 | "The call was declined." |
+
+### Earlier images (review round 1, kept for the FU-236 before/after)
 
 Images, with the §3b binary check run on the extracted binary:
 
@@ -278,6 +338,13 @@ Fixture state, set through the database (not the UI) and kept from earlier sessi
 Chats 904 and 905 were diagnostic chats for the 403.
 
 ## Follow-ups
+
+- A pipeline continuation that died with something persisted but before any journal record is stale (F, pre-existing):
+  needs owner-stamped pipeline continuation markers.
+- Register internal and application tools' read-only class in the sensitive catalog, so a dispatched read-only sibling
+  of those kinds re-runs (I) instead of being refused (C).
+- Reserve the cloud workspace's tool names in the binding plan, so a toolkit tool named `run_command` is renamed
+  instead of refusing assembly.
 
 - The toolkit direct-path read-only gates and nested-pipeline direct-tool nodes (inventory above).
 - A nested call whose recorded result exceeds 256 KiB degrades to `RECOVERY_REFUSED` on a crash before the parent
