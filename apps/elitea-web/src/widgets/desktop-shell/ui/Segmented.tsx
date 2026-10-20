@@ -8,7 +8,7 @@ import { useId, type ReactNode } from 'react';
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 
-export interface SegmentedOption<T extends string> {
+interface SegmentedOption<T extends string> {
   value: T;
   label: ReactNode;
   /** The accessible name when `label` is not text. */

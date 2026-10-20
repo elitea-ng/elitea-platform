@@ -5,7 +5,7 @@
  * `routes/__tests__/workspacesRoute.test.tsx`.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, configure, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, fireEvent, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +20,8 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
+import { createFakeAppIpc, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
+import { AppIpcProvider } from '@/widgets/desktop-shell';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -36,7 +38,7 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const FOLDER: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: null, is_git: true };
 
 /** Mounts the pages at `path`; answers a function that opens another folder's session. */
-function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (workspaceId: string) => Promise<void> {
+function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc, appIpc?: FakeAppIpc): (workspaceId: string) => Promise<void> {
   const rootRoute = createRootRoute();
   const list = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage });
@@ -47,9 +49,10 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (w
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   const pages = <RouterProvider router={router} />;
+  const withIndex = indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>;
   render(
     <AppProviders>
-      <WorkspaceIpcProvider ipc={ipc}>{indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>}</WorkspaceIpcProvider>
+      <WorkspaceIpcProvider ipc={ipc}>{appIpc === undefined ? withIndex : <AppIpcProvider ipc={appIpc}>{withIndex}</AppIpcProvider>}</WorkspaceIpcProvider>
     </AppProviders>,
   );
   return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
@@ -108,7 +111,7 @@ async function pickCoder(user: ReturnType<typeof userEvent.setup>): Promise<void
 }
 
 describe('WorkspacesPage', () => {
-  it('lists the opened folders with a git badge and the bound project, and opens a new one', async () => {
+  it('lists the opened folders as a table with a git badge and the bound project, and opens a new one', async () => {
     const ipc = createFakeWorkspaceIpc({
       workspaces: [{ ...FOLDER, project_id: 42 }],
       nextOpen: { id: 'w2', path: '/tmp/notes', name: 'notes', project_id: null, is_git: false },
@@ -116,20 +119,37 @@ describe('WorkspacesPage', () => {
     const user = userEvent.setup();
     mount(ipc, '/workspaces');
 
+    expect(await screen.findByRole('table', { name: 'Local work' })).toBeInTheDocument();
     const rows = await screen.findAllByTestId('workspace-row');
     expect(within(rows[0] as HTMLElement).getByText('app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('/Users/me/code/app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('Git')).toBeInTheDocument();
     // No host index client (a plain browser tab): no index chip.
     expect(within(rows[0] as HTMLElement).queryByTestId('index-status-chip')).toBeNull();
-    await waitFor(() => expect(within(rows[0] as HTMLElement).getByRole('combobox')).toHaveTextContent('Marketing'));
+    await waitFor(() => expect(within(rows[0] as HTMLElement).getByText('Marketing')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: 'Open folder' }));
     const after = await screen.findAllByTestId('workspace-row');
     expect(after).toHaveLength(2);
     expect(within(after[1] as HTMLElement).queryByText('Git')).toBeNull();
-    // An unbound folder cannot start a session yet.
-    expect(within(after[1] as HTMLElement).getByRole('button', { name: 'Open' })).toBeDisabled();
+    // An unbound folder says what it needs, and does not open.
+    expect(within(after[1] as HTMLElement).getByText('Bind a project to work here')).toBeInTheDocument();
+    await user.dblClick(after[1] as HTMLElement);
+    expect(screen.getByTestId('workspaces-page')).toBeInTheDocument();
+  });
+
+  it('opens a folder with a double click or Return, selecting rows with the arrow keys', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }, { ...FOLDER, id: 'w2', name: 'notes', project_id: 42 }] });
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces');
+    const rows = await screen.findAllByTestId('workspace-row');
+    await user.click(rows[0] as HTMLElement);
+    expect(rows[0]).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{ArrowDown}');
+    expect(rows[1]).toHaveAttribute('aria-selected', 'true');
+    expect(rows[1]).toHaveFocus();
+    await user.dblClick(rows[1] as HTMLElement);
+    await waitFor(() => expect(screen.queryByTestId('workspaces-page')).toBeNull());
   });
 
   it('shows each folder\'s code index on its row', async () => {
@@ -150,38 +170,51 @@ describe('WorkspacesPage', () => {
     expect(indexIpc.calls.refreshes).toEqual([]);
   });
 
-  it('binds a project to a folder through the project picker', async () => {
+  it('puts a folder\'s actions in its native context menu', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
+    const row = await screen.findByTestId('workspace-row');
+    await waitFor(() => expect(within(row).getByText('Marketing')).toBeInTheDocument());
+    fireEvent.contextMenu(row);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+    expect(labels).toEqual(['Open', '-', 'Reveal in Finder', 'Copy Path', '-', 'Public', '✓ Marketing', '-', 'Remove']);
+  });
+
+  it('binds a project to a folder from its context menu', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
     const row = await screen.findByTestId('workspace-row');
-    await user.click(within(row).getByRole('combobox'));
-    await user.click(await screen.findByRole('option', { name: 'Marketing' }));
+    appIpc.chooseFromContextMenu('project:42');
+    fireEvent.contextMenu(row);
 
     await waitFor(async () => expect((await ipc.list())[0]?.project_id).toBe(42));
-    await waitFor(() => expect(within(screen.getByTestId('workspace-row')).getByRole('button', { name: 'Open' })).toBeEnabled());
+    await waitFor(() => expect(within(screen.getByTestId('workspace-row')).getByText('Marketing')).toBeInTheDocument());
   });
 
   it('says why the project of a folder with a running turn cannot change', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     ipc.failNext('bindProject', 'workspace_busy', 'Wait for the running turn to end.');
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
     const row = await screen.findByTestId('workspace-row');
-    await user.click(within(row).getByRole('combobox'));
-    await user.click(await screen.findByRole('option', { name: 'Marketing' }));
+    appIpc.chooseFromContextMenu('project:42');
+    fireEvent.contextMenu(row);
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
     expect((await ipc.list())[0]?.project_id).toBeNull();
   });
 
-  it('removes a folder', async () => {
+  it('removes a folder from its context menu', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
-    await user.click(await screen.findByRole('button', { name: 'Remove app' }));
+    appIpc.chooseFromContextMenu('remove');
+    fireEvent.contextMenu(await screen.findByTestId('workspace-row'));
     expect(await screen.findByText('Open a folder to start')).toBeInTheDocument();
     expect(await ipc.list()).toEqual([]);
   });
@@ -189,10 +222,11 @@ describe('WorkspacesPage', () => {
   it('says why a folder with a running turn cannot be removed', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     ipc.failNext('remove', 'workspace_busy', 'A turn is already running in this workspace.');
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
-    await user.click(await screen.findByRole('button', { name: 'Remove app' }));
+    appIpc.chooseFromContextMenu('remove');
+    fireEvent.contextMenu(await screen.findByTestId('workspace-row'));
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
     expect(await ipc.list()).toHaveLength(1);
   });
@@ -230,7 +264,7 @@ describe('WorkspaceSessionPage', () => {
     );
   }
 
-  it('opens the folder\'s code index settings from the toolbar menu', async () => {
+  it('shows the folder\'s code index in the inspector, opened from the toolbar menu', async () => {
     serveProject();
     const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } });
     mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', indexIpc);
@@ -239,7 +273,9 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(indexIpc.calls.opened).toEqual(['w1']));
     await userEvent.click(within(session).getByRole('button', { name: 'More' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Index settings…' }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    // The inspector opens on its Index segment.
+    expect(await screen.findByTestId('index-panel')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Index' })).toBeChecked();
   });
 
   it('asks to bind a project first when the folder has none', async () => {

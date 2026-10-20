@@ -25,11 +25,15 @@ export interface SessionActions {
   handoffSettings?: () => void;
 }
 
+/** The inspector's segments (the right panel). */
+export type InspectorTab = 'changes' | 'approvals' | 'index';
+
 export const CHANGES_WIDTH = { min: 280, max: 720, initial: 360 } as const;
 
 export interface DesktopLayoutState {
   readonly sidebarOpen: boolean;
   readonly changesOpen: boolean;
+  readonly inspectorTab: InspectorTab;
   readonly paletteOpen: boolean;
   readonly changesWidth: number;
   readonly platform: AppPlatform;
@@ -44,6 +48,9 @@ export interface DesktopLayoutState {
   readonly session: SessionActions | null;
   readonly setSidebarOpen: (open: boolean) => void;
   readonly setChangesOpen: (open: boolean) => void;
+  readonly setInspectorTab: (tab: InspectorTab) => void;
+  /** Open the inspector on `tab` (the Folder menu's Index settings…, an approval to review). */
+  readonly showInspector: (tab: InspectorTab) => void;
   readonly setPaletteOpen: (open: boolean) => void;
   readonly setChangesWidth: (width: number) => void;
   readonly setPlatform: (platform: AppPlatform, hostMenu: boolean) => void;
@@ -64,6 +71,7 @@ export function createDesktopLayoutStore(): DesktopLayoutStore {
   return create<DesktopLayoutState>((set) => ({
     sidebarOpen: true,
     changesOpen: true,
+    inspectorTab: 'changes',
     paletteOpen: false,
     changesWidth: CHANGES_WIDTH.initial,
     platform: BROWSER_PLATFORM,
@@ -72,6 +80,8 @@ export function createDesktopLayoutStore(): DesktopLayoutStore {
     session: null,
     setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
     setChangesOpen: (changesOpen) => set({ changesOpen }),
+    setInspectorTab: (inspectorTab) => set({ inspectorTab }),
+    showInspector: (inspectorTab) => set({ inspectorTab, changesOpen: true }),
     setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
     setChangesWidth: (width) => set({ changesWidth: clampChangesWidth(width) }),
     setPlatform: (platform, hostMenu) => set({ platform, hostMenu }),

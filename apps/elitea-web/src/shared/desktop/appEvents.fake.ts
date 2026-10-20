@@ -3,7 +3,7 @@
  * side of `app://command` (a menu item, a drop), so a test can drive the
  * shell exactly.
  */
-import type { AppCommand, AppCommandHandler, AppIpc, AppPlatform, NativeWindowTheme } from './appEvents';
+import type { AppCommand, AppCommandHandler, AppIpc, AppPlatform, ContextMenuItem, NativeWindowTheme } from './appEvents';
 import { BROWSER_PLATFORM } from './appEvents';
 import { WorkspaceIpcError } from './workspaceIpc';
 
@@ -15,7 +15,10 @@ export interface FakeAppIpc extends AppIpc {
     revealed: { workspaceId: string; path: string }[];
     opened: { workspaceId: string; path: string }[];
     themes: NativeWindowTheme[];
+    contextMenus: (readonly ContextMenuItem[])[];
   };
+  /** What the next context menu answers (the item the person "chooses"); `null`: dismissed. */
+  chooseFromContextMenu(id: string | null): void;
   /** Make the next `revealPath` / `openPath` reject the way the host does. */
   failNext(command: 'revealPath' | 'openPath', code: string, message: string): void;
   subscriberCount(): number;
@@ -26,7 +29,8 @@ export const MACOS_PLATFORM: AppPlatform = { os: 'macos', titlebar_overlay: true
 export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): FakeAppIpc {
   const handlers = new Set<AppCommandHandler>();
   const queued: AppCommand[] = [];
-  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [] };
+  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [], contextMenus: [] };
+  let nextChoice: string | null = null;
   const failures = new Map<'revealPath' | 'openPath', WorkspaceIpcError>();
   const settle = (command: 'revealPath' | 'openPath'): Promise<void> => {
     const error = failures.get(command);
@@ -44,6 +48,15 @@ export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): Fake
     openPath(workspaceId, path) {
       calls.opened.push({ workspaceId, path });
       return settle('openPath');
+    },
+    contextMenu(items) {
+      calls.contextMenus.push(items);
+      const choice = nextChoice;
+      nextChoice = null;
+      return Promise.resolve(choice);
+    },
+    chooseFromContextMenu(id) {
+      nextChoice = id;
     },
     setWindowTheme(theme) {
       calls.themes.push(theme);

@@ -480,7 +480,7 @@
       // it deliberately leaves the web app's type/radius/spacing ladder, and
       // it reads internal MUI classes to do it. Colours still come from
       // theme.vars; `color-mix()` of those tokens is not a literal.
-      "files": ["src/widgets/desktop-shell/**", "src/entries/desktop/**", "src/pages/workspace/**"],
+      "files": ["src/widgets/desktop-shell/**", "src/entries/desktop/**", "src/pages/workspace/**", "src/features/workspace/**", "src/features/workspace-handoff/**", "src/features/workspace-index/**"],
       "rules": {
         "elitea/no-raw-color": "off",
         "elitea/no-mui-internal-selector": "off",

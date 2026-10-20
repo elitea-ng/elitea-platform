@@ -41,6 +41,7 @@ fn main() {
             "index_cancel",
             "index_remove",
             "app_platform",
+            "context_menu_show",
             "http_fetch",
             "http_read_body",
             "http_cancel",

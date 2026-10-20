@@ -162,6 +162,39 @@ describe('DesktopFrame sidebar', () => {
   });
 });
 
+describe('DesktopFrame context menus', () => {
+  it('pops the native menu on a thread row and acts on the choice', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    const { router } = mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const thread = await within(folders[0] as HTMLElement).findByTestId('shell-thread');
+    appIpc.chooseFromContextMenu('chat');
+    fireEvent.contextMenu(thread);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link']);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
+  });
+
+  it('pops the native menu on a folder row: reveal, copy, projects, remove', async () => {
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    fireEvent.contextMenu(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+    expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', '✓ Marketing', '-', 'Remove from sidebar']);
+  });
+
+  it('leaves the browser alone without a host', async () => {
+    mount({ appIpc: null });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    within(folders[0] as HTMLElement).getAllByRole('button')[0]?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
 describe('DesktopFrame sidebar layout', () => {
   it('heads the folders "Local work" and keeps each folder on one line, its project as quiet text and in the tooltip', async () => {
     mount();

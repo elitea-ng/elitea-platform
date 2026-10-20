@@ -32,7 +32,7 @@ import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
-import { AppIpcProvider, DesktopFrame, useActivityFeed } from '@/widgets/desktop-shell';
+import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 const FOLDERS: Workspace[] = [
   { id: 'w1', path: '/Users/me/code/elitea-platform', name: 'elitea-platform', project_id: 42, is_git: true },
@@ -48,6 +48,7 @@ const API: [string, RegExp, unknown][] = [
     { id: '5', name: 'Coder', description: '', versions: [{ id: '9', name: 'base', status: 'published', agent_type: 'openai' }] },
   ],
   ['POST', /\/elitea_core\/conversations\/prompt_lib\/42$/, { id: 77, name: 'quick overview' }],
+  ['GET', /\/elitea_core\/conversation\/prompt_lib\/42\/\d+$/, { id: 72, uuid: 'c0ffee00-0000-4000-8000-000000000072', name: 'quick overview' }],
   ['GET', /\/elitea_core\/conversations\/prompt_lib\/42/, { rows: [], total: 0 }],
   ['POST', /\/elitea_core\/participants\//, []],
   ['GET', /\/social\/author/, { id: 3, name: 'Me' }],
@@ -193,6 +194,8 @@ export function mountDesktopHarness(container: HTMLElement): void {
     indexIpc,
     handoffIpc,
     feed: useActivityFeed,
+    /** A shell notice (the banner under the toolbar). */
+    notice: (message: string) => useDesktopLayout.getState().setNotice(message),
     router,
     /** The index builds: `n` of `total` files read (the island and the inspector follow). */
     playIndex(done = 40, total = 120) {

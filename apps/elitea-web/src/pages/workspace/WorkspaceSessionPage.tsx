@@ -24,7 +24,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
-import { IndexSettingsHost, useHasIndexHost } from '@/features/workspace-index';
+import { useHasIndexHost } from '@/features/workspace-index';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
@@ -50,7 +50,7 @@ const LIST_KEY = ['workspace', 'list'] as const;
 /** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
 const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
 
-const indexSettingsOpener = (hasIndex: boolean, setOpen: (open: boolean) => void): (() => void) | undefined => (hasIndex ? () => setOpen(true) : undefined);
+const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
@@ -58,7 +58,6 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
-  const [indexOpen, setIndexOpen] = useState(false);
   const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
@@ -73,7 +72,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
   const codingAgent = useLocalCodingAgent(projectId, raw.empty);
 
-  useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => setIndexOpen(true) });
+  useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index') });
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -90,7 +89,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           pathOpen={projectMenuOpen}
           onPathOpenChange={setProjectMenuOpen}
           attention={attentionOf(session)}
-          onIndexSettings={indexSettingsOpener(hasIndex, setIndexOpen)}
+          onIndexSettings={indexSettingsOpener(hasIndex)}
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -142,6 +141,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           ipc={ipc}
           appIpc={appIpc}
           workspaceId={workspace.id}
+          hasIndex={hasIndex}
           changeSets={session.changeSets}
           undoTurnId={session.undoTurnId}
           undoRequest={commands.undoRequest}
@@ -149,7 +149,6 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           decided={session.decided}
         />
       )}
-      <IndexSettingsHost workspaceId={workspace.id} name={workspace.name} open={indexOpen} onClose={() => setIndexOpen(false)} />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>

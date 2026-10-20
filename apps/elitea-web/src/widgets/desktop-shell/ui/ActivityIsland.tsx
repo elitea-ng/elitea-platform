@@ -145,7 +145,7 @@ function ActivityRow({ activity, now, reduced, onFocus }: { activity: Activity; 
           variant="determinate"
           value={Math.round((activity.progress.done / Math.max(activity.progress.total, 1)) * 100)}
           aria-label={activity.label}
-          sx={{ height: 3, borderRadius: 2, ...(reduced ? { '& .MuiLinearProgress-bar': { transition: 'none' } } : {}) }}
+          sx={{ height: 3, borderRadius: 2 }}
         />
       )}
     </Box>

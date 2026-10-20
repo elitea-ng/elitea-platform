@@ -240,6 +240,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 /// A menu item was chosen.
 pub fn on_event(app: &AppHandle, event: &MenuEvent) {
+    if crate::context_menu::on_event(app, event) {
+        return;
+    }
     let id = event.id().as_ref();
     if let Some((command, _, _)) = FORWARDED.iter().find(|(known, _, _)| *known == id) {
         app_events::show_main(app);

@@ -60,11 +60,22 @@ export interface AppIpc {
    * (`core:window:allow-set-theme`).
    */
   setWindowTheme(theme: NativeWindowTheme): Promise<void>;
+  /**
+   * Pop the OS's own context menu at the cursor. Resolves with the id of the
+   * item chosen, or `null` when the menu was dismissed.
+   */
+  contextMenu(items: readonly ContextMenuItem[]): Promise<string | null>;
 }
+
+/** One entry of a native context menu (`context_menu_show`). A separator carries no id or label. */
+export type ContextMenuItem = { id: string; label: string; enabled?: boolean } | { separator: true };
 
 export type NativeWindowTheme = 'light' | 'dark' | null;
 
 export const APP_COMMAND_CHANNEL = 'app://command';
+export const CONTEXT_MENU_CHANNEL = 'app://context-menu';
+/** After the menu closes the host's choice may still be in flight; wait this long for it before saying "dismissed". */
+const CHOICE_GRACE_MS = 80;
 
 /** What a plain browser tab (no host) reports. */
 export const BROWSER_PLATFORM: AppPlatform = { os: 'linux', titlebar_overlay: false, traffic_light_inset_px: 0, vibrancy: false };
@@ -81,6 +92,20 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     onCommand: (handler) => listen(APP_COMMAND_CHANNEL, (payload) => handler(payload as AppCommand)),
     ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
+    contextMenu: async (items) => {
+      let chosen: string | null = null;
+      const off = await listen(CONTEXT_MENU_CHANNEL, (payload) => {
+        const id = (payload as { id?: unknown } | null)?.id;
+        if (typeof id === 'string') chosen = id;
+      });
+      try {
+        await invoke<void>('context_menu_show', { items });
+        await new Promise<void>((resolve) => setTimeout(resolve, CHOICE_GRACE_MS));
+      } finally {
+        off();
+      }
+      return chosen;
+    },
   };
 }
 

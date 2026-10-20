@@ -6,7 +6,7 @@
  * (default cursor, keyboard-only focus ring, thin overlay scrollbars, chrome
  * that does not select on a stray drag).
  */
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import GlobalStyles from '@mui/material/GlobalStyles';
 import { ThemeProvider, type Theme } from '@mui/material/styles';
@@ -25,7 +25,24 @@ const SELECTABLE = [
   '[data-testid="session-transcript"] *',
 ].join(', ');
 
+/** ⌘. cancels the sheet in front, as Escape does. */
+function useCancelShortcut(): void {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== '.' || !(event.metaKey || event.ctrlKey)) return;
+      const sheets = document.querySelectorAll('[role="dialog"]');
+      const front = sheets.item(sheets.length - 1);
+      if (front === null) return;
+      event.preventDefault();
+      front.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}
+
 export function DesktopThemeLayer({ children, transparentPage = false }: { children: ReactNode; transparentPage?: boolean }): React.JSX.Element {
+  useCancelShortcut();
   return (
     <ThemeProvider theme={withDesktopComponents}>
       <GlobalStyles

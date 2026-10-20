@@ -2,8 +2,9 @@
  * Desktop-only `/workspaces`: the start screen of the workspace-first window.
  * Without folders it is "Open a folder to start" (the button, or a folder
  * dropped on the window — the host handles the drop and opens it); with
- * folders it lists them, each bindable to one project (whose agents its
- * threads then offer). After sign-in the desktop opens the last thread
+ * folders it lists them as a source-list table (open with a double click or
+ * Return; reveal, copy the path, bind a project, remove from its native context
+ * menu), each bound to one project (whose agents its threads then offer). After sign-in the desktop opens the last thread
  * instead (`routes/_shell/index.tsx`), so this is mostly the first run.
  */
 import { useMemo } from 'react';
@@ -23,7 +24,7 @@ import { WorkspaceList, describeWorkspaceError, useWorkspaceIpc } from '@/featur
 import { WorkspaceIndexControl } from '@/features/workspace-index';
 import { toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { ShowSidebarButton, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
+import { copyText, ShowSidebarButton, TitleBarSpacer, useAppIpc, useContextMenu, useDesktopLayout, type ContextAction } from '@/widgets/desktop-shell';
 
 import { useBindableProjects } from './useBindableProjects';
 
@@ -34,6 +35,8 @@ export default function WorkspacesPage(): React.JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const projects = useBindableProjects();
+  const appIpc = useAppIpc();
+  const showMenu = useContextMenu();
 
   const list = useQuery({ queryKey: LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
   const refresh = (): Promise<void> => queryClient.invalidateQueries({ queryKey: LIST_KEY });
@@ -55,6 +58,24 @@ export default function WorkspacesPage(): React.JSX.Element {
     );
   }
 
+  const openSession = (workspace: Workspace): void => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } });
+  // The row's native context menu: everything a folder can do besides opening.
+  const folderActions = (workspace: Workspace): ContextAction[] => [
+    { id: 'open', label: t('workspace.openSession', 'Open'), enabled: workspace.project_id !== null, run: () => openSession(workspace) },
+    { separator: true },
+    { id: 'reveal', label: t('workspace.path.reveal', 'Reveal in Finder'), enabled: appIpc !== undefined, run: () => void appIpc?.revealPath(workspace.id, '').catch(() => undefined) },
+    { id: 'copy', label: t('workspace.path.copy', 'Copy Path'), run: () => copyText(workspace.path) },
+    { separator: true },
+    ...projects.map((project): ContextAction => ({
+      id: `project:${String(project.id)}`,
+      label: `${workspace.project_id === project.id ? '✓ ' : ''}${project.name}`,
+      enabled: workspace.project_id !== project.id,
+      run: () => bind.mutate({ workspace, projectId: project.id }),
+    })),
+    { separator: true },
+    { id: 'remove', label: t('workspace.remove', 'Remove'), run: () => remove.mutate(workspace) },
+  ];
+
   const failed = list.isError || open.isError || remove.isError || bind.isError;
   // A folder with a running turn can be neither removed nor re-bound (the host answers workspace_busy).
   const busyError = [remove.error, bind.error].find((error) => error !== null && toWorkspaceIpcError(error).code === 'workspace_busy');
@@ -70,7 +91,7 @@ export default function WorkspacesPage(): React.JSX.Element {
       <TitleBarSpacer leading={!sidebarOpen} logo={false}>
         <ShowSidebarButton />
       </TitleBarSpacer>
-      <Box sx={{ width: '100%', maxWidth: '46rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Box sx={{ width: '100%', maxWidth: '60rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {failed && (
           <Alert severity="error">
             {busyError === undefined ? t('workspace.failed', 'That did not work. Try again.') : describeWorkspaceError(busyError)}
@@ -117,10 +138,9 @@ export default function WorkspacesPage(): React.JSX.Element {
             <WorkspaceList
               workspaces={workspaces}
               projects={projects}
-              onSelect={(workspace) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } })}
-              onRemove={(workspace) => remove.mutate(workspace)}
-              onBind={(workspace, projectId) => bind.mutate({ workspace, projectId })}
-              badges={(workspace) => <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />}
+              onSelect={openSession}
+              onContextMenu={(workspace, event) => showMenu(event, folderActions(workspace))}
+              indexCell={(workspace) => <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />}
             />
           </>
         )}

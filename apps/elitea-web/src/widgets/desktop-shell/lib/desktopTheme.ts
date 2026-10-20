@@ -8,6 +8,8 @@
  */
 import type { Theme } from '@mui/material/styles';
 
+import { SheetTransition } from './sheetTransition';
+
 export const SYSTEM_FONT_STACK =
   '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif';
 
@@ -176,6 +178,38 @@ export function withDesktopComponents(outer: Theme): Theme {
     MuiCheckbox: {
       ...outer.components?.MuiCheckbox,
       defaultProps: { ...outer.components?.MuiCheckbox?.defaultProps, disableRipple: true, size: 'small' },
+    },
+    // Dialogs are sheets: they hang from the toolbar edge, square at the top.
+    MuiDialog: {
+      ...outer.components?.MuiDialog,
+      defaultProps: { ...outer.components?.MuiDialog?.defaultProps, slots: { transition: SheetTransition } },
+      styleOverrides: {
+        container: { alignItems: 'flex-start' },
+        paper: ({ theme: t }: { theme: Theme }) => ({
+          margin: 0,
+          minWidth: 0,
+          maxHeight: 'calc(100% - 24px)',
+          borderRadius: '0 0 10px 10px',
+          border: `0.5px solid ${t.vars.palette.divider}`,
+          borderTop: 'none',
+          background: t.vars.palette.background.paper,
+          backgroundImage: 'none',
+          boxShadow: `0 10px 36px color-mix(in srgb, ${t.vars.palette.text.primary} 28%, transparent)`,
+        }),
+      },
+    },
+    MuiBackdrop: {
+      ...outer.components?.MuiBackdrop,
+      styleOverrides: { root: ({ theme: t }: { theme: Theme }) => ({ backgroundColor: `color-mix(in srgb, ${t.vars.palette.common.black} 30%, transparent)` }) },
+    },
+    MuiDialogContent: {
+      ...outer.components?.MuiDialogContent,
+      styleOverrides: { root: { padding: '4px 20px 12px' } },
+    },
+    MuiDialogActions: {
+      ...outer.components?.MuiDialogActions,
+      // The default button is the trailing one.
+      styleOverrides: { root: { padding: '10px 20px 16px', gap: 8, justifyContent: 'flex-end', '& > :not(style) ~ :not(style)': { marginLeft: 0 } } },
     },
     MuiPaper: {
       ...outer.components?.MuiPaper,

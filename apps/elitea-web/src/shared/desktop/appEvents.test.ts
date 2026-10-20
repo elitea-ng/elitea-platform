@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { APP_COMMAND_CHANNEL, createAppIpc, tauriAppIpc, type AppCommand } from './appEvents';
+import { APP_COMMAND_CHANNEL, CONTEXT_MENU_CHANNEL, createAppIpc, tauriAppIpc, type AppCommand } from './appEvents';
 import { createFakeAppIpc, MACOS_PLATFORM } from './appEvents.fake';
 import { WorkspaceIpcError, type ListenFn } from './workspaceIpc';
 
@@ -44,6 +44,26 @@ describe('createAppIpc', () => {
     expect(received).toEqual([{ id: 'workspace_opened', args: { workspace_id: 'abc' } }, { id: 'toggle_sidebar' }]);
   });
 
+  it('pops a native context menu and resolves with the chosen id, or null when dismissed', async () => {
+    let deliver: ((payload: unknown) => void) | undefined;
+    const off = vi.fn();
+    const listen: ListenFn = (channel, handler) => {
+      expect(channel).toBe(CONTEXT_MENU_CHANNEL);
+      deliver = handler;
+      return Promise.resolve(off);
+    };
+    const items = [{ id: 'open', label: 'Open' }, { separator: true as const }, { id: 'rm', label: 'Remove', enabled: false }];
+    const chosen = vi.fn().mockImplementation(() => {
+      deliver?.({ id: 'open' });
+      return Promise.resolve(null);
+    });
+    expect(await createAppIpc(chosen, listen).contextMenu(items)).toBe('open');
+    expect(chosen).toHaveBeenCalledWith('context_menu_show', { items });
+    expect(off).toHaveBeenCalledTimes(1);
+    // Dismissed: the host sent nothing.
+    expect(await createAppIpc(vi.fn().mockResolvedValue(null), listen).contextMenu(items)).toBeNull();
+  });
+
   it('is undefined outside the Tauri webview', () => {
     expect(tauriAppIpc()).toBeUndefined();
   });
@@ -63,5 +83,9 @@ describe('createFakeAppIpc', () => {
     await expect(fake.revealPath('w', 'x')).rejects.toBeInstanceOf(WorkspaceIpcError);
     await fake.revealPath('w', 'x');
     expect(fake.calls.revealed).toHaveLength(2);
+    fake.chooseFromContextMenu('open');
+    expect(await fake.contextMenu([{ id: 'open', label: 'Open' }])).toBe('open');
+    expect(await fake.contextMenu([{ id: 'open', label: 'Open' }])).toBeNull();
+    expect(fake.calls.contextMenus).toHaveLength(2);
   });
 });

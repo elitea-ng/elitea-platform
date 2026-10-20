@@ -752,6 +752,7 @@ for one send and restores it.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
+| `context_menu_show` | `{items: {id?, label?, enabled?, separator?}[]}` | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The choice arrives on `app://context-menu` as `{id}` (the id the page gave the item; a dismissed menu sends nothing). 1–40 items; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
 | `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
@@ -887,9 +888,9 @@ for them.
 
 ## Events
 
-Four event names, all emitted to the `main` window only: `app://command`
-(above), `agent://event`, `index://event` and `handoff://event` (Cloud
-handoff, above). The webview may listen
+Five event names, all emitted to the `main` window only: `app://command`
+(above), `app://context-menu` (`{id}`, the item chosen from `context_menu_show`),
+`agent://event`, `index://event` and `handoff://event` (Cloud handoff, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:

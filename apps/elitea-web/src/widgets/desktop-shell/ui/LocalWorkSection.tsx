@@ -35,6 +35,9 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import type { ShellAction } from '../lib/shellActions';
+import { conversationLink, copyText } from '../lib/conversationLink';
+import { useAppIpc } from '../model/appIpcContext';
+import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
@@ -62,8 +65,19 @@ interface FolderThreadsProps extends Omit<SectionProps, 'projects'> {
   statuses: Readonly<Record<string, HandoffStatus>>;
 }
 
+/** A thread's native context menu: open it, open it in the web chat, copy its link. */
+function threadActions(workspace: Workspace, thread: WorkspaceThread, run: SectionProps['run']): ContextAction[] {
+  const link = conversationLink(thread.id);
+  return [
+    { id: 'open', label: t('desktop.menu.open', 'Open'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id }) },
+    { id: 'chat', label: t('workspace.openInChat', 'Open in chat'), run: () => run({ type: 'go', to: `/chat/${thread.id}` }) },
+    { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
+  ];
+}
+
 function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }: FolderThreadsProps): React.JSX.Element {
   const threads = useQuery(threadsQuery(workspace.id));
+  const showMenu = useContextMenu();
   // The UUIDs the thread pages read (handoff is keyed by them), to badge a row without opening it.
   const uuids = readThreadUuids(workspace.id);
   const list: WorkspaceThread[] = threads.data ?? [];
@@ -75,6 +89,7 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
         <li key={thread.id}>
           <ShellRow
             testId="shell-thread"
+            onContextMenu={(event) => showMenu(event, threadActions(workspace, thread, run))}
             indent={CHILD_INDENT}
             label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
             selected={here && location.conversationId === thread.id}
@@ -108,13 +123,19 @@ function FolderThreads({ workspace, location, run, all, onToggleAll, statuses }:
   );
 }
 
-function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omit<SectionProps, 'location'>): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+/** Binding a folder to a project and removing it from the sidebar: the ⋯ menu's and the context menu's shared actions. */
+function useFolderMutations(workspace: Workspace) {
   const ipc = useWorkspaceIpc();
   const queryClient = useQueryClient();
   const refresh = (): Promise<void> => queryClient.invalidateQueries({ queryKey: WORKSPACE_LIST_KEY });
   const bind = useMutation({ mutationFn: (projectId: number) => ipc?.bindProject(workspace.id, projectId) ?? Promise.resolve(), onSettled: refresh });
   const remove = useMutation({ mutationFn: () => ipc?.remove(workspace.id) ?? Promise.resolve(), onSettled: refresh });
+  return { bind, remove };
+}
+
+function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omit<SectionProps, 'location'>): React.JSX.Element {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const { bind, remove } = useFolderMutations(workspace);
   const close = (): void => setAnchor(null);
   return (
     <>
@@ -165,6 +186,52 @@ function FolderMenu({ workspace, projects, run }: { workspace: Workspace } & Omi
         </MenuItem>
       </Menu>
     </>
+  );
+}
+
+interface FolderRowProps extends Omit<SectionProps, 'location'> {
+  workspace: Workspace;
+  open: boolean;
+  selected: boolean;
+  project: string;
+  onToggle: () => void;
+}
+
+/** A folder's row, with its hover actions and its native context menu. */
+function FolderRow({ workspace, projects, run, open, selected, project, onToggle }: FolderRowProps): React.JSX.Element {
+  const showMenu = useContextMenu();
+  const appIpc = useAppIpc();
+  const { bind, remove } = useFolderMutations(workspace);
+  const actions = (): ContextAction[] => [
+    { id: 'new', label: t('desktop.shell.newThread', 'New thread'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id }) },
+    { separator: true },
+    { id: 'reveal', label: t('workspace.path.reveal', 'Reveal in Finder'), enabled: appIpc !== undefined, run: () => void appIpc?.revealPath(workspace.id, '').catch(() => undefined) },
+    { id: 'copy', label: t('workspace.path.copy', 'Copy Path'), run: () => copyText(workspace.path) },
+    { separator: true },
+    ...projects
+      .filter((p) => !p.suspended)
+      .map((p): ContextAction => ({
+        id: `project:${String(p.id)}`,
+        label: `${workspace.project_id === p.id ? '✓ ' : ''}${p.name}`,
+        enabled: workspace.project_id !== p.id,
+        run: () => bind.mutate(p.id),
+      })),
+    { separator: true },
+    { id: 'remove', label: t('desktop.shell.removeFolder', 'Remove from sidebar'), run: () => remove.mutate() },
+  ];
+  return (
+    <ShellRow
+      label={workspace.name}
+      meta={project}
+      title={`${workspace.path}\n${t('desktop.shell.folderProject', 'Project: {{name}}', { name: project })}`}
+      icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+      ariaExpanded={open}
+      selected={selected}
+      onClick={onToggle}
+      onContextMenu={(event) => showMenu(event, actions())}
+      trailingOnHover
+      trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
+    />
   );
 }
 
@@ -227,16 +294,14 @@ export function LocalWorkSection({ location, run, projects }: SectionProps): Rea
           const toggle = (): void => toggleIn(setCollapsed, workspace.id);
           return (
             <li key={workspace.id} data-testid="shell-folder">
-              <ShellRow
-                label={workspace.name}
-                meta={project}
-                title={`${workspace.path}\n${t('desktop.shell.folderProject', 'Project: {{name}}', { name: project })}`}
-                icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-                ariaExpanded={open}
+              <FolderRow
+                workspace={workspace}
+                projects={projects}
+                run={run}
+                open={open}
                 selected={location.workspaceId === workspace.id && !open}
-                onClick={toggle}
-                trailingOnHover
-                trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
+                project={project}
+                onToggle={toggle}
               />
               {open && (
                 <FolderThreads

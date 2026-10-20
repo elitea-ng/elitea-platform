@@ -41,6 +41,7 @@
     "allow-index-cancel",
     "allow-index-remove",
     "allow-app-platform",
+    "allow-context-menu-show",
     "allow-http-fetch",
     "allow-http-read-body",
     "allow-http-cancel",

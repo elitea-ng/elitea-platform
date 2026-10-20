@@ -28,11 +28,10 @@ import Typography from '@mui/material/Typography';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
 import { readThreads, type ProjectChoice } from '@/features/workspace';
-import { getConfig } from '@/shared/config';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexIdleLine } from '@/features/workspace-index';
-import { ActivityIsland, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
+import { ActivityIsland, conversationLink, copyText as copy, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { PanelToggle } from './sessionParts';
 
@@ -50,17 +49,6 @@ export interface ThreadToolbarProps {
   /** Items the inspector's badge counts. */
   attention: number;
   onIndexSettings?: (() => void) | undefined;
-}
-
-/** The deployment's link to a conversation, for Copy Link. */
-function conversationLink(conversationId: string): string | null {
-  const config = getConfig();
-  if (config.status !== 'ok' || conversationId === '') return null;
-  return `${config.config.vite_server_url.replace(/\/$/, '')}/chat/${conversationId}`;
-}
-
-function copy(text: string): void {
-  void navigator.clipboard?.writeText(text).catch(() => undefined);
 }
 
 function PathCard({ workspace, projectId, projects, busy, onChangeProject, onClose }: Pick<ThreadToolbarProps, 'workspace' | 'projectId' | 'projects' | 'busy' | 'onChangeProject'> & { onClose: () => void }): React.JSX.Element {

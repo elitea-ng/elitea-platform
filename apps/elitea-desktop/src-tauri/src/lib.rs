@@ -21,6 +21,7 @@ mod index;
 mod local_commands;
 mod logging;
 mod loopback;
+mod context_menu;
 mod menu;
 mod net;
 mod pkce;
@@ -366,6 +367,7 @@ pub fn run() {
             index::index_cancel,
             index::index_remove,
             platform::app_platform,
+            context_menu::context_menu_show,
             net::http_fetch,
             net::http_read_body,
             net::http_cancel,

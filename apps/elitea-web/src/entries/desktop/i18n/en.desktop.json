@@ -422,5 +422,14 @@
   "desktop.island.steps": "{{n}} steps",
   "desktop.island.title": "Activity",
   "desktop.island.tool": "Running {{tool}}",
-  "desktop.island.working": "Working…"
+  "desktop.island.working": "Working…",
+  "desktop.banner.dismiss": "Dismiss",
+  "desktop.menu.open": "Open",
+  "workspace.col.index": "Index",
+  "workspace.col.name": "Name",
+  "workspace.col.path": "Path",
+  "workspace.copy": "Copy",
+  "workspace.panel.approvalsCount": "Approvals · {{n}}",
+  "workspace.panel.index": "Index",
+  "workspace.panel.noApprovals": "Nothing was asked of you in this thread yet."
 }
