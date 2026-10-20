@@ -9,13 +9,11 @@ import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { DragOverlay, useDroppable } from '@dnd-kit/core';
 
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import Box from '@mui/material/Box';
-import ButtonBase from '@mui/material/ButtonBase';
 import InputBase from '@mui/material/InputBase';
 import type { Theme } from '@mui/material/styles';
-import Typography from '@mui/material/Typography';
 
 import type { Conversation } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
@@ -26,8 +24,6 @@ import { folderDropId, UNGROUPED_DROP_ID, type useSidebarChatDrag } from '../mod
 import { ConversationRow, type ConversationRowActions } from './ConversationRow';
 import { CHILD_INDENT, ShellRow } from './rows';
 
-/** The text edge of a row under Chats, in spacing units: the row padding, one level, the icon column. */
-const TEXT_EDGE = 1 + CHILD_INDENT + CHILD_INDENT;
 /** How long a dragged row hovers a closed folder before it opens. */
 const OPEN_ON_HOVER_MS = 600;
 
@@ -41,40 +37,26 @@ interface GroupProps {
   readonly children: ReactNode;
 }
 
-/** A date group: its caption is the disclosure (the count shows while it is closed). */
+/**
+ * A date group, drawn as Local work draws a folder: the chevron in the icon
+ * column, the caption on the text edge its chats share, the count at the right
+ * while it is closed.
+ */
 export function Group({ caption, count, open, onToggle, children }: GroupProps): React.JSX.Element {
   return (
     <li>
-      <Box component="h3" sx={{ margin: 0 }}>
-        <ButtonBase
-          data-testid="shell-chats-group"
-          aria-expanded={open}
+      <Box component="h3" sx={{ margin: 0, font: 'inherit' }}>
+        <ShellRow
+          testId="shell-chats-group"
+          muted
+          icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
+          ariaExpanded={open}
+          label={caption}
+          labelClassName="shell-group-caption"
+          metaTestId="shell-chats-group-count"
+          {...(open ? {} : { meta: String(count) })}
           onClick={onToggle}
-          sx={(theme: Theme) => ({
-            width: '100%',
-            justifyContent: 'flex-start',
-            gap: 0.5,
-            minHeight: '1.5rem',
-            marginTop: 0.5,
-            paddingLeft: TEXT_EDGE,
-            paddingRight: 1,
-            borderRadius: theme.vars.shape.radiusSm,
-            color: theme.vars.palette.text.metrics,
-            '&:hover': { color: theme.vars.palette.text.secondary },
-            '& .shell-group-chevron': { width: '0.75rem', height: '0.75rem', transition: 'transform 120ms', transform: open ? 'rotate(90deg)' : 'none' },
-          })}
-        >
-          <Typography variant="bodySmall" component="span" className="shell-group-caption" sx={{ fontWeight: 600 }}>
-            {caption}
-          </Typography>
-          <ChevronRightIcon aria-hidden className="shell-group-chevron" />
-          <Box component="span" sx={{ flex: 1 }} />
-          {!open && (
-            <Typography variant="bodySmall" component="span" data-testid="shell-chats-group-count">
-              {count}
-            </Typography>
-          )}
-        </ButtonBase>
+        />
       </Box>
       {open && (
         <Box component="ul" sx={LIST_SX}>
@@ -108,7 +90,7 @@ export function Rows({ conversations, openId, indent, actions }: RowsProps): Rea
 export function ShowMore({ indent, onClick }: { readonly indent: number; readonly onClick: () => void }): React.JSX.Element {
   return (
     <li>
-      <ShellRow testId="shell-chats-more" muted indent={indent} reserveIcon label={t('desktop.chats.showMore', 'Show more')} onClick={onClick} />
+      <ShellRow testId="shell-chats-more" muted indent={indent} label={t('desktop.chats.showMore', 'Show more')} onClick={onClick} />
     </li>
   );
 }
@@ -142,9 +124,7 @@ export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId,
       <Box ref={setNodeRef}>
         <ShellRow
           testId="shell-chats-folder"
-          indent={CHILD_INDENT}
-          disclosure={expanded}
-          icon={expanded ? <FolderOpenOutlinedIcon /> : <FolderOutlinedIcon />}
+          icon={expanded ? <ExpandMoreIcon /> : <ChevronRightIcon />}
           ariaExpanded={expanded}
           label={folder.name}
           meta={String(count)}
@@ -154,8 +134,8 @@ export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId,
       </Box>
       {expanded && (
         <Box component="ul" sx={LIST_SX}>
-          <Rows conversations={folder.conversations} openId={openId} indent={CHILD_INDENT * 2} actions={actions} />
-          {rail.hasMore(folder) && <ShowMore indent={CHILD_INDENT * 2} onClick={() => rail.loadMoreInFolder(folder.id)} />}
+          <Rows conversations={folder.conversations} openId={openId} indent={CHILD_INDENT} actions={actions} />
+          {rail.hasMore(folder) && <ShowMore indent={CHILD_INDENT} onClick={() => rail.loadMoreInFolder(folder.id)} />}
         </Box>
       )}
     </li>
@@ -181,7 +161,7 @@ export function RecentArea({ drag, children }: { readonly drag: Drag; readonly c
           {children}
           {valid && (
             <li>
-              <ShellRow testId="shell-chats-drop-out" muted indent={CHILD_INDENT} reserveIcon label={t('desktop.chats.dropOutOfFolder', 'Drop here to take it out of the folder')} onClick={() => undefined} />
+              <ShellRow testId="shell-chats-drop-out" muted indent={CHILD_INDENT} label={t('desktop.chats.dropOutOfFolder', 'Drop here to take it out of the folder')} onClick={() => undefined} />
             </li>
           )}
         </Box>
@@ -198,7 +178,7 @@ export function NewFolderField({ onDone }: { readonly onDone: (name: string | nu
     else if (event.key === 'Escape') onDone(null);
   };
   return (
-    <Box component="li" sx={(theme: Theme) => ({ paddingLeft: 1 + CHILD_INDENT, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center', gap: 1, color: theme.vars.palette.text.metrics })}>
+    <Box component="li" sx={(theme: Theme) => ({ paddingLeft: 1, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center', gap: 1, color: theme.vars.palette.text.metrics })}>
       <FolderOutlinedIcon aria-hidden sx={{ width: '1rem', height: '1rem' }} />
       <InputBase
         value={value}

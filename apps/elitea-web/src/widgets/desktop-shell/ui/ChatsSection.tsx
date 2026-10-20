@@ -5,13 +5,13 @@
  * bucket with a lazy "Show more"; an "Archived" row at the end opens the
  * archived chats page.
  *
- * One outline grid (`rows.tsx` `CHILD_INDENT`): every row under Chats has its
- * icon column at the Chats row's text edge and its label on one text edge —
- * a folder's glyph and the Archived glyph in that column, a conversation's
- * column empty — and a folder's disclosure chevron one column to the left.
- * The date-group captions sit on the same text edge and are disclosures:
- * Pinned and Today open, the older groups closed by default, each remembered
- * (`useChatGroupsOpen`); a closed group shows its count.
+ * The grid is Local work's (`LocalWorkSection.tsx`): a folder, a date group
+ * (Pinned, Today, Yesterday, Previous 7 days, Previous 30 days, Older) and
+ * Archived are top-level rows with their chevron or glyph in the icon column
+ * and the label on the Chats row's text edge; their conversations sit one
+ * level in (`CHILD_INDENT`), on that same text edge. Pinned and Today open,
+ * the older groups closed by default, each remembered (`useChatGroupsOpen`);
+ * a closed group or folder shows its count.
  *
  * The open conversation (the route) is the selected row: the group or folder
  * that holds it opens for it (until the person closes it again), and the row
@@ -155,14 +155,13 @@ function ChatsList({ rail, pathname, creatingFolder = false, onCreatingFolderDon
         </RecentArea>
         {empty && (
           <li>
-            <ShellRow muted indent={CHILD_INDENT} reserveIcon label={t('desktop.chats.empty', 'No chats yet')} onClick={() => void navigate({ to: '/chat' })} />
+            <ShellRow muted indent={CHILD_INDENT} label={t('desktop.chats.empty', 'No chats yet')} onClick={() => void navigate({ to: '/chat' })} />
           </li>
         )}
         <li>
           <ShellRow
             testId="shell-chats-archived"
             muted={pathname !== ARCHIVED_PATH}
-            indent={CHILD_INDENT}
             icon={<ArchiveOutlinedIcon />}
             label={t('desktop.chats.archived', 'Archived')}
             selected={pathname === ARCHIVED_PATH}

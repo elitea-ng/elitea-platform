@@ -188,15 +188,25 @@ export const Participants = memo(
      * Copied before sorting — `groupedByType`'s arrays are memoised and
      * `Array.prototype.sort` mutates in place.
      */
-    const userParticipants = useMemo(
-      () =>
-        [...(groupedByType[ChatParticipantType.Users] ?? [])].sort((a, b) => {
+    const userParticipants = useMemo(() => {
+      // One row per person: a user attached twice (two participant rows with
+      // the same user id) is listed once.
+      const seen = new Set<string>();
+      return [...(groupedByType[ChatParticipantType.Users] ?? [])]
+        .filter((row) => {
+          const id = row.entity_meta?.id;
+          if (id === undefined || id === null) return true;
+          const key = String(id);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => {
           const aId = Number(a.entity_meta?.id ?? 0);
           const bId = Number(b.entity_meta?.id ?? 0);
           return aId - bId;
-        }),
-      [groupedByType],
-    );
+        });
+    }, [groupedByType]);
 
     const usersToDisplay = useMemo(
       () => userParticipants.slice(0, maxVisibleUsers),

@@ -272,6 +272,7 @@ function ExpandedParticipantsContent({
           onSelectParticipant={actions.onSelectParticipant!}
           onDeleteParticipant={actions.onDeleteParticipant}
           disabledEdit={sections.disabledEdit}
+          vertical={inspector === true}
         />
       )}
 

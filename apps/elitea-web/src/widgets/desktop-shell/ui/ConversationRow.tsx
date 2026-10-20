@@ -35,7 +35,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { conversationLink, copyText } from '../lib/conversationLink';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { MoveToFolderDialog, type FolderChoice } from './MoveToFolderDialog';
-import { CHILD_INDENT, ShellRow } from './rows';
+import { ShellRow } from './rows';
 
 export interface ConversationRowActions {
   readonly open: (conversation: Conversation) => void;
@@ -131,7 +131,7 @@ function RenameField({ conversation, indent, onDone }: { readonly conversation: 
     else if (event.key === 'Escape') onDone(null);
   };
   return (
-    <Box sx={{ paddingLeft: 1 + indent + CHILD_INDENT, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center' }}>
+    <Box sx={{ paddingLeft: 1 + indent, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center' }}>
       <InputBase
         value={value}
         onChange={(event) => setValue(event.target.value)}
@@ -207,7 +207,6 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
             label={label}
             title={label}
             indent={indent}
-            reserveIcon
             selected={selected}
             onClick={() => actions.open(conversation)}
             onContextMenu={(event) => showMenu(event, items)}

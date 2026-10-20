@@ -47,7 +47,7 @@ function userRow(id: string, userName: string): Record<string, unknown> {
   return { id: Number(id) + 100, entity_name: 'user', entity_meta: { id }, meta: { user_name: userName } };
 }
 
-function renderRail(participants: readonly Record<string, unknown>[]): void {
+function renderRail(participants: readonly Record<string, unknown>[], inspector = false): void {
   configureGeneratedClient({ baseUrl: BASE });
   server.use(http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: '1', name: 'Reader' })));
 
@@ -55,7 +55,7 @@ function renderRail(participants: readonly Record<string, unknown>[]): void {
   render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
-        <Participants participants={participants as never} />
+        <Participants participants={participants as never} inspector={inspector} />
       </ThemeProvider>
     </QueryClientProvider>,
   );
@@ -79,6 +79,20 @@ describe('Participants — the users row', () => {
     });
     expect(screen.getByText('Bob Builder')).toBeTruthy();
     expect(screen.getByText('Ada Lovelace')).toBeTruthy();
+  });
+
+  it('lists one user once when two participant rows name the same user', async () => {
+    renderRail([userRow('3', 'Bob Builder'), { ...userRow('3', 'Bob Builder'), id: 999 }]);
+
+    await waitFor(() => expect(screen.getByTestId('users-section')).toBeTruthy());
+    expect(screen.getAllByText('Bob Builder')).toHaveLength(1);
+  });
+
+  it('stacks the users one per line in the desktop inspector', async () => {
+    renderRail([userRow('3', 'Bob Builder'), userRow('4', 'Ada Lovelace')], true);
+
+    const section = await screen.findByTestId('users-section');
+    expect(getComputedStyle(section.firstElementChild as HTMLElement).flexDirection).toBe('column');
   });
 
   /** No user participants must still mean no row — the fix must not produce an empty one. */

@@ -25,7 +25,7 @@ import { ChatsSection } from '../ui/ChatsSection';
 
 const globals = globalThis as unknown as Record<string, unknown>;
 const at = new Date().toISOString();
-const row = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ id, name, author_id: 3, updated_at: at, created_at: at, ...extra });
+const row = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ id: Number(id), name, author_id: 3, updated_at: at, created_at: at, ...extra });
 
 const LISTING = {
   pinned: { conversations: [row('81', 'Release checklist')] },
@@ -90,7 +90,7 @@ beforeEach(() => {
       listingReads += 1;
       return HttpResponse.json({
         ...LISTING,
-        date_groups: LISTING.date_groups.map((group) => ({ ...group, conversations: group.conversations.filter((item) => !archived.includes(item.id)) })),
+        date_groups: LISTING.date_groups.map((group) => ({ ...group, conversations: group.conversations.filter((item) => !archived.includes(String(item.id))) })),
       });
     }),
     http.put('*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId', ({ params }) => {
@@ -111,7 +111,9 @@ let listingReads: number;
 
 const labels = (): string[] =>
   screen.getAllByTestId(/^shell-(chats-group|conversation)$/).map((node) => node.querySelector('.shell-group-caption')?.textContent ?? node.textContent ?? '');
-const caption = (name: string): HTMLElement => screen.getAllByTestId('shell-chats-group').find((node) => node.querySelector('.shell-group-caption')?.textContent === name) as HTMLElement;
+// The group's disclosure button (the row's test id is on its frame, the button inside it).
+const caption = (name: string): HTMLElement =>
+  within(screen.getAllByTestId('shell-chats-group').find((node) => node.querySelector('.shell-group-caption')?.textContent === name) as HTMLElement).getByRole('button');
 
 describe('ChatsSection', () => {
   it('lists Pinned first, then the date buckets with native captions, and leaves Local work threads out', async () => {

@@ -51,6 +51,10 @@ export interface ShellRowProps {
   reserveIcon?: boolean;
   /** A drop target that the dragged row is over. */
   dropActive?: boolean;
+  /** A class on the label (a date group's caption: `shell-group-caption`). */
+  labelClassName?: string;
+  /** A test id on the meta text (a closed group's count). */
+  metaTestId?: string;
 }
 
 const ONE_LINE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
@@ -91,11 +95,12 @@ function rowSx(theme: Theme, { selected, dropActive, swaps, trailingRoom }: RowL
 }
 
 /** Quiet text after the label (a folder's project, a count). */
-function RowMeta({ meta }: { readonly meta: string | undefined }): React.JSX.Element | null {
+function RowMeta({ meta, testId }: { readonly meta: string | undefined; readonly testId?: string | undefined }): React.JSX.Element | null {
   if (meta === undefined || meta === '') return null;
   return (
     <Typography
       className="shell-row-meta"
+      data-testid={testId}
       variant="bodySmall"
       component="span"
       sx={(theme: Theme) => ({ ...ONE_LINE, flexShrink: 1, maxWidth: '45%', color: theme.vars.palette.text.metrics })}
@@ -147,7 +152,7 @@ function RowLeading({ disclosure, icon, reserveIcon, indent }: { readonly disclo
 
 export function ShellRow(props: ShellRowProps): React.JSX.Element {
   const { label, icon, selected = false, indent = 0, onClick, trailing, trailingOnHover = false, trailingRoom = '3.75rem', meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
-  const { disclosure, reserveIcon = false, dropActive = false } = props;
+  const { disclosure, reserveIcon = false, dropActive = false, labelClassName, metaTestId } = props;
   const swaps = trailing !== undefined && trailingOnHover;
   return (
     <Box
@@ -176,13 +181,14 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
       >
         <RowLeading disclosure={disclosure} icon={icon} reserveIcon={reserveIcon} indent={indent} />
         <Typography
+          className={labelClassName}
           variant="labelSmall"
           component="span"
           sx={(theme: Theme) => ({ ...ONE_LINE, flex: 1, minWidth: 0, color: labelColor(theme, selected, muted) })}
         >
           {label}
         </Typography>
-        <RowMeta meta={meta} />
+        <RowMeta meta={meta} testId={metaTestId} />
       </ButtonBase>
       {trailing !== undefined && (
         <Box className="shell-row-trailing" sx={{ display: 'flex', alignItems: 'center', paddingRight: 0.5 }}>
