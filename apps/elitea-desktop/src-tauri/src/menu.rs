@@ -30,6 +30,14 @@ pub const FORWARDED: &[(&str, &str, Option<&str>)] = &[
     ),
     ("back", "Back", Some("CmdOrCtrl+[")),
     ("forward", "Forward", Some("CmdOrCtrl+]")),
+    // Thread menu: acts on the thread on screen (the UI no-ops without one).
+    ("send_to_cloud", "Send to Cloud…", Some("CmdOrCtrl+Shift+U")),
+    ("open_in_chat", "Open in Chat", None),
+    ("toggle_plan", "Plan Mode", Some("CmdOrCtrl+Shift+P")),
+    ("choose_agent", "Choose Agent…", Some("CmdOrCtrl+L")),
+    // Folder menu: the folder of the thread on screen.
+    ("index_settings", "Index Settings…", None),
+    ("handoff_settings", "Handoff Settings…", None),
 ];
 
 const OPEN_FOLDER: &str = "open_folder";
@@ -165,6 +173,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&PredefinedMenuItem::fullscreen(app, None)?)
         .build()?;
 
+    let thread = SubmenuBuilder::new(app, "Thread")
+        .item(&forwarded(app, "send_to_cloud")?)
+        .item(&forwarded(app, "open_in_chat")?)
+        .item(&separator()?)
+        .item(&forwarded(app, "toggle_plan")?)
+        .item(&forwarded(app, "choose_agent")?)
+        .build()?;
+    let folder = SubmenuBuilder::new(app, "Folder")
+        .item(&forwarded(app, "index_settings")?)
+        .item(&forwarded(app, "handoff_settings")?)
+        .build()?;
+
     // These two ids make Tauri register them with the OS, which adds its
     // window list and the help search box.
     let window = SubmenuBuilder::with_id(app, tauri::menu::WINDOW_SUBMENU_ID, "Window")
@@ -210,7 +230,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 .build()?,
         );
     }
-    menus.extend([file, edit, view, window, help]);
+    menus.extend([file, edit, view, thread, folder, window, help]);
     let refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = menus
         .iter()
         .map(|m| m as &dyn tauri::menu::IsMenuItem<Wry>)
@@ -318,7 +338,13 @@ mod tests {
                 "toggle_sidebar",
                 "toggle_changes",
                 "back",
-                "forward"
+                "forward",
+                "send_to_cloud",
+                "open_in_chat",
+                "toggle_plan",
+                "choose_agent",
+                "index_settings",
+                "handoff_settings"
             ]
         );
         let mut shortcuts: Vec<&str> = FORWARDED.iter().filter_map(|(_, _, a)| *a).collect();

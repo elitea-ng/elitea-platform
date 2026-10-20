@@ -24,6 +24,8 @@ export interface AppPlatform {
 /** One `app://command` payload. `open_folder` is never sent: Open Folder… runs host-side and sends `workspace_opened`. */
 export type AppCommand =
   | { id: 'new_thread' | 'settings' | 'command_palette' | 'toggle_sidebar' | 'toggle_changes' | 'back' | 'forward'; args?: undefined }
+  /** Thread / Folder menu: act on the thread on screen (no-ops without one). */
+  | { id: 'send_to_cloud' | 'open_in_chat' | 'toggle_plan' | 'choose_agent' | 'index_settings' | 'handoff_settings'; args?: undefined }
   /** Help › Run Diagnostics…: open the Doctor. Sent live, never queued for `ready`. */
   | { id: 'run_diagnostics'; args?: undefined }
   /** The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside). Sent live. */

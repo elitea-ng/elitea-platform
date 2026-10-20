@@ -17,6 +17,12 @@ export interface SessionActions {
   workspaceId: string;
   newThread: () => void;
   togglePlanMode: () => void;
+  /** Thread / Folder menu entries; absent when the thread cannot do it now. */
+  sendToCloud?: () => void;
+  openInChat?: () => void;
+  chooseAgent?: () => void;
+  indexSettings?: () => void;
+  handoffSettings?: () => void;
 }
 
 export const CHANGES_WIDTH = { min: 280, max: 720, initial: 360 } as const;
@@ -43,6 +49,8 @@ export interface DesktopLayoutState {
   readonly setPlatform: (platform: AppPlatform, hostMenu: boolean) => void;
   readonly setNotice: (notice: string | null) => void;
   readonly setSession: (session: SessionActions | null) => void;
+  /** Adds the on-screen thread's optional actions to the registered session (no-op without one). */
+  readonly extendSession: (actions: Partial<SessionActions>) => void;
 }
 
 type DesktopLayoutStore = UseBoundStore<StoreApi<DesktopLayoutState>>;
@@ -69,6 +77,7 @@ export function createDesktopLayoutStore(): DesktopLayoutStore {
     setPlatform: (platform, hostMenu) => set({ platform, hostMenu }),
     setNotice: (notice) => set({ notice }),
     setSession: (session) => set({ session }),
+    extendSession: (actions) => set((state) => (state.session === null ? {} : { session: { ...state.session, ...actions } })),
   }));
 }
 

@@ -2,8 +2,8 @@
  * Desktop-only `/workspaces/$workspaceId[?conversation=<id>]`: one THREAD of
  * a folder — the centre of the workspace-first window.
  *
- * Header: the folder, its project (re-binding moves the folder), the agent
- * and version. Body: the thread's exchanges — your prompt, then what the
+ * Toolbar: the folder ▸ thread title (its path card re-binds the project).
+ * Composer footer: agent·version, Act | Plan, where it runs. Body: the thread's exchanges — your prompt, then what the
  * agent did (text, collapsible tool lines). Bottom: the composer ("@" files,
  * "/" commands). Right (⌘⌥\): the changes panel (`SessionPanel`).
  *
@@ -21,76 +21,36 @@ import { useQuery } from '@tanstack/react-query';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
-import { WorkspaceIndexControl } from '@/features/workspace-index';
-import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { IndexSettingsHost, useHasIndexHost } from '@/features/workspace-index';
+import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
+import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import { AgentPickers, NoAgents } from './AgentPickers';
+import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
-import { HandoffBanner, HandoffDialogs, HandoffHeader } from './HandoffControls';
-import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
+import { AgentChip, RunLocationChip } from './ComposerControls';
+import { HandoffBanner, HandoffDialogs } from './HandoffControls';
+import { COLUMN, EarlierTurns, Exchanges, firstError, SessionNotices, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
+import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
 import { useAgentSkills } from './useAgentSkills';
 import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
-import { useThreadHandoff, type ThreadHandoff } from './useThreadHandoff';
+import { useSessionMenuActions } from './useSessionMenuActions';
+import { useThreadHandoff } from './useThreadHandoff';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
 import { WorkspaceComposer } from './WorkspaceComposer';
 
 const LIST_KEY = ['workspace', 'list'] as const;
 
-interface HeaderProps {
-  session: ThreadSession;
-  handoff: ThreadHandoff;
-  workspace: Workspace;
-  projectId: number;
-  conversationId: string;
-  busy: boolean;
-  projectMenuOpen: boolean;
-  onProjectMenuOpenChange: (open: boolean) => void;
-}
+/** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
+const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
 
-/** The folder, its project and agent, the folder's code index, "Open in chat" for a started thread, and the panel toggle. */
-function SessionHeader({ session, handoff, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
-  const changesOpen = useDesktopLayout((state) => state.changesOpen);
-  const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
-  const attention = session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
-  return (
-    <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-      <TitleBarSpacer
-        leading={!sidebarOpen}
-        logo={false}
-        trailing={
-          <>
-            <HandoffHeader handoff={handoff} />
-            <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} open />
-            {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
-            {!changesOpen && <PanelToggle count={attention} />}
-          </>
-        }
-      >
-        <ShowSidebarButton />
-        <FolderTitle workspace={workspace} />
-        <AgentPickers
-          selection={session.selection}
-          projectId={projectId}
-          projects={session.projects}
-          busy={busy}
-          onChangeProject={(next) => session.rebind.mutate(next)}
-          projectMenuOpen={projectMenuOpen}
-          onProjectMenuOpenChange={onProjectMenuOpenChange}
-          agentRef={session.commands.agentRef}
-        />
-      </TitleBarSpacer>
-    </Box>
-  );
-}
+const indexSettingsOpener = (hasIndex: boolean, setOpen: (open: boolean) => void): (() => void) | undefined => (hasIndex ? () => setOpen(true) : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
@@ -98,6 +58,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [indexOpen, setIndexOpen] = useState(false);
+  const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
   // "Continue?" at the step limit is a card in the transcript; the rest are the dialog's queue.
@@ -111,20 +73,24 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
   const codingAgent = useLocalCodingAgent(projectId, raw.empty);
 
+  useSessionMenuActions({ handoff, conversationId, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => setIndexOpen(true) });
+
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
     // transcript scrolls in its own column and the composer stays below it.
     <Box data-testid="workspace-session" sx={{ position: 'absolute', inset: 0, display: 'flex', minHeight: 0 }}>
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <SessionHeader
-          session={session}
-          handoff={handoff}
+        <ThreadToolbar
           workspace={workspace}
-          projectId={projectId}
           conversationId={conversationId}
+          projectId={projectId}
+          projects={session.projects}
           busy={busy}
-          projectMenuOpen={projectMenuOpen}
-          onProjectMenuOpenChange={setProjectMenuOpen}
+          onChangeProject={(next) => session.rebind.mutate(next)}
+          pathOpen={projectMenuOpen}
+          onPathOpenChange={setProjectMenuOpen}
+          attention={attentionOf(session)}
+          onIndexSettings={indexSettingsOpener(hasIndex, setIndexOpen)}
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -160,6 +126,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
             readOnly={handoff.offLaptop}
             busy={turn.busy}
             planMode={commands.planMode}
+            agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} />}
+            runLocation={<RunLocationChip handoff={handoff} />}
             onPlanModeChange={commands.setPlanMode}
             skills={skills}
             onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
@@ -181,6 +149,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           decided={session.decided}
         />
       )}
+      <IndexSettingsHost workspaceId={workspace.id} name={workspace.name} open={indexOpen} onClose={() => setIndexOpen(false)} />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>

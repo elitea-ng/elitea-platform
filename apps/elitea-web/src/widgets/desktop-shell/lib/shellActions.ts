@@ -14,6 +14,8 @@ export type ShellAction =
   | { type: 'toggle_sidebar' }
   | { type: 'toggle_changes' }
   | { type: 'toggle_plan' }
+  /** Thread / Folder menu: the session on screen acts (`SessionActions`). */
+  | { type: 'send_to_cloud' | 'open_in_chat' | 'choose_agent' | 'index_settings' | 'handoff_settings' }
   | { type: 'back' }
   | { type: 'forward' }
   /** The folders home: the last folder/thread, else the start screen. */
@@ -28,7 +30,7 @@ export type ShellAction =
   /** Files (not a folder) were dropped on the window. */
   | { type: 'files_dropped' };
 
-const PLAIN_COMMANDS = new Set<string>(['new_thread', 'settings', 'command_palette', 'toggle_sidebar', 'toggle_changes', 'back', 'forward']);
+const PLAIN_COMMANDS = new Set<string>(['new_thread', 'settings', 'command_palette', 'toggle_sidebar', 'toggle_changes', 'back', 'forward', 'send_to_cloud', 'open_in_chat', 'toggle_plan', 'choose_agent', 'index_settings', 'handoff_settings']);
 
 const workspaceIdOf = (args: unknown): string | undefined => {
   const id = (args as { workspace_id?: unknown } | undefined)?.workspace_id;

@@ -848,6 +848,12 @@ type AppCommand = { id: string; args?: object };
 | `toggle_changes` | — | View ▸ Toggle Changes Panel (⌘⌥\\) |
 | `back` | — | View ▸ Back (⌘[) |
 | `forward` | — | View ▸ Forward (⌘]) |
+| `send_to_cloud` | — | Thread ▸ Send to Cloud… (⇧⌘U): open the Send to cloud sheet of the thread on screen. |
+| `open_in_chat` | — | Thread ▸ Open in Chat: open the thread on screen in the web chat. |
+| `toggle_plan` | — | Thread ▸ Plan Mode (⇧⌘P): switch the composer between Act and Plan. |
+| `choose_agent` | — | Thread ▸ Choose Agent… (⌘L): open the composer's agent picker. |
+| `index_settings` | — | Folder ▸ Index Settings…: open the folder's index settings (inspector, Index). |
+| `handoff_settings` | — | Folder ▸ Handoff Settings…: open the folder's cloud handoff settings. |
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
 | `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |

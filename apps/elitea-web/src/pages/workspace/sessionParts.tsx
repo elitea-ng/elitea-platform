@@ -152,17 +152,6 @@ export function ThreadIntro({
   );
 }
 
-/** The header's way to the whole conversation in the Elitea chat. */
-export function OpenInChat({ conversationId }: { conversationId: string }): React.JSX.Element {
-  return (
-    <Box sx={(theme: Theme) => ({ ...linkSx(theme), flexShrink: 0, whiteSpace: 'nowrap' })} data-testid="open-in-chat">
-      <Link to="/chat/$conversationId" params={{ conversationId }}>
-        {t('workspace.openInChat', 'Open in chat')}
-      </Link>
-    </Box>
-  );
-}
-
 const quietSx = (theme: Theme) => ({ color: theme.vars.palette.text.metrics });
 
 /** One recorded turn: its prompt, then its events replayed as the live transcript showed them. */

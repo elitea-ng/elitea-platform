@@ -81,27 +81,36 @@ afterEach(() => {
   delete globals['elitea_ui_config'];
 });
 
-const sendButton = (): HTMLElement | null => screen.queryByRole('button', { name: 'Send to cloud' });
+/** Opens the composer footer's run-location menu. */
+async function openLocation(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByTestId('executor-badge'));
+}
 
 describe('a thread running here', () => {
-  it('offers Send to cloud and shows the Local badge', async () => {
+  it('offers Send to cloud from the run-location menu and shows Local', async () => {
     serve();
     const handoff = createFakeHandoffIpc();
+    const user = userEvent.setup();
     mount(handoff);
     const session = await screen.findByTestId('workspace-session');
-    await waitFor(() => expect(within(session).getByRole('button', { name: 'Send to cloud' })).toBeInTheDocument());
-    expect(within(session).getByTestId('executor-badge')).toHaveTextContent('Local');
+    await waitFor(() => expect(within(session).getByTestId('executor-badge')).toHaveTextContent('Local'));
+    await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
+    await openLocation(user);
+    expect(await screen.findByRole('menuitem', { name: 'Send to cloud…' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
     expect(screen.queryByTestId('cloud-thread-banner')).toBeNull();
     // The host was asked about this thread by its UUID, with its project.
     expect(handoff.calls.statuses).toContain(UUID);
   });
 
-  it('opens the folder\'s Handoff settings next to Send to cloud', async () => {
+  it('opens the folder\'s Handoff settings from the run-location menu', async () => {
     serve();
     const user = userEvent.setup();
     const handoff = createFakeHandoffIpc();
     mount(handoff);
-    await user.click(await screen.findByRole('button', { name: 'Handoff settings' }));
+    await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
+    await openLocation(user);
+    await user.click(await screen.findByRole('menuitem', { name: 'Handoff settings…' }));
     const dialog = await screen.findByRole('dialog', { name: 'Handoff settings' });
     await waitFor(() => expect(handoff.calls.settingsGets).toEqual(['w1']));
     expect(await within(dialog).findByTestId('handoff-settings-exclusions')).toBeInTheDocument();
@@ -112,9 +121,8 @@ describe('a thread running here', () => {
     const handoff = createFakeHandoffIpc({ allowed: false });
     mount(handoff);
     const session = await screen.findByTestId('workspace-session');
-    await waitFor(() => expect(within(session).getByTestId('executor-badge')).toBeInTheDocument());
-    expect(sendButton()).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Handoff settings' })).toBeNull();
+    // Local, and nothing to do from here: the badge reports, it opens no menu.
+    await waitFor(() => expect(within(session).getByTestId('executor-badge')).toBeDisabled());
   });
 
   it('hides Send to cloud on a new thread that has no conversation yet', async () => {
@@ -122,7 +130,7 @@ describe('a thread running here', () => {
     const handoff = createFakeHandoffIpc();
     mount(handoff, '/workspaces/w1');
     await screen.findByTestId('workspace-session');
-    expect(sendButton()).toBeNull();
+    expect(screen.queryByTestId('executor-badge')).toBeNull();
     expect(handoff.calls.statuses).toEqual([]);
   });
 
@@ -131,7 +139,9 @@ describe('a thread running here', () => {
     const user = userEvent.setup();
     const handoff = createFakeHandoffIpc();
     mount(handoff);
-    await user.click(await screen.findByRole('button', { name: 'Send to cloud' }));
+    await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
+    await openLocation(user);
+    await user.click(await screen.findByRole('menuitem', { name: 'Send to cloud…' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Send this thread to the cloud' });
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Send to cloud' })).toBeEnabled());
@@ -140,7 +150,7 @@ describe('a thread running here', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(handoff.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: UUID, leave: [], confirmIncludes: false }]);
     expect(await screen.findByTestId('cloud-thread-banner')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Send to cloud' })).toBeNull();
+    await waitFor(() => expect(screen.getAllByTestId('executor-badge')[0]).toHaveTextContent('In cloud'));
   });
 });
 
@@ -165,7 +175,7 @@ describe('a thread running in the cloud', () => {
     const composer = screen.getByTestId('workspace-composer');
     expect(within(composer).getByRole('textbox')).toBeDisabled();
     expect(screen.getByTestId('workspace-send-button')).toBeDisabled();
-    expect(sendButton()).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Send to cloud…' })).toBeNull();
   });
 
   it('shows a take back that waits for the running cloud turn', async () => {

@@ -15,8 +15,7 @@
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
  */
-import type { ComponentRef, KeyboardEvent } from 'react';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
@@ -24,10 +23,8 @@ import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import SendIcon from '@mui/icons-material/Send';
 import Box from '@mui/material/Box';
-import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import type { Theme } from '@mui/material/styles';
-import Switch from '@mui/material/Switch';
 
 import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
@@ -35,6 +32,7 @@ import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId 
 import type { ComposerSkill } from './useAgentSkills';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { Segmented } from '@/widgets/desktop-shell';
 
 type ComposerHandle = ComponentRef<typeof NewChatInput>;
 type Token = ReturnType<typeof composer.activeToken>;
@@ -59,6 +57,9 @@ export interface WorkspaceComposerProps {
   readOnly?: boolean;
   busy: boolean;
   planMode: boolean;
+  /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
+  agentPicker?: ReactNode;
+  runLocation?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
   /** The selected agent's skills, offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
@@ -240,11 +241,20 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         slots={{
           modelSelector: null,
           attachmentButton: (
-            <FormControlLabel
-              sx={{ marginLeft: 0 }}
-              control={<Switch size="small" checked={planMode} onChange={(e) => onPlanModeChange(e.target.checked)} />}
-              label={t('workspace.planMode', 'Plan mode (no changes)')}
-            />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+              <Segmented
+                ariaLabel={t('workspace.mode', 'Mode')}
+                value={planMode ? 'plan' : 'act'}
+                onChange={(next) => onPlanModeChange(next === 'plan')}
+                testId="mode-segmented"
+                options={[
+                  { value: 'act', label: t('workspace.mode.act', 'Act') },
+                  { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
+                ]}
+              />
+              {props.agentPicker}
+              {props.runLocation}
+            </Box>
           ),
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton

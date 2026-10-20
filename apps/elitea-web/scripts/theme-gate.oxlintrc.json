@@ -22,7 +22,7 @@
     {
       // The desktop shell mixes theme.vars tokens with color-mix() (hover /
       // bezel tints): derived from tokens, never a literal colour.
-      "files": ["**/widgets/desktop-shell/**", "**/entries/desktop/**"],
+      "files": ["**/widgets/desktop-shell/**", "**/entries/desktop/**", "**/pages/workspace/**"],
       "rules": { "elitea/no-raw-color": "off" }
     },
     {

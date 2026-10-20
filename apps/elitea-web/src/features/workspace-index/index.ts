@@ -6,3 +6,4 @@
  */
 export { WorkspaceIndexControl } from './ui/WorkspaceIndexControl';
 export { IndexIpcProvider } from './model/ipcContext';
+export { IndexSettingsHost, useHasIndexHost } from './ui/IndexSettingsHost';

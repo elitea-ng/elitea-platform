@@ -384,5 +384,22 @@
   "workspace.handoff.settings.save": "Save",
   "workspace.handoff.settings.title": "Handoff settings",
   "workspace.handoff.showFewer": "Show fewer",
-  "workspace.handoff.env.notice": "Your login shell’s variables could not be read ({{notice}}), so none are offered."
+  "workspace.handoff.env.notice": "Your login shell’s variables could not be read ({{notice}}), so none are offered.",
+  "workspace.agent.choose": "Agent: {{label}}",
+  "workspace.copyLink": "Copy Link",
+  "workspace.handoff.eraseMenu": "Erase cloud copy…",
+  "workspace.handoff.sendMenu": "Send to cloud…",
+  "workspace.handoff.settingsMenu": "Handoff settings…",
+  "workspace.handoff.takeBackMenu": "Take back…",
+  "workspace.handoff.where": "Runs: {{where}}",
+  "workspace.index.menu": "Index settings…",
+  "workspace.mode": "Mode",
+  "workspace.mode.act": "Act",
+  "workspace.mode.plan": "Plan",
+  "workspace.more": "More",
+  "workspace.path.copy": "Copy Path",
+  "workspace.path.project": "Project",
+  "workspace.path.reveal": "Reveal in Finder",
+  "workspace.thread.menu": "Thread",
+  "workspace.thread.untitled": "New thread"
 }
