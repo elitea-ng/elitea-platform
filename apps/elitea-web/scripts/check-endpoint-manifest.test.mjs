@@ -746,7 +746,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // Projects page for any project (getAdminProjectCloudExecutor,
 // setAdminProjectCloudExecutor). Their manifest entries land with the pages
 // that call them (see MANIFEST_ENTRY_COUNT).
-const GENERATED_OPERATION_COUNT = 335;
+// 335 -> 337 (client contract 1.10): archiveConversation and
+// unarchiveConversation, the per-user conversation archive the chat lists
+// of the web, desktop and mobile apps share. Their manifest entries land
+// with the screens that call them (see MANIFEST_ENTRY_COUNT).
+const GENERATED_OPERATION_COUNT = 337;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

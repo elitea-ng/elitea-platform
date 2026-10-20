@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.9"
+  x-elitea-client-contract: "1.10"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2134,7 +2134,7 @@ components:
         for it (no per-conversation duration is computed server-side yet); a
         caller wanting a displayed duration derives one from
         created_at/updated_at instead of trusting this field.
-      required: [id, name, created_at, updated_at, duration, message_groups_count, is_pinned]
+      required: [id, name, created_at, updated_at, duration, message_groups_count, is_pinned, is_archived]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -2161,6 +2161,25 @@ components:
             row in the `changes_since` delta; it does not change
             `updated_at`. A server before 1.4 omits the field, which means
             not pinned.
+        is_archived:
+          type: boolean
+          description: >
+            Client contract 1.10. The conversation is archived in its project
+            (archiveConversation). The archive is shared by the project, as
+            the pin is: every member who can see the row sees the same value.
+            An archived row keeps its `is_pinned`; a client leaves archived
+            rows out of its pinned section. An archive or unarchive
+            re-delivers the row in the `changes_since` delta of every member
+            who can see it; it does not change `updated_at`. A server before
+            1.10 omits the field, which means not archived.
+        archived_by:
+          $ref: '#/components/schemas/ConversationArchivedBy'
+        archived_at:
+          type: string
+          format: date-time
+          description: >
+            Client contract 1.10. When the conversation was archived, in UTC.
+            Present only when `is_archived` is true.
         meta:
           type: object
           additionalProperties: true
@@ -2178,6 +2197,22 @@ components:
             unrelated code paths (single_participant filters, is_hidden,
             steps_limit, internal_tools), so the object's key set is not
             fixed by this endpoint.
+
+    ConversationArchivedBy:
+      type: object
+      description: >
+        Client contract 1.10. The member who archived the conversation.
+        Present on a list row only when `is_archived` is true. `name` is the
+        user's display name, or an empty string when the server cannot
+        resolve one.
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: The user id.
+        name:
+          type: string
 
     ConversationListing:
       type: object
@@ -16911,6 +16946,100 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
+  /elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    put:
+      operationId: archiveConversation
+      summary: Archive a conversation in its project
+      description: |
+        Client contract 1.10. Archives the conversation in its project. The
+        archive is shared by the project, as the conversation pin is: one
+        archive per conversation, and every member's default conversation
+        list leaves it out. The list row names who archived it
+        (`archived_by`) and when (`archived_at`). The archive does not change
+        the conversation. It stays open by id, it keeps its project pin, and
+        new turns work as before.
+
+        Needs `models.chat.conversation.details` and access to the
+        conversation itself (the chat authority's detail rule, the same one
+        the conversation pin passes). A conversation the caller cannot see
+        answers 404 and archives nothing. A repeated request succeeds and
+        keeps the FIRST archive: its `archived_by` and `archived_at` do not
+        change, and nothing is re-delivered.
+
+        The archive re-delivers the conversation's list row, with
+        `is_archived: true`, in the `changes_since` delta of every member who
+        can see the conversation. It does not change `updated_at`. It never
+        writes a tombstone: a tombstone means a deletion or a loss of access.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      responses:
+        "200":
+          description: The conversation is archived in its project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+    delete:
+      operationId: unarchiveConversation
+      summary: Unarchive a conversation in its project
+      description: |
+        Client contract 1.10. Removes the project's archive of the
+        conversation, whichever member archived it, as unpinEntity removes a
+        pin. The conversation is in every member's default conversation list
+        again. Needs the same access as archiveConversation; a conversation
+        the caller cannot see answers 404. A repeated request succeeds,
+        removes nothing and re-delivers nothing.
+
+        An unarchive re-delivers the list row, with `is_archived: false`, in
+        the `changes_since` delta of every member who can see the
+        conversation.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      responses:
+        "200":
+          description: The archive is removed, or there was none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/conversation_export/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -17041,6 +17170,19 @@ paths:
           schema:
             type: string
           description: "`only` inverts the default hidden-conversation exclusion; any other value keeps the default."
+        - name: archived
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Client contract 1.10. The project's archived conversations (archiveConversation): `exclude` (the
+            default; absent or any other value means `exclude`) leaves them out, `only` lists only them, and
+            `include` lists both. In delta mode
+            (`changes_since`) the value narrows `total` and the first page of a full sync (`changes_since` empty
+            or `0`). The rows of every later delta are NOT narrowed by it: an archive or unarchive re-delivers the
+            row with its new `is_archived`, and the client keeps the rows that match its list and drops the
+            others. An archive is never a tombstone.
         - name: limit
           in: query
           required: false
@@ -17066,7 +17208,8 @@ paths:
           description: >
             Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged. Empty or `0`: a full sync from
             the beginning in delta shape. Otherwise the opaque `next_cursor` of a previous delta of THIS list —
-            the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine` and `hidden` values; a
+            the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine`, `hidden` and
+            `archived` values (an absent `archived` and `exclude` are the same list); a
             cursor from another list is a 400. Rows come oldest change first. Losing access to the whole project
             is not a tombstone: the client sees 403 and drops that project's cache.
       responses:

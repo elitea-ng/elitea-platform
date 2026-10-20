@@ -3597,6 +3597,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
 					r.With(projectPermission("models.chat.conversations.delete")).
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
+					// Per-user conversation archive (client contract 1.10).
+					// It declares the conversation read permission, as the
+					// conversation pin does: whoever may open a conversation
+					// may file it away for themselves. No migration needed.
+					r.With(requireConversationRead).
+						Put("/conversation_archive/prompt_lib/{projectID}/{conversationID}", convHandler.Archive)
+					r.With(requireConversationRead).
+						Delete("/conversation_archive/prompt_lib/{projectID}/{conversationID}", convHandler.Unarchive)
 					r.With(projectPermission("models.chat.messages.list")).
 						Get("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.ListMessages)
 					// Conversation export (#851). It reads the TRANSCRIPT, so
