@@ -1,0 +1,48 @@
+[package]
+name = "elitea-local-embed"
+description = "The desktop's local embeddings: the Embedder trait, the pinned model catalogue, the model cache/download manager and the on-device candle backend (Metal on Apple silicon)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# The on-device backend: candle running the catalogue's models, on the GPU
+# (Metal) on macOS and on the CPU elsewhere. Metal is a target dependency
+# feature below, not a feature of this crate, so `--all-features` builds on
+# Linux too.
+candle = ["dep:candle-core", "dep:candle-nn", "dep:tokenizers"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+# Default features only: the desktop host links this crate and must not
+# build serde_json with `preserve_order` (ADR-0029 decision 2).
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+candle-core = { version = "0.11.0", optional = true }
+candle-nn = { version = "0.11.0", optional = true }
+# `onig` only: no progress bars, no hf-hub (the manager downloads), and its
+# serde_json is default-features (checked by the desktop's
+# `serde_json_preserve_order_is_off` test).
+tokenizers = { version = "0.22.2", default-features = false, features = ["onig"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { version = "0.11.0", optional = true, features = ["metal"] }
+candle-nn = { version = "0.11.0", optional = true, features = ["metal"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+
+[dev-dependencies]
+# The reference BERT the fused-attention one is checked against.
+candle-transformers = "0.11.0"
+tempfile = "3.27.0"
+
+[[example]]
+name = "embed_bench"
+required-features = ["candle"]
+
+[lints]
+workspace = true
