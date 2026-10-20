@@ -19,6 +19,11 @@
 //!   same approval (a duplicate or late submission). Nothing moved the checkpoint, yet it is
 //!   refused as stale and runs nothing; the dead execution's own replacement then finishes.
 //!
+//! * `crash_after_forward`: the replayed child call reaches the root session, then the Worker dies
+//!   before the approved call's `dispatched` record. Nothing ran; `recover` runs it once (R).
+//! * `dispatch_append_fails`: the `dispatched` append fails; the run ends with a typed failure
+//!   (FAILED, so Main does not re-claim it) and never runs the call or answers past it.
+//!
 //! A replacement is the same execution re-claimed with a higher claim attempt, as Main does after
 //! a lease expires; every other submission is another execution.
 
@@ -38,6 +43,7 @@ const PENDING_MARKER: &str = "EFFECT_PENDING=";
 const EXIT_BEFORE_DISPATCH: i32 = 85;
 const EXIT_AFTER_DISPATCH: i32 = 86;
 const EXIT_AFTER_OUTCOME: i32 = 87;
+const EXIT_AFTER_FORWARD: i32 = 88;
 const DONE: &str = "child finished after the approved change";
 /// The execution that approves and dies; its replacement re-claims it.
 const APPROVAL_EXECUTION: &str = "execution-approval";
@@ -54,6 +60,8 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
         ],
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
         "crash_after_outcome" => &[("start", 0), ("crash", EXIT_AFTER_OUTCOME), ("recover", 0)],
+        "crash_after_forward" => &[("start", 0), ("crash", EXIT_AFTER_FORWARD), ("recover", 0)],
+        "dispatch_append_fails" => &[("start", 0), ("append_fails", 0)],
         "late_duplicate" => &[
             ("start", 0),
             ("crash", EXIT_AFTER_OUTCOME),
@@ -143,6 +151,16 @@ async fn postgres_worker_replaced_before_dispatch_runs_the_approved_call_once() 
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_worker_replaced_after_dispatch_refuses_as_may_have_started() {
     run_scenario("crash_after_dispatch").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_worker_replaced_after_forwarding_before_the_dispatch_record_runs_the_call_once() {
+    run_scenario("crash_after_forward").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_failed_dispatch_record_ends_the_run_typed_and_never_runs_the_call() {
+    run_scenario("dispatch_append_fails").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -342,7 +360,10 @@ async fn postgres_effect_child() {
             println!("{PENDING_MARKER}{card}");
         }
         "approve" | "recover"
-            if matches!(scenario.as_str(), "approve" | "crash_before_dispatch") =>
+            if matches!(
+                scenario.as_str(),
+                "approve" | "crash_before_dispatch" | "crash_after_forward"
+            ) =>
         {
             let (assembler, captured, calls) = worker(
                 &pool,
@@ -462,6 +483,11 @@ async fn postgres_effect_child() {
                 }
                 // The tool runs and its outcome is recorded; the Worker dies at the
                 // child's next model request, before the parent continues.
+                "crash_after_forward" => {
+                    crate::agents::dispatch_journal::EXIT_BEFORE_DISPATCHED_RECORD
+                        .store(EXIT_AFTER_FORWARD, Ordering::Release);
+                    (Vec::new(), ToolMode::ExitInExecute)
+                }
                 "crash_after_outcome" | "late_duplicate" => (
                     vec![TestModelGatewayOutcome::ExitProcess(EXIT_AFTER_OUTCOME)],
                     ToolMode::Normal,
@@ -552,6 +578,41 @@ async fn postgres_effect_child() {
             assert!(
                 request.contains("written"),
                 "recover: the model sees the recorded outcome: {request}"
+            );
+        }
+        "append_fails" => {
+            crate::agents::dispatch_journal::FAIL_DISPATCHED_APPEND.store(true, Ordering::Release);
+            let (assembler, captured, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "unexpected answer past the approved call",
+                ))],
+                ToolMode::Normal,
+            );
+            let invocation = assembler
+                .assemble(authorized_turn(
+                    &decision(&card(), "approve", "", 44),
+                    APPROVAL_EXECUTION,
+                    2,
+                ))
+                .await
+                .expect("append_fails: assembles");
+            let upstream = failure_code(invocation).await;
+            assert_eq!(
+                crate::protocol::output::model_failure(upstream.as_deref()),
+                crate::protocol::output::RuntimeFailureKind::Internal,
+                "append_fails: the failure, got {upstream:?}"
+            );
+            assert_eq!(
+                upstream.as_deref(),
+                Some(crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE),
+                "append_fails: the registered stop code"
+            );
+            assert_eq!(calls.load(Ordering::Acquire), 0, "append_fails: never runs");
+            assert_eq!(
+                model_requests(&captured),
+                0,
+                "append_fails: nothing answers past it"
             );
         }
         "late" => {

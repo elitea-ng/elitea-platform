@@ -1286,13 +1286,21 @@ impl PipelineApplicationScopeRegistry {
             .map_err(|_| unavailable_scope())?
             .ok_or_else(invalid_scope)?;
         if root.thread_id != root_thread
-            || root.checkpoint_id != binding.checkpoint_id()
+            || !super::scope_receipts::continues_pause_checkpoint(
+                &root,
+                binding.checkpoint_id(),
+                binding.pending_node_name(),
+            )
             || root.pending_nodes.as_slice() != [binding.pending_node_name()]
         {
             return Err(invalid_scope());
         }
         let mut checkpoints = BTreeMap::new();
-        for nested in binding.nested_checkpoints() {
+        for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
+            let pending = binding
+                .nested_checkpoints()
+                .get(index + 1)
+                .map_or(binding.node_name(), |next| next.node_name());
             let path = nested
                 .thread_id()
                 .strip_prefix(root_thread)
@@ -1307,7 +1315,11 @@ impl PipelineApplicationScopeRegistry {
                 .map_err(|_| unavailable_scope())?
                 .ok_or_else(invalid_scope)?;
             if checkpoint.thread_id != nested.thread_id()
-                || checkpoint.checkpoint_id != nested.checkpoint_id()
+                || !super::scope_receipts::continues_pause_checkpoint(
+                    &checkpoint,
+                    nested.checkpoint_id(),
+                    pending,
+                )
             {
                 return Err(invalid_scope());
             }

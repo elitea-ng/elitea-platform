@@ -329,13 +329,14 @@ impl PipelineApplicationNodeRuntime {
                 REPLAY_UNSUPPORTED_PUBLIC_CODE,
                 replay_unsupported(&self.node_name),
             ),
-            // The approved call may have run; it is not repeated. The run ends
-            // with the registered recovery-refused reason, as an unscoped Agent
-            // node does (`graph/application.rs` `child_failure`).
-            ChildFailure::MayHaveStarted => {
+            // The approved call may have run (not repeated), or its dispatch
+            // record could not be written (it never ran). The run ends with the
+            // registered reason, as an unscoped Agent node does
+            // (`graph/application.rs` `child_failure`).
+            ChildFailure::ApprovedCallStop(code) => {
                 return self
                     .events
-                    .recovery_refused(&self.node_name)
+                    .approved_call_stop(code, &self.node_name)
                     .await
                     .unwrap_or_else(failure);
             }
@@ -373,7 +374,7 @@ impl PipelineApplicationNodeRuntime {
                     Err(_) => Err(ChildFailure::Scope(failure())),
                 },
                 signal = receiver.recv() => match signal {
-                    Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(ChildFailure::Scope(error)); },
+                    Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(error); },
                     None => break Err(ChildFailure::Scope(failure())),
                 }
             }
@@ -387,13 +388,16 @@ impl PipelineApplicationNodeRuntime {
                 .drain(signal, receipt, graph_scope, root_container, terminal)
                 .await
             {
-                result = Err(ChildFailure::Scope(error));
+                result = Err(error);
                 break;
             }
         }
         result
     }
 
+    /// Forward one queued child signal. A child that stopped on an approved
+    /// call (FU-226) reports that typed stop on its stream as well as in its
+    /// result; any other failed signal breaks the scope.
     async fn drain(
         &self,
         signal: ApplicationEventSignal,
@@ -401,8 +405,27 @@ impl PipelineApplicationNodeRuntime {
         graph_scope: Option<&PipelineNodeEventScope>,
         root_container: &str,
         terminal: &mut Option<Event>,
+    ) -> Result<(), ChildFailure> {
+        let event =
+            application_signal_event(signal).map_err(|error| {
+                match ChildFailure::from_child(error.code) {
+                    stop @ ChildFailure::ApprovedCallStop(_) => stop,
+                    _ => ChildFailure::Scope(failure()),
+                }
+            })?;
+        self.drain_event(event, receipt, graph_scope, root_container, terminal)
+            .await
+            .map_err(ChildFailure::Scope)
+    }
+
+    async fn drain_event(
+        &self,
+        mut event: Event,
+        receipt: &PipelineGraphCallReceipt,
+        graph_scope: Option<&PipelineNodeEventScope>,
+        root_container: &str,
+        terminal: &mut Option<Event>,
     ) -> Result<(), GraphError> {
-        let mut event = application_signal_event(signal).map_err(|_| failure())?;
         let calls = event.tool_calls();
         if event.invocation_id == receipt.invocation_id()
             && calls
@@ -548,8 +571,9 @@ enum ChildFailure {
     Scope(GraphError),
     /// The nested Agent refused its decided call before running it.
     ReplayUnsupported,
-    /// An earlier continuation already dispatched the approved call.
-    MayHaveStarted,
+    /// The approved call may have started (`RECOVERY_REFUSED_UPSTREAM_CODE`),
+    /// or its dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`).
+    ApprovedCallStop(&'static str),
     /// The nested Agent refused its decided card for another typed reason.
     Refused,
     /// The child failed for a reason that is not a direct-HITL refusal.
@@ -561,8 +585,12 @@ impl ChildFailure {
     /// direct-HITL refusal's typed code (FU-226).
     fn from_child(code: &str) -> Self {
         use crate::agents::direct_hitl::DirectHitlErrorCode;
-        if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
-            Self::MayHaveStarted
+        use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
+        use crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE;
+        if code == RECOVERY_REFUSED_UPSTREAM_CODE {
+            Self::ApprovedCallStop(RECOVERY_REFUSED_UPSTREAM_CODE)
+        } else if code == DISPATCH_UNRECORDED_CODE {
+            Self::ApprovedCallStop(DISPATCH_UNRECORDED_CODE)
         } else if code == DirectHitlErrorCode::UnsupportedCapability.as_str() {
             Self::ReplayUnsupported
         } else if code.starts_with("direct_hitl.") {

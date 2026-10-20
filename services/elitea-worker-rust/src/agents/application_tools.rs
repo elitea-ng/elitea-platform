@@ -775,11 +775,9 @@ fn live_nested_events<'a>(
     };
     let expected = submitted.iter().cloned().collect::<BTreeSet<_>>();
     let marker = nested_resume_user_content(submitted);
-    let is_marker = |event: &Event| {
-        event
-            .content()
-            .is_some_and(|content| content.role == marker.role && content.parts == marker.parts)
-    };
+    let is_marker_content =
+        |content: &Content| content.role == marker.role && content.parts == marker.parts;
+    let is_marker = |event: &Event| event.content().is_some_and(is_marker_content);
     let mut dead = None;
     for (index, event) in events.iter().enumerate() {
         // A descendant's own replay batch (a child agent, or an agent inside a
@@ -806,42 +804,20 @@ fn live_nested_events<'a>(
                         && is_marker(candidate)
                 })
                 .ok_or_else(stale)?;
-            let calls = batch.call_ordinals.into_keys().collect::<HashSet<_>>();
-            dead = Some((start, event.branch.clone(), calls));
+            dead = Some((start, event.branch.clone()));
         }
     }
-    let Some((start, branch, calls)) = dead else {
+    let Some((start, branch)) = dead else {
         return Ok(events);
     };
     let tail = &events[start..];
     super::dispatch_journal::records_bound_to(tail, owner, |id| submitted.contains(id))
         .map_err(|_| stale())?;
-    let child_branch = format!("{branch}.");
+    let mut suffix = ContinuationSuffix::default();
     for event in tail {
-        let results = event.tool_results();
-        // A new pause, or a child result that is itself a pause, means that
-        // continuation finished its turn: it is not a dead one.
-        if event.actions.tool_confirmation.is_some()
-            || results
-                .iter()
-                .any(|result| is_nested_interrupt_result(result.response))
-        {
-            return Err(stale());
-        }
         let set_aside = super::dispatch_journal::is_dispatch_record(event)
-            || replay_batch(event)?.is_some()
-            || event.branch.starts_with(&child_branch)
-            || (event.author == "user" && is_marker(event))
-            // Content-free model-checkpoint bookkeeping. A retained pause
-            // (a sibling left for later) ended that continuation's turn.
-            || (event.author == "elitea-recovery" && event.llm_response.content.is_none())
-            // The children's results returned to the parent before it continued.
-            || (!results.is_empty()
-                && event.tool_calls().is_empty()
-                && event.actions.tool_confirmation.is_none()
-                && results
-                    .iter()
-                    .all(|result| result.call_id.is_some_and(|id| calls.contains(id))));
+            || (replay_batch(event)?.is_some() && event.branch == branch)
+            || suffix.owns(event, is_marker_content);
         if !set_aside {
             return Err(stale());
         }
@@ -2471,11 +2447,128 @@ fn nested_resume_markers(events: &[Event]) -> Result<Vec<Content>, NativeAgentAs
         .collect())
 }
 
+const NESTED_RESUME_PREFIX: &str = "[Elitea nested HITL ";
+const NESTED_RESUME_SUFFIX: &str = "] Resume the exact paused saved-agent calls.";
+
+/// Whether `content` is exactly a nested resume marker (`nested_resume_user_content`).
+fn is_nested_resume_marker(content: &Content) -> bool {
+    let [Part::Text { text }] = content.parts.as_slice() else {
+        return false;
+    };
+    text.strip_prefix(NESTED_RESUME_PREFIX)
+        .and_then(|rest| rest.strip_suffix(NESTED_RESUME_SUFFIX))
+        .is_some_and(|ids| !ids.is_empty() && !ids.contains(char::is_whitespace))
+}
+
+/// The events a dead continuation of decided cards left after it began, read
+/// in order. It owns only what it wrote while its children had not moved past
+/// the decided message: its resume marker, the root's replayed application call,
+/// each child's replayed call (the first call event of that child invocation)
+/// and the results of those calls, and content-free recovery bookkeeping.
+/// Anything else is an advance, and re-running the continuation would repeat
+/// it: a new pause, a nested interrupt result, a child's result reaching the
+/// parent (it finished), a child's later model turn (text, or calls after its
+/// replayed one), a node's output or state changes.
+#[derive(Default)]
+pub(crate) struct ContinuationSuffix {
+    replayed_children: HashSet<String>,
+    /// Parent call ids that started a child (from its forwarded events): their
+    /// results mean that child finished.
+    child_calls: HashSet<String>,
+}
+
+impl ContinuationSuffix {
+    /// Whether `event` is the dead continuation's own (dispatch records are
+    /// checked by the caller). `is_marker` names the continuation's marker.
+    pub(crate) fn owns(&mut self, event: &Event, is_marker: impl Fn(&Content) -> bool) -> bool {
+        if event.actions.tool_confirmation.is_some() {
+            return false;
+        }
+        // A model-checkpoint record (`elitea-recovery`, always with its state
+        // delta) of the dead invocation would stay live for model recovery while
+        // the continuation is rebuilt; two recoveries must never act on one
+        // continuation, so such a suffix is not a dead one (stale, F).
+        if event.author == "elitea-recovery" {
+            return false;
+        }
+        if let Some(parent_call) = event.provider_metadata.get(DESCENDANT_PARENT_CALL_KEY) {
+            self.child_calls.insert(parent_call.clone());
+        }
+        // A child's result at any depth: it finished, so re-running it would
+        // repeat its later calls.
+        if event.tool_results().iter().any(|result| {
+            result
+                .call_id
+                .is_some_and(|call_id| self.child_calls.contains(call_id))
+                || is_nested_interrupt_result(result.response)
+        }) {
+            return false;
+        }
+        let Some(content) = event.llm_response.content.as_ref() else {
+            // An agent's state-only start (its instruction or planner state).
+            return super::instruction_authority::valid_state_delta(&event.actions.state_delta);
+        };
+        if !event.actions.state_delta.is_empty() || content.parts.is_empty() {
+            return false;
+        }
+        if event.author == "user" {
+            return is_marker(content);
+        }
+        let calls = content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::FunctionCall { .. }));
+        let results = content
+            .parts
+            .iter()
+            .all(|part| matches!(part, Part::FunctionResponse { .. }));
+        if event.branch == super::events::APPLICATION_BRANCH_ROOT {
+            // The replayed application call; a result here means a child finished.
+            return calls;
+        }
+        if !is_child_branch(event)
+            && !event
+                .provider_metadata
+                .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
+        {
+            return false;
+        }
+        if calls {
+            // Only the child's replayed message; a later call is a new model turn.
+            return self.replayed_children.insert(event.invocation_id.clone());
+        }
+        results
+    }
+}
+
+/// The event rule of a pipeline continuation's suffix (`continuation_pause`).
+pub(crate) fn pipeline_continuation_suffix() -> impl FnMut(&Event) -> bool {
+    let mut suffix = ContinuationSuffix::default();
+    move |event| suffix.owns(event, is_pipeline_resume_marker)
+}
+
+/// Whether `content` is a pipeline application continuation's marker.
+pub(crate) fn is_pipeline_resume_marker(content: &Content) -> bool {
+    is_nested_resume_marker(content)
+        || matches!(
+            content.parts.as_slice(),
+            [Part::Text { text }] if text == super::session::PIPELINE_RESUME_MARKER
+        )
+}
+
+/// A child's own event (its branch lies below the root application branch).
+fn is_child_branch(event: &Event) -> bool {
+    event
+        .branch
+        .strip_prefix(super::events::APPLICATION_BRANCH_ROOT)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
 fn nested_resume_user_content(interrupt_ids: &HashSet<String>) -> Content {
     let mut interrupt_ids = interrupt_ids.iter().map(String::as_str).collect::<Vec<_>>();
     interrupt_ids.sort_unstable();
     Content::new("user").with_text(format!(
-        "[Elitea nested HITL {}] Resume the exact paused saved-agent calls.",
+        "{NESTED_RESUME_PREFIX}{}{NESTED_RESUME_SUFFIX}",
         interrupt_ids.join(",")
     ))
 }
@@ -3753,6 +3846,13 @@ impl LazyNestedAgent {
             || model.clone(),
             |checkpoint| checkpoint.clone().delegation_model(model.clone()),
         );
+        // Every child model step of the invocation stops after a failed dispatch
+        // record. Outermost, so no replay layer (a pending delegation, a saved
+        // output prefix) emits past it.
+        let model = match self.model_scopes.as_ref() {
+            Some(scopes) => scopes.dispatch_abort().guard(model),
+            None => model,
+        };
         let mut builder = LlmAgentBuilder::new(self.name.clone())
             .description(self.description.clone())
             .model(model)
@@ -3835,27 +3935,25 @@ impl LazyNestedAgent {
                 .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
-                // Every call of the replay that will really run and may not simply
-                // run again journals its dispatch in the root session first, so a
-                // later continuation never runs it twice and serves its recorded
-                // outcome instead. A call that can re-run costs no journal writes.
-                let executed = replay.journaled_call_ids(sensitive_tools);
-                let toolsets = if executed.is_empty() {
-                    self.toolsets.clone()
-                } else {
-                    self.model_scopes
-                        .as_ref()
-                        .and_then(ModelScopeSessions::dispatch_journal)
-                        .ok_or_else(agent_configuration_error)?
-                        .wrap(
-                            self.toolsets.clone(),
-                            &replay.journal_decision(),
-                            executed,
-                            super::dispatch_journal::JournalOutcomes::Recorded,
-                        )
-                };
-                let prepared = replay.bind(bound.provider_model());
-                let (model, run_input, toolsets) = prepared.into_parts(toolsets);
+                // An approved sensitive-tool replay journals each call that may not
+                // simply run again in the root session first, so a later
+                // continuation never runs it twice and serves its recorded outcome
+                // instead. A call that can re-run costs no journal writes; a
+                // clarifying or authorization continuation journals nothing, and no
+                // tool of either starts after the invocation's stop.
+                let journal = self
+                    .model_scopes
+                    .as_ref()
+                    .and_then(ModelScopeSessions::dispatch_journal);
+                let (model, run_input, toolsets) = replay
+                    .bind(bound.provider_model())
+                    .into_parts(
+                        self.toolsets.clone(),
+                        journal.as_ref(),
+                        super::dispatch_journal::JournalOutcomes::Recorded,
+                        sensitive_tools,
+                    )
+                    .map_err(|_| agent_configuration_error())?;
                 let (user_content, run_config) = run_input.into_parts();
                 let checkpoint = self
                     .context_checkpoint(&bound, Some(user_content.clone()))?
@@ -4099,6 +4197,19 @@ impl ApplicationAgentTool {
                 .await?;
         }
         let result = self.drain_child(ctx.as_ref(), agent, child_context).await?;
+        // A child can end normally after its approved call's dispatch record
+        // failed (its step limit spent on that call): the run still stops here.
+        if let Some(error) = self
+            .application
+            .agent
+            .model_scopes
+            .as_ref()
+            .and_then(|scopes| scopes.dispatch_abort().error())
+        {
+            self.send_fatal(ApplicationEventFailure::Model(error.code))
+                .await?;
+            return Err(error);
+        }
         if pipeline_container && !is_nested_interrupt_result(&result) {
             self.send_container_result(ctx.as_ref(), result.clone())
                 .await?;
@@ -4146,9 +4257,12 @@ impl ApplicationAgentTool {
                                 super::model_checkpoint::output::ContinuationFailure::ChildFailure,
                             ),
                         )
-                    } else if crate::protocol::output::model_failure(Some(error.code))
-                        != crate::protocol::output::RuntimeFailureKind::Internal
+                    } else if error.code == super::dispatch_journal::DISPATCH_UNRECORDED_CODE
+                        || crate::protocol::output::model_failure(Some(error.code))
+                            != crate::protocol::output::RuntimeFailureKind::Internal
                     {
+                        // A failed dispatch record keeps its own code: it is never
+                        // returned to the parent model as data (`child_failure_report`).
                         ApplicationEventFailure::Model(error.code)
                     } else {
                         ApplicationEventFailure::ChildExecution
@@ -6005,6 +6119,131 @@ mod live_nested_events_tests {
             batch_event("elitea.saved_applications.application_1", None, true),
             test_dispatched_record("elitea-child-2", "hitl-1", "call_mcp", owner()),
         ]
+    }
+
+    /// #1321 review rounds 5–6: a dead continuation owns its marker, the root's
+    /// replayed call, each child's replayed call and those calls' results. A new
+    /// pause, a child's later turn (another call, or text), a child result at the
+    /// parent (it finished), model text or another user turn is an advance.
+    #[test]
+    #[allow(clippy::too_many_lines)] // One ordered table of owned and advancing events.
+    fn a_dead_continuation_owns_only_its_marker_replayed_calls_and_their_results() {
+        let owns = |events: &[&Event]| {
+            let mut suffix = ContinuationSuffix::default();
+            events
+                .iter()
+                .all(|event| suffix.owns(event, is_pipeline_resume_marker))
+        };
+        let mut marker = Event::new("inv-2");
+        "user".clone_into(&mut marker.author);
+        marker.llm_response.content =
+            Some(Content::new("user").with_text(crate::agents::session::PIPELINE_RESUME_MARKER));
+        let replayed = batch_event("elitea.saved_applications", None, false);
+        let child_call = batch_event("elitea.saved_applications.application_1", None, true);
+        let mut child_result = Event::new(&child_call.invocation_id);
+        "elitea.saved_applications.application_1".clone_into(&mut child_result.branch);
+        child_result.llm_response.content = Some(Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: adk_rust::FunctionResponseData::new(
+                    "lookup",
+                    json!({"written": true}),
+                ),
+                id: Some("call_mcp".to_owned()),
+                annotations: None,
+            }],
+        });
+        assert!(owns(&[&marker, &replayed, &child_call, &child_result]));
+        // The child's next turn called another tool: an advance.
+        assert!(!owns(&[
+            &marker,
+            &replayed,
+            &child_call,
+            &child_result,
+            &child_call
+        ]));
+        let mut child_text = child_result.clone();
+        child_text.llm_response.content = Some(Content::new("model").with_text("child answer"));
+        assert!(!owns(&[&marker, &replayed, &child_call, &child_text]));
+        let mut paused = child_call.clone();
+        paused.actions.tool_confirmation = Some(adk_rust::ToolConfirmationRequest {
+            tool_name: "lookup".to_owned(),
+            function_call_id: Some("call_mcp".to_owned()),
+            args: json!({}),
+        });
+        assert!(!owns(&[&paused]), "a new pause is an advance");
+        let mut finished = child_result.clone();
+        "elitea.saved_applications".clone_into(&mut finished.branch);
+        finished.provider_metadata.clear();
+        assert!(
+            !owns(&[&finished]),
+            "a child result at the parent is an advance"
+        );
+        let mut text = Event::new("inv-2");
+        "elitea-agent".clone_into(&mut text.author);
+        "elitea.saved_applications".clone_into(&mut text.branch);
+        text.llm_response.content = Some(Content::new("model").with_text("node output"));
+        assert!(!owns(&[&text]), "model text is an advance");
+        let mut other_user = Event::new("inv-3");
+        "user".clone_into(&mut other_user.author);
+        other_user.llm_response.content = Some(Content::new("user").with_text("a new turn"));
+        assert!(!owns(&[&other_user]));
+
+        // A model-checkpoint record is never set aside (no double recovery).
+        let mut recovery = Event::new("inv-2");
+        "elitea-recovery".clone_into(&mut recovery.author);
+        recovery
+            .actions
+            .state_delta
+            .insert("elitea.agent.recovery.v1".to_owned(), json!({"version": 1}));
+        assert!(
+            !owns(&[&marker, &recovery, &replayed]),
+            "a model-checkpoint record is not a dead continuation's"
+        );
+        // A child agent's state-only start (its instruction or planner state).
+        let mut start = Event::new(&child_call.invocation_id);
+        "elitea.saved_applications.application_1".clone_into(&mut start.branch);
+        let scope = "s:a";
+        start.actions.state_delta.insert(
+            format!(
+                "{}{}",
+                elitea_agent_runtime::planner::STATE_PREFIX,
+                elitea_agent_runtime::instruction_authority::content_digest(scope)
+            ),
+            json!({"schema": 1, "scope": scope, "plan": null}),
+        );
+        assert!(
+            owns(&[&replayed, &start, &child_call]),
+            "a state-only start is owned"
+        );
+        let mut node_state = start.clone();
+        node_state.actions.state_delta = HashMap::from([("result".to_owned(), json!(1))]);
+        assert!(!owns(&[&node_state]), "other state changes are an advance");
+        // A grandchild's result reaching its parent child: that child finished.
+        let mut grandchild = batch_event(
+            "elitea.saved_applications.application_1.application_1",
+            None,
+            true,
+        );
+        "elitea-grandchild-1".clone_into(&mut grandchild.invocation_id);
+        grandchild.provider_metadata.insert(
+            DESCENDANT_PARENT_CALL_KEY.to_owned(),
+            "call_grandchild".to_owned(),
+        );
+        let mut grandchild_result = child_result.clone();
+        if let Some(Part::FunctionResponse { id, .. }) = grandchild_result
+            .llm_response
+            .content
+            .as_mut()
+            .and_then(|content| content.parts.first_mut())
+        {
+            *id = Some("call_grandchild".to_owned());
+        }
+        assert!(owns(&[&replayed, &child_call, &grandchild]));
+        assert!(
+            !owns(&[&replayed, &child_call, &grandchild, &grandchild_result]),
+            "a grandchild's result at its parent is an advance"
+        );
     }
 
     /// #1321 code review round 3: the replacement of the same execution sets the

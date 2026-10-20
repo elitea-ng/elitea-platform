@@ -164,6 +164,40 @@ pub(crate) fn receipt_revision_parent(
     Ok(Some(revision.parent_checkpoint_id))
 }
 
+/// Whether a decided Application pause continues from `checkpoint`: the pause's
+/// own revision `pause_checkpoint_id`, or the one receipt revision of it that an
+/// earlier continuation wrote when it started the approved child (`node`'s call
+/// `Paused` → `Resuming`). A receipt revision keeps its parent's frontier and
+/// changes one receipt (`validate_graph_call_revision`), and only a paused call
+/// becomes `Resuming`, so nothing else moved. Whether that continuation belonged
+/// to this execution is the caller's `continuation_pause` check; any later
+/// revision is an advance. A malformed revision is not one.
+pub(crate) fn continues_pause_checkpoint(
+    checkpoint: &Checkpoint,
+    pause_checkpoint_id: &str,
+    node: &str,
+) -> bool {
+    checkpoint.checkpoint_id == pause_checkpoint_id
+        || is_resuming_revision_of(checkpoint, pause_checkpoint_id, node)
+}
+
+fn is_resuming_revision_of(
+    checkpoint: &Checkpoint,
+    parent_checkpoint_id: &str,
+    node: &str,
+) -> bool {
+    receipt_revision_parent(checkpoint)
+        .ok()
+        .flatten()
+        .is_some_and(|parent| parent == parent_checkpoint_id)
+        && read_receipts(checkpoint).ok().is_some_and(|receipts| {
+            receipts
+                .calls
+                .get(node)
+                .is_some_and(|call| matches!(call.outcome, GraphCallOutcome::Resuming { .. }))
+        })
+}
+
 fn graph_frontier(checkpoint: &Checkpoint) -> Result<Value, GraphError> {
     let mut core = checkpoint.clone();
     core.checkpoint_id.clear();
@@ -864,5 +898,97 @@ mod tests {
         let mut changed = old;
         changed.metadata.insert("edited".to_owned(), json!(true));
         assert!(checkpointer.save(&changed).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_decided_pause_continues_only_from_itself_or_its_resuming_revision() {
+        let inner: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+        let checkpointer = PipelineGraphReceiptCheckpointer::new(inner, Arc::new(Mutex::new(())));
+        checkpointer
+            .save(&Checkpoint::new(
+                "owned-root",
+                State::new(),
+                0,
+                vec!["child".to_owned()],
+            ))
+            .await
+            .unwrap();
+        let (started, _) = prepare(&checkpointer, 0, &json!({"task":"work"}))
+            .await
+            .unwrap();
+        let before_pause = checkpointer.load("owned-root").await.unwrap().unwrap();
+        let ids = std::collections::BTreeSet::from(["leaf-a".to_owned()]);
+        let result = crate::agents::application_tools::nested_interrupt_result(&ids);
+        let paused_receipt = finish_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context(0),
+            &started,
+            GraphCallOutcome::Paused {
+                result: result.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let paused = checkpointer.load("owned-root").await.unwrap().unwrap();
+        assert!(continues_pause_checkpoint(
+            &paused,
+            &paused.checkpoint_id,
+            "child"
+        ));
+        // A Started -> Paused revision is not a continuation of the pause before it.
+        assert!(!continues_pause_checkpoint(
+            &paused,
+            &before_pause.checkpoint_id,
+            "child"
+        ));
+        let resuming_receipt = finish_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context(0),
+            &paused_receipt,
+            GraphCallOutcome::Resuming {
+                result: result.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let resuming = checkpointer.load("owned-root").await.unwrap().unwrap();
+        assert!(continues_pause_checkpoint(
+            &resuming,
+            &paused.checkpoint_id,
+            "child"
+        ));
+        assert!(!continues_pause_checkpoint(
+            &resuming,
+            &paused.checkpoint_id,
+            "other"
+        ));
+        assert!(!continues_pause_checkpoint(
+            &resuming,
+            &before_pause.checkpoint_id,
+            "child"
+        ));
+        // The child re-paused: an advance past the decided pause.
+        finish_graph_call(
+            &checkpointer,
+            &Mutex::new(()),
+            &context(0),
+            &resuming_receipt,
+            GraphCallOutcome::Paused { result },
+        )
+        .await
+        .unwrap();
+        let repaused = checkpointer.load("owned-root").await.unwrap().unwrap();
+        assert!(!continues_pause_checkpoint(
+            &repaused,
+            &paused.checkpoint_id,
+            "child"
+        ));
+        assert!(!continues_pause_checkpoint(
+            &repaused,
+            &resuming.checkpoint_id,
+            "child"
+        ));
     }
 }

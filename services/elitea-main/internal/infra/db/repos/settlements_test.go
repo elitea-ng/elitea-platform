@@ -186,11 +186,11 @@ func TestSettlementErrorCodeNamesOnlyARegisteredRuntimeFailureCode(t *testing.T)
 		}
 		return raw
 	}
-	got := settlementErrorCode(payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED))
+	got := settlementErrorCode(executionapp.SettlementFailed, payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED))
 	if got == nil || *got != "RECOVERY_REFUSED" {
 		t.Fatalf("recovery refusal code = %v", got)
 	}
-	got = settlementErrorCode(payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY))
+	got = settlementErrorCode(executionapp.SettlementFailed, payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY))
 	if got == nil || *got != "UNSUPPORTED_CAPABILITY" {
 		t.Fatalf("unsupported capability code = %v", got)
 	}
@@ -204,8 +204,18 @@ func TestSettlementErrorCodeNamesOnlyARegisteredRuntimeFailureCode(t *testing.T)
 		"empty":        {payloadTypeRuntimeFailure, nil},
 		"agent result": {"AGENT_EXECUTION_RESULT", encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED)},
 	} {
-		if got := settlementErrorCode(input.payloadType, input.payload); got != nil {
+		if got := settlementErrorCode(executionapp.SettlementFailed, input.payloadType, input.payload); got != nil {
 			t.Fatalf("%s: error code = %q, want none", name, *got)
+		}
+	}
+	// Only a FAILED settlement names a failure code (review round 4 item 5).
+	for _, outcome := range []executionapp.SettlementOutcome{
+		executionapp.SettlementCancelled,
+		executionapp.SettlementSucceeded,
+		executionapp.SettlementOutcomeUnknown,
+	} {
+		if got := settlementErrorCode(outcome, payloadTypeRuntimeFailure, encode(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED)); got != nil {
+			t.Fatalf("%s settlement: error code = %q, want none", outcome, *got)
 		}
 	}
 }

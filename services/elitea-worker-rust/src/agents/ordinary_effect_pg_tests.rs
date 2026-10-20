@@ -17,6 +17,9 @@
 //!   the Worker dies at the child's next model request. The replacement serves the recorded
 //!   outcome (class R) and never calls the tool again.
 //!
+//! * `dispatch_append_fails`: the approved call's `dispatched` append fails; the run ends with a
+//!   typed failure before any model step and never runs the call.
+//!
 //! A replacement is the same execution re-claimed with a higher claim attempt, as Main does after
 //! a lease expires.
 
@@ -76,6 +79,7 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
             ("outcome_crash_again", EXIT_AFTER_OUTCOME),
             ("outcome_recover", 0),
         ],
+        "dispatch_append_fails" => &[("start", 0), ("append_fails", 0)],
         "precheck_crash" => &[
             ("start_two", 0),
             ("precheck_crash", EXIT_BEFORE_SIBLING_PAUSE),
@@ -169,6 +173,11 @@ async fn postgres_root_duplicate_after_a_dispatch_is_stale_and_runs_nothing() {
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_root_recorded_outcome_survives_two_replaced_workers_without_a_rerun() {
     run_scenario("crash_after_outcome_twice").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_root_failed_dispatch_record_ends_the_run_typed_and_never_runs_the_call() {
+    run_scenario("dispatch_append_fails").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -752,6 +761,41 @@ async fn postgres_root_effect_child() {
                 0,
                 "outcome_recover: never re-run"
             );
+        }
+        "append_fails" => {
+            crate::agents::dispatch_journal::FAIL_DISPATCHED_APPEND.store(true, Ordering::Release);
+            let (assembler, captured, calls) = worker(
+                &pool,
+                vec![TestModelGatewayOutcome::Response(text_response(
+                    "unexpected answer past the approved call",
+                ))],
+                false,
+            );
+            let invocation = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 52),
+                    APPROVAL_EXECUTION,
+                    2,
+                ))
+                .await
+                .expect("append_fails: assembles");
+            let (browser, failure) = run_turn(invocation).await;
+            assert_eq!(
+                crate::protocol::output::model_failure(failure.as_deref()),
+                crate::protocol::output::RuntimeFailureKind::Internal,
+                "append_fails: a typed failure, got {failure:?}"
+            );
+            assert_eq!(
+                failure.as_deref(),
+                Some(crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE),
+                "append_fails: the registered stop code"
+            );
+            assert!(
+                !said(&browser, "unexpected answer"),
+                "append_fails: nothing answers past the call: {browser:?}"
+            );
+            assert_eq!(calls.load(Ordering::Acquire), 0, "append_fails: never runs");
+            assert_eq!(captured.lock().expect("captured").len(), 0);
         }
         "start_two" => {
             let (assembler, _, calls) = worker(

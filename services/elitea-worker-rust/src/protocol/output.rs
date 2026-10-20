@@ -729,6 +729,11 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
 
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(RECOVERY_REFUSED_UPSTREAM_CODE) => RuntimeFailureKind::RecoveryRefused,
+        // An approved call's dispatch record could not be written; it never ran.
+        // Not retryable: another submission of the card is stale behind it.
+        Some(crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE) => {
+            RuntimeFailureKind::Internal
+        }
         Some(
             "model_gateway.response_header_timeout"
             | "model_gateway.stream_idle_timeout"

@@ -636,39 +636,13 @@ impl PipelineContinuationDecision {
                     |event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY),
                     owner,
                     |pause| pause_interrupt_ids(pause, root_agent_name, thread_id),
+                    crate::agents::application_tools::pipeline_continuation_suffix(),
                 )
                 .ok_or_else(PipelineResumeError::stale)?;
                 if let Ok(binding) =
                     pipeline_application_event_binding(interrupt, root_agent_name, thread_id)
                 {
-                    let checkpoint = checkpointer
-                        .load(thread_id)
-                        .await
-                        .map_err(|_| PipelineResumeError::dependency())?
-                        .ok_or_else(PipelineResumeError::stale)?;
-                    if checkpoint.thread_id != thread_id
-                        || checkpoint.checkpoint_id != binding.checkpoint_id()
-                        || checkpoint.pending_nodes.as_slice() != [binding.pending_node_name()]
-                    {
-                        return Err(PipelineResumeError::stale());
-                    }
-                    for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
-                        let checkpoint = checkpointer
-                            .load(nested.thread_id())
-                            .await
-                            .map_err(|_| PipelineResumeError::dependency())?
-                            .ok_or_else(PipelineResumeError::stale)?;
-                        let next = binding
-                            .nested_checkpoints()
-                            .get(index + 1)
-                            .map_or(binding.node_name(), |next| next.node_name());
-                        if checkpoint.thread_id != nested.thread_id()
-                            || checkpoint.checkpoint_id != nested.checkpoint_id()
-                            || checkpoint.pending_nodes.as_slice() != [next]
-                        {
-                            return Err(PipelineResumeError::stale());
-                        }
-                    }
+                    verify_bound_checkpoints(checkpointer, &binding, thread_id).await?;
                     let ResolvedDirectHitlStart::Nested(decisions) =
                         application
                             .resolve(session)
@@ -688,9 +662,17 @@ impl PipelineContinuationDecision {
                     if submitted.is_empty() || !submitted.is_subset(&expected) {
                         return Err(PipelineResumeError::stale());
                     }
+                    let pause_id = interrupt.id.clone();
+                    let pause_invocation_id = interrupt.invocation_id.clone();
                     return Ok(ResolvedPipelineContinuation::application(
                         PipelineResume::empty(),
-                        decisions,
+                        PipelineApplicationContinuation {
+                            decisions,
+                            pause_id,
+                            pause_invocation_id,
+                            binding,
+                            events,
+                        },
                     ));
                 }
                 if let Some(authorization) = authorization {
@@ -710,6 +692,49 @@ impl PipelineContinuationDecision {
     }
 }
 
+/// The pause's checkpoint and every nested one it names are still the bound
+/// revisions (or their one `Resuming` receipt revision): nothing advanced.
+async fn verify_bound_checkpoints(
+    checkpointer: &dyn Checkpointer,
+    binding: &crate::agents::events::PipelineApplicationHitlEventBinding,
+    thread_id: &str,
+) -> Result<(), PipelineResumeError> {
+    use crate::agents::pipeline::scope_receipts::continues_pause_checkpoint;
+    let checkpoint = checkpointer
+        .load(thread_id)
+        .await
+        .map_err(|_| PipelineResumeError::dependency())?
+        .ok_or_else(PipelineResumeError::stale)?;
+    if checkpoint.thread_id != thread_id
+        || !continues_pause_checkpoint(
+            &checkpoint,
+            binding.checkpoint_id(),
+            binding.pending_node_name(),
+        )
+        || checkpoint.pending_nodes.as_slice() != [binding.pending_node_name()]
+    {
+        return Err(PipelineResumeError::stale());
+    }
+    for (index, nested) in binding.nested_checkpoints().iter().enumerate() {
+        let checkpoint = checkpointer
+            .load(nested.thread_id())
+            .await
+            .map_err(|_| PipelineResumeError::dependency())?
+            .ok_or_else(PipelineResumeError::stale)?;
+        let next = binding
+            .nested_checkpoints()
+            .get(index + 1)
+            .map_or(binding.node_name(), |next| next.node_name());
+        if checkpoint.thread_id != nested.thread_id()
+            || !continues_pause_checkpoint(&checkpoint, nested.checkpoint_id(), next)
+            || checkpoint.pending_nodes.as_slice() != [next]
+        {
+            return Err(PipelineResumeError::stale());
+        }
+    }
+    Ok(())
+}
+
 /// The cards of one pipeline Application pause, as the browser saw them.
 pub(crate) fn pause_interrupt_ids(
     pause: &adk_rust::Event,
@@ -723,29 +748,37 @@ pub(crate) fn pause_interrupt_ids(
 
 pub(crate) struct ResolvedPipelineContinuation {
     resume: PipelineResume,
-    application_decisions: Option<Vec<ResolvedDirectHitlDecision>>,
+    application: Option<PipelineApplicationContinuation>,
+}
+
+/// The nested Agent decisions of one pipeline Application pause, with the pause
+/// they were proven against (one scan and one decode, reused by the caller).
+pub(crate) struct PipelineApplicationContinuation {
+    pub(crate) decisions: Vec<ResolvedDirectHitlDecision>,
+    pub(crate) pause_id: String,
+    pub(crate) pause_invocation_id: String,
+    pub(crate) binding: crate::agents::events::PipelineApplicationHitlEventBinding,
+    /// The session events the pause was proven against.
+    pub(crate) events: Vec<adk_rust::Event>,
 }
 
 impl ResolvedPipelineContinuation {
     fn graph(resume: PipelineResume) -> Self {
         Self {
             resume,
-            application_decisions: None,
+            application: None,
         }
     }
 
-    fn application(
-        resume: PipelineResume,
-        application_decisions: Vec<ResolvedDirectHitlDecision>,
-    ) -> Self {
+    fn application(resume: PipelineResume, application: PipelineApplicationContinuation) -> Self {
         Self {
             resume,
-            application_decisions: Some(application_decisions),
+            application: Some(application),
         }
     }
 
-    pub(crate) fn into_parts(self) -> (PipelineResume, Option<Vec<ResolvedDirectHitlDecision>>) {
-        (self.resume, self.application_decisions)
+    pub(crate) fn into_parts(self) -> (PipelineResume, Option<PipelineApplicationContinuation>) {
+        (self.resume, self.application)
     }
 }
 
@@ -1370,7 +1403,7 @@ impl PipelineResumeError {
         Self::new(PipelineResumeErrorCode::InvalidInput)
     }
 
-    pub(super) const fn stale() -> Self {
+    pub(crate) const fn stale() -> Self {
         Self::new(PipelineResumeErrorCode::StaleDecision)
     }
 

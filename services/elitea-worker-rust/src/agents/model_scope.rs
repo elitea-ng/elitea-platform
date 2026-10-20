@@ -100,6 +100,8 @@ pub(super) struct ModelScopeSessions {
     application_tools: Arc<HashSet<String>>,
     /// The root session's identity, where nested approved calls journal their dispatch.
     root_identity: Option<AdkIdentity>,
+    /// The invocation's stop after a failed dispatch record.
+    dispatch_abort: super::dispatch_journal::DispatchAbort,
 }
 
 impl ModelScopeSessions {
@@ -118,7 +120,22 @@ impl ModelScopeSessions {
             recover_pending_models: false,
             application_tools: Arc::default(),
             root_identity: None,
+            dispatch_abort: super::dispatch_journal::DispatchAbort::default(),
         }
+    }
+
+    /// Share the invocation's stop after a failed dispatch record.
+    pub(super) fn with_dispatch_abort(
+        mut self,
+        abort: super::dispatch_journal::DispatchAbort,
+    ) -> Self {
+        self.dispatch_abort = abort;
+        self
+    }
+
+    /// The invocation's stop after a failed dispatch record.
+    pub(super) fn dispatch_abort(&self) -> &super::dispatch_journal::DispatchAbort {
+        &self.dispatch_abort
     }
 
     /// Bind the root session a nested approved call journals its dispatch to.
@@ -137,6 +154,7 @@ impl ModelScopeSessions {
                     self.execution_id.clone(),
                     self.generation,
                 ),
+                self.dispatch_abort.clone(),
             )
         })
     }

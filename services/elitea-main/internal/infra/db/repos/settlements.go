@@ -207,7 +207,7 @@ INSERT INTO elitea_runtime.execution_settlements (
 			terminalEventID,
 			int64(proposal.TerminalSequence),
 			proposal.TerminalPayloadDigest[:],
-			settlementErrorCode(payloadType, payloadBytes),
+			settlementErrorCode(proposal.Outcome, payloadType, payloadBytes),
 		); err != nil {
 			return fmt.Errorf("insert execution settlement: %w", err)
 		}
@@ -399,9 +399,10 @@ var _ executionapp.SettlementRepository = (*SettlementsRepository)(nil)
 // settlementErrorCode is the registered runtime error code a FAILED terminal
 // carries ("RECOVERY_REFUSED", "PIPELINE_TOOL_FAILED", ...), so a settlement row
 // names why the run failed. It reads only the typed code, never the message,
-// and is nil for any other terminal or an unregistered code.
-func settlementErrorCode(payloadType string, payloadBytes []byte) *string {
-	if payloadType != payloadTypeRuntimeFailure || len(payloadBytes) == 0 {
+// and is nil for any other disposition (a cancelled or timed-out run carries no
+// failure code), any other terminal, or an unregistered code.
+func settlementErrorCode(outcome executionapp.SettlementOutcome, payloadType string, payloadBytes []byte) *string {
+	if outcome != executionapp.SettlementFailed || payloadType != payloadTypeRuntimeFailure || len(payloadBytes) == 0 {
 		return nil
 	}
 	var failure runtimev1.RuntimeErrorV1
