@@ -24,6 +24,8 @@ import { HandoffIpcProvider } from '@/features/workspace-handoff';
 import { IndexIpcProvider } from '@/features/workspace-index';
 import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import WorkspacesPage from '@/pages/workspace/WorkspacesPage';
+import ArchivedChatsPage from '@/pages/chat-archived/ArchivedChatsPage';
+import { ChatParticipantsPanel } from '@/pages/chat/ChatParticipantsPanel';
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
 import { BROWSER_PLATFORM } from '@/shared/desktop/appEvents';
 import { installTestEventSource } from '@/shared/api/sse/testing';
@@ -33,6 +35,7 @@ import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
+import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 const FOLDERS: Workspace[] = [
@@ -40,7 +43,65 @@ const FOLDERS: Workspace[] = [
   { id: 'w2', path: '/Users/me/notes/docs', name: 'docs', project_id: null, is_git: false },
 ];
 
+const hoursAgo = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
+const chat = (id: string, name: string, hours: number) => ({ id, name, is_private: true, author_id: 3, updated_at: hoursAgo(hours), created_at: hoursAgo(hours) });
+
+/** The Chats list (`&chats`): the grouped folders listing the sidebar reads. */
+const GROUPED_CHATS = {
+  pinned: { conversations: [chat('81', 'Release checklist', 30)] },
+  folders: [{ id: '5', name: 'Research', meta: { is_pinned: false }, total: 2, offset: 2, conversations: [chat('91', 'Vector stores compared', 50), chat('92', 'Embedding model picks', 70)] }],
+  date_groups: [
+    { name: 'Today', total: 12, offset: 3, conversations: [chat('72', 'quick overview', 1), chat('73', 'Fix flaky gateway test', 2), chat('74', 'Draft the Q4 roadmap email', 3)] },
+    { name: 'Yesterday', total: 2, offset: 2, conversations: [chat('75', 'Postgres connection math', 26), chat('76', 'Explain ADR-0034', 28)] },
+    { name: 'This week', total: 1, offset: 1, conversations: [chat('77', 'Helm values for staging', 80)] },
+    { name: 'This month', total: 0, offset: 0, conversations: [] },
+    { name: 'Older', total: 1, offset: 1, conversations: [chat('78', 'Onboarding notes', 900)] },
+  ],
+  total_folders: 1,
+};
+
+const ARCHIVED_CHATS = {
+  total: 2,
+  rows: [
+    { id: 61, name: 'Old sprint retro', created_at: hoursAgo(400), updated_at: hoursAgo(300), duration: -1, message_groups_count: 4, is_pinned: false, is_archived: true, archived_by: { id: 4, name: 'Ana Ruiz' }, archived_at: hoursAgo(5) },
+    { id: 62, name: 'Spike: socket.io removal', created_at: hoursAgo(900), updated_at: hoursAgo(800), duration: -1, message_groups_count: 9, is_pinned: false, is_archived: true, archived_by: { id: 3, name: 'Me' }, archived_at: hoursAgo(50) },
+  ],
+};
+
+/** The participants the harness chat's inspector shows. */
+const HARNESS_CONVERSATION = {
+  id: '72',
+  name: 'quick overview',
+  participants: [
+    { id: 3, entity_name: 'application', entity_meta: { id: 5, project_id: 42 }, entity_settings: { agent_type: 'openai' }, meta: { name: 'Coder' } },
+    { id: 4, entity_name: 'application', entity_meta: { id: 6, project_id: 42 }, entity_settings: { agent_type: 'openai' }, meta: { name: 'Reviewer' } },
+    { id: 7, entity_name: 'user', entity_meta: { id: 3 }, meta: { name: 'Me' } },
+  ],
+};
+
+function HarnessChat({ title }: { title: string }): React.JSX.Element {
+  return (
+    <>
+      <Placeholder title={title} />
+      <ChatParticipantsPanel
+        activeConversation={HARNESS_CONVERSATION}
+        activeParticipant={undefined}
+        projectId="42"
+        isMcpVisible={false}
+        handlers={{ onSelectParticipant: () => undefined, onDeleteParticipant: () => undefined, onEditParticipant: () => undefined, onAddParticipants: () => undefined }}
+      />
+    </>
+  );
+}
+
 const API: [string, RegExp, unknown][] = [
+  ['GET', /\/elitea_core\/folder\/prompt_lib\/42$/, GROUPED_CHATS],
+  ['PUT', /\/elitea_core\/conversation_archive\/prompt_lib\/42\/\d+$/, { ok: true }],
+  ['DELETE', /\/elitea_core\/conversation_archive\/prompt_lib\/42\/\d+$/, { ok: true }],
+  ['PUT', /\/elitea_core\/conversation\/prompt_lib\/42\/\d+$/, { id: 72 }],
+  ['DELETE', /\/elitea_core\/conversation\/prompt_lib\/42\/\d+$/, {}],
+  ['POST', /\/social\/pin\//, { ok: true }],
+  ['DELETE', /\/social\/pin\//, { ok: true }],
   ['GET', /\/projects\/project\/default\//, [{ id: '1', name: 'Public', suspended: false }, { id: '42', name: 'Platform team', suspended: false }]],
   ['GET', /\/elitea_core\/applications\/prompt_lib\/42/, { rows: [{ id: '5', name: 'Coder', tags: [] }, { id: '6', name: 'Reviewer', tags: [] }], total: 2 }],
   [
@@ -57,11 +118,16 @@ const API: [string, RegExp, unknown][] = [
   ['GET', /\/elitea_core\/conversations\/prompt_lib\/42/, { rows: [], total: 0 }],
   ['POST', /\/elitea_core\/participants\//, []],
   ['GET', /\/social\/author/, { id: 3, name: 'Me' }],
+  ['GET', /\/auth\/permissions\/prompt_lib\/42$/, ['get', 'create', 'update', 'delete'].map((verb) => ({ name: `models.chat.folders.${verb}`, enabled: true }))],
 ];
 
 function installApiStub(): void {
   const answer = (method: string, url: string): Response => {
-    const path = new URL(url, window.location.origin).pathname;
+    const parsed = new URL(url, window.location.origin);
+    const path = parsed.pathname;
+    if (method === 'GET' && parsed.searchParams.get('archived') === 'only') {
+      return new Response(JSON.stringify(ARCHIVED_CHATS), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
     const hit = API.find(([verb, pattern]) => verb === method && pattern.test(path));
     return new Response(JSON.stringify(hit === undefined ? {} : hit[2]), {
       status: hit === undefined ? 404 : 200,
@@ -95,6 +161,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
     vite_public_project_id: '1',
   };
   configureGeneratedClient({ baseUrl: '/api/v2' });
+  useSelectedProjectStore.getState().setProject({ id: '42', name: 'Platform team' });
   installApiStub();
 
   if (params.has('threads')) {
@@ -156,7 +223,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
       page('/agents', 'Agents'),
       page('/settings', 'Settings'),
       page('/elitea-catalog', 'Catalog'),
-      page('/chat', 'Chats'),
+      createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => <HarnessChat title="New chat" /> }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/chat/archived', component: ArchivedChatsPage }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component: () => <HarnessChat title="quick overview" /> }),
     ]),
     history: createMemoryHistory({ initialEntries: [params.get('at') ?? '/workspaces'] }),
   });

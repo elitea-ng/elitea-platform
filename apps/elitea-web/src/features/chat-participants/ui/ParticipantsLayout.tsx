@@ -54,7 +54,12 @@ interface HeaderState {
   onCollapsed?: () => void;
   /** True when the collapsed icon-strip replaces the sections list (`collapsed && !isSmallWindow`). */
   showCollapsedParticipants: boolean;
+  /** The desktop inspector hosts the panel: the title and section labels are native captions. */
+  inspector?: boolean;
 }
+
+/** The desktop sidebar's caption (`widgets/desktop-shell/ui/rows.tsx` `SectionCaption`): small, semibold, quiet. */
+const nativeCaptionSx = (theme) => ({ fontWeight: 600, color: theme.vars.palette.text.metrics });
 
 interface UserDisplay {
   usersToDisplay: TransformedParticipant[];
@@ -125,6 +130,7 @@ const SECTION_LABEL_KEYS: Record<string, string> = {
  */
 interface ParticipantTypeSectionProps {
   title: string;
+  inspector?: boolean;
   participants: TransformedParticipant[];
   collapsed: boolean;
   disabledEdit?: boolean;
@@ -140,7 +146,7 @@ interface ParticipantTypeSectionProps {
 
 const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
   const {
-    title, participants, collapsed, disabledEdit, activeParticipantId,
+    title, inspector, participants, collapsed, disabledEdit, activeParticipantId,
     selectedManager, newConversationSelectedManager,
     onSelectParticipant, onDeleteParticipant, onEditParticipant,
     editingToolkit, resolveToolkitIcon,
@@ -165,8 +171,8 @@ const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
             label inside the rail, and an h6 under the page's heading tree
             skips levels — axe heading-order, which fired the moment a
             journey first attached a participant. */}
-        <Typography variant="labelMedium" component="p" color="text.secondary">
-          {title} ({participants.length})
+        <Typography variant={inspector ? 'labelSmall' : 'labelMedium'} component="p" color="text.secondary" sx={inspector ? nativeCaptionSx : undefined}>
+          {inspector ? `${title} · ${participants.length}` : `${title} (${participants.length})`}
         </Typography>
         <IconButton
           size="small"
@@ -244,6 +250,7 @@ function deriveEffectiveMaxVisibleUsers(componentWidth: number, maxVisibleUsers:
 
 /** ExpandedParticipantsContent — users row + type sections + empty state (same complexity-budget reason as the strip above). */
 interface ExpandedParticipantsContentProps {
+  inspector?: boolean;
   users: UserDisplay;
   sections: SectionConfig;
   actions: ParticipantActions;
@@ -252,7 +259,7 @@ interface ExpandedParticipantsContentProps {
 }
 
 function ExpandedParticipantsContent({
-  users, sections, actions, usersToRender, usersOverflowCount,
+  inspector, users, sections, actions, usersToRender, usersOverflowCount,
 }: ExpandedParticipantsContentProps) {
   return (
     <>
@@ -276,6 +283,7 @@ function ExpandedParticipantsContent({
         <ParticipantTypeSection
           key={key}
           title={t(SECTION_LABEL_KEYS[key] ?? `chat-participants.collapsed.${key}`, `${entityType}s`)}
+          inspector={inspector}
           participants={group}
           collapsed={false}
           disabledEdit={sections.disabledEdit}
@@ -318,7 +326,7 @@ export function ParticipantsLayout({
         {/* Header */}
         <Box sx={styles.headerContainer(header.collapsed)}>
           {header.showTitle && (
-            <Typography variant="subtitle" sx={styles.titleText}>
+            <Typography variant={header.inspector ? 'labelSmall' : 'subtitle'} sx={header.inspector ? [styles.titleText, nativeCaptionSx] : styles.titleText}>
               {t('chat-participants.participants.title', 'Participants')}
             </Typography>
           )}
@@ -365,6 +373,7 @@ export function ParticipantsLayout({
             <CollapsedParticipantsStrip users={users} sections={sections} actions={actions} />
           ) : (
             <ExpandedParticipantsContent
+              inspector={header.inspector}
               users={users}
               sections={sections}
               actions={actions}

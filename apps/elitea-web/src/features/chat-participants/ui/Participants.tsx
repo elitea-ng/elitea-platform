@@ -98,6 +98,7 @@ export const Participants = memo(
     isSmallWindow = false,
     selectedManager,
     newConversationSelectedManager,
+    inspector = false,
   }: ParticipantsProps) => {
     // Mirrors old-app `Participants.jsx`'s `showTitle`/`showCollapsedParticipants`
     // (adversarial review C5-wrapper #4): on a small window the full section
@@ -242,7 +243,7 @@ export const Participants = memo(
 
     return (
       <ParticipantsLayout
-        header={{ showTitle, collapseIcon, collapsed, onCollapsed, showCollapsedParticipants }}
+        header={{ showTitle, collapseIcon, collapsed, onCollapsed, showCollapsedParticipants, inspector }}
         users={{ usersToDisplay, hasOverflow, visibleCount, maxVisibleUsers }}
         sections={{
           sections,
