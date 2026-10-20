@@ -16,7 +16,11 @@ name: CI — Web E2E
 #
 # WHEN THEY FIRE:
 #   e2e     — every PR matching the paths below, pushes to main, `v*` tags,
-#             and workflow_dispatch. No job-level `if:` (issue #158).
+#             and workflow_dispatch. Its only job-level `if:` is the
+#             `model-path-changes` reaches-stack gate, which is true for every
+#             push and dispatch and false only for a pull request that changes
+#             nothing but docs, the desktop host or the chart (issue #158 was a
+#             gate that skipped EVERY pull request; this one cannot).
 #   visual  — the same set, and for the same reason (issue #159). It used to
 #             carry `if: startsWith(github.ref, 'refs/tags/v')`, which — with
 #             no `v*` tag ever cut — meant it had never run at all. Its very
@@ -119,6 +123,9 @@ on:
       # The `native-client-conformance` job's own subject: the black-box
       # ADR-0025 suite it runs against the stack.
       - "conformance/nativeclient/**"
+      # The lane filter the `model-path-changes` job runs, and its test.
+      - "scripts/ci/e2e-lane-filter.sh"
+      - "scripts/ci/e2e-lane-filter-test.sh"
       - ".github/workflows/ci-web-e2e.yml"
   push:
     branches:
@@ -154,6 +161,9 @@ on:
       # The `native-client-conformance` job's own subject: the black-box
       # ADR-0025 suite it runs against the stack.
       - "conformance/nativeclient/**"
+      # The lane filter the `model-path-changes` job runs, and its test.
+      - "scripts/ci/e2e-lane-filter.sh"
+      - "scripts/ci/e2e-lane-filter-test.sh"
       - ".github/workflows/ci-web-e2e.yml"
     # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.
     # A GITHUB_TOKEN-created tag starts no workflow run, so this arm has never
@@ -178,6 +188,10 @@ defaults:
 jobs:
   e2e:
     name: E2E (${{ matrix.leg }})
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: model-path-changes
+    if: needs.model-path-changes.outputs.reaches-stack == 'true'
     # Runs on pull requests (issue #158). It previously carried
     #   if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     # which skipped it on every PR — confirmed on runs 31335173296 and
@@ -512,6 +526,10 @@ jobs:
 
   chat-stream-rust:
     name: Chat journey on the native Rust runtime (${{ matrix.leg }})
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: model-path-changes
+    if: needs.model-path-changes.outputs.reaches-stack == 'true'
     # The SAME journeys as `chat-stream`, against the OTHER worker.
     #
     # `STANDALONE_WORKER=rust` swaps `elitea-worker` for the native Rust agent
@@ -638,46 +656,59 @@ jobs:
           retention-days: 14
 
   model-path-changes:
-    name: Does this change reach the model path?
-    # Decides whether the real-model lane runs on a pull request. The lane's
-    # signal — the gateway's SSE relay against a vendor's real chunks, and a
-    # tool call the model chose — changes only when the gateway, a worker,
-    # the execution plane, the chat surface, the E2E harness or the stack
-    # itself changes. A pull request that touches none of those gets the mock
-    # lanes, which already prove the product's own code paths, and skips this
-    # one. Every push to main and every dispatch runs it.
+    name: Which E2E lanes does this change reach?
+    # Decides, on a pull request, which lanes below run. Two outputs:
+    #
+    #   reaches-stack — false when EVERY changed path is outside the stack:
+    #     docs (*.md, the embedded docs SPA), the desktop host or the helm
+    #     chart (scripts/ci/e2e-lane-filter.sh says exactly which, and why
+    #     each is safe). The six stack lanes then SKIP. Measured 2026-10-20:
+    #     this workflow ran on 97% of pull-request SHAs.
+    #   reaches-model — the real-model lane's signal (the gateway's SSE relay
+    #     against a vendor's real chunks, a tool call the model chose) changes
+    #     only when the gateway, a worker, the execution plane, the chat
+    #     surface, the E2E harness or the stack itself changes. A pull request
+    #     that touches none of those gets the mock lanes and skips this one.
+    #
+    # Every push to main and every dispatch reaches everything, so the mount
+    # cache writers (`index-stream-rust`, `visual`) still run on main.
+    #
+    # A skipped job is reported as "skipped", which a required status check
+    # accepts as passing; nothing waits on a check that never starts. If THIS
+    # job fails, the lanes are skipped too — but this job is then red, so the
+    # skip cannot read as green.
     #
     # A plain `git diff` against the pull request's base, not a third-party
-    # path-filter action: the list below is the whole mechanism, and it needs
-    # no extra token scope.
+    # path-filter action: the script is the whole mechanism, it needs no
+    # extra token scope, and its own test runs first.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       reaches-model: ${{ steps.filter.outputs.reaches-model }}
+      reaches-stack: ${{ steps.filter.outputs.reaches-stack }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: The lane filter decides every case it is tested on
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/ci/e2e-lane-filter-test.sh
       - id: filter
         working-directory: ${{ github.workspace }}
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          set -euo pipefail
           if [ "$EVENT" != "pull_request" ]; then
+            echo "reaches-stack=true" >> "$GITHUB_OUTPUT"
             echo "reaches-model=true" >> "$GITHUB_OUTPUT"
-            echo "not a pull request: the real-model lane runs"
+            echo "not a pull request: every lane runs"
             exit 0
           fi
-          changed="$(git diff --name-only "${BASE_SHA}...HEAD")"
-          pattern='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
-          if printf '%s\n' "$changed" | grep -qE "$pattern"; then
-            echo "reaches-model=true" >> "$GITHUB_OUTPUT"
-            echo "model path touched:"; printf '%s\n' "$changed" | grep -E "$pattern"
-          else
-            echo "reaches-model=false" >> "$GITHUB_OUTPUT"
-            echo "no model-path file changed; the real-model lane is skipped on this pull request"
-          fi
+          # A failed diff fails this job (pipefail), never an empty list.
+          git diff --name-only "${BASE_SHA}...HEAD" > "$RUNNER_TEMP/changed.txt"
+          bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
 
   chat-stream-real:
     name: Chat journeys against a real model
@@ -986,6 +1017,10 @@ jobs:
 
   deepwiki-stack:
     name: DeepWiki journeys through the facade and the provider
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: model-path-changes
+    if: needs.model-path-changes.outputs.reaches-stack == 'true'
     # The provider-backed DeepWiki journeys (DWIKI-005/006/010/011/012):
     # generate → the provider's native engine sidecar on its fixture runner
     # (built from services/elitea-deepwiki-engine, cache scope
@@ -1063,6 +1098,10 @@ jobs:
 
   native-client-conformance:
     name: Native client conformance (ADR-0025)
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: model-path-changes
+    if: needs.model-path-changes.outputs.reaches-stack == 'true'
     # The black-box Go suite in conformance/nativeclient, run as a native app
     # would run it against a deployment: discovery from the origin alone, the
     # RFC 8252 sign-in through the deployment's own pages (OIDC, and SAML
@@ -1117,6 +1156,10 @@ jobs:
 
   index-stream-rust:
     name: Index journey and lifecycle on the Rust-only runtime (ADR-0030 V3)
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: model-path-changes
+    if: needs.model-path-changes.outputs.reaches-stack == 'true'
     # ADR-0030 Verification (3): "The Index definition-of-done journey (#93)
     # and the index lifecycle specs pass on a Rust-only deployment."
     #
@@ -1217,6 +1260,10 @@ jobs:
 
   visual:
     name: Visual regression
+    # Skipped when the pull request changes only docs, the desktop host or
+    # the chart (`model-path-changes`, scripts/ci/e2e-lane-filter.sh).
+    needs: model-path-changes
+    if: needs.model-path-changes.outputs.reaches-stack == 'true'
     # Release tags, pull requests, and manual dispatch.
     #
     # It used to be `startsWith(github.ref, 'refs/tags/v')` alone, and the `on:`
