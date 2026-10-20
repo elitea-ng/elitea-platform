@@ -1893,7 +1893,7 @@ pub(super) async fn assemble_pipeline_native(
         generation: _,
         regenerate: _,
         instruction_plan,
-        dispatch_abort: _,
+        dispatch_abort,
     } = plan;
     // Node models consume the admitted policy. The Runner never summarizes
     // deterministic graph state or introduces a pipeline-wide summary model.
@@ -1915,6 +1915,8 @@ pub(super) async fn assemble_pipeline_native(
             application_resume.clone(),
         )
     });
+    // A failed dispatch record ends the run even when no model step follows it.
+    let agent = dispatch_abort.guard_agent(agent);
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
@@ -2033,12 +2035,12 @@ async fn resolve_pipeline_start(
                     decisions,
                 )
                 .await?;
+            let card = binding
+                .interrupt_ids()
+                .first()
+                .ok_or_else(invalid_configuration)?;
             journal
-                .record_continuing(
-                    &interrupt.id,
-                    &interrupt.invocation_id,
-                    binding.interrupt_ids().iter().map(String::as_str),
-                )
+                .record_continuing(&interrupt.id, &interrupt.invocation_id, card)
                 .await
                 .map_err(|_| dependency_unavailable())?;
             Some(super::graph::resume::PipelineResume::empty())
@@ -2068,10 +2070,10 @@ async fn resolve_pipeline_start(
             }) = application
             {
                 let events = session.events().all();
-                let submitted_ids = decisions
-                    .iter()
+                let card = decisions
+                    .first()
                     .map(|decision| decision.interrupt_id().to_owned())
-                    .collect::<Vec<_>>();
+                    .ok_or_else(invalid_configuration)?;
                 if let Some(scopes) = application_scopes {
                     scopes
                         .install_root_continuation(
@@ -2111,11 +2113,7 @@ async fn resolve_pipeline_start(
                 // Owner proof of everything this continuation forwards before it
                 // finishes: a replacement of this execution continues behind it.
                 plan.dispatch_journal(Arc::clone(&state.sessions))?
-                    .record_continuing(
-                        &pause_id,
-                        &pause_invocation_id,
-                        submitted_ids.iter().map(String::as_str),
-                    )
+                    .record_continuing(&pause_id, &pause_invocation_id, &card)
                     .await
                     .map_err(|_| dependency_unavailable())?;
             }
@@ -2893,8 +2891,7 @@ async fn prepare_direct_resume(
             .await?;
             let (replay_model, user_content, run_config) = prepared.into_parts();
             (
-                // A nested call's failed dispatch record stops the root here too.
-                journal.abort().guard(replay_model),
+                replay_model,
                 DirectHitlRunInput::from_parts(user_content, run_config),
                 toolsets,
                 true,
@@ -2974,8 +2971,9 @@ where
         &journal,
     )
     .await?;
+    // Every model step and the root run stop after a failed dispatch record.
     let (agent, projector) = build_runtime_agent(
-        prepared.model,
+        journal.abort().guard(prepared.model),
         generation_config,
         max_iterations,
         projection,
@@ -2983,6 +2981,7 @@ where
         prepared.parallel_applications,
         None,
     )?;
+    let agent = journal.abort().guard_agent(agent);
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)

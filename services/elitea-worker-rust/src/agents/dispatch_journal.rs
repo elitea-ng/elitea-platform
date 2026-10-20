@@ -290,41 +290,45 @@ pub(crate) fn continuation_pause<'a>(
 }
 
 /// The code a run ends with when an approved call's `dispatched` record could
-/// not be written: the call never ran, and it is not run on this attempt.
+/// not be written: that call never ran, and no later journaled call of the
+/// invocation starts. The run fails (not retryable): another submission of the
+/// card is stale behind this execution's continuation.
 pub(crate) const DISPATCH_UNRECORDED_CODE: &str = "agent.dispatch_unrecorded";
-const WRITER_NOT_CURRENT_CODE: &str = "session.writer_not_current";
 
 /// One invocation's stop after a failed `dispatched` append.
 ///
 /// ADK turns every tool error into a function response the model reads, so the
 /// approved call's tool error alone would let the run continue and even
-/// SUCCEED without its effect. The journal records the failure here, and every
-/// model of the invocation is guarded by it: the next model step ends the run
-/// with a typed failure. Nothing ran, so the execution's replacement (or a
-/// retry) runs the call once.
+/// SUCCEED without its effect. The journal records the failure here, and the
+/// invocation stops on it at three points: no later journaled call starts, every
+/// guarded model step refuses, and the root agent's stream ends with the error
+/// even when no further model step happens (a child at its step limit).
 #[derive(Clone, Default)]
-pub(crate) struct DispatchAbort(Arc<std::sync::OnceLock<&'static str>>);
+pub(crate) struct DispatchAbort(Arc<std::sync::OnceLock<()>>);
 
 impl DispatchAbort {
-    fn record(&self, error: &adk_rust::AdkError) {
-        // A lost writer keeps its own code, so the run ends as a lease loss.
-        let code = if error.code == WRITER_NOT_CURRENT_CODE {
-            WRITER_NOT_CURRENT_CODE
-        } else {
-            DISPATCH_UNRECORDED_CODE
-        };
-        let _ = self.0.set(code);
+    fn record(&self) {
+        let _ = self.0.set(());
     }
 
     fn error(&self) -> Option<adk_rust::AdkError> {
-        self.0.get().map(|code| {
+        self.0.get().map(|()| {
             adk_rust::AdkError::new(
                 adk_rust::ErrorComponent::Session,
-                // Not retryable: the run stops; its replacement runs the call.
+                // Not retryable: the run stops.
                 adk_rust::ErrorCategory::Internal,
-                code,
+                DISPATCH_UNRECORDED_CODE,
                 "an approved tool call's dispatch could not be recorded; it was not run",
             )
+        })
+    }
+
+    /// Wrap the root agent so its run ends with the stop even when no guarded
+    /// model step follows the failed record.
+    pub(crate) fn guard_agent(&self, inner: Arc<dyn adk_rust::Agent>) -> Arc<dyn adk_rust::Agent> {
+        Arc::new(AbortGuardedAgent {
+            inner,
+            abort: self.clone(),
         })
     }
 
@@ -334,6 +338,44 @@ impl DispatchAbort {
             inner,
             abort: self.clone(),
         })
+    }
+}
+
+struct AbortGuardedAgent {
+    inner: Arc<dyn adk_rust::Agent>,
+    abort: DispatchAbort,
+}
+
+#[async_trait]
+impl adk_rust::Agent for AbortGuardedAgent {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn adk_rust::Agent>] {
+        self.inner.sub_agents()
+    }
+
+    async fn run(
+        &self,
+        ctx: Arc<dyn adk_rust::InvocationContext>,
+    ) -> adk_rust::Result<adk_rust::EventStream> {
+        Ok(self.abort.stop_at_end(self.inner.run(ctx).await?))
+    }
+}
+
+impl DispatchAbort {
+    /// The events, then the stop if a dispatch record failed meanwhile.
+    fn stop_at_end(&self, events: adk_rust::EventStream) -> adk_rust::EventStream {
+        use adk_rust::futures::StreamExt as _;
+        let abort = self.clone();
+        let end = adk_rust::futures::stream::once(async move { abort.error() })
+            .filter_map(|error| async move { error.map(Err) });
+        Box::pin(events.chain(end))
     }
 }
 
@@ -416,31 +458,29 @@ impl DispatchJournal {
         &self.abort
     }
 
-    /// Record that this execution's continuation of `pause` begins, once per
-    /// card it answers, before its Runner starts (see [`continuation_pause`]).
+    /// Record, with one append before its Runner starts, that this execution's
+    /// continuation of `pause` begins for `interrupt_id`, one of the cards it
+    /// answers (see [`continuation_pause`]).
     ///
     /// # Errors
     ///
     /// The fenced root writer refused the append.
-    pub(crate) async fn record_continuing<'a>(
+    pub(crate) async fn record_continuing(
         &self,
         pause_id: &str,
         pause_invocation_id: &str,
-        interrupt_ids: impl IntoIterator<Item = &'a str>,
+        interrupt_id: &str,
     ) -> adk_rust::Result<()> {
-        for interrupt_id in interrupt_ids {
-            self.append(&DispatchRecord {
-                version: RECORD_VERSION,
-                phase: Phase::Continuing,
-                decision_invocation_id: pause_invocation_id.to_owned(),
-                interrupt_id: interrupt_id.to_owned(),
-                owner: self.owner.clone(),
-                call_id: pause_id.to_owned(),
-                result: None,
-            })
-            .await?;
-        }
-        Ok(())
+        self.append(&DispatchRecord {
+            version: RECORD_VERSION,
+            phase: Phase::Continuing,
+            decision_invocation_id: pause_invocation_id.to_owned(),
+            interrupt_id: interrupt_id.to_owned(),
+            owner: self.owner.clone(),
+            call_id: pause_id.to_owned(),
+            result: None,
+        })
+        .await
     }
 
     /// The execution this journal writes for.
@@ -638,6 +678,11 @@ impl Tool for JournalTool {
         if !self.scope.call_ids.contains(&call_id) {
             return self.inner.execute(context, arguments).await;
         }
+        // An earlier call's dispatch record failed: the invocation is stopping,
+        // and no further approved effect starts.
+        if let Some(error) = self.scope.journal.abort.error() {
+            return Err(error);
+        }
         // The dispatch is durable before the effect, or the effect never starts.
         // A failed append stops the whole invocation at its next model step
         // (`DispatchAbort`): the tool error alone would be read by the model.
@@ -647,7 +692,7 @@ impl Tool for JournalTool {
             .append(&self.scope.record(Phase::Dispatched, call_id.clone(), None))
             .await
         {
-            self.scope.journal.abort.record(&error);
+            self.scope.journal.abort.record();
             return Err(error);
         }
         let outcome = self.inner.execute(context, arguments).await;
@@ -1146,10 +1191,12 @@ mod tests {
         );
     }
 
-    /// A session whose appends fail with `code` (a database error, or a lost writer).
+    /// A session whose first `failures` appends fail with `code` (a database
+    /// error, or a lost writer); later appends succeed.
     struct FailingAppends {
         inner: Arc<adk_rust::session::InMemorySessionService>,
         code: &'static str,
+        failures: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait]
@@ -1175,25 +1222,34 @@ mod tests {
         async fn delete(&self, req: adk_rust::session::DeleteRequest) -> adk_rust::Result<()> {
             self.inner.delete(req).await
         }
-        async fn append_event(&self, _session_id: &str, _event: Event) -> adk_rust::Result<()> {
-            Err(self.failure())
+        async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
+            self.fail_first()?;
+            self.inner.append_event(session_id, event).await
         }
-        async fn append_event_for_identity(
-            &self,
-            _req: AppendEventRequest,
-        ) -> adk_rust::Result<()> {
-            Err(self.failure())
+        async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_rust::Result<()> {
+            self.fail_first()?;
+            self.inner.append_event_for_identity(req).await
         }
     }
 
     impl FailingAppends {
-        fn failure(&self) -> adk_rust::AdkError {
-            adk_rust::AdkError::new(
-                adk_rust::ErrorComponent::Session,
-                adk_rust::ErrorCategory::Unavailable,
-                self.code,
-                "fixture append failure",
-            )
+        fn fail_first(&self) -> adk_rust::Result<()> {
+            use std::sync::atomic::Ordering;
+            if self
+                .failures
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(adk_rust::AdkError::new(
+                    adk_rust::ErrorComponent::Session,
+                    adk_rust::ErrorCategory::Unavailable,
+                    self.code,
+                    "fixture append failure",
+                ));
+            }
+            Ok(())
         }
     }
 
@@ -1213,20 +1269,19 @@ mod tests {
         }
     }
 
-    /// #1321 review round 4 item 3: a failed `dispatched` append never lets the
-    /// run continue past the approved call. The effect does not start, and every
-    /// guarded model of the invocation refuses with a typed code: a lost writer
-    /// keeps its own, anything else is `agent.dispatch_unrecorded`.
+    /// #1321 review rounds 4–5: a failed `dispatched` append never lets the run
+    /// continue past the approved call. Its effect does not start, no LATER
+    /// approved call of the invocation starts (even though its own append would
+    /// succeed), and every guarded model step refuses with the typed code,
+    /// whether the store failed or the writer was lost.
     #[tokio::test(flavor = "current_thread")]
-    async fn a_failed_dispatch_record_stops_the_invocation_before_its_next_model_step() {
-        for (append_code, expected) in [
-            ("session.storage_unavailable", DISPATCH_UNRECORDED_CODE),
-            (WRITER_NOT_CURRENT_CODE, WRITER_NOT_CURRENT_CODE),
-        ] {
+    async fn a_failed_dispatch_record_stops_every_later_effect_and_model_step() {
+        for append_code in ["session.storage_unavailable", "session.writer_not_current"] {
             let (sessions, _) = journal_session().await;
             let failing: Arc<dyn SessionService> = Arc::new(FailingAppends {
                 inner: sessions,
                 code: append_code,
+                failures: std::sync::atomic::AtomicUsize::new(1),
             });
             let identity = AdkIdentity::new(
                 adk_rust::AppName::new("elitea-agent-v1").expect("app"),
@@ -1257,22 +1312,23 @@ mod tests {
                     invocation_id: "inv-1",
                     interrupt_id: "hitl-1",
                 },
-                BTreeSet::from(["call-1".to_owned()]),
+                BTreeSet::from(["call-1".to_owned(), "call-2".to_owned()]),
                 JournalOutcomes::Recorded,
             )[0]
             .tools(Arc::new(adk_rust::tool::SimpleToolContext::new("fixture")))
             .await
             .expect("tools")
             .remove(0);
-            assert!(
-                tool.execute(call_context("call-1"), json!({}))
-                    .await
-                    .is_err()
-            );
+            for call in ["call-1", "call-2"] {
+                assert!(
+                    tool.execute(call_context(call), json!({})).await.is_err(),
+                    "{call} is refused"
+                );
+            }
             assert_eq!(
                 calls.load(std::sync::atomic::Ordering::Acquire),
                 0,
-                "the effect never starts without its dispatch record"
+                "no effect starts once a dispatch record failed"
             );
             let Err(error) = guarded
                 .generate_content(adk_rust::LlmRequest::new("echo", Vec::new()), false)
@@ -1280,8 +1336,30 @@ mod tests {
             else {
                 panic!("the next model step must stop the run");
             };
-            assert_eq!(error.code, expected);
+            assert_eq!(error.code, DISPATCH_UNRECORDED_CODE);
         }
+    }
+
+    /// #1321 review round 5: the root run ends with the stop even when no model
+    /// step follows the failed record (a child at its step limit returns
+    /// normally); without a failure the stream is unchanged.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_root_run_ends_with_the_stop_when_no_model_step_follows() {
+        use adk_rust::futures::StreamExt as _;
+        let one = || -> adk_rust::EventStream {
+            Box::pin(adk_rust::futures::stream::iter([Ok(Event::new("inv-1"))]))
+        };
+        let abort = DispatchAbort::default();
+        let clean: Vec<_> = abort.stop_at_end(one()).collect().await;
+        assert_eq!(clean.len(), 1);
+        assert!(clean[0].is_ok());
+        abort.record();
+        let stopped: Vec<_> = abort.stop_at_end(one()).collect().await;
+        assert_eq!(stopped.len(), 2, "the inner events, then the stop");
+        assert!(
+            matches!(&stopped[1], Err(error) if error.code == DISPATCH_UNRECORDED_CODE),
+            "the run ends with the typed stop"
+        );
     }
 
     #[test]

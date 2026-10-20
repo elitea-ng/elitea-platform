@@ -782,8 +782,13 @@ async fn postgres_root_effect_child() {
             let (browser, failure) = run_turn(invocation).await;
             assert_eq!(
                 crate::protocol::output::model_failure(failure.as_deref()),
-                crate::protocol::output::RuntimeFailureKind::DependencyUnavailable,
+                crate::protocol::output::RuntimeFailureKind::Internal,
                 "append_fails: a typed failure, got {failure:?}"
+            );
+            assert_eq!(
+                failure.as_deref(),
+                Some(crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE),
+                "append_fails: the registered stop code"
             );
             assert!(
                 !said(&browser, "unexpected answer"),

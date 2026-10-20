@@ -1819,10 +1819,8 @@ impl PreparedDirectHitlReplay {
                 ));
             }
         };
-        let model = journal.map_or_else(
-            || Arc::clone(&self.model),
-            |journal| journal.abort().guard(Arc::clone(&self.model)),
-        );
+        // The caller guards the model with the invocation's `DispatchAbort`.
+        let model = Arc::clone(&self.model);
         for blocked in self.blocked.iter().filter(|blocked| {
             blocked.response["type"] == "mcp_auth_decision"
                 && blocked.response["status"] == "authorized"

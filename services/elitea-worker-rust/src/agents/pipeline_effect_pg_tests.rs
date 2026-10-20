@@ -600,8 +600,13 @@ async fn postgres_effect_child() {
             let upstream = failure_code(invocation).await;
             assert_eq!(
                 crate::protocol::output::model_failure(upstream.as_deref()),
-                crate::protocol::output::RuntimeFailureKind::DependencyUnavailable,
-                "append_fails: a typed failure, got {upstream:?}"
+                crate::protocol::output::RuntimeFailureKind::Internal,
+                "append_fails: the failure, got {upstream:?}"
+            );
+            assert_eq!(
+                upstream.as_deref(),
+                Some(crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE),
+                "append_fails: the registered stop code"
             );
             assert_eq!(calls.load(Ordering::Acquire), 0, "append_fails: never runs");
             assert_eq!(
