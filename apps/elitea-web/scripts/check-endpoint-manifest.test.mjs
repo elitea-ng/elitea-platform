@@ -951,8 +951,12 @@ const GENERATED_OPERATION_COUNT = 337;
  * 277 -> 279 (ADR-0034 decision 11): settings.getProjectCloudExecutor and
  * settings.setProjectCloudExecutor, Settings, General's Send to cloud
  * section (features/cloud-executor-switch). Generated.
+ *
+ * 279 -> 281 (project-level chat archive): conversation.archive and
+ * conversation.unarchive, the chat lists' Archive and the Archived chats
+ * page's Unarchive (pages/chat-archived). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 279;
+const MANIFEST_ENTRY_COUNT = 281;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
