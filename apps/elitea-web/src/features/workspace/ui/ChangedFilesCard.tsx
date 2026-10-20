@@ -214,7 +214,9 @@ function Summary({ files, stacked, onUndo, older, undoDisabled, undone }: Summar
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
       <CardTitle hidden={stacked} />
       <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
-        {t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
+        {files.length === 1
+          ? t('workspace.changes.summaryOne', '1 file, +{{added}} -{{removed}}', { added, removed })
+          : t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
       </Typography>
       {undone && <Chip size="small" label={t('workspace.changes.undone', 'Undone')} />}
       {onUndo !== undefined && (

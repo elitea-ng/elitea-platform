@@ -18,3 +18,5 @@ export { useActivityFeed } from './model/activityFeed.store';
 export { useContextMenu } from './model/useContextMenu';
 export type { ContextAction } from './model/useContextMenu';
 export { conversationLink, copyText } from './lib/conversationLink';
+export { folderContextActions } from './lib/folderMenu';
+export { ProjectPickerSheet } from './ui/ProjectPickerSheet';

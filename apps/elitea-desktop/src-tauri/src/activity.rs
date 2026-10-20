@@ -111,6 +111,12 @@ fn parse_after(message: &str, before: &str, after: &str) -> Option<u64> {
 
 impl ActivityState {
     /// Fold one agent event. `now` is when it was heard.
+    ///
+    /// Terminal rules (the web feed folds the same way, IPC.md "Activity"):
+    /// a turn ends at `done`, and also at an `error` event or a terminal
+    /// `status` (`done`, `cancelled`, `error`) — a turn refused at the start
+    /// never sends `done`. An approval is open until `approval_respond`
+    /// answers it (`answered`) or its turn ends: no other event closes it.
     pub fn observe_agent(&mut self, event: &AgentEvent, now: Instant) {
         let turn = event.turn_id.as_str();
         match event.kind {
@@ -118,10 +124,8 @@ impl ActivityState {
                 let phase = event.payload["phase"].as_str().unwrap_or("");
                 if matches!(phase, "resolving" | "starting" | "running" | "committing") {
                     self.turns.entry(turn.to_owned()).or_insert(now);
-                }
-                // The run went on: whatever it asked was answered.
-                if phase == "running" {
-                    self.approvals.retain(|_, a| a.turn_id != turn);
+                } else if matches!(phase, "done" | "cancelled" | "error") {
+                    self.end(turn);
                 }
             }
             "approval_request" => {
@@ -141,13 +145,20 @@ impl ActivityState {
                     );
                 }
             }
-            "tool_result" | "text_delta" => self.approvals.retain(|_, a| a.turn_id != turn),
-            "done" => {
-                self.turns.remove(turn);
-                self.approvals.retain(|_, a| a.turn_id != turn);
-            }
+            "error" | "done" => self.end(turn),
             _ => {}
         }
+    }
+
+    fn end(&mut self, turn: &str) {
+        self.turns.remove(turn);
+        self.approvals.retain(|_, a| a.turn_id != turn);
+    }
+
+    /// Whether `turn` is still shown as running or waiting.
+    #[must_use]
+    pub fn knows(&self, turn: &str) -> bool {
+        self.turns.contains_key(turn)
     }
 
     /// `approval_respond` answered a request.
@@ -279,8 +290,19 @@ pub struct Activity {
     app: AppHandle,
     state: Mutex<ActivityState>,
     ticking: AtomicBool,
-    /// The menu last applied, to rebuild it only when it changed.
-    applied: Mutex<Vec<Entry>>,
+    /// The folder name of each live turn, read once (the workspace file is
+    /// not touched per event).
+    names: Mutex<HashMap<String, String>>,
+    /// What was last applied: nothing is posted to the main thread unless it changed.
+    applied: Mutex<Option<Rendered>>,
+}
+
+/// Everything `render` applies; equal means nothing to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Rendered {
+    title: String,
+    dock: Dock,
+    entries: Vec<Entry>,
 }
 
 impl Activity {
@@ -290,7 +312,8 @@ impl Activity {
             app,
             state: Mutex::new(ActivityState::default()),
             ticking: AtomicBool::new(false),
-            applied: Mutex::new(Vec::new()),
+            names: Mutex::new(HashMap::new()),
+            applied: Mutex::new(None),
         }
     }
 
@@ -301,8 +324,41 @@ impl Activity {
     }
 
     pub fn agent(&self, event: &AgentEvent) {
+        self.remember_name(event);
         self.state().observe_agent(event, Instant::now());
+        self.forget_finished();
         self.changed();
+    }
+
+    /// Look the folder up once per turn, never on a streamed token and never
+    /// while the state lock is held.
+    fn remember_name(&self, event: &AgentEvent) {
+        if matches!(event.kind, "text_delta" | "usage" | "tool_result") {
+            return;
+        }
+        let known = self
+            .names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&event.turn_id);
+        if known {
+            return;
+        }
+        if let Some(name) = Self::workspace_name(&self.app, &event.turn_id) {
+            self.names
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(event.turn_id.clone(), name);
+        }
+    }
+
+    /// Names of turns that ended are dropped with them.
+    fn forget_finished(&self) {
+        let state = self.state();
+        self.names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|turn, _| state.knows(turn));
     }
 
     pub fn answered(&self, request_id: &str) {
@@ -358,30 +414,44 @@ impl Activity {
             .map(|w| w.name)
     }
 
-    /// Apply the state to the tray and the dock, on the main thread.
+    /// Apply the state to the tray and the dock, on the main thread — only
+    /// when the title, the dock bar or the menu actually changed.
     fn render(&self) {
-        let (title, dock, entries) = {
+        let names = self
+            .names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let now = {
             let state = self.state();
-            (
-                state.title(Instant::now()),
-                state.dock(),
-                state.entries(&|turn| Self::workspace_name(&self.app, turn)),
-            )
+            Rendered {
+                title: state.title(Instant::now()),
+                dock: state.dock(),
+                entries: state.entries(&|turn| names.get(turn).cloned()),
+            }
         };
-        let changed = {
+        let menu_changed = {
             let mut applied = self
                 .applied
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let changed = *applied != entries;
-            if changed {
-                applied.clone_from(&entries);
+            if applied.as_ref() == Some(&now) {
+                return;
             }
-            changed
+            let menu_changed = applied
+                .as_ref()
+                .is_none_or(|before| before.entries != now.entries);
+            *applied = Some(now.clone());
+            menu_changed
         };
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
-            apply(&app, &title, dock, changed.then_some(&entries));
+            apply(
+                &app,
+                &now.title,
+                now.dock,
+                menu_changed.then_some(&now.entries),
+            );
         });
     }
 }
@@ -557,13 +627,44 @@ mod tests {
     }
 
     #[test]
-    fn an_approval_clears_when_the_turn_goes_on() {
+    fn only_an_answer_or_the_end_of_its_turn_closes_an_approval() {
         let t0 = Instant::now();
         let mut state = ActivityState::default();
         state.observe_agent(&approval("t1", "r1", "run_command"), t0);
-        assert_eq!(state.title(t0), "⚠ 1");
+        state.observe_agent(&approval("t1", "r2", "write_file"), t0);
+        assert_eq!(state.title(t0), "⚠ 2");
+        // Another tool's result or streamed text says nothing about these.
         state.observe_agent(&event("t1", "tool_result", json!({"call_id": "c"})), t0);
-        assert_eq!(state.title(t0), "◐ 0:00");
+        state.observe_agent(&event("t1", "text_delta", json!({"text": "hi"})), t0);
+        assert_eq!(state.title(t0), "⚠ 2");
+        state.answered("r1");
+        assert_eq!(state.title(t0), "⚠ 1");
+        state.observe_agent(&event("t1", "done", json!({"committed": true})), t0);
+        assert_eq!(state.title(t0), "");
+    }
+
+    #[test]
+    fn a_turn_refused_at_the_start_never_shows_as_running() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        state.observe_agent(&event("t1", "status", json!({"phase": "resolving"})), t0);
+        assert!(state.has_timer());
+        state.observe_agent(
+            &event("t1", "error", json!({"code": "x", "message": "m"})),
+            t0,
+        );
+        assert!(
+            !state.has_timer(),
+            "an error ends it; no `done` follows a refusal"
+        );
+        assert_eq!(state.title(t0), "");
+        // The terminal statuses end a turn too, with or without the error before them.
+        for phase in ["error", "cancelled", "done"] {
+            state.observe_agent(&running("t2"), t0);
+            assert!(state.knows("t2"));
+            state.observe_agent(&event("t2", "status", json!({"phase": phase})), t0);
+            assert!(!state.knows("t2"), "{phase}");
+        }
     }
 
     #[test]

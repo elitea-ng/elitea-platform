@@ -43,6 +43,9 @@ function subscribe<E>(register: (handler: (event: E) => void) => Promise<() => v
 }
 
 export function useActivityFeedSources(): void {
+  // The app (its signed-in session) going away takes what it was doing with it:
+  // a sign-out reloads, but a stale turn must never outlive the identity that ran it.
+  useEffect(() => () => useActivityFeed.getState().reset(), []);
   const workspaceIpc = useWorkspaceIpc();
   const indexIpc = useIndexIpc();
   const handoffIpc = useHandoffIpc();

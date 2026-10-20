@@ -36,10 +36,12 @@ import { t } from '@/shared/i18n';
 
 import type { ShellAction } from '../lib/shellActions';
 import { conversationLink, copyText } from '../lib/conversationLink';
+import { folderContextActions } from '../lib/folderMenu';
 import { useAppIpc } from '../model/appIpcContext';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
+import { ProjectPickerSheet } from './ProjectPickerSheet';
 import { CHILD_INDENT, ShellRow, SectionCaption } from './rows';
 import { ThreadCloudBadge } from './ThreadCloudBadge';
 import { modKey } from './shortcutLabel';
@@ -202,24 +204,19 @@ function FolderRow({ workspace, projects, run, open, selected, project, onToggle
   const showMenu = useContextMenu();
   const appIpc = useAppIpc();
   const { bind, remove } = useFolderMutations(workspace);
-  const actions = (): ContextAction[] => [
-    { id: 'new', label: t('desktop.shell.newThread', 'New thread'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id }) },
-    { separator: true },
-    { id: 'reveal', label: t('workspace.path.reveal', 'Reveal in Finder'), enabled: appIpc !== undefined, run: () => void appIpc?.revealPath(workspace.id, '').catch(() => undefined) },
-    { id: 'copy', label: t('workspace.path.copy', 'Copy Path'), run: () => copyText(workspace.path) },
-    { separator: true },
-    ...projects
-      .filter((p) => !p.suspended)
-      .map((p): ContextAction => ({
-        id: `project:${String(p.id)}`,
-        label: `${workspace.project_id === p.id ? '✓ ' : ''}${p.name}`,
-        enabled: workspace.project_id !== p.id,
-        run: () => bind.mutate(p.id),
-      })),
-    { separator: true },
-    { id: 'remove', label: t('desktop.shell.removeFolder', 'Remove from sidebar'), run: () => remove.mutate() },
-  ];
+  const [picking, setPicking] = useState(false);
+  const actions = (): ContextAction[] =>
+    folderContextActions({
+      workspace,
+      projects,
+      appIpc,
+      primary: { label: t('desktop.shell.newThread', 'New thread'), run: () => run({ type: 'open_workspace', workspaceId: workspace.id }) },
+      bind: (projectId) => bind.mutate(projectId),
+      remove: () => remove.mutate(),
+      choosePicker: () => setPicking(true),
+    });
   return (
+    <>
     <ShellRow
       label={workspace.name}
       meta={project}
@@ -232,6 +229,8 @@ function FolderRow({ workspace, projects, run, open, selected, project, onToggle
       trailingOnHover
       trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
     />
+    <ProjectPickerSheet open={picking} projects={projects} currentId={workspace.project_id} onPick={(projectId) => bind.mutate(projectId)} onClose={() => setPicking(false)} />
+    </>
   );
 }
 

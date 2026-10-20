@@ -110,7 +110,7 @@ export function WorkspaceList({ workspaces, projects, onSelect, onContextMenu, i
             >
               <Box component="td" sx={cellSx}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                  <Typography variant="labelMedium" component="span" sx={(theme: Theme) => ({ overflow: 'hidden', textOverflow: 'ellipsis', color: theme.vars.palette.text.primary })}>
+                  <Typography variant="labelMedium" component="span" sx={(theme: Theme) => ({ overflow: 'hidden', textOverflow: 'ellipsis', color: theme.vars.palette.text.secondary })}>
                     {workspace.name}
                   </Typography>
                   {workspace.is_git && <Chip size="small" variant="outlined" label={t('workspace.git', 'Git')} />}

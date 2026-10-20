@@ -96,7 +96,7 @@ function RowActions({ activity, onFocus }: { activity: Activity; onFocus: (a: Ac
   const cancellable = activity.cancelKey !== null && activity.kind !== 'cloud' && activity.kind !== 'commit';
   return (
     <>
-      {activity.kind === 'approval' && (
+      {activity.kind === 'approval' && activity.workspaceId !== null && (
         <ButtonBase
           onClick={() => onFocus(activity)}
           sx={(theme: Theme) => ({ fontSize: '0.6875rem', fontWeight: 600, color: theme.vars.palette.primary.main, padding: '1px 6px', borderRadius: '5px' })}
@@ -186,6 +186,11 @@ function usePopoverState(): { open: (has: boolean) => boolean; enter: () => void
   };
 }
 
+const visuallyHidden = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' } as const;
+
+/** An approval opens its thread; one with no known folder (a turn from before this window listened) opens the list instead. */
+const canFocus = (activity: Activity): boolean => activity.kind === 'approval' && activity.workspaceId !== null;
+
 const nothingToSay = (primary: Activity | undefined, idle: string | null): boolean => primary === undefined && (idle === null || idle === '');
 
 /** Opens the folder and thread an activity belongs to. */
@@ -216,7 +221,7 @@ function useContentWidth(signature: string): { inner: React.RefObject<HTMLSpanEl
 
 function Muted({ children }: { children: string }): React.JSX.Element {
   return (
-    <Box component="span" sx={(theme: Theme) => ({ fontVariantNumeric: 'tabular-nums', color: theme.vars.palette.text.secondary })}>
+    <Box component="span" aria-hidden sx={(theme: Theme) => ({ fontVariantNumeric: 'tabular-nums', color: theme.vars.palette.text.secondary })}>
       {children}
     </Box>
   );
@@ -273,9 +278,8 @@ export function ActivityIsland({ idle = null }: ActivityIslandProps): React.JSX.
           ref={anchor}
           data-testid="activity-island"
           data-kind={primary?.kind ?? 'idle'}
-          aria-live="polite"
           aria-expanded={activities.length > 0 ? open : undefined}
-          onClick={() => (primary?.kind === 'approval' ? focus(primary) : popover.toggle())}
+          onClick={() => (primary !== undefined && canFocus(primary) ? focus(primary) : popover.toggle())}
           sx={(theme: Theme) => capsuleSx(theme, { width, reduced, attention })}
         >
           <Box ref={inner} component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, paddingX: 1.25, whiteSpace: 'nowrap', fontSize: '0.75rem', fontWeight: 500 }}>
@@ -283,6 +287,10 @@ export function ActivityIsland({ idle = null }: ActivityIslandProps): React.JSX.
             <span>{label}</span>
             {timer !== '' && <Muted>{timer}</Muted>}
             {activities.length > 1 && <Muted>{`+${String(activities.length - 1)}`}</Muted>}
+          </Box>
+          {/* Announced when the state or the label changes — never the ticking timer. */}
+          <Box component="output" aria-live="polite" sx={visuallyHidden}>
+            {label}
           </Box>
         </ButtonBase>
         <Popper open={open} anchorEl={anchor.current} placement="bottom" sx={{ zIndex: (theme: Theme) => theme.zIndex.modal }} modifiers={[{ name: 'offset', options: { offset: [0, 6] } }]}>

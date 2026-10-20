@@ -183,7 +183,9 @@ describe('DesktopFrame context menus', () => {
     fireEvent.contextMenu(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
     await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
     const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
-    expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', '✓ Marketing', '-', 'Remove from sidebar']);
+    expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
+    const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing']);
   });
 
   it('leaves the browser alone without a host', async () => {

@@ -106,6 +106,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(menu::Zoom::default())
+        .manage(context_menu::Pending::default())
         .manage(app_events::PendingOpens::default())
         .manage(app_events::CommandQueue::default())
         // A (re)loading page is not listening to app://command yet: hold

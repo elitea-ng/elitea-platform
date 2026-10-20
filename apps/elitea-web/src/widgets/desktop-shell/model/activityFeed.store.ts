@@ -13,6 +13,7 @@
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
+import { foldProgress } from '@/features/workspace-index';
 import type { AgentEvent, ApprovalRequestPayload, TurnDonePayload, TurnPhase } from '@/shared/desktop/workspaceIpc';
 import type { HandoffEvent } from '@/shared/desktop/handoffIpc';
 import type { IndexEvent, IndexStatus } from '@/shared/desktop/indexIpc';
@@ -77,8 +78,6 @@ export interface TrackedCloud {
 }
 
 const SEND_OVER: ReadonlySet<HandoffEvent['phase']> = new Set(['complete', 'cancelled', 'error']);
-const PROGRESS = /Processed (\d+) files/;
-const PARSING = /Parsing (\d+) files/;
 
 export interface ActivityFeedState {
   readonly turns: Readonly<Record<string, TrackedTurn>>;
@@ -89,6 +88,8 @@ export interface ActivityFeedState {
   readonly registerTurn: (turnId: string, owner: { workspaceId: string; workspaceName: string; conversationId: string }) => void;
   readonly applyAgentEvent: (event: AgentEvent, now?: number) => void;
   /** What `agent_turn_status` answered for a turn the feed believes unfinished. */
+  /** `approval_respond` answered a request: it no longer waits. */
+  readonly answerApproval: (requestId: string) => void;
   readonly reconcileTurn: (turnId: string, status: { state: 'running' | 'committing' | 'done'; done: TurnDonePayload | null } | null) => void;
   readonly applyIndexEvent: (event: IndexEvent, workspaceName?: string | null) => void;
   readonly applyHandoffEvent: (event: HandoffEvent) => void;
@@ -140,21 +141,33 @@ function settled(turn: TrackedTurn, done: TurnDonePayload): TrackedTurn {
   return { ...turn, approvals: [], tool: null, commit, finished: commit === 'none', changedFiles: done.changed_files };
 }
 
+const TERMINAL_PHASES: ReadonlySet<TurnPhase> = new Set<TurnPhase>(['done', 'cancelled', 'error']);
+
+/**
+ * The turn ended: an `error` event or a terminal `status` (a turn refused at
+ * the start never sends `done`). It stays listed only while its commit is
+ * still to land. Approvals close here and in `answerApproval`, never on other
+ * events (IPC.md, "Activity").
+ */
+function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
+  return { ...turn, phase, tool: null, approvals: [], finished: turn.commit === 'none' };
+}
+
 /** Folds one agent event into a turn. Pure. */
 export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
   switch (event.kind) {
     case 'status':
-      return { ...turn, phase: event.payload.phase, approvals: event.payload.phase === 'running' ? [] : turn.approvals };
+      return TERMINAL_PHASES.has(event.payload.phase) ? ended(turn, event.payload.phase) : { ...turn, phase: event.payload.phase };
     case 'tool_call':
       return { ...turn, tool: event.payload.tool, steps: turn.steps + 1 };
     case 'tool_result':
-      return { ...turn, tool: null, approvals: [] };
+      return { ...turn, tool: null };
     case 'text_delta':
-      return turn.approvals.length === 0 ? turn : { ...turn, approvals: [] };
+      return turn;
     case 'approval_request':
       return withApproval(turn, event.payload);
     case 'error':
-      return { ...turn, phase: 'error', approvals: [] };
+      return ended(turn, 'error');
     case 'done':
       return settled(turn, event.payload);
     case 'usage':
@@ -167,26 +180,9 @@ export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
 function foldIndex(previous: TrackedIndex | undefined, event: IndexEvent, name: string | null): TrackedIndex {
   const status = event.status;
   const base: TrackedIndex = previous ?? { workspaceId: event.workspace_id, workspaceName: name, state: status.state, entities: 0, done: 0, total: null };
-  let { done, total } = status.state === 'building' ? base : { done: 0, total: null as number | null };
-  if (status.state === 'building') {
-    if (event.phase === 'listing') {
-      done = 0;
-      total = null;
-    }
-    const message = event.message ?? '';
-    const parsing = PARSING.exec(message);
-    const processed = processedFiles(message);
-    if (parsing !== null) {
-      done = 0;
-      total = Number(parsing[1]);
-    } else if (processed !== null) done = processed;
-  }
-  return { ...base, workspaceName: name ?? base.workspaceName, state: status.state, entities: status.entities, done, total };
-}
-
-function processedFiles(message: string): number | null {
-  const hit = PROGRESS.exec(message);
-  return hit === null ? null : Number(hit[1]);
+  // The same folding the index UI does (one set of rules for "Parsing n files" / "Processed n files").
+  const progress = foldProgress(previous === undefined ? null : { done: base.done, total: base.total }, event) ?? { done: 0, total: null };
+  return { ...base, workspaceName: name ?? base.workspaceName, state: status.state, entities: status.entities, done: progress.done, total: progress.total };
 }
 
 export function createActivityFeedStore(): FeedStore {
@@ -207,6 +203,13 @@ export function createActivityFeedStore(): FeedStore {
         const turns = { ...state.turns, [event.turn_id]: next };
         // Settled turns do not pile up: keep only the unfinished ones and the newest few.
         return { turns: prune(turns) };
+      }),
+    answerApproval: (requestId) =>
+      set((state) => {
+        const turns = Object.fromEntries(
+          Object.entries(state.turns).map(([id, turn]) => [id, turn.approvals.some((a) => a.requestId === requestId) ? { ...turn, approvals: turn.approvals.filter((a) => a.requestId !== requestId) } : turn]),
+        );
+        return { turns };
       }),
     reconcileTurn: (turnId, status) =>
       set((state) => {

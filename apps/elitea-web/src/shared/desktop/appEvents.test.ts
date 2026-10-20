@@ -44,7 +44,7 @@ describe('createAppIpc', () => {
     expect(received).toEqual([{ id: 'workspace_opened', args: { workspace_id: 'abc' } }, { id: 'toggle_sidebar' }]);
   });
 
-  it('pops a native context menu and resolves with the chosen id, or null when dismissed', async () => {
+  it('pops a native context menu and resolves with the outcome the host sent for THIS request', async () => {
     let deliver: ((payload: unknown) => void) | undefined;
     const off = vi.fn();
     const listen: ListenFn = (channel, handler) => {
@@ -52,16 +52,29 @@ describe('createAppIpc', () => {
       deliver = handler;
       return Promise.resolve(off);
     };
-    const items = [{ id: 'open', label: 'Open' }, { separator: true as const }, { id: 'rm', label: 'Remove', enabled: false }];
-    const chosen = vi.fn().mockImplementation(() => {
-      deliver?.({ id: 'open' });
+    const items = [{ id: 'open', label: 'Open' }, { separator: true as const }, { label: 'Project', children: [{ id: 'p:1', label: 'One' }] }];
+    let requestId = '';
+    const shown = vi.fn().mockImplementation((_command: string, args: { request_id: string }) => {
+      requestId = args.request_id;
+      // A stray outcome of another menu is ignored; the matching one answers.
+      deliver?.({ request_id: 'someone-else', id: 'rm' });
+      deliver?.({ request_id: requestId, id: 'open' });
       return Promise.resolve(null);
     });
-    expect(await createAppIpc(chosen, listen).contextMenu(items)).toBe('open');
-    expect(chosen).toHaveBeenCalledWith('context_menu_show', { items });
+    expect(await createAppIpc(shown, listen).contextMenu(items)).toBe('open');
+    expect(shown).toHaveBeenCalledWith('context_menu_show', { request_id: requestId, items });
+    expect(requestId.length).toBeGreaterThan(8);
     expect(off).toHaveBeenCalledTimes(1);
-    // Dismissed: the host sent nothing.
-    expect(await createAppIpc(vi.fn().mockResolvedValue(null), listen).contextMenu(items)).toBeNull();
+    // Dismissed: the host says so, explicitly.
+    const dismissed = vi.fn().mockImplementation((_command: string, args: { request_id: string }) => {
+      deliver?.({ request_id: args.request_id, id: null });
+      return Promise.resolve(null);
+    });
+    expect(await createAppIpc(dismissed, listen).contextMenu(items)).toBeNull();
+    // A refusal rejects (and still stops listening).
+    const refused = vi.fn().mockRejectedValue({ code: 'unknown', message: 'a context menu has at most 60 items' });
+    await expect(createAppIpc(refused, listen).contextMenu(items)).rejects.toThrow('at most 60');
+    expect(off).toHaveBeenCalledTimes(3);
   });
 
   it('is undefined outside the Tauri webview', () => {

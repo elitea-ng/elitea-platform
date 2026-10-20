@@ -752,7 +752,7 @@ for one send and restores it.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
-| `context_menu_show` | `{items: {id?, label?, enabled?, separator?}[]}` | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The choice arrives on `app://context-menu` as `{id}` (the id the page gave the item; a dismissed menu sends nothing). 1–40 items; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
+| `context_menu_show` | `{request_id: string, items: Item[]}`; `Item` is `{id, label, enabled?}`, `{separator: true}` or a submenu `{label, enabled?, children: {id, label, enabled?}[]}` (one level) | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The outcome arrives on `app://context-menu` as `{request_id, id}`: `id` is the id the page gave the item, or `null` when the menu was dismissed (sent by the host ~150 ms after the menu closed with no choice). The page ignores events whose `request_id` is not its own. `request_id`: ≤ 64 chars of `[A-Za-z0-9_-]`. At most 60 choosable items across the menu and its submenu; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
 | `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
@@ -862,6 +862,29 @@ type AppCommand = { id: string; args?: object };
 | `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
 | `focus_turn` | `{workspace_id: string, turn_id: string}` | A running or waiting turn was chosen in the menu-bar item's menu (see below): show its folder. (A notification click still only activates the app: the notification plugin has no click callback on desktop.) |
 
+**Activity contract.** Two places fold the agent, index and handoff streams
+into "what is running now": the host (`src/activity.rs`: the menu-bar item and
+the Dock) and the web feed (`widgets/desktop-shell/model/activityFeed.store.ts`:
+the activity island). They follow ONE set of rules, so they cannot drift; change
+both together:
+
+- A turn is running from its first `status` with phase `resolving`, `starting`,
+  `running` or `committing`, and from an `approval_request`.
+- A turn ends at `done`, at an `error` event, or at a `status` with phase `done`,
+  `cancelled` or `error` — a turn refused at the start sends `error` and
+  `status` `error` and never `done`. (The web feed keeps a turn listed after
+  that only while its commit is pending or failed.)
+- An approval waits from `approval_request` until `approval_respond` answers it
+  or its turn ends. No other event closes it: a `tool_result` or a `text_delta`
+  says nothing about which approval it was.
+- Index progress: `Parsing <m> files` in an `index://event` message sets the
+  total and resets the count; `Processed <n> files` sets the count; leaving the
+  `building` state clears it. (Web: `foldProgress`, `features/workspace-index/
+  model/progress.ts`; host: `ActivityState::observe_index`.)
+- A send to the cloud runs until its `handoff://event` phase is `complete`,
+  `cancelled` or `error`; its bar is `done` of `total` (indeterminate when
+  `total` is 0).
+
 **Menu-bar item and Dock** (`src/activity.rs`, host-side; the page does nothing for
 them). The host folds the same `agent://event`, `index://event` and
 `handoff://event` streams the window gets: the menu-bar item's title is
@@ -899,7 +922,7 @@ for them.
 ## Events
 
 Five event names, all emitted to the `main` window only: `app://command`
-(above), `app://context-menu` (`{id}`, the item chosen from `context_menu_show`),
+(above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
 `agent://event`, `index://event` and `handoff://event` (Cloud handoff, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 

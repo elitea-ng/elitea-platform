@@ -4,7 +4,7 @@
  * the same brand theme): `withDesktopComponents` on the theme the screen
  * already has, and the global rules a native app gets from its toolkit
  * (default cursor, keyboard-only focus ring, thin overlay scrollbars, chrome
- * that does not select on a stray drag).
+ * that is chrome — see CHROME below).
  */
 import { useEffect, type ReactNode } from 'react';
 
@@ -13,16 +13,23 @@ import { ThemeProvider, type Theme } from '@mui/material/styles';
 
 import { SYSTEM_FONT_STACK, withDesktopComponents } from '../lib/desktopTheme';
 
-/** Selectors whose text stays selectable: the content, not the chrome. */
-const SELECTABLE = [
-  'input',
-  'textarea',
-  '[contenteditable="true"]',
-  'pre',
-  'code',
-  '[data-selectable]',
-  '[data-testid="session-transcript"]',
-  '[data-testid="session-transcript"] *',
+/**
+ * The chrome: what a native app does not select on a stray drag — buttons,
+ * tabs, menu items, the toolbar, the sidebar. Everything else (chat, agent
+ * pages, alerts, errors, code) stays selectable, so it can be copied.
+ */
+const CHROME = [
+  'button',
+  '[role="button"]',
+  '[role="tab"]',
+  '[role="menuitem"]',
+  '[role="menuitemradio"]',
+  '[role="radio"]',
+  '[role="separator"]',
+  'label',
+  'nav',
+  '[data-chrome]',
+  '[data-testid="title-bar"]',
 ].join(', ');
 
 /** ⌘. cancels the sheet in front, as Escape does. */
@@ -52,13 +59,11 @@ export function DesktopThemeLayer({ children, transparentPage = false }: { child
             fontSize: '0.8125rem',
             WebkitFontSmoothing: 'antialiased',
             cursor: 'default',
-            userSelect: 'none',
-            WebkitUserSelect: 'none',
             ...(transparentPage ? { background: 'transparent' } : {}),
           },
           ...(transparentPage ? { html: { background: 'transparent' } } : {}),
-          [SELECTABLE]: { userSelect: 'text', WebkitUserSelect: 'text' },
-          'input, textarea': { cursor: 'text' },
+          [CHROME]: { userSelect: 'none', WebkitUserSelect: 'none' },
+          'input, textarea': { userSelect: 'text', WebkitUserSelect: 'text', cursor: 'text' },
           // Only real links are hands.
           'a[href], a[href] *': { cursor: 'pointer' },
           '[data-tauri-drag-region]': { cursor: 'default' },

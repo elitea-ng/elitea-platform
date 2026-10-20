@@ -67,15 +67,27 @@ export interface AppIpc {
   contextMenu(items: readonly ContextMenuItem[]): Promise<string | null>;
 }
 
-/** One entry of a native context menu (`context_menu_show`). A separator carries no id or label. */
-export type ContextMenuItem = { id: string; label: string; enabled?: boolean } | { separator: true };
+/** One entry of a native context menu (`context_menu_show`). A separator carries no id or label; a submenu holds one level of entries. */
+export type ContextMenuItem =
+  | { id: string; label: string; enabled?: boolean }
+  | { separator: true }
+  | { label: string; enabled?: boolean; children: readonly ContextMenuLeaf[] };
+
+/** An entry of a submenu. */
+type ContextMenuLeaf = { id: string; label: string; enabled?: boolean };
 
 export type NativeWindowTheme = 'light' | 'dark' | null;
 
 export const APP_COMMAND_CHANNEL = 'app://command';
 export const CONTEXT_MENU_CHANNEL = 'app://context-menu';
-/** After the menu closes the host's choice may still be in flight; wait this long for it before saying "dismissed". */
-const CHOICE_GRACE_MS = 80;
+let contextMenuRequests = 0;
+
+/** A request id for one context menu: the host echoes it on `app://context-menu`, so only that call is answered. */
+function nextContextMenuRequestId(): string {
+  contextMenuRequests += 1;
+  const random = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : String(Date.now());
+  return `${random}-${String(contextMenuRequests)}`;
+}
 
 /** What a plain browser tab (no host) reports. */
 export const BROWSER_PLATFORM: AppPlatform = { os: 'linux', titlebar_overlay: false, traffic_light_inset_px: 0, vibrancy: false };
@@ -93,18 +105,24 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
     contextMenu: async (items) => {
-      let chosen: string | null = null;
+      const requestId = nextContextMenuRequestId();
+      let settle: (id: string | null) => void = () => undefined;
+      const outcome = new Promise<string | null>((resolve) => {
+        settle = resolve;
+      });
+      // Listening first: the outcome event can arrive before the command returns.
       const off = await listen(CONTEXT_MENU_CHANNEL, (payload) => {
-        const id = (payload as { id?: unknown } | null)?.id;
-        if (typeof id === 'string') chosen = id;
+        const event = payload as { request_id?: unknown; id?: unknown } | null;
+        if (event?.request_id !== requestId) return;
+        settle(typeof event.id === 'string' ? event.id : null);
       });
       try {
-        await invoke<void>('context_menu_show', { items });
-        await new Promise<void>((resolve) => setTimeout(resolve, CHOICE_GRACE_MS));
+        await invoke<void>('context_menu_show', { request_id: requestId, items });
+        // The host answers every shown menu: with the choice, or with `null` once it was dismissed.
+        return await outcome;
       } finally {
         off();
       }
-      return chosen;
     },
   };
 }

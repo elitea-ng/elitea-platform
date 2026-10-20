@@ -432,5 +432,8 @@
   "workspace.panel.approvalsCount": "Approvals · {{n}}",
   "workspace.panel.index": "Index",
   "workspace.panel.noApprovals": "Nothing was asked of you in this thread yet.",
-  "desktop.island.tokens": "{{context}} context · {{out}} out"
+  "desktop.island.tokens": "{{context}} context · {{out}} out",
+  "desktop.menu.moreProjects": "More projects…",
+  "desktop.menu.refused": "The menu could not be shown: {{message}}",
+  "workspace.changes.summaryOne": "1 file, +{{added}} -{{removed}}"
 }

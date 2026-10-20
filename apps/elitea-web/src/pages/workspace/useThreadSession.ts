@@ -201,6 +201,8 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const answer = (requestId: string, decision: ApprovalDecision): void => {
     const request = turn.view.approvals.find((a) => a.request_id === requestId);
     if (request !== undefined) setDecided((current) => [...current, { requestId, title: request.title, decision }]);
+    // The activity feed (island) stops waiting on it too: nothing else closes an approval but its turn ending.
+    useActivityFeed.getState().answerApproval(requestId);
     void turn.answer(requestId, decision);
   };
 

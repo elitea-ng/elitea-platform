@@ -140,4 +140,34 @@ describe('ActivityIsland', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w1'));
     expect(router.state.location.search).toEqual({ conversation: '77' });
   });
+
+  it('announces the state, not the ticking timer', async () => {
+    const { ipc } = mount();
+    await screen.findByTestId('activity-island');
+    await waitFor(() => expect(ipc.subscriberCount()).toBeGreaterThan(0));
+    useActivityFeed.getState().registerTurn('t1', { workspaceId: 'w1', workspaceName: 'app', conversationId: '77' });
+    act(() => ipc.emit({ turn_id: 't1', seq: 1, kind: 'status', payload: { phase: 'running' } }));
+    const island = screen.getByTestId('activity-island');
+    await waitFor(() => expect(island).toHaveTextContent('Working…'));
+    expect(island).not.toHaveAttribute('aria-live');
+    const live = within(island).getByRole('status');
+    expect(live).toHaveAttribute('aria-live', 'polite');
+    expect(live).toHaveTextContent(/^Working…$/);
+    // The timer is drawn but hidden from assistive technology.
+    expect(island.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('opens the list instead when an approval has no known folder to go to', async () => {
+    const user = userEvent.setup();
+    const { ipc } = mount();
+    await screen.findByTestId('activity-island');
+    await waitFor(() => expect(ipc.subscriberCount()).toBeGreaterThan(0));
+    // No registerTurn: the host sent an approval of a turn this window never started.
+    act(() => ipc.emit({ turn_id: 'stranger', seq: 1, kind: 'approval_request', payload: { request_id: 'r1', tool: 'run_command', title: 'Run it', detail: '', reason: '', can_remember: false } }));
+    const island = screen.getByTestId('activity-island');
+    await waitFor(() => expect(island).toHaveAttribute('data-kind', 'approval'));
+    await user.click(island);
+    expect(await screen.findByTestId('island-popover')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review' })).toBeNull();
+  });
 });

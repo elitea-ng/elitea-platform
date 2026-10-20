@@ -38,9 +38,27 @@ describe('the activity feed', () => {
     const [first, second] = buildActivities(facts(store));
     expect(first).toMatchObject({ kind: 'approval', label: 'Approve: run_command', tone: 'attention' });
     expect(second?.kind).toBe('turn');
-    // The turn went on: the approval was answered.
+    // Another tool's result or streamed text says nothing about the approval.
     emit({ ...at(3), kind: 'tool_result', payload: { call_id: 'c', ok: true, summary: '', truncated: false } });
+    emit({ ...at(4), kind: 'text_delta', payload: { text: 'hi' } });
+    expect(buildActivities(facts(store))[0]?.kind).toBe('approval');
+    // Only the answer (approval_respond) closes it.
+    store.getState().answerApproval('r1');
     expect(buildActivities(facts(store))[0]?.kind).toBe('turn');
+  });
+
+  it('drops a turn refused at the start (an error and a terminal status, no `done`)', () => {
+    emit({ ...at(1), kind: 'status', payload: { phase: 'resolving' } });
+    expect(buildActivities(facts(store))).toHaveLength(1);
+    emit({ ...at(2), kind: 'error', payload: { code: 'x', message: 'm' } });
+    expect(buildActivities(facts(store))).toEqual([]);
+    for (const phase of ['error', 'cancelled', 'done'] as const) {
+      const turn = { turn_id: `t-${phase}`, seq: 1 };
+      emit({ ...turn, kind: 'status', payload: { phase: 'running' } });
+      expect(buildActivities(facts(store)).some((a) => a.turnId === `t-${phase}`)).toBe(true);
+      emit({ ...turn, seq: 2, kind: 'status', payload: { phase } });
+      expect(buildActivities(facts(store)).some((a) => a.turnId === `t-${phase}`)).toBe(false);
+    }
   });
 
   it('keeps a pending commit visible and a failed one as a warning, until the host says it settled', () => {

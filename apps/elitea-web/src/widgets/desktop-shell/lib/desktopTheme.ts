@@ -90,7 +90,7 @@ export function withDesktopComponents(outer: Theme): Theme {
             // The secondary bezel: a hairline and a faint raised fill.
             return {
               ...base,
-              color: t.vars.palette.text.primary,
+              color: t.vars.palette.text.secondary,
               border: `1px solid ${t.vars.palette.divider}`,
               backgroundColor: `color-mix(in srgb, ${t.vars.palette.text.primary} 4%, transparent)`,
               '&:hover': { backgroundColor: `color-mix(in srgb, ${t.vars.palette.text.primary} 8%, transparent)`, border: `1px solid ${t.vars.palette.divider}` },
@@ -100,7 +100,7 @@ export function withDesktopComponents(outer: Theme): Theme {
           // Toolbar style: borderless icon + label.
           return {
             ...base,
-            color: t.vars.palette.text.primary,
+            color: t.vars.palette.text.secondary,
             padding: '0 6px',
             '&:hover': { backgroundColor: `color-mix(in srgb, ${t.vars.palette.text.primary} 8%, transparent)` },
             '&:active': { backgroundColor: `color-mix(in srgb, ${t.vars.palette.text.primary} 12%, transparent)` },

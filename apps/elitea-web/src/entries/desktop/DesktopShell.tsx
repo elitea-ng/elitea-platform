@@ -6,7 +6,7 @@ import { needsAttention, type DoctorIpc } from '@/shared/desktop/doctorIpc';
 import type { HostBridge, HostDeployment, HostState } from '@/shared/desktop/hostBridge';
 import { t } from '@/shared/i18n';
 import { BrandLogoFull } from '@/shared/ui/brand-logo';
-import { DoctorPanel } from '@/widgets/desktop-shell';
+import { DoctorPanel, useActivityFeed } from '@/widgets/desktop-shell';
 
 import { launchApp } from './launchApp';
 
@@ -37,7 +37,10 @@ function AppHost({ bridge, state, launch }: { bridge: HostBridge; state: HostSta
     // Signed out (refresh failed, or the device was revoked): the host has
     // already dropped the session. A reload is the thorough reset — it clears
     // every in-memory store and lands on the connect screen.
-    const reboot = (): void => window.location.reload();
+    const reboot = (): void => {
+      useActivityFeed.getState().reset();
+      window.location.reload();
+    };
     const launched = launch({
       bridge,
       state,

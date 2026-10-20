@@ -179,7 +179,9 @@ describe('WorkspacesPage', () => {
     fireEvent.contextMenu(row);
     await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
     const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
-    expect(labels).toEqual(['Open', '-', 'Reveal in Finder', 'Copy Path', '-', 'Public', '✓ Marketing', '-', 'Remove']);
+    expect(labels).toEqual(['Open', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
+    const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['Public', '✓ Marketing']);
   });
 
   it('binds a project to a folder from its context menu', async () => {
