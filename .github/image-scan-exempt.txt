@@ -1,5 +1,6 @@
-# Images that .github/workflows/ci-image-scan.yml scans and reports, but that do
-# NOT fail the merge on a HIGH or CRITICAL finding.
+# Images that the release scan (publish.yml) and the nightly scan
+# (nightly-image-scan.yml) scan and report, but that do NOT fail on a HIGH or
+# CRITICAL finding.
 #
 # This file exists so that every exemption is visible in one place, and so that
 # a pull request which adds one changes a file whose only subject is exemptions.
@@ -34,8 +35,9 @@
 #   - it does not survive its cause. The job FAILS when an exempt image reports
 #     zero findings, because the entry is then stale.
 #
-# The scan matrix in ci-image-scan.yml must set `blocking: false` for exactly
-# these names. The coverage job fails when the two files disagree.
+# publish.yml's `scan` matrix must set `blocking: false` for exactly these
+# names. scripts/ci/image-matrix.sh (image-matrix.yml) fails when the two
+# files disagree.
 #
 # Lines that start with # are comments. Blank lines are ignored.
 

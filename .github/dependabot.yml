@@ -1,7 +1,8 @@
 # Source-level dependency scanning.
 #
 # WHAT THIS CLOSES. Before this file, a dependency vulnerability was caught in
-# exactly one place: trivy in ci-image-scan.yml, which runs against a BUILT
+# exactly one place: trivy in ci-image-scan.yml (now nightly-image-scan.yml,
+# against the published `latest`), which runs against a BUILT
 # IMAGE. That means nothing was scanned until it was packaged, nothing that is
 # not packaged was scanned at all (every library module, the tools, the test
 # harnesses), and the report arrived with no route to a fix — trivy names a

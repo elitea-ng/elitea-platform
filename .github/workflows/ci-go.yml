@@ -546,7 +546,8 @@ jobs:
           go test -count=1 -timeout=120s ./tests/integration/
 
   # The `container-scan` job that PR #432 added here (issue #224) now lives in
-  # .github/workflows/ci-image-scan.yml, together with the five other published
+  # .github/workflows/ci-image-scan.yml (since 2026-10-20 the nightly scan of
+  # the published `latest`, nightly-image-scan.yml), together with the five other published
   # images that had no scan at all (#433). Nothing about the elitea-main scan
   # changed — same `target: final` build, same HIGH,CRITICAL threshold, same
   # "a report with no Go binary is a failure" guard.

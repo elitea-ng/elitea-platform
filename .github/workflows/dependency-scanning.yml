@@ -14,7 +14,7 @@ on:
     branches:
       - main
   schedule:
-    # 06:41 UTC daily. Deliberately away from ci-image-scan.yml's 05:17,
+    # 06:41 UTC daily. Deliberately away from nightly-image-scan.yml's 05:17,
     # deepwiki-real-engine.yml's Sunday 04:23 and the Saturday 02:00 UTC
     # dependabot burst, so the cadence jobs do not contend for the free plan's
     # 20-job concurrency window.
