@@ -220,14 +220,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
       # The check asks `origin` whether the branch it names still exists, so the
       # authenticated remote that actions/checkout leaves behind is required.
-      # It reads only the standard library; there is nothing to install.
+      # It reads only node's standard library (the runner's node); there is
+      # nothing to install.
       - name: Every push arm that names main also names the staging branch
-        run: python scripts/ci/check_workflow_branch_coverage.py
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-workflow-branch-coverage.test.mjs
+          node scripts/ci/check-workflow-branch-coverage.mjs
 
   # Issue #520. A migration states its version number when an author writes it.
   # The number is only true when the pull request MERGES. Pull requests #369 and
