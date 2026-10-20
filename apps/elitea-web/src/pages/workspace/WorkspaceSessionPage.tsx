@@ -2,8 +2,8 @@
  * Desktop-only `/workspaces/$workspaceId[?conversation=<id>]`: one THREAD of
  * a folder — the centre of the workspace-first window.
  *
- * Header: the folder, its project (re-binding moves the folder), the agent
- * and version. Body: the thread's exchanges — your prompt, then what the
+ * Toolbar: the folder ▸ thread title (its path card re-binds the project).
+ * Composer footer: agent·version, Act | Plan, where it runs. Body: the thread's exchanges — your prompt, then what the
  * agent did (text, collapsible tool lines). Bottom: the composer ("@" files,
  * "/" commands). Right (⌘⌥\): the changes panel (`SessionPanel`).
  *
@@ -21,70 +21,36 @@ import { useQuery } from '@tanstack/react-query';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
-import { WorkspaceIndexControl } from '@/features/workspace-index';
-import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { useHasIndexHost } from '@/features/workspace-index';
+import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
+import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import { AgentPickers, NoAgents } from './AgentPickers';
-import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
+import { NoAgents } from './AgentPickers';
+import { CloudTranscript } from './CloudTranscript';
+import { HandoffDialogs } from './HandoffControls';
+import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
+import { ThreadComposer } from './ThreadComposer';
+import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
+import { useCloudChat } from './useCloudChat';
 import { useAgentSkills } from './useAgentSkills';
+import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
+import { useSessionMenuActions } from './useSessionMenuActions';
+import { useThreadHandoff } from './useThreadHandoff';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
-import { WorkspaceComposer } from './WorkspaceComposer';
 
 const LIST_KEY = ['workspace', 'list'] as const;
 
-interface HeaderProps {
-  session: ThreadSession;
-  workspace: Workspace;
-  projectId: number;
-  conversationId: string;
-  busy: boolean;
-  projectMenuOpen: boolean;
-  onProjectMenuOpenChange: (open: boolean) => void;
-}
+/** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
+const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
 
-/** The folder, its project and agent, the folder's code index, "Open in chat" for a started thread, and the panel toggle. */
-function SessionHeader({ session, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
-  const changesOpen = useDesktopLayout((state) => state.changesOpen);
-  const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
-  const attention = session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
-  return (
-    <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-      <TitleBarSpacer
-        leading={!sidebarOpen}
-        logo={false}
-        trailing={
-          <>
-            <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} open />
-            {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
-            {!changesOpen && <PanelToggle count={attention} />}
-          </>
-        }
-      >
-        <ShowSidebarButton />
-        <FolderTitle workspace={workspace} />
-        <AgentPickers
-          selection={session.selection}
-          projectId={projectId}
-          projects={session.projects}
-          busy={busy}
-          onChangeProject={(next) => session.rebind.mutate(next)}
-          projectMenuOpen={projectMenuOpen}
-          onProjectMenuOpenChange={onProjectMenuOpenChange}
-          agentRef={session.commands.agentRef}
-        />
-      </TitleBarSpacer>
-    </Box>
-  );
-}
+const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
@@ -92,58 +58,67 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
-  const [pendingApproval, ...waiting] = turn.view.approvals;
+  // "Continue?" at the step limit is a card in the transcript; the rest are the dialog's queue.
+  const continueRequest = turn.view.approvals.find((approval) => approval.kind === 'continue');
+  const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => approval.kind !== 'continue');
   const busy = turn.busy || session.rebind.isPending;
   const started = turn.turnId !== null || turn.earlier.length > 0;
   // The intro stands in for a thread with nothing to show: new, or its history unreadable.
   const nothingEarlier = session.history.kind === 'none' || session.history.kind === 'unavailable';
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
+  const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
+  const codingAgent = useLocalCodingAgent(projectId, raw.empty);
+  // A thread away from this computer is chatted with on the server (the cloud copy); `cloud` is idle otherwise.
+  const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
+
+  useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index') });
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
     // transcript scrolls in its own column and the composer stays below it.
     <Box data-testid="workspace-session" sx={{ position: 'absolute', inset: 0, display: 'flex', minHeight: 0 }}>
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <SessionHeader
-          session={session}
+        <ThreadToolbar
           workspace={workspace}
-          projectId={projectId}
           conversationId={conversationId}
+          projectId={projectId}
+          projects={session.projects}
           busy={busy}
-          projectMenuOpen={projectMenuOpen}
-          onProjectMenuOpenChange={setProjectMenuOpen}
+          onChangeProject={(next) => session.rebind.mutate(next)}
+          pathOpen={projectMenuOpen}
+          onPathOpenChange={setProjectMenuOpen}
+          attention={attentionOf(session)}
+          onIndexSettings={indexSettingsOpener(hasIndex)}
         />
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {raw.empty && <NoAgents busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
-            {!raw.empty && !started && nothingEarlier && (
-              <ThreadIntro
-                workspace={workspace}
-                conversationId={conversationId}
-                unavailable={session.history.kind === 'unavailable'}
-                title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
-              />
+            {handoff.offLaptop ? (
+              <CloudTranscript chat={cloud} />
+            ) : (
+              <>
+              {raw.empty && (
+                <NoAgents codingAgent={codingAgent} busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />
+              )}
+              {!raw.empty && !started && nothingEarlier && (
+                <ThreadIntro
+                  workspace={workspace}
+                  conversationId={conversationId}
+                  unavailable={session.history.kind === 'unavailable'}
+                  title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
+                />
+              )}
+              <EarlierTurns history={session.history} shown={session.shown} />
+              <Exchanges turn={turn} prompts={session.prompts} />
+              <ApprovalDialog request={continueRequest} queued={0} onRespond={session.answer} />
+              </>
             )}
-            <EarlierTurns history={session.history} shown={session.shown} />
-            <Exchanges turn={turn} prompts={session.prompts} />
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <SessionNotices error={firstError(turn.startError, session.sendError, session.rebind.error)} commands={commands} />
-          <WorkspaceComposer
-            ipc={ipc}
-            workspaceId={workspace.id}
-            canSend={session.canSend}
-            busy={turn.busy}
-            planMode={commands.planMode}
-            onPlanModeChange={commands.setPlanMode}
-            skills={skills}
-            onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
-            onStop={() => void turn.cancel()}
-            onCommand={session.run}
-          />
+          <ThreadComposer ipc={ipc} workspaceId={workspace.id} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
         </Box>
       </Box>
       {changesOpen && (
@@ -151,6 +126,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           ipc={ipc}
           appIpc={appIpc}
           workspaceId={workspace.id}
+          hasIndex={hasIndex}
           changeSets={session.changeSets}
           undoTurnId={session.undoTurnId}
           undoRequest={commands.undoRequest}
@@ -158,6 +134,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           decided={session.decided}
         />
       )}
+      <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>
   );

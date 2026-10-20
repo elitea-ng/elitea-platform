@@ -20,7 +20,7 @@ import { composer, describeWorkspaceError, replayView, TurnTranscript, type Work
 import type { StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
-import { modKey, useDesktopLayout } from '@/widgets/desktop-shell';
+import { copyText, modKey, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { SessionCommands } from './useSessionCommands';
 import type { ServerMessage, ThreadHistory } from './useThreadHistory';
@@ -63,10 +63,18 @@ export function firstError(startError: string | null, sendError: string | null, 
   return rebindError === null || rebindError === undefined ? null : describeWorkspaceError(rebindError);
 }
 
-function YourPrompt({ text }: { text: string }): React.JSX.Element {
+/** The native context menu of a message: Copy. */
+export function useCopyMenu(): (text: string, event: React.MouseEvent) => void {
+  const showMenu = useContextMenu();
+  return (text, event) => showMenu(event, [{ id: 'copy', label: t('workspace.copy', 'Copy'), run: () => copyText(text) }]);
+}
+
+export function YourPrompt({ text }: { text: string }): React.JSX.Element {
+  const copyMenu = useCopyMenu();
   return (
     <Box
       data-testid="your-prompt"
+      onContextMenu={(event) => copyMenu(text, event)}
       sx={(theme: Theme) => ({
         alignSelf: 'flex-end',
         maxWidth: '85%',
@@ -152,26 +160,16 @@ export function ThreadIntro({
   );
 }
 
-/** The header's way to the whole conversation in the Elitea chat. */
-export function OpenInChat({ conversationId }: { conversationId: string }): React.JSX.Element {
-  return (
-    <Box sx={(theme: Theme) => ({ ...linkSx(theme), flexShrink: 0, whiteSpace: 'nowrap' })} data-testid="open-in-chat">
-      <Link to="/chat/$conversationId" params={{ conversationId }}>
-        {t('workspace.openInChat', 'Open in chat')}
-      </Link>
-    </Box>
-  );
-}
-
 const quietSx = (theme: Theme) => ({ color: theme.vars.palette.text.metrics });
 
 /** One recorded turn: its prompt, then its events replayed as the live transcript showed them. */
 function RecordedTurn({ stored }: { stored: StoredTurn }): React.JSX.Element {
+  const copyMenu = useCopyMenu();
   const view = useMemo(() => replayView(stored.events), [stored.events]);
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <YourPrompt text={stored.prompt} />
-      <TurnTranscript view={view} busy={false} onCancel={() => undefined} />
+      <TurnTranscript view={view} busy={false} onCancel={() => undefined} onTextContextMenu={copyMenu} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <Typography variant="bodySmall" sx={quietSx}>
           {t('workspace.history.interrupted', 'This turn did not finish: the app closed while it ran.')}
@@ -187,12 +185,15 @@ function RecordedTurn({ stored }: { stored: StoredTurn }): React.JSX.Element {
 }
 
 function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
+  const copyMenu = useCopyMenu();
   if (message.role === 'user') return <YourPrompt text={message.content} />;
   return (
     // The chat's own renderer; raw HTML from the model is dropped, not rendered.
-    <Markdown renderHtml={false} data-testid="history-answer">
-      {message.content}
-    </Markdown>
+    <Box onContextMenu={(event) => copyMenu(message.content, event)}>
+      <Markdown renderHtml={false} data-testid="history-answer">
+        {message.content}
+      </Markdown>
+    </Box>
   );
 }
 
@@ -231,6 +232,7 @@ export function EarlierTurns({ history, shown }: { history: ThreadHistory; shown
 
 /** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) */
 export function Exchanges({ turn, prompts }: { turn: WorkspaceTurn; prompts: readonly string[] }): React.JSX.Element {
+  const copyMenu = useCopyMenu();
   const exchanges = [
     ...turn.earlier.map((entry, index) => ({ key: entry.turnId, prompt: prompts[index], view: entry.view, live: false })),
     ...(turn.turnId === null ? [] : [{ key: turn.turnId, prompt: prompts[turn.earlier.length], view: turn.view, live: true }]),
@@ -240,7 +242,13 @@ export function Exchanges({ turn, prompts }: { turn: WorkspaceTurn; prompts: rea
       {exchanges.map((exchange) => (
         <Box key={exchange.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt} />}
-          <TurnTranscript view={exchange.view} busy={exchange.live && turn.busy} onCancel={() => void turn.cancel()} />
+          <TurnTranscript
+            view={exchange.view}
+            busy={exchange.live && turn.busy}
+            onCancel={() => void turn.cancel()}
+            onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
+            onTextContextMenu={copyMenu}
+          />
         </Box>
       ))}
     </>

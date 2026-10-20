@@ -1,0 +1,187 @@
+{{- if .Values.egressProxy.enabled }}
+{{- include "elitea-egress-proxy.validateGuards" . -}}
+{{- $e := .Values.egressProxy }}
+{{- $l := $e.limits }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "elitea-egress-proxy.fullname" . }}
+  labels:
+    {{- include "elitea-egress-proxy.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $e.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "elitea-egress-proxy.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "elitea-egress-proxy.selectorLabels" . | nindent 8 }}
+      annotations:
+        # A key rotation is read from the mounted Secret without a restart
+        # (ELITEA_EGRESS_PROXY_KEYS_RELOAD_INTERVAL); this checksum restarts the
+        # pods only when the chart-managed key set changes shape.
+        checksum/public-keys: {{ toJson ($e.publicKeys.keys | default dict) | sha256sum }}
+        {{- with $e.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "elitea-egress-proxy.serviceAccountName" . }}
+      # The proxy calls no Kubernetes API.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      # Drain: readiness fails at SIGTERM, the proxy keeps accepting for
+      # drainDelaySeconds, then waits up to shutdownTimeoutSeconds for open
+      # tunnels. The grace period covers both (the chart refuses less).
+      terminationGracePeriodSeconds: {{ $e.terminationGracePeriodSeconds }}
+      {{- include "elitea.imagePullSecrets" (dict "local" $e.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
+      {{- if $e.affinity }}
+      affinity:
+        {{- toYaml $e.affinity | nindent 8 }}
+      {{- else }}
+      # Two replicas on two nodes when the cluster has them: one node failure
+      # must not cut every allowlist-mode run off at once.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "elitea-egress-proxy.selectorLabels" . | nindent 20 }}
+      {{- end }}
+      {{- if $e.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml $e.topologySpreadConstraints | nindent 8 }}
+      {{- else }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "elitea-egress-proxy.selectorLabels" . | nindent 14 }}
+      {{- end }}
+      {{- with $e.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $e.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: elitea-egress-proxy
+          image: "{{ $e.image.repository }}:{{ $e.image.tag | default .Values.image.tag }}"
+          imagePullPolicy: {{ $e.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: proxy
+              containerPort: {{ $e.service.port }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ $e.adminPort }}
+              protocol: TCP
+          env:
+            - name: ELITEA_EGRESS_PROXY_LISTEN_ADDR
+              value: {{ printf ":%v" $e.service.port | quote }}
+            - name: ELITEA_EGRESS_PROXY_ADMIN_ADDR
+              value: {{ printf ":%v" $e.adminPort | quote }}
+            - name: ELITEA_EGRESS_PROXY_PUBLIC_KEYS
+              value: /etc/elitea-egress-proxy/keys
+            - name: ELITEA_EGRESS_PROXY_KEYS_RELOAD_INTERVAL
+              value: {{ $e.publicKeys.reloadInterval | quote }}
+            - name: ELITEA_EGRESS_PROXY_DENY_CIDRS
+              value: {{ include "elitea-egress-proxy.denyCidrs" . | quote }}
+            - name: ELITEA_EGRESS_PROXY_MAX_CONNECTIONS
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.maxConnections" "value" $l.maxConnections "min" 1) | quote }}
+            - name: ELITEA_EGRESS_PROXY_MAX_HEADER_BYTES
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.maxHeaderBytes" "value" $l.maxHeaderBytes "min" 1) | quote }}
+            - name: ELITEA_EGRESS_PROXY_RUN_MAX_CONNECTIONS
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.runMaxConnections" "value" $l.runMaxConnections "min" 1) | quote }}
+            - name: ELITEA_EGRESS_PROXY_RUN_MAX_BYTES
+              value: {{ include "elitea.integer" (dict "field" "egressProxy.limits.runMaxBytes" "value" $l.runMaxBytes "min" 1) | quote }}
+            - name: ELITEA_EGRESS_PROXY_IDLE_TIMEOUT
+              value: {{ $l.idleTimeout | quote }}
+            - name: ELITEA_EGRESS_PROXY_MAX_CONNECTION_LIFETIME
+              value: {{ $l.maxConnectionLifetime | quote }}
+            - name: ELITEA_EGRESS_PROXY_SUMMARY_INTERVAL
+              value: {{ $e.summaryInterval | quote }}
+            - name: ELITEA_EGRESS_PROXY_DRAIN_DELAY
+              value: {{ printf "%vs" $e.drainDelaySeconds | quote }}
+            - name: ELITEA_EGRESS_PROXY_SHUTDOWN_TIMEOUT
+              value: {{ printf "%vs" $e.shutdownTimeoutSeconds | quote }}
+            - name: ELITEA_EGRESS_PROXY_LOG_LEVEL
+              value: {{ $e.logLevel | quote }}
+            {{- if $e.audit.enabled }}
+            # The per-turn audit: run summaries to elitea-main over mTLS.
+            - name: ELITEA_EGRESS_PROXY_AUDIT_TARGET
+              value: {{ include "elitea-egress-proxy.auditTarget" . | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_SERVER_NAME
+              value: {{ include "elitea-egress-proxy.auditServerName" . | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_CA_FILE
+              value: {{ printf "%s/ca.crt" $e.audit.mountPath | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_CERT_FILE
+              value: {{ printf "%s/tls.crt" $e.audit.mountPath | quote }}
+            - name: ELITEA_EGRESS_PROXY_AUDIT_KEY_FILE
+              value: {{ printf "%s/tls.key" $e.audit.mountPath | quote }}
+            - name: ELITEA_EGRESS_PROXY_REPLICA_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            periodSeconds: 2
+            failureThreshold: 1
+          volumeMounts:
+            - name: public-keys
+              mountPath: /etc/elitea-egress-proxy/keys
+              readOnly: true
+            {{- if $e.audit.enabled }}
+            - name: audit-client-tls
+              mountPath: {{ $e.audit.mountPath }}
+              readOnly: true
+            {{- end }}
+          {{- with $e.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: public-keys
+          secret:
+            secretName: {{ include "elitea-egress-proxy.keysSecretName" . }}
+            defaultMode: 0444
+        {{- if $e.audit.enabled }}
+        - name: audit-client-tls
+          secret:
+            secretName: {{ $e.audit.clientSecretName }}
+            defaultMode: 0440
+        {{- end }}
+{{- end }}

@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use tauri::{AppHandle, Manager as _};
 
@@ -179,6 +179,8 @@ pub struct Attention {
     app: AppHandle,
     tracker: Mutex<Tracker>,
     permission: AtomicU8,
+    /// Cloud threads waiting on the person (`activity.rs`): counted with the approvals on the Dock badge.
+    external: AtomicUsize,
 }
 
 impl Attention {
@@ -188,6 +190,7 @@ impl Attention {
             app,
             tracker: Mutex::new(Tracker::default()),
             permission: AtomicU8::new(PERMISSION_UNKNOWN),
+            external: AtomicUsize::new(0),
         }
     }
 
@@ -215,6 +218,13 @@ impl Attention {
         }
     }
 
+    /// The number of cloud threads waiting on the person changed.
+    pub fn set_external(&self, waiting: usize) {
+        if self.external.swap(waiting, Ordering::AcqRel) != waiting {
+            self.refresh_badge();
+        }
+    }
+
     /// `approval_respond` answered `request_id`.
     pub fn answered(&self, request_id: &str) {
         if self.tracker().answered(request_id) {
@@ -230,7 +240,7 @@ impl Attention {
             let Some(attention) = app.try_state::<std::sync::Arc<Attention>>() else {
                 return;
             };
-            let count = attention.tracker().pending();
+            let count = attention.tracker().pending() + attention.external.load(Ordering::Acquire);
             if let Some(window) = app.get_webview_window("main") {
                 // Windows has no badge count (unsupported, ignored).
                 let _ = window

@@ -31,7 +31,10 @@ func TestLocalWorkPolicyOverlay(t *testing.T) {
 		"local_work_command_deny": ["rm -rf *"],
 		"local_work_path_deny": ["**/.env", "~/.ssh/**"],
 		"local_work_local_mcp": true, "local_work_local_index": false,
-		"local_work_cloud_sync": true, "local_work_memory_write": false}`), &values); err != nil {
+		"local_work_cloud_sync": true, "local_work_memory_write": false,
+		"local_work_cloud_handoff": true, "local_work_index_local_embeddings": false,
+		"local_work_index_remote_embeddings": true,
+		"local_work_index_model_mirror_url": "https://mirror.example.com/hf"}`), &values); err != nil {
 		t.Fatal(err)
 	}
 	got := NativeClientPolicyFromValues(values).LocalWork
@@ -39,7 +42,9 @@ func TestLocalWorkPolicyOverlay(t *testing.T) {
 		Allowed: true, Shell: false, MaxSandboxMode: SandboxModeReadOnly, Network: true,
 		CommandAllow: []string{"cargo test", "npm test"}, CommandDeny: []string{"rm -rf *"},
 		PathDeny: []string{"**/.env", "~/.ssh/**"}, LocalMCP: true, LocalIndex: false,
-		CloudSync: true, MemoryWrite: false,
+		CloudSync: true, MemoryWrite: false, CloudHandoff: true,
+		IndexLocalEmbeddings: false, IndexRemoteEmbeddings: true,
+		IndexModelMirrorURL: "https://mirror.example.com/hf",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("overlay = %+v\nwant %+v", got, want)

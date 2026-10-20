@@ -111,7 +111,10 @@ function labelledButton(text: HTMLElement, name: string | RegExp): HTMLButtonEle
 async function openGroupedExport(user: ReturnType<typeof userEvent.setup>) {
   // Check the selected button without recomputing every composer button's accessible name.
   await user.click(labelledButton(await screen.findByText(/Thought for/), /Thought for/));
-  await user.click(labelledButton(screen.getByText(/^debug_probe$/i), /^debug_probe$/i));
+  // A pipeline Code node is not a delegated sub-agent: its steps render flat in
+  // the thinking view, labelled by the node, as the current UI renders every
+  // plain pipeline node (`getSubAgentName`, EliteaUI #5389) — no accordion.
+  expect(screen.queryByTestId(/^chat-answer-nested-agent-accordion-summary-/)).toBeNull();
   await user.click(screen.getByText('debug_probe / debug export'));
   expect(await screen.findByRole('dialog')).toHaveTextContent('Code debug · debug_probe · attempt 1');
   expect(artifactReads).toBe(0);

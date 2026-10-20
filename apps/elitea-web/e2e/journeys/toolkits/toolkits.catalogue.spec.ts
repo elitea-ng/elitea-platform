@@ -402,7 +402,18 @@ test.describe('JRNY-017C: the served toolkit catalogue', () => {
         ).toBe(201);
         createdIds.push(((await response.json()) as { id: string }).id);
         uiSaved.push(representative.type);
-        await expect(page.getByRole('alert')).toHaveCount(0);
+        // The saved toolkit's page has rendered (its name is the page title)
+        // BEFORE "no alert" is asserted. Asserted right after the 201, the
+        // check raced the render: it passed on a page that had not drawn its
+        // alerts yet, and failed once the page was quicker (#1294, webkit).
+        // The rig runs with tool discovery off, so a toolkit with no static
+        // tools shows the "discovery is turned off" notice (an info Alert,
+        // role=alert): a deployment setting, not a fault of the save, and
+        // the one alert excluded here.
+        await expect(page.getByText(name, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+        await expect(
+          page.getByRole('alert').filter({ hasNotText: 'Tool discovery is turned off on this deployment' }),
+        ).toHaveCount(0);
       }
 
       // ── read it back through a FULL reload, so the list cache cannot answer

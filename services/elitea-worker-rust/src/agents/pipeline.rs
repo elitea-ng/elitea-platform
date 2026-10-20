@@ -537,6 +537,10 @@ impl PipelineNativeAgentAssembler {
                 .redeem_elitea_context(runtime_context)
                 .await
                 .map_err(NativeAgentAssemblyError::from)?;
+            // ADR-0034 Phase 1: a handed-off thread runs direct agents only.
+            if context.workspace().is_some() {
+                return Err(super::workspace::workspace_run_unavailable());
+            }
             Some(Arc::new(context))
         } else {
             None
@@ -2439,19 +2443,6 @@ const fn invalid_direct_tool_scope() -> NativeAgentAssemblyError {
 /// Cause of [`unserved_direct_toolkit`]: the readable-refusal path (#1180)
 /// routes it to the registered "not available on this deployment" message.
 pub(crate) const UNSERVED_DIRECT_TOOLKIT_CODE: &str = "pipeline.direct_tool.toolkit_not_served";
-
-/// An approved sensitive-tool call of an `agent` node was started by an earlier continuation
-/// and left no outcome. It may have run, so it is never run again.
-pub(crate) const APPROVED_CALL_MAY_HAVE_STARTED_CODE: &str =
-    "pipeline.agent_node.approved_call_may_have_started";
-
-pub(crate) fn approved_call_may_have_started() -> NativeAgentAssemblyError {
-    NativeAgentAssemblyError::new(
-        NativeAgentAssemblyErrorCode::UnsupportedCapability,
-        "the approved tool call may already have started; it is not repeated",
-    )
-    .with_cause(APPROVED_CALL_MAY_HAVE_STARTED_CODE, None)
-}
 
 pub(crate) const fn unserved_direct_toolkit() -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(

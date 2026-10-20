@@ -78,4 +78,32 @@ describe('ApprovalDialog', () => {
     renderWithTheme(<ApprovalDialog request={REQUEST} queued={2} onRespond={vi.fn()} />);
     expect(screen.getByText('2 more waiting')).toBeInTheDocument();
   });
+
+  it('renders the continue kind as a compact card, not a modal, that never remembers', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    const request: ApprovalRequestPayload = {
+      request_id: 'c1',
+      kind: 'continue',
+      steps: 100,
+      tool: '',
+      title: 'The agent used its 100 steps',
+      detail: 'Renamed the symbol in 40 files; fixing the tests next.',
+      reason: '',
+      can_remember: false,
+    };
+    renderWithTheme(<ApprovalDialog request={request} queued={0} onRespond={onRespond} />);
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const card = screen.getByRole('region', { name: 'The agent used its 100 steps' });
+    expect(card).toHaveAttribute('data-testid', 'approval-continue-card');
+    expect(screen.getByText('Renamed the symbol in 40 files; fixing the tests next.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Continue for 100 more steps' }));
+    await user.click(screen.getByRole('button', { name: 'Stop here' }));
+    expect(onRespond.mock.calls).toEqual([
+      ['c1', 'allow_once'],
+      ['c1', 'deny'],
+    ]);
+  });
 });

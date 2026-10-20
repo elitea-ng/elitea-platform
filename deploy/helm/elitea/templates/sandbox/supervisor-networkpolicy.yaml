@@ -20,6 +20,10 @@ spec:
         - port: {{ .port }}
           protocol: TCP
         {{- end }}
+        {{- if $s.workspaceRuns.enabled }}
+        - port: {{ $s.workspaceRuns.profile.port }}
+          protocol: TCP
+        {{- end }}
       from:
         {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
         {{- include "elitea.netpol.mainPeer" . | nindent 8 }}

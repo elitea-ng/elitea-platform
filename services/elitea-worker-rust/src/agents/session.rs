@@ -94,10 +94,26 @@ const APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 const ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";
 const FROZEN_HISTORY_EVENT_DOMAIN: &[u8] = b"elitea.adk.frozen-history-event.v1\0";
 const MAX_PARALLEL_APPLICATION_CALLS: usize = 8;
+/// The user turn of an output continuation.
+///
+/// A REASONING-ONLY cut (no visible output; Main sends an empty
+/// `truncated_content`) cannot be continued from where it stopped: the hidden
+/// reasoning is deliberately not carried (agent.proto, `truncated_content`),
+/// so the model would restart the same reasoning under the same output
+/// allowance and be cut again (live 4.45.1: Continue for ever). The prompt
+/// therefore asks for the answer DIRECTLY, with as little reasoning as the task
+/// allows. A model with a reasoning effort set runs at `low` for this call; a
+/// model with no effort gets no reasoning knob, because none is proven safe for
+/// it (`continuation_reasoning_effort` in ordinary.rs lists each family). The
+/// allowance is not raised: it is the user's own setting, and the SDK's nested
+/// continuation never raises a configured limit either
+/// (`_continuation_max_tokens`, "reduce, but never increase"). A second
+/// reasoning-only cut ends the turn as `OUTPUT_CONTINUATION_EXHAUSTED` instead of
+/// another Continue (`AgentEventProjector::finish_after_eos`).
 fn output_continuation_prompt(original_request: &str, visible_content: &str) -> String {
     if visible_content.is_empty() {
         return format!(
-            "The previous attempt reached its output-token limit during internal reasoning before it produced visible output. Produce the complete answer now. Follow the original request exactly. Output only the answer and do not refer to the previous attempt.\n\nOriginal request:\n{original_request}"
+            "The previous attempt used its whole output-token limit on internal reasoning and produced no visible output. Answer now, directly. Keep internal reasoning to the minimum the task needs and start the visible answer immediately; the same output-token limit applies. Follow the original request exactly. Output only the answer and do not refer to the previous attempt.\n\nOriginal request:\n{original_request}"
         );
     }
     let visible_words = visible_content.split_whitespace().count();
@@ -284,6 +300,9 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// The Smart Tools Selection index for the system prompt, when the mode
     /// is on and has enough tools to be worth it.
     lazy_tools_index: Option<String>,
+    /// The cloud workspace's argument-aware confirmation (ADR-0034): a
+    /// destructive or escaping `run_command` is a HITL interrupt.
+    tool_call_confirmation: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -306,7 +325,36 @@ impl OrdinaryRuntimeBindings {
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             application_runtime,
             lazy_tools_index: None,
+            tool_call_confirmation: None,
         }
+    }
+
+    /// Ask a person before a destructive or escaping `run_command` of the
+    /// cloud workspace (ADR-0034 decision 9): `gate` decides per call, and
+    /// the workspace command joins the sensitive catalog as a CONDITIONAL
+    /// entry, so its interrupt is projected and resumed like any sensitive
+    /// tool's, and an approved call replays in the continuation's workspace.
+    ///
+    /// # Errors
+    ///
+    /// The catalog already names a `local.run_command`.
+    pub(crate) fn with_workspace_gate(
+        mut self,
+        gate: Arc<dyn adk_rust::agent::ToolCallConfirmation>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        self.sensitive_tools =
+            std::mem::take(&mut self.sensitive_tools).with_workspace_command()?;
+        self.tool_call_confirmation = Some(gate);
+        Ok(self)
+    }
+
+    #[must_use]
+    fn with_tool_call_confirmation(
+        mut self,
+        gate: Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
+    ) -> Self {
+        self.tool_call_confirmation = gate;
+        self
     }
 
     #[must_use]
@@ -376,6 +424,14 @@ impl OrdinaryRuntimeBindings {
     #[must_use]
     pub(crate) fn with_toolkit_attribution(mut self, catalog: ToolkitAttributionCatalog) -> Self {
         self.toolkit_attribution = catalog;
+        self
+    }
+
+    /// Add the cloud executor's workspace toolset (ADR-0034), after the
+    /// configured toolkits.
+    #[must_use]
+    pub(crate) fn with_workspace_toolset(mut self, toolset: Arc<dyn Toolset>) -> Self {
+        self.toolsets.push(toolset);
         self
     }
 
@@ -652,6 +708,7 @@ impl OrdinaryNativeAgentPlan {
             self.generation,
             self.definition_digest,
         )
+        .with_root_identity(self.session_identity().ok())
     }
 
     /// The durable conversation thread this turn belongs to.
@@ -818,6 +875,17 @@ impl OrdinaryNativeAgentPlan {
 
     pub(super) fn session_id(&self) -> &str {
         self.session_id.as_ref()
+    }
+
+    /// The root session's identity, the one the Runner and the direct HITL
+    /// resume read and write.
+    pub(super) fn session_identity(&self) -> Result<AdkIdentity, NativeAgentAssemblyError> {
+        let app_name = adk_rust::AppName::new(APP_NAME).map_err(|_| invalid_configuration())?;
+        Ok(AdkIdentity::new(
+            app_name,
+            self.user_id.clone(),
+            self.session_id.clone(),
+        ))
     }
 
     pub(super) fn resource_project_id(&self) -> &str {
@@ -1452,6 +1520,23 @@ pub(crate) trait DurableModelCompletion: Send + Sync {
     }
 }
 
+/// Test-only: exit the process with this code before the Runner persists a
+/// confirmation (pause) event: a Worker that dies after a replayed message and
+/// before ADK's pre-check pause on an undecided sibling is durable.
+#[cfg(test)]
+pub(crate) static EXIT_BEFORE_CONFIRMATION_APPEND: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+
+#[cfg(test)]
+fn exit_before_confirmation_append(event: &Event) {
+    if event.actions.tool_confirmation.is_some()
+        && let code @ 1.. =
+            EXIT_BEFORE_CONFIRMATION_APPEND.load(std::sync::atomic::Ordering::Acquire)
+    {
+        std::process::exit(code);
+    }
+}
+
 pub(super) struct RunnerSessionService {
     inner: Arc<dyn SessionService>,
     completion: Option<Arc<dyn DurableModelCompletion>>,
@@ -1562,6 +1647,8 @@ impl SessionService for RunnerSessionService {
         if self.omit_resume_input(&event) {
             return Ok(());
         }
+        #[cfg(test)]
+        exit_before_confirmation_append(&event);
         self.inner
             .append_event(session_id, self.durable_event(event)?)
             .await
@@ -1571,6 +1658,8 @@ impl SessionService for RunnerSessionService {
         if self.omit_resume_input(&req.event) {
             return Ok(());
         }
+        #[cfg(test)]
+        exit_before_confirmation_append(&req.event);
         self.inner
             .append_event_for_identity(AppendEventRequest {
                 identity: req.identity,
@@ -1608,6 +1697,20 @@ impl SessionService for RunnerSessionService {
 pub(crate) struct OrdinaryAgentCompletion<M> {
     model: M,
     thread_id: String,
+    /// ADR-0034: the cloud executor's workspace, published once the run
+    /// completes or pauses, and never when it fails.
+    workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+}
+
+impl<M> OrdinaryAgentCompletion<M> {
+    #[must_use]
+    pub(crate) fn with_workspace(
+        mut self,
+        workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+    ) -> Self {
+        self.workspace = workspace;
+        self
+    }
 }
 
 #[async_trait]
@@ -1616,9 +1719,65 @@ where
     M: BoundOrdinaryAgentModel,
 {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
-        let content = self.model.take_completed_text()?;
+        // A turn wrapped up for a take back was stopped cooperatively: it may
+        // have no final text of its own, and it still completes (its work is
+        // published) with the take-back note. A turn that finished on its own
+        // before the stop fired keeps its answer as it is.
+        let wrapped_up = self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.wrap_up().stopped());
+        let mut content = match self.model.take_completed_text() {
+            Ok(content) => content,
+            Err(_) if wrapped_up => String::new(),
+            Err(error) => {
+                if let Some(workspace) = &self.workspace {
+                    let _ = workspace
+                        .finish(crate::workspace_run::turn::TurnEnd::Failed)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(workspace) = &self.workspace {
+            let stamp = workspace
+                .finish(crate::workspace_run::turn::TurnEnd::Completed)
+                .await
+                .map_err(|error| super::workspace::publish_error(&error))?;
+            // The visible turn notice of contract 6.4: which files held
+            // harvested values (names, never values) and what was done.
+            if let Some(notice) = stamp
+                .as_ref()
+                .and_then(|stamp| crate::workspace_run::file_redact::notice(&stamp.redactions))
+            {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str(&notice);
+            }
+            if wrapped_up {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str(crate::workspace_run::wrap_up::NOTE);
+            }
+        }
         CompletedAgentBrowserOutput::ordinary(content, self.thread_id)
             .map_err(|error| completed_output_error(&error))
+    }
+
+    async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
+        if let Some(workspace) = &self.workspace {
+            workspace
+                .finish(crate::workspace_run::turn::TurnEnd::Paused)
+                .await
+                .map_err(|error| super::workspace::publish_error(&error))?;
+        }
+        Ok(())
+    }
+
+    fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
+        self.workspace.as_ref().map(|workspace| workspace.wrap_up())
     }
 }
 
@@ -1839,28 +1998,41 @@ async fn resolve_pipeline_start(
             Some(super::graph::resume::PipelineResume::empty())
         }
         PipelineNativeStart::Hitl(decision) => {
-            // An approved call an earlier continuation started may have run: refuse
-            // before any decision is resolved, with the "may have started" reason.
-            if let Some(checkpoint) = state.application_checkpoint(plan).await?
-                && super::pipeline::scope_receipts::has_unfinished_approved_resume(&checkpoint)
-                    .map_err(|_| invalid_configuration())?
-            {
-                return Err(super::pipeline::approved_call_may_have_started());
-            }
             let session = restore_pipeline_session(state, plan).await?;
+            let owner = super::dispatch_journal::DispatchOwner::new(
+                plan.execution_id.clone(),
+                plan.generation,
+            );
             let resolved = decision
                 .resolve(
                     session.as_ref(),
                     state.checkpointer.as_ref(),
                     ROOT_AGENT_NAME,
                     plan.session_id.as_ref(),
+                    &owner,
                 )
                 .await
                 .map_err(|error| pipeline_resume_error(&error))?;
             let (resume, application_decisions) = resolved.into_parts();
             if let Some(decisions) = application_decisions {
                 let events = session.events().all();
-                let interrupt = events.last().ok_or_else(invalid_configuration)?;
+                let interrupt = super::dispatch_journal::continuation_pause(
+                    &events,
+                    |event| {
+                        event
+                            .provider_metadata
+                            .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
+                    },
+                    &owner,
+                    |pause| {
+                        super::graph::resume::pause_interrupt_ids(
+                            pause,
+                            ROOT_AGENT_NAME,
+                            plan.session_id.as_ref(),
+                        )
+                    },
+                )
+                .ok_or_else(invalid_configuration)?;
                 let binding = super::events::pipeline_application_event_binding(
                     interrupt,
                     ROOT_AGENT_NAME,
@@ -2338,7 +2510,11 @@ where
         AssembledNativeAgentInvocation::new(
             invocation,
             projector,
-            OrdinaryAgentCompletion { model, thread_id },
+            OrdinaryAgentCompletion {
+                model,
+                thread_id,
+                workspace: None,
+            },
         ),
         evidence,
     ))
@@ -2377,6 +2553,7 @@ fn build_runtime_agent(
         instruction_plan,
         // Already part of the bound model's system instruction (ordinary.rs).
         lazy_tools_index: _,
+        tool_call_confirmation,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -2425,6 +2602,9 @@ fn build_runtime_agent(
     }
     if internal_tools.ask_user_enabled() {
         builder = builder.require_tool_confirmation(ASK_USER_TOOL_NAME);
+    }
+    if let Some(gate) = tool_call_confirmation {
+        builder = builder.tool_call_confirmation(gate);
     }
     let ApplicationRuntimeProjection {
         presentations: application_tools,
@@ -2559,9 +2739,10 @@ async fn prepare_direct_resume(
     stored: &dyn Session,
     runtime: OrdinaryRuntimeBindings,
     start: DirectResumeStart,
+    journal: &super::dispatch_journal::DispatchJournal,
 ) -> Result<PreparedDirectResume, NativeAgentAssemblyError> {
     let OrdinaryRuntimeBindings {
-        toolsets,
+        mut toolsets,
         sensitive_tools,
         mut delegated_authorization,
         internal_tools,
@@ -2574,7 +2755,9 @@ async fn prepare_direct_resume(
         instruction_plan,
         // Already part of the bound model's system instruction (ordinary.rs).
         lazy_tools_index: _,
+        tool_call_confirmation,
     } = runtime;
+    let events = stored.events().all();
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
             .resolve(stored)
@@ -2594,6 +2777,22 @@ async fn prepare_direct_resume(
     } = application_runtime;
     let (model, run_input, toolsets, parallel_applications) = match resolved {
         ResolvedDirectHitlStart::Direct(decision) => {
+            // Another execution's dispatch record for this card: it already
+            // continued it, so this submission is stale (not "may have started").
+            let owned = super::dispatch_journal::decision_records_owned_by(
+                &events,
+                journal.owner(),
+                decision.invocation_id(),
+                decision.interrupt_id(),
+            )
+            .map_err(|_| {
+                direct_hitl_error(&DirectHitlError::new(DirectHitlErrorCode::CorruptSession))
+            })?;
+            if !owned {
+                return Err(direct_hitl_error(&DirectHitlError::new(
+                    DirectHitlErrorCode::StaleDecision,
+                )));
+            }
             decision.restore_authorization_scope(&mut delegated_authorization);
             let replay = if decision.is_delegated_authorization() {
                 (*decision)
@@ -2604,9 +2803,20 @@ async fn prepare_direct_resume(
                     .into_clarifying_question_replay()
                     .map_err(|error| direct_hitl_error(&error))?
             } else {
-                (*decision)
+                let replay = (*decision)
                     .into_direct_replay(&sensitive_tools)
-                    .map_err(|error| direct_hitl_error(&error))?
+                    .map_err(|error| direct_hitl_error(&error))?;
+                // Each approved call that may not simply run again journals its
+                // dispatch before its effect (one root append; the Runner
+                // persists the outcome). Read-only calls re-run and cost none.
+                let journaled = replay.journaled_call_ids(&sensitive_tools);
+                toolsets = journal.wrap(
+                    toolsets,
+                    &replay.journal_decision(),
+                    journaled,
+                    super::dispatch_journal::JournalOutcomes::ByRunner,
+                );
+                replay
             };
             let prepared = replay.bind(model);
             let (replay_model, run_input, toolsets) = prepared.into_parts(toolsets);
@@ -2615,7 +2825,7 @@ async fn prepare_direct_resume(
         ResolvedDirectHitlStart::StaticTools(decisions) => {
             let coordinator = resume.as_ref().ok_or_else(invalid_configuration)?;
             let prepared = super::application_tools::prepare_static_application_resume(
-                &stored.events().all(),
+                &events,
                 decisions,
                 &application_tools,
                 coordinator,
@@ -2633,11 +2843,12 @@ async fn prepare_direct_resume(
         ResolvedDirectHitlStart::Nested(decisions) => {
             let coordinator = resume.as_ref().ok_or_else(invalid_configuration)?;
             let prepared = prepare_nested_application_resume(
-                &stored.events().all(),
+                &events,
                 decisions,
                 &application_tools,
                 coordinator,
                 model,
+                journal.owner(),
             )
             .await?;
             let (replay_model, user_content, run_config) = prepared.into_parts();
@@ -2664,7 +2875,8 @@ async fn prepare_direct_resume(
         )
         .with_internal_tools(internal_tools)
         .with_instruction_plan(instruction_plan)
-        .with_toolkit_attribution(toolkit_attribution),
+        .with_toolkit_attribution(toolkit_attribution)
+        .with_tool_call_confirmation(tool_call_confirmation),
         parallel_applications,
     })
 }
@@ -2679,6 +2891,11 @@ async fn assemble_direct_resume_with_sessions_and_applications<M>(
 where
     M: BoundOrdinaryAgentModel,
 {
+    let journal = super::dispatch_journal::DispatchJournal::new(
+        Arc::clone(&sessions),
+        plan.session_identity()?,
+        super::dispatch_journal::DispatchOwner::new(plan.execution_id.clone(), plan.generation),
+    );
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -2711,8 +2928,14 @@ where
         })
         .await
         .map_err(|_| dependency_unavailable())?;
-    let prepared =
-        prepare_direct_resume(model.provider_model(), stored.as_ref(), runtime, start).await?;
+    let prepared = prepare_direct_resume(
+        model.provider_model(),
+        stored.as_ref(),
+        runtime,
+        start,
+        &journal,
+    )
+    .await?;
     let (agent, projector) = build_runtime_agent(
         prepared.model,
         generation_config,
@@ -2738,23 +2961,16 @@ where
     Ok(AssembledNativeAgentInvocation::new(
         NativeAgentInvocation::new_direct_hitl(runner, user_id, session_id, prepared.run_input),
         projector,
-        OrdinaryAgentCompletion { model, thread_id },
+        OrdinaryAgentCompletion {
+            model,
+            thread_id,
+            workspace: None,
+        },
     ))
 }
 
 fn direct_hitl_error(error: &DirectHitlError) -> NativeAgentAssemblyError {
-    let code = match error.code() {
-        DirectHitlErrorCode::InvalidInput
-        | DirectHitlErrorCode::StaleDecision
-        | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        // A root Agent has no registered "may have started" reason yet (G-ADV-01);
-        // the refusal stays typed and the effect is never repeated.
-        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
-    };
-    NativeAgentAssemblyError::new(code, "the direct tool continuation replay was rejected")
+    super::direct_hitl::assembly_error(error, "the direct tool continuation replay was rejected")
 }
 
 async fn restore_or_create_session(
@@ -3223,6 +3439,17 @@ fn pipeline_resume_error(error: &PipelineResumeError) -> NativeAgentAssemblyErro
         | PipelineResumeErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
         PipelineResumeErrorCode::UnsupportedCapability => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        // An approved call may have run; the run ends with that registered reason.
+        PipelineResumeErrorCode::MayHaveStarted => {
+            return NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+            )
+            .with_cause(
+                crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                None,
+            );
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable

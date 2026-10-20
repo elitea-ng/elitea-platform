@@ -50,6 +50,7 @@ import (
 	v2openapidocs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/openapidocs"
 	v2pipelinetriggers "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2predict "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	v2projectcloudexecutor "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectcloudexecutor"
 	v2projectinfo "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projectinfo"
 	v2projects "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	v2promptcontextreads "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/promptcontextreads"
@@ -75,6 +76,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
+	handoffapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	platformauth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/buildinfo"
@@ -584,6 +586,15 @@ type RouterConfig struct {
 	// 1.5). Composed in cmd/elitea-main wherever a database is configured;
 	// it needs no runtime, because no worker runs a local turn.
 	CurrentLocalTurns http.Handler
+	// CurrentWorkspaceHandoff serves the desktop ⇄ cloud handoff and the
+	// workspace store's desktop routes (ADR-0034 decision 14, client contract
+	// 1.8). Composed in cmd/elitea-main wherever a database and an object
+	// store are configured; nil registers none of its routes.
+	CurrentWorkspaceHandoff http.Handler
+	// CloudExecutorStorageEncryption is the handoff's startup answer for
+	// storage encryption at rest ("confirmed", "attested", "refused"), shown
+	// on the admin cloud_executor section. Empty when not composed.
+	CloudExecutorStorageEncryption string
 	// CurrentResolvedVersion serves resolveApplicationVersion (ADR-0029
 	// decision 5a, client contract 1.6). Composed in cmd/elitea-main wherever
 	// a database is configured; it answers 501 where no agent plane is.
@@ -2103,6 +2114,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					admin.WithSCIMClients(scimClientStore),
 					// The toolkit type policy the served catalogue also reads.
 					admin.WithToolkitTypePolicy(toolkitTypePolicyStore),
+					admin.WithCloudExecutorEncryption(cfg.CloudExecutorStorageEncryption),
 				}, adminOptions...)...,
 			)
 			// Project requests (#871) reuse the SAME provisioner and personal-
@@ -2337,6 +2349,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// are rendered unavailable in the UI rather than guessed at here.
 				r.With(requireProjectsEdit).
 					Put("/project_suspend/{mode}/{projectID}", adminHandler.ProjectSuspend)
+				// A project's own Send to cloud switch, for any project, from
+				// the admin Projects page (ADR-0034 decision 11). The same
+				// handler serves the project settings page's route under
+				// /elitea_core, gated there on the project's own permissions;
+				// here the gates are the projects surface's.
+				adminCloudExecutor := newProjectCloudExecutorHandler(cfg.Pool)
+				r.With(requireProjectsView).Get(v2projectcloudexecutor.AdminPath, adminCloudExecutor.Get)
+				r.With(requireProjectsEdit).Put(v2projectcloudexecutor.AdminPath, adminCloudExecutor.Put)
 				r.With(requireRuntimePlugins).Get("/plugin_config_schemas/{mode}", adminHandler.PluginConfigSchemas)
 				// The admin Configuration page's read and write (unit A14).
 				// The `{mode}` pair they replace answered 200 for EVERY section:
@@ -4141,6 +4161,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					personalproject.NewOwnershipCheck(cfg.Pool).IsOwnPersonalProject,
 					"models.project_context.edit",
 					"models.project_settings.edit")
+				// The project's own Send to cloud switch (ADR-0034 decision
+				// 11). Any member reads it; only the project admin writes it,
+				// the same rule the `cloud_executor` configuration rows follow
+				// (internal/api/v2/configurations/project_settings_access.go),
+				// so there is no personal-project exception here.
+				projectCloudExecutor := newProjectCloudExecutorHandler(cfg.Pool)
+				r.With(requireProjectContextView).Get(v2projectcloudexecutor.ProjectPath, projectCloudExecutor.Get)
+				r.With(projectPermission(v2configs.ProjectSettingsEditPermission)).
+					Put(v2projectcloudexecutor.ProjectPath, projectCloudExecutor.Put)
 				r.With(requireProjectContextView).
 					Get("/project_info/prompt_lib/{projectID}/project-info", coreHandler.ProjectInfo)
 				r.With(requireProjectSettingsEdit).
@@ -5010,4 +5039,22 @@ func discoveryAttachmentPolicy(limits v2convs.AttachmentLimits) v2discovery.Atta
 		InlineImageFormats:   limits.InlineImageFormats,
 		InlineImageDownscale: limits.InlineImageDownscale,
 	}
+}
+
+// newProjectCloudExecutorHandler serves a project's Send to cloud switch over
+// the cloud executor settings repository. Without a database every call
+// answers 503.
+func newProjectCloudExecutorHandler(pool *pgxpool.Pool) *v2projectcloudexecutor.Handler {
+	if pool == nil {
+		return v2projectcloudexecutor.NewHandler(nil)
+	}
+	repo, err := dbrepos.NewCloudExecutorSettingsRepository(pool)
+	if err != nil {
+		return v2projectcloudexecutor.NewHandler(nil)
+	}
+	service, err := handoffapp.NewProjectSwitchService(repo, repo)
+	if err != nil {
+		return v2projectcloudexecutor.NewHandler(nil)
+	}
+	return v2projectcloudexecutor.NewHandler(service)
 }

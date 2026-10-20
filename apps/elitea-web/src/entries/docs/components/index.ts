@@ -18,6 +18,7 @@ import { CardGroup, Card } from './Card';
 import { Check, Info, Note, Tip, Warning } from './Callouts';
 import { DocsImage } from './DocsImage';
 import { DocsLink } from './DocsLink';
+import { DocsTable } from './DocsTable';
 import { Frame } from './Frame';
 import { Icon } from './Icon';
 import { Mermaid } from './Mermaid';
@@ -66,6 +67,8 @@ export const docsComponents: Record<string, ComponentType<any>> = {
   // not authored as JSX) against these the same way it resolves `<Card>`
   // against `Card` above — see `DocsLink.tsx`/`DocsImage.tsx` for why they
   // exist (root-relative content hrefs/srcs need the docs base prefixed).
+  // `table` wraps a Markdown table in its own scroller (`DocsTable.tsx`).
   a: DocsLink,
   img: DocsImage,
+  table: DocsTable,
 };

@@ -11,6 +11,7 @@ import { activeToken, mentionText, referencedPaths } from './model/composerToken
 import { readLastLocation, writeLastLocation } from './model/threads';
 
 export { ApprovalDialog } from './ui/ApprovalDialog';
+export { ApprovalCard } from './ui/ApprovalCard';
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
 export { TurnTranscript } from './ui/TurnTranscript';
 export { WorkspaceList } from './ui/WorkspaceList';
@@ -20,7 +21,6 @@ export { useWorkspaceTurn } from './model/useWorkspaceTurn';
 export { replayView } from './model/turnReducer';
 export { describeWorkspaceError } from './model/describeWorkspaceError';
 export { readThreads, recordThread, threadsQueryKey } from './model/threads';
-export type { WorkspaceThread } from './model/threads';
 export type { WorkspaceTurn } from './model/useWorkspaceTurn';
 export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';

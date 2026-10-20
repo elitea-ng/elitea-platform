@@ -65,6 +65,10 @@ export interface AdminProjectsPageState {
   readonly memberProject: AdminProjectRow | null;
   /** The project whose activity drawer is open, or `null`. */
   readonly activityProject: AdminProjectRow | null;
+  /** The project whose Send to cloud dialog is open, or `null`. */
+  readonly cloudExecutorProject: AdminProjectRow | null;
+  /** Presentation only: whether the operator's config advertises the project write. */
+  readonly canEditProjects: boolean;
 
   readonly onTabChange: (event: unknown, next: number) => void;
   readonly onSearchChange: (value: string) => void;
@@ -75,6 +79,9 @@ export interface AdminProjectsPageState {
   readonly onOpenActivity: (project: AdminProjectRow) => void;
   readonly onCloseActivity: () => void;
   readonly onCloseMembers: () => void;
+  /** Always present: the dialog reads; `canEditProjects` decides whether it writes. */
+  readonly onOpenCloudExecutor: (project: AdminProjectRow) => void;
+  readonly onCloseCloudExecutor: () => void;
   /** Downloads every row the current tab + search select, as CSV. */
   readonly onExport: () => void;
 
@@ -114,6 +121,7 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
   const [errorMessage, setErrorMessage] = useState('');
   const [memberProject, setMemberProject] = useState<AdminProjectRow | null>(null);
   const [activityProject, setActivityProject] = useState<AdminProjectRow | null>(null);
+  const [cloudExecutorProject, setCloudExecutorProject] = useState<AdminProjectRow | null>(null);
   const [isExporting, setIsExporting] = useState(false);
 
   const projectType = PROJECT_TYPES[activeTab] ?? 'team';
@@ -277,6 +285,8 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
 
     memberProject,
     activityProject,
+    cloudExecutorProject,
+    canEditProjects: showsProjectWrites,
 
     onTabChange,
     onSearchChange,
@@ -293,6 +303,8 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
     onOpenActivity: useCallback((project: AdminProjectRow) => setActivityProject(project), []),
     onCloseActivity: useCallback(() => setActivityProject(null), []),
     onCloseMembers: useCallback(() => setMemberProject(null), []),
+    onOpenCloudExecutor: setCloudExecutorProject,
+    onCloseCloudExecutor: useCallback(() => setCloudExecutorProject(null), []),
     onExport,
 
     onToggleSuspended: showsProjectWrites ? handleToggleSuspended : undefined,

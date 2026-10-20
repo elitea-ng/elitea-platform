@@ -43,6 +43,8 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "26"
+          # semantic-release runs from npx; nothing here wants a cache.
+          package-manager-cache: false
 
       - name: Semantic Release
         id: semantic
@@ -179,23 +181,6 @@ jobs:
   #   gate cannot quietly exempt an image or expect a target type the merge gate
   #   does not.
   #
-  # elitea-worker-python was excluded here until this change, on the grounds
-  # that "the worker plane it belongs to (worker_core / worker_client /
-  # indexer_worker / provider_worker) is marked `pending` in the workspace
-  # repos.yaml". That inference does not hold: those four rows are
-  # `legacy/plugins/` repositories — the code services/elitea-worker-python
-  # REPLACES — and the monorepo it actually lives in carries `status: target`.
-  # repos.yaml has no row for this service at all.
-  #
-  # The contract the note called unsettled is settled here and gated:
-  # `schema_version` is a Literal["elitea.runtime-deploy.v1"] with
-  # extra="forbid" (services/elitea-worker-python/src/elitea_worker/config.py),
-  # the NATS JetStream command bus is implemented on both sides
-  # (services/elitea-main/internal/transport/commandbus, the worker's
-  # transport/nats_jetstream.py; docs/runtime-command-bus.md), and
-  # testdata/proto/runtime/v1 is a shared
-  # conformance corpus both languages run in CI.
-  #
   # Meanwhile compose declares this service mandatory for agent execution —
   # "without this service an admitted run streams nothing and ends in a
   # terminal failure" — so the one service the platform cannot execute an agent
@@ -225,6 +210,11 @@ jobs:
           - name: elitea-subapp-host
             context: .
             dockerfile: ./services/elitea-subapp-host/Containerfile
+          # Repo ROOT context: the module replaces libs/go/egresslib.
+          - name: elitea-egress-proxy
+            context: .
+            dockerfile: ./services/elitea-egress-proxy/Containerfile
+            target: final
           - name: elitea-ui
             context: .
             dockerfile: ./deploy/docker/Containerfile.elitea-ui
@@ -246,15 +236,8 @@ jobs:
           - name: elitea-llm-gateway
             context: .
             dockerfile: ./services/elitea-llm-gateway/Containerfile
-          # Repo ROOT context, like elitea-main and unlike the two services
-          # above: the Containerfile COPYs libs/proto (:19) and
-          # testdata/proto/runtime/v1 (:85), so the service directory is not a
-          # valid context. No `target:` — its shipping stage is unnamed.
-          - name: elitea-worker-python
-            context: .
-            dockerfile: ./services/elitea-worker-python/Containerfile
           # The native Rust worker, and the chart's DEFAULT worker.runtime.
-          # Repo ROOT context, like the Python worker: the Containerfile COPYs
+          # Repo ROOT context: the Containerfile COPYs
           # libs/proto from outside the service directory.
           #
           # It had a Containerfile, a CI workflow and a compose overlay naming
@@ -266,6 +249,14 @@ jobs:
           - name: elitea-worker-rust
             context: .
             dockerfile: ./services/elitea-worker-rust/Containerfile
+          # The cloud executor's sandbox supervisor (ADR-0034): the
+          # `supervisor` stage of the worker Containerfile, built with
+          # `--features sandbox-supervisor`. The chart pins it by digest
+          # (sandboxKubernetes.supervisor.image), so it must be pullable.
+          - name: elitea-sandbox-supervisor
+            context: .
+            dockerfile: ./services/elitea-worker-rust/Containerfile
+            target: supervisor
           # The Rust-native Inventory engine (ADR-0027): the only Inventory
           # engine sidecar. It replaced the Python elitea-inventory image,
           # which is no longer published. Repo ROOT context: the
@@ -295,6 +286,12 @@ jobs:
           - name: elitea-doc-extractor
             context: .
             dockerfile: ./services/elitea-doc-extractor/Containerfile
+          # elitea-workspace-runner (ADR-0034 decision 9): the cloud
+          # executor's workspace sandbox. Repo ROOT context: the Containerfile
+          # COPYs libs/rust.
+          - name: elitea-workspace-runner
+            context: .
+            dockerfile: ./libs/rust/workspace-runner/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -451,6 +448,9 @@ jobs:
           - name: elitea-subapp-host
             expect_type: gobinary
             blocking: true
+          - name: elitea-egress-proxy
+            expect_type: gobinary
+            blocking: true
           - name: elitea-ui
             expect_type: alpine
             blocking: true
@@ -460,9 +460,6 @@ jobs:
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
-          - name: elitea-worker-python
-            expect_type: python-pkg
-            blocking: false
           # `rustbinary`, not `debian`: the Containerfile builds with
           # cargo-auditable so trivy can see the crate graph, and this value is
           # what makes a report that only reached the distroless base FAIL
@@ -473,6 +470,12 @@ jobs:
           # itself reports zero. There is nothing here to exempt, so it is held
           # to the same threshold as the Go images.
           - name: elitea-worker-rust
+            expect_type: rustbinary
+            blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
             expect_type: rustbinary
             blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
@@ -504,6 +507,14 @@ jobs:
           - name: elitea-doc-extractor
             expect_type: rustbinary
             blocking: true
+          # elitea-workspace-runner (ADR-0034 decision 9): a Debian 13 userland
+          # with git and a build toolchain (the agent builds the user's
+          # project in it), so trivy reports a `debian` Result, and the image
+          # is exempt for the Debian base's unfixed findings
+          # (.github/image-scan-exempt.txt).
+          - name: elitea-workspace-runner
+            expect_type: debian
+            blocking: false
 
     steps:
       - name: Checkout
@@ -610,6 +621,9 @@ jobs:
           - name: elitea-subapp-host
             expect_type: gobinary
             blocking: true
+          - name: elitea-egress-proxy
+            expect_type: gobinary
+            blocking: true
           - name: elitea-ui
             expect_type: alpine
             blocking: true
@@ -619,9 +633,6 @@ jobs:
           - name: elitea-llm-gateway
             expect_type: gobinary
             blocking: true
-          - name: elitea-worker-python
-            expect_type: python-pkg
-            blocking: false
           # `rustbinary`, not `debian`: the Containerfile builds with
           # cargo-auditable so trivy can see the crate graph, and this value is
           # what makes a report that only reached the distroless base FAIL
@@ -632,6 +643,12 @@ jobs:
           # itself reports zero. There is nothing here to exempt, so it is held
           # to the same threshold as the Go images.
           - name: elitea-worker-rust
+            expect_type: rustbinary
+            blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
             expect_type: rustbinary
             blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
@@ -663,6 +680,14 @@ jobs:
           - name: elitea-doc-extractor
             expect_type: rustbinary
             blocking: true
+          # elitea-workspace-runner (ADR-0034 decision 9): a Debian 13 userland
+          # with git and a build toolchain (the agent builds the user's
+          # project in it), so trivy reports a `debian` Result, and the image
+          # is exempt for the Debian base's unfixed findings
+          # (.github/image-scan-exempt.txt).
+          - name: elitea-workspace-runner
+            expect_type: debian
+            blocking: false
 
     steps:
       - name: Checkout
@@ -694,13 +719,15 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           IMAGE="${{ env.REGISTRY }}/${{ matrix.image.name }}"
 
-          TAGS="--tag ${IMAGE}:${VERSION}"
+          # An array, not a "--tag a --tag b" string split by an unquoted
+          # expansion: the same argv, and no element can be split or globbed.
+          tags=(--tag "${IMAGE}:${VERSION}")
           if [[ "$VERSION" != *"-"* ]]; then
             MAJOR_MINOR="${VERSION%.*}"
-            TAGS="$TAGS --tag ${IMAGE}:latest --tag ${IMAGE}:${MAJOR_MINOR}"
+            tags+=(--tag "${IMAGE}:latest" --tag "${IMAGE}:${MAJOR_MINOR}")
           fi
 
-          docker buildx imagetools create $TAGS \
+          docker buildx imagetools create "${tags[@]}" \
             "${IMAGE}:${VERSION}-linux-amd64" \
             "${IMAGE}:${VERSION}-linux-arm64"
 
@@ -764,6 +791,12 @@ jobs:
           - chart: nats
             image: ""
           - chart: nats-bootstrap
+            image: ""
+          # The optional sandbox runtime installer (ADR-0034): a node-level
+          # chart kept apart from `elitea`, which never touches nodes. Its
+          # image is a pinned third-party Debian 13 digest, so nothing is
+          # stamped.
+          - chart: elitea-sandbox-runtime
             image: ""
 
     steps:
@@ -1023,7 +1056,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 
@@ -1066,7 +1099,7 @@ jobs:
           # `elitea` chart, so a rollback warned about six charts that no longer
           # exist and left the one chart this release actually published in
           # place — pointing at images the step above had just deleted.
-          CHARTS=("elitea" "nats" "nats-bootstrap")
+          CHARTS=("elitea" "nats" "nats-bootstrap" "elitea-sandbox-runtime")
           ORG="${{ github.repository_owner }}"
 
           # Report what could not be deleted. Every call here used to end in

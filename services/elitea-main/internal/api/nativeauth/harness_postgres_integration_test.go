@@ -41,6 +41,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
@@ -106,6 +107,11 @@ func buildTemplate(t *testing.T, admin *pgxpool.Pool) (string, error) {
 	}
 	if err := migrate.New(pool, migrations.Files).ApplyShared(ctx); err != nil {
 		return "", fmt.Errorf("apply shared migrations: %w", err)
+	}
+	// The naive-clock probe the dbtest template installs, so every clone
+	// refuses a session-local stamp in a `timestamp` WITHOUT time zone column.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		return "", err
 	}
 	return name, nil
 }

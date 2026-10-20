@@ -37,6 +37,7 @@ func newObjectStore(ctx context.Context, cfg storage.Config) (storage.ObjectStor
 			ForcePathStyle: cfg.S3.ForcePathStyle,
 			Bucket:         cfg.S3.Bucket,
 			KeyPrefix:      cfg.S3.KeyPrefix,
+			NoPresign:      cfg.S3.NoPresign,
 		})
 	case "azure":
 		store, err = azure.New(ctx, azure.Config{

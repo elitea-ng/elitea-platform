@@ -189,10 +189,46 @@ pub struct SpooledFrame {
     pub payload: Vec<u8>,
 }
 
+/// The locked child directory, released explicitly when the owner drops.
+///
+/// `flock` ownership belongs to the open file DESCRIPTION, not to this
+/// descriptor, so closing it only releases the lock once every copy is closed.
+/// `fork` — and glibc's `posix_spawn`, which clones without `CLONE_FILES` —
+/// copies every descriptor, `O_CLOEXEC` ones included, into the child until it
+/// execs. Without the explicit `LOCK_UN` below, a sibling thread spawning a
+/// process at the moment a spool dropped kept the spool "owned" by a
+/// half-born child, and this worker's own immediate reopen failed with
+/// `OwnershipUnavailable`. Unlocking through any descriptor of the description
+/// releases it for all of them, so ownership now ends exactly when the owner
+/// does.
+struct OwnedSpoolDirectory(File);
+
+impl std::ops::Deref for OwnedSpoolDirectory {
+    type Target = File;
+
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+
+impl std::os::fd::AsFd for OwnedSpoolDirectory {
+    fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+
+impl Drop for OwnedSpoolDirectory {
+    fn drop(&mut self) {
+        // Best effort: on failure the close that follows still releases the
+        // lock once no inherited copy remains, which is the old behaviour.
+        let _ = flock(&self.0, FlockOperation::Unlock);
+    }
+}
+
 /// Single-owner handle for one execution-bound encrypted directory.
 pub struct EncryptedOutputSpool {
     root: File,
-    directory: File,
+    directory: OwnedSpoolDirectory,
     child_name: String,
     cipher: LessSafeKey,
     stream_aad: Vec<u8>,
@@ -287,7 +323,7 @@ impl EncryptedOutputSpool {
         stream_aad.extend_from_slice(&binding.encoded);
         let mut spool = Self {
             root,
-            directory,
+            directory: OwnedSpoolDirectory(directory),
             child_name: binding.directory_name.clone(),
             cipher,
             stream_aad,
@@ -1370,7 +1406,7 @@ mod tests {
         stream_aad.extend_from_slice(&binding.encoded);
         let spool = EncryptedOutputSpool {
             root: File::open(".").expect("current directory"),
-            directory: File::open(".").expect("current directory"),
+            directory: super::OwnedSpoolDirectory(File::open(".").expect("current directory")),
             child_name: String::new(),
             cipher,
             stream_aad,
@@ -1389,5 +1425,48 @@ mod tests {
             )
             .expect("fixed nonce encryption");
         assert_eq!(lower_hex(&body), vectors["fixed_nonce_body"]);
+    }
+
+    /// An open file description shared with another process outlives the
+    /// handle that took the lock: `fork` (and glibc's `posix_spawn`, which
+    /// clones without `CLONE_FILES`) copies every descriptor — `O_CLOEXEC`
+    /// ones included — into the child until it execs. A concurrent spawn at
+    /// the moment a spool dropped therefore kept the `flock` alive past the
+    /// drop, and an immediate reopen by the same worker saw
+    /// `OwnershipUnavailable`
+    /// (`checkpoint_progress_replay_preserves_exact_bytes_and_closes_on_error`
+    /// failed that way on Linux CI, where many lib tests re-exec the test
+    /// binary). A duplicated descriptor shares the description exactly as an
+    /// inherited one does, so holding one across the drop is the deterministic
+    /// form of that race.
+    #[test]
+    fn dropping_the_owner_releases_ownership_even_if_the_description_is_shared() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let temporary = tempfile::tempdir_in(base).expect("temporary output root");
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("private output root");
+        let master = SpoolMasterKey::new([b's'; 32]);
+        let limits = SpoolLimits {
+            max_frames: 4,
+            max_encrypted_bytes: 64 * 1024,
+            max_frame_bytes: 4096,
+        };
+        let binding = binding();
+        let first = EncryptedOutputSpool::open(temporary.path(), &master, &binding, limits)
+            .expect("first owner");
+        let inherited = first.directory.try_clone().expect("shared description");
+        assert!(
+            EncryptedOutputSpool::open(temporary.path(), &master, &binding, limits).is_err(),
+            "a live owner must still exclude a second one"
+        );
+        drop(first);
+        let second = EncryptedOutputSpool::open(temporary.path(), &master, &binding, limits)
+            .expect("ownership must end when the owning handle drops");
+        drop(second);
+        drop(inherited);
     }
 }

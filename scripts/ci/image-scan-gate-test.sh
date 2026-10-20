@@ -117,13 +117,13 @@ expects 1 "a report with no gobinary target fails, though it holds no finding" \
 # ── An exempt image ──────────────────────────────────────────────────────────
 echo "== an exempt image reports and does not block =="
 expects 0 "findings are reported and do not stop the release" \
-  "$WORK/exempt-findings.json" elitea-worker-python python-pkg false
+  "$WORK/exempt-findings.json" an-exempt-image python-pkg false
 expects 1 "zero findings fail: the exemption has outlived its cause" \
-  "$WORK/exempt-clean.json" elitea-worker-python python-pkg false
+  "$WORK/exempt-clean.json" an-exempt-image python-pkg false
 expects 1 "the dormancy guard blocks the exempt image too" \
-  "$WORK/os-layers-only.json" elitea-worker-python python-pkg false
+  "$WORK/os-layers-only.json" an-exempt-image python-pkg false
 expects 1 "a missing report blocks the exempt image too" \
-  "$WORK/no-such-report.json" elitea-worker-python python-pkg false
+  "$WORK/no-such-report.json" an-exempt-image python-pkg false
 
 # ── The gate refuses input it cannot act on ──────────────────────────────────
 echo "== input the gate must refuse =="

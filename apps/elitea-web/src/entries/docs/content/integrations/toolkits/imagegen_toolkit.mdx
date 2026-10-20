@@ -46,8 +46,8 @@ Name the toolkit and select **Create**. It's now available to attach to agents, 
 
 ## Common issues
 
-<Note title="Both workers">
-ImageGen runs on the Python and the Rust worker. On either, image generation goes through the gateway with your project's budget, and a model that does not support image generation (or an unreachable gateway) is reported to the agent as a plain sentence. The Rust worker does not download an image the model returns only as a link; it uses images returned inline, which is what the gateway asks for.
+<Note title="How images are generated">
+Image generation goes through the gateway with your project's budget, and a model that does not support image generation (or an unreachable gateway) is reported to the agent as a plain sentence. The worker does not download an image the model returns only as a link; it uses images returned inline, which is what the gateway asks for.
 </Note>
 
 <Note>

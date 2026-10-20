@@ -567,20 +567,23 @@ async fn postgres_scoped_child() {
                 "",
                 [44; 32],
             );
-            // The root frontier still holds the approved resume the dead Worker started, so
-            // the replacement refuses before it resolves the decision or binds any tool.
-            let Err(error) = assembler
-                .assemble(authorized_turn(&request, "execution-recover", 3))
+            // The replacement is the same execution re-claimed. The root dispatch journal
+            // holds the approved call's dispatch without an outcome, so the decision is
+            // refused as "may have started" before the tool binds a second time.
+            let upstream = match assembler
+                .assemble(authorized_turn(&request, "execution-crash", 3))
                 .await
-            else {
-                panic!("recover: a dispatched approval was assembled again");
+            {
+                Ok(invocation) => collect_pipeline_failure(invocation).await,
+                Err(error) => error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+                    .map(str::to_owned),
             };
             assert_eq!(
-                error
-                    .cause()
-                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
-                Some(super::super::pipeline::APPROVED_CALL_MAY_HAVE_STARTED_CODE),
-                "recover: the refusal names the may-have-started cause: {error}"
+                crate::protocol::output::model_failure(upstream.as_deref()),
+                crate::protocol::output::RuntimeFailureKind::RecoveryRefused,
+                "recover: the may-have-started reason, got {upstream:?}"
             );
             assert_eq!(
                 tool_calls.load(std::sync::atomic::Ordering::Acquire),

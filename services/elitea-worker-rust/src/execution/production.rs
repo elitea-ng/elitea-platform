@@ -289,6 +289,7 @@ impl ProductionAgentRuntime {
             sandbox,
             index_runtime,
             extractor,
+            workspace_runs,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -379,7 +380,8 @@ impl ProductionAgentRuntime {
                     .toolkit_model_call_cap
                     .unwrap_or(crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS),
             )
-            .with_office_runtime(office_runtime.clone()),
+            .with_office_runtime(office_runtime.clone())
+            .with_workspace_runs(workspace_runs),
         );
         let clock = Arc::new(SystemUnixMillisClock);
         let agent: ProductionAgentProcessor = native_agent_delivery_processor(

@@ -24,7 +24,7 @@ use super::attachment_tools::AttachmentLibrary;
 use super::attachments;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecisionSet, DirectHitlError,
-    DirectHitlErrorCode, DirectHitlRunInput,
+    DirectHitlRunInput,
 };
 use super::events::{
     AgentEventProjectionError, AgentEventProjector, CompletedAgentBrowserOutput,
@@ -139,6 +139,20 @@ impl From<RuntimeContextError> for NativeAgentAssemblyError {
 #[async_trait]
 pub(crate) trait NativeAgentCompletionSelector: Send {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>;
+
+    /// The run paused for input (a HITL interrupt) and `select` will not be
+    /// called. A cloud-executor turn publishes its work so far here
+    /// (ADR-0034 decision 7); every other turn has nothing to do.
+    async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
+        Ok(())
+    }
+
+    /// The cloud turn's take-back wrap-up (ADR-0034 decision 7), which the
+    /// lifecycle requests when the lease poll says `workspace_wrap_up`.
+    /// `None` for every other turn.
+    fn wrap_up(&self) -> Option<std::sync::Arc<crate::workspace_run::wrap_up::WrapUp>> {
+        None
+    }
 }
 
 /// Post-authorization assembly input with one runtime-context redemption.
@@ -733,16 +747,7 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
 }
 
 fn direct_hitl_admission_error(error: &DirectHitlError) -> NativeAgentAssemblyError {
-    let code = match error.code() {
-        DirectHitlErrorCode::InvalidInput
-        | DirectHitlErrorCode::StaleDecision
-        | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
-    };
-    NativeAgentAssemblyError::new(code, "the direct sensitive-tool continuation is malformed")
+    super::direct_hitl::assembly_error(error, "the direct sensitive-tool continuation is malformed")
 }
 
 fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAssemblyError {
@@ -750,7 +755,9 @@ fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAsse
         PipelineResumeErrorCode::InvalidInput
         | PipelineResumeErrorCode::StaleDecision
         | PipelineResumeErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        PipelineResumeErrorCode::UnsupportedCapability => {
+        // Admission parses a payload; it never resolves a dispatch.
+        PipelineResumeErrorCode::UnsupportedCapability
+        | PipelineResumeErrorCode::MayHaveStarted => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
@@ -1170,7 +1177,7 @@ impl NativeAgentInvocation {
         }
     }
 
-    /// Seal a read-only direct-HITL replay prepared from one persisted call.
+    /// Seal a direct-HITL replay prepared from one persisted call.
     pub(crate) fn new_direct_hitl(
         runner: Runner,
         user_id: UserId,

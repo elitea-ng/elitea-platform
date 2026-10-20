@@ -93,6 +93,8 @@ import type {
   NativeOAuthError,
   OkResponse,
   PlatformSettings,
+  ProjectCloudExecutorSwitch,
+  ProjectCloudExecutorSwitchUpdate,
   ProjectRequestCreate,
   PublishedAgentsListing,
   RemoveUserModeRoleParams,
@@ -1305,6 +1307,518 @@ export function useDeleteNativeClient<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getDeleteNativeClientQueryOptions(clientId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAdminProjectCloudExecutorResponse200 = {
+  data: ProjectCloudExecutorSwitch;
+  status: 200;
+};
+
+export type getAdminProjectCloudExecutorResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getAdminProjectCloudExecutorResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAdminProjectCloudExecutorResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAdminProjectCloudExecutorResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type getAdminProjectCloudExecutorResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getAdminProjectCloudExecutorResponseSuccess =
+  getAdminProjectCloudExecutorResponse200 & {
+    headers: Headers;
+  };
+export type getAdminProjectCloudExecutorResponseError = (
+  | getAdminProjectCloudExecutorResponse400
+  | getAdminProjectCloudExecutorResponse401
+  | getAdminProjectCloudExecutorResponse403
+  | getAdminProjectCloudExecutorResponse404
+  | getAdminProjectCloudExecutorResponse503
+) & {
+  headers: Headers;
+};
+
+export type getAdminProjectCloudExecutorResponse =
+  | getAdminProjectCloudExecutorResponseSuccess
+  | getAdminProjectCloudExecutorResponseError;
+
+export const getGetAdminProjectCloudExecutorUrl = (projectId: string) => {
+  return `/admin/project_cloud_executor/administration/${projectId}`;
+};
+
+/**
+ * The admin Projects page, for any project. The project's own cloud executor on/off (ADR-0034
+ * decision 11): its explicit value, or unset to follow the platform's
+ * `cloud_executor.project_default_enabled`, with the platform switch
+ * that always wins. Requires `projects.projects.projects.view` in the administration mode. NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+ * @summary Read a project's Send to cloud switch
+ */
+export const getAdminProjectCloudExecutor = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAdminProjectCloudExecutorResponse> => {
+  return eliteaFetch<getAdminProjectCloudExecutorResponse>(
+    getGetAdminProjectCloudExecutorUrl(projectId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAdminProjectCloudExecutorQueryKey = (projectId: string) => {
+  return [`/admin/project_cloud_executor/administration/${projectId}`] as const;
+};
+
+export const getGetAdminProjectCloudExecutorQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAdminProjectCloudExecutorQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>
+  > = ({ signal }) =>
+    getAdminProjectCloudExecutor(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminProjectCloudExecutorQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>
+>;
+export type GetAdminProjectCloudExecutorQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useGetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a project's Send to cloud switch
+ */
+
+export function useGetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminProjectCloudExecutorQueryOptions(
+    projectId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setAdminProjectCloudExecutorResponse200 = {
+  data: ProjectCloudExecutorSwitch;
+  status: 200;
+};
+
+export type setAdminProjectCloudExecutorResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type setAdminProjectCloudExecutorResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setAdminProjectCloudExecutorResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setAdminProjectCloudExecutorResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type setAdminProjectCloudExecutorResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type setAdminProjectCloudExecutorResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type setAdminProjectCloudExecutorResponseSuccess =
+  setAdminProjectCloudExecutorResponse200 & {
+    headers: Headers;
+  };
+export type setAdminProjectCloudExecutorResponseError = (
+  | setAdminProjectCloudExecutorResponse400
+  | setAdminProjectCloudExecutorResponse401
+  | setAdminProjectCloudExecutorResponse403
+  | setAdminProjectCloudExecutorResponse404
+  | setAdminProjectCloudExecutorResponse409
+  | setAdminProjectCloudExecutorResponse503
+) & {
+  headers: Headers;
+};
+
+export type setAdminProjectCloudExecutorResponse =
+  | setAdminProjectCloudExecutorResponseSuccess
+  | setAdminProjectCloudExecutorResponseError;
+
+export const getSetAdminProjectCloudExecutorUrl = (projectId: string) => {
+  return `/admin/project_cloud_executor/administration/${projectId}`;
+};
+
+/**
+ * The admin Projects page, for any project. Stores `enabled` in the project's `cloud_executor`
+ * setting and keeps its other fields; null removes it so the project
+ * follows the platform default. On is refused (409) while the platform
+ * has the cloud executor off. Requires `projects.projects.projects.edit` in the administration mode. NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+ * @summary Turn a project's Send to cloud on or off, or back to the default
+ */
+export const setAdminProjectCloudExecutor = async (
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setAdminProjectCloudExecutorResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setAdminProjectCloudExecutorResponse>(
+    getSetAdminProjectCloudExecutorUrl(projectId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(projectCloudExecutorSwitchUpdate),
+    },
+  );
+};
+
+export const getSetAdminProjectCloudExecutorQueryKey = (
+  projectId: string,
+  projectCloudExecutorSwitchUpdate?: ProjectCloudExecutorSwitchUpdate,
+) => {
+  return [
+    "PUT",
+    `/admin/project_cloud_executor/administration/${projectId}`,
+    projectCloudExecutorSwitchUpdate,
+  ] as const;
+};
+
+export const getSetAdminProjectCloudExecutorQueryOptions = <
+  TData = Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetAdminProjectCloudExecutorQueryKey(
+      projectId,
+      projectCloudExecutorSwitchUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>
+  > = ({ signal }) =>
+    setAdminProjectCloudExecutor(projectId, projectCloudExecutorSwitchUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetAdminProjectCloudExecutorQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>
+>;
+export type SetAdminProjectCloudExecutorQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useSetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Turn a project's Send to cloud on or off, or back to the default
+ */
+
+export function useSetAdminProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAdminProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetAdminProjectCloudExecutorQueryOptions(
+    projectId,
+    projectCloudExecutorSwitchUpdate,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

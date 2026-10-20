@@ -13,20 +13,18 @@ WORKDIR /src
 COPY libs/proto/gen/go ./libs/proto/gen/go
 WORKDIR /src/services/elitea-subapp-host
 COPY services/elitea-subapp-host/go.mod services/elitea-subapp-host/go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    for attempt in 1 2 3 4 5; do \
-        go mod download && exit 0; \
-        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
-        sleep $((attempt * 5)); \
-    done; \
-    echo "go mod download failed after 5 attempts" >&2; \
-    exit 1
 COPY services/elitea-subapp-host/ ./
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    for attempt in 1 2 3 4 5; do \
+        go mod download && break; \
+        [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }; \
+        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
+        sleep $((attempt * 5)); \
+    done; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-subapp-host ./cmd/elitea-subapp-host
 

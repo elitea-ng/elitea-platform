@@ -42,17 +42,8 @@ CONTAINERFILE="${REPO_ROOT}/services/elitea-llm-gateway/Containerfile"
 GO_MOD="${REPO_ROOT}/services/elitea-llm-gateway/go.mod"
 
 # The workflows that build or test THIS module.
-#
-# `.github/workflows/ci-python.yml` also sets up Go, to build the tier 2
-# conformance harness from this module. Its pin moved to the series in the same
-# change that moved ci-gateway.yml, so it is held here too.
-# services/elitea-worker-python/tests/parity/test_sdk_lock.py asserts that file
-# line by line, but it asserts the SDK revisions, the archive hash and the
-# conformance driver path — not the `go-version:` line. Keep it that way: a
-# toolchain pin belongs to this check, not to the SDK lock test.
 WORKFLOWS=(
   "${REPO_ROOT}/.github/workflows/ci-gateway.yml"
-  "${REPO_ROOT}/.github/workflows/ci-python.yml"
 )
 
 failures=0

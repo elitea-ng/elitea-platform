@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -9,14 +8,17 @@ use adk_rust::session::{
 use adk_rust::{Content, Event};
 use chrono::{TimeZone as _, Utc};
 use serde_json::json;
-use sqlx::postgres::PgConnectOptions;
-use sqlx::{ConnectOptions as _, PgPool};
+use sqlx::PgPool;
 
 use super::TestStateWriterLease;
 use super::postgres_session::{
     APPLICATION_CAPABILITY_ID, PostgresSessionError, PostgresSessionService, SessionLimits,
     SessionWriterAuthority, canonical_json, decode_event, encode_event, postgres_timestamp,
 };
+
+/// The client may start timing after the server's lock wait began (see the
+/// lock-timeout assertions below).
+const LOCK_WAIT_CLOCK_SKEW: Duration = Duration::from_millis(50);
 
 const TEST_DATABASE_URL: &str = "ELITEA_TEST_DATABASE_URL";
 static DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -25,13 +27,13 @@ const SESSION_MIGRATION: &str =
 
 pub(crate) struct IsolatedPostgres {
     pub(crate) pool: PgPool,
-    admin_options: PgConnectOptions,
+    admin_options: crate::test_pg::TestConnectOptions,
     pub(crate) database_name: String,
 }
 
 impl IsolatedPostgres {
     pub(crate) async fn create(database_url: &str) -> Self {
-        let admin_options = PgConnectOptions::from_str(database_url)
+        let admin_options = crate::test_pg::connect_options(database_url)
             .expect("parse PostgreSQL session component-test URL")
             .disable_statement_logging();
         let admin_pool = crate::test_pg::pool_options()
@@ -62,6 +64,7 @@ impl IsolatedPostgres {
             .connect_with(admin_options.clone().database(&database_name))
             .await
             .expect("connect isolated session database");
+        crate::test_pg::assert_test_session(&pool, "IsolatedPostgres::create").await;
         Self {
             pool,
             admin_options,
@@ -103,6 +106,9 @@ impl Drop for IsolatedPostgres {
 }
 
 pub(crate) async fn install_schema(pool: &PgPool) {
+    // Every fixture hands the pool its test will use through here, so this
+    // is where a hand-built UTC pool is caught however it was spelled.
+    crate::test_pg::assert_test_session(pool, "postgres_session_tests::install_schema").await;
     sqlx::raw_sql(SESSION_MIGRATION)
         .execute(pool)
         .await
@@ -989,7 +995,7 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
         .max_connections(2)
         .acquire_timeout(Duration::from_mins(1))
         .connect_with(
-            PgConnectOptions::from_str(&database_url)
+            crate::test_pg::connect_options(&database_url)
                 .expect("parse test URL")
                 .disable_statement_logging()
                 .database(&database.database_name),
@@ -1043,7 +1049,17 @@ async fn session_writer_lock_wait_fails_typed_instead_of_waiting_forever() {
         caused_by_lock_timeout(&error),
         "the failure is PostgreSQL's lock timeout, not another storage error"
     );
-    assert!(waited >= lock_timeout, "{waited:?}");
+    // PostgreSQL's lock_timeout runs on the SERVER, from when the statement
+    // starts waiting for the lock; this Instant starts on the client a little
+    // later (the request still has to reach the server). So the client can
+    // measure a few microseconds UNDER the timeout while the server waited
+    // all of it (seen in CI: 9.9992 s against 10 s). The 55P03 check above is
+    // what proves the lock timeout fired; this bound only checks the write
+    // was not refused early, so it allows the client/server clock skew.
+    assert!(
+        waited + LOCK_WAIT_CLOCK_SKEW >= lock_timeout,
+        "refused early: waited {waited:?}, lock timeout {lock_timeout:?}"
+    );
     assert!(waited < Duration::from_secs(5), "{waited:?}");
     holder.rollback().await.expect("release holder");
 

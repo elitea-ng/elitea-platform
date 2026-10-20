@@ -6,6 +6,7 @@
 {{- $inventory := .Values.inventory.enabled }}
 {{- $runtimePeers := and .Values.main.runtime.enabled $worker }}
 {{- $vectorPeers := and .Values.main.runtime.enabled .Values.vector.enabled }}
+{{- $egressAuditPeers := and .Values.main.runtime.enabled (include "elitea-egress-proxy.auditEnabled" .) }}
 {{- $httpPeers := or $edge $deepwiki $inventory $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
 # Ingress to the elitea-main pods. Only the sources listed here may open a
 # connection; every other in-cluster source is refused.
@@ -33,7 +34,7 @@ spec:
       {{- include "elitea-main.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
-  {{- if or $httpPeers $runtimePeers $vectorPeers }}
+  {{- if or $httpPeers $runtimePeers $vectorPeers $egressAuditPeers }}
   ingress:
   {{- end }}
     {{- if $httpPeers }}
@@ -77,5 +78,14 @@ spec:
           protocol: TCP
       from:
         {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-vector.selectorLabels" .)) | nindent 8 }}
+    {{- end }}
+    {{- if $egressAuditPeers }}
+    # The egress proxy, on the control listener only, for its run summaries
+    # (EgressAuditService, ADR-0034 decision 9).
+    - ports:
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
+          protocol: TCP
+      from:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-egress-proxy.selectorLabels" .)) | nindent 8 }}
     {{- end }}
 {{- end }}

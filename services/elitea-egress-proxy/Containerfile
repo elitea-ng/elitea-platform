@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+#
+# elitea-egress-proxy (ADR-0034 decision 9): the egress boundary for
+# cloud-executor sandboxes in allowlist mode.
+#
+# Build context is the REPO ROOT (docker-bake.hcl, publish.yml,
+# ci-image-scan.yml): the module replaces libs/go/egresslib and
+# libs/proto/gen/go (the EgressAuditService client), which live outside the
+# service directory. go.work is not copied, and the build sets GOWORK=off,
+# so the image builds the module exactly as go.mod and go.sum state.
+FROM golang:1.26-trixie AS builder
+WORKDIR /src
+COPY libs/go/egresslib ./libs/go/egresslib
+COPY libs/proto/gen/go ./libs/proto/gen/go
+COPY services/elitea-egress-proxy/go.mod services/elitea-egress-proxy/go.sum ./services/elitea-egress-proxy/
+WORKDIR /src/services/elitea-egress-proxy
+COPY services/elitea-egress-proxy/ ./
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+# VERSION is declared for build-time labelling; no version symbol exists in
+# the source tree, so it is NOT injected via -X.
+ARG VERSION=dev
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
+    for attempt in 1 2 3 4 5; do \
+        GOWORK=off go mod download && break; \
+        [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }; \
+        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
+        sleep $((attempt * 5)); \
+    done; \
+    CGO_ENABLED=0 GOWORK=off GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/elitea-egress-proxy ./cmd/elitea-egress-proxy
+
+# Distroless static on Debian 13: no shell, no package manager, nothing for a
+# compromised proxy to run. The chart probes /healthz and /readyz on the admin
+# port with httpGet; there is no HEALTHCHECK, because the image has no shell.
+FROM gcr.io/distroless/static-debian13:nonroot AS final
+COPY --from=builder /out/elitea-egress-proxy /elitea-egress-proxy
+HEALTHCHECK NONE
+# 3128: the proxy (CONNECT and absolute-form http://). 9090: admin
+# (/healthz, /readyz, /metrics).
+EXPOSE 3128 9090
+USER nonroot:nonroot
+ENTRYPOINT ["/elitea-egress-proxy"]

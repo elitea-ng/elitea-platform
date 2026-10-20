@@ -17,12 +17,16 @@ import (
 // S6's ArtifactBucketsRepository and ArtifactObjectsRepository methods the
 // bucket-plane handlers depend on. Nothing before S8 builds one.
 type fakeRepo struct {
-	mu       sync.Mutex
-	nextID   int64
-	buckets  map[int64]repos.BucketRow
-	policies map[int64]repos.ProjectStoragePolicy
-	sizes    map[int64]int64
-	counts   map[int64]int64
+	mu sync.Mutex
+	// gateCalls counts BucketGate calls; workspaceCalls the standalone
+	// IsWorkspaceBucket calls.
+	gateCalls      int
+	workspaceCalls int
+	nextID         int64
+	buckets        map[int64]repos.BucketRow
+	policies       map[int64]repos.ProjectStoragePolicy
+	sizes          map[int64]int64
+	counts         map[int64]int64
 	// objects backs UpsertObject/DeleteObjects/SumProjectBytes (S12) with
 	// real per-object tracking, independent of sizes/counts above (which
 	// stay directly seedable via setAggregate for S8's bucket-enrichment
@@ -478,3 +482,36 @@ func (r *fakeRepo) IsProjectAdmin(_ context.Context, projectID, userID int64) (b
 }
 
 var _ artifacts.Repository = (*fakeRepo)(nil)
+
+// IsWorkspaceBucket answers from the stored rows' type, as production does.
+func (f *fakeRepo) IsWorkspaceBucket(ctx context.Context, projectID int64, name string) (bool, error) {
+	f.mu.Lock()
+	f.workspaceCalls++
+	f.mu.Unlock()
+	return f.isWorkspaceBucket(ctx, projectID, name)
+}
+
+func (f *fakeRepo) isWorkspaceBucket(_ context.Context, projectID int64, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.buckets {
+		if row.ProjectID == projectID && row.Name == name && row.BucketType == "workspace" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// BucketGate is IsWorkspaceBucket and GetBucketPermission in one call, as
+// production answers them in one query. gateCalls counts the calls.
+func (f *fakeRepo) BucketGate(ctx context.Context, projectID, userID int64, bucket string) (repos.BucketGate, error) {
+	f.mu.Lock()
+	f.gateCalls++
+	f.mu.Unlock()
+	hidden, err := f.isWorkspaceBucket(ctx, projectID, bucket)
+	if err != nil || hidden {
+		return repos.BucketGate{Workspace: hidden}, err
+	}
+	permissions, found, err := f.GetBucketPermission(ctx, projectID, userID, bucket)
+	return repos.BucketGate{Permissions: permissions, Found: found}, err
+}

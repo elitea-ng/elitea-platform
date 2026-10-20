@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use elitea_agent_runtime::host::{
     ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, HostErrorCode,
 };
+use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
 use elitea_local_tools::approvals::{APPROVE_ALWAYS, PAYLOAD_KEY, ToolCall};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -140,19 +141,25 @@ impl ApprovalChannel for UiPrompt {
         let title = payload["title"].as_str().unwrap_or_default().to_owned();
         let kind = if request.payload.get(REMOTE_PAYLOAD_KEY).is_some() {
             "tool_confirmation"
+        } else if request.payload.get(CONTINUE_PAYLOAD_KEY).is_some() {
+            CONTINUE_KIND
         } else {
             "command_approval"
         };
         binding.events.send("approval_request", payload);
         let decision = answer.await.map_err(|_| ended())?;
         let approved = decision != UiDecision::Deny;
-        binding.recorder.hitl_exchange(json!({
+        let mut exchange = json!({
             "interrupt_id": request_id,
             "kind": kind,
-            "tool_run_id": request.subject,
             "prompt": cut(&title, 4096),
             "decision": if approved { "approve" } else { "reject" },
-        }));
+        });
+        // "Continue?" belongs to the turn, not to a tool step.
+        if kind != CONTINUE_KIND {
+            exchange["tool_run_id"] = Value::String(request.subject.clone());
+        }
+        binding.recorder.hitl_exchange(exchange);
         Ok(match decision {
             UiDecision::AllowAlways if can_remember => ApprovalOutcome::Decided {
                 action: APPROVE_ALWAYS.to_owned(),
@@ -215,6 +222,18 @@ fn describe(request: &ApprovalRequest) -> Value {
                 json!(shlex::split(command).unwrap_or_else(|| vec![command.clone()]));
         }
         return payload;
+    }
+    if let Some(question) = request.payload.get(CONTINUE_PAYLOAD_KEY) {
+        // "Continue?" at the step limit: asked every time, never remembered.
+        return json!({
+            "kind": CONTINUE_KIND,
+            "tool": "",
+            "title": request.message,
+            "detail": question.get("detail").and_then(Value::as_str).unwrap_or_default(),
+            "steps": question.get("steps").and_then(Value::as_u64).unwrap_or_default(),
+            "reason": "",
+            "can_remember": false,
+        });
     }
     if let Some(remote) = request.payload.get(REMOTE_PAYLOAD_KEY) {
         let text = |key: &str| remote.get(key).and_then(Value::as_str).unwrap_or_default();

@@ -82,10 +82,7 @@ func TestMemorySchemaKeepsPgvectorRequiredUnlessItLivesOnTheVectorStore(t *testi
 func TestMemoryIsOfferedOnTheRustWorkerOnlyWhenItIsActuallyServed(t *testing.T) {
 	t.Parallel()
 
-	rustIndexing := runtimecomposition.Config{
-		Enabled: true, IndexingRuntime: runtimecomposition.IndexingRuntimeRust,
-		IndexIngestDispatchEnabled: true,
-	}
+	rustIndexing := runtimecomposition.Config{Enabled: true, IndexIngestDispatchEnabled: true}
 	withModel := rustIndexing
 	withModel.MemoryEmbeddingModel = "text-embedding-3-small"
 

@@ -10,10 +10,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
+import { HandoffIpcProvider, rememberThreadUuid } from '@/features/workspace-handoff';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { BROWSER_PLATFORM, type AppIpc } from '@/shared/desktop/appEvents';
 import { createFakeAppIpc, MACOS_PLATFORM, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
+import { installTestEventSource } from '@/shared/api/sse/testing';
+import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { clearNamespace } from '@/shared/lib/storage';
@@ -24,7 +27,7 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const APP: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
 const DOCS: Workspace = { id: 'w2', path: '/Users/me/docs', name: 'docs', project_id: null, is_git: false };
 
-function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace } = {}) {
+function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Workspace[]; nextOpen?: Workspace; handoffIpc?: FakeHandoffIpc } = {}) {
   const rootRoute = createRootRoute({
     component: () => (
       <DesktopFrame permissions={new Set()} projects={[{ id: 42, name: 'Marketing', suspended: false }]} selectedProjectId="42" onSelectProject={() => undefined}>
@@ -46,7 +49,7 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
   const tree = (
     <AppProviders>
       <WorkspaceIpcProvider ipc={ipc}>
-        <RouterProvider router={router} />
+        {options.handoffIpc === undefined ? <RouterProvider router={router} /> : <HandoffIpcProvider ipc={options.handoffIpc}>{<RouterProvider router={router} />}</HandoffIpcProvider>}
       </WorkspaceIpcProvider>
     </AppProviders>
   );
@@ -90,6 +93,52 @@ describe('DesktopFrame sidebar', () => {
     expect(within(folders[0] as HTMLElement).queryAllByTestId('shell-thread')).toHaveLength(0);
   });
 
+  it('badges a thread that runs in the cloud or is on its way back, and no other', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    recordThread('w1', { id: '78', title: 'quick overview', updatedAt: 2 });
+    recordThread('w1', { id: '79', title: 'no uuid yet', updatedAt: 3 });
+    rememberThreadUuid('w1', '77', 'u-77');
+    rememberThreadUuid('w1', '78', 'u-78');
+    const handoffIpc = createFakeHandoffIpc();
+    handoffIpc.setStatusOf('u-77', { state: 'CLOUD_IDLE', epoch: 2, executor: 'cloud', read_only: true, sent_from_here: true });
+    handoffIpc.setStatusOf('u-78', { state: 'RECLAIMING', epoch: 3, executor: 'returning', read_only: true, sent_from_here: true });
+    mount({ handoffIpc });
+
+    const folders = await screen.findAllByTestId('shell-folder');
+    const rows = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
+    await waitFor(() => expect(rows.map((row) => row.textContent)).toEqual(['no uuid yet', 'quick overviewReturning', 'fix the buildIn cloud']));
+    // One batched read for every visible row with a UUID, not a call per row.
+    expect(handoffIpc.calls.statusManys).toEqual([['u-77', 'u-78']]);
+    expect(handoffIpc.calls.statuses).toEqual([]);
+  });
+
+  it('subscribes each bound project to the live handoff stream, once each, and skips the unbound folders', async () => {
+    const registry = installTestEventSource();
+    try {
+      const APP2: Workspace = { id: 'w4', path: '/Users/me/code/app2', name: 'app2', project_id: 42, is_git: true };
+      mount({ handoffIpc: createFakeHandoffIpc(), workspaces: [APP, APP2, DOCS] });
+      await screen.findAllByTestId('shell-folder');
+      await waitFor(() => {
+        expect(registry.getOpen().filter((source) => source.url === 'https://elitea.example/events/prompt_lib/42')).toHaveLength(1);
+      });
+      // The unbound folder (project_id null) opens no stream.
+      expect(registry.getOpen().filter((source) => source.url.includes('/events/prompt_lib/'))).toHaveLength(1);
+    } finally {
+      registry.restore();
+    }
+  });
+
+  it('opens no handoff stream without the handoff host', async () => {
+    const registry = installTestEventSource();
+    try {
+      mount();
+      await screen.findAllByTestId('shell-folder');
+      expect(registry.getOpen().filter((source) => source.url.includes('/events/prompt_lib/'))).toHaveLength(0);
+    } finally {
+      registry.restore();
+    }
+  });
+
   it('opens a folder from the sidebar and lands in it', async () => {
     const user = userEvent.setup();
     const picked: Workspace = { id: 'w3', path: '/tmp/new', name: 'new', project_id: null, is_git: false };
@@ -110,6 +159,41 @@ describe('DesktopFrame sidebar', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
     await user.click(screen.getByRole('button', { name: 'Local work' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
+  });
+});
+
+describe('DesktopFrame context menus', () => {
+  it('pops the native menu on a thread row and acts on the choice', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    const { router } = mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const thread = await within(folders[0] as HTMLElement).findByTestId('shell-thread');
+    appIpc.chooseFromContextMenu('chat');
+    fireEvent.contextMenu(thread);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    expect((appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'))).toEqual(['Open', 'Open in chat', 'Copy Link']);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
+  });
+
+  it('pops the native menu on a folder row: reveal, copy, projects, remove', async () => {
+    const appIpc: FakeAppIpc = createFakeAppIpc(MACOS_PLATFORM);
+    mount({ appIpc });
+    const folders = await screen.findAllByTestId('shell-folder');
+    fireEvent.contextMenu(within(folders[0] as HTMLElement).getAllByRole('button')[0] as HTMLElement);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+    expect(labels).toEqual(['New thread', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
+    const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['✓ Marketing']);
+  });
+
+  it('leaves the browser alone without a host', async () => {
+    mount({ appIpc: null });
+    const folders = await screen.findAllByTestId('shell-folder');
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    within(folders[0] as HTMLElement).getAllByRole('button')[0]?.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 });
 

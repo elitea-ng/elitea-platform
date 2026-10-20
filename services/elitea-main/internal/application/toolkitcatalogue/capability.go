@@ -1,23 +1,14 @@
 package toolkitcatalogue
 
-// What the admitted workers can actually BUILD, published as a verdict the
+// What the admitted worker can actually BUILD, published as a verdict the
 // admin page renders beside each type.
 //
 // # The problem this answers
 //
-// The served catalogue and the runtimes that execute it disagree, and nothing
-// on any screen said so:
-//
-//   - The Python worker image installs the SDK extras `[agent-current,
-//     indexing-current]`, a curated subset of `elitea-sdk[all]`.
-//     `services/elitea-worker-python/elitea-sdk.lock.json` build-verifies
-//     exactly eighteen SDK tool import keys. A type outside that set whose
-//     third-party dependency is absent lands in the SDK's FAILED_IMPORTS and
-//     fails at AGENT-RUN time, not at toolkit-create time.
-//   - The Rust worker materialises twenty-two native families and SKIPS every
-//     other type with a warning (`agent_toolkit_skipped`). It does not refuse.
-//     So a `STANDALONE_WORKER=rust` deployment silently drops most of the
-//     catalogue: the toolkit attaches, and then does nothing.
+// The served catalogue and the runtime that executes it disagree, and nothing
+// on any screen said so: the Rust worker materialises its native families and
+// SKIPS every other type with a warning (`agent_toolkit_skipped`). It does not
+// refuse. So a toolkit of an unported type attaches, and then does nothing.
 //
 // An operator deciding whether to offer a tile needs that fact in front of
 // them. This file is the fact.
@@ -25,28 +16,17 @@ package toolkitcatalogue
 // # UNVERIFIED IS NOT UNUSABLE, AND THIS NEVER HIDES A TYPE
 //
 // The verdict is ADVISORY. It changes nothing about what the catalogue serves:
-// `Filter` reads the policy tables and this file is not consulted there. That is
-// deliberate and it is the honest reading of what these two lists are.
+// `Filter` reads the policy tables and this file is not consulted there. The
+// catalogue's own worker-capability projection (runtimecomposition) is what
+// hides a type the worker cannot run.
 //
-// The Python list is what the image build VERIFIES, not what it can import. An
-// extra that happens to be present transitively still works; the lock simply
-// does not assert it. Turning "not build-verified" into "withheld" would take
-// roughly thirty working types away from every deployment on the strength of a
-// list that was never a capability manifest.
+// # Why the list is Go source and not a generated file
 //
-// The real fix is a worker that publishes its own FAILED_IMPORTS at admission,
-// which is a separate change to `services/elitea-worker-python` and to the
-// admission plane. When that lands, `Source` gains a `worker_capability` member
-// and this file becomes its static fallback. Until then the page states what is
-// known and the operator decides.
-//
-// # Why the lists are Go source and not a generated file
-//
-// They are two dozen short strings that change when a worker changes. A
+// It is a few dozen short strings that change when the worker changes. A
 // generator would add a build step, a checked-in artefact and a way for the
-// artefact to go stale unnoticed. `capability_drift_test.go` re-reads BOTH
-// upstream sources on every run and fails naming the file that moved, which is
-// the same guarantee with nothing to regenerate.
+// artefact to go stale unnoticed. `capability_test.go` re-reads the upstream
+// source on every run and fails naming the file that moved, which is the same
+// guarantee with nothing to regenerate.
 
 import (
 	"sort"
@@ -57,12 +37,10 @@ import (
 type Verdict string
 
 const (
-	// VerdictSupported means at least one admitted worker is known to carry the
-	// type: the Python image build-verifies its SDK import, or the Rust worker
-	// has a native family for it.
+	// VerdictSupported means the Rust worker has a native family for the type.
 	VerdictSupported Verdict = "supported"
-	// VerdictUnverified means neither is known to carry it. It is NOT a claim
-	// that the type fails — see this file's header.
+	// VerdictUnverified means the worker is not known to carry it. It is NOT a
+	// claim that the type fails — see this file's header.
 	VerdictUnverified Verdict = "unverified"
 )
 
@@ -70,9 +48,6 @@ const (
 type Capability struct {
 	ToolkitType string
 	Verdict     Verdict
-	// Python reports whether elitea-sdk.lock.json's indexing capability profile
-	// build-verifies this type's SDK tool import in the admitted image.
-	Python bool
 	// Rust reports whether services/elitea-worker-rust materialises a native
 	// family for this type.
 	Rust bool
@@ -80,37 +55,6 @@ type Capability struct {
 	// verdict. A bare boolean on the page would send the operator to read Go
 	// source to find out what it measured.
 	Reason string
-}
-
-// pythonVerifiedImportKeys are the SDK tool import keys the admitted Python
-// worker image build-verifies.
-//
-// Transcribed from `indexing_capability_profile.required_sdk_tool_import_keys`
-// in services/elitea-worker-python/elitea-sdk.lock.json. `capability_drift_test.go`
-// re-reads that file and fails if this list stops matching it.
-//
-// THESE ARE IMPORT KEYS, NOT CATALOGUE TYPES. `toolkitTypeForImportKey` maps
-// the one that differs. `ado` is the SDK's shared Azure DevOps base family and
-// is not a catalogue type at all; it maps to nothing and is dropped.
-var pythonVerifiedImportKeys = []string{
-	"ado",
-	"ado_boards",
-	"ado_plans",
-	"ado_repos",
-	"ado_wiki",
-	"bitbucket",
-	"confluence",
-	"figma",
-	"github",
-	"gitlab",
-	"jira",
-	"qtest",
-	"sharepoint",
-	"testrail",
-	"xray_cloud",
-	"zephyr_enterprise",
-	"zephyr_essential",
-	"zephyr_scale",
 }
 
 // rustNativeToolTypes are the tool types services/elitea-worker-rust
@@ -223,50 +167,37 @@ var importKeyToToolkitType = map[string]string{
 	"ado": "",
 }
 
-// PinnedWorkerCapabilities answers from the two lists above.
+// PinnedWorkerCapabilities answers from the list above.
 //
 // A value, not a pointer, and it holds no state: the verdict for a type is a
-// pure function of two constant sets, so there is nothing to construct, nothing
+// pure function of one constant set, so there is nothing to construct, nothing
 // to inject and no nil receiver to guard.
 type PinnedWorkerCapabilities struct{}
 
 // ToolkitCapability resolves one catalogue type.
 func (PinnedWorkerCapabilities) ToolkitCapability(toolkitType string) Capability {
 	key := strings.TrimSpace(toolkitType)
-	return capabilityVerdict(key, pythonVerifiedTypes()[key], rustNativeTypes()[key])
+	return capabilityVerdict(key, rustNativeTypes()[key])
 }
 
-// capabilityVerdict is the verdict table for one type given what each worker
-// carries. Split out so every row is testable even when the pinned lists hold
-// no type for it (no catalogue type is Python-only today).
-func capabilityVerdict(key string, python, rust bool) Capability {
-	capability := Capability{ToolkitType: key, Python: python, Rust: rust}
-	switch {
-	case python && rust:
+// capabilityVerdict is the verdict table for one type given whether the Rust
+// worker carries it.
+func capabilityVerdict(key string, rust bool) Capability {
+	capability := Capability{ToolkitType: key, Rust: rust}
+	if rust {
 		capability.Verdict = VerdictSupported
-		capability.Reason = "the admitted Python worker image build-verifies this type's SDK import, " +
-			"and the Rust worker carries a native family for it"
-	case python:
-		capability.Verdict = VerdictSupported
-		capability.Reason = "the admitted Python worker image build-verifies this type's SDK import"
-	case rust:
-		capability.Verdict = VerdictSupported
-		capability.Reason = "the Rust worker carries a native family for this type; " +
-			"the Python worker image does not build-verify its SDK import"
-	default:
-		capability.Verdict = VerdictUnverified
-		capability.Reason = "no admitted worker is known to carry this type: the Python image's " +
-			"pinned extras do not build-verify its SDK import, and the Rust worker has no native " +
-			"family for it. The type may still work; it is not verified"
+		capability.Reason = "the Rust worker carries a native family for this type"
+		return capability
 	}
+	capability.Verdict = VerdictUnverified
+	capability.Reason = "the Rust worker is not known to carry this type: it has no native " +
+		"family for it. The type may still work; it is not verified"
 	return capability
 }
 
-// pythonVerifiedTypes and rustNativeTypes project the two lists onto catalogue
-// keys. Built on each call rather than in a package-level map so that no caller
-// can mutate a shared set — the same rule `toolkitTypeSchemas` had to learn.
-func pythonVerifiedTypes() map[string]bool { return catalogueKeys(pythonVerifiedImportKeys) }
-
+// rustNativeTypes projects the list onto catalogue keys. Built on each call
+// rather than in a package-level map so that no caller can mutate a shared set
+// — the same rule `toolkitTypeSchemas` had to learn.
 func rustNativeTypes() map[string]bool { return catalogueKeys(rustNativeToolTypes) }
 
 func catalogueKeys(importKeys []string) map[string]bool {
@@ -285,13 +216,10 @@ func catalogueKeys(importKeys []string) map[string]bool {
 	return keys
 }
 
-// CapabilityTypes lists every catalogue type either worker is known to carry,
+// CapabilityTypes lists every catalogue type the worker is known to carry,
 // sorted. Tests and the drift check read it; nothing on the request path does.
 func CapabilityTypes() []string {
 	seen := map[string]bool{}
-	for key := range pythonVerifiedTypes() {
-		seen[key] = true
-	}
 	for key := range rustNativeTypes() {
 		seen[key] = true
 	}

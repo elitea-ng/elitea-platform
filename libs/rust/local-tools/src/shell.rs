@@ -252,18 +252,32 @@ fn rendered(capture: &SharedCapture, cut_off: bool) -> Captured {
     )
 }
 
-fn environment(config: &ShellConfig) -> Vec<(String, String)> {
+/// The person's variables a command gets: the passthrough set (and the
+/// host's `env_passthrough`), secret-looking names dropped. `run_command`
+/// adds its own fixed settings (`TMPDIR`, `TERM`, …) on top. The handoff's
+/// env harvest offers these (ADR-0034 decision 5).
+#[must_use]
+pub fn passthrough_environment(config: &ShellConfig) -> Vec<(String, String)> {
     let names = PASSTHROUGH
         .iter()
         .map(|name| (*name).to_owned())
         .chain(config.env_passthrough.iter().cloned());
-    let mut out: Vec<(String, String)> = names
+    names
         .filter(|name| {
             let upper = name.to_ascii_uppercase();
             !SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
         })
         .filter_map(|name| std::env::var(&name).ok().map(|value| (name, value)))
-        .collect();
+        .collect()
+}
+
+fn environment(config: &ShellConfig) -> Vec<(String, String)> {
+    environment_from(config, passthrough_environment(config))
+}
+
+/// [`environment`] over the given passed-through variables.
+fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut out = passed;
     // PATH without relative or empty entries: a bare name never runs a
     // program from the workspace (the approval rules resolve it the same
     // way).
@@ -287,6 +301,13 @@ fn environment(config: &ShellConfig) -> Vec<(String, String)> {
         ]
         .map(|(name, value)| (name.to_owned(), value)),
     );
+    // A container host's workspace root that git must trust although
+    // another uid owns it (empty on the desktop).
+    let trust = config.sandbox.git_trust_env();
+    if !trust.is_empty() {
+        out.retain(|(name, _)| !crate::sandbox::is_git_config_env(name));
+        out.extend(trust);
+    }
     out
 }
 
@@ -446,6 +467,10 @@ pub async fn run_checked(
         .id()
         .and_then(|id| i32::try_from(id).ok())
         .and_then(rustix::process::Pid::from_raw);
+    // A caller that stops waiting (the future is dropped, e.g. a cloud
+    // turn's take back) kills the whole group: `kill_on_drop` alone reaches
+    // only the leader, and a build's children would keep writing.
+    let mut group_guard = GroupKillOnDrop(group);
     let stdout = child
         .stdout
         .take()
@@ -471,9 +496,7 @@ pub async fn run_checked(
     };
     // Children left in the group may still hold the pipes: kill the group
     // after the leader exits too, then give the readers a bounded drain.
-    if let Some(group) = group {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-    }
+    group_guard.kill_now();
     if spec.mode != SandboxMode::ReadOnly {
         // It may have created a `.git` or a denied file.
         config.sandbox.masks.invalidate();
@@ -513,6 +536,149 @@ pub async fn run_checked(
     })
 }
 
+/// The person's login-shell environment, as editors read it (the handoff's
+/// env harvest, ADR-0034 decision 5): `vars`, or none with a `notice` when
+/// the shell could not be asked. Never an error: the harvest then offers
+/// nothing.
+#[derive(Default)]
+pub struct LoginEnvironment {
+    pub vars: Vec<(String, String)>,
+    pub notice: Option<String>,
+}
+
+impl std::fmt::Debug for LoginEnvironment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Names only: values may be secrets.
+        f.debug_struct("LoginEnvironment")
+            .field(
+                "names",
+                &self.vars.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+            )
+            .field("notice", &self.notice)
+            .finish()
+    }
+}
+
+/// How much a login shell may print for its environment.
+const LOGIN_ENV_CAP: usize = 1024 * 1024;
+
+/// The login shell to ask: `$SHELL` when it is an absolute path to a file,
+/// else `/bin/zsh` on macOS and `/bin/bash` elsewhere.
+#[must_use]
+pub fn login_shell() -> PathBuf {
+    std::env::var_os("SHELL")
+        .map(PathBuf::from)
+        .filter(|shell| shell.is_absolute() && shell.is_file())
+        .unwrap_or_else(|| {
+            PathBuf::from(if cfg!(target_os = "macos") {
+                "/bin/zsh"
+            } else {
+                "/bin/bash"
+            })
+        })
+}
+
+/// Ask `shell` (`-l -i -c`) for its environment: `env -0` between two
+/// markers (so whatever the rc files print is ignored), from the home
+/// directory, with no stdin, its own process group killed at `timeout`, at
+/// most 1 MiB read. The shell inherits this process's environment, as a
+/// terminal would. A timeout, a failed start, a nonzero exit or output
+/// without both markers give no variables and a `notice`.
+pub async fn login_environment(shell: &std::path::Path, timeout: Duration) -> LoginEnvironment {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let marker = format!("__ELITEA_ENV_{}_{nonce}__", std::process::id());
+    let script = format!("printf '%s' '{marker}'; /usr/bin/env -0; printf '%s' '{marker}'");
+    let failed = |why: String| LoginEnvironment {
+        vars: Vec::new(),
+        notice: Some(why),
+    };
+    let mut command = tokio::process::Command::new(shell);
+    command
+        .args(["-l", "-i", "-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .kill_on_drop(true);
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        command.current_dir(home);
+    }
+    let Ok(mut child) = command.spawn() else {
+        return failed(format!("{} could not be started", shell.display()));
+    };
+    let group = child
+        .id()
+        .and_then(|id| i32::try_from(id).ok())
+        .and_then(rustix::process::Pid::from_raw);
+    let Some(stdout) = child.stdout.take() else {
+        return failed("the login shell gave no output".to_owned());
+    };
+    let read = async {
+        let mut out = Vec::new();
+        let _ = stdout
+            .take(LOGIN_ENV_CAP as u64)
+            .read_to_end(&mut out)
+            .await;
+        let status = child.wait().await.ok();
+        (out, status)
+    };
+    let Ok((out, status)) = tokio::time::timeout(timeout, read).await else {
+        if let Some(group) = group {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+        return failed(format!(
+            "the login shell did not answer in {}s",
+            timeout.as_secs()
+        ));
+    };
+    if let Some(group) = group {
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    }
+    if !status.is_some_and(|status| status.success()) {
+        return failed("the login shell exited with an error".to_owned());
+    }
+    let marker = marker.as_bytes();
+    let find = |from: usize| {
+        out[from..]
+            .windows(marker.len())
+            .position(|w| w == marker)
+            .map(|at| at + from)
+    };
+    let (Some(start), Some(end)) = (find(0), find(0).and_then(|s| find(s + marker.len()))) else {
+        return failed("the login shell printed no environment".to_owned());
+    };
+    let vars = out[start + marker.len()..end]
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            let at = entry.iter().position(|byte| *byte == b'=')?;
+            let name = std::str::from_utf8(&entry[..at]).ok()?;
+            let value = std::str::from_utf8(&entry[at + 1..]).ok()?;
+            (!name.is_empty()).then(|| (name.to_owned(), value.to_owned()))
+        })
+        .collect();
+    LoginEnvironment { vars, notice: None }
+}
+
+/// Kills a command's process group when dropped.
+struct GroupKillOnDrop(Option<rustix::process::Pid>);
+
+impl GroupKillOnDrop {
+    /// Kill the group now, once: a later drop must not signal a reused id.
+    fn kill_now(&mut self) {
+        if let Some(group) = self.0.take() {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+    }
+}
+
+impl Drop for GroupKillOnDrop {
+    fn drop(&mut self) {
+        self.kill_now();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -538,6 +704,75 @@ mod tests {
             mode,
             network: false,
         }
+    }
+
+    /// In a container with a trusted root, a workspace command's git
+    /// trusts exactly that root (`GIT_CONFIG_COUNT`); off (the desktop, or
+    /// no root), nothing is added.
+    #[test]
+    fn a_container_root_reaches_the_commands_git_config_only_when_on() {
+        let (_dir, _workspace, mut config) = setup();
+        let git_env = |config: &ShellConfig| -> Vec<(String, String)> {
+            super::environment(config)
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("GIT_CONFIG_"))
+                .collect()
+        };
+        assert!(git_env(&config).is_empty());
+        config.sandbox.git_safe_directory = Some("/workspace".into());
+        assert!(git_env(&config).is_empty(), "not a container: unchanged");
+        config.sandbox.container = true;
+        assert_eq!(
+            git_env(&config),
+            [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "safe.directory"),
+                ("GIT_CONFIG_VALUE_0", "/workspace"),
+            ]
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        );
+        config.sandbox.git_safe_directory = None;
+        assert!(git_env(&config).is_empty());
+    }
+
+    /// With the trust env on, every passed-through git config variable is
+    /// dropped (a stale `KEY_1` or `PARAMETERS` cannot ride along); off,
+    /// the passthrough is left as it was.
+    #[test]
+    fn the_trust_env_replaces_every_passed_through_git_config_variable() {
+        let (_dir, _workspace, mut config) = setup();
+        let passed: Vec<(String, String)> = [
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_1", "core.sshCommand"),
+            ("GIT_CONFIG_VALUE_1", "evil"),
+            ("GIT_CONFIG_PARAMETERS", "'core.pager'='less'"),
+            ("LANG", "C.UTF-8"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .to_vec();
+        let git_env = |config: &ShellConfig| -> Vec<(String, String)> {
+            super::environment_from(config, passed.clone())
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("GIT_CONFIG_"))
+                .collect()
+        };
+        assert_eq!(git_env(&config).len(), 4, "off: unchanged");
+        config.sandbox.container = true;
+        config.sandbox.git_safe_directory = Some("/workspace".into());
+        assert_eq!(
+            git_env(&config),
+            [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "safe.directory"),
+                ("GIT_CONFIG_VALUE_0", "/workspace"),
+            ]
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        );
+        assert!(
+            super::environment_from(&config, passed.clone())
+                .iter()
+                .any(|(name, _)| name == "LANG")
+        );
     }
 
     #[tokio::test]
@@ -702,5 +937,62 @@ mod tests {
         let mut missing = spec("pwd", SandboxMode::FullAccess);
         missing.cwd = workspace.resolve("nope", Intent::Read).expect("path");
         assert!(run(&workspace, &config, &missing).await.is_err());
+    }
+
+    fn fake_shell(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        path
+    }
+
+    #[tokio::test]
+    async fn the_login_shell_environment_is_read_between_markers() {
+        let dir = tempfile::tempdir().expect("dir");
+        // An rc file that exports a variable and prints noise; `$4` is the
+        // `-c` script (`-l -i -c <script>`).
+        let shell = fake_shell(
+            dir.path(),
+            "zsh",
+            "export DATABASE_URL='postgres://u:p@h/db'\nexport MULTI='a\nb'\necho rc noise\nexec /bin/sh -c \"$4\"",
+        );
+        let env = super::login_environment(&shell, Duration::from_secs(10)).await;
+        assert!(env.notice.is_none(), "{:?}", env.notice);
+        let get = |name: &str| {
+            env.vars
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(get("DATABASE_URL").as_deref(), Some("postgres://u:p@h/db"));
+        assert_eq!(get("MULTI").as_deref(), Some("a\nb"));
+        assert!(
+            !format!("{env:?}").contains("postgres"),
+            "Debug shows names only"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_or_slow_login_shell_gives_nothing_and_a_notice() {
+        let dir = tempfile::tempdir().expect("dir");
+        for (name, body, timeout) in [
+            ("exits", "exit 3", Duration::from_secs(10)),
+            ("hangs", "sleep 30", Duration::from_millis(300)),
+            ("babbles", "echo no markers here", Duration::from_secs(10)),
+        ] {
+            let shell = fake_shell(dir.path(), name, body);
+            let started = std::time::Instant::now();
+            let env = super::login_environment(&shell, timeout).await;
+            assert!(env.vars.is_empty(), "{name}");
+            assert!(env.notice.is_some(), "{name}");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{name} was bounded"
+            );
+        }
+        let missing =
+            super::login_environment(&dir.path().join("none"), Duration::from_secs(1)).await;
+        assert!(missing.vars.is_empty() && missing.notice.is_some());
     }
 }

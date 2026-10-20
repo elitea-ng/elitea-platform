@@ -58,28 +58,12 @@ target "elitea-web" {
 }
 
 
-# The agent worker. Repo-root context, because the Containerfile COPYs
-# libs/proto and testdata/proto/runtime/v1 from outside its own directory.
+# The agent worker (native Rust). Repo-root context, because the Containerfile
+# COPYs libs/proto and libs/rust from outside its own directory.
 #
-# Deliberately NOT in `group "default"`: this is the only target here that
-# compiles a Python dependency closure from source, so a bare `docker buildx
-# bake` would go from minutes to tens of minutes. Name it to build it.
-target "elitea-worker-python" {
-  context    = "."
-  dockerfile = "services/elitea-worker-python/Containerfile"
-  tags       = ["${REGISTRY}/elitea-worker-python:${TAG}"]
-  cache-from = ["type=gha,scope=elitea-worker-python-linux-amd64"]
-  cache-to   = ["type=gha,mode=max,scope=elitea-worker-python-linux-amd64,ignore-error=true"]
-  platforms  = ["linux/amd64", "linux/arm64"]
-}
-
-# The native Rust agent worker, and the chart's default `worker.runtime` since
-# it started shipping. Repo-root context for the same reason as the Python
-# worker: the Containerfile COPYs libs/proto and libs/rust from outside its
-# own directory.
-#
-# Out of `group "default"` on the same grounds as elitea-worker-python, and
-# more so: this compiles 418 crates from source. Name it to build it.
+# Deliberately NOT in `group "default"`: it compiles 418 crates from source, so
+# a bare `docker buildx bake` would go from minutes to tens of minutes. Name it
+# to build it.
 target "elitea-worker-rust" {
   context    = "."
   dockerfile = "services/elitea-worker-rust/Containerfile"
@@ -109,6 +93,37 @@ target "elitea-subapp-host" {
   tags       = ["${REGISTRY}/elitea-subapp-host:${TAG}"]
   cache-from = ["type=gha,scope=elitea-subapp-host-linux-amd64"]
   cache-to   = ["type=gha,mode=max,scope=elitea-subapp-host-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
+# The egress proxy (ADR-0034 decision 9): the host-allowlist boundary for
+# cloud-executor sandboxes. Repo-root context, because the module replaces
+# libs/go/egresslib; standard library otherwise.
+target "elitea-egress-proxy" {
+  context    = "."
+  dockerfile = "services/elitea-egress-proxy/Containerfile"
+  target     = "final"
+  tags       = ["${REGISTRY}/elitea-egress-proxy:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-egress-proxy-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-egress-proxy-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
+# The cloud executor's sandbox supervisor (ADR-0034): the `supervisor` stage of
+# the worker Containerfile, built with `--features sandbox-supervisor`. It runs
+# the workspace sandboxes (Kubernetes pods under a gVisor/Kata RuntimeClass)
+# and is the only process that may create them. The same distroless
+# base-nossl-debian13 runtime and cargo-auditable build as the worker; the
+# default worker image keeps no sandbox feature.
+#
+# Not in `group "default"`, like the worker: it compiles from source.
+target "elitea-sandbox-supervisor" {
+  context    = "."
+  dockerfile = "services/elitea-worker-rust/Containerfile"
+  target     = "supervisor"
+  tags       = ["${REGISTRY}/elitea-sandbox-supervisor:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-sandbox-supervisor-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-sandbox-supervisor-linux-amd64,ignore-error=true"]
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
@@ -190,6 +205,23 @@ target "elitea-doc-extractor" {
 # libs/go/egresslib, which lives outside the service directory. go.work is not
 # copied into the image and the build sets GOWORK=off, so the module still
 # builds off the workspace.
+# The cloud executor's workspace sandbox image (ADR-0034 decision 9): one
+# container per cloud turn runs `elitea-workspace-runner` over a disk-backed
+# /workspace. Debian 13 (trixie-slim) with git and a build toolchain, because
+# the agent's `run_command` builds the user's project: a Debian userland, so
+# its scan is exempt (.github/image-scan-exempt.txt), not distroless.
+# Repo-root context: the Containerfile COPYs libs/rust.
+#
+# Not in `group "default"`: it compiles from source.
+target "elitea-workspace-runner" {
+  context    = "."
+  dockerfile = "libs/rust/workspace-runner/Containerfile"
+  tags       = ["${REGISTRY}/elitea-workspace-runner:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-workspace-runner-linux-amd64"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-workspace-runner-linux-amd64,ignore-error=true"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 target "elitea-llm-gateway" {
   context    = "."
   dockerfile = "services/elitea-llm-gateway/Containerfile"

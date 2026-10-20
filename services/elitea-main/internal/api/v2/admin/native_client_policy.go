@@ -262,7 +262,7 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"key":          platformconfig.KeyNativeLocalWorkLocalIndex,
 			"type":         "boolean",
 			"title":        "Allow Local Index",
-			"description":  "Whether the app may index a workspace folder on the device. Embeddings spend the user's budget.",
+			"description":  "Whether the app may index a workspace folder on the device (text and code structure; vectors are the two embedding switches below).",
 			"section":      section,
 			"default":      defaults.LocalIndex,
 			"visible_when": visible,
@@ -284,6 +284,49 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 				"content off the device. Recall is always allowed.",
 			"section":      section,
 			"default":      defaults.MemoryWrite,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkCloudHandoff,
+			"type":  "boolean",
+			"title": "Allow Send to Cloud",
+			"description": "Whether a Local work thread may be sent to the cloud executor, which uploads the folder's " +
+				"files to this deployment. The Cloud executor section and the project settings can narrow it.",
+			"section":      section,
+			"default":      defaults.CloudHandoff,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkIndexLocalEmbeddings,
+			"type":  "boolean",
+			"title": "Allow On-Device Index Embeddings",
+			"description": "Whether users may add vectors to a local index with an embedding model that runs on their " +
+				"own machine (downloaded when they choose one). Nothing leaves the device. Embeddings stay off " +
+				"until the user turns them on for a workspace.",
+			"section":      section,
+			"default":      defaults.IndexLocalEmbeddings,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkIndexRemoteEmbeddings,
+			"type":  "boolean",
+			"title": "Allow Index Embeddings Through This Deployment",
+			"description": "Whether users may embed a local index through this deployment's embeddings route, which " +
+				"receives the workspace's text and spends the user's budget. Turning it off makes the app drop the " +
+				"vectors made this way.",
+			"section":      section,
+			"default":      defaults.IndexRemoteEmbeddings,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkIndexModelMirrorURL,
+			"type":  "string",
+			"title": "Embedding Model Mirror URL",
+			"description": "Where the app downloads on-device embedding models from instead of Hugging Face: an " +
+				"https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Leave " +
+				"empty for Hugging Face. Every file is checked against the checksum built into the app.",
+			"section":      section,
+			"default":      defaults.IndexModelMirrorURL,
 			"visible_when": visible,
 		},
 	}
@@ -349,6 +392,13 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 				return fmt.Sprintf("%q[%d] must be a non-blank pattern of at most %d bytes without control "+
 					"characters", key, index, platformconfig.MaxLocalWorkPatternBytes)
 			}
+		}
+	}
+	if raw, present := values[platformconfig.KeyNativeLocalWorkIndexModelMirrorURL]; present {
+		mirror, ok := raw.(string)
+		if !ok || !platformconfig.ValidModelMirrorURL(mirror) {
+			return fmt.Sprintf("%q must be empty or an https URL without credentials, query or fragment",
+				platformconfig.KeyNativeLocalWorkIndexModelMirrorURL)
 		}
 	}
 	if raw, present := values[platformconfig.KeyNativeMinClientVersion]; present {

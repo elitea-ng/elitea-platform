@@ -34,6 +34,7 @@ use crate::auth::AuthService;
 use crate::credentials_file::{self, CredentialsFile};
 use crate::error::HostError;
 use crate::history::{self, HistoryStore};
+use crate::sessions::{self, DesktopStateStore};
 use elitea_local_index::sqlite_store::{
     FILE_NAME as INDEX_FILE, SCHEMA_VERSION as INDEX_SCHEMA_VERSION,
 };
@@ -53,7 +54,7 @@ pub enum Status {
 pub struct Check {
     /// Stable: `credentials`, `dir.config`, `dir.data`, `dir.logs`,
     /// `history`, `workspaces`, `index.<workspace id>` (one per workspace
-    /// with a local index), `deployment`, `session`, `local_work`,
+    /// with a local index), `models`, `deployment`, `session`, `local_work`,
     /// `pending_revokes`.
     pub id: String,
     pub title: &'static str,
@@ -302,6 +303,26 @@ pub struct LocalDoctor {
     pub workspaces: Arc<WorkspaceStore>,
     /// The thread history opened at launch; `None` when it was refused.
     pub history: Option<Arc<HistoryStore>>,
+    /// The agent's session memory opened at launch; `None` when refused.
+    pub sessions: Option<Arc<DesktopStateStore>>,
+}
+
+/// One owner-only SQLite file the Doctor checks (`database_check`).
+struct Database {
+    id: &'static str,
+    title: &'static str,
+    /// What the message calls it ("history", "session memory").
+    noun: &'static str,
+    missing: &'static str,
+    path: PathBuf,
+    file_name: &'static str,
+    schema_version: i64,
+    /// The app opened it at launch.
+    open: bool,
+    tighten: &'static str,
+    move_aside: &'static str,
+    /// Why moving it aside loses nothing.
+    on_server: &'static str,
 }
 
 const MOVE_ASIDE: &str = "Move it aside";
@@ -310,6 +331,10 @@ const RESTRICT: &str = "Restrict to you";
 impl LocalDoctor {
     fn credentials_path(&self) -> PathBuf {
         self.credentials.path()
+    }
+
+    fn sessions_path(&self) -> PathBuf {
+        self.data_dir.join(sessions::FILE_NAME)
     }
 
     fn history_path(&self) -> PathBuf {
@@ -344,9 +369,54 @@ impl LocalDoctor {
             ));
         }
         checks.push(self.history_check());
+        checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
         checks.extend(self.index_checks());
+        checks.push(self.models_check());
         checks
+    }
+
+    /// The embedding model cache (`<data>/models`): owner-only like the
+    /// rest, and which catalogue models are on this computer (sizes only:
+    /// every load verifies the files against their pinned digests).
+    fn models_check(&self) -> Check {
+        use elitea_local_embed::catalog::MODELS;
+        use elitea_local_embed::manager::{ModelState, ModelStore};
+        let root = self.data_dir.join("models");
+        let mut check = dir_check("models", "Embedding models", &root, "dir.tighten.models");
+        if check.status != Status::Ok || fs::symlink_metadata(&root).is_err() {
+            if fs::symlink_metadata(&root).is_err() {
+                check.message =
+                    "No embedding model downloaded (embeddings are off unless you choose one)."
+                        .into();
+            }
+            return check;
+        }
+        let store = ModelStore::new(&root);
+        let states: Vec<String> = MODELS
+            .into_iter()
+            .filter_map(|spec| match store.state(spec) {
+                ModelState::Missing => None,
+                ModelState::Ready => Some(format!("{} (ready)", spec.display_name)),
+                ModelState::Partial { have, total } => Some(format!(
+                    "{} (partly downloaded, {} of {} MB)",
+                    spec.display_name,
+                    have / 1_000_000,
+                    total / 1_000_000
+                )),
+            })
+            .collect();
+        check.message = if states.is_empty() {
+            format!("{} holds no model.", root.display())
+        } else {
+            format!(
+                "{} — {}; {} MB in all.",
+                root.display(),
+                states.join(", "),
+                store.disk_bytes() / 1_000_000
+            )
+        };
+        check
     }
 
     fn credentials_check(&self) -> Check {
@@ -411,82 +481,123 @@ impl LocalDoctor {
     }
 
     fn history_check(&self) -> Check {
-        const ID: &str = "history";
-        const TITLE: &str = "Thread history";
-        let path = self.history_path();
+        self.database_check(&Database {
+            id: "history",
+            title: "Thread history",
+            noun: "history",
+            missing: "No history yet; it starts with the first local turn.",
+            path: self.history_path(),
+            file_name: history::FILE_NAME,
+            schema_version: history::SCHEMA_VERSION,
+            open: self.history.is_some(),
+            tighten: "history.tighten",
+            move_aside: "history.move_aside",
+            on_server: "the threads on the server are not affected",
+        })
+    }
+
+    /// The agent's session memory (`sessions.sqlite`): untrusted, loose,
+    /// corrupt or a newer schema. It is a cache the server conversation
+    /// rebuilds, so moving it aside loses nothing.
+    fn sessions_check(&self) -> Check {
+        self.database_check(&Database {
+            id: "sessions",
+            title: "Agent session memory",
+            noun: "session memory",
+            missing: "No session memory yet; it starts with the first local turn.",
+            path: self.sessions_path(),
+            file_name: sessions::FILE_NAME,
+            schema_version: sessions::SCHEMA_VERSION,
+            open: self.sessions.is_some(),
+            tighten: "sessions.tighten",
+            move_aside: "sessions.move_aside",
+            on_server: "the conversations on the server are not affected and rebuild it",
+        })
+    }
+
+    /// The checks of one owner-only SQLite file and its journals.
+    fn database_check(&self, db: &Database) -> Check {
+        let (id, title) = (db.id, db.title);
+        let path = &db.path;
         let sidecars_ok = ["-wal", "-shm"].iter().all(|suffix| {
-            let sidecar = path.with_file_name(format!("{}{suffix}", history::FILE_NAME));
+            let sidecar = path.with_file_name(format!("{}{suffix}", db.file_name));
             matches!(health(&sidecar, false), Health::Missing | Health::Healthy)
         });
-        match health(&path, false) {
+        match health(path, false) {
             Health::Missing => {
-                return Check::new(
-                    ID,
-                    TITLE,
-                    Status::Ok,
-                    "No history yet; it starts with the first local turn.".into(),
-                );
+                return Check::new(id, title, Status::Ok, db.missing.into());
             }
             Health::Untrusted(why) => {
                 return Check::new(
-                    ID,
-                    TITLE,
+                    id,
+                    title,
                     Status::Fail,
                     format!(
-                        "{} {why}, so the app will not use it. Move it aside to start a new history.",
-                        path.display()
+                        "{} {why}, so the app will not use it. Move it aside to start a new {}.",
+                        path.display(),
+                        db.noun
                     ),
                 )
-                .fix("history.move_aside", MOVE_ASIDE);
+                .fix(db.move_aside, MOVE_ASIDE);
             }
             Health::Loose(mode) => {
                 return Check::new(
-                    ID,
-                    TITLE,
+                    id,
+                    title,
                     Status::Warn,
                     format!(
                         "{} can be read by other users (mode {mode:o}); it should be 0600.",
                         path.display()
                     ),
                 )
-                .fix("history.tighten", RESTRICT);
+                .fix(db.tighten, RESTRICT);
             }
             Health::Healthy if !sidecars_ok => {
                 return Check::new(
-                    ID,
-                    TITLE,
+                    id,
+                    title,
                     Status::Warn,
-                    "The history's journal files are readable by other users.".into(),
+                    format!(
+                        "The {}'s journal files are readable by other users.",
+                        db.noun
+                    ),
                 )
-                .fix("history.tighten", RESTRICT);
+                .fix(db.tighten, RESTRICT);
             }
             Health::Healthy => {}
         }
-        match history::integrity(&path) {
-            Ok(version) if version > history::SCHEMA_VERSION => Check::new(
-                ID,
-                TITLE,
+        match history::integrity(path) {
+            Ok(version) if version > db.schema_version => Check::new(
+                id,
+                title,
                 Status::Fail,
+                format!("Written by a newer version of Elitea (schema {version}); update the app."),
+            ),
+            Ok(_) if !db.open => Check::new(
+                id,
+                title,
+                Status::Warn,
                 format!(
-                    "Written by a newer version of Elitea (schema {version}); update the app."
+                    "The {} looks fine now but did not open at launch; restart Elitea.",
+                    db.noun
                 ),
             ),
-            Ok(_) if self.history.is_none() => Check::new(
-                ID,
-                TITLE,
-                Status::Warn,
-                "The history looks fine now but did not open at launch; restart Elitea.".into(),
+            Ok(_) => Check::new(
+                id,
+                title,
+                Status::Ok,
+                "Opens and passes its integrity check.".into(),
             ),
-            Ok(_) => Check::new(ID, TITLE, Status::Ok, "Opens and passes its integrity check.".into()),
             Err(error) => Check::new(
-                ID,
-                TITLE,
+                id,
+                title,
                 Status::Fail,
                 format!(
-                    "The history is damaged ({error}). Move it aside to start a new one; the threads on the server are not affected."
+                    "The {} is damaged ({error}). Move it aside to start a new one; {}.",
+                    db.noun, db.on_server
                 ),
             )
-            .fix("history.move_aside", MOVE_ASIDE),
+            .fix(db.move_aside, MOVE_ASIDE),
         }
     }
 
@@ -590,6 +701,9 @@ impl LocalDoctor {
                 tighten_dir(&self.config_dir).map(|()| "Restricted to you.".into())
             }
             "dir.tighten.data" => tighten_dir(&self.data_dir).map(|()| "Restricted to you.".into()),
+            "dir.tighten.models" => {
+                tighten_dir(&self.data_dir.join("models")).map(|()| "Restricted to you.".into())
+            }
             "dir.tighten.logs" => match &self.log_dir {
                 Some(logs) => tighten_dir(logs).map(|()| "Restricted to you.".into()),
                 None => Err(HostError::Storage("there is no logs folder".into())),
@@ -606,6 +720,18 @@ impl LocalDoctor {
                 Ok("The history is now readable by you only.".into())
             }
             "history.move_aside" => self.move_history_aside(),
+            "sessions.tighten" => {
+                let path = self.sessions_path();
+                tighten_file(&path)?;
+                for suffix in ["-wal", "-shm"] {
+                    let sidecar = path.with_file_name(format!("{}{suffix}", sessions::FILE_NAME));
+                    if fs::symlink_metadata(&sidecar).is_ok() {
+                        tighten_file(&sidecar)?;
+                    }
+                }
+                Ok("The session memory is now readable by you only.".into())
+            }
+            "sessions.move_aside" => self.move_sessions_aside(),
             "workspaces.drop_missing" => {
                 let (mut removed, mut kept) = (0, Vec::new());
                 for workspace in self.missing_workspaces()? {
@@ -645,6 +771,31 @@ impl LocalDoctor {
         let aside = move_aside(&self.credentials_path())?;
         self.credentials.forget_cache();
         Ok(aside)
+    }
+
+    /// `sessions.move_aside`: as [`Self::move_history_aside`]; the agent's
+    /// next turn on each conversation is seeded from the server.
+    fn move_sessions_aside(&self) -> Result<String, HostError> {
+        if let Some(store) = &self.sessions {
+            let aside = store.store().move_aside()?;
+            return Ok(format!(
+                "Moved to {}. A new, empty session memory has started; the conversations on the server are not affected and rebuild it.",
+                aside.display()
+            ));
+        }
+        let files = sessions::session_files(&self.data_dir);
+        if files.iter().all(|file| fs::symlink_metadata(file).is_err()) {
+            return Ok("There was nothing to move.".into());
+        }
+        let aside = history::move_files_aside(&self.data_dir, sessions::FILE_NAME, &files)?;
+        log::warn!(
+            "diagnostics: moved the session memory aside to {}",
+            aside.display()
+        );
+        Ok(format!(
+            "Moved to {}. Restart Elitea to start a new session memory.",
+            aside.display()
+        ))
     }
 
     /// `history.move_aside`: the open store closes, moves its three files
@@ -1234,12 +1385,52 @@ mod tests {
             data_dir,
             log_dir: Some(log_dir),
             history: None,
+            sessions: None,
         };
         Fixture {
             _root: root,
             doctor,
             hooks,
         }
+    }
+
+    /// The model cache: absent is fine, a loose one is tightened, and a
+    /// partial download is named with its size.
+    #[test]
+    fn the_model_cache_is_checked_and_tightened() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let models = |f: &Fixture| {
+            f.doctor
+                .checks()
+                .into_iter()
+                .find(|check| check.id == "models")
+                .unwrap()
+        };
+        let absent = models(&f);
+        assert_eq!(absent.status, Status::Ok);
+        assert!(
+            absent.message.contains("No embedding model"),
+            "{}",
+            absent.message
+        );
+        let root = f.doctor.data_dir.join("models");
+        let spec = elitea_local_embed::catalog::MODELS[0];
+        let dir = root.join(spec.cache_key());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("model.safetensors.part"), vec![0_u8; 2_000_000]).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let loose = models(&f);
+        assert_eq!(loose.status, Status::Warn);
+        assert_eq!(loose.fix_id.as_deref(), Some("dir.tighten.models"));
+        f.doctor.fix("dir.tighten.models", false).unwrap();
+        let tight = models(&f);
+        assert_eq!(tight.status, Status::Ok);
+        assert!(
+            tight.message.contains("partly downloaded, 2 of"),
+            "{}",
+            tight.message
+        );
     }
 
     struct NoBrowser;
@@ -1430,6 +1621,91 @@ mod tests {
             ..open
         };
         assert_eq!(check(&closed.checks(), "history").status, Status::Warn);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_session_memory_is_checked_and_repaired_like_the_history() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let path = f.doctor.data_dir.join(sessions::FILE_NAME);
+        // Nothing yet: fine.
+        assert_eq!(check(&f.doctor.checks(), "sessions").status, Status::Ok);
+        // Loose: tightened.
+        credentials_file::create_private_file(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let c = check(&f.doctor.checks(), "sessions").clone();
+        assert_eq!(
+            (c.status, c.fix_id.as_deref()),
+            (Status::Warn, Some("sessions.tighten")),
+            "{c:?}"
+        );
+        f.doctor.fix("sessions.tighten", false).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // Corrupt: moved aside, never deleted.
+        fs::write(&path, b"this is not a database at all, not even close").unwrap();
+        let c = check(&f.doctor.checks(), "sessions").clone();
+        assert_eq!(
+            (c.status, c.fix_id.as_deref()),
+            (Status::Fail, Some("sessions.move_aside")),
+            "{c:?}"
+        );
+        f.doctor.fix("sessions.move_aside", false).unwrap();
+        assert!(!path.exists());
+        assert_eq!(
+            entries(&f.doctor.data_dir, "sessions.sqlite.broken-").len(),
+            1
+        );
+        assert_eq!(check(&f.doctor.checks(), "sessions").status, Status::Ok);
+        // A symlink is untrusted.
+        let target = f.doctor.data_dir.join("elsewhere");
+        fs::write(&target, b"").unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        let c = check(&f.doctor.checks(), "sessions").clone();
+        assert_eq!(
+            (c.status, c.fix_id.as_deref()),
+            (Status::Fail, Some("sessions.move_aside")),
+            "{c:?}"
+        );
+    }
+
+    #[test]
+    fn a_newer_session_schema_is_reported_and_an_open_store_moves_aside_and_restarts_fresh() {
+        let f = fixture();
+        let store = Arc::new(DesktopStateStore::open(&f.doctor.data_dir).unwrap());
+        let doctor = LocalDoctor {
+            sessions: Some(store.clone()),
+            ..f.doctor
+        };
+        assert_eq!(check(&doctor.checks(), "sessions").status, Status::Ok);
+        let message = doctor.fix("sessions.move_aside", false).unwrap();
+        assert!(message.contains("new, empty session memory"), "{message}");
+        let moved = entries(&doctor.data_dir, "sessions.sqlite.broken-");
+        assert_eq!(moved.len(), 1);
+        assert!(
+            doctor
+                .data_dir
+                .join(moved[0].as_str())
+                .join(sessions::FILE_NAME)
+                .is_file()
+        );
+        assert!(doctor.data_dir.join(sessions::FILE_NAME).is_file());
+        assert_eq!(check(&doctor.checks(), "sessions").status, Status::Ok);
+        let closed = LocalDoctor {
+            sessions: None,
+            ..doctor
+        };
+        assert_eq!(check(&closed.checks(), "sessions").status, Status::Warn);
+        // Newer schema.
+        let conn = rusqlite::Connection::open(closed.data_dir.join(sessions::FILE_NAME)).unwrap();
+        conn.pragma_update(None, "user_version", 99).unwrap();
+        drop(conn);
+        let c = check(&closed.checks(), "sessions").clone();
+        assert_eq!(c.status, Status::Fail, "{c:?}");
+        assert!(c.message.contains("newer version"));
     }
 
     /// The names of the entries in `dir` that start with `prefix`.

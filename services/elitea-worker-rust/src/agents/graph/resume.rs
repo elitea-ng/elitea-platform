@@ -618,6 +618,7 @@ impl PipelineContinuationDecision {
         checkpointer: &dyn Checkpointer,
         root_agent_name: &str,
         thread_id: &str,
+        owner: &crate::agents::dispatch_journal::DispatchOwner,
     ) -> Result<ResolvedPipelineContinuation, PipelineResumeError> {
         match self {
             Self::Node(decision) => decision
@@ -630,7 +631,13 @@ impl PipelineContinuationDecision {
                 authorization,
             } => {
                 let events = session.events().all();
-                let interrupt = events.last().ok_or_else(PipelineResumeError::stale)?;
+                let interrupt = crate::agents::dispatch_journal::continuation_pause(
+                    &events,
+                    |event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY),
+                    owner,
+                    |pause| pause_interrupt_ids(pause, root_agent_name, thread_id),
+                )
+                .ok_or_else(PipelineResumeError::stale)?;
                 if let Ok(binding) =
                     pipeline_application_event_binding(interrupt, root_agent_name, thread_id)
                 {
@@ -701,6 +708,17 @@ impl PipelineContinuationDecision {
             }
         }
     }
+}
+
+/// The cards of one pipeline Application pause, as the browser saw them.
+pub(crate) fn pause_interrupt_ids(
+    pause: &adk_rust::Event,
+    root_agent_name: &str,
+    thread_id: &str,
+) -> Option<BTreeSet<String>> {
+    pipeline_application_event_binding(pause, root_agent_name, thread_id)
+        .ok()
+        .map(|binding| binding.interrupt_ids().iter().cloned().collect())
 }
 
 pub(crate) struct ResolvedPipelineContinuation {
@@ -1247,8 +1265,11 @@ fn direct_hitl_resume_error(error: &DirectHitlError) -> PipelineResumeError {
         DirectHitlErrorCode::InvalidInput | DirectHitlErrorCode::ResourceExhausted => {
             PipelineResumeError::invalid()
         }
-        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
+        DirectHitlErrorCode::UnsupportedCapability => {
             PipelineResumeError::new(PipelineResumeErrorCode::UnsupportedCapability)
+        }
+        DirectHitlErrorCode::MayHaveStarted => {
+            PipelineResumeError::new(PipelineResumeErrorCode::MayHaveStarted)
         }
         DirectHitlErrorCode::StaleDecision => PipelineResumeError::stale(),
         DirectHitlErrorCode::CorruptSession => PipelineResumeError::corrupt(),
@@ -1317,6 +1338,8 @@ pub(crate) enum PipelineResumeErrorCode {
     StaleDecision,
     CorruptSession,
     DependencyUnavailable,
+    /// An approved call was dispatched without a recorded outcome.
+    MayHaveStarted,
 }
 
 impl PipelineResumeErrorCode {
@@ -1328,6 +1351,7 @@ impl PipelineResumeErrorCode {
             Self::StaleDecision => "pipeline_hitl.stale_decision",
             Self::CorruptSession => "pipeline_hitl.corrupt_session",
             Self::DependencyUnavailable => "pipeline_hitl.dependency_unavailable",
+            Self::MayHaveStarted => "pipeline_hitl.may_have_started",
         }
     }
 }

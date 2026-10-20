@@ -31,7 +31,7 @@
 #     liveness probe cannot be configured into failing;
 #   * the sidecar has no Service and no NetworkPolicy of its own: it listens on
 #     no port;
-#   * the Python worker, and the Rust worker on the python indexing runtime,
+#   * the retired Python worker and python indexing runtime,
 #     refuse the sidecar at render time.
 #
 # Usage: deploy/helm/tests/render-worker-extractor.sh
@@ -59,7 +59,7 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 
 RENDER=(
   -f "$CHART/values-standalone.yaml"
-  --set worker.enabled=true --set worker.implementation=python --set worker.indexingRuntime=python
+  --set worker.enabled=true
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
@@ -206,20 +206,22 @@ for probe in ("livenessProbe", "readinessProbe"):
 PY
 
 echo "== refusals =="
-# refused <extra args...>: 0 when the chart refuses for the extractor's reason.
+# refused <reason> <extra args...>: 0 when the chart refuses for that reason.
 refused() {
+  local reason="$1"
+  shift
   if "$HELM" template t "$CHART" "${RENDER[@]}" "$@" >"$TMP/refused.yaml" 2>"$TMP/refused.err"; then
     return 1
   fi
-  grep -qF "worker.extractor.enabled needs" "$TMP/refused.err"
+  grep -qF "$reason" "$TMP/refused.err"
 }
 # Unrolled, like render-worker.sh: the floor counts accepting sites.
-refused --set worker.implementation=python --set worker.extractor.enabled=true \
-  && ok "the Python worker with the extractor is refused" \
-  || bad "the Python worker with the extractor: $(tail -1 "$TMP/refused.err")"
-refused --set worker.implementation=rust --set worker.indexingRuntime=python --set worker.extractor.enabled=true \
-  && ok "the Rust worker on python indexing with the extractor is refused" \
-  || bad "the Rust worker on python indexing with the extractor: $(tail -1 "$TMP/refused.err")"
+refused "is no longer supported" --set worker.implementation=python --set worker.extractor.enabled=true \
+  && ok "the retired Python worker is refused, extractor or not" \
+  || bad "the retired Python worker with the extractor: $(tail -1 "$TMP/refused.err")"
+refused "is no longer supported" --set worker.implementation=rust --set worker.indexingRuntime=python --set worker.extractor.enabled=true \
+  && ok "the retired python indexing runtime is refused, extractor or not" \
+  || bad "python indexing with the extractor: $(tail -1 "$TMP/refused.err")"
 
 echo
 RAN=$((PASS+FAIL))

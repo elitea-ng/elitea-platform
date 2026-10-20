@@ -35,17 +35,16 @@
  * actually left the platform. Neither can be faked by the answer text, which
  * is written by the same model that was shown the picture.
  *
- * ── Why the python leg ────────────────────────────────────────────────────
- * See `ADO_LEG_REASON`: the families are SDK-only, and the image pipeline under
- * test is the SDK's loader stack.
+ * ── Why the cases are parked ──────────────────────────────────────────────
+ * See `ADO_NATIVE_GAP`: the image pipeline under test was the retired Python
+ * worker's SDK loader stack, and the native families do not describe images.
  */
 import { expect, test } from '@playwright/test';
 
 import { clearMockLlmJournal, readMockLlmJournal } from '../fixtures/api';
 import {
-  ADO_LEG_REASON,
+  ADO_NATIVE_GAP,
   createAdoAgent,
-  onPythonLeg,
   readAdoJournal,
   readAdoState,
   resetAdo,
@@ -53,7 +52,7 @@ import {
   shownImages,
 } from '../fixtures/adoMock';
 
-test.skip(!onPythonLeg(), ADO_LEG_REASON);
+test.fixme(true, ADO_NATIVE_GAP);
 
 /** The seeded work item whose one image appears in three of its five comments. */
 const REPEATED = 101;

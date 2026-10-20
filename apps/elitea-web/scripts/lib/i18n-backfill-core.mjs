@@ -203,10 +203,44 @@ export function planBackfill(existingEn, allEntries) {
  * which is in a desktop-only module is a desktop key.
  */
 
+/**
+ * Route catalogues: strings only one lazily loaded module renders, kept out
+ * of the initial `en.json` (bundle budget). The module registers its file
+ * itself (`i18n.addResourceBundle`) when its chunk loads. Every key of the
+ * file carries `prefix`, and no key with `prefix` may sit in another
+ * catalogue.
+ */
+export const ROUTE_CATALOGUES = [
+  // The web chat's notice of a handed-off Local work thread (ADR-0034).
+  { file: 'src/pages/chat/i18n/en.chatCloud.json', prefix: 'pages.chat.cloud.' },
+  // A project's Send to cloud switch (ADR-0034 decision 11): the admin
+  // Projects page's dialog and the project settings section. The control's
+  // module registers it; the table's row action is rendered only by the page
+  // that also imports the dialog.
+  { file: 'src/features/cloud-executor-switch/i18n/en.cloudExecutorSwitch.json', prefix: 'features.cloudExecutorSwitch.' },
+];
+
+/** Keys in the wrong place for the route catalogues: `[{ key, problem }]`. */
+export function planRouteCatalogues(sharedEn, desktopEn, routeCatalogues) {
+  const problems = [];
+  for (const { file, prefix, keys } of routeCatalogues) {
+    for (const key of Object.keys(keys)) {
+      if (!key.startsWith(prefix)) problems.push({ key, problem: `in ${file} without its prefix ${prefix}` });
+    }
+    for (const [name, catalogue] of [['en.json', sharedEn], ['en.desktop.json', desktopEn]]) {
+      for (const key of Object.keys(catalogue)) {
+        if (key.startsWith(prefix)) problems.push({ key, problem: `in ${name}; belongs in ${file}` });
+      }
+    }
+  }
+  return problems;
+}
+
 /** Modules that only the `desktop` build reaches. `desktopEntry.tsx` is the door the web build also ships (its notice is web copy). */
 const DESKTOP_ONLY_PREFIXES = [
   'src/entries/desktop/',
   'src/features/workspace/',
+  'src/features/workspace-handoff/',
   'src/features/workspace-index/',
   'src/pages/workspace/',
   'src/shared/desktop/',

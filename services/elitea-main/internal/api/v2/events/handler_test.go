@@ -102,11 +102,11 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 		t.Fatal("Stream did not return after ctx cancel")
 	}
 
-	if got := strings.Join(src.channels, ","); got != "project:42:events,project:42:presence" {
-		t.Errorf("subscribed channels = %q, want the gateway's and the presence family of project 42", got)
+	if got := strings.Join(src.channels, ","); got != "project:42:events,project:42:presence,project:42:workspace" {
+		t.Errorf("subscribed channels = %q, want the gateway's, the presence and the workspace family of project 42", got)
 	}
-	if src.cancelled() != 2 {
-		t.Errorf("cancel funcs called %d times, want 2 (one per family)", src.cancelled())
+	if src.cancelled() != 3 {
+		t.Errorf("cancel funcs called %d times, want 3 (one per family)", src.cancelled())
 	}
 
 	body := rec.Body.String()
@@ -223,7 +223,7 @@ func waitForBody(t *testing.T, rec *lockedRecorder, want string) {
 }
 
 func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
-	for _, eventType := range []string{"canvas.editors", "budget.soft_alert"} {
+	for _, eventType := range []string{"canvas.editors", "budget.soft_alert", "workspace.handoff"} {
 		if !Forwarded(eventType) {
 			t.Errorf("Forwarded(%q) = false, want true", eventType)
 		}
@@ -237,8 +237,15 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 			t.Errorf("Forwarded(%q) = true; every forwarded type is readable by any project viewer", eventType)
 		}
 	}
-	if len(streamFamilies) != 2 {
-		t.Errorf("streamFamilies has %d entries, want 2; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
+	// The third family (ADR-0034 workspace handoff) is audience-scoped: it
+	// reaches only each frame's readers (TestStream_WorkspaceHandoff...).
+	if len(streamFamilies) != 3 {
+		t.Errorf("streamFamilies has %d entries, want 3; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
+	}
+	for _, f := range streamFamilies {
+		if f.audience != (f.eventType == WorkspaceHandoffEventType) {
+			t.Errorf("family %q audience scoping = %v", f.eventType, f.audience)
+		}
 	}
 	// And each from its own family only.
 	for _, c := range []struct {
@@ -251,6 +258,10 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 		{"project:7:presence", "budget.soft_alert", false},
 		{"project:8:presence", "canvas.editors", false},
 		{"project:7:other", "canvas.editors", false},
+		{"project:7:workspace", "workspace.handoff", true},
+		{"project:7:presence", "workspace.handoff", false},
+		{"project:7:events", "workspace.handoff", false},
+		{"project:7:workspace", "canvas.editors", false},
 	} {
 		if got := ForwardedOn("7", c.channel, c.eventType); got != c.want {
 			t.Errorf("ForwardedOn(7, %q, %q) = %v, want %v", c.channel, c.eventType, got, c.want)
@@ -278,8 +289,8 @@ func TestStream_ReturnsWhenSourceChannelCloses(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stream did not return when source channel closed")
 	}
-	if src.cancelled() != 2 {
-		t.Errorf("cancel funcs called %d times, want 2", src.cancelled())
+	if src.cancelled() != 3 {
+		t.Errorf("cancel funcs called %d times, want 3", src.cancelled())
 	}
 }
 
@@ -547,5 +558,60 @@ func TestTheProjectStreamRefusesADifferentPermission(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d for a caller holding an unrelated permission, want %d",
 			rec.Code, http.StatusForbidden)
+	}
+}
+
+// ADR-0034 scope B: a workspace handoff state change reaches only its
+// audience (the thread's readers: a Local work thread's owner). Another
+// project viewer, a caller without an owning user id, a frame with no
+// audience and a malformed frame get nothing; the audience list never leaves
+// the server.
+func TestStream_WorkspaceHandoffReachesOnlyItsAudience(t *testing.T) {
+	stream := func(user *auth.User) string {
+		t.Helper()
+		src := newFakeSource()
+		h := NewHandlerFromSource(src)
+		ctx, cancel := context.WithCancel(context.Background())
+		if user != nil {
+			ctx = auth.ContextWithUser(ctx, *user)
+		}
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			h.Stream(rec, newRequestWithProjectID(ctx, "7"))
+			close(done)
+		}()
+		frames := []string{
+			`{"conversation_uuid":"c-1","state":"CLOUD_RUNNING","epoch":2,"reclaim_pending":true,"audience":[11]}`,
+			`{"conversation_uuid":"c-2","state":"CLOUD_IDLE","epoch":5,"reclaim_pending":false,"audience":[12]}`,
+			`{"conversation_uuid":"c-3","state":"LOCAL","epoch":4,"reclaim_pending":false}`,
+			`not json`,
+		}
+		for _, frame := range frames {
+			src.stream("project:7:workspace") <- natsbus.Event{Type: "workspace.handoff", Payload: json.RawMessage(frame)}
+		}
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		<-done
+		return rec.Body.String()
+	}
+	owner := stream(&auth.User{ID: "11", UserID: "11"})
+	if !strings.Contains(owner, "event: workspace.handoff") ||
+		!strings.Contains(owner, `"conversation_uuid":"c-1"`) || !strings.Contains(owner, `"reclaim_pending":true`) {
+		t.Fatalf("the owner did not get their thread's change: %q", owner)
+	}
+	for _, leaked := range []string{"c-2", "c-3", "not json", "audience"} {
+		if strings.Contains(owner, leaked) {
+			t.Fatalf("the owner's stream carries %q: %q", leaked, owner)
+		}
+	}
+	for name, user := range map[string]*auth.User{
+		"another viewer":    {ID: "13", UserID: "13"},
+		"no user":           nil,
+		"a token, no owner": {ID: "t-1", TokenID: "t-1", AuthType: "token"},
+	} {
+		if body := stream(user); strings.Contains(body, "workspace.handoff") {
+			t.Fatalf("%s got a workspace frame: %q", name, body)
+		}
 	}
 }

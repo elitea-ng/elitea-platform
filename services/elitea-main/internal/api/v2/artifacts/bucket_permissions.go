@@ -130,26 +130,28 @@ func callerUserID(ctx context.Context) (int64, bool) {
 	return user.OwningUserID()
 }
 
-// authorizeBucket answers whether the caller may act on one bucket.
-//
-// It reads the exception FIRST and asks about project-admin membership only
-// when the exception refuses, so the common path — no exception — costs one
-// indexed lookup and the admin query never runs.
-func (h *Handler) authorizeBucket(
+// gateBucket is a bucket route's first step, in one lookup: hidden is the
+// project's workspace bucket (answered 404 before any access answer, as for
+// a missing bucket), allowed is the access list's verdict.
+func (h *Handler) gateBucket(
 	ctx context.Context, projectID int64, bucket, need string,
-) (bool, error) {
-	userID, ok := callerUserID(ctx)
-	if !ok {
-		return true, nil
+) (hidden, allowed bool, err error) {
+	userID, caller := callerUserID(ctx)
+	if !caller {
+		userID = 0
 	}
-	permissions, found, err := h.repo.GetBucketPermission(ctx, projectID, userID, bucket)
+	gate, err := h.repo.BucketGate(ctx, projectID, userID, bucket)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	if accessPermitted(permissions, found, need) {
-		return true, nil
+	if gate.Workspace {
+		return true, false, nil
 	}
-	return h.repo.IsProjectAdmin(ctx, projectID, userID)
+	if !caller || accessPermitted(gate.Permissions, gate.Found, need) {
+		return false, true, nil
+	}
+	admin, err := h.repo.IsProjectAdmin(ctx, projectID, userID)
+	return false, admin, err
 }
 
 // visibleBuckets applies the listing filter — legacy's blacklist, see this
@@ -233,9 +235,18 @@ func (h *Handler) ListBucketPermissions(w http.ResponseWriter, r *http.Request) 
 	}
 	out := make([]bucketPermissionRow, 0, len(rows))
 	for _, row := range rows {
-		permissions := row.BucketPermissions
-		if permissions == nil {
-			permissions = map[string][]string{}
+		permissions := map[string][]string{}
+		for bucket, verbs := range row.BucketPermissions {
+			// The hidden workspace bucket is never named on the wire
+			// (ADR-0034 decision 3).
+			hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket)
+			if err != nil {
+				h.writeInternal(w, r, "list bucket permissions", err)
+				return
+			}
+			if !hidden {
+				permissions[bucket] = verbs
+			}
 		}
 		out = append(out, bucketPermissionRow{
 			UserID:            row.UserID,
@@ -323,6 +334,19 @@ func (h *Handler) SetBucketPermissions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", message)
 		return
 	}
+	// The hidden workspace bucket has no access list (ADR-0034 decision 3):
+	// naming it is an invalid bucket name, as for any name the caller may not use.
+	for bucket := range body.BucketPermissions {
+		hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, bucket)
+		if err != nil {
+			h.writeInternal(w, r, "set bucket permissions", err)
+			return
+		}
+		if hidden {
+			writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid bucket name "+bucket)
+			return
+		}
+	}
 	if err := h.repo.ReplaceUserBucketPermissions(
 		r.Context(), projectID, *body.UserID, body.BucketPermissions,
 	); err != nil {
@@ -359,6 +383,14 @@ func (h *Handler) DeleteBucketPermission(w http.ResponseWriter, r *http.Request)
 	}
 	if body.Bucket == nil || *body.Bucket == "" {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "bucket is required")
+		return
+	}
+	// The hidden workspace bucket has no access list (ADR-0034 decision 3).
+	if hidden, err := h.repo.IsWorkspaceBucket(r.Context(), projectID, *body.Bucket); err != nil {
+		h.writeInternal(w, r, "delete bucket permission", err)
+		return
+	} else if hidden {
+		writeError(w, http.StatusNotFound, "NotFound", "no exception for this member and bucket")
 		return
 	}
 	removed, err := h.repo.DeleteUserBucketPermission(r.Context(), projectID, *body.UserID, *body.Bucket)

@@ -296,18 +296,6 @@ fn read_receipts(checkpoint: &Checkpoint) -> Result<GraphCallReceipts, GraphErro
     Ok(value)
 }
 
-/// Whether a frontier call of this checkpoint is an approved resume that started and left no
-/// outcome: the approved call may have run, so no continuation may run it again.
-pub(crate) fn has_unfinished_approved_resume(checkpoint: &Checkpoint) -> Result<bool, GraphError> {
-    Ok(read_receipts(checkpoint)?
-        .calls
-        .iter()
-        .any(|(node, receipt)| {
-            checkpoint.pending_nodes.contains(node)
-                && matches!(receipt.outcome, GraphCallOutcome::Resuming { .. })
-        }))
-}
-
 pub(crate) fn receipt_for_node(
     checkpoint: &Checkpoint,
     node: &str,

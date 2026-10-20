@@ -6,7 +6,7 @@
 # /usr/lib/<triplet>/, and its base package is gcc-14-base (gcc-12-base on
 # Debian 12). services/elitea-deepwiki-engine/Containerfile does the same.
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
-FROM rust:1.97.1-trixie AS runtime-libraries
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS runtime-libraries
 COPY --from=runtime-cc /usr/lib/ /cc-lib/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
@@ -21,7 +21,14 @@ RUN cd /cc-lib && \
 FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
 COPY --from=runtime-libraries /runtime-files/ /
 
-FROM rust:1.97.1-trixie AS builder-base
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder-base
+# A transient GitHub/crates.io failure must not fail the build: cargo's
+# built-in libgit2 fetch gave up on one TLS error ("SSL error: unknown error",
+# then "revision ... not found") for a pinned tree-sitter git dependency in
+# CI. The git CLI and more retries ride over it; the lockfile still pins
+# every revision and checksum.
+ENV CARGO_NET_RETRY=10 \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 WORKDIR /src
 
@@ -53,8 +60,8 @@ WORKDIR /src
 # what a scan of the base layers alone is. Dropping this line would not turn
 # the scan red — it would make it pass while measuring the base image, which is
 # the exact "absence reads as correctness" shape #433 was about.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo install cargo-auditable --locked --version 0.7.5
 
 # Resolve every shipped ELF dependency against the final runtime without starting the application.

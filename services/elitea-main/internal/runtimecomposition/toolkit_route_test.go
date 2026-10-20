@@ -1,9 +1,10 @@
 package runtimecomposition
 
 import (
+	"testing"
+
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestStandaloneRustToolkitsUseAgentRuntimeWithoutIndexing(t *testing.T) {
@@ -21,7 +22,6 @@ func TestStandaloneRustToolkitsUseAgentRuntimeWithoutIndexing(t *testing.T) {
 	route, err := configuredToolkitRoute(config, worker)
 	require.NoError(t, err)
 	require.True(t, route.enabled)
-	require.True(t, route.rust)
 	require.Equal(t, config.AgentExecutionCommandStream, route.stream)
 	require.Equal(t, "elitea-agent-worker-v1", route.consumer)
 	require.Equal(t, agentResourceClass, route.resourceClass)
@@ -35,25 +35,4 @@ func TestStandaloneRustToolkitsUseAgentRuntimeWithoutIndexing(t *testing.T) {
 	again, err := configuredToolkitRoute(config, worker)
 	require.NoError(t, err)
 	require.Equal(t, route, again)
-}
-
-func TestStandalonePythonToolkitsKeepIndexWorkerRoute(t *testing.T) {
-	worker, err := LoadPinnedWorkerToolkitCapability(PythonWorkerImplementation)
-	require.NoError(t, err)
-	config := Config{ToolkitDiscoveryEnabled: true, IndexIngestDispatchEnabled: true, IndexIngestCommandStream: "ELITEA_RT_V1_INDEX",
-		AgentExecutionDispatchEnabled: true, AgentExecutionCommandStream: "ELITEA_RT_V1_AGENT"}
-	route, err := configuredToolkitRoute(config, worker)
-	require.NoError(t, err)
-	require.True(t, route.enabled)
-	require.False(t, route.rust)
-	require.Equal(t, "ELITEA_RT_V1_INDEX", route.stream)
-	require.Equal(t, "elitea-index-worker-v1", route.consumer)
-	require.Equal(t, indexResourceClass, route.resourceClass)
-	config.IndexIngestDispatchEnabled = false
-	_, err = configuredToolkitRoute(config, worker)
-	require.Error(t, err)
-	config.ToolkitDiscoveryEnabled = false
-	route, err = configuredToolkitRoute(config, worker)
-	require.NoError(t, err)
-	require.False(t, route.enabled)
 }

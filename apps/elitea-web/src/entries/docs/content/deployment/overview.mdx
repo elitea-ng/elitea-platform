@@ -3,7 +3,7 @@ title: "Production deployment overview"
 description: "The target Kubernetes topology, what the Helm chart creates versus what you bring, and where the signed release artefacts live."
 ---
 
-Elitea's Kubernetes path is one Helm chart, `elitea`, composed with two supporting charts (`nats`, `nats-bootstrap`) through ArgoCD's app-of-apps pattern — there is no umbrella chart. This page is the map; [Install with Helm](/deployment/helm-install) walks the install itself.
+Elitea's Kubernetes path is one Helm chart, `elitea`, composed with two supporting charts (`nats`, `nats-bootstrap`) through ArgoCD's app-of-apps pattern — there is no umbrella chart. This page is the map; [Deploy from scratch](/deployment/from-scratch) walks a complete first install, and [Install with Helm](/deployment/helm-install) is the shorter reference.
 
 <Info title="Compose also exists">
 A one-host Compose stack (`docker-compose.standalone-full.yml`) runs the same topology for evaluation and small teams — see [Install Elitea](/getting-started/install). This section covers the Kubernetes path only.
@@ -20,7 +20,7 @@ flowchart TB
     Main --> Gateway["LLM gateway"]
     Main --> Scheduler["elitea-scheduler"]
     Main --> SubappHost["subapp-host: DeepWiki / Inventory"]
-    Main -. mTLS control/output/content .-> Worker["agent worker (python or rust)"]
+    Main -. mTLS control/output/content .-> Worker["agent worker (Rust)"]
 
     Gateway --> Worker
     Gateway --> NATS[("NATS JetStream")]
@@ -39,7 +39,7 @@ flowchart TB
     SubappHost --> Object
 ```
 
-Every arrow into the worker and the NATS command bus is mutually authenticated (mTLS; the command bus is NATS JetStream, elitea-main publishing as its own identity and the workers pulling from their own account) — that plane's material is described in [Install with Helm](/deployment/helm-install#secrets-to-create-beforehand) and `deploy/runtime/README.md`. DeepWiki and Inventory are two instances of the same `subapp-host` pattern: a Go host process reaching a Python engine sidecar over a Unix socket inside one pod.
+Every arrow into the worker and the NATS command bus is mutually authenticated (mTLS; the command bus is NATS JetStream, elitea-main publishing as its own identity and the workers pulling from their own account) — that plane's material is described in [Install with Helm](/deployment/helm-install#secrets-to-create-beforehand) and `deploy/runtime/README.md`. DeepWiki and Inventory are two instances of the same `subapp-host` pattern: a Go host process reaching a Rust engine sidecar over a Unix socket inside one pod.
 
 ## What the chart creates, and what you bring
 
@@ -57,9 +57,9 @@ The chart is **one release** — elitea-main and its migration Job, elitea-web, 
 
 The runtime plane (agent execution) opens **six isolated connection pools per elitea-main replica** — 36 connections beyond the primary pool — and they may not share capacity. `values-standalone.yaml` sizes for this explicitly: at `postgresql.maxConnections: 200` and `main.autoscaling.maxReplicas: 4`, four replicas cost roughly 4 × 42 = 168 connections, inside the 175 left after `reservedConnections: 25` (interactive `psql`, backup tooling, the migration and `dbInit` Jobs). The chart's own guard (`elitea-main.validateConnectionBudget`) refuses to render a topology that would exceed the stated ceiling, rather than letting it surface later as `FATAL: sorry, too many clients already` on whichever component connects next.
 
-<Warning>
-A connection pooler is not a substitute for this budget today. pgbouncer in transaction mode breaks pgx's prepared-statement caching and the secrets backfill's advisory lock; session mode buys almost nothing because this platform's client pools already hold connections open for their lifetime. Size PostgreSQL for the topology instead.
-</Warning>
+<Note>
+When the server cannot hold the replicas you need, turn on the chart's transaction-mode PgBouncer (`pgbouncer.enabled`) and point the `elitea-main-db` DSN at its Service. Every elitea-main replica then shares one server-side pool. The migration Jobs, the gateway and the worker keep their direct connections, which `reservedConnections` covers.
+</Note>
 
 ## Published artefacts
 

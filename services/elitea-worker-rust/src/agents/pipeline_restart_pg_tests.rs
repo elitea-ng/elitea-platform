@@ -15,8 +15,6 @@
 //! The assembler is the production `PipelineNativeAgentAssembler::postgres` path, so session and
 //! checkpoint writers are activated by `activate_pipeline_postgres` from that claim.
 
-use std::str::FromStr as _;
-
 use super::*;
 use crate::protocol::control::test_session_authority_for_claim;
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};
@@ -28,9 +26,9 @@ const PHASE_ENV: &str = "ELITEA_NESTED_RESTART_PG_PHASE";
 const PENDING_ENV: &str = "ELITEA_NESTED_RESTART_PG_PENDING";
 const PENDING_MARKER: &str = "NESTED_RESTART_PENDING=";
 /// One turn takes about a second here; the bound only turns a hang into a failure.
-pub(super) const PHASE_DEADLINE: std::time::Duration = std::time::Duration::from_mins(2);
+pub(crate) const PHASE_DEADLINE: std::time::Duration = std::time::Duration::from_mins(2);
 pub(super) const GENERATION: u64 = 3;
-pub(super) const CHECKPOINT_MIGRATION: &str =
+pub(crate) const CHECKPOINT_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0001_agent_graph_checkpoints.sql");
 
 const FIRST_CHILD_ANSWER: &str = "first child answer";
@@ -105,8 +103,8 @@ pub(super) fn authorized_turn<'a>(
     )
 }
 
-pub(super) async fn connect(database: &str) -> sqlx::PgPool {
-    let options = sqlx::postgres::PgConnectOptions::from_str(
+pub(crate) async fn connect(database: &str) -> sqlx::PgPool {
+    let options = crate::test_pg::connect_options(
         &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").expect("database URL"),
     )
     .expect("parse database URL")
@@ -206,7 +204,7 @@ async fn postgres_two_nested_agent_pauses_resume_across_process_replacement() {
 }
 
 /// Runs one phase process under a deadline, so a stuck turn fails the proof instead of hanging it.
-pub(super) fn run_phase(phase: &str, mut command: std::process::Command) -> std::process::Output {
+pub(crate) fn run_phase(phase: &str, mut command: std::process::Command) -> std::process::Output {
     let child = command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

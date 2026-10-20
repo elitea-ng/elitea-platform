@@ -5,10 +5,10 @@
  * `routes/__tests__/workspacesRoute.test.tsx`.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, fireEvent, getConfig, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
@@ -20,6 +20,8 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
+import { createFakeAppIpc, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
+import { AppIpcProvider } from '@/widgets/desktop-shell';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -36,7 +38,7 @@ const globals = globalThis as unknown as Record<string, unknown>;
 const FOLDER: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: null, is_git: true };
 
 /** Mounts the pages at `path`; answers a function that opens another folder's session. */
-function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (workspaceId: string) => Promise<void> {
+function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc, appIpc?: FakeAppIpc): (workspaceId: string) => Promise<void> {
   const rootRoute = createRootRoute();
   const list = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage });
@@ -47,13 +49,34 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc): (w
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   const pages = <RouterProvider router={router} />;
+  const withIndex = indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>;
   render(
     <AppProviders>
-      <WorkspaceIpcProvider ipc={ipc}>{indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>}</WorkspaceIpcProvider>
+      <WorkspaceIpcProvider ipc={ipc}>{appIpc === undefined ? withIndex : <AppIpcProvider ipc={appIpc}>{withIndex}</AppIpcProvider>}</WorkspaceIpcProvider>
     </AppProviders>,
   );
   return (workspaceId) => router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId } });
 }
+
+/*
+ * Deadlines sized for a busy machine. These tests drive whole pages with
+ * real timers (MUI selects, typing, dialogs): "runs a whole turn" takes
+ * 0.6 s alone, with a cold or a warm transform cache alike (no lazy import
+ * is loaded mid-test, and the page's only intervals are 15 s and longer), but
+ * 5.4 s while `vitest run src/features` runs beside it: CPU contention,
+ * which broke both the 5 s test timeout and testing-library's 1 s
+ * `waitFor`/`findBy` deadline. Measured 2026-10-15; see DEVIATIONS
+ * "desktop-followup".
+ */
+vi.setConfig({ testTimeout: 30_000 });
+let asyncUtilTimeout = 1000;
+beforeAll(() => {
+  asyncUtilTimeout = getConfig().asyncUtilTimeout;
+  configure({ asyncUtilTimeout: 10_000 });
+});
+afterAll(() => {
+  configure({ asyncUtilTimeout });
+});
 
 beforeEach(() => {
   resetConfigForTests();
@@ -80,8 +103,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+/** Picks the "Coder" agent in the composer footer's picker. */
+async function pickCoder(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByTestId('agent-chip'));
+  await user.click(await screen.findByRole('menuitem', { name: 'Coder' }));
+  await waitFor(() => expect(screen.getByTestId('agent-chip')).toHaveTextContent('Coder · base'));
+}
+
 describe('WorkspacesPage', () => {
-  it('lists the opened folders with a git badge and the bound project, and opens a new one', async () => {
+  it('lists the opened folders as a table with a git badge and the bound project, and opens a new one', async () => {
     const ipc = createFakeWorkspaceIpc({
       workspaces: [{ ...FOLDER, project_id: 42 }],
       nextOpen: { id: 'w2', path: '/tmp/notes', name: 'notes', project_id: null, is_git: false },
@@ -89,20 +119,37 @@ describe('WorkspacesPage', () => {
     const user = userEvent.setup();
     mount(ipc, '/workspaces');
 
+    expect(await screen.findByRole('table', { name: 'Local work' })).toBeInTheDocument();
     const rows = await screen.findAllByTestId('workspace-row');
     expect(within(rows[0] as HTMLElement).getByText('app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('/Users/me/code/app')).toBeInTheDocument();
     expect(within(rows[0] as HTMLElement).getByText('Git')).toBeInTheDocument();
     // No host index client (a plain browser tab): no index chip.
     expect(within(rows[0] as HTMLElement).queryByTestId('index-status-chip')).toBeNull();
-    await waitFor(() => expect(within(rows[0] as HTMLElement).getByRole('combobox')).toHaveTextContent('Marketing'));
+    await waitFor(() => expect(within(rows[0] as HTMLElement).getByText('Marketing')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: 'Open folder' }));
     const after = await screen.findAllByTestId('workspace-row');
     expect(after).toHaveLength(2);
     expect(within(after[1] as HTMLElement).queryByText('Git')).toBeNull();
-    // An unbound folder cannot start a session yet.
-    expect(within(after[1] as HTMLElement).getByRole('button', { name: 'Open' })).toBeDisabled();
+    // An unbound folder says what it needs, and does not open.
+    expect(within(after[1] as HTMLElement).getByText('Bind a project to work here')).toBeInTheDocument();
+    await user.dblClick(after[1] as HTMLElement);
+    expect(screen.getByTestId('workspaces-page')).toBeInTheDocument();
+  });
+
+  it('opens a folder with a double click or Return, selecting rows with the arrow keys', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }, { ...FOLDER, id: 'w2', name: 'notes', project_id: 42 }] });
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces');
+    const rows = await screen.findAllByTestId('workspace-row');
+    await user.click(rows[0] as HTMLElement);
+    expect(rows[0]).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{ArrowDown}');
+    expect(rows[1]).toHaveAttribute('aria-selected', 'true');
+    expect(rows[1]).toHaveFocus();
+    await user.dblClick(rows[1] as HTMLElement);
+    await waitFor(() => expect(screen.queryByTestId('workspaces-page')).toBeNull());
   });
 
   it('shows each folder\'s code index on its row', async () => {
@@ -123,38 +170,53 @@ describe('WorkspacesPage', () => {
     expect(indexIpc.calls.refreshes).toEqual([]);
   });
 
-  it('binds a project to a folder through the project picker', async () => {
+  it('puts a folder\'s actions in its native context menu', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
+    const row = await screen.findByTestId('workspace-row');
+    await waitFor(() => expect(within(row).getByText('Marketing')).toBeInTheDocument());
+    fireEvent.contextMenu(row);
+    await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+    const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+    expect(labels).toEqual(['Open', '-', 'Reveal in Finder', 'Copy Path', '-', 'Project', '-', 'Remove from sidebar']);
+    const submenu = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'children' in item);
+    expect(submenu !== undefined && 'children' in submenu ? submenu.children.map((c) => c.label) : []).toEqual(['Public', '✓ Marketing']);
+  });
+
+  it('binds a project to a folder from its context menu', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
     const row = await screen.findByTestId('workspace-row');
-    await user.click(within(row).getByRole('combobox'));
-    await user.click(await screen.findByRole('option', { name: 'Marketing' }));
+    appIpc.chooseFromContextMenu('project:42');
+    fireEvent.contextMenu(row);
 
     await waitFor(async () => expect((await ipc.list())[0]?.project_id).toBe(42));
-    await waitFor(() => expect(within(screen.getByTestId('workspace-row')).getByRole('button', { name: 'Open' })).toBeEnabled());
+    await waitFor(() => expect(within(screen.getByTestId('workspace-row')).getByText('Marketing')).toBeInTheDocument());
   });
 
   it('says why the project of a folder with a running turn cannot change', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     ipc.failNext('bindProject', 'workspace_busy', 'Wait for the running turn to end.');
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
     const row = await screen.findByTestId('workspace-row');
-    await user.click(within(row).getByRole('combobox'));
-    await user.click(await screen.findByRole('option', { name: 'Marketing' }));
+    appIpc.chooseFromContextMenu('project:42');
+    fireEvent.contextMenu(row);
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
     expect((await ipc.list())[0]?.project_id).toBeNull();
   });
 
-  it('removes a folder', async () => {
+  it('removes a folder from its context menu', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
-    await user.click(await screen.findByRole('button', { name: 'Remove app' }));
+    appIpc.chooseFromContextMenu('remove');
+    fireEvent.contextMenu(await screen.findByTestId('workspace-row'));
     expect(await screen.findByText('Open a folder to start')).toBeInTheDocument();
     expect(await ipc.list()).toEqual([]);
   });
@@ -162,10 +224,11 @@ describe('WorkspacesPage', () => {
   it('says why a folder with a running turn cannot be removed', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     ipc.failNext('remove', 'workspace_busy', 'A turn is already running in this workspace.');
-    const user = userEvent.setup();
-    mount(ipc, '/workspaces');
+    const appIpc = createFakeAppIpc();
+    mount(ipc, '/workspaces', undefined, appIpc);
 
-    await user.click(await screen.findByRole('button', { name: 'Remove app' }));
+    appIpc.chooseFromContextMenu('remove');
+    fireEvent.contextMenu(await screen.findByTestId('workspace-row'));
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
     expect(await ipc.list()).toHaveLength(1);
   });
@@ -203,14 +266,18 @@ describe('WorkspaceSessionPage', () => {
     );
   }
 
-  it('shows the folder\'s code index in the header', async () => {
+  it('shows the folder\'s code index in the inspector, opened from the toolbar menu', async () => {
     serveProject();
     const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } });
     mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', indexIpc);
     const session = await screen.findByTestId('workspace-session');
-    // The session page opens the index, which checks the folder.
-    await waitFor(() => expect(within(session).getByTestId('index-status-chip')).toHaveTextContent('Building…'));
-    expect(indexIpc.calls.opened).toEqual(['w1']);
+    // The session page opens the index, which checks the folder; its settings are in the ⋯ menu.
+    await waitFor(() => expect(indexIpc.calls.opened).toEqual(['w1']));
+    await userEvent.click(within(session).getByRole('button', { name: 'More' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Index settings…' }));
+    // The inspector opens on its Index segment.
+    expect(await screen.findByTestId('index-panel')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Index' })).toBeChecked();
   });
 
   it('asks to bind a project first when the folder has none', async () => {
@@ -226,12 +293,10 @@ describe('WorkspaceSessionPage', () => {
     mount(ipc, '/workspaces/w1');
 
     // Only the bound project's agents; the version follows the agent.
-    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
-    await user.click(await screen.findByRole('option', { name: 'Coder' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await pickCoder(user);
 
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
-    await user.click(screen.getByRole('switch', { name: 'Plan mode (no changes)' }));
+    await user.click(screen.getByRole('radio', { name: 'Plan mode (no changes)' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
@@ -272,8 +337,8 @@ describe('WorkspaceSessionPage', () => {
 
     expect(await screen.findByText('src/main.rs')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
-    const chatLink = screen.getByRole('link', { name: 'Open in chat' });
-    expect(chatLink).toHaveAttribute('href', '/chat/77');
+    await user.click(screen.getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Open in chat' })).not.toHaveAttribute('aria-disabled', 'true');
   });
 
   function recorded(turnId: string, overrides: Partial<StoredTurn> = {}): StoredTurn {
@@ -308,6 +373,7 @@ describe('WorkspaceSessionPage', () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
     ipc.setHistory('w1', '77', [recorded('t1'), recorded('t2', { live: true, state: 'interrupted', events: recorded('t2').events.slice(0, 2) })]);
     ipc.setChanges('t2', { files: [{ path: 't2-live.txt', status: 'modified', added: 2, removed: 1, diff: '' }] });
+    const user = userEvent.setup();
     mount(ipc, '/workspaces/w1?conversation=77');
 
     const transcript = await screen.findByTestId('session-transcript');
@@ -318,7 +384,10 @@ describe('WorkspaceSessionPage', () => {
     expect(screen.getAllByTestId('tool-row')).toHaveLength(1);
     expect(screen.getByText(/did not finish/)).toBeInTheDocument();
     expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
-    expect(screen.getByRole('link', { name: 'Open in chat' })).toHaveAttribute('href', '/chat/77');
+    await user.click(screen.getByRole('button', { name: 'More' }));
+    expect(await screen.findByRole('menuitem', { name: 'Open in chat' })).not.toHaveAttribute('aria-disabled', 'true');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
 
     // The panel: the live turn from the host (with undo), the older one as recorded (without).
     const sets = await screen.findAllByTestId('panel-turn-changes');
@@ -391,9 +460,7 @@ describe('WorkspaceSessionPage', () => {
     const user = userEvent.setup();
     mount(ipc, '/workspaces/w1');
 
-    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
-    await user.click(await screen.findByRole('option', { name: 'Coder' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await pickCoder(user);
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
@@ -417,9 +484,7 @@ describe('WorkspaceSessionPage', () => {
     const user = userEvent.setup();
     mount(ipc, '/workspaces/w1');
 
-    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
-    await user.click(await screen.findByRole('option', { name: 'Coder' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await pickCoder(user);
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
@@ -448,9 +513,7 @@ describe('WorkspaceSessionPage', () => {
     const user = userEvent.setup();
     mount(ipc, '/workspaces/w1');
 
-    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
-    await user.click(await screen.findByRole('option', { name: 'Coder' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await pickCoder(user);
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(adds).toBe(1));
@@ -471,9 +534,7 @@ describe('WorkspaceSessionPage', () => {
     const user = userEvent.setup();
     const openFolder = mount(ipc, '/workspaces/w1');
 
-    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
-    await user.click(await screen.findByRole('option', { name: 'Coder' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await pickCoder(user);
     await user.type(screen.getByTestId('chat-message-input'), 'go');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
@@ -482,7 +543,7 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
 
     await act(() => openFolder('w2'));
-    expect(await screen.findByText('/Users/me/code/lib')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'lib' })).toBeInTheDocument();
     expect(screen.queryByText('working in app')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
     // One listener: the old session's was removed with it.
@@ -495,9 +556,7 @@ describe('WorkspaceSessionPage', () => {
     const user = userEvent.setup();
     mount(ipc, '/workspaces/w1');
 
-    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
-    await user.click(await screen.findByRole('option', { name: 'Coder' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await pickCoder(user);
     await user.type(screen.getByTestId('chat-message-input'), 'go');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
@@ -535,6 +594,8 @@ describe('WorkspaceSessionPage', () => {
         busy: false,
         startError: null,
         start: () => Promise.resolve(started),
+        prewarm: () => undefined,
+        retryCommit: () => Promise.resolve(),
         cancel: () => Promise.resolve(),
         answer: () => Promise.resolve(),
         clear: () => undefined,
@@ -637,11 +698,79 @@ describe('WorkspaceSessionPage', () => {
           }),
         ),
         http.get(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ rows: [], total: 0 })),
+        // What the "Local coding agent" offer checks: may this person create agents here, and with which model.
+        http.get(`${BASE}/auth/permissions/prompt_lib/42`, () =>
+          HttpResponse.json(mayCreate ? [{ name: 'models.applications.applications.create', enabled: true }] : []),
+        ),
+        http.get(`${BASE}/configurations/models/42`, () =>
+          HttpResponse.json({ items: [{ name: 'gpt-5', project_id: '1', default: true }], default_model_name: 'gpt-5' }),
+        ),
       );
     }
+    let mayCreate = true;
 
     afterEach(() => {
       window.localStorage.clear();
+      mayCreate = true;
+    });
+
+    it('offers a Local coding agent in an empty project, creates it there on a click, and a turn runs on it', async () => {
+      const rows: { id: string; name: string }[] = [];
+      serveAgents(rows);
+      const created: unknown[] = [];
+      server.use(
+        http.post(`${BASE}/elitea_core/applications/prompt_lib/42`, async ({ request }) => {
+          created.push(await request.json());
+          rows.push({ id: '5', name: 'Local coding agent' });
+          return HttpResponse.json({ id: 5, name: 'Local coding agent' }, { status: 201 });
+        }),
+        http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/51`, () =>
+          HttpResponse.json({ items: [], total: 0, page: 1, page_size: 0, total_pages: 1 }),
+        ),
+        http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 3, name: 'Me' })),
+        http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ id: 77, name: 'fix the build' })),
+        http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => HttpResponse.json([])),
+      );
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      const empty = await screen.findByTestId('workspace-no-agents');
+      expect(await within(empty).findByText(/^Create a Local coding agent\?/)).toBeInTheDocument();
+      // Nothing is created until the person clicks.
+      expect(created).toEqual([]);
+      await user.click(within(empty).getByRole('button', { name: 'Create a Local coding agent' }));
+
+      await waitFor(() => expect(created).toHaveLength(1));
+      const body = created[0] as { name: string; versions: { instructions: string; llm_settings: unknown; meta: unknown; tools?: unknown }[] };
+      expect(body.name).toBe('Local coding agent');
+      expect(body.versions).toHaveLength(1);
+      const [version] = body.versions;
+      expect(version?.instructions).toContain('Explore before you edit');
+      expect(version?.instructions).toContain('never invent file contents');
+      expect(version?.llm_settings).toEqual({ model_name: 'gpt-5', model_project_id: 1 });
+      expect(version?.meta).toEqual({ step_limit: 100 });
+      expect(version?.tools).toBeUndefined();
+
+      // The list reads again: the new agent is picked and a turn runs on it.
+      await waitFor(() => expect(screen.queryByTestId('workspace-no-agents')).toBeNull());
+      await waitFor(() => expect(screen.getByTestId('agent-chip')).toHaveTextContent('Local coding agent · base'));
+      await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]).toEqual(expect.objectContaining({ application_id: 5, version_id: 51 }));
+    });
+
+    it('explains who can create an agent when the person may not', async () => {
+      mayCreate = false;
+      serveAgents([]);
+      mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1');
+      const empty = await screen.findByTestId('workspace-no-agents');
+      expect(await within(empty).findByText(/You cannot create agents in this project/)).toBeInTheDocument();
+      expect(within(empty).queryByRole('button', { name: 'Create a Local coding agent' })).toBeNull();
+      expect(within(empty).queryByRole('button', { name: 'Create an agent' })).toBeNull();
+      expect(within(empty).getByRole('button', { name: 'Use another project' })).toBeInTheDocument();
     });
 
     it('explains an empty project and offers to create an agent there or bind another project', async () => {
@@ -652,11 +781,10 @@ describe('WorkspaceSessionPage', () => {
 
       const empty = await screen.findByTestId('workspace-no-agents');
       expect(within(empty).getByText('This project has no agents')).toBeInTheDocument();
-      expect(screen.queryByRole('combobox', { name: 'Agent' })).toBeNull();
-      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project' })).toHaveTextContent('Marketing'));
+      expect(screen.queryByTestId('agent-chip')).toBeNull();
 
       await user.click(within(empty).getByRole('button', { name: 'Use another project' }));
-      await user.click(await screen.findByRole('option', { name: 'Public' }));
+      await user.click(await screen.findByRole('menuitemradio', { name: 'Public' }));
       await waitFor(async () => expect((await ipc.list())[0]?.project_id).toBe(1));
     });
 
@@ -667,7 +795,7 @@ describe('WorkspaceSessionPage', () => {
       mount(ipc, '/workspaces/w1');
 
       const empty = await screen.findByTestId('workspace-no-agents');
-      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project' })).toHaveTextContent('Marketing'));
+      await screen.findByTestId('thread-title');
       await user.click(within(empty).getByRole('button', { name: 'Create an agent' }));
       expect(await screen.findByText('agent editor')).toBeInTheDocument();
       expect(useSelectedProjectStore.getState().project).toEqual({ id: '42', name: 'Marketing' });
@@ -709,7 +837,7 @@ describe('WorkspaceSessionPage', () => {
       serveProject(skills);
       const user = userEvent.setup();
       mount(ipc, '/workspaces/w1');
-      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+      await waitFor(() => expect(screen.getByTestId('agent-chip')).toHaveTextContent('· base'));
       return user;
     }
 
@@ -764,6 +892,17 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.mentions).toEqual([]);
     });
 
+    it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      expect(ipc.calls.prewarmed).toEqual([]);
+      await user.click(screen.getByTestId('chat-message-input'));
+      await waitFor(() => expect(ipc.calls.prewarmed.length).toBeGreaterThan(0));
+      // A new thread has no conversation yet: only the agent version is read ahead.
+      expect(ipc.calls.prewarmed[0]).toEqual({ project_id: 42, application_id: 5, version_id: 9 });
+      expect(ipc.calls.started).toHaveLength(0);
+    });
+
     it('Shift+Enter breaks the line and Enter sends', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
@@ -788,14 +927,15 @@ describe('WorkspaceSessionPage', () => {
       const menu = await screen.findByTestId('workspace-command-menu');
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/help']);
       await user.type(input, 'pl{Enter}');
-      expect(screen.getByRole('switch', { name: 'Plan mode (no changes)' })).toBeChecked();
+      expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
       await waitFor(() => expect(input).toHaveValue(''));
 
       await user.type(input, '/help{Enter}');
       expect(within(await screen.findByTestId('workspace-help')).getByText('/undo')).toBeInTheDocument();
 
       await user.type(input, '/agent{Enter}');
-      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveFocus());
+      expect(await screen.findByRole('menu')).toBeInTheDocument();
+      await user.keyboard('{Escape}');
 
       // Nothing to undo yet.
       await user.click(input);
@@ -831,7 +971,7 @@ describe('WorkspaceSessionPage', () => {
       await user.type(input, '/new{Enter}');
       // A new thread is a fresh session (its own composer), with the agent last used here.
       await waitFor(() => expect(screen.getByTestId('chat-message-input')).not.toBe(input));
-      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+      await waitFor(() => expect(screen.getByTestId('agent-chip')).toHaveTextContent('· base'));
       await user.type(screen.getByTestId('chat-message-input'), 'again{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(created).toBe(1);

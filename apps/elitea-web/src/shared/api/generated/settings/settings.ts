@@ -63,6 +63,8 @@ import type {
   OkResponse,
   ParticipantSettingsRequest,
   PredictLLMUnavailableResponse,
+  ProjectCloudExecutorSwitch,
+  ProjectCloudExecutorSwitchUpdate,
   ProjectContextDraft,
 } from "../model";
 
@@ -87,6 +89,517 @@ const withQueryKey = <T extends object, K>(
   }
   return result;
 };
+
+export type getProjectCloudExecutorResponse200 = {
+  data: ProjectCloudExecutorSwitch;
+  status: 200;
+};
+
+export type getProjectCloudExecutorResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getProjectCloudExecutorResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getProjectCloudExecutorResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getProjectCloudExecutorResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type getProjectCloudExecutorResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getProjectCloudExecutorResponseSuccess =
+  getProjectCloudExecutorResponse200 & {
+    headers: Headers;
+  };
+export type getProjectCloudExecutorResponseError = (
+  | getProjectCloudExecutorResponse400
+  | getProjectCloudExecutorResponse401
+  | getProjectCloudExecutorResponse403
+  | getProjectCloudExecutorResponse404
+  | getProjectCloudExecutorResponse503
+) & {
+  headers: Headers;
+};
+
+export type getProjectCloudExecutorResponse =
+  getProjectCloudExecutorResponseSuccess | getProjectCloudExecutorResponseError;
+
+export const getGetProjectCloudExecutorUrl = (projectId: string) => {
+  return `/elitea_core/project_cloud_executor/prompt_lib/${projectId}`;
+};
+
+/**
+ * The project settings page. The project's own cloud executor on/off (ADR-0034
+ * decision 11): its explicit value, or unset to follow the platform's
+ * `cloud_executor.project_default_enabled`, with the platform switch
+ * that always wins. Requires `models.project_context.view` in the project. NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+ * @summary Read a project's Send to cloud switch
+ */
+export const getProjectCloudExecutor = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getProjectCloudExecutorResponse> => {
+  return eliteaFetch<getProjectCloudExecutorResponse>(
+    getGetProjectCloudExecutorUrl(projectId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetProjectCloudExecutorQueryKey = (projectId: string) => {
+  return [
+    `/elitea_core/project_cloud_executor/prompt_lib/${projectId}`,
+  ] as const;
+};
+
+export const getGetProjectCloudExecutorQueryOptions = <
+  TData = Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetProjectCloudExecutorQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getProjectCloudExecutor>>
+  > = ({ signal }) =>
+    getProjectCloudExecutor(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetProjectCloudExecutorQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getProjectCloudExecutor>>
+>;
+export type GetProjectCloudExecutorQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useGetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read a project's Send to cloud switch
+ */
+
+export function useGetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetProjectCloudExecutorQueryOptions(
+    projectId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setProjectCloudExecutorResponse200 = {
+  data: ProjectCloudExecutorSwitch;
+  status: 200;
+};
+
+export type setProjectCloudExecutorResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type setProjectCloudExecutorResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setProjectCloudExecutorResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setProjectCloudExecutorResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type setProjectCloudExecutorResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type setProjectCloudExecutorResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type setProjectCloudExecutorResponseSuccess =
+  setProjectCloudExecutorResponse200 & {
+    headers: Headers;
+  };
+export type setProjectCloudExecutorResponseError = (
+  | setProjectCloudExecutorResponse400
+  | setProjectCloudExecutorResponse401
+  | setProjectCloudExecutorResponse403
+  | setProjectCloudExecutorResponse404
+  | setProjectCloudExecutorResponse409
+  | setProjectCloudExecutorResponse503
+) & {
+  headers: Headers;
+};
+
+export type setProjectCloudExecutorResponse =
+  setProjectCloudExecutorResponseSuccess | setProjectCloudExecutorResponseError;
+
+export const getSetProjectCloudExecutorUrl = (projectId: string) => {
+  return `/elitea_core/project_cloud_executor/prompt_lib/${projectId}`;
+};
+
+/**
+ * The project settings page. Stores `enabled` in the project's `cloud_executor`
+ * setting and keeps its other fields; null removes it so the project
+ * follows the platform default. On is refused (409) while the platform
+ * has the cloud executor off. Requires `models.project_settings.edit` in the project (the project admin). NOTE(W2): internal/api/v2/projectcloudexecutor/handler.go:55.
+ * @summary Turn a project's Send to cloud on or off, or back to the default
+ */
+export const setProjectCloudExecutor = async (
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setProjectCloudExecutorResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setProjectCloudExecutorResponse>(
+    getSetProjectCloudExecutorUrl(projectId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(projectCloudExecutorSwitchUpdate),
+    },
+  );
+};
+
+export const getSetProjectCloudExecutorQueryKey = (
+  projectId: string,
+  projectCloudExecutorSwitchUpdate?: ProjectCloudExecutorSwitchUpdate,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/project_cloud_executor/prompt_lib/${projectId}`,
+    projectCloudExecutorSwitchUpdate,
+  ] as const;
+};
+
+export const getSetProjectCloudExecutorQueryOptions = <
+  TData = Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetProjectCloudExecutorQueryKey(
+      projectId,
+      projectCloudExecutorSwitchUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setProjectCloudExecutor>>
+  > = ({ signal }) =>
+    setProjectCloudExecutor(projectId, projectCloudExecutorSwitchUpdate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetProjectCloudExecutorQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setProjectCloudExecutor>>
+>;
+export type SetProjectCloudExecutorQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useSetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof setProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+          TError,
+          Awaited<ReturnType<typeof setProjectCloudExecutor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Turn a project's Send to cloud on or off, or back to the default
+ */
+
+export function useSetProjectCloudExecutor<
+  TData = Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  projectCloudExecutorSwitchUpdate: ProjectCloudExecutorSwitchUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectCloudExecutor>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetProjectCloudExecutorQueryOptions(
+    projectId,
+    projectCloudExecutorSwitchUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export type generateProjectContextDraftResponse200 = {
   data: ProjectContextDraft;

@@ -14,7 +14,7 @@
 # added `replace .../libs/go/egresslib => ../../libs/go/egresslib`: the replace
 # target sits OUTSIDE the module directory, so `go mod download` failed with
 # "reading /libs/go/egresslib/go.mod: no such file or directory" before any Go
-# source was read. elitea-scheduler, elitea-worker-python and elitea-worker-rust
+# source was read. elitea-scheduler and elitea-worker-rust
 # already build from the root for the same reason.
 #
 # Nothing about the toolchain changes with the wider context. go.work is NOT
@@ -64,18 +64,10 @@ WORKDIR /src/services/elitea-llm-gateway
 # layer cache — it cannot make a stale layer be reused, and the module cache is
 # content-addressed and verified against go.sum — so it does not weaken
 # ci-web-e2e.yml's recorded "no buildx/gha layer cache here on purpose".
-# `go build` below mounts the same cache; without that the modules this step
-# fetched would not be visible to it.
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    for attempt in 1 2 3 4 5; do \
-        go mod download && exit 0; \
-        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
-        sleep $((attempt * 5)); \
-    done; \
-    echo "go mod download failed after 5 attempts" >&2; \
-    exit 1
-
+# The retry runs in the SAME step as `go build`. A separate download step
+# writes only into the cache mount, so its layer is empty: when CI's
+# cache-from imports that layer, the step never runs, the mount starts empty,
+# and `go build` fetches the whole graph itself with no retry (seen in CI).
 COPY services/elitea-llm-gateway/ ./
 
 ARG TARGETOS=linux
@@ -87,6 +79,12 @@ ARG VERSION=dev
 # go.work the host may set; GOWORK=off guarantees the workspace is not consulted.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    for attempt in 1 2 3 4 5; do \
+        GOWORK=off go mod download && break; \
+        [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }; \
+        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
+        sleep $((attempt * 5)); \
+    done; \
     CGO_ENABLED=0 GOWORK=off GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-llm-gateway ./cmd/elitea-llm-gateway
 

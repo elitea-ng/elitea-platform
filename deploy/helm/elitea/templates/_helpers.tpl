@@ -214,31 +214,32 @@ value for a deployment that did not ask for one.
 {{- end }}
 
 {{/*
-  The indexing runtime this release uses (ADR-0030 decision 6): the explicit
-  worker.indexingRuntime, python otherwise. There is NO automatic switch to
-  rust: Rust indexing starts with empty indexes, so it is something an operator
-  chooses, with every prerequisite (see "elitea.rustIndexingMissing"). The final
-  Python-removal change will flip this default. This is the single resolver:
-  elitea-main's ELITEA_INDEXING_RUNTIME, the worker's vector_target, the
-  extractor guard and NOTES.txt all read it.
+  The indexing runtime this release uses (ADR-0030 decision 6): always rust,
+  the only implementation since the Python worker was removed. guards.yaml
+  refuses any other worker.indexingRuntime (in particular the retired python).
+  Written to elitea-main as ELITEA_INDEXING_RUNTIME.
 */}}
-{{- define "elitea.indexingRuntime" -}}
-{{- if eq (default "" .Values.worker.indexingRuntime) "rust" -}}rust{{- else -}}python{{- end -}}
+{{- define "elitea.indexingRuntime" -}}rust{{- end }}
+
+{{/*
+  "true" when this release indexes: the runtime plane with index ingest
+  dispatch (main.runtime.enabled and main.runtime.indexIngestDispatch.enabled)
+  — exactly elitea-main's own decision (runtimecomposition Config.RustIndexing).
+  The worker's vector_target, index_egress_allowlist, the model-call cap, the
+  memory model and the extractor guard all key on it.
+*/}}
+{{- define "elitea.indexingEnabled" -}}
+{{- if and .Values.main.runtime.enabled ((.Values.main.runtime.indexIngestDispatch | default dict).enabled) -}}true{{- end -}}
 {{- end }}
 
 {{/*
-  What Rust indexing is missing, one requirement per line; empty when it has
-  everything. The one place these conditions are written: every guard that
-  refuses worker.indexingRuntime=rust prints this list.
+  What indexing is missing, one requirement per line; empty when it has
+  everything. Checked when this release runs the worker with indexing on
+  (guards.yaml): the worker needs a vector store, and elitea-main its
+  elitea-vector client.
 */}}
 {{- define "elitea.rustIndexingMissing" -}}
 {{- $missing := list -}}
-{{- if not (and .Values.worker.enabled (eq .Values.worker.implementation "rust")) -}}
-{{- $missing = append $missing "worker.enabled=true with worker.implementation=rust (only the Rust worker searches the vector store that Rust indexing writes, ADR-0031)" -}}
-{{- end -}}
-{{- if not (and .Values.main.runtime.enabled ((.Values.main.runtime.indexIngestDispatch | default dict).enabled)) -}}
-{{- $missing = append $missing "main.runtime.enabled=true and main.runtime.indexIngestDispatch.enabled=true (elitea-main selects the registry only when index ingest dispatch is composed, and refuses ELITEA_INDEXING_RUNTIME=rust with its runtime plane off)" -}}
-{{- end -}}
 {{- if not (or .Values.vector.enabled ((.Values.worker.runtime | default dict).vectorTarget)) -}}
 {{- $missing = append $missing "a vector store: vector.enabled=true (this chart's elitea-vector, <vector.service.name>:<vector.service.port>) or worker.runtime.vectorTarget=<host:port> of one deployed elsewhere (without it the worker refuses every index.ingest.v1 run)" -}}
 {{- end -}}
@@ -246,4 +247,32 @@ value for a deployment that did not ask for one.
 {{- $missing = append $missing "elitea-main's elitea-vector client: vector.mainClient.enabled=true with this chart's elitea-vector, or main.env.ELITEA_VECTOR_GRPC_TARGET (plus the three ELITEA_VECTOR_GRPC_*_FILE paths and main.fileConfig.vectorClientMaterial) for one deployed elsewhere (without it a deleted index keeps its vectors)" -}}
 {{- end -}}
 {{- join "\n" $missing -}}
+{{- end }}
+
+{{/*
+elitea.integer — a values number rendered as a base-10 integer, or a refusal
+naming the field. Helm reads every number in a values file as a float64, and
+a bare toString prints one of a million or more in scientific notation
+("2.147483648e+09"), which the consuming service refuses. Accepts a whole
+number or a base-10 digit string (no leading zero, no 0x: sprig's int64 would
+read those as octal or hex), and refuses anything else instead of letting
+int64 turn it into 0. Pass: dict "field" "a.b.c" "value" $v "min" 1.
+*/}}
+{{- define "elitea.integer" -}}
+{{- $value := .value -}}
+{{- $text := "" -}}
+{{- if or (kindIs "float64" $value) (kindIs "int64" $value) (kindIs "int" $value) -}}
+{{- if ne (float64 $value) (float64 (int64 $value)) -}}
+{{- fail (printf "%s must be a whole number, and it is %v" .field $value) -}}
+{{- end -}}
+{{- $text = printf "%d" (int64 $value) -}}
+{{- else if and (kindIs "string" $value) (regexMatch "^(0|-?[1-9][0-9]*)$" $value) -}}
+{{- $text = $value -}}
+{{- else -}}
+{{- fail (printf "%s must be a whole number, and it is %v" .field $value) -}}
+{{- end -}}
+{{- if lt (int64 $text) (int64 .min) -}}
+{{- fail (printf "%s must be at least %d, and it is %s" .field (int64 .min) $text) -}}
+{{- end -}}
+{{- $text -}}
 {{- end }}

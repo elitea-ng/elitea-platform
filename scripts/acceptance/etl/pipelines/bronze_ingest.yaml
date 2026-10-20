@@ -1,0 +1,125 @@
+# DRAFT fixture: bronze_ingest, raw landing (ACCEPTANCE-ETL.md §2.1). No parallelism: one dataset, one marker row.
+# Task: etl_job.run_request (JSON text). Answer (JSON text): the run request plus batch_items, one per row batch.
+#
+# Artifact caps decide the shape (see ../README.md "Artifact limits"): no node can read the 2.6 MB orders.csv whole,
+# so bronze works from the listing of orders.batches/ (gen_orders.py writes it next to the big file; each batch is
+# <= 400 rows and <= 190,000 characters). The bronze marker key is the listing digest
+# (manifest datasets.<file>.batch_listing_sha256); a re-run with the same listing is a no-op.
+# Oracles: manifest batches[] (files, count), expected_outcome refused for orders-limit-plus-1 (65 batches).
+state:
+  input: {type: str}
+  messages: {type: list}
+  request: {type: dict}
+  run_id: {type: str}
+  batch_folder: {type: str}
+  listing: {type: str}
+  listing_key: {type: str}
+  batch_count: {type: int}
+  batch_plan: {type: dict}
+  batch_items: {type: list}
+  land_receipt: {type: dict}
+entry_point: parse_request
+nodes:
+  - id: parse_request
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        request = json.loads(elitea_state['input'])
+        {'request': request, 'run_id': request['run_id'], 'batch_folder': request['dataset'] + '.batches/'}
+    input: [input]
+    output: [request, run_id, batch_folder]
+    transition: list_batches
+
+  - id: list_batches
+    type: toolkit
+    toolkit_name: ETL artifacts
+    tool: list_files
+    input_mapping:
+      folder: {type: variable, value: batch_folder}
+      include: {type: fixed, value: ["batch-*.csv"]}
+    input: [batch_folder]
+    output: [listing]
+    transition: plan_batches
+
+  # The declared row limit is 64 batches of 400 rows (the Map's MAX_ITEMS): the limit+1 file is refused here with a
+  # typed, readable error before any effect.
+  # TODO(2.4): pin the list_files answer format against the live toolkit (names and sizes are parsed below).
+  - id: plan_batches
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import hashlib, json, re
+        request = elitea_state['request']
+        found = sorted(set(re.findall(r'(batch-\d{4}\.csv)\D+?(\d+)\s*(?:bytes|B)\b', elitea_state['listing'])))
+        if not found:
+            raise ValueError(f"etl.no_batches: no batch files under {request['dataset']}.batches/")
+        if len(found) > 64:
+            raise ValueError(f'etl.too_many_batches: {len(found)} batches, the declared limit is 64 '
+                             f'(25,600 rows); split the dataset into smaller runs')
+        names = [name for name, _ in found]
+        if names != [f'batch-{k:04d}.csv' for k in range(len(names))]:
+            raise ValueError('etl.batch_gap: batch files are not numbered 0..n-1 without gaps')
+        key = hashlib.sha256('\n'.join(f'{n}:{b}' for n, b in found).encode()).hexdigest()
+        {'listing_key': key, 'batch_count': len(names),
+         'batch_plan': {'run_id': request['run_id'], 'bucket': request['bucket'], 'dataset': request['dataset'],
+                        'batches': [{'batch_no': k, 'file': f"{request['dataset']}.batches/{n}"}
+                                    for k, n in enumerate(names)]}}
+    input: [request, listing]
+    output: [listing_key, batch_count, batch_plan]
+    transition: land_bronze
+
+  # One write transaction: the bronze marker. ON CONFLICT DO NOTHING keeps one row per listing across re-runs.
+  # TODO(1.12): DB node admitted (5e-3). Rule warehouse_pg.load: configuration of type sql, dialect postgres,
+  # database warehouse, mode write, marker_table etl.elitea_effects.
+  - id: land_bronze
+    type: db
+    operation: warehouse_pg.load
+    mode: write
+    statements:
+      - sql: >-
+          INSERT INTO etl.bronze_files (listing_sha256, batch_count, run_id) VALUES ($1, $2, $3)
+          ON CONFLICT (listing_sha256) DO NOTHING
+        params:
+          - {from: listing_key, type: text}
+          - {from: batch_count, type: int8}
+          - {from: run_id, type: text}
+    result: {mode: affected_counts}
+    input: [listing_key, batch_count, run_id]
+    output: [land_receipt]
+    transition: split_batches
+
+  # Split Out, mode row_field: one item per batch; retain only selected parent fields (missing: null), the batch
+  # list itself removed from the retained data.
+  - id: split_batches
+    type: split_out
+    source: batch_plan
+    output: [batch_items]
+    split: {mode: row_field, path: /batches}
+    destination: batch
+    retain:
+      mode: only
+      fields:
+        - {path: /run_id, output: run_id}
+        - {path: /bucket, output: bucket}
+        - {path: /dataset, output: dataset}
+        - {path: /label, output: label, missing: null}
+    remove_source: true
+    transition: emit
+
+  - id: emit
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import json
+        json.dumps(dict(elitea_state['request'], listing_sha256=elitea_state['listing_key'],
+                        batch_items=elitea_state['batch_items']), sort_keys=True)
+    input: [request, listing_key, batch_items]
+    output: [messages]
+    transition: END

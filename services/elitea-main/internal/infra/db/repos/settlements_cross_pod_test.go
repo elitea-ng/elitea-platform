@@ -33,7 +33,7 @@ func TestPrepareSettlementAllowsExpiredPredecessorFromDifferentProducer(t *testi
 			{values: []any{replacement.Fence.CommandID}},
 			{err: pgx.ErrNoRows},
 			{values: []any{"replacement-claim"}},
-			{values: []any{replacement.TerminalEventID}},
+			{values: []any{replacement.TerminalEventID, "RUNTIME_FAILURE", []byte(nil)}},
 		},
 		execTags: []pgconn.CommandTag{
 			pgconn.NewCommandTag("INSERT 0 1"),

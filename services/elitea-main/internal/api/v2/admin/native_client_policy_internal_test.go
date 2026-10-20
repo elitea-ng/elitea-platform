@@ -32,7 +32,14 @@ func TestValidateNativeClientPolicyValues(t *testing.T) {
 			"local_work_max_sandbox_mode":"full-access","local_work_network":true,
 			"local_work_command_allow":["cargo test"],"local_work_command_deny":["rm -rf *"],
 			"local_work_path_deny":["**/.env"],"local_work_local_mcp":true,"local_work_local_index":false,
-			"local_work_cloud_sync":true,"local_work_memory_write":false}`, ""},
+			"local_work_cloud_sync":true,"local_work_memory_write":false,
+			"local_work_index_local_embeddings":false,"local_work_index_remote_embeddings":true,
+			"local_work_index_model_mirror_url":"https://mirror.example.com/hf"}`, ""},
+		{"mirror not https", `{"local_work_index_model_mirror_url":"http://mirror.example.com"}`, "local_work_index_model_mirror_url"},
+		{"mirror with credentials", `{"local_work_index_model_mirror_url":"https://u:p@mirror.example.com"}`, "local_work_index_model_mirror_url"},
+		{"mirror with query", `{"local_work_index_model_mirror_url":"https://mirror.example.com/?a=1"}`, "local_work_index_model_mirror_url"},
+		{"mirror not a string", `{"local_work_index_model_mirror_url":7}`, "local_work_index_model_mirror_url"},
+		{"mirror empty", `{"local_work_index_model_mirror_url":""}`, ""},
 		{"sandbox mode unknown", `{"local_work_max_sandbox_mode":"root"}`, "local_work_max_sandbox_mode"},
 		{"sandbox mode not exact", `{"local_work_max_sandbox_mode":"Read-Only"}`, "local_work_max_sandbox_mode"},
 		{"blank pattern", `{"local_work_command_deny":["ok","  "]}`, "local_work_command_deny"},
@@ -85,13 +92,16 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 		"allow_notification_actions", "allow_system_surfaces",
 		"local_work_allowed", "local_work_shell", "local_work_max_sandbox_mode", "local_work_network",
 		"local_work_command_allow", "local_work_command_deny", "local_work_path_deny",
-		"local_work_local_mcp", "local_work_local_index", "local_work_cloud_sync", "local_work_memory_write"} {
+		"local_work_local_mcp", "local_work_local_index", "local_work_cloud_sync", "local_work_memory_write",
+		"local_work_cloud_handoff", "local_work_index_local_embeddings", "local_work_index_remote_embeddings",
+		"local_work_index_model_mirror_url"} {
 		if !keys[key] {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 24 {
-		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6 and contract 1.5's 11", len(keys))
+	if len(keys) != 28 {
+		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1 "+
+			"and contract 1.9's 3", len(keys))
 	}
 	for _, field := range section.fields {
 		if field["key"] == "notification_preview" {

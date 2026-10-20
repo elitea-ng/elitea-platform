@@ -45,9 +45,8 @@ type currentIndexRuntime struct {
 	cancel       *indexingapp.CurrentIndexCancellationService
 	initializer  *indexingapp.DurableIndexMetaInitializer
 	materializer *storage.CurrentConfigurationsMaterializer
-	// indexMeta, indexDelete, indexConfig and exact are the python path's
-	// pgvector-backed services, or the registry service in rust mode. The
-	// routes and the schedule kernel see only these interfaces.
+	// indexMeta, indexDelete, indexConfig and exact are the registry service.
+	// The routes and the schedule kernel see only these interfaces.
 	indexMeta      indexingapi.CurrentIndexMetaReader
 	indexDelete    indexingapi.CurrentIndexMetaDeleter
 	indexConfig    indexingapi.CurrentIndexConfigurationSaver
@@ -89,18 +88,13 @@ func newCurrentIndexRuntime(
 	configurations *CurrentConfigurationsRuntime,
 	config Config,
 	policy repos.IndexIngestDispatchPolicy,
-	indexMetaWriter indexingapp.CurrentIndexMetaWriter,
 	registry *indexRegistryComposition,
 	reportInitializationFailure func(error),
 ) (*currentIndexRuntime, error) {
-	// ELITEA_INDEXING_RUNTIME picks exactly one metadata store for the whole
-	// runtime: the project's pgvector index_meta rows (python, the default) or
-	// the registry (rust). Each mode requires its own dependency and refuses the
-	// other's, so a half-composed runtime cannot start.
-	rustIndexing := config.IndexingRuntime == IndexingRuntimeRust
-	if (rustIndexing && (registry == nil || indexMetaWriter != nil)) ||
-		(!rustIndexing && (indexMetaWriter == nil || registry != nil)) {
-		return nil, errors.New("current index runtime metadata store does not match the indexing runtime")
+	// The index registry is the one metadata store of the runtime (the Rust
+	// indexing runtime is the only one since the Python worker was removed).
+	if registry == nil {
+		return nil, errors.New("current index runtime needs the composed index registry")
 	}
 	if pool == nil || configurations == nil || configurations.rows == nil || configurations.scope == nil ||
 		configurations.unsecreter == nil || configurations.expander == nil || configurations.models == nil || configurations.vaultLoader == nil ||
@@ -108,7 +102,6 @@ func newCurrentIndexRuntime(
 		reportInitializationFailure == nil {
 		return nil, errors.New("current index runtime dependencies are required")
 	}
-	vaults := configurations.vaultLoader
 
 	builtInSchemas, err := LoadPinnedCurrentToolkitSchemaSnapshot()
 	if err != nil {
@@ -205,22 +198,9 @@ func newCurrentIndexRuntime(
 	if err != nil {
 		return nil, err
 	}
-	var indexMetaInitializer indexingapp.IndexMetaMaterializer
-	if rustIndexing {
-		// The registry row needs no frozen toolkit and no pgvector connection
-		// string: it is addressed by the admission identity alone.
-		indexMetaInitializer, err = indexingapp.NewRegistryIndexMetaInitializer(registry.repo)
-	} else {
-		var toolkitClaimer *currentFrozenToolkitConfigurationClaimer
-		toolkitClaimer, err = newCurrentFrozenToolkitConfigurationClaimer(materializer)
-		if err != nil {
-			return nil, err
-		}
-		indexMetaInitializer, err = indexingapp.NewCurrentIndexMetaInitializer(
-			durableIndexMetaFrozenToolkitClaimer{delegate: toolkitClaimer},
-			indexMetaWriter,
-		)
-	}
+	// The registry row needs no frozen toolkit and no pgvector connection
+	// string: it is addressed by the admission identity alone.
+	indexMetaInitializer, err := indexingapp.NewRegistryIndexMetaInitializer(registry.repo)
 	if err != nil {
 		return nil, err
 	}
@@ -253,13 +233,9 @@ func newCurrentIndexRuntime(
 		return nil, err
 	}
 	// HTTP success now follows both durable admission and the committed
-	// project-PgVector metadata effect. The outbox remains invisible until the
+	// registry metadata effect. The outbox remains invisible until the
 	// exact initialization transition succeeds.
 	start, err := indexingapp.NewStartService(inputs, initializedAdmissions, currentRuntimeID)
-	if err != nil {
-		return nil, err
-	}
-	indexMetaTimeouts, err := storage.NewCurrentIndexMetaTimeoutResolver(vaults)
 	if err != nil {
 		return nil, err
 	}
@@ -272,62 +248,19 @@ func newCurrentIndexRuntime(
 		settings:     settings,
 		inputs:       inputs,
 	}
-	if rustIndexing {
-		// The one registry Service of the deployment, which the worker's
-		// remove_index runs through as well (review round 2).
-		service := registry.service
-		if service == nil {
-			return nil, errors.New("current index runtime needs the composed index registry service")
-		}
-		runtime.indexMeta, runtime.indexDelete, runtime.indexConfig, runtime.exact =
-			service, service, service, service
-		return runtime, nil
+	// The one registry Service of the deployment, which the worker's
+	// remove_index runs through as well (review round 2).
+	service := registry.service
+	if service == nil {
+		return nil, errors.New("current index runtime needs the composed index registry service")
 	}
-
-	indexMetaReader := pgvector.NewCurrentIndexMetaReader()
-	indexMeta, err := indexmetaapp.NewService(
-		toolkits,
-		settings,
-		indexMetaTimeouts,
-		indexMetaReader,
-	)
-	if err != nil {
-		return nil, err
-	}
-	exact, err := indexmetaapp.NewExactService(
-		toolkits,
-		settings,
-		indexMetaReader,
-	)
-	if err != nil {
-		return nil, err
-	}
-	indexDelete, err := newConfiguredCurrentIndexMetaDeleteService(
-		config.IndexIngestDispatchEnabled,
-		pool,
-		toolkits,
-		settings,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	indexConfig, err := indexmetaapp.NewConfigurationService(
-		toolkits,
-		settings,
-		pgvector.NewCurrentIndexConfigurationWriter(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("construct current index configuration service: %w", err)
-	}
-
 	runtime.indexMeta, runtime.indexDelete, runtime.indexConfig, runtime.exact =
-		indexMeta, indexDelete, indexConfig, exact
+		service, service, service, service
 	return runtime, nil
 }
 
 // indexRegistryComposition is what the rust indexing runtime composes the
-// registry from. It is nil in python mode.
+// registry from. It is nil while index ingest dispatch is off.
 type indexRegistryComposition struct {
 	repo *repos.IndexRegistryRepository
 	// vectors is the hook to elitea-vector's Delete (ADR-0031 decision 4).

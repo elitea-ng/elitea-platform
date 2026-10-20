@@ -200,6 +200,20 @@ spec:
             - name: ELITEA_AUTH_CONFIG_FILE
               value: {{ .Values.main.fileConfig.authConfig.mountPath }}
             {{- end }}
+            {{- if .Values.egressProxy.enabled }}
+            # The workspace egress proxy (ADR-0034 decision 9): elitea-main
+            # signs a run token at claim time for a cloud turn whose project
+            # restricts the network to a host allowlist, and tells the worker
+            # where the proxy is. The signing key is mounted below.
+            - name: ELITEA_EGRESS_PROXY_URL
+              value: {{ include "elitea-egress-proxy.url" . | quote }}
+            - name: ELITEA_EGRESS_TOKEN_SIGNING_KEY_FILE
+              value: {{ printf "%s/%s" .Values.egressProxy.signingKey.mountPath .Values.egressProxy.signingKey.key | quote }}
+            {{- with .Values.egressProxy.defaultTurnWall }}
+            - name: ELITEA_EGRESS_PROXY_DEFAULT_TURN_WALL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.main.fileConfig.brandPack.enabled }}
             - name: BRAND_PACK_PATH
               value: {{ .Values.main.fileConfig.brandPack.mountPath }}
@@ -317,6 +331,13 @@ spec:
               subPath: {{ .Values.main.fileConfig.brandPack.key }}
               readOnly: true
             {{- end }}
+            {{- if .Values.egressProxy.enabled }}
+            # The run-token signing key (egressProxy.signingKey). Only this
+            # key of the Secret is projected; the proxy never mounts it.
+            - name: egress-token-signing-key
+              mountPath: {{ .Values.egressProxy.signingKey.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.main.runtime.enabled }}
             # The runtime material (issue #382): signing key, verification
             # keyring, the runtime CA and the three server keypairs.
@@ -341,6 +362,18 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.egressProxy.enabled }}
+        - name: egress-token-signing-key
+          secret:
+            secretName: {{ .Values.egressProxy.signingKey.existingSecret }}
+            # Readable by Main's non-root user: the pod sets no fsGroup, so
+            # 0400 left the file root-only and Main exited on "permission
+            # denied". The same mode as the other Secret sources here.
+            defaultMode: 0444
+            items:
+              - key: {{ .Values.egressProxy.signingKey.key }}
+                path: {{ .Values.egressProxy.signingKey.key }}
+        {{- end }}
         {{- if .Values.main.runtime.enabled }}
         - name: runtime-material
           {{- if .Values.main.runtime.material.secretName }}

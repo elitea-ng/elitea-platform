@@ -48,8 +48,8 @@ export function isInvocationId(pcid: string): boolean {
  * Each block is either a coordinator block (`kind: 'coord'`) or a sub-agent
  * block (`kind: 'sub'`) keyed by its instance (pcid).
  *
- * Sequential resumption (post-HITL pause) folds fresh pcids into the most
- * recent same-name block while it is paused.
+ * Instances are identified only by their key (call id / path); two keys are
+ * never folded together by name.
  */
 interface CoordBlock {
   readonly kind: 'coord';
@@ -88,7 +88,6 @@ export function partitionActionsIntoBlocks(
 ): PartitionedBlock[] {
   const blocks: PartitionedBlock[] = [];
   const subBlockByKey = new Map<string, SubBlock>();
-  const openBlockByName = new Map<string, SubBlock>();
   let coordRun: SubAgentGroupable[] = [];
 
   const flushCoord = (): void => {
@@ -107,21 +106,12 @@ export function partitionActionsIntoBlocks(
     const instanceKey = deriveInstanceKey(action);
     flushCoord();
 
-    // (1) exact invocation (pcid) match.
+    // Exact instance match only. The reference also folded a fresh key into
+    // the most recent PAUSED same-name block (its legacy runtime re-issued a
+    // new call id on every resume). This runtime resumes durably with stable
+    // ids, and the fold merged two genuinely parallel same-agent instances
+    // into one accordion — so two instances are never folded by name (W5).
     let block = subBlockByKey.get(instanceKey);
-
-    // (2) no pcid match → fold a fresh-pcid sequential-resume replay into
-    //     the most-recent same-name block, but ONLY while that block is paused.
-    if (!block) {
-      const open = openBlockByName.get(name);
-      if (open && open.pausedForResume) {
-        block = open;
-        subBlockByKey.set(instanceKey, block);
-        if (!block.aliasKeys.includes(instanceKey)) {
-          block.aliasKeys.push(instanceKey);
-        }
-      }
-    }
 
     if (block) {
       block.actions.push(action);
@@ -135,7 +125,6 @@ export function partitionActionsIntoBlocks(
         aliasKeys: [instanceKey],
       };
       subBlockByKey.set(instanceKey, block);
-      openBlockByName.set(name, block);
       blocks.push(block);
     }
 

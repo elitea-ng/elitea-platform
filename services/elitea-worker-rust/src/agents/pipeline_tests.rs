@@ -49,10 +49,12 @@ use crate::transport::runtime_context::{
 
 #[path = "pipeline_artifact_tests.rs"]
 mod artifact_tests;
+#[path = "pipeline_effect_pg_tests.rs"]
+mod effect_pg_tests;
 #[path = "pipeline_scope_tests.rs"]
 mod model_scope_tests;
 #[path = "pipeline_restart_pg_tests.rs"]
-mod restart_pg_tests;
+pub(super) mod restart_pg_tests;
 #[path = "pipeline_scoped_pg_tests.rs"]
 mod scoped_pg_tests;
 #[path = "pipeline_scoped_tests.rs"]
@@ -538,7 +540,18 @@ fn direct_agent_pipeline_runtime() -> PipelineChildRuntime {
 }
 
 fn sensitive_direct_agent_pipeline_runtime() -> PipelineChildRuntime {
-    pipeline_runtime_cycles(
+    sensitive_direct_agent_pipeline_runtime_with(vec![
+        TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
+        TestModelGatewayOutcome::Response(pipeline_text_response("child resumed summary")),
+    ])
+    .0
+}
+
+/// The sensitive MCP release agent with this process's model script.
+fn sensitive_direct_agent_pipeline_runtime_with(
+    outcomes: Vec<TestModelGatewayOutcome>,
+) -> (PipelineChildRuntime, CapturedModelRequests) {
+    pipeline_runtime_cycles_with_capture(
         &json!({
             "agent_type": "agent",
             "instructions": "Read the release evidence and summarize it.",
@@ -570,10 +583,7 @@ fn sensitive_direct_agent_pipeline_runtime() -> PipelineChildRuntime {
                 "openai_compatible": true
             }
         }),
-        vec![
-            TestModelGatewayOutcome::Response(pipeline_mcp_tool_call_response()),
-            TestModelGatewayOutcome::Response(pipeline_text_response("child resumed summary")),
-        ],
+        outcomes,
         2,
     )
 }

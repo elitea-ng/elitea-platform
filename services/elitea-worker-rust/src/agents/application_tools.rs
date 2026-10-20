@@ -104,6 +104,11 @@ const ADK_LLM_REQUEST_METADATA_KEY: &str = "gcp.vertex.agent.llm_request";
 const ADK_LLM_RESPONSE_METADATA_KEY: &str = "gcp.vertex.agent.llm_response";
 const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
 const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
+/// The execution whose ROOT continuation emitted a replay batch. A key of its
+/// own beside the batch (whose schema is strict), so a Worker without it still
+/// reads the batch; only that execution's replacement may continue behind it
+/// (`live_nested_events`).
+const APPLICATION_REPLAY_OWNER_KEY: &str = "elitea.application.replay_owner.v1";
 const APPLICATION_RETAINED_PAUSE_KEY: &str = "elitea.application.retained_pause.v1";
 const MAX_RETAINED_PAUSE_BYTES: usize = 512 * 1_024;
 const APPLICATION_RETAINED_PIPELINE_KEY: &str = "elitea.application.retained_pipeline.v1";
@@ -704,7 +709,24 @@ pub(crate) async fn prepare_nested_application_resume(
     applications: &ApplicationToolPresentationCatalog,
     coordinator: &ApplicationResumeCoordinator,
     delegate: Arc<dyn Llm>,
+    owner: &super::dispatch_journal::DispatchOwner,
 ) -> Result<PreparedNestedApplicationResume, NativeAgentAssemblyError> {
+    let submitted = decisions
+        .iter()
+        .map(|decision| decision.interrupt_id().to_owned())
+        .collect::<HashSet<_>>();
+    // A dead continuation of this same answer by this execution is set aside;
+    // its journal records stay in the resolved decisions.
+    let events = live_nested_events(events, &submitted, owner)?;
+    if decisions
+        .iter()
+        .any(ResolvedDirectHitlDecision::has_unrecorded_dispatch)
+    {
+        // An approved nested call was dispatched without a recorded outcome. It
+        // is never repeated: the run ends with the registered reason before any
+        // parent or child call, not as a tool error the parent model could read past.
+        return Err(super::direct_hitl::recovery_refused_error());
+    }
     let (child_resumes, submitted_interrupt_ids) =
         build_nested_application_resume(events, decisions, applications)?;
     let calls = application_replay_calls(&child_resumes)?;
@@ -719,10 +741,112 @@ pub(crate) async fn prepare_nested_application_resume(
             batch,
             previous_markers: nested_resume_markers(events)?,
             replay_marker: user_content.clone(),
+            owner: Some(owner.clone()),
         }),
         user_content,
         run_config: application_run_config(),
     })
+}
+
+/// The root events a nested continuation resolves against.
+///
+/// A root continuation that answered these cards and then died left its suffix
+/// behind: its marker, its replay batch, the child's events, the child's call
+/// results and the journal records of the approved calls. When that suffix
+/// belongs to THIS execution (Main re-claims a lost execution under the same
+/// identity) and answered exactly these cards, it is set aside and the answer
+/// is rebuilt from the session before it: a recorded outcome is then served
+/// from the journal (class R) and an unrecorded dispatch is refused. Any other
+/// consumer of these cards, a different execution (a duplicate or late
+/// submission), a different card set, or an advance of the parent (its own
+/// model output or a new pause) makes the decision stale.
+fn live_nested_events<'a>(
+    events: &'a [Event],
+    submitted: &HashSet<String>,
+    owner: &super::dispatch_journal::DispatchOwner,
+) -> Result<&'a [Event], NativeAgentAssemblyError> {
+    let stale = || {
+        super::direct_hitl::assembly_error(
+            &super::direct_hitl::DirectHitlError::new(
+                super::direct_hitl::DirectHitlErrorCode::StaleDecision,
+            ),
+            "the nested decision was already answered",
+        )
+    };
+    let expected = submitted.iter().cloned().collect::<BTreeSet<_>>();
+    let marker = nested_resume_user_content(submitted);
+    let is_marker = |event: &Event| {
+        event
+            .content()
+            .is_some_and(|content| content.role == marker.role && content.parts == marker.parts)
+    };
+    let mut dead = None;
+    for (index, event) in events.iter().enumerate() {
+        // A descendant's own replay batch (a child agent, or an agent inside a
+        // pipeline tool) carries a grandchild's cards too; only the root
+        // Agent's batch, on the root application branch, consumes them.
+        if event.branch != super::events::APPLICATION_BRANCH_ROOT {
+            continue;
+        }
+        let Some(batch) = replay_batch(event)? else {
+            continue;
+        };
+        if batch.interrupt_ids.is_disjoint(&expected) {
+            continue;
+        }
+        if batch.interrupt_ids != expected || replay_owner(event)?.as_ref() != Some(owner) {
+            return Err(stale());
+        }
+        if dead.is_none() {
+            let start = events[..index]
+                .iter()
+                .rposition(|candidate| {
+                    candidate.invocation_id == event.invocation_id
+                        && candidate.author == "user"
+                        && is_marker(candidate)
+                })
+                .ok_or_else(stale)?;
+            let calls = batch.call_ordinals.into_keys().collect::<HashSet<_>>();
+            dead = Some((start, event.branch.clone(), calls));
+        }
+    }
+    let Some((start, branch, calls)) = dead else {
+        return Ok(events);
+    };
+    let tail = &events[start..];
+    super::dispatch_journal::records_bound_to(tail, owner, |id| submitted.contains(id))
+        .map_err(|_| stale())?;
+    let child_branch = format!("{branch}.");
+    for event in tail {
+        let results = event.tool_results();
+        // A new pause, or a child result that is itself a pause, means that
+        // continuation finished its turn: it is not a dead one.
+        if event.actions.tool_confirmation.is_some()
+            || results
+                .iter()
+                .any(|result| is_nested_interrupt_result(result.response))
+        {
+            return Err(stale());
+        }
+        let set_aside = super::dispatch_journal::is_dispatch_record(event)
+            || replay_batch(event)?.is_some()
+            || event.branch.starts_with(&child_branch)
+            || (event.author == "user" && is_marker(event))
+            // Content-free model-checkpoint bookkeeping. A retained pause
+            // (a sibling left for later) ended that continuation's turn.
+            || (event.author == "elitea-recovery" && event.llm_response.content.is_none())
+            // The children's results returned to the parent before it continued.
+            || (!results.is_empty()
+                && event.tool_calls().is_empty()
+                && event.actions.tool_confirmation.is_none()
+                && results
+                    .iter()
+                    .all(|result| result.call_id.is_some_and(|id| calls.contains(id))));
+        if !set_aside {
+            return Err(stale());
+        }
+    }
+    Ok(&events[..start])
 }
 
 pub(crate) async fn install_nested_application_resume(
@@ -1532,12 +1656,17 @@ fn resume_interrupt_ids(
     Ok(interrupt_ids)
 }
 
-fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+/// One typed value of a replayed model response's provider metadata: the live
+/// response's and ADK's serialized copy must agree.
+fn replay_metadata<T: serde::de::DeserializeOwned + PartialEq>(
+    event: &Event,
+    key: &str,
+) -> Result<Option<T>, NativeAgentAssemblyError> {
     let live = event
         .llm_response
         .provider_metadata
         .as_ref()
-        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+        .and_then(|metadata| metadata.get(key));
     let encoded = event
         .provider_metadata
         .get(ADK_LLM_RESPONSE_METADATA_KEY)
@@ -1548,20 +1677,30 @@ fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeA
     let serialized = encoded
         .as_ref()
         .and_then(|response| response.provider_metadata.as_ref())
-        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+        .and_then(|metadata| metadata.get(key));
     let decode = |raw: Option<&Value>| {
-        raw.map(|raw| {
-            serde_json::from_value::<ApplicationReplayBatch>(raw.clone())
-                .map_err(|_| invalid_configuration())
-        })
-        .transpose()
+        raw.map(|raw| serde_json::from_value::<T>(raw.clone()).map_err(|_| invalid_configuration()))
+            .transpose()
     };
-    let live = decode(live)?;
-    let serialized = decode(serialized)?;
-    let batch = match (live, serialized) {
-        (Some(live), Some(serialized)) if live != serialized => return Err(invalid_configuration()),
-        (Some(value), _) | (_, Some(value)) => value,
-        (None, None) => return Ok(None),
+    match (decode(live)?, decode(serialized)?) {
+        (Some(live), Some(serialized)) if live != serialized => Err(invalid_configuration()),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// The execution whose root continuation emitted this replay batch, if stamped.
+fn replay_owner(
+    event: &Event,
+) -> Result<Option<super::dispatch_journal::DispatchOwner>, NativeAgentAssemblyError> {
+    replay_metadata(event, APPLICATION_REPLAY_OWNER_KEY)
+}
+
+fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+    let Some(batch) =
+        replay_metadata::<ApplicationReplayBatch>(event, APPLICATION_REPLAY_BATCH_KEY)?
+    else {
+        return Ok(None);
     };
     if batch.event_id.is_empty()
         || batch.event_id.len() > 512
@@ -2352,6 +2491,8 @@ struct ApplicationReplayModel {
     batch: ApplicationReplayBatch,
     previous_markers: Vec<Content>,
     replay_marker: Content,
+    /// Set for the ROOT batch only (`APPLICATION_REPLAY_OWNER_KEY`).
+    owner: Option<super::dispatch_journal::DispatchOwner>,
 }
 
 #[async_trait]
@@ -2398,7 +2539,13 @@ impl Llm for ApplicationReplayModel {
                     }),
                     finish_reason: Some(FinishReason::Stop),
                     turn_complete: true,
-                    provider_metadata: Some(json!({APPLICATION_REPLAY_BATCH_KEY: self.batch})),
+                    provider_metadata: Some(match &self.owner {
+                        Some(owner) => json!({
+                            APPLICATION_REPLAY_BATCH_KEY: self.batch,
+                            APPLICATION_REPLAY_OWNER_KEY: owner,
+                        }),
+                        None => json!({APPLICATION_REPLAY_BATCH_KEY: self.batch}),
+                    }),
                     ..LlmResponse::default()
                 };
                 Ok(Box::pin(stream::once(async move { Ok(response) })))
@@ -3679,22 +3826,36 @@ impl LazyNestedAgent {
                 let mut authorization = self.delegated_authorization.clone();
                 decision.restore_authorization_scope(&mut authorization);
                 let replay = if decision.is_delegated_authorization() {
-                    (*decision)
-                        .into_delegated_authorization_replay(&mut authorization)
-                        .map_err(|_| direct_hitl_execution_error())?
+                    (*decision).into_delegated_authorization_replay(&mut authorization)
                 } else if decision.is_clarifying_question() {
-                    (*decision)
-                        .into_clarifying_question_replay()
-                        .map_err(|_| direct_hitl_execution_error())?
+                    (*decision).into_clarifying_question_replay()
                 } else {
-                    (*decision)
-                        .into_direct_replay(sensitive_tools)
-                        .map_err(|error| direct_replay_execution_error(&error))?
-                };
+                    (*decision).into_direct_replay(sensitive_tools)
+                }
+                .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
+                // Every call of the replay that will really run and may not simply
+                // run again journals its dispatch in the root session first, so a
+                // later continuation never runs it twice and serves its recorded
+                // outcome instead. A call that can re-run costs no journal writes.
+                let executed = replay.journaled_call_ids(sensitive_tools);
+                let toolsets = if executed.is_empty() {
+                    self.toolsets.clone()
+                } else {
+                    self.model_scopes
+                        .as_ref()
+                        .and_then(ModelScopeSessions::dispatch_journal)
+                        .ok_or_else(agent_configuration_error)?
+                        .wrap(
+                            self.toolsets.clone(),
+                            &replay.journal_decision(),
+                            executed,
+                            super::dispatch_journal::JournalOutcomes::Recorded,
+                        )
+                };
                 let prepared = replay.bind(bound.provider_model());
-                let (model, run_input, toolsets) = prepared.into_parts(self.toolsets.clone());
+                let (model, run_input, toolsets) = prepared.into_parts(toolsets);
                 let (user_content, run_config) = run_input.into_parts();
                 let checkpoint = self
                     .context_checkpoint(&bound, Some(user_content.clone()))?
@@ -3723,6 +3884,7 @@ impl LazyNestedAgent {
                     batch,
                     previous_markers: Vec::new(),
                     replay_marker: user_content.clone(),
+                    owner: None,
                 });
                 Ok(PreparedChildApplicationResume {
                     agent: self.build_agent(
@@ -5163,42 +5325,24 @@ pub(super) fn child_execution_error() -> AdkError {
     )
 }
 
-/// A nested Agent's sensitive-tool card was decided, but the decided call cannot
-/// run here (its tool is no longer offered, or an approved sibling that changes
-/// data cannot be proven unexecuted). Nothing ran. The pipeline node reports it
-/// as an unavailable tool, not a fault.
-pub(crate) const NESTED_REPLAY_UNSUPPORTED_CODE: &str = "elitea_nested_agent.replay_unsupported";
-
-/// A nested Agent's approved call that changes data was already dispatched by an
-/// earlier continuation and left no result. It may have run; it is not repeated.
-pub(crate) const NESTED_REPLAY_MAY_HAVE_STARTED_CODE: &str =
-    "elitea_nested_agent.replay_may_have_started";
-
-fn direct_replay_execution_error(error: &super::direct_hitl::DirectHitlError) -> AdkError {
+/// A nested Agent's decided card cannot continue. The typed direct-HITL code is
+/// kept as the error code, so the parent reports a readable reason: a "may
+/// have started" refusal carries the registered recovery-refused code.
+fn direct_hitl_execution_error(error: &super::direct_hitl::DirectHitlError) -> AdkError {
     match error.code() {
-        super::direct_hitl::DirectHitlErrorCode::UnsupportedCapability => AdkError::new(
-            ErrorComponent::Agent,
-            ErrorCategory::Unsupported,
-            NESTED_REPLAY_UNSUPPORTED_CODE,
-            "the decided nested agent tool call cannot run on this deployment",
-        ),
         super::direct_hitl::DirectHitlErrorCode::MayHaveStarted => AdkError::new(
             ErrorComponent::Agent,
             ErrorCategory::Unsupported,
-            NESTED_REPLAY_MAY_HAVE_STARTED_CODE,
-            "the approved nested agent tool call may already have started",
+            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
         ),
-        _ => direct_hitl_execution_error(),
+        code => AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::InvalidInput,
+            code.as_str(),
+            "the nested agent continuation is invalid",
+        ),
     }
-}
-
-fn direct_hitl_execution_error() -> AdkError {
-    AdkError::new(
-        ErrorComponent::Agent,
-        ErrorCategory::InvalidInput,
-        "elitea_nested_agent.invalid_resume",
-        "the nested agent continuation is invalid",
-    )
 }
 
 fn nested_resume_execution_error(_error: NativeAgentAssemblyError) -> AdkError {
@@ -5799,6 +5943,94 @@ mod tests {
         assert_eq!(
             error.code(),
             NativeAgentAssemblyErrorCode::InvalidConfiguration
+        );
+    }
+}
+
+#[cfg(test)]
+mod live_nested_events_tests {
+    use super::*;
+    use crate::agents::dispatch_journal::{DispatchOwner, test_dispatched_record};
+
+    fn owner() -> DispatchOwner {
+        DispatchOwner::new("execution-1", 1)
+    }
+
+    fn batch_event(branch: &str, owner: Option<&DispatchOwner>, child: bool) -> Event {
+        let batch = ApplicationReplayBatch {
+            event_id: "original-batch".to_owned(),
+            interrupt_ids: BTreeSet::from(["hitl-1".to_owned()]),
+            call_ordinals: BTreeMap::from([("call_child".to_owned(), 1)]),
+        };
+        let mut event = Event::new("inv-2");
+        "elitea-agent".clone_into(&mut event.author);
+        branch.clone_into(&mut event.branch);
+        event.llm_response.content = Some(Content {
+            role: "model".to_owned(),
+            parts: vec![Part::FunctionCall {
+                name: "elitea_agent_31_v_41".to_owned(),
+                args: json!({}),
+                id: Some("call_child".to_owned()),
+                thought_signature: None,
+            }],
+        });
+        event.llm_response.provider_metadata = Some(match owner {
+            Some(owner) => json!({
+                APPLICATION_REPLAY_BATCH_KEY: batch,
+                APPLICATION_REPLAY_OWNER_KEY: owner,
+            }),
+            None => json!({ APPLICATION_REPLAY_BATCH_KEY: batch }),
+        });
+        if child {
+            event.provider_metadata.insert(
+                DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+                "elitea-child-1".to_owned(),
+            );
+        }
+        event
+    }
+
+    fn dead_continuation(root_owner: Option<&DispatchOwner>) -> Vec<Event> {
+        let submitted = HashSet::from(["hitl-1".to_owned()]);
+        let mut earlier = Event::new("inv-1");
+        earlier.llm_response.content = Some(Content::new("user").with_text("current"));
+        let mut marker = Event::new("inv-2");
+        "user".clone_into(&mut marker.author);
+        marker.llm_response.content = Some(nested_resume_user_content(&submitted));
+        vec![
+            earlier,
+            marker,
+            batch_event("elitea.saved_applications", root_owner, false),
+            // A depth-2 child forwards its own batch for the same grandchild card.
+            batch_event("elitea.saved_applications.application_1", None, true),
+            test_dispatched_record("elitea-child-2", "hitl-1", "call_mcp", owner()),
+        ]
+    }
+
+    /// #1321 code review round 3: the replacement of the same execution sets the
+    /// dead continuation aside, also when a depth-2 child forwarded its own batch;
+    /// another execution, or a batch without an owner, is stale.
+    #[test]
+    fn only_this_executions_dead_root_continuation_is_set_aside() {
+        let submitted = HashSet::from(["hitl-1".to_owned()]);
+        let events = dead_continuation(Some(&owner()));
+        let live = live_nested_events(&events, &submitted, &owner()).expect("same execution");
+        assert_eq!(
+            live.len(),
+            1,
+            "everything from the dead marker on is set aside"
+        );
+        assert!(
+            live_nested_events(&events, &submitted, &DispatchOwner::new("execution-2", 1)).is_err()
+        );
+        let unstamped = dead_continuation(None);
+        assert!(live_nested_events(&unstamped, &submitted, &owner()).is_err());
+        // No consumer of the card: the session is used as it is.
+        assert_eq!(
+            live_nested_events(&events[..1], &submitted, &owner())
+                .expect("untouched")
+                .len(),
+            1
         );
     }
 }

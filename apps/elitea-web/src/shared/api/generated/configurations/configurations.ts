@@ -57,11 +57,13 @@ import type {
   CheckStoredConfigurationConnection200,
   CheckStoredConfigurationConnection400,
   CheckStoredConfigurationConnection404,
+  ClientUpgradeRequiredResponse,
   ConfigurationListResponse,
   ConfigurationModelListResponse,
   ErrorResponse,
   ListConfigurationModelsParams,
   ListConfigurationsParams,
+  N400Response,
   N401Response,
   N403Response,
   N404Response,
@@ -372,6 +374,11 @@ export type listConfigurationModelsResponse200 = {
   status: 200;
 };
 
+export type listConfigurationModelsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type listConfigurationModelsResponse401 = {
   data: N401Response;
   status: 401;
@@ -380,6 +387,11 @@ export type listConfigurationModelsResponse401 = {
 export type listConfigurationModelsResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type listConfigurationModelsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type listConfigurationModelsResponse500 = {
@@ -392,8 +404,10 @@ export type listConfigurationModelsResponseSuccess =
     headers: Headers;
   };
 export type listConfigurationModelsResponseError = (
+  | listConfigurationModelsResponse400
   | listConfigurationModelsResponse401
   | listConfigurationModelsResponse403
+  | listConfigurationModelsResponse426
   | listConfigurationModelsResponse500
 ) & {
   headers: Headers;
@@ -436,6 +450,11 @@ export const getListConfigurationModelsUrl = (
  * The app calls this through a hand-written client today, and four
  * separate slices re-derived that client independently. It is described
  * here so one generated client replaces all four.
+ *
+ * Client contract 1.9: the desktop app reads
+ * `?section=embedding&include_shared=true` to offer the project's
+ * embedding models for its workspace index (each item's `name` is the
+ * model a `/llm/v1/embeddings` request names).
  * @summary List the models a project can select
  */
 export const listConfigurationModels = async (
@@ -464,7 +483,12 @@ export const getListConfigurationModelsQueryKey = (
 
 export const getListConfigurationModelsQueryOptions = <
   TData = Awaited<ReturnType<typeof listConfigurationModels>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConfigurationModelsParams,
@@ -506,11 +530,20 @@ export type ListConfigurationModelsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listConfigurationModels>>
 >;
 export type ListConfigurationModelsQueryError =
-  N401Response | N403Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useListConfigurationModels<
   TData = Awaited<ReturnType<typeof listConfigurationModels>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params: undefined | ListConfigurationModelsParams,
@@ -538,7 +571,12 @@ export function useListConfigurationModels<
 };
 export function useListConfigurationModels<
   TData = Awaited<ReturnType<typeof listConfigurationModels>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConfigurationModelsParams,
@@ -566,7 +604,12 @@ export function useListConfigurationModels<
 };
 export function useListConfigurationModels<
   TData = Awaited<ReturnType<typeof listConfigurationModels>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConfigurationModelsParams,
@@ -590,7 +633,12 @@ export function useListConfigurationModels<
 
 export function useListConfigurationModels<
   TData = Awaited<ReturnType<typeof listConfigurationModels>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListConfigurationModelsParams,

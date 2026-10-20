@@ -106,8 +106,8 @@ describe('IndexSettingsDialog flows', () => {
     const user = userEvent.setup();
     mount(ipc);
     const dialog = await openDialog(user);
-    expect(within(dialog).getByTestId('index-embeddings')).toHaveTextContent('coming soon');
-    expect(within(dialog).getByRole('switch')).toBeDisabled();
+    // Semantic search is offered once the index is on.
+    expect(within(dialog).queryByTestId('index-embeddings')).toBeNull();
 
     await user.click(within(dialog).getByRole('button', { name: 'Turn on' }));
     expect(ipc.calls.enabled).toEqual(['w1']);

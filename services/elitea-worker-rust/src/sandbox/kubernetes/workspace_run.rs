@@ -1,0 +1,675 @@
+//! Workspace runs on Kubernetes (ADR-0034 decision 9): one Pod per run from
+//! `WorkspaceRunContainer::kubernetes_pod`, its workspace an `emptyDir`
+//! sized by `sizeLimit` and the container's `ephemeral-storage` limit (the
+//! kubelet evicts a Pod over either), the runner's operations as execs.
+//! The binding a run carries is in annotations (a 64-hex value does not fit
+//! a label).
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, PoisonError};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use k8s_openapi::api::core::v1::Pod;
+use kube::Api;
+use kube::api::{AttachParams, DeleteParams, ListParams, PostParams};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
+
+use super::runtime_class::{self, RuntimeClassRefusal};
+use crate::sandbox::workspace_run::{
+    ACTIVATION_BINDING, CONTAINER_NAME, EXPIRES_BINDING, KIND_LABEL, KIND_WORKSPACE_RUN,
+    REQUEST_BINDING,
+};
+use crate::sandbox::workspace_run_service::{
+    BackendError, ExecExit, RunBinding, WorkspaceRunBackend, WorkspaceRunLaunch, failure_code,
+};
+
+const API_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a new Pod may take to run (image pull included).
+const READY_TIMEOUT: Duration = Duration::from_mins(3);
+const MAX_STDERR_BYTES: usize = 8 * 1024;
+/// How long a verified `RuntimeClass` is trusted before it is read again. A
+/// `RuntimeClass`'s handler is immutable, but the object can be deleted and
+/// recreated with another one; a run never starts on a verdict older than
+/// this.
+const RUNTIME_CLASS_TTL: Duration = Duration::from_mins(1);
+/// How long a refusal is reused before the `RuntimeClass` is read again: long
+/// enough that a burst of runs against a broken class makes one API call, short
+/// enough that a fixed class is picked up within seconds.
+const REFUSAL_TTL: Duration = Duration::from_secs(5);
+
+/// One `RuntimeClass` verdict and when it was reached.
+struct Verdict {
+    at: tokio::time::Instant,
+    outcome: Result<(), RuntimeClassRefusal>,
+}
+
+impl Verdict {
+    fn fresh(&self) -> bool {
+        let ttl = if self.outcome.is_ok() {
+            RUNTIME_CLASS_TTL
+        } else {
+            REFUSAL_TTL
+        };
+        self.at.elapsed() < ttl
+    }
+}
+
+/// The Kubernetes backend of one workspace profile.
+pub struct KubernetesWorkspaceRuns {
+    client: kube::Client,
+    pods: Api<Pod>,
+    namespace: String,
+    runtime_class: String,
+    node_selector: BTreeMap<String, String>,
+    tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+    /// The current `RuntimeClass` check. Callers share one in-flight read
+    /// through the `OnceCell` (single-flight) and the std mutex is held only
+    /// to swap a stale cell, never across the API call.
+    verdict: std::sync::Mutex<Arc<tokio::sync::OnceCell<Verdict>>>,
+}
+
+impl KubernetesWorkspaceRuns {
+    #[must_use]
+    pub fn new(
+        client: kube::Client,
+        namespace: String,
+        runtime_class: String,
+        node_selector: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            pods: Api::namespaced(client.clone(), &namespace),
+            client,
+            namespace,
+            runtime_class,
+            node_selector,
+            tolerations: Vec::new(),
+            verdict: std::sync::Mutex::new(Arc::new(tokio::sync::OnceCell::new())),
+        }
+    }
+
+    /// The sandbox nodes' taints every run Pod tolerates.
+    #[must_use]
+    pub fn with_tolerations(
+        mut self,
+        tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
+    ) -> Self {
+        self.tolerations = tolerations;
+        self
+    }
+
+    /// The backend, its `RuntimeClass` checked once up front. A refusal is a
+    /// warning, not a startup failure: the supervisor (and every other
+    /// profile it serves) stays up, and each workspace run is refused,
+    /// fail-closed, until the check passes.
+    pub async fn connect(
+        client: kube::Client,
+        namespace: String,
+        runtime_class: String,
+        node_selector: BTreeMap<String, String>,
+    ) -> Self {
+        let backend = Self::new(client, namespace, runtime_class, node_selector);
+        if let Err(refusal) = backend.isolating().await {
+            tracing::warn!(
+                event = "workspace_run_runtime_class_unverified",
+                runtime_class = %backend.runtime_class,
+                error = %refusal,
+                "Starting without a verified workspace RuntimeClass; workspace runs are refused until it isolates"
+            );
+        }
+        backend
+    }
+
+    /// Verify the profile's `RuntimeClass`, from a verdict at most
+    /// [`RUNTIME_CLASS_TTL`] old (a success) or [`REFUSAL_TTL`] old (a
+    /// refusal), so a fixed `RuntimeClass` is picked up without a restart and
+    /// a broken one is never trusted. Concurrent callers share one read.
+    async fn isolating(&self) -> Result<(), RuntimeClassRefusal> {
+        let cell = {
+            let mut current = self.verdict.lock().unwrap_or_else(PoisonError::into_inner);
+            if current.get().is_some_and(|verdict| !verdict.fresh()) {
+                *current = Arc::new(tokio::sync::OnceCell::new());
+            }
+            Arc::clone(&current)
+        };
+        cell.get_or_init(|| self.verify()).await.outcome.clone()
+    }
+
+    async fn verify(&self) -> Verdict {
+        let outcome = match runtime_class::verify(self.client.clone(), &self.runtime_class).await {
+            Ok(handler) => {
+                tracing::info!(
+                    event = "workspace_run_runtime_class_verified",
+                    runtime_class = %self.runtime_class,
+                    handler = %handler,
+                    "The workspace RuntimeClass isolates"
+                );
+                Ok(())
+            }
+            Err(refusal) => {
+                tracing::error!(
+                    event = "workspace_run_runtime_class_refused",
+                    runtime_class = %self.runtime_class,
+                    error = %refusal,
+                    "Refusing workspace runs: the RuntimeClass does not isolate"
+                );
+                Err(refusal)
+            }
+        };
+        Verdict {
+            at: tokio::time::Instant::now(),
+            outcome,
+        }
+    }
+
+    /// The Pod of one run, binding annotations included.
+    ///
+    /// # Errors
+    ///
+    /// As `WorkspaceRunContainer::kubernetes_pod`.
+    pub fn pod(&self, launch: &WorkspaceRunLaunch) -> Result<serde_json::Value, BackendError> {
+        let mut pod = render_pod(
+            launch,
+            &self.namespace,
+            &self.runtime_class,
+            &self.node_selector,
+        )?;
+        if !self.tolerations.is_empty() {
+            pod["spec"]["tolerations"] =
+                serde_json::to_value(&self.tolerations).map_err(|_| BackendError::Refused)?;
+        }
+        Ok(pod)
+    }
+
+    async fn running(&self, name: &str) -> Result<(), BackendError> {
+        let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
+        loop {
+            let pod = tokio::time::timeout(API_TIMEOUT, self.pods.get_opt(name))
+                .await
+                .map_err(|_| BackendError::Timeout)?
+                .map_err(|_| BackendError::Unavailable)?
+                .ok_or(BackendError::NotFound)?;
+            match pod
+                .status
+                .as_ref()
+                .and_then(|status| status.phase.as_deref())
+            {
+                Some("Running") => return Ok(()),
+                Some("Failed" | "Succeeded") => return Err(BackendError::Refused),
+                _ => {}
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(BackendError::Timeout);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+}
+
+/// [`KubernetesWorkspaceRuns::pod`] without a client (tests).
+///
+/// # Errors
+///
+/// As `WorkspaceRunContainer::kubernetes_pod`.
+pub fn render_pod(
+    launch: &WorkspaceRunLaunch,
+    namespace: &str,
+    runtime_class: &str,
+    node_selector: &BTreeMap<String, String>,
+) -> Result<serde_json::Value, BackendError> {
+    let mut pod = launch
+        .container
+        .kubernetes_pod(namespace, runtime_class, node_selector)
+        .map_err(|_| BackendError::Refused)?;
+    let annotations = pod["metadata"]["annotations"]
+        .as_object_mut()
+        .ok_or(BackendError::Refused)?;
+    annotations.insert(
+        REQUEST_BINDING.to_owned(),
+        launch.binding.request.clone().into(),
+    );
+    annotations.insert(
+        ACTIVATION_BINDING.to_owned(),
+        launch.binding.owner.clone().into(),
+    );
+    annotations.insert(
+        EXPIRES_BINDING.to_owned(),
+        launch.binding.expires_at.to_string().into(),
+    );
+    Ok(pod)
+}
+
+fn binding_of(pod: &Pod) -> Option<RunBinding> {
+    let labels = pod.metadata.labels.as_ref()?;
+    if labels.get(KIND_LABEL).map(String::as_str) != Some(KIND_WORKSPACE_RUN) {
+        return None;
+    }
+    let annotations = pod.metadata.annotations.as_ref()?;
+    Some(RunBinding {
+        request: annotations.get(REQUEST_BINDING)?.clone(),
+        owner: annotations.get(ACTIVATION_BINDING)?.clone(),
+        expires_at: annotations.get(EXPIRES_BINDING)?.parse().ok()?,
+    })
+}
+
+#[async_trait]
+impl WorkspaceRunBackend for KubernetesWorkspaceRuns {
+    async fn start(&self, launch: &WorkspaceRunLaunch) -> Result<bool, BackendError> {
+        // Fail-closed, before any Pod exists: never a run on runc.
+        self.isolating().await.map_err(|_| BackendError::Refused)?;
+        let pod: Pod =
+            serde_json::from_value(self.pod(launch)?).map_err(|_| BackendError::Refused)?;
+        let created =
+            match tokio::time::timeout(API_TIMEOUT, self.pods.create(&PostParams::default(), &pod))
+                .await
+                .map_err(|_| BackendError::Timeout)?
+            {
+                Ok(_) => true,
+                Err(kube::Error::Api(error)) if error.code == 409 => {
+                    match self.binding(&launch.container.name).await? {
+                        Some(existing)
+                            if existing.request == launch.binding.request
+                                && existing.owner == launch.binding.owner => {}
+                        _ => return Err(BackendError::Conflict),
+                    }
+                    false
+                }
+                Err(_) => return Err(BackendError::Unavailable),
+            };
+        if let Err(error) = self.running(&launch.container.name).await {
+            if created {
+                let _ = self.destroy(&launch.container.name).await;
+            }
+            return Err(error);
+        }
+        Ok(created)
+    }
+
+    async fn binding(&self, name: &str) -> Result<Option<RunBinding>, BackendError> {
+        let pod = tokio::time::timeout(API_TIMEOUT, self.pods.get_opt(name))
+            .await
+            .map_err(|_| BackendError::Timeout)?
+            .map_err(|_| BackendError::Unavailable)?;
+        Ok(pod.as_ref().and_then(binding_of))
+    }
+
+    async fn exec(
+        &self,
+        name: &str,
+        argv: &[String],
+        stdin: &mut (dyn AsyncRead + Unpin + Send),
+        stdout: &mut (dyn AsyncWrite + Unpin + Send),
+    ) -> Result<ExecExit, BackendError> {
+        let params = AttachParams::default()
+            .container(CONTAINER_NAME)
+            .stdin(true)
+            .stdout(true)
+            .stderr(true);
+        let mut process = self
+            .pods
+            .exec(name, argv.to_vec(), &params)
+            .await
+            .map_err(|_| BackendError::Unavailable)?;
+        let mut input = process.stdin().ok_or(BackendError::Unavailable)?;
+        let mut output = process.stdout().ok_or(BackendError::Unavailable)?;
+        let mut errors = process.stderr().ok_or(BackendError::Unavailable)?;
+        let status = process.take_status().ok_or(BackendError::Unavailable)?;
+        let send = async {
+            let mut buffer = vec![0_u8; 32 * 1024];
+            loop {
+                let count = stdin.read(&mut buffer).await?;
+                if count == 0 {
+                    break;
+                }
+                input.write_all(&buffer[..count]).await?;
+                input.flush().await?;
+            }
+            input.shutdown().await
+        };
+        let receive = async {
+            let mut buffer = vec![0_u8; 32 * 1024];
+            loop {
+                let count = output.read(&mut buffer).await?;
+                if count == 0 {
+                    return stdout.flush().await;
+                }
+                stdout.write_all(&buffer[..count]).await?;
+                stdout.flush().await?;
+            }
+        };
+        let read_errors = async {
+            let mut stderr = Vec::new();
+            let mut buffer = vec![0_u8; 4 * 1024];
+            while let Ok(count) = errors.read(&mut buffer).await {
+                if count == 0 {
+                    break;
+                }
+                let room = MAX_STDERR_BYTES.saturating_sub(stderr.len());
+                stderr.extend_from_slice(&buffer[..count.min(room)]);
+            }
+            stderr
+        };
+        let (_, received, stderr) = tokio::join!(send, receive, read_errors);
+        received.map_err(|_| BackendError::Unavailable)?;
+        let status = status.await.ok_or(BackendError::Unavailable)?;
+        // Keep the attached process alive until the status is read.
+        drop(process);
+        let exit_code = if status.status.as_deref() == Some("Success") {
+            0
+        } else {
+            status
+                .details
+                .and_then(|details| details.causes)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|cause| cause.reason.as_deref() == Some("ExitCode"))
+                .and_then(|cause| cause.message)
+                .and_then(|code| code.parse().ok())
+                .unwrap_or(-1)
+        };
+        Ok(ExecExit {
+            exit_code,
+            failure_code: failure_code(&stderr),
+        })
+    }
+
+    async fn destroy(&self, name: &str) -> Result<bool, BackendError> {
+        match tokio::time::timeout(
+            API_TIMEOUT,
+            self.pods.delete(
+                name,
+                &DeleteParams {
+                    grace_period_seconds: Some(0),
+                    ..DeleteParams::default()
+                },
+            ),
+        )
+        .await
+        .map_err(|_| BackendError::Timeout)?
+        {
+            Ok(_) => Ok(true),
+            Err(kube::Error::Api(error)) if error.code == 404 => Ok(false),
+            Err(_) => Err(BackendError::Unavailable),
+        }
+    }
+
+    async fn runs(&self) -> Result<Vec<(String, RunBinding)>, BackendError> {
+        let pods = tokio::time::timeout(
+            API_TIMEOUT,
+            self.pods
+                .list(&ListParams::default().labels(&format!("{KIND_LABEL}={KIND_WORKSPACE_RUN}"))),
+        )
+        .await
+        .map_err(|_| BackendError::Timeout)?
+        .map_err(|_| BackendError::Unavailable)?;
+        Ok(pods
+            .items
+            .iter()
+            .filter_map(|pod| Some((pod.metadata.name.clone()?, binding_of(pod)?)))
+            .collect())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::sandbox::workspace_run::WorkspaceRunContainer;
+
+    pub(crate) fn launch() -> WorkspaceRunLaunch {
+        WorkspaceRunLaunch {
+            container: WorkspaceRunContainer {
+                name: "elitea-ws-0123456789abcdef01234567".into(),
+                image: format!("registry.example/runner@sha256:{}", "c".repeat(64)),
+                workspace_bytes: 3 << 30,
+                egress: false,
+                egress_proxy: false,
+                cpu_millis: 1_000,
+                memory_bytes: 2 << 30,
+                pids_limit: 4_096,
+                wall_seconds: 600,
+            },
+            binding: RunBinding {
+                request: "a".repeat(64),
+                owner: "b".repeat(64),
+                expires_at: 1_700_000_720,
+            },
+        }
+    }
+
+    /// What the fake API server's `RuntimeClass` `gvisor` is: its handler,
+    /// or `None` for a 404.
+    pub(crate) type Class = Arc<std::sync::Mutex<Option<&'static str>>>;
+
+    /// A fake API server: the `RuntimeClass` `gvisor` with `handler`, and a
+    /// Pod that is Running as soon as it is created. Counts `RuntimeClass`
+    /// reads and Pod creations.
+    fn api(
+        handler: &'static str,
+    ) -> (
+        kube::Client,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        api_with(
+            Arc::new(std::sync::Mutex::new(Some(handler))),
+            Duration::ZERO,
+        )
+    }
+
+    /// [`api`] with a mutable `RuntimeClass` and a delay on each of its reads.
+    pub(crate) fn api_with(
+        class: Class,
+        delay: Duration,
+    ) -> (
+        kube::Client,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let reads = Arc::new(AtomicUsize::new(0));
+        let creates = Arc::new(AtomicUsize::new(0));
+        let (seen_reads, seen_creates) = (reads.clone(), creates.clone());
+        let client = kube::Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                let path = request.uri().path().to_owned();
+                let mut wait = Duration::ZERO;
+                let (status, body) = if path == "/apis/node.k8s.io/v1/runtimeclasses/gvisor" {
+                    seen_reads.fetch_add(1, Ordering::SeqCst);
+                    wait = delay;
+                    match *class.lock().unwrap() {
+                        Some(handler) => (
+                            200,
+                            serde_json::json!({"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass",
+                                "metadata":{"name":"gvisor"},"handler":handler}),
+                        ),
+                        None => (
+                            404,
+                            serde_json::json!({"apiVersion":"v1","kind":"Status","status":"Failure",
+                                "message":"runtimeclasses \"gvisor\" not found","reason":"NotFound","code":404}),
+                        ),
+                    }
+                } else {
+                    assert!(
+                        path.starts_with("/api/v1/namespaces/elitea-execution/pods"),
+                        "{path}"
+                    );
+                    if request.method() == http::Method::POST {
+                        seen_creates.fetch_add(1, Ordering::SeqCst);
+                    }
+                    (
+                        200,
+                        serde_json::json!({"apiVersion":"v1","kind":"Pod",
+                            "metadata":{"name":launch().container.name,"namespace":"elitea-execution"},
+                            "status":{"phase":"Running"}}),
+                    )
+                };
+                async move {
+                    if !wait.is_zero() {
+                        tokio::time::sleep(wait).await;
+                    }
+                    Ok::<_, std::convert::Infallible>(
+                        http::Response::builder()
+                            .status(status)
+                            .body(http_body_util::Full::new(bytes::Bytes::from(
+                                serde_json::to_vec(&body).unwrap(),
+                            )))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "elitea-execution",
+        );
+        (client, reads, creates)
+    }
+
+    fn backend(client: kube::Client) -> KubernetesWorkspaceRuns {
+        KubernetesWorkspaceRuns::new(
+            client,
+            "elitea-execution".into(),
+            "gvisor".into(),
+            BTreeMap::from([("elitea.ai/sandbox".to_owned(), "true".to_owned())]),
+        )
+    }
+
+    /// A `RuntimeClass` on runc (or crun) refuses before any Pod exists, at
+    /// startup and on every run; runsc starts the run, and the verdict is
+    /// cached, not read per run.
+    #[tokio::test]
+    async fn a_non_isolating_runtime_class_refuses_before_any_pod() {
+        use std::sync::atomic::Ordering;
+        for handler in ["runc", "crun"] {
+            let (client, _, creates) = api(handler);
+            let runs = backend(client.clone());
+            assert!(matches!(
+                runs.isolating().await,
+                Err(RuntimeClassRefusal::NotIsolating { .. })
+            ));
+            assert!(matches!(
+                runs.start(&launch()).await,
+                Err(BackendError::Refused)
+            ));
+            assert!(matches!(
+                backend(client).start(&launch()).await,
+                Err(BackendError::Refused)
+            ));
+            assert_eq!(creates.load(Ordering::SeqCst), 0, "{handler}");
+        }
+        let (client, reads, creates) = api("runsc");
+        let runs = backend(client);
+        assert!(runs.start(&launch()).await.expect("starts"));
+        assert!(runs.start(&launch()).await.expect("starts"));
+        assert_eq!(creates.load(Ordering::SeqCst), 2);
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+
+    /// Concurrent runs share one `RuntimeClass` read: the check is
+    /// single-flight, and no caller waits behind a lock held across the API
+    /// call. A refusal is shared the same way.
+    #[tokio::test(start_paused = true)]
+    async fn concurrent_callers_make_one_runtime_class_read() {
+        use std::sync::atomic::Ordering;
+        for handler in [Some("runsc"), None] {
+            let (client, reads, _) = api_with(
+                Arc::new(std::sync::Mutex::new(handler)),
+                Duration::from_secs(2),
+            );
+            let runs = Arc::new(backend(client));
+            let mut callers = tokio::task::JoinSet::new();
+            for _ in 0..16 {
+                let runs = Arc::clone(&runs);
+                callers.spawn(async move { runs.isolating().await });
+            }
+            let started = tokio::time::Instant::now();
+            while let Some(outcome) = callers.join_next().await {
+                assert_eq!(outcome.expect("joined").is_ok(), handler.is_some());
+            }
+            assert_eq!(reads.load(Ordering::SeqCst), 1, "{handler:?}");
+            // One 2 s read, not sixteen in a row.
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+    }
+
+    /// A refusal is reused for [`REFUSAL_TTL`], then read again, so a
+    /// `RuntimeClass` created after the supervisor started is picked up
+    /// without a restart.
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_is_cached_briefly_then_rechecked() {
+        use std::sync::atomic::Ordering;
+        let class: Class = Arc::new(std::sync::Mutex::new(None));
+        let (client, reads, creates) = api_with(class.clone(), Duration::ZERO);
+        let runs = KubernetesWorkspaceRuns::connect(
+            client,
+            "elitea-execution".into(),
+            "gvisor".into(),
+            BTreeMap::from([("a".to_owned(), "b".to_owned())]),
+        )
+        .await;
+        assert!(matches!(
+            runs.isolating().await,
+            Err(RuntimeClassRefusal::Missing(_))
+        ));
+        assert!(matches!(
+            runs.start(&launch()).await,
+            Err(BackendError::Refused)
+        ));
+        assert_eq!(reads.load(Ordering::SeqCst), 1, "the refusal is reused");
+        *class.lock().unwrap() = Some("runsc");
+        tokio::time::advance(REFUSAL_TTL + Duration::from_millis(1)).await;
+        assert!(runs.start(&launch()).await.expect("starts"));
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+        assert_eq!(creates.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_pod_tolerates_the_sandbox_taint() {
+        let client = kube::Client::new(
+            tower::service_fn(|_: http::Request<kube::client::Body>| async {
+                Ok::<_, std::convert::Infallible>(http::Response::new(http_body_util::Full::new(
+                    bytes::Bytes::new(),
+                )))
+            }),
+            "elitea-execution",
+        );
+        let toleration: k8s_openapi::api::core::v1::Toleration = serde_json::from_value(
+            serde_json::json!({"key":"elitea.ai/sandbox","operator":"Equal","value":"true","effect":"NoSchedule"}),
+        )
+        .expect("toleration");
+        let pod = backend(client.clone())
+            .with_tolerations(vec![toleration])
+            .pod(&launch())
+            .expect("pod");
+        assert_eq!(pod["spec"]["tolerations"][0]["key"], "elitea.ai/sandbox");
+        assert_eq!(pod["spec"]["tolerations"][0]["effect"], "NoSchedule");
+        assert_eq!(pod["spec"]["runtimeClassName"], "gvisor");
+        assert!(
+            backend(client).pod(&launch()).expect("pod")["spec"]
+                .get("tolerations")
+                .is_none()
+        );
+    }
+
+    /// Item 5 on Kubernetes: the declared workspace is the `emptyDir`
+    /// `sizeLimit` and inside the container's `ephemeral-storage` limit, and
+    /// the binding rides annotations the API server keeps.
+    #[test]
+    fn the_pod_is_sized_and_carries_its_binding() {
+        let selector = BTreeMap::from([("sandbox".to_owned(), "true".to_owned())]);
+        let pod = render_pod(&launch(), "elitea-execution", "gvisor", &selector).expect("pod");
+        assert_eq!(
+            pod["spec"]["volumes"][0]["emptyDir"]["sizeLimit"],
+            (3_u64 << 30).to_string()
+        );
+        let limit: u64 = pod["spec"]["containers"][0]["resources"]["limits"]["ephemeral-storage"]
+            .as_str()
+            .expect("limit")
+            .parse()
+            .expect("bytes");
+        assert!(limit >= 3 << 30);
+        let annotations = &pod["metadata"]["annotations"];
+        assert_eq!(annotations[REQUEST_BINDING], "a".repeat(64));
+        assert_eq!(annotations[ACTIVATION_BINDING], "b".repeat(64));
+        assert_eq!(annotations[EXPIRES_BINDING], "1700000720");
+        let typed: Pod = serde_json::from_value(pod).expect("a valid Pod");
+        assert_eq!(binding_of(&typed), Some(launch().binding));
+    }
+}

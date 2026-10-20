@@ -31,6 +31,8 @@ pub(crate) async fn prepare_static_application_resume(
             batch,
             previous_markers: nested_resume_markers(events)?,
             replay_marker: user_content.clone(),
+            // A static tool resume runs no approved effect and is never set aside.
+            owner: None,
         }),
         user_content,
         run_config: application_run_config(),

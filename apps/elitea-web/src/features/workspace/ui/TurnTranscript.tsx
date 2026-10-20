@@ -2,7 +2,7 @@
  * The live transcript of one turn: streamed text (Markdown, as in chat), tool rows (local or remote,
  * with a collapsible result), the status line and the cancel button.
  */
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 
 import CheckIcon from '@mui/icons-material/Check';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -162,18 +162,48 @@ export interface TurnTranscriptProps {
   view: TurnView;
   busy: boolean;
   onCancel: () => void;
+  /** The turn's commit failed after `done`: send it again (absent: the notice offers no Retry). */
+  onRetryCommit?: (executionId: string) => Promise<void>;
+  /** Right-click on the agent's text (the desktop's native context menu: Copy). */
+  onTextContextMenu?: (text: string, event: MouseEvent) => void;
 }
 
-export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): React.JSX.Element {
+/** The answer is on screen, but not in the conversation: the host's reason, and "Retry". */
+function CommitFailed({ failed, onRetry }: { failed: NonNullable<TurnView['commitFailed']>; onRetry?: (executionId: string) => Promise<void> }): React.JSX.Element {
+  const [retrying, setRetrying] = useState(false);
+  const action =
+    onRetry === undefined ? undefined : (
+      <Button
+        color="inherit"
+        size="small"
+        disabled={retrying}
+        onClick={() => {
+          setRetrying(true);
+          void onRetry(failed.executionId).finally(() => setRetrying(false));
+        }}
+      >
+        {t('workspace.commitFailed.retry', 'Retry')}
+      </Button>
+    );
+  return (
+    <Alert severity="warning" data-testid="commit-failed" action={action}>
+      {failed.message}
+    </Alert>
+  );
+}
+
+export function TurnTranscript({ view, busy, onCancel, onRetryCommit, onTextContextMenu }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {view.items.map((item) =>
         item.type === 'text' ? (
           // The chat's own renderer; raw HTML from the model is dropped, not rendered.
-          <Markdown key={item.key} renderHtml={false} data-testid="turn-text">
-            {item.text}
-          </Markdown>
+          <Box key={item.key} onContextMenu={onTextContextMenu === undefined ? undefined : (event: MouseEvent) => onTextContextMenu(item.text, event)}>
+            <Markdown renderHtml={false} data-testid="turn-text">
+              {item.text}
+            </Markdown>
+          </Box>
         ) : (
           <ToolRow key={item.key} item={item} />
         ),
@@ -181,6 +211,7 @@ export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): R
       {view.error !== undefined && (
         <Alert severity="error">{view.error.message}</Alert>
       )}
+      {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (
           <Tooltip title={view.projectInstructions.join(', ')}>

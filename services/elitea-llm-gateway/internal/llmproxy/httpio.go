@@ -182,6 +182,7 @@ func isBudgetError(status int, errType, code string) bool {
 
 // writeOpenAIError maps a bifrost error to the OpenAI-shaped error body.
 func (h *Handler) writeOpenAIError(w http.ResponseWriter, bErr *schemas.BifrostError) {
+	h.logProviderRefusal(bErr)
 	body := openAIErrorBody(bErr)
 	status, _, _ := statusAndType(bErr)
 	writeJSON(w, status, body)
@@ -289,4 +290,68 @@ func setElapsedHeader(w http.ResponseWriter, overhead time.Duration) {
 		overhead = 0
 	}
 	w.Header().Set("X-Elapsed-Ms", strconv.FormatFloat(float64(overhead)/float64(time.Millisecond), 'f', 3, 64))
+}
+
+// maxRefusalFieldBytes bounds each provider-reported field in the refusal log.
+const maxRefusalFieldBytes = 64
+
+// logProviderRefusal records why a request was refused, with fixed fields
+// only: the status, the provider's error type, code and parameter path, the
+// provider and the model. Each provider-reported field is bounded and reduced
+// to a token charset. The message and the request or response body never
+// reach the log: they can echo prompt content.
+//
+// Without it, the request log keeps only the status class ("client_error"),
+// and an upstream refusal cannot be told apart from a gateway one.
+func (h *Handler) logProviderRefusal(bErr *schemas.BifrostError) {
+	if bErr == nil || h.logger == nil {
+		return
+	}
+	status := 0
+	if bErr.StatusCode != nil {
+		status = *bErr.StatusCode
+	}
+	var errType, code, param string
+	if bErr.Error != nil {
+		if bErr.Error.Type != nil {
+			errType = *bErr.Error.Type
+		}
+		if bErr.Error.Code != nil {
+			code = *bErr.Error.Code
+		}
+		if p, ok := bErr.Error.Param.(string); ok {
+			param = p
+		}
+	}
+	h.logger.Warn("provider refused the request",
+		"event", "llm_provider_refusal",
+		"status", status,
+		"gateway_origin", bErr.IsBifrostError,
+		"error_type", refusalToken(errType),
+		"error_code", refusalToken(code),
+		"error_param", refusalToken(param),
+		"provider", refusalToken(string(bErr.ExtraFields.RoutingInfo.Provider)),
+		"model", refusalToken(bErr.ExtraFields.RoutingInfo.Model))
+}
+
+// refusalToken keeps a provider-reported identifier only when it is a short
+// token ([A-Za-z0-9_.:/[\]-], at most maxRefusalFieldBytes). Anything else is
+// replaced by a fixed marker, so free text can never pass through.
+func refusalToken(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) > maxRefusalFieldBytes {
+		return "redacted"
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '_' || c == '.' || c == ':' || c == '/' || c == '-' || c == '[' || c == ']':
+		default:
+			return "redacted"
+		}
+	}
+	return value
 }

@@ -20,20 +20,6 @@ const RUST: RuntimeCapabilities = {
   hidden_toolkit_types: ['jira', 'confluence', 'testio'],
 };
 
-const PYTHON: RuntimeCapabilities = {
-  worker: 'python',
-  internal_tools: {
-    image_generation: true,
-    data_analysis: true,
-    internal_mcp: true,
-    planner: true,
-    swarm: true,
-    lazy_tools_mode: true,
-    attachments: true,
-  },
-  hidden_toolkit_types: ['aws', 'azure'],
-};
-
 describe('isInternalToolAvailable', () => {
   it('reports false for a tool the Rust worker still skips on a Rust deployment (#866)', () => {
     expect(isInternalToolAvailable(RUST, 'swarm')).toBe(false);
@@ -47,15 +33,9 @@ describe('isInternalToolAvailable', () => {
     expect(isInternalToolAvailable(RUST, 'data_analysis')).toBe(true);
   });
 
-  it('reports true for the same tools on a Python deployment', () => {
-    expect(isInternalToolAvailable(PYTHON, 'planner')).toBe(true);
-    expect(isInternalToolAvailable(PYTHON, 'swarm')).toBe(true);
-  });
-
-  // pyodide is deliberately out of #866's scope and never appears in
-  // internal_tools — must not read as unavailable just because absent.
+  // A name absent from internal_tools must not read as unavailable just
+  // because it is absent.
   it('defaults to available for a tool name the capabilities response does not mention', () => {
-    expect(isInternalToolAvailable(RUST, 'pyodide')).toBe(true);
     expect(isInternalToolAvailable(RUST, 'a_tool_this_endpoint_has_not_been_taught')).toBe(true);
   });
 

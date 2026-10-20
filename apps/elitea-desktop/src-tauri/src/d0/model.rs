@@ -165,6 +165,7 @@ impl Llm for GatewayModel {
                     "the model stream was cut off",
                 )
             })?;
+            self.events.first_token();
             if reader.push(&chunk)? {
                 break;
             }
@@ -493,6 +494,14 @@ impl<'a> StreamReader<'a> {
             openai::FinishReason::Other => FinishReason::Other,
             _ => FinishReason::Stop,
         };
+        if let Some(usage) = &self.usage {
+            let count = |n: i32| u32::try_from(n).unwrap_or_default();
+            self.events.usage(
+                count(usage.prompt_token_count),
+                count(usage.candidates_token_count),
+                count(usage.total_token_count),
+            );
+        }
         let completed = (!has_calls).then(|| self.text.clone());
         let response = LlmResponse {
             content: (!parts.is_empty()).then(|| Content {
@@ -593,12 +602,20 @@ mod tests {
             response.usage_metadata.as_ref().unwrap().total_token_count,
             7
         );
-        let deltas: Vec<_> = emitter
-            .all()
-            .into_iter()
+        let all = emitter.all();
+        let deltas: Vec<_> = all
+            .iter()
+            .filter(|e| e.kind == "text_delta")
             .map(|e| e.payload["text"].as_str().unwrap().to_owned())
             .collect();
         assert_eq!(deltas, ["Let me ", "look."]);
+        // The call's usage goes to the UI too: what it sent (the context in use) and what it produced.
+        let usage: Vec<_> = all.iter().filter(|e| e.kind == "usage").collect();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(
+            usage[0].payload,
+            json!({"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7})
+        );
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub(crate) mod mcp_tool_cache;
 pub(crate) mod policy;
 pub mod snapshot;
 pub mod tool_binding;
+pub mod workspace_pull_request;
 
 #[cfg(test)]
 mod ado_boards_tests;

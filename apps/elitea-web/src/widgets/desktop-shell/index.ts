@@ -5,11 +5,18 @@
  * the desktop-only `pages/workspace`.
  */
 export { DesktopFrame, ShowSidebarButton } from './ui/DesktopFrame';
-export type { DesktopFrameProps } from './ui/DesktopFrame';
 export { TitleBarSpacer } from './ui/TitleBarSpacer';
 export { useDesktopLayout, CHANGES_WIDTH } from './model/desktopLayout.store';
-export type { SessionActions } from './model/desktopLayout.store';
+export type { InspectorTab } from './model/desktopLayout.store';
 export { modKey } from './ui/shortcutLabel';
 export { AppIpcProvider, useAppIpc } from './model/appIpcContext';
 export { DoctorPanel } from './ui/DoctorPanel';
-export type { DoctorPanelProps } from './ui/DoctorPanel';
+export { DesktopThemeLayer } from './ui/DesktopThemeLayer';
+export { Segmented } from './ui/Segmented';
+export { ActivityIsland } from './ui/ActivityIsland';
+export { useActivityFeed } from './model/activityFeed.store';
+export { useContextMenu } from './model/useContextMenu';
+export type { ContextAction } from './model/useContextMenu';
+export { conversationLink, copyText } from './lib/conversationLink';
+export { folderContextActions } from './lib/folderMenu';
+export { ProjectPickerSheet } from './ui/ProjectPickerSheet';

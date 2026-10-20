@@ -95,6 +95,14 @@ type Repository interface {
 	ReplaceUserBucketPermissions(ctx context.Context, projectID, userID int64, permissions map[string][]string) error
 	DeleteUserBucketPermission(ctx context.Context, projectID, userID int64, bucket string) (bool, error)
 	IsProjectAdmin(ctx context.Context, projectID, userID int64) (bool, error)
+	// IsWorkspaceBucket reports the project's hidden workspace bucket
+	// (ADR-0034 decision 3), found by type whatever its name: every bucket
+	// route answers it 404 before the access list is read.
+	IsWorkspaceBucket(ctx context.Context, projectID int64, name string) (bool, error)
+	// BucketGate answers, in one lookup, IsWorkspaceBucket and the caller's
+	// exception (GetBucketPermission) for a bucket route's gate. userID 0
+	// is no caller.
+	BucketGate(ctx context.Context, projectID, userID int64, bucket string) (repos.BucketGate, error)
 }
 
 type Handler struct {
@@ -417,6 +425,14 @@ func (h *Handler) CreateBucket(w http.ResponseWriter, r *http.Request) {
 	}
 	if !bucketNamePattern.MatchString(req.Name) {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "bucket name must match ^[a-z][a-z0-9-]{1,62}$")
+		return
+	}
+	// A reserved name (elitea-workspaces and its suffixed forms) is an invalid
+	// name for a NEW bucket, never a conflict: a 409 would tell the caller
+	// that the hidden workspace bucket exists (ADR-0034 decision 3). A user
+	// bucket created under that name before it was reserved keeps working.
+	if storage.ReservedBucketName(req.Name) {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "this bucket name is reserved")
 		return
 	}
 	reserved, err := h.reservedBucketName(r.Context(), projectID, req.Name)

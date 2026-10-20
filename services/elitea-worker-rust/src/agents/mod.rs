@@ -2,6 +2,7 @@
 
 pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
+pub(crate) mod approved_calls;
 pub(crate) mod assembly;
 pub(crate) mod attachment_context;
 pub(crate) mod attachment_tools;
@@ -12,6 +13,7 @@ pub(crate) use elitea_agent_runtime::context_management;
 use elitea_agent_runtime::context_status;
 pub(crate) use elitea_agent_runtime::context_summary;
 pub(crate) mod direct_hitl;
+pub(crate) mod dispatch_journal;
 pub(crate) mod driven;
 pub(crate) mod events;
 pub mod graph;
@@ -34,9 +36,13 @@ pub(crate) mod session;
 pub(crate) mod skipped_capabilities;
 pub(crate) use elitea_agent_runtime::tool_namespacing;
 pub(crate) mod variables;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod workspace;
 
 #[cfg(test)]
 mod application_pipeline_tests;
+#[cfg(test)]
+mod approved_calls_pg_tests;
 #[cfg(test)]
 mod assembly_tests;
 #[cfg(test)]

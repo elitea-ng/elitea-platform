@@ -157,7 +157,11 @@ async function fillAndSaveAhaCredential(
 
 /** Opens the New Aha! Toolkit configuration page (create flow) and returns once the Toolkit Name field is ready. */
 async function gotoCreateAhaToolkit(page: Page): Promise<void> {
-  await page.goto(BASE_URL + '/app/toolkits/all');
+  // domcontentloaded and a bound, like the other navigations in this file.
+  // The default `load` wait had no bound but the test's own 120 s: a webkit
+  // run spent all of it on a blank page, so the failure named no step. Now
+  // a stalled navigation fails here, in 30 s, and says so.
+  await page.goto(BASE_URL + '/app/toolkits/all', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForURL(/\/app\/toolkits\/(all|create)/, { timeout: 20_000 });
   if (!/\/create/.test(page.url())) await clickCreateButton(page);
   await page.waitForURL(/\/app\/toolkits\/create/, { timeout: 20_000 });

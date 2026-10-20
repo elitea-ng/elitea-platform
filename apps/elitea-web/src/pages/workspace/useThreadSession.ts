@@ -21,7 +21,7 @@ import {
 } from '@/features/workspace';
 import type { ApprovalDecision, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { useSelectedProject } from '@/widgets/app-shell';
-import { useDesktopLayout } from '@/widgets/desktop-shell';
+import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
@@ -99,7 +99,7 @@ function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: 
   return sets.reverse();
 }
 
-export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send'> {
+export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send' | 'prewarm'> {
   raw: AgentSelection;
   selection: AgentSelection;
   turn: WorkspaceTurn;
@@ -144,6 +144,12 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
       turn.adopt(running.turn_id, running.events);
     }
   }
+  // The activity feed learns which folder and thread this turn belongs to (events carry only the turn).
+  const liveTurnId = turn.turnId;
+  useEffect(() => {
+    if (liveTurnId === null) return;
+    useActivityFeed.getState().registerTurn(liveTurnId, { workspaceId: workspace.id, workspaceName: workspace.name, conversationId });
+  }, [liveTurnId, workspace.id, workspace.name, conversationId]);
   const shown = new Set([...turn.earlier.map((entry) => entry.turnId), ...(turn.turnId === null ? [] : [turn.turnId])]);
 
   // The URL's thread is the conversation (adjusted during render, once per mount).
@@ -163,7 +169,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     void queryClient.invalidateQueries({ queryKey: threadsQueryKey(workspace.id) });
     if (id !== conversationId) onAdopt(id);
   };
-  const { canSend, sendError, send } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
+  const { canSend, sendError, send, prewarm } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
   const done = turn.view.done;
   const changeSets = changeSetsOf(history, shown, turn, prompts);
   // `/undo` acts on the last turn, as before: only when it changed files.
@@ -195,6 +201,8 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const answer = (requestId: string, decision: ApprovalDecision): void => {
     const request = turn.view.approvals.find((a) => a.request_id === requestId);
     if (request !== undefined) setDecided((current) => [...current, { requestId, title: request.title, decision }]);
+    // The activity feed (island) stops waiting on it too: nothing else closes an approval but its turn ending.
+    useActivityFeed.getState().answerApproval(requestId);
     void turn.answer(requestId, decision);
   };
 
@@ -217,5 +225,6 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     canSend,
     sendError,
     send,
+    prewarm,
   };
 }

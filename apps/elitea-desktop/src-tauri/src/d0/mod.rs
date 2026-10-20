@@ -10,6 +10,10 @@
 //!
 //! * [`api`] — the platform operations (resolved definition, local turn
 //!   start/commit, remote toolkit call) over HTTPS with the native token;
+//! * [`cache`] — the session's in-memory caches of the agent versions and
+//!   the conversations' answering participants (a warm turn's one round trip);
+//! * [`commits`] — a turn's commit after its `done`, one FIFO lane per
+//!   conversation, retried with backoff;
 //! * [`definition`] — what D0 runs, and the refusals for what it does not;
 //! * [`model`] — `ModelTransport` over `/llm` (llm-wire + reqwest);
 //! * [`remote_tools`] — `RemoteToolkit` tools (decision 3);
@@ -20,20 +24,28 @@
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
 //! * [`skills`] — a skill picked with "/", applied to one turn;
 //! * [`framing`] — framing text the instructions carry but do not author;
+//! * [`environment`] — the host's `## Environment` section of the prompt;
+//! * [`session`] — a turn's session: reopened from `sessions.sqlite`, seeded
+//!   from the server conversation when it has nothing (the execution
+//!   request's `chat_history` stays empty: the session carries the history);
 //! * [`turn`] — the assembler and the host's turn table.
 
 pub mod api;
 pub mod approvals;
+pub mod cache;
+pub mod commits;
 pub mod definition;
+pub mod environment;
 pub mod events;
 pub mod framing;
 pub mod mentions;
 pub mod model;
 pub mod recorder;
 pub mod remote_tools;
+pub mod session;
 pub mod skills;
 pub mod tools;
 pub mod turn;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

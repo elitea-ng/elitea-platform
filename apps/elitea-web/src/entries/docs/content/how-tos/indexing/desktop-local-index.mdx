@@ -1,0 +1,59 @@
+---
+title: "Search a local folder (desktop)"
+description: "How the Elitea desktop app indexes a folder on your computer for agents, and how to add search by meaning with a model that runs locally or, if your organisation allows it, through your deployment."
+---
+
+The Elitea desktop app keeps a **code index** for each folder you work in with **Local work**. Agents use it through the `search_workspace` tool and the code-graph tools to find files, symbols and the code that relates to a question, without reading the whole folder.
+
+## What the index holds
+
+- **Words and identifiers.** Every source file and document is split into chunks and indexed for full-text search. Identifiers are also split (`parseUserId` matches *parse user id*).
+- **Code structure.** Files, functions, types and how they call or import each other. A search ranks code that is linked to a match a little higher.
+- **Meaning (optional, off by default).** Vectors that let a search find code by what it does even when the words differ.
+
+The index is built on your computer and kept in the app's data. It follows the folder's ignore rules and your organisation's file access rules (`path_deny`). While the folder is open, it refreshes on its own a few seconds after files change.
+
+## Turn the index on
+
+<Steps>
+1. Open the folder in **Local work**.
+2. Select the index chip next to the folder's name.
+3. Select **Turn on**. The first build reads every file; later refreshes read only what changed.
+</Steps>
+
+## Add search by meaning
+
+Search by meaning needs an embedding model. **Nothing is downloaded and nothing is sent until you choose one.**
+
+<Steps>
+1. In the index settings, under **Semantic search**, choose a model:
+   - **multilingual-e5-small**: about 490 MB to download, about 1.4 GB of memory while embedding. Small and fast; good for prose in many languages.
+   - **Qwen3-Embedding-0.6B**: about 1.2 GB to download, about 2.6 GB of memory while embedding. Better on code and questions; slower.
+   The settings mark one as **recommended for this folder**: Qwen3-Embedding-0.6B, or multilingual-e5-small when the folder's index holds more than 50,000 chunks (its first pass is several times faster). You still choose.
+2. Confirm the download. The model is fetched once from Hugging Face (or your organisation's mirror, when the policy names one), checked against a checksum built into the app, and shared by every folder.
+3. The folder is embedded in the background. The progress shows about how long is left.
+</Steps>
+
+Offline, or downloads blocked? Select **Import model files…** next to the model and pick a folder that holds its files (the same files the download fetches). Each one is checked against its checksum. **Remove model** deletes a model's files; folders that use it stop embedding until it is back.
+
+A long first pass does not start over: if you quit the app, it carries on shortly after the next start, embedding only what is still missing. The files the agent just changed and the files you @-mention are embedded first.
+
+<Note>
+Embedding runs at low priority and pauses while an agent works, on battery, and in Low Power Mode. Select **Embed now** to embed anyway. The model is unloaded after two idle minutes.
+</Note>
+
+### Through your deployment
+
+If your administrator allows it, **Through your deployment** embeds the folder with one of your deployment's embedding models instead of a local one: pick it from the bound project's embedding models (or type its name when the list cannot be read). The folder's code is then sent to the deployment and paid from the bound project's budget, so the folder must be bound to a project. This option is off unless the policy turns it on.
+
+## For administrators
+
+Three settings in the native client policy control embeddings:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| **Allow On-Device Index Embeddings** | On | People may download a model and embed folders on their computer. Nothing leaves the device. |
+| **Allow Index Embeddings Through This Deployment** | Off | People may embed folders through the deployment's embeddings endpoint. Code is sent to the deployment. |
+| **Embedding Model Mirror URL** | Empty | An `https` URL that serves the models laid out as Hugging Face does (`<mirror>/<repo>/resolve/<revision>/<file>`). Empty: Hugging Face. Downloads are still checked against the checksums built into the app. |
+
+Both need **Local work** and the **local index** to be allowed. When a setting is turned off, the desktop app stops using that kind of embedding at once and deletes the vectors it made.

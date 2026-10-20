@@ -2,9 +2,10 @@ package runtimecomposition
 
 import (
 	"context"
+	"testing"
+
 	indexing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	toolkitexecution "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
-	"testing"
 )
 
 type actorReaderStub struct {

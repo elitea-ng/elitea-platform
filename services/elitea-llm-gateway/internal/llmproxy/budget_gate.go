@@ -243,6 +243,17 @@ type budgetVerdict struct {
 // budgetAllowed is the verdict every admitted request gets.
 var budgetAllowed = budgetVerdict{allow: true}
 
+// budgetEnforcementPendingVerdict refuses a request while budget enforcement is
+// required and not installed yet (budget_plane.go, pending). It is the same
+// 503 body the gate's own outage refusal (failmode.Block503) writes, so a
+// client handles both the same way and retries.
+var budgetEnforcementPendingVerdict = budgetVerdict{
+	status:  http.StatusServiceUnavailable,
+	errType: "service_unavailable",
+	message: "budget service temporarily unavailable; try again shortly",
+	code:    "nats_unavailable",
+}
+
 // admissionMode says whether an admission question comes from an ARRIVAL or
 // from a RE-CHECK of work already admitted.
 //
@@ -323,6 +334,15 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 	// budget_plane.go.
 	bp := h.budget()
 	if bp.gate == nil {
+		if bp.pending {
+			// Enforcement is REQUIRED and not installed yet: NATS was
+			// unreachable at boot and the recovery loop has not installed the
+			// gate (WithBudgetEnforcementPending). Admitting here served the
+			// request with no budget check and no billing (live 4.45.1), so it
+			// is refused as the outage it is. Every project, the anonymous one
+			// too: without the gate nothing can tell which project has a cap.
+			return budgetEnforcementPendingVerdict
+		}
 		return budgetAllowed
 	}
 

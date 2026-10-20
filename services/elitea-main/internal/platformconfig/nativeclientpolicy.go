@@ -2,6 +2,7 @@ package platformconfig
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -52,7 +53,44 @@ const (
 	KeyNativeLocalWorkLocalIndex     = "local_work_local_index"
 	KeyNativeLocalWorkCloudSync      = "local_work_cloud_sync"
 	KeyNativeLocalWorkMemoryWrite    = "local_work_memory_write"
+	// KeyNativeLocalWorkCloudHandoff is the device switch of the desktop ⇄
+	// cloud handoff (ADR-0034 decision 11). It is not local_work_cloud_sync,
+	// which ADR-0029 decision 7 ties to DeepWiki and Inventory.
+	KeyNativeLocalWorkCloudHandoff = "local_work_cloud_handoff"
+	// KeyNativeLocalWorkIndexLocalEmbeddings and
+	// KeyNativeLocalWorkIndexRemoteEmbeddings gate the vectors of the local
+	// index (client contract 1.9). Embeddings stay off per workspace until
+	// the user turns them on and picks how; these say which ways the user may
+	// pick. Local embeddings run a model on the device (nothing leaves it);
+	// remote embeddings send the workspace's text to this deployment's
+	// /llm/v1/embeddings route and spend the user's budget.
+	KeyNativeLocalWorkIndexLocalEmbeddings  = "local_work_index_local_embeddings"
+	KeyNativeLocalWorkIndexRemoteEmbeddings = "local_work_index_remote_embeddings"
+	// KeyNativeLocalWorkIndexModelMirrorURL is where the desktop downloads
+	// the on-device embedding models from instead of Hugging Face (client
+	// contract 1.9): an https base URL laid out as the Hugging Face CDN
+	// (`<base>/<repo>/resolve/<revision>/<file>`). Empty: Hugging Face. The
+	// app checks every file against the SHA-256 it pins, whatever serves it.
+	KeyNativeLocalWorkIndexModelMirrorURL = "local_work_index_model_mirror_url"
 )
+
+// MaxModelMirrorURLBytes bounds KeyNativeLocalWorkIndexModelMirrorURL.
+const MaxModelMirrorURLBytes = 2048
+
+// ValidModelMirrorURL reports whether raw may be the model mirror: empty, or
+// an absolute https URL with a host, no credentials, query or fragment, of at
+// most MaxModelMirrorURLBytes.
+func ValidModelMirrorURL(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	if len(raw) > MaxModelMirrorURLBytes || strings.TrimSpace(raw) != raw {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil &&
+		parsed.RawQuery == "" && parsed.Fragment == "" && !parsed.ForceQuery
+}
 
 // The values of KeyNativeLocalWorkMaxSandboxMode, from the most to the least
 // confined. The policy names the WIDEST mode the desktop may use; a workspace
@@ -132,6 +170,20 @@ type LocalWorkPolicy struct {
 	CloudSync bool `json:"cloud_sync"`
 	// MemoryWrite: local turns may save to cloud memory. Recall stays allowed.
 	MemoryWrite bool `json:"memory_write"`
+	// CloudHandoff: a Local work thread may be sent to the cloud executor
+	// (ADR-0034). The server also refuses a send while it is false; the
+	// platform and project settings can narrow it further.
+	CloudHandoff bool `json:"cloud_handoff"`
+	// IndexLocalEmbeddings: the user may embed a local index with a model
+	// that runs on the device.
+	IndexLocalEmbeddings bool `json:"index_local_embeddings"`
+	// IndexRemoteEmbeddings: the user may embed a local index through this
+	// deployment's embeddings route, which receives the workspace's text.
+	// Turning it off makes the desktop drop the vectors made that way.
+	IndexRemoteEmbeddings bool `json:"index_remote_embeddings"`
+	// IndexModelMirrorURL: where the on-device embedding models are
+	// downloaded from; empty is Hugging Face.
+	IndexModelMirrorURL string `json:"index_model_mirror_url"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -151,6 +203,12 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		LocalIndex:     true,
 		CloudSync:      false,
 		MemoryWrite:    true,
+		CloudHandoff:   false,
+		// On-device embeddings send nothing anywhere; remote ones send the
+		// folder's text to the deployment, so they wait for an administrator.
+		IndexLocalEmbeddings:  true,
+		IndexRemoteEmbeddings: false,
+		IndexModelMirrorURL:   "",
 	}
 }
 
@@ -169,6 +227,12 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.LocalIndex = values.Bool(KeyNativeLocalWorkLocalIndex, policy.LocalIndex)
 	policy.CloudSync = values.Bool(KeyNativeLocalWorkCloudSync, policy.CloudSync)
 	policy.MemoryWrite = values.Bool(KeyNativeLocalWorkMemoryWrite, policy.MemoryWrite)
+	policy.CloudHandoff = values.Bool(KeyNativeLocalWorkCloudHandoff, policy.CloudHandoff)
+	policy.IndexLocalEmbeddings = values.Bool(KeyNativeLocalWorkIndexLocalEmbeddings, policy.IndexLocalEmbeddings)
+	policy.IndexRemoteEmbeddings = values.Bool(KeyNativeLocalWorkIndexRemoteEmbeddings, policy.IndexRemoteEmbeddings)
+	if mirror, ok := values[KeyNativeLocalWorkIndexModelMirrorURL].(string); ok && ValidModelMirrorURL(mirror) {
+		policy.IndexModelMirrorURL = mirror
+	}
 	return policy
 }
 

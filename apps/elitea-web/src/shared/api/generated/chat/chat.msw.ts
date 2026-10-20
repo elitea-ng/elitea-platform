@@ -73,6 +73,18 @@ import type {
   SupportConversationList,
   SupportPredictResponse,
   UpdatedConversation,
+  WorkspaceFetchPlan,
+  WorkspaceHandoffBegun,
+  WorkspaceHandoffEmpty,
+  WorkspaceHandoffErased,
+  WorkspaceHandoffPolicy,
+  WorkspaceHandoffReclaimPending,
+  WorkspaceHandoffReclaimed,
+  WorkspaceHandoffReleased,
+  WorkspaceHandoffState,
+  WorkspaceHandoffTransition,
+  WorkspaceSegmentPublished,
+  WorkspaceSegmentUploadGrant,
 } from "../model";
 
 export const getGetSupportAssistantConfigResponseMock = (
@@ -325,6 +337,10 @@ export const getListConversationsResponseMock = (
     updated_at: faker.string.alpha({ length: { min: 10, max: 20 } }),
     duration: faker.number.int(),
     message_groups_count: faker.number.int(),
+    workspace_executor: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
     is_pinned: faker.datatype.boolean(),
     meta: faker.helpers.arrayElement([
       faker.helpers.arrayElement([null]),
@@ -472,6 +488,10 @@ export const getGetConversationResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       null,
     ]),
+    undefined,
+  ]),
+  workspace_executor: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
   is_private: faker.datatype.boolean(),
@@ -844,6 +864,303 @@ export const getCommitLocalTurnResponseMock = (
   created: faker.datatype.boolean(),
   ...overrideResponse,
 });
+
+export const getGetWorkspaceHandoffPolicyResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffPolicy, object>> = {},
+): WorkspaceHandoffPolicy => ({
+  enabled: faker.datatype.boolean(),
+  disabled_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  shell: faker.datatype.boolean(),
+  network: faker.datatype.boolean(),
+  history_modes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  exclusions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  exclusions_platform: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  exclusions_project: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  path_deny: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  allow_user_include: faker.datatype.boolean(),
+  env_harvest: faker.datatype.boolean(),
+  env_deny: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  env_allow: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    null,
+  ]),
+  limits: {
+    max_segment_bytes: faker.number.int(),
+    max_file_bytes: faker.number.int(),
+    max_files: faker.number.int(),
+    max_unpacked_bytes: faker.number.int(),
+    project_workspace_bytes_left: faker.number.int(),
+  },
+  env_limits: { max_vars: faker.number.int(), max_bytes: faker.number.int() },
+  ...overrideResponse,
+});
+
+export const getBeginWorkspaceHandoffResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffBegun, object>> = {},
+): WorkspaceHandoffBegun => ({
+  handoff_id: faker.string.uuid(),
+  epoch: faker.number.int(),
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  allowed_refs: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  expected_old: {
+    [faker.string.alphanumeric(5)]: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+  },
+  limits: {
+    max_segment_bytes: faker.number.int(),
+    max_file_bytes: faker.number.int(),
+    max_files: faker.number.int(),
+    max_unpacked_bytes: faker.number.int(),
+    project_workspace_bytes_left: faker.number.int(),
+  },
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getGetWorkspaceHandoffResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffState, object>> = {},
+): WorkspaceHandoffState => ({
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  reclaim_pending: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
+  handoff_id: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
+  device_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  history_mode: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  has_upstream: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
+  stats: faker.helpers.arrayElement([
+    {
+      files: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
+      bytes: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
+      unpacked_bytes: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
+      excluded: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      excluded_count: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
+      scan_findings: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
+    },
+    undefined,
+  ]),
+  cloud_sha: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  delete_after: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    undefined,
+  ]),
+  workspace_bytes: faker.helpers.arrayElement([faker.number.int(), undefined]),
+  ...overrideResponse,
+});
+
+export const getEraseWorkspaceHandoffResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffErased, object>> = {},
+): WorkspaceHandoffErased => ({
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCompleteWorkspaceHandoffResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffTransition, object>> = {},
+): WorkspaceHandoffTransition => ({
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getReclaimWorkspaceHandoffResponseMock = (
+  overrideResponse: Partial<
+    Extract<WorkspaceHandoffReclaimed | WorkspaceHandoffReclaimPending, object>
+  > = {},
+): WorkspaceHandoffReclaimed | WorkspaceHandoffReclaimPending =>
+  faker.helpers.arrayElement([
+    {
+      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      epoch: faker.number.int(),
+      cloud_sha: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      ...overrideResponse,
+    },
+    {
+      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      reclaim_pending: faker.datatype.boolean(),
+      epoch: faker.number.int(),
+      waiting_for_execution_id: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+      ...overrideResponse,
+    },
+  ]);
+
+export const getRequestWorkspaceHandoffReclaimResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffEmpty, object>> = {},
+): WorkspaceHandoffEmpty => ({ ...overrideResponse });
+
+export const getReleaseWorkspaceHandoffResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceHandoffReleased, object>> = {},
+): WorkspaceHandoffReleased => ({
+  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  epoch: faker.number.int(),
+  cloud_copy_delete_after: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRequestWorkspaceSegmentUploadResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceSegmentUploadGrant, object>> = {},
+): WorkspaceSegmentUploadGrant => ({
+  exists: faker.datatype.boolean(),
+  put: faker.helpers.arrayElement([
+    {
+      url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      headers: {
+        [faker.string.alphanumeric(5)]: faker.string.alpha({
+          length: { min: 10, max: 20 },
+        }),
+      },
+    },
+    null,
+  ]),
+  multipart: faker.helpers.arrayElement([
+    {
+      upload_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      part_size: faker.number.int(),
+      part_urls: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      complete_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    null,
+  ]),
+  expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getPublishWorkspaceSegmentResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceSegmentPublished, object>> = {},
+): WorkspaceSegmentPublished => ({
+  seq: faker.number.int(),
+  refs: {
+    [faker.string.alphanumeric(5)]: faker.string.alpha({
+      length: { min: 10, max: 20 },
+    }),
+  },
+  superseded: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  ...overrideResponse,
+});
+
+export const getGetWorkspaceFetchPlanResponseMock = (
+  overrideResponse: Partial<Extract<WorkspaceFetchPlan, object>> = {},
+): WorkspaceFetchPlan => ({
+  head_seq: faker.number.int(),
+  refs: {
+    [faker.string.alphanumeric(5)]: faker.string.alpha({
+      length: { min: 10, max: 20 },
+    }),
+  },
+  segments: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    seq: faker.number.int(),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    sha256: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    bytes: faker.number.int(),
+    prerequisites: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    refs: {
+      [faker.string.alphanumeric(5)]: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+    },
+    url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getGetWorkspaceSegmentObjectResponseMock = (): ArrayBuffer =>
+  new ArrayBuffer(faker.number.int({ min: 1, max: 64 }));
 
 export const getListExecutionInterruptsResponseMock = (
   overrideResponse: Partial<Extract<ExecutionInterruptList, object>> = {},
@@ -2034,6 +2351,371 @@ export const getCommitLocalTurnMockHandler = (
   );
 };
 
+export const getGetWorkspaceHandoffPolicyMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffPolicy
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffPolicy> | WorkspaceHandoffPolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff_policy/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffPolicyResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getBeginWorkspaceHandoffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffBegun
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WorkspaceHandoffBegun> | WorkspaceHandoffBegun),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_handoff/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getBeginWorkspaceHandoffResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetWorkspaceHandoffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffState
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceHandoffState> | WorkspaceHandoffState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_handoff/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceHandoffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getEraseWorkspaceHandoffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffErased
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<WorkspaceHandoffErased> | WorkspaceHandoffErased),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/workspace_handoff/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getEraseWorkspaceHandoffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCompleteWorkspaceHandoffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffTransition
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WorkspaceHandoffTransition> | WorkspaceHandoffTransition),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_handoff_complete/prompt_lib/:projectId/:handoffId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCompleteWorkspaceHandoffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReclaimWorkspaceHandoffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffReclaimed
+    | WorkspaceHandoffReclaimPending
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<WorkspaceHandoffReclaimed | WorkspaceHandoffReclaimPending>
+        | WorkspaceHandoffReclaimed
+        | WorkspaceHandoffReclaimPending),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_handoff_reclaim/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReclaimWorkspaceHandoffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRequestWorkspaceHandoffReclaimMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffEmpty
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WorkspaceHandoffEmpty> | WorkspaceHandoffEmpty),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_handoff_reclaim_request/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRequestWorkspaceHandoffReclaimResponseMock(),
+        { status: 202 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReleaseWorkspaceHandoffMockHandler = (
+  overrideResponse?:
+    | WorkspaceHandoffReleased
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WorkspaceHandoffReleased> | WorkspaceHandoffReleased),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_handoff_release/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReleaseWorkspaceHandoffResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRequestWorkspaceSegmentUploadMockHandler = (
+  overrideResponse?:
+    | WorkspaceSegmentUploadGrant
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WorkspaceSegmentUploadGrant> | WorkspaceSegmentUploadGrant),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_store_upload/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRequestWorkspaceSegmentUploadResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCompleteWorkspaceSegmentUploadMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_store_upload_complete/prompt_lib/:projectId/:grantId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getPublishWorkspaceSegmentMockHandler = (
+  overrideResponse?:
+    | WorkspaceSegmentPublished
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WorkspaceSegmentPublished> | WorkspaceSegmentPublished),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/workspace_store_publish/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getPublishWorkspaceSegmentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetWorkspaceFetchPlanMockHandler = (
+  overrideResponse?:
+    | WorkspaceFetchPlan
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<WorkspaceFetchPlan> | WorkspaceFetchPlan),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_store_fetch/prompt_lib/:projectId/:conversationUuid",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceFetchPlanResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getPutWorkspaceSegmentObjectMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/workspace_store_object/prompt_lib/:projectId/:conversationUuid/:sha256",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getGetWorkspaceSegmentObjectMockHandler = (
+  overrideResponse?:
+    | ArrayBuffer
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ArrayBuffer> | ArrayBuffer),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/workspace_store_object/prompt_lib/:projectId/:conversationUuid/:sha256",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const binaryBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetWorkspaceSegmentObjectResponseMock();
+      return HttpResponse.arrayBuffer(
+        binaryBody instanceof ArrayBuffer ? binaryBody : new ArrayBuffer(0),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        },
+      );
+    },
+    options,
+  );
+};
+
 export const getCancelChatExecutionMockHandler = (
   overrideResponse?:
     | void
@@ -2540,6 +3222,20 @@ export const getChatMock = () => [
   getSendChatMessageMockHandler(),
   getStartLocalTurnMockHandler(),
   getCommitLocalTurnMockHandler(),
+  getGetWorkspaceHandoffPolicyMockHandler(),
+  getBeginWorkspaceHandoffMockHandler(),
+  getGetWorkspaceHandoffMockHandler(),
+  getEraseWorkspaceHandoffMockHandler(),
+  getCompleteWorkspaceHandoffMockHandler(),
+  getReclaimWorkspaceHandoffMockHandler(),
+  getRequestWorkspaceHandoffReclaimMockHandler(),
+  getReleaseWorkspaceHandoffMockHandler(),
+  getRequestWorkspaceSegmentUploadMockHandler(),
+  getCompleteWorkspaceSegmentUploadMockHandler(),
+  getPublishWorkspaceSegmentMockHandler(),
+  getGetWorkspaceFetchPlanMockHandler(),
+  getPutWorkspaceSegmentObjectMockHandler(),
+  getGetWorkspaceSegmentObjectMockHandler(),
   getCancelChatExecutionMockHandler(),
   getListExecutionInterruptsMockHandler(),
   getDecideExecutionInterruptMockHandler(),

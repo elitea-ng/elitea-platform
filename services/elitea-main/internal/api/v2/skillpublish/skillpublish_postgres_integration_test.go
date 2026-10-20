@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skillpublish"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/dbtest"
 )
 
 const (
@@ -954,6 +955,12 @@ func newSkillPublishPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, `SELECT create_tenant_schema($1)`, userSchema); err != nil {
 		t.Fatalf("create source project schema: %v", err)
+	}
+	// The naive-clock probe the dbtest template installs, after the last
+	// schema statement: a writer that stores the session-local clock in a
+	// `timestamp` WITHOUT time zone column fails instead of passing unread.
+	if err := dbtest.InstallNaiveClockProbe(ctx, pool); err != nil {
+		t.Fatal(err)
 	}
 	return pool
 }

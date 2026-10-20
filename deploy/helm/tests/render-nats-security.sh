@@ -52,7 +52,7 @@ NS=elitea
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
 # The standalone profile: the runtime plane on, so the command bus's
 # identities (elitea-main-runtime, elitea-worker) render too.
-"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true --set worker.implementation=python --set worker.indexingRuntime=python \
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-runtime.yaml"
 
@@ -193,6 +193,41 @@ refuse "bootstrap: nats:// URL"               "is not tls://"                eli
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
 refuse "bootstrap: connectWait eats the deadline" "leaves the Job under a minute" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set connectWait=590
 refuse "bootstrap: an account left out"       "must be [main, gateway, runtime, worker]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway,runtime}'
+# A numeric value that is not an integer must fail the render: `int64` would
+# turn it into 0, which natscli reads as the server default (MaxAckPending
+# 1000, MaxBytes unbounded). Review of #1296.
+refuse "bootstrap: maxAckPending with a unit"  "deltas.writeback.maxAckPending must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.writeback.maxAckPending=40k
+refuse "bootstrap: maxBytes with a unit"       "deltas.maxBytes must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxBytes=1GiB
+printf 'deltas:\n  maxMsgs: 1.5\n' > "$TMP/fractional.yaml"   # a YAML float, not a --set string
+refuse "bootstrap: a fractional maxMsgs (YAML float)" "deltas.maxMsgs must be a whole number" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" -f "$TMP/fractional.yaml"
+refuse "bootstrap: a fractional maxMsgs (--set)" "deltas.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set deltas.maxMsgs=1.5
+refuse "bootstrap: a runtime maxMsgs typo"     "runtime.agent.maxMsgs must be an integer" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set runtime.agent.maxMsgs=1o24
+# The scheduler's write-back rule: never without a scrape path.
+refuse "elitea: a non-integer maxAckPending in the rule" "scheduler.metrics.prometheusRule.maxAckPending must be a whole number" "${EL[@]}" --api-versions monitoring.coreos.com/v1 --set scheduler.metrics.prometheusRule.maxAckPending=40k
+# With the Prometheus Operator served, a rendered budget-writeback rule ALWAYS
+# comes with a scrape path (the PodMonitor, or the scrape annotations): a rule
+# over a metric nothing scrapes is an alert that cannot fire.
+monitoring_case() {
+  local name="$1" want_rule="$2" want_scrape="$3"; shift 3
+  local out
+  if ! out="$("$HELM" template "${EL[@]}" --api-versions monitoring.coreos.com/v1 "$@" 2>&1)"; then
+    echo "RENDER-FAILED	$name	$(echo "$out" | tail -1)" >> "$TMP/refusals"; return
+  fi
+  local rule=no scrape=no
+  # Here-strings, not `echo | grep -q`: under pipefail, grep -q closing the
+  # pipe early makes echo fail with SIGPIPE on a large render, and the match
+  # then reads as a miss.
+  grep -q "name: elitea-scheduler-budget-writeback" <<<"$out" && rule=yes
+  { grep -q "^kind: PodMonitor" <<<"$out" || grep -q "prometheus.io/scrape: \"true\"" <<<"$out"; } && scrape=yes
+  if [ "$rule" = "$want_rule" ] && [ "$scrape" = "$want_scrape" ]; then
+    echo "ok	$name" >> "$TMP/refusals"
+  else
+    echo "WRONG-MONITORING	$name	rule=$rule scrape=$scrape, want rule=$want_rule scrape=$want_scrape" >> "$TMP/refusals"
+  fi
+}
+monitoring_case "elitea: Operator defaults scrape and alert together" yes yes
+monitoring_case "elitea: no scrape path, no rule" no no --set scheduler.metrics.podMonitor.enabled=false
+monitoring_case "elitea: annotations alone carry the rule" yes yes --set scheduler.metrics.podMonitor.enabled=false --set scheduler.metrics.scrapeAnnotations=true
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.tls.enabled=false
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222
@@ -330,10 +365,11 @@ check("MAIN imports exactly GATEWAY's soft-alert stream",
 mainp = users.get(URI("elitea-main"), {})
 check("elitea-main publishes presence on its own family, never the gateway's",
       "elitea.events.project.*.presence" in mainp.get("publish", {}).get("allow", [])
+      and "elitea.events.project.*.workspace" in mainp.get("publish", {}).get("allow", [])
       and not any(p.startswith("gateway.") for p in mainp.get("publish", {}).get("allow", []))
       and "gateway.>" in mainp.get("publish", {}).get("deny", []), mainp.get("publish"))
-check("elitea-main reads exactly the two families the SSE route forwards",
-      sorted(mainp.get("subscribe", {}).get("allow", [])) == sorted(["elitea.events.project.*.presence", ALERTS, "_INBOX_elitea-main.>"]), mainp.get("subscribe"))
+check("elitea-main reads exactly the three families the SSE route forwards",
+      sorted(mainp.get("subscribe", {}).get("allow", [])) == sorted(["elitea.events.project.*.presence", "elitea.events.project.*.workspace", ALERTS, "_INBOX_elitea-main.>"]), mainp.get("subscribe"))
 gwp = users.get(URI("elitea-llm-gateway"), {}).get("publish", {}).get("allow", [])
 check("the gateway cannot publish on elitea-main's presence family", not any(p.startswith("elitea.") for p in gwp), gwp)
 RT_DURABLES = (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))
@@ -468,6 +504,15 @@ for name, c in bcerts.items():
 job = kinds(bs, "Job")[0]["spec"]["template"]["spec"]
 env = {e["name"]: e.get("value") for e in job["containers"][0]["env"]}
 check("the bootstrap dials tls:// with no credential", env.get("NATS_URL", "").startswith("tls://") and "@" not in env.get("NATS_URL", ""))
+# A YAML integer of 7+ digits renders as "1.073741824e+09" through `quote`,
+# which natscli refuses: on default values the Job could not create or
+# reconcile GATEWAY_BUDGET_DELTAS or budget-writeback (review of #1296).
+# Every numeric value renders through `int64 | quote`.
+sci = {k: v for k, v in env.items() if v is not None and re.search(r"[0-9]e\+[0-9]", str(v))}
+check("no bootstrap env value renders in scientific notation", not sci, sci)
+for key, want in (("NATS_DELTAS_MAX_BYTES", "1073741824"), ("NATS_DELTAS_MAX_MSGS", "5000000"),
+                  ("NATS_WRITEBACK_MAX_DELIVER", "-1"), ("NATS_WRITEBACK_MAX_PENDING", "40000")):
+    check(f"bootstrap env {key} renders as the integer {want}", env.get(key) == want, env.get(key))
 check("the bootstrap connects to every account", env.get("NATS_BOOTSTRAP_ACCOUNTS") == "main gateway runtime worker", env.get("NATS_BOOTSTRAP_ACCOUNTS"))
 check("the bootstrap presents no single identity (NATS_TLS_*_FILE)", not any(k.startswith("NATS_TLS_") and k.endswith("_FILE") for k in env))
 check("the bootstrap Job pod is what the NetworkPolicy admits", kinds(bs, "Job")[0]["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") == "nats-bootstrap")
@@ -603,16 +648,14 @@ code_prefix = hit.group(1) if hit else None
 tos = [i.get("to", "") for i in accts["SCHEDULER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
 check("the SCHEDULER imports use the scheduler code's JetStream API prefix", code_prefix and tos and all(t.startswith(code_prefix + ".") for t in tos), (code_prefix, tos))
 # Likewise the workers (#1081 review S1): natsconn.WorkerRuntimeJSAPIPrefix,
-# the Rust worker's and the Python worker's own constants, and the WORKER
+# the Rust worker's own constant, and the WORKER
 # imports must all name the same prefix, or a secured worker's bind answers
 # "JetStream not enabled" / no responders.
 hit = re.search(r'WorkerRuntimeJSAPIPrefix\s*=\s*"([^"]+)"', (root / "libs/go/natsconn/natsconn.go").read_text())
 wprefix = hit.group(1) if hit else None
 wtos = [i.get("to", "") for i in accts["WORKER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
 check("the WORKER imports use natsconn.WorkerRuntimeJSAPIPrefix", wprefix and wtos and all(t.startswith(wprefix + ".") for t in wtos), (wprefix, wtos))
-py = re.search(r'RUNTIME_API_PREFIX\s*=\s*"([^"]+)"', (root / "services/elitea-worker-python/src/elitea_worker/transport/nats_jetstream.py").read_text())
 rs = re.search(r'RUNTIME_API_PREFIX:\s*&str\s*=\s*"([^"]+)"', (root / "services/elitea-worker-rust/src/transport/command_bus.rs").read_text())
-check("the Python worker's prefix is the chart's", py and py.group(1) == wprefix, py and py.group(1))
 check("the Rust worker's prefix is the chart's", rs and rs.group(1) == wprefix, rs and rs.group(1))
 
 # ── one NATS server version everywhere (R9) ───────────────────────────────

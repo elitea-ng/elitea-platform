@@ -289,6 +289,8 @@ struct RecoveryControl {
     renew_fail_switch: Option<Arc<AtomicBool>>,
     renew_attempts: AtomicUsize,
     observe_states: Mutex<VecDeque<i32>>,
+    /// ADR-0034: every renewal says `workspace_wrap_up`.
+    wrap_up: bool,
 }
 
 #[async_trait]
@@ -404,6 +406,7 @@ impl ControlRpc for RecoveryControl {
             return Err(Status::unavailable("test lease renewal unavailable"));
         }
         Ok(Response::new(RenewLeaseResponseV1 {
+            workspace_wrap_up: self.wrap_up,
             lease_expires_at_unix_millis: NOW + 600_000,
             desired_state: DesiredExecutionStateV1::Running as i32,
             rejection: None,
@@ -416,6 +419,7 @@ impl ControlRpc for RecoveryControl {
     ) -> Result<Response<ObserveDesiredStateResponseV1>, Status> {
         self.trace.lock().expect("trace").push("observe");
         Ok(Response::new(ObserveDesiredStateResponseV1 {
+            workspace_wrap_up: false,
             desired_state: self
                 .observe_states
                 .lock()
@@ -538,6 +542,7 @@ fn recovery_control_with_policy(
                 renew_fail_after,
                 renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(
                     observe_states
                         .into_iter()
@@ -570,6 +575,7 @@ fn authorization_control_with_disposition(
                 renew_fail_after: None,
                 renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(VecDeque::new()),
             },
             ControlGrpcConfig {
@@ -612,6 +618,7 @@ fn authorized_control_with_policy(
                 renew_fail_after: None,
                 renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(
                     observe_states
                         .into_iter()
@@ -650,6 +657,7 @@ fn output_recovery_control(
                 renew_fail_after: None,
                 renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(VecDeque::new()),
             },
             ControlGrpcConfig {
@@ -676,6 +684,7 @@ fn unavailable_authorization_control(
                 renew_fail_after: None,
                 renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(VecDeque::new()),
             },
             ControlGrpcConfig {
@@ -4802,6 +4811,7 @@ async fn checkpoint_delivery_processor_joins_supervision_or_replays_before_recla
                     renew_fail_after: None,
                     renew_fail_switch: None,
                     renew_attempts: AtomicUsize::new(0),
+                    wrap_up: false,
                     observe_states: Mutex::new(VecDeque::new()),
                 },
                 ControlGrpcConfig {
@@ -4941,6 +4951,7 @@ async fn run_checkpoint_delivery_with_pending_progress(
                 renew_fail_after: None,
                 renew_fail_switch: None,
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(VecDeque::new()),
             },
             ControlGrpcConfig {
@@ -5272,6 +5283,7 @@ fn authorized_control_failing_renewal(
                 renew_fail_after: None,
                 renew_fail_switch: Some(switch),
                 renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
                 observe_states: Mutex::new(VecDeque::new()),
             },
             ControlGrpcConfig {
@@ -5394,5 +5406,213 @@ async fn lease_loss_releases_a_parked_agent_stream_and_retains_the_command() {
     assert!(!observed.contains(&"retire"));
     drop(observed);
     assert_eq!(admission.available_capacity(), 1);
+    drop(temporary);
+}
+
+/// A model turn that has produced some text and is still working: it never
+/// ends on its own (only a stop ends it).
+struct UnfinishedTurnAgent;
+
+#[async_trait]
+impl Agent for UnfinishedTurnAgent {
+    fn name(&self) -> &'static str {
+        "root-agent"
+    }
+
+    fn description(&self) -> &'static str {
+        "a turn still working when the thread is taken back"
+    }
+
+    fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+        &[]
+    }
+
+    async fn run(&self, context: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
+        use adk_rust::futures::StreamExt as _;
+        let mut event = Event::with_id("llm-1", context.invocation_id());
+        event.timestamp = Utc
+            .timestamp_millis_opt(NOW + 1)
+            .single()
+            .expect("valid fixture time");
+        event.author = self.name().to_owned();
+        event.llm_response.content = Some(Content {
+            role: "model".to_owned(),
+            parts: vec![Part::Text {
+                text: "half done".to_owned(),
+            }],
+        });
+        event.llm_response.partial = true;
+        Ok(Box::pin(stream::iter([Ok(event)]).chain(stream::pending())))
+    }
+}
+
+/// The cloud turn's completion as `OrdinaryAgentCompletion` does it: the
+/// wrap-up is the turn's, `select` publishes (counted) and appends the note.
+struct WrapUpCompletion {
+    wrap_up: Arc<crate::workspace_run::wrap_up::WrapUp>,
+    published: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NativeAgentCompletionSelector for WrapUpCompletion {
+    async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.published.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            self.wrap_up.requested(),
+            "the turn completes only because it was taken back"
+        );
+        Ok(CompletedAgentBrowserOutput::fixture(
+            crate::workspace_run::wrap_up::NOTE,
+        ))
+    }
+
+    fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
+        Some(Arc::clone(&self.wrap_up))
+    }
+}
+
+struct WrapUpAssembler {
+    inner: TestNativeAssembler,
+    wrap_up: Arc<crate::workspace_run::wrap_up::WrapUp>,
+    published: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl NativeAgentAssembler for WrapUpAssembler {
+    type Completion = WrapUpCompletion;
+
+    async fn assemble(
+        &self,
+        assembly: AuthorizedNativeAssembly<'_>,
+    ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
+        let (wrap_up, published) = (Arc::clone(&self.wrap_up), Arc::clone(&self.published));
+        Ok(self
+            .inner
+            .assemble(assembly)
+            .await?
+            .map_completion(|FixedCompletion| WrapUpCompletion { wrap_up, published }))
+    }
+}
+
+/// ADR-0034 take back during a cloud turn: the lease poll says
+/// `workspace_wrap_up` while the model is still working. The lifecycle
+/// requests the wrap-up, stops the run cooperatively once no workspace tool
+/// call is in flight, and the turn COMPLETES (its work published once, the
+/// answer carrying the note), never a cancellation or failure.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One end-to-end lifecycle, as the case above.
+async fn a_taken_back_cloud_turn_wraps_up_and_completes_once() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let (temporary, output_root) = root();
+    let outcome = preflight(output_root, "worker-1")
+        .prepare(fresh_for_kind(AgentExecutionKind::Adhoc))
+        .await
+        .expect("empty native lifecycle preflight");
+    let AgentOutputPreflightOutcome::Empty(empty) = outcome else {
+        panic!("new native lifecycle spool must be empty");
+    };
+    let control = Arc::new(
+        AgentControlClient::new(
+            RecoveryControl {
+                trace: Arc::clone(&trace),
+                claim_fixture: "accepted_claim",
+                settlement_fails: false,
+                authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                authorize_unavailable: false,
+                renew_fail_after: None,
+                renew_fail_switch: None,
+                renew_attempts: AtomicUsize::new(0),
+                wrap_up: true,
+                observe_states: Mutex::new(VecDeque::new()),
+            },
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("authorized control"),
+    );
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("invocation admission"),
+    );
+    let prepared = prepare_fresh_agent_invocation_with(
+        *empty,
+        Arc::clone(&control),
+        &admission,
+        &KindAgentInput {
+            trace: Arc::clone(&trace),
+            kind: AgentExecutionKind::Adhoc,
+        },
+        Arc::new(|| NOW),
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation config"),
+    )
+    .await
+    .expect("prepared native invocation");
+    let AgentPreparationOutcome::Prepared(prepared) = prepared else {
+        panic!("valid native input must reach authorization");
+    };
+    let progress_state =
+        FakeProgressState::new(std::iter::repeat_n(LiveProgressAction::Acknowledge, 16), []);
+    let connector = FakeProgressConnector {
+        state: Arc::clone(&progress_state),
+    };
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
+    let wrap_up = Arc::new(crate::workspace_run::wrap_up::WrapUp::default());
+    let published = Arc::new(AtomicUsize::new(0));
+    let coordinator = native_agent_coordinator(
+        admission.clone(),
+        Arc::new(WrapUpAssembler {
+            inner: TestNativeAssembler {
+                trace: Arc::clone(&trace),
+                agent: Arc::new(UnfinishedTurnAgent),
+                sensitive: false,
+            },
+            wrap_up: Arc::clone(&wrap_up),
+            published: Arc::clone(&published),
+        }),
+        connector.clone(),
+        Arc::clone(&control),
+        Arc::clone(&retirer),
+        Arc::new(|| NOW + 2),
+        1,
+        recovery_config(1),
+    );
+    let invocation = match coordinator.submit(*prepared) {
+        Ok(invocation) => invocation,
+        Err(rejected) => panic!("native coordination failed: {}", rejected.error()),
+    };
+    let completion = tokio::time::timeout(Duration::from_secs(20), invocation.wait())
+        .await
+        .expect("the taken-back turn ends without waiting for the model")
+        .expect("native lifecycle result");
+    let AgentAuthorizationJobCompletion::Authorized(completion) = completion else {
+        panic!("the native lifecycle must own the authorized outcome");
+    };
+    coordinator.close().await.expect("native lifecycle drain");
+    assert!(
+        matches!(
+            completion.disposition(),
+            AgentAuthorizedLifecycleDisposition::ExecutedSettledAcked { .. }
+        ),
+        "the turn completes and settles"
+    );
+    assert!(wrap_up.requested());
+    assert_eq!(
+        published.load(Ordering::SeqCst),
+        1,
+        "published exactly once"
+    );
+    let frames = progress_state.frames.lock().expect("frames");
+    let terminal = frames.last().expect("terminal frame");
+    assert!(terminal.terminal);
+    assert!(
+        matches!(
+            terminal.payload,
+            Some(execution_output_frame_v1::Payload::AgentExecution(_))
+        ),
+        "a completed answer, not a runtime error"
+    );
+    drop(frames);
     drop(temporary);
 }

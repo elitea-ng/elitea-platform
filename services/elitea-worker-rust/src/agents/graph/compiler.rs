@@ -1714,7 +1714,8 @@ impl PipelineDefinition {
             PipelineConfigurationError::Unsupported(
                 "the selected pipeline Agent participant is unavailable",
             )
-        })?;
+        })?
+        .with_failure_events(runtimes.events.clone());
         let mut next = builder.node(application);
         if let Some(transition) = transition {
             let target = if transition == "END" {

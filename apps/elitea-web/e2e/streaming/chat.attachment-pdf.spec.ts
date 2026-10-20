@@ -11,8 +11,7 @@
  * Now elitea-main extracts the PDF (internal/infra/extract, PDFium in
  * WebAssembly) and serves its text with a page map; the native worker inlines
  * it within the turn's budget and marks it COMPLETE or PARTIAL
- * (services/elitea-worker-rust/src/agents/attachment_context.rs). The Python
- * worker reads the same file through the SDK artifact toolkit.
+ * (services/elitea-worker-rust/src/agents/attachment_context.rs).
  *
  * THE PROOF. The PDF below is generated here and carries a token that exists
  * only inside its text layer — not in the prompt and not in the file name. The
@@ -39,7 +38,6 @@ const CONVERSATIONS_RE = /\/elitea_core\/conversations\/prompt_lib\/(\d+)$/;
 const UPLOAD_RE = /\/elitea_core\/attachments\/prompt_lib\/(\d+)\/([^/?]+)$/;
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
 const MODEL_NAME = process.env["E2E_CHAT_MODEL"] || "E2E-MOCK-MODEL";
-const WORKER = process.env["E2E_WORKER"] ?? "rust";
 
 /**
  * A one-page PDF 1.4 with a Helvetica text layer and a correct cross-reference
@@ -78,19 +76,6 @@ function onePagePdf(lines: readonly string[]): Buffer {
   body += `trailer\n<< /Size ${String(objects.length + 1)} /Root 1 0 R >>\nstartxref\n${String(xref)}\n%%EOF\n`;
   return Buffer.from(body, "latin1");
 }
-
-// RETARGETED to the native Rust leg (owner direction, PR #1293): the Python
-// worker is being removed, so this case asserts the runtime that stays.
-// elitea-main extracts the PDF in-process (internal/infra/extract), so the
-// native leg needs no extractor sidecar. The Python leg's empty attachment
-// block was elitea-main refusing the SDK's claim-less read, which carries
-// only the execution-id request-log tag; that is fixed in
-// internal/api/v2/artifacts/system_buckets.go and pinned there by
-// TestAnExecutionTagAloneIsNotAClaim.
-test.skip(
-  WORKER !== "rust",
-  "retargeted to the native Rust runtime; the Python worker is being removed",
-);
 
 test("a real PDF attached in chat reaches the model as its text", async ({
   page,
@@ -199,7 +184,7 @@ test("a real PDF attached in chat reaches the model as its text", async ({
     await expectStoredAssistantAnswer(page, projectId, conversationId, {
       timeout: 120_000,
       contains: fileName,
-      message: `the ${WORKER} worker did not answer the turn that carries the PDF`,
+      message: `the worker did not answer the turn that carries the PDF`,
     });
     const answer = await readStoredAssistantAnswer(
       page,
@@ -208,11 +193,11 @@ test("a real PDF attached in chat reaches the model as its text", async ({
     );
     expect(
       answer.content,
-      `the PDF's TEXT never reached the model on the ${WORKER} leg. On the native leg check ` +
+      "the PDF's TEXT never reached the model. Check " +
         "`agent_input_attachment_unreadable` (elitea-main refused it, with a reason) and " +
         "`agent_input_attachment_read_failed` (the read itself failed) in the worker log.",
     ).toContain(token);
-    // The unreadable note both workers write names the file:
+    // The unreadable note the worker writes names the file:
     // `"<name>" could not be read`. The bare phrase also appears in the
     // attachment instructions the mock model echoes back ("a note that says
     // which part could not be read and why"), so it proves nothing.

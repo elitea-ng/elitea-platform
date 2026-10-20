@@ -439,9 +439,32 @@ pub(super) struct ApplicationNode {
     activation_checkpointer: Option<Arc<ApplicationActivationCheckpointer>>,
     graph_call_owner: Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>>,
     parallel_inputs: bool,
+    /// The run's node failure channel, so a typed child refusal keeps its reason.
+    failure_events: Option<PipelineNodeEventSender>,
 }
 
 impl ApplicationNode {
+    /// Report typed child refusals on the run's node failure channel.
+    pub(super) fn with_failure_events(mut self, events: Option<PipelineNodeEventSender>) -> Self {
+        self.failure_events = events;
+        self
+    }
+
+    /// A saved Agent child refused its continuation. A typed "may have started"
+    /// refusal keeps its registered reason; anything else stays a node failure.
+    async fn child_failure(&self, error: &adk_rust::AdkError) -> GraphError {
+        if error.code != crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
+            return node_failure(self.name());
+        }
+        let Some(events) = &self.failure_events else {
+            return node_failure(self.name());
+        };
+        match events.recovery_refused(self.name()).await {
+            Some(error) => error,
+            None => node_failure(self.name()),
+        }
+    }
+
     pub(super) fn new(
         definition: ApplicationNodeDefinition,
         state_types: BTreeMap<String, String>,
@@ -493,6 +516,7 @@ impl ApplicationNode {
             }
         }
         Ok(Self {
+            failure_events: None,
             definition,
             state_types,
             participant,
@@ -1004,8 +1028,10 @@ impl Node for ApplicationNode {
                         };
                         arguments.insert(key.clone(), value);
                     }
-                    let (result, call_id) = match &self.participant {
-                        ResolvedApplicationParticipant::ScopedAgent { scope, .. } => {
+                    let (result, call_id) =
+                        if let ResolvedApplicationParticipant::ScopedAgent { scope, .. } =
+                            &self.participant
+                        {
                             scope
                                 .execute(
                                     context,
@@ -1014,14 +1040,16 @@ impl Node for ApplicationNode {
                                     Value::Object(arguments),
                                 )
                                 .await?
-                        }
-                        _ => (
-                            tool.execute(Arc::clone(&tool_context), Value::Object(arguments))
+                        } else {
+                            let result = match tool
+                                .execute(Arc::clone(&tool_context), Value::Object(arguments))
                                 .await
-                                .map_err(|_| node_failure(self.name()))?,
-                            tool_context.function_call_id().to_owned(),
-                        ),
-                    };
+                            {
+                                Ok(result) => result,
+                                Err(error) => return Err(self.child_failure(&error).await),
+                            };
+                            (result, tool_context.function_call_id().to_owned())
+                        };
                     if let Some(interrupt_ids) = nested_application_interrupt_ids(&result) {
                         return Ok(NodeOutput::interrupt_with_data(
                             PIPELINE_APPLICATION_HITL_MESSAGE,

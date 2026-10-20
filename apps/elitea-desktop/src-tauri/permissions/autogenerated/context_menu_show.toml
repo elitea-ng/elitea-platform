@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-context-menu-show"
+description = "Enables the context_menu_show command without any pre-configured scope."
+commands.allow = ["context_menu_show"]
+
+[[permission]]
+identifier = "deny-context-menu-show"
+description = "Denies the context_menu_show command without any pre-configured scope."
+commands.deny = ["context_menu_show"]

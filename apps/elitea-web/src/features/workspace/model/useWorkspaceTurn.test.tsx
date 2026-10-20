@@ -209,4 +209,49 @@ describe('useWorkspaceTurn', () => {
     expect(result.current.startError).toBe('no agent runtime');
     expect(result.current.busy).toBe(false);
   });
+
+  describe('retryCommit', () => {
+    const failedTurn = async (ipc: ReturnType<typeof createFakeWorkspaceIpc>) => {
+      const hook = renderHook(() => useWorkspaceTurn(ipc));
+      await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+      await act(() => hook.result.current.start(REQUEST));
+      act(() => {
+        ipc.emit(ev(1, { kind: 'done', payload: { committed: false, conversation_id: 'c1', message_ids: [], changed_files: 0 } }));
+        ipc.emit(ev(2, { kind: 'commit_failed', payload: { execution_id: 'exec-1', code: 'local_turn_unavailable', message: 'The turn could not be saved: down' } }));
+      });
+      expect(hook.result.current.view.commitFailed?.seq).toBe(2);
+      return hook;
+    };
+
+    it('drops a stale Retry and shows the error when the host keeps nothing to retry (commit_unknown, no event)', async () => {
+      const ipc = createFakeWorkspaceIpc();
+      const { result } = await failedTurn(ipc);
+      ipc.failNext('retryCommit', 'commit_unknown', 'This app keeps no unsaved turn with that execution id.');
+      await act(() => result.current.retryCommit('turn-1', 'exec-1'));
+      expect(ipc.calls.commitRetries).toEqual(['exec-1']);
+      expect(result.current.view.commitFailed).toBeUndefined();
+      expect(result.current.startError).not.toBeNull();
+    });
+
+    it('keeps Retry when the refusal came as a new commit_failed', async () => {
+      const ipc = createFakeWorkspaceIpc();
+      const { result } = await failedTurn(ipc);
+      ipc.retryCommit = (executionId: string) => {
+        ipc.calls.commitRetries.push(executionId);
+        ipc.emit(ev(3, { kind: 'commit_failed', payload: { execution_id: 'exec-1', code: 'local_turn_unavailable', message: 'The turn could not be saved: still down' } }));
+        return Promise.reject(new Error('local_turn_unavailable'));
+      };
+      await act(() => result.current.retryCommit('turn-1', 'exec-1'));
+      expect(result.current.view.commitFailed?.seq).toBe(3);
+      expect(result.current.startError).toBeNull();
+    });
+
+    it('clears Retry once the retried commit is saved', async () => {
+      const ipc = createFakeWorkspaceIpc();
+      const { result } = await failedTurn(ipc);
+      await act(() => result.current.retryCommit('turn-1', 'exec-1'));
+      expect(result.current.view.commitFailed).toBeUndefined();
+      expect(result.current.startError).toBeNull();
+    });
+  });
 });

@@ -69,7 +69,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
-          cache: npm
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
         run: npm ci

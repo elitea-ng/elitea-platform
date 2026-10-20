@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -91,6 +92,10 @@ func TestRuntimeListenersServeFromASecretVolume(t *testing.T) {
 	defer cancel()
 	served := make(chan error, 1)
 	go func() { served <- servers.Serve(ctx) }()
+	// Serve binds the three listeners from that goroutine. A dial that lands
+	// before a Listen call returns gets connection refused, so the real calls
+	// start only once every address already accepts connections.
+	awaitPrivateListeners(t, addresses[0], addresses[1], addresses[2])
 	defer func() {
 		cancel()
 		select {
@@ -110,6 +115,27 @@ func TestRuntimeListenersServeFromASecretVolume(t *testing.T) {
 	strangerTLS := stranger.clientTLSFor(t, "control.runtime.test")
 	strangerTLS.RootCAs = fixture.rootPool()
 	refuseControl(t, config.ControlAddress, strangerTLS)
+}
+
+// awaitPrivateListeners blocks until the kernel accepts TCP connections on
+// every address. Serve performs the Listen calls from its own goroutine, so a
+// raw dial is the only signal that a bind is visible to a peer process.
+func awaitPrivateListeners(t *testing.T, addresses ...string) {
+	t.Helper()
+	for _, address := range addresses {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			conn, err := net.Dial("tcp", address)
+			if err == nil {
+				_ = conn.Close()
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the listener at %s did not start accepting connections: %v", address, err)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 }
 
 func testGRPCPolicy() runtimegrpc.GRPCServerPolicy {

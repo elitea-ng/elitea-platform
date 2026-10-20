@@ -793,6 +793,10 @@ fn classify_receipt(bytes: &[u8]) -> Result<(Phase, Option<&'static str>), Super
     Ok(match status {
         "completed" => (Phase::Completed, None),
         "failed" => (Phase::Failed, Some("sandbox.code_failed")),
+        // Synthesized by the runtime adapter from platform evidence only.
+        super::runtime_loss::RECEIPT_STATUS => {
+            (Phase::Failed, Some(super::runtime_loss::FAILURE_CODE))
+        }
         "memory_limit" => (Phase::Failed, Some("sandbox.memory_limit")),
         "timeout" => (Phase::Failed, Some("sandbox.deadline_exceeded")),
         "output_limit" => (Phase::Failed, Some("sandbox.output_limit")),
@@ -869,6 +873,10 @@ mod tests {
         assert_eq!(
             classify_receipt(br#"{"status":"failed"}"#).unwrap(),
             (Phase::Failed, Some("sandbox.code_failed"))
+        );
+        assert_eq!(
+            classify_receipt(br#"{"status":"runtime_lost"}"#).unwrap(),
+            (Phase::Failed, Some("sandbox.runtime_lost"))
         );
         assert_eq!(
             classify_receipt(br#"{"status":"output_limit"}"#).unwrap(),

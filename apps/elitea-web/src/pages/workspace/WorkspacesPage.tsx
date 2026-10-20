@@ -2,11 +2,12 @@
  * Desktop-only `/workspaces`: the start screen of the workspace-first window.
  * Without folders it is "Open a folder to start" (the button, or a folder
  * dropped on the window — the host handles the drop and opens it); with
- * folders it lists them, each bindable to one project (whose agents its
- * threads then offer). After sign-in the desktop opens the last thread
+ * folders it lists them as a source-list table (open with a double click or
+ * Return; reveal, copy the path, bind a project, remove from its native context
+ * menu), each bound to one project (whose agents its threads then offer). After sign-in the desktop opens the last thread
  * instead (`routes/_shell/index.tsx`), so this is mostly the first run.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -23,17 +24,34 @@ import { WorkspaceList, describeWorkspaceError, useWorkspaceIpc } from '@/featur
 import { WorkspaceIndexControl } from '@/features/workspace-index';
 import { toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { ShowSidebarButton, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
+import { folderContextActions, ProjectPickerSheet, ShowSidebarButton, TitleBarSpacer, useAppIpc, useContextMenu, useDesktopLayout, type ContextAction } from '@/widgets/desktop-shell';
 
 import { useBindableProjects } from './useBindableProjects';
 
 const LIST_KEY = ['workspace', 'list'] as const;
+
+/** "Open folder": primary in the empty state, a bordered toolbar button above the table. */
+function OpenFolderButton({ variant, pending, onOpen }: { variant: 'contained' | 'outlined'; pending: boolean; onOpen: () => void }): React.JSX.Element {
+  return (
+    <Button variant={variant} disabled={pending} onClick={onOpen} startIcon={<CreateNewFolderOutlinedIcon />}>
+      {t('workspace.openFolder', 'Open folder')}
+    </Button>
+  );
+}
+
+/** The project picker sheet for the folder whose context menu asked for "More projects…". */
+function PickerFor({ workspace, projects, onPick, onClose }: { workspace: Workspace | null; projects: ReturnType<typeof useBindableProjects>; onPick: (workspace: Workspace, projectId: number) => void; onClose: () => void }): React.JSX.Element {
+  return <ProjectPickerSheet open={workspace !== null} projects={projects} currentId={workspace?.project_id ?? null} onPick={(projectId) => workspace !== null && onPick(workspace, projectId)} onClose={onClose} />;
+}
 
 export default function WorkspacesPage(): React.JSX.Element {
   const ipc = useWorkspaceIpc();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const projects = useBindableProjects();
+  const appIpc = useAppIpc();
+  const showMenu = useContextMenu();
+  const [picking, setPicking] = useState<Workspace | null>(null);
 
   const list = useQuery({ queryKey: LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
   const refresh = (): Promise<void> => queryClient.invalidateQueries({ queryKey: LIST_KEY });
@@ -55,22 +73,29 @@ export default function WorkspacesPage(): React.JSX.Element {
     );
   }
 
+  const openSession = (workspace: Workspace): void => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } });
+  // The row's native context menu: everything a folder can do besides opening it.
+  const folderActions = (workspace: Workspace): ContextAction[] =>
+    folderContextActions({
+      workspace,
+      projects,
+      appIpc,
+      primary: { label: t('workspace.openSession', 'Open'), enabled: workspace.project_id !== null, run: () => openSession(workspace) },
+      bind: (projectId) => bind.mutate({ workspace, projectId }),
+      remove: () => remove.mutate(workspace),
+      choosePicker: () => setPicking(workspace),
+    });
+
   const failed = list.isError || open.isError || remove.isError || bind.isError;
   // A folder with a running turn can be neither removed nor re-bound (the host answers workspace_busy).
   const busyError = [remove.error, bind.error].find((error) => error !== null && toWorkspaceIpcError(error).code === 'workspace_busy');
-
-  const openButton = (
-    <Button variant="contained" disabled={open.isPending} onClick={() => open.mutate()} startIcon={<CreateNewFolderOutlinedIcon />}>
-      {t('workspace.openFolder', 'Open folder')}
-    </Button>
-  );
 
   return (
     <Box data-testid="workspaces-page" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <TitleBarSpacer leading={!sidebarOpen} logo={false}>
         <ShowSidebarButton />
       </TitleBarSpacer>
-      <Box sx={{ width: '100%', maxWidth: '46rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Box sx={{ width: '100%', maxWidth: '60rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 2 }}>
         {failed && (
           <Alert severity="error">
             {busyError === undefined ? t('workspace.failed', 'That did not work. Try again.') : describeWorkspaceError(busyError)}
@@ -100,7 +125,7 @@ export default function WorkspacesPage(): React.JSX.Element {
             <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, maxWidth: '26rem' })}>
               {t('workspace.start.body', 'An agent works on the files of a folder on this computer. You approve what it runs, and you can review and undo every change.')}
             </Typography>
-            {openButton}
+            <OpenFolderButton variant="contained" pending={open.isPending} onOpen={() => open.mutate()} />
             <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
               {t('workspace.start.drop', 'Or drop a folder on this window.')}
             </Typography>
@@ -112,19 +137,19 @@ export default function WorkspacesPage(): React.JSX.Element {
               <Typography component="h1" variant="headingMedium">
                 {t('workspace.title', 'Local work')}
               </Typography>
-              <Box sx={{ marginLeft: 'auto' }}>{openButton}</Box>
+              <Box sx={{ marginLeft: 'auto' }}><OpenFolderButton variant="outlined" pending={open.isPending} onOpen={() => open.mutate()} /></Box>
             </Box>
             <WorkspaceList
               workspaces={workspaces}
               projects={projects}
-              onSelect={(workspace) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } })}
-              onRemove={(workspace) => remove.mutate(workspace)}
-              onBind={(workspace, projectId) => bind.mutate({ workspace, projectId })}
-              badges={(workspace) => <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />}
+              onSelect={openSession}
+              onContextMenu={(workspace, event) => showMenu(event, folderActions(workspace))}
+              indexCell={(workspace) => <WorkspaceIndexControl workspaceId={workspace.id} name={workspace.name} />}
             />
           </>
         )}
       </Box>
+      <PickerFor workspace={picking} projects={projects} onPick={(workspace, projectId) => bind.mutate({ workspace, projectId })} onClose={() => setPicking(null)} />
     </Box>
   );
 }

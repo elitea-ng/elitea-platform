@@ -43,6 +43,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
+          # Stated, not defaulted: automatic caching would save from every
+          # ref (scripts/ci/check_workflow_cache_writes.py).
+          package-manager-cache: false
 
       - name: Install dependencies
         working-directory: ${{ matrix.app.path }}

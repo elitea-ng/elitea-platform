@@ -44,6 +44,8 @@ const TOKEN: &str = "ephemeral-ordinary-fixture-token";
 #[path = "ordinary_scope_tests.rs"]
 mod model_scope_tests;
 
+#[path = "ordinary_effect_pg_tests.rs"]
+mod effect_pg_tests;
 #[path = "image_turn_tests.rs"]
 mod image_turn_tests;
 
@@ -1150,8 +1152,8 @@ async fn application_and_adhoc_share_authorized_redemption_model_session_and_pro
             "earlier question"
         );
         assert_eq!(body["messages"][2]["role"], "assistant");
-        assert_eq!(body["messages"][2]["content"][0]["text"], "earlier ");
-        assert_eq!(body["messages"][2]["content"][1]["text"], "answer");
+        // The stored answer's text parts reach the provider as one string.
+        assert_eq!(body["messages"][2]["content"], "earlier answer");
         assert_eq!(body["messages"][3]["content"], "current");
         assert_eq!(
             body["messages"][0]["content"],
@@ -1163,6 +1165,294 @@ async fn application_and_adhoc_share_authorized_redemption_model_session_and_pro
         assert_eq!(captured[0].headers["x-project-id"], "17");
         assert!(captured[0].headers["authorization"].is_sensitive());
     }
+}
+
+/// A provider stream that spends every output token reasoning: inline
+/// `reasoning_content`, no visible text, `finish_reason: length` (Qwen3 on
+/// vLLM with a 2048-token allowance, live 4.45.1).
+const REASONING_ONLY_LENGTH_CUT: &str = concat!(
+    "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Let me think about the tools\"},\"finish_reason\":null}]}\n\n",
+    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2048}}\n\n",
+    "data: [DONE]\n\n",
+);
+
+type OutputTurn = (
+    Vec<serde_json::Value>,
+    Result<Vec<serde_json::Value>, super::events::AgentEventProjectionErrorCode>,
+    Vec<serde_json::Value>,
+);
+
+/// One turn through the real assembler, projector and completion selector:
+/// the streamed browser events, then `finish_after_eos` (its events, or the
+/// projection error code), then the captured model requests.
+async fn run_one_output_turn(
+    sessions: &Arc<dyn SessionService>,
+    request: &super::request::AgentExecutionRequest,
+    raw: &'static str,
+) -> OutputTurn {
+    let (runtime_context, _) = runtime_context_client();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::<Bytes>::from(raw))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    )
+    .with_sessions(Arc::clone(sessions));
+    let mut invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            request,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .expect("authorized ordinary assembly");
+    let _start = invocation.project_start(chrono::Utc::now()).unwrap();
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    let browser = |event| {
+        serde_json::from_slice::<serde_json::Value>(
+            &encode_current_node_event_json(&event).expect("canonical browser event"),
+        )
+        .expect("browser event JSON")
+    };
+    let mut streamed = Vec::new();
+    while let Some(event) = native.next_event().await.expect("native event") {
+        streamed.extend(projector.project(&event).expect("projected native event"));
+    }
+    let streamed: Vec<_> = streamed.into_iter().map(browser).collect();
+    let completed = completion.select().await.expect("selected completion");
+    let finish = projector
+        .finish_after_eos(completed, chrono::Utc::now())
+        .map(|batch| batch.into_iter().map(browser).collect())
+        .map_err(|error| error.code());
+    let bodies = captured
+        .lock()
+        .expect("captured model requests")
+        .iter()
+        .map(|request| serde_json::from_slice(&request.body).expect("model request JSON"))
+        .collect();
+    (streamed, finish, bodies)
+}
+
+/// The Continue of the `ordinary_request` turn: Main resumes the same thread
+/// with `should_continue` and the visible output so far as
+/// `truncated_content` — EMPTY after a reasoning-only cut.
+fn output_continuation(visible: &str) -> super::request::AgentExecutionRequest {
+    let mut continuation = ordinary_request(AgentExecutionKind::Application);
+    continuation.payload.should_continue = true;
+    continuation.payload.truncated_content = Some(visible.to_owned());
+    continuation
+}
+
+fn offers_continue(events: &[serde_json::Value]) -> bool {
+    events
+        .iter()
+        .any(|event| event["type"] == "agent_requires_confirmation")
+}
+
+fn last_user_text(body: &serde_json::Value) -> String {
+    let message = body["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .expect("a user message");
+    assert_eq!(message["role"], "user");
+    match &message["content"] {
+        serde_json::Value::String(text) => text.clone(),
+        parts => parts
+            .as_array()
+            .expect("content parts")
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect(),
+    }
+}
+
+/// Live 4.45.1, F1: after a reasoning-only cut, Continue re-sent the original
+/// request under the same allowance and the model reasoned itself into the
+/// same cut, for ever. The continuation now asks for the answer directly with
+/// minimal reasoning, and an answer completes the turn normally: no second
+/// Continue offer, not output-limited. The output allowance is the user's own
+/// and is NOT raised.
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_only_continue_asks_for_a_direct_answer_and_completes() {
+    // One session store for both turns: the Continue resumes the session the
+    // cut turn wrote, exactly as the durable store does in production.
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let original = ordinary_request(AgentExecutionKind::Application);
+    let (streamed, finish, first) =
+        run_one_output_turn(&sessions, &original, REASONING_ONLY_LENGTH_CUT).await;
+    assert!(
+        offers_continue(&streamed),
+        "the first reasoning-only cut offers Continue"
+    );
+    let finish = finish.expect("the first cut completes with the Continue offer");
+    let full = finish
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full message");
+    assert_eq!(full["response_metadata"]["output_limit_reached"], true);
+
+    let answer = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":5}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let continuation = output_continuation("");
+    let (streamed, finish, second) = run_one_output_turn(&sessions, &continuation, answer).await;
+    assert!(
+        !offers_continue(&streamed),
+        "an answered continuation offers no Continue"
+    );
+    let finish = finish.expect("the answered continuation completes");
+    let full = finish
+        .iter()
+        .find(|event| event["type"] == "full_message")
+        .expect("full message");
+    assert_eq!(full["content"], "The answer is 42.");
+    assert_eq!(full["response_metadata"]["output_limit_reached"], false);
+
+    let (first, second) = (&first[0], &second[0]);
+    let prompt = last_user_text(second);
+    assert!(
+        prompt.contains("Answer now, directly.")
+            && prompt.contains("Keep internal reasoning to the minimum")
+            && prompt.contains("Original request:\ncurrent"),
+        "{prompt}"
+    );
+    assert_ne!(
+        last_user_text(first),
+        prompt,
+        "the continuation is not the original turn re-sent"
+    );
+    // The user's allowance and the platform's budget rules are untouched.
+    assert_eq!(
+        second.get("max_completion_tokens"),
+        first.get("max_completion_tokens")
+    );
+}
+
+/// Review of #1296: the reasoning knob a reasoning-only Continue sends, per
+/// family, read off the CONTINUATION's own model request body.
+/// - Effort set (`medium`, a `supports_reasoning` model): the continuation
+///   sends `reasoning_effort: low`.
+/// - No effort (the catalogue's non-reasoning family, the live Qwen3-on-vLLM
+///   case): no reasoning parameter at all. None is proven safe; see
+///   `continuation_reasoning_effort`.
+/// - Effort `none` with a temperature: it stays `none`, the pair binds, and
+///   the Continue runs. It used to become `low` beside the temperature, which
+///   `validate_invocation` refuses, so every Continue failed at binding.
+#[tokio::test(flavor = "current_thread")]
+async fn reasoning_only_continue_sends_only_the_reasoning_knob_the_profile_supports() {
+    let answer = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    for (effort, temperature, expected_effort) in [
+        (
+            serde_json::json!("medium"),
+            serde_json::Value::Null,
+            Some("low"),
+        ),
+        (serde_json::Value::Null, serde_json::json!(0.7), None),
+        (
+            serde_json::json!("none"),
+            serde_json::json!(0.7),
+            Some("none"),
+        ),
+    ] {
+        let mut continuation = output_continuation("");
+        let settings = continuation
+            .payload
+            .application
+            .get_mut("version_details")
+            .and_then(|details| details.get_mut("llm_settings"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("application llm_settings");
+        settings.insert("reasoning_effort".to_owned(), effort.clone());
+        settings.insert("temperature".to_owned(), temperature.clone());
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let (_, finish, bodies) = run_one_output_turn(&sessions, &continuation, answer).await;
+        let label = format!("effort={effort} temperature={temperature}");
+        let full = finish
+            .unwrap_or_else(|code| panic!("{label}: the Continue failed: {code:?}"))
+            .into_iter()
+            .find(|event| event["type"] == "full_message")
+            .expect("full message");
+        assert_eq!(full["content"], "Done.", "{label}");
+        let body = &bodies[0];
+        assert_eq!(
+            body.get("reasoning_effort")
+                .and_then(serde_json::Value::as_str),
+            expected_effort,
+            "{label}: {body}"
+        );
+        for unsupported in ["chat_template_kwargs", "reasoning", "thinking"] {
+            assert!(
+                body.get(unsupported).is_none(),
+                "{label}: sent {unsupported}"
+            );
+        }
+        assert_eq!(
+            body.get("temperature").and_then(serde_json::Value::as_f64),
+            temperature.as_f64(),
+            "{label}"
+        );
+    }
+}
+
+/// Live 4.45.1, F1 cap: a reasoning-only Continue that is cut reasoning-only
+/// AGAIN offers no further Continue. The turn ends as
+/// `OUTPUT_CONTINUATION_EXHAUSTED`, which the chat renders as the continuation
+/// notice ("Increase the output limit in Model settings…").
+#[tokio::test(flavor = "current_thread")]
+async fn a_second_reasoning_only_cut_ends_without_another_continue() {
+    // The original reasoning-only cut, then its Continue, cut the same way.
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let (streamed, finish, _) = run_one_output_turn(
+        &sessions,
+        &ordinary_request(AgentExecutionKind::Application),
+        REASONING_ONLY_LENGTH_CUT,
+    )
+    .await;
+    assert!(offers_continue(&streamed), "the first cut offers Continue");
+    finish.expect("the first cut completes with the Continue offer");
+    let continuation = output_continuation("");
+    let (streamed, finish, _) =
+        run_one_output_turn(&sessions, &continuation, REASONING_ONLY_LENGTH_CUT).await;
+    assert!(
+        !offers_continue(&streamed),
+        "a second reasoning-only cut must not offer Continue again"
+    );
+    assert_eq!(
+        finish.expect_err("a second reasoning-only cut is not a completion"),
+        super::events::AgentEventProjectionErrorCode::OutputContinuationExhausted
+    );
+
+    // A continuation of VISIBLE output that is cut again keeps the ordinary
+    // Continue: only the reasoning-only loop is capped.
+    let visible = output_continuation("The first half of the answer");
+    let cut_after_text = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\" and more of it\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2048}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let (streamed, finish, _) = run_one_output_turn(&sessions, &visible, cut_after_text).await;
+    assert!(
+        offers_continue(&streamed),
+        "a visible continuation cut again still offers Continue"
+    );
+    finish.expect("a visible continuation cut again completes with the offer");
 }
 
 /// Live 4.45.0: a model that spends every output token reasoning ends with
@@ -2521,10 +2811,8 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool, reverse: bo
     else {
         panic!("a consumed child decision cannot be replaced");
     };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::InvalidConfiguration
-    );
+    // A decision a finished continuation already consumed is stale.
+    assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
     assert_eq!(captured.lock().expect("captured model requests").len(), 4);
 
     let mut resume = ordinary_request(AgentExecutionKind::Application);
@@ -5534,4 +5822,319 @@ mod internal_tools_graph {
             "{read}"
         );
     }
+}
+
+/// A data-changing nested tool that never returns: a Worker that stops inside
+/// it leaves a durable `dispatched` record and no outcome.
+struct StalledEffectConnector {
+    tool_calls: Arc<AtomicUsize>,
+    started: Arc<tokio::sync::Notify>,
+    /// The tool returns its result instead of stalling.
+    completes: bool,
+}
+
+#[async_trait]
+impl McpConnector for StalledEffectConnector {
+    async fn connect(
+        &self,
+        _config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Ok(Arc::new(BasicToolset::new(
+            "fixture_mcp",
+            vec![Arc::new(StalledEffectTool {
+                calls: Arc::clone(&self.tool_calls),
+                started: Arc::clone(&self.started),
+                completes: self.completes,
+            })],
+        )))
+    }
+}
+
+struct StalledEffectTool {
+    calls: Arc<AtomicUsize>,
+    started: Arc<tokio::sync::Notify>,
+    completes: bool,
+}
+
+#[async_trait]
+impl Tool for StalledEffectTool {
+    fn name(&self) -> &'static str {
+        "lookup_release"
+    }
+
+    fn description(&self) -> &'static str {
+        "Record one release decision."
+    }
+
+    fn parameters_schema(&self) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {"release": {"type": "string"}},
+            "required": ["release"],
+            "additionalProperties": false
+        }))
+    }
+
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: serde_json::Value,
+    ) -> adk_rust::Result<serde_json::Value> {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        self.started.notify_one();
+        if self.completes {
+            return Ok(serde_json::json!({"release": "4.2", "effect": "written"}));
+        }
+        std::future::pending().await
+    }
+}
+
+/// Under an ordinary root Agent, a nested Agent's approved call that may have
+/// started ends the ROOT run with the registered recovery-refused reason. The
+/// Worker stops inside the approved tool; its replacement refuses at assembly,
+/// before the parent model or the child runs again.
+#[tokio::test(flavor = "current_thread")]
+async fn a_nested_approved_call_that_may_have_started_ends_the_root_run_with_its_reason() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let (runtime_context, _) = runtime_context_with_sensitive_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
+            // Only reached if the refusal reached the parent model as data.
+            TestModelGatewayOutcome::Response(text_response("parent finished anyway")),
+            TestModelGatewayOutcome::Response(text_response("parent finished anyway")),
+        ],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        sensitive_mcp_policy(),
+    )
+    .with_mcp_connector(Arc::new(StalledEffectConnector {
+        tool_calls: Arc::clone(&tool_calls),
+        started: Arc::clone(&started),
+        completes: false,
+    }))
+    .with_sessions(sessions);
+
+    let cards = drain_nested_pause(&assembler, request).await;
+    assert_eq!(cards.len(), 1);
+    let interrupt_id = cards[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+        .as_str()
+        .expect("nested interrupt id")
+        .to_owned();
+    let model_calls_at_pause = captured.lock().expect("captured").len();
+
+    // The approving Worker stops inside the approved tool.
+    let mut approve = ordinary_request(AgentExecutionKind::Application);
+    approve.binding.request_content_digest = [61; 32];
+    attach_nested_agent(&mut approve);
+    admit_approved_resume(&mut approve, &interrupt_id);
+    {
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &approve,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("approving continuation assembles");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("approving start");
+        let (mut native, _projector, _completion) = invocation.start().expect("native start");
+        tokio::select! {
+            () = started.notified() => {}
+            event = async {
+                loop {
+                    if native.next_event().await.expect("approving event").is_none() {
+                        break;
+                    }
+                }
+            } => panic!("the approved tool never started: {event:?}"),
+        }
+    }
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        1,
+        "the approved call ran"
+    );
+
+    // The replacement continues the same decision.
+    let mut recover = ordinary_request(AgentExecutionKind::Application);
+    recover.binding.request_content_digest = [62; 32];
+    attach_nested_agent(&mut recover);
+    admit_approved_resume(&mut recover, &interrupt_id);
+    let Err(error) = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &recover,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+    else {
+        panic!("a dispatched nested approval was assembled again");
+    };
+    assert_eq!(
+        error
+            .cause()
+            .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+        Some(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
+        "the refusal carries the registered reason: {error}"
+    );
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1, "never repeated");
+    assert_eq!(
+        captured.lock().expect("captured").len(),
+        model_calls_at_pause,
+        "the parent model never sees the refusal as data"
+    );
+}
+
+/// #1321 review round 2 item 1 (class R): under an ordinary root Agent, a
+/// nested Agent's approved call whose outcome WAS recorded is served after the
+/// Worker stops, never run again. The approving Worker stops at the child's
+/// next model request, after the tool returned; the replacement (the same
+/// execution's next claim) continues with the recorded result.
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One ordered pause, stop and replacement proof.
+async fn a_nested_approved_call_with_a_recorded_outcome_is_served_after_the_worker_stops() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    attach_nested_agent(&mut request);
+    let (runtime_context, _) = runtime_context_with_sensitive_child();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![
+            TestModelGatewayOutcome::Response(nested_agent_call_response()),
+            TestModelGatewayOutcome::Response(mcp_tool_call_response()),
+            // The approving Worker stops at the child's next model request.
+            TestModelGatewayOutcome::Pending,
+            TestModelGatewayOutcome::Response(text_response("child recorded the release")),
+            TestModelGatewayOutcome::Response(text_response("parent finished")),
+        ],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway");
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        sensitive_mcp_policy(),
+    )
+    .with_mcp_connector(Arc::new(StalledEffectConnector {
+        tool_calls: Arc::clone(&tool_calls),
+        started: Arc::clone(&started),
+        completes: true,
+    }))
+    .with_sessions(Arc::clone(&sessions));
+
+    let cards = drain_nested_pause(&assembler, request).await;
+    assert_eq!(cards.len(), 1);
+    let interrupt_id = cards[0]["response_metadata"]["hitl_interrupts"][0]["interrupt_id"]
+        .as_str()
+        .expect("nested interrupt id")
+        .to_owned();
+    let model_calls_at_pause = captured.lock().expect("captured").len();
+
+    let mut approve = ordinary_request(AgentExecutionKind::Application);
+    approve.binding.request_content_digest = [63; 32];
+    attach_nested_agent(&mut approve);
+    admit_approved_resume(&mut approve, &interrupt_id);
+    {
+        let mut invocation = assembler
+            .assemble(AuthorizedNativeAssembly::new(
+                &approve,
+                test_runtime_context_authority(),
+                AuthorizedNativeCommandBinding::fixture(),
+            ))
+            .await
+            .expect("approving continuation assembles");
+        invocation
+            .project_start(chrono::Utc::now())
+            .expect("approving start");
+        let (mut native, _projector, _completion) = invocation.start().expect("native start");
+        let stalled = async {
+            while captured.lock().expect("captured").len() <= model_calls_at_pause {
+                tokio::task::yield_now().await;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        };
+        tokio::select! {
+            () = stalled => {}
+            event = async {
+                loop {
+                    if native.next_event().await.expect("approving event").is_none() {
+                        break;
+                    }
+                }
+            } => panic!("the approving Worker finished instead of stopping: {event:?}"),
+        }
+    }
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        1,
+        "the approved call ran"
+    );
+    // The replacement continues the same decision and serves the recorded result.
+    let invocation = assembler
+        .assemble(AuthorizedNativeAssembly::new(
+            &approve,
+            test_runtime_context_authority(),
+            AuthorizedNativeCommandBinding::fixture(),
+        ))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "the replacement must serve the recorded outcome: {error} {:?}",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let browser = drain_browser(invocation).await;
+    assert!(
+        browser
+            .iter()
+            .any(|event| serde_json::to_string(event)
+                .is_ok_and(|raw| raw.contains("parent finished"))),
+        "the root run finishes: {browser:?}"
+    );
+    assert_eq!(tool_calls.load(Ordering::Acquire), 1, "never repeated");
+    let captured = captured.lock().expect("captured");
+    let child = String::from_utf8_lossy(&captured[captured.len() - 2].body);
+    assert!(
+        child.contains("written"),
+        "the child model sees the recorded result: {child}"
+    );
+}
+
+/// Run one assembled turn to its end and return its browser events.
+async fn drain_browser(
+    mut invocation: crate::agents::runtime::AssembledNativeAgentInvocation<
+        impl crate::agents::runtime::NativeAgentCompletionSelector,
+    >,
+) -> Vec<serde_json::Value> {
+    invocation
+        .project_start(chrono::Utc::now())
+        .expect("browser start");
+    let (mut native, mut projector, _completion) = invocation.start().expect("native start");
+    let mut browser = Vec::new();
+    while let Some(event) = native.next_event().await.expect("turn event") {
+        for projected in projector.project(&event).expect("projection") {
+            browser.push(
+                serde_json::from_slice(
+                    &encode_current_node_event_json(&projected).expect("browser event"),
+                )
+                .expect("browser JSON"),
+            );
+        }
+    }
+    browser
 }

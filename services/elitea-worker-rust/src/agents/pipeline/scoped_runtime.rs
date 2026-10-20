@@ -221,8 +221,8 @@ impl PipelineApplicationNodeRuntime {
                 {
                     return Ok((result, receipt.activation().call_id().to_owned()));
                 }
-                // An approval may dispatch an effect: mark the resume durably first,
-                // so a crash after it can never run the approved call a second time.
+                // An approval may dispatch an effect: record durably that its resume
+                // started, so no stale copy of this receipt can drop it.
                 if coordinator
                     .approves_sensitive_call(
                         receipt.invocation_id(),
@@ -240,10 +240,20 @@ impl PipelineApplicationNodeRuntime {
                     .await?;
                 }
             }
-            GraphCallOutcome::Resuming { .. } => {
-                // An earlier continuation started this approved child and left no
-                // outcome: the approved call may have run. Never run it again.
-                return Err(self.child_failure(ChildFailure::MayHaveStarted).await);
+            GraphCallOutcome::Resuming { result } => {
+                // An earlier continuation of this approval started the child and
+                // stopped. The decision carries the root dispatch journal's facts
+                // (FU-226): a recorded outcome is served, a dispatch without one is
+                // refused as "may have started", and a call that never started runs
+                // once. Without a pending resume (a later turn) the pause result
+                // stands.
+                let coordinator = self.applications.resume_coordinator().ok_or_else(failure)?;
+                if !coordinator
+                    .has_resume(receipt.invocation_id(), receipt.activation().call_id())
+                    .await
+                {
+                    return Ok((result, receipt.activation().call_id().to_owned()));
+                }
             }
             GraphCallOutcome::Started if !fresh => {
                 // An interrupted unpaused provider/tool has no graph-level replay authority.
@@ -319,11 +329,21 @@ impl PipelineApplicationNodeRuntime {
                 REPLAY_UNSUPPORTED_PUBLIC_CODE,
                 replay_unsupported(&self.node_name),
             ),
-            // The approved call may have run; it is not repeated.
-            ChildFailure::MayHaveStarted => (
-                MAY_HAVE_STARTED_PUBLIC_CODE,
-                may_have_started(&self.node_name),
-            ),
+            // The approved call may have run; it is not repeated. The run ends
+            // with the registered recovery-refused reason, as an unscoped Agent
+            // node does (`graph/application.rs` `child_failure`).
+            ChildFailure::MayHaveStarted => {
+                return self
+                    .events
+                    .recovery_refused(&self.node_name)
+                    .await
+                    .unwrap_or_else(failure);
+            }
+            // Another typed refusal of the decided card: the node fails, as an
+            // unscoped Agent node does, not as a broken scope.
+            ChildFailure::Refused => return node_refused(&self.node_name),
+            // Not a refusal of the decided card: unchanged scope failure.
+            ChildFailure::Child => return failure(),
         };
         match self.events.send_execution_failure(code).await {
             Ok(()) => error,
@@ -349,9 +369,8 @@ impl PipelineApplicationNodeRuntime {
             tokio::select! {
                 value = &mut future => break match value {
                     Ok(Ok(value)) => Ok(value),
-                    Ok(Err(error)) if error.code == crate::agents::application_tools::NESTED_REPLAY_UNSUPPORTED_CODE => Err(ChildFailure::ReplayUnsupported),
-                    Ok(Err(error)) if error.code == crate::agents::application_tools::NESTED_REPLAY_MAY_HAVE_STARTED_CODE => Err(ChildFailure::MayHaveStarted),
-                    _ => Err(ChildFailure::Scope(failure())),
+                    Ok(Err(error)) => Err(ChildFailure::from_child(error.code)),
+                    Err(_) => Err(ChildFailure::Scope(failure())),
                 },
                 signal = receiver.recv() => match signal {
                     Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(ChildFailure::Scope(error)); },
@@ -531,18 +550,36 @@ enum ChildFailure {
     ReplayUnsupported,
     /// An earlier continuation already dispatched the approved call.
     MayHaveStarted,
+    /// The nested Agent refused its decided card for another typed reason.
+    Refused,
+    /// The child failed for a reason that is not a direct-HITL refusal.
+    Child,
+}
+
+impl ChildFailure {
+    /// Classify a child tool error by its code. The nested Agent keeps each
+    /// direct-HITL refusal's typed code (FU-226).
+    fn from_child(code: &str) -> Self {
+        use crate::agents::direct_hitl::DirectHitlErrorCode;
+        if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
+            Self::MayHaveStarted
+        } else if code == DirectHitlErrorCode::UnsupportedCapability.as_str() {
+            Self::ReplayUnsupported
+        } else if code.starts_with("direct_hitl.") {
+            Self::Refused
+        } else {
+            Self::Child
+        }
+    }
 }
 
 /// Registered public code for a decided call that cannot run (no effect ran).
 const REPLAY_UNSUPPORTED_PUBLIC_CODE: &str = "pipeline.tool_unavailable";
 
-/// Registered public code whose text says the tool may have started work.
-const MAY_HAVE_STARTED_PUBLIC_CODE: &str = "pipeline.tool_failed";
-
-fn may_have_started(node: &str) -> GraphError {
+fn node_refused(node: &str) -> GraphError {
     GraphError::NodeExecutionFailed {
         node: node.to_owned(),
-        message: "the approved tool call may already have started; it was not repeated".to_owned(),
+        message: "the pipeline Agent node failed".to_owned(),
     }
 }
 

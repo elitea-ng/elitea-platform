@@ -2,9 +2,12 @@ package s3
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +42,13 @@ type Config struct {
 	// through to ObjectRef.StorageKey/BucketPrefix. Optional, empty by
 	// default.
 	KeyPrefix string
+
+	// NoPresign turns presigning off: Capabilities reports neither Presign
+	// nor NativeMultipart, so every client upload and download goes through
+	// Main's streaming facade. For an endpoint only Main can reach, such as
+	// an in-cluster RustFS, whose presigned URLs name a host the desktop
+	// cannot resolve.
+	NoPresign bool
 }
 
 // Backend implements storage.ObjectStore using S3-compatible APIs (AWS S3,
@@ -50,6 +60,7 @@ type Backend struct {
 
 	bucket    string
 	keyPrefix string
+	noPresign bool
 }
 
 var _ storage.ObjectStore = (*Backend)(nil)
@@ -83,10 +94,18 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 
 	client := s3.NewFromConfig(awsCfg, clientOpts...)
 	return &Backend{
-		client:    client,
-		uploader:  transfermanager.New(client),
+		client: client,
+		// The transfer manager does not inherit the client's checksum
+		// setting: unset, it sends CRC32 on every part. Hand it the resolved
+		// one, so AWS_REQUEST_CHECKSUM_CALCULATION=when_required reaches the
+		// multipart path too (RustFS 1.0.0-beta.8 refuses a checksummed
+		// UploadPart into a bucket with default SSE).
+		uploader: transfermanager.New(client, func(o *transfermanager.Options) {
+			o.RequestChecksumCalculation = awsCfg.RequestChecksumCalculation
+		}),
 		bucket:    cfg.Bucket,
 		keyPrefix: cfg.KeyPrefix,
+		noPresign: cfg.NoPresign,
 	}, nil
 }
 
@@ -127,7 +146,8 @@ func (b *Backend) ConfigureRetentionLifecycle(ctx context.Context) error {
 }
 
 func (b *Backend) Capabilities() storage.Capabilities {
-	return storage.Capabilities{Presign: true, NativeMultipart: true, ServerSideCopy: true}
+	// Native multipart is offered only through presigned part URLs.
+	return storage.Capabilities{Presign: !b.noPresign, NativeMultipart: !b.noPresign, ServerSideCopy: true, ChecksumSHA256: true}
 }
 
 func (b *Backend) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
@@ -153,6 +173,9 @@ func (b *Backend) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader
 		}
 		if len(opts.Metadata) > 0 {
 			input.Metadata = opts.Metadata
+		}
+		if len(opts.ChecksumSHA256) == sha256.Size {
+			input.ChecksumSHA256 = aws.String(base64.StdEncoding.EncodeToString(opts.ChecksumSHA256))
 		}
 		out, err := b.client.PutObject(ctx, input)
 		if err != nil {
@@ -288,8 +311,9 @@ func formatByteRange(r storage.ByteRange) string {
 
 func (b *Backend) Stat(ctx context.Context, ref storage.ObjectRef) (storage.ObjectInfo, error) {
 	out, err := b.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(b.bucket),
-		Key:    aws.String(ref.StorageKey(b.keyPrefix)),
+		Bucket:       aws.String(b.bucket),
+		Key:          aws.String(ref.StorageKey(b.keyPrefix)),
+		ChecksumMode: types.ChecksumModeEnabled,
 	})
 	if err != nil {
 		return storage.ObjectInfo{}, mapS3Error(err, "stat object")
@@ -300,6 +324,7 @@ func (b *Backend) Stat(ctx context.Context, ref storage.ObjectRef) (storage.Obje
 		LastModified: aws.ToTime(out.LastModified),
 		ContentType:  aws.ToString(out.ContentType),
 		ETag:         strings.Trim(aws.ToString(out.ETag), `"`),
+		DigestSHA256: fullObjectSHA256(out.ChecksumSHA256, out.ChecksumType),
 	}, nil
 }
 
@@ -404,6 +429,9 @@ func (b *Backend) List(ctx context.Context, q storage.ListQuery) (storage.ListPa
 }
 
 func (b *Backend) PresignGet(ctx context.Context, ref storage.ObjectRef, ttl time.Duration) (string, error) {
+	if b.noPresign {
+		return "", storage.ErrNotSupported
+	}
 	presigned, err := s3.NewPresignClient(b.client).PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(ref.StorageKey(b.keyPrefix)),
@@ -418,12 +446,20 @@ func (b *Backend) PresignGet(ctx context.Context, ref storage.ObjectRef, ttl tim
 // presigned PUT does not enforce media type at the storage layer. S15
 // verifies it on commit instead.
 func (b *Backend) PresignPut(ctx context.Context, ref storage.ObjectRef, ttl time.Duration, opts storage.PutOptions) (string, error) {
+	if b.noPresign {
+		return "", storage.ErrNotSupported
+	}
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(ref.StorageKey(b.keyPrefix)),
 	}
 	if opts.ContentType != "" {
 		input.ContentType = aws.String(opts.ContentType)
+	}
+	if len(opts.ChecksumSHA256) == sha256.Size {
+		// X-Amz-Checksum-* is a required signed header: the client must
+		// send this exact value, and the store refuses other bytes.
+		input.ChecksumSHA256 = aws.String(base64.StdEncoding.EncodeToString(opts.ChecksumSHA256))
 	}
 	presigned, err := s3.NewPresignClient(b.client).PresignPutObject(ctx, input, s3.WithPresignExpires(ttl))
 	if err != nil {
@@ -448,6 +484,9 @@ func (b *Backend) StartMultipart(ctx context.Context, ref storage.ObjectRef, opt
 }
 
 func (b *Backend) PresignPart(ctx context.Context, ref storage.ObjectRef, id storage.UploadID, part int32, ttl time.Duration) (string, error) {
+	if b.noPresign {
+		return "", storage.ErrNotSupported
+	}
 	presigned, err := s3.NewPresignClient(b.client).PresignUploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(b.bucket),
 		Key:        aws.String(ref.StorageKey(b.keyPrefix)),
@@ -531,4 +570,86 @@ func mapS3Error(err error, op string) error {
 		}
 	}
 	return fmt.Errorf("storage/s3: %s: %w", op, err)
+}
+
+// DefaultEncryptionConfirmed reads the bucket's default encryption
+// (GetBucketEncryption; AWS S3 and RustFS implement it). Any server-side rule
+// (SSE-S3, SSE-KMS) confirms it. No configuration
+// (ServerSideEncryptionConfigurationNotFoundError) is a refusal. A backend
+// that does not implement the call answers storage.ErrEncryptionUnreportable,
+// which the operator may attest (ADR-0034 decision 4).
+func (b *Backend) DefaultEncryptionConfirmed(ctx context.Context) (bool, error) {
+	output, err := b.client.GetBucketEncryption(ctx, &s3.GetBucketEncryptionInput{Bucket: aws.String(b.bucket)})
+	if err != nil {
+		return encryptionAnswer(err)
+	}
+	if output.ServerSideEncryptionConfiguration == nil {
+		return false, nil
+	}
+	for _, rule := range output.ServerSideEncryptionConfiguration.Rules {
+		if rule.ApplyServerSideEncryptionByDefault != nil && rule.ApplyServerSideEncryptionByDefault.SSEAlgorithm != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// fullObjectSHA256 answers the raw digest of a full-object SHA-256 checksum.
+// A multipart upload's composite value ("<b64>-<parts>") is not the digest of
+// the bytes, so it answers nil, and so does an absent or malformed value.
+func fullObjectSHA256(value *string, kind types.ChecksumType) []byte {
+	if value == nil || kind == types.ChecksumTypeComposite {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(*value)
+	if err != nil || len(raw) != sha256.Size {
+		return nil
+	}
+	return raw
+}
+
+// encryptionAnswer maps a GetBucketEncryption error: no configuration is "not
+// encrypted", an unimplemented call is "cannot report", and anything else is
+// an error (the check runs again at the next start).
+func encryptionAnswer(err error) (bool, error) {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "ServerSideEncryptionConfigurationNotFoundError":
+			return false, nil
+		case "NotImplemented", "MethodNotAllowed", "NotSupported", "UnsupportedOperation":
+			return false, fmt.Errorf("storage/s3: read bucket default encryption: %w: %w", storage.ErrEncryptionUnreportable, err)
+		}
+	}
+	var status interface{ HTTPStatusCode() int }
+	if errors.As(err, &status) && (status.HTTPStatusCode() == 501 || status.HTTPStatusCode() == 405) {
+		return false, fmt.Errorf("storage/s3: read bucket default encryption: %w: %w", storage.ErrEncryptionUnreportable, err)
+	}
+	return false, fmt.Errorf("storage/s3: read bucket default encryption: %w", err)
+}
+
+var _ storage.ObjectCopier = (*Backend)(nil)
+
+// Copy is S3 CopyObject inside the backend's bucket. It asks for a SHA-256
+// checksum on the copy, so a copied segment still reports its full-object
+// digest at HEAD (a single CopyObject is limited to 5 GiB, the single-PUT
+// ceiling a checksum-bound segment already respects).
+func (b *Backend) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	source := b.bucket + "/" + src.StorageKey(b.keyPrefix)
+	out, err := b.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(b.bucket),
+		Key:               aws.String(dst.StorageKey(b.keyPrefix)),
+		CopySource:        aws.String((&url.URL{Path: source}).EscapedPath()),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		return storage.ObjectInfo{}, mapS3Error(err, "copy object")
+	}
+	info := storage.ObjectInfo{Key: dst.Key()}
+	if out.CopyObjectResult != nil {
+		info.ETag = strings.Trim(aws.ToString(out.CopyObjectResult.ETag), `"`)
+		info.LastModified = aws.ToTime(out.CopyObjectResult.LastModified)
+		info.DigestSHA256 = fullObjectSHA256(out.CopyObjectResult.ChecksumSHA256, out.CopyObjectResult.ChecksumType)
+	}
+	return info, nil
 }

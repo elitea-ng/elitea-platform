@@ -30,8 +30,18 @@ pub mod process;
 pub mod request;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod runtime;
+pub mod runtime_loss;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod runtime_workspace;
 #[cfg(feature = "sandbox-supervisor")]
 pub mod service;
 pub mod workspace;
+pub mod workspace_run;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod workspace_run_docker;
+#[cfg(all(test, feature = "sandbox-supervisor"))]
+mod workspace_run_docker_tests;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod workspace_run_profile;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod workspace_run_service;

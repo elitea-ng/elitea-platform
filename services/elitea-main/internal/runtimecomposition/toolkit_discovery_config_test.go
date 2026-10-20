@@ -14,6 +14,13 @@ func TestDiscoveryActivationDefaultsClosedAndRequiresRuntime(t *testing.T) {
 	}
 	env["ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED"] = "true"
 	env["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] = "ELITEA_RT_V1_INDEX"
+	// Discovery goes over the agent command stream, so index dispatch alone
+	// must not admit it.
+	if _, err := ConfigFromEnv(mapLookup(env)); err == nil {
+		t.Fatal("discovery enabled with index dispatch only")
+	}
+	env["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
+	env["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	config, err = ConfigFromEnv(mapLookup(env))
 	if err != nil || !config.ToolkitDiscoveryEnabled {
 		t.Fatalf("rehearsal selection rejected: %v", err)

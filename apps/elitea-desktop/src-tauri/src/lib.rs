@@ -5,24 +5,32 @@
 //! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
+mod activity;
 mod app_events;
 mod attention;
 mod auth;
 mod commands;
+mod context_menu;
 mod credentials_file;
 mod d0;
 mod discovery;
 mod doctor;
+mod embeddings;
 mod error;
+mod handoff;
+mod handoff_settings;
 mod history;
 mod index;
 mod local_commands;
 mod logging;
 mod loopback;
 mod menu;
+mod models;
 mod net;
 mod pkce;
 mod platform;
+mod seed;
+mod sessions;
 mod settings;
 mod store;
 mod tokens;
@@ -52,9 +60,11 @@ use crate::index::{IndexRegistry, MainWindowIndexEvents};
 use crate::local_commands::{
     AppDoctorHooks, AuthCredentials, LocalState, MainWindowEvents, StoredPolicy,
 };
+use crate::sessions::DesktopStateStore;
 use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
+use elitea_local_index::embedding::{EmbedConfig, EmbedStatus, Embedding};
 
 /// The credentials file's slots (src/credentials_file.rs).
 const SESSION_SLOT: &str = "device-session";
@@ -99,6 +109,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(menu::Zoom::default())
+        .manage(context_menu::Pending::default())
         .manage(app_events::PendingOpens::default())
         .manage(app_events::CommandQueue::default())
         // A (re)loading page is not listening to app://command yet: hold
@@ -218,18 +229,94 @@ pub fn run() {
                     None
                 }
             };
+            // The agent's session memory; turns run without it (seeded from
+            // the server every time) when the file is refused.
+            let sessions = match DesktopStateStore::open(&data_dir) {
+                Ok(store) => {
+                    log::info!("session store: {}", store.store().path().display());
+                    Some(Arc::new(store))
+                }
+                Err(error) => {
+                    log::warn!("running without the session store: {error}");
+                    None
+                }
+            };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            // A linked worktree (a take-back's, ADR-0034) is used by host
+            // git only when its repository is a workspace the person opened.
+            handoff::trust_open_workspaces(workspaces.clone());
             let policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
+            let handoff_policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on
             // first use; kept across sign-out and wipe (src/index.rs).
-            let index = Arc::new(
-                IndexRegistry::new(
-                    workspaces.clone(),
-                    policy.clone(),
-                    Arc::new(MainWindowIndexEvents(app.handle().clone())),
-                )
-                .with_deny_list(host_deny),
-            );
+            // Their embeddings, off unless a workspace turns them on
+            // (src/embeddings.rs): one background thread, one model in memory.
+            let index = IndexRegistry::new(
+                workspaces.clone(),
+                policy.clone(),
+                Arc::new(MainWindowIndexEvents(app.handle().clone())),
+            )
+            .with_deny_list(host_deny);
+            let remote_embeddings = match tauri::async_runtime::handle() {
+                tauri::async_runtime::RuntimeHandle::Tokio(runtime) => {
+                    Some(embeddings::RemoteDeps {
+                        http: http.clone(),
+                        credentials: Arc::new(AuthCredentials(auth.clone())),
+                        workspaces: workspaces.clone(),
+                        runtime,
+                    })
+                }
+            };
+            let index_events: models::Emit = {
+                let handle = app.handle().clone();
+                Arc::new(move |payload: serde_json::Value| {
+                    use tauri::Emitter as _;
+                    if let Err(error) = handle.emit_to("main", index::EVENT_NAME, &payload) {
+                        log::warn!("could not deliver an index event: {error}");
+                    }
+                })
+            };
+            app.manage(Arc::new(models::ModelHost::new(
+                &data_dir,
+                policy.clone(),
+                remote_embeddings.clone(),
+                index_events.clone(),
+            )));
+            let index = match Embedding::start(
+                Arc::new(embeddings::Embedders {
+                    local: embeddings::LocalModels::new(&data_dir),
+                    remote: remote_embeddings,
+                    policy: policy.clone(),
+                }),
+                Arc::new(embeddings::Power::default()),
+                EmbedConfig::default(),
+                Arc::new(move |workspace_id: &str, status: &EmbedStatus| {
+                    index_events(serde_json::json!({
+                        "kind": "embeddings",
+                        "workspace_id": workspace_id,
+                        "status": status,
+                    }));
+                }),
+            ) {
+                Ok(embedding) => index.with_embedding(Arc::new(embedding)),
+                Err(error) => {
+                    log::warn!("the index embedder did not start: {error}");
+                    index
+                }
+            }
+            .shared();
+            // An embedding pass the app quit in the middle of resumes once
+            // start-up settles (only the chunks still missing a vector).
+            {
+                let index = index.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(index::RESUME_EMBEDDINGS_AFTER).await;
+                    let resumed = index.resume_embeddings().await;
+                    if resumed > 0 {
+                        log::info!("resumed embedding {resumed} workspace index(es)");
+                    }
+                });
+            }
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
                     http: http.clone(),
@@ -240,6 +327,7 @@ pub fn run() {
                     emitter: Arc::new(MainWindowEvents(app.handle().clone())),
                     retry: RetryPolicy::default(),
                     history: history.clone(),
+                    sessions: sessions.clone(),
                     index: Some(index.clone()),
                     // The stored sign-in, the history, other workspaces'
                     // checkpoints and indexes, and the logs stay out of
@@ -249,6 +337,32 @@ pub fn run() {
                 })
                 .map_err(|error| error.message)?,
             );
+            // The desktop ⇄ cloud handoff (ADR-0034).
+            let handoff = handoff::HandoffHost::new(handoff::HandoffDeps {
+                agents: agents.clone(),
+                http: http.clone(),
+                credentials: Arc::new(AuthCredentials(auth.clone())),
+                client_version: env!("CARGO_PKG_VERSION").to_owned(),
+                workspaces: workspaces.clone(),
+                policy: handoff_policy,
+                history: history.clone(),
+                data_dir: data_dir.clone(),
+                events: Arc::new(handoff::MainWindowHandoffEvents(app.handle().clone())),
+                device_id: {
+                    let auth = auth.clone();
+                    Arc::new(move || auth.device_id())
+                },
+                backoff: elitea_workspace_store::sync::Backoff::default(),
+                git_global_config: None,
+                // The env harvest offers the person's login-shell environment.
+                env_source: Arc::new(handoff_settings::LoginShellEnv {
+                    shell: None,
+                    timeout: handoff_settings::LOGIN_SHELL_TIMEOUT,
+                }),
+            })
+            .map_err(|error| error.message)?;
+            let handoff = Arc::new(handoff);
+            app.manage(handoff::HandoffState(handoff.clone()));
             app.manage(Arc::new(doctor::Doctor {
                 local: doctor::LocalDoctor {
                     hooks: Arc::new(AppDoctorHooks {
@@ -261,6 +375,7 @@ pub fn run() {
                     credentials: credentials.clone(),
                     workspaces: workspaces.clone(),
                     history: history.clone(),
+                    sessions: sessions.clone(),
                 },
                 auth: auth.clone(),
             }));
@@ -269,9 +384,15 @@ pub fn run() {
                 history,
                 agents,
                 index,
+                handoff: Some(handoff),
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
+            app.manage(Arc::new(activity::Activity::new(app.handle().clone())));
+            // The menu-bar item: a compact state and the turns that run or wait.
+            if let Err(error) = activity::create_tray(app.handle()) {
+                log::warn!("no menu-bar item: {error}");
+            }
             #[cfg(target_os = "macos")]
             window::quiet_input_source_indicator();
             window::create_main_window(app.handle())?;
@@ -291,14 +412,19 @@ pub fn run() {
             local_commands::workspace_list,
             local_commands::workspace_remove,
             local_commands::workspace_bind_project,
+            local_commands::workspace_agent_settings_get,
+            local_commands::workspace_agent_settings_set,
             local_commands::workspace_files,
             local_commands::agent_turn_start,
+            local_commands::agent_prewarm,
+            local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
             local_commands::agent_turn_status,
             local_commands::approval_respond,
             local_commands::turn_changes,
             local_commands::thread_history,
             local_commands::thread_history_delete,
+            local_commands::session_info,
             local_commands::checkpoint_restore,
             local_commands::checkpoint_preview,
             local_commands::reveal_path,
@@ -309,14 +435,38 @@ pub fn run() {
             index::index_disable,
             index::index_refresh,
             index::index_cancel,
+            index::index_embeddings_get,
+            models::index_embeddings_set,
+            models::index_embeddings_status,
+            models::index_embeddings_rebuild,
+            models::index_models,
+            models::index_model_download,
+            models::index_model_cancel,
+            models::index_model_import,
+            models::index_model_remove,
+            models::index_remote_models,
             index::index_remove,
             platform::app_platform,
+            context_menu::context_menu_show,
+            activity::activity_cloud_run,
             net::http_fetch,
             net::http_read_body,
             net::http_cancel,
             app_events::app_ready,
             doctor::doctor_run,
             doctor::doctor_fix,
+            handoff::handoff_preview,
+            handoff::handoff_send,
+            handoff::handoff_status,
+            handoff::handoff_reclaim,
+            handoff::handoff_preflight,
+            handoff::handoff_apply,
+            handoff::handoff_undo,
+            handoff::handoff_erase,
+            handoff::handoff_cancel,
+            handoff::handoff_status_many,
+            handoff::handoff_settings_get,
+            handoff::handoff_settings_set,
         ])
         .build(tauri::generate_context!());
     let app = match built {
@@ -330,14 +480,41 @@ pub fn run() {
     app.run(on_run_event);
 }
 
+/// How long the app's exit waits for the local turns' commits still queued
+/// or running, over every conversation.
+const EXIT_COMMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[allow(clippy::needless_pass_by_value)] // the signature `App::run` takes
 fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
     // The history writer commits what it still holds before the process ends.
     if matches!(event, tauri::RunEvent::Exit)
         && let Some(local) = app.try_state::<LocalState>()
-        && let Some(history) = &local.history
     {
-        history.flush();
+        if let Some(history) = &local.history {
+            history.flush();
+        }
+        // A turn's commit runs after its `done`: the exit waits (bounded)
+        // for those queued or running; one still pending after that, or kept
+        // after it failed, is not saved; its execution expires on the server.
+        if local.agents.unsaved_commits().0 > 0 {
+            let agents = local.agents.clone();
+            let settled = tauri::async_runtime::block_on(async move {
+                tokio::time::timeout(EXIT_COMMIT_WAIT, agents.commits_idle()).await
+            });
+            if settled.is_err() {
+                log::warn!(
+                    "the exit stopped waiting for local turn commits after {}s",
+                    EXIT_COMMIT_WAIT.as_secs()
+                );
+            }
+        }
+        let (pending, failed) = local.agents.unsaved_commits();
+        if pending + failed > 0 {
+            log::warn!(
+                "quitting with {pending} local turn commit(s) still running and {failed} failed; \
+                 those turns are not in their conversations"
+            );
+        }
     }
     #[cfg(target_os = "macos")]
     match event {

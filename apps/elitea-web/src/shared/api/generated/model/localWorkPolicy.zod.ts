@@ -92,6 +92,26 @@ export const LocalWorkPolicy = zod
       .describe(
         "Local turns may save to the user's cloud memory. Recall is always allowed. Default true.",
       ),
+    cloud_handoff: zod
+      .boolean()
+      .describe(
+        "Client contract 1.8 (ADR-0034 decision 11). A Local work thread may be sent to the cloud executor. Default false. The server refuses a send while it is false; the platform and project settings narrow it further.",
+      ),
+    index_local_embeddings: zod
+      .boolean()
+      .describe(
+        "Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model.",
+      ),
+    index_remote_embeddings: zod
+      .boolean()
+      .describe(
+        "Client contract 1.9. The user may embed a local index through this deployment's /llm/v1/embeddings route, which receives the workspace's text. Default false. While it is false the app drops the vectors made that way.",
+      ),
+    index_model_mirror_url: zod
+      .string()
+      .describe(
+        "Client contract 1.9. Where the app downloads the on-device embedding models from instead of Hugging Face: an https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Empty (the default) is Hugging Face. Every file is checked against the SHA-256 the app pins.",
+      ),
   })
   .describe(
     "Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).",

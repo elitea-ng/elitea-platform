@@ -1,8 +1,7 @@
 //! Required-mode disposable PG18 fixture; authored source, never runtime acceptance.
 use super::*;
 use crate::state::postgres_session_tests::IsolatedPostgres;
-use sqlx::{ConnectOptions as _, postgres::PgConnectOptions};
-use std::{str::FromStr as _, time::Duration};
+use std::time::Duration;
 
 async fn database(install_workspace: bool) -> IsolatedPostgres {
     assert_eq!(
@@ -12,7 +11,7 @@ async fn database(install_workspace: bool) -> IsolatedPostgres {
     );
     let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
         .expect("a disposable loopback PG18 administrator is required");
-    let options = PgConnectOptions::from_str(&url)
+    let options = crate::test_pg::connect_options(&url)
         .expect("parse fixture administrator")
         .disable_statement_logging();
     assert!(matches!(

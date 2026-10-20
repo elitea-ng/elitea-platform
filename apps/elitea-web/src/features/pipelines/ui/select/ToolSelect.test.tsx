@@ -1,3 +1,5 @@
+import type { QueryClient } from '@tanstack/react-query';
+import { waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -5,13 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { renderWithRouterAndProject } from '../../__tests__/testUtils';
+import { createTestQueryClient, renderWithRouterAndProject } from '../../__tests__/testUtils';
 import { ToolSelect } from './ToolSelect';
 
 const BASE = '/api/v2';
 const PROJECT_ID = 'proj-1';
 
+let queryClient: QueryClient;
+
 beforeEach(() => {
+  queryClient = createTestQueryClient();
   configureGeneratedClient({ baseUrl: BASE });
   server.use(
     http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({})),
@@ -19,7 +24,18 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+// ToolSelect fires two queries on mount (toolkit schemas, platform settings),
+// and no test waits for them: every assertion here passes on the first render.
+// A response that lands at the end of a test is delivered to React by
+// TanStack Query's notifyManager on a setTimeout(0). When that was the file's
+// last test, the timer could fire after Vitest had torn the jsdom environment
+// down, and React's update scheduling read `window`: "window is not defined",
+// an unhandled error in the full run only. Wait for both queries to settle
+// while the tree is still mounted; waitFor drains a setTimeout(0) tick after it
+// passes, so the delivery happens before cleanup unmounts the tree. This
+// afterEach runs before Testing Library's cleanup (hooks run in stack order).
+afterEach(async () => {
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
   resetGeneratedClient();
 });
 
@@ -28,6 +44,7 @@ describe('ToolSelect', () => {
     const { findByText } = renderWithRouterAndProject(
       <ToolSelect versionTools={[{ type: 'github', name: 'github', toolkit_name: 'github' }]} />,
       PROJECT_ID,
+      queryClient,
     );
 
     expect(await findByText('Toolkit')).toBeInTheDocument();
@@ -44,6 +61,7 @@ describe('ToolSelect', () => {
         onSelectTool={onSelectTool}
       />,
       PROJECT_ID,
+      queryClient,
     );
 
     await user.click(await findByRole('combobox'));
@@ -65,6 +83,7 @@ describe('ToolSelect', () => {
         onSelectTool={onSelectTool}
       />,
       PROJECT_ID,
+      queryClient,
     );
 
     const combobox = await findByRole('combobox');
@@ -91,6 +110,7 @@ describe('ToolSelect', () => {
         onSelectTool={onSelectTool}
       />,
       PROJECT_ID,
+      queryClient,
     );
 
     await user.click(await findByRole('combobox'));
@@ -113,6 +133,7 @@ describe('ToolSelect', () => {
         filterTypes={filterTypes}
       />,
       PROJECT_ID,
+      queryClient,
     );
 
     await findByRole('combobox');
@@ -126,6 +147,7 @@ describe('ToolSelect', () => {
         disabled
       />,
       PROJECT_ID,
+      queryClient,
     );
     expect(await findByRole('combobox')).toHaveAttribute('aria-disabled', 'true');
   });

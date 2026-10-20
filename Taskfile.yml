@@ -2,7 +2,6 @@ version: "3"
 
 vars:
   SERVICE: services/elitea-main
-  WORKER_SERVICE: services/elitea-worker-python
 
 tasks:
   # ── Go ────────────────────────────────────────────────────────────────────────
@@ -85,16 +84,6 @@ tasks:
       - buf build libs/proto
       - python3 scripts/contract/generate_configuration_validation_fixtures.py --check
       - python3 scripts/contract/check_configuration_validation_contract.py
-
-  worker:test:
-    desc: Run the standalone Python worker test suite
-    cmds:
-      - python -m pytest "{{.WORKER_SERVICE}}/tests"
-
-  worker:conformance:
-    desc: Execute the standalone worker against runtime-v1 byte vectors
-    cmds:
-      - ELITEA_CONFORMANCE_ROOT="{{.ROOT_DIR}}/testdata/proto/runtime/v1" elitea-worker conformance --suite runtime-v1
 
   openapi:
     desc: Generate OpenAPI server interface for elitea-main
@@ -203,13 +192,11 @@ tasks:
       - podman build -t ghcr.io/eliteaai/elitea-web:dev -f apps/elitea-web/Containerfile .
 
   images:worker:
-    desc: Build elitea-worker-python image
+    desc: Build elitea-worker-rust image
     cmds:
-      # Repo root, not the service directory: the Containerfile COPYs
-      # libs/proto and testdata/proto/runtime/v1. Expect this to be the slowest
-      # image here by some margin — it compiles a Python dependency closure and
-      # clones the SDK at a digest-verified revision.
-      - podman build -t ghcr.io/eliteaai/elitea-worker-python:dev -f services/elitea-worker-python/Containerfile .
+      # Repo root, not the service directory: the Containerfile COPYs libs/proto
+      # and libs/rust. Expect the slowest image here: it compiles the crate graph.
+      - podman build -t ghcr.io/eliteaai/elitea-worker-rust:dev -f services/elitea-worker-rust/Containerfile .
 
   # ── Deploy ────────────────────────────────────────────────────────────────────
   deploy:check-edge:

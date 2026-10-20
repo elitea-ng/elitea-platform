@@ -72,7 +72,7 @@ describe('EditPipelineToolsPanel', () => {
 
     const modules = within(await screen.findByText('INTERNAL TOOLS').then((node) => node.parentElement as HTMLElement));
     expect(modules.getByText('Attachments')).toBeInTheDocument();
-    expect(modules.queryByText('Python sandbox')).not.toBeInTheDocument();
+    expect(modules.queryByText('Planner')).not.toBeInTheDocument();
     expect(modules.queryByText('Swarm Mode')).not.toBeInTheDocument();
   }, 20_000);
 

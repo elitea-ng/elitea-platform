@@ -65,9 +65,19 @@
     "description": "The app-of-apps root, sync-wave order, per-environment value overrides, image promotion, and rollback."
   },
   {
+    "slug": "deployment/cloud-executor-kubernetes",
+    "title": "Cloud executor on Kubernetes",
+    "description": "Run desktop threads sent to the cloud in gVisor or Kata sandboxes: the sandbox nodes on GKE, AKS, EKS and k3s, the encrypted bucket, the keys and certificates, the values, the admin switches and how to verify each one."
+  },
+  {
     "slug": "deployment/configuration",
     "title": "Post-install configuration",
     "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
+  },
+  {
+    "slug": "deployment/from-scratch",
+    "title": "Deploy from scratch",
+    "description": "A complete Kubernetes install on an empty cluster: decisions to make first, the external database and object store, every Secret and certificate authority, the edge in front of it, and the first sign-in."
   },
   {
     "slug": "deployment/helm-install",
@@ -273,6 +283,11 @@
     "slug": "how-tos/entity-management/organizing-entities",
     "title": "Organize agents, pipelines and toolkits",
     "description": "Find, pin, tag, and group your agents, pipelines, toolkits, credentials, and MCPs as your project grows."
+  },
+  {
+    "slug": "how-tos/indexing/desktop-local-index",
+    "title": "Search a local folder (desktop)",
+    "description": "How the Elitea desktop app indexes a folder on your computer for agents, and how to add search by meaning with a model that runs locally or, if your organisation allows it, through your deployment."
   },
   {
     "slug": "how-tos/indexing/index-sources",
@@ -602,7 +617,7 @@
   {
     "slug": "menus/internal-tools",
     "title": "Internal tools",
-    "description": "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, Python sandbox, swarm mode, and smart tools selection."
+    "description": "Built-in chat and agent capabilities — image creation, data analysis, attachments, planner, swarm mode, and smart tools selection."
   },
   {
     "slug": "menus/overview",
@@ -672,7 +687,7 @@
   {
     "slug": "reference/toolkit-catalogue",
     "title": "Toolkit catalogue",
-    "description": "Every toolkit type Elitea serves, its category, and whether the Python or Rust worker can run it."
+    "description": "Every toolkit type Elitea serves, its category, and whether the agent worker can run it."
   },
   {
     "slug": "support/faqs",

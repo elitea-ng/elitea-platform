@@ -68,7 +68,7 @@ describe('partitionActionsIntoBlocks', () => {
     expect(blocks).toHaveLength(2);
   });
 
-  it('folds sequential-resume pcid into paused block of same name', () => {
+  it('never folds a second same-name instance into a paused block (W5)', () => {
     const classifyWrapperPaused = (a: SubAgentGroupable) =>
       (a as unknown as Record<string, string>).phase === 'paused' ? 'paused' as const : null;
     const actions = [
@@ -80,12 +80,7 @@ describe('partitionActionsIntoBlocks', () => {
       deriveInstanceKey,
       classifyWrapper: classifyWrapperPaused,
     });
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]!.kind).toBe('sub');
-    if (blocks[0]!.kind === 'sub') {
-      expect(blocks[0]!.aliasKeys).toContain('call_1');
-      expect(blocks[0]!.aliasKeys).toContain('call_2');
-    }
+    expect(blocks.map((block) => (block.kind === 'sub' ? block.instanceKey : ''))).toEqual(['call_1', 'call_2']);
   });
 
   it('handles empty/undefined list gracefully', () => {

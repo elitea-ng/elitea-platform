@@ -104,9 +104,67 @@ pub(super) fn model_history(mut request: LlmRequest) -> adk_rust::Result<LlmRequ
             }
         }
     }
-    request.contents.retain(|content| !content.parts.is_empty());
+    let called: std::collections::HashSet<String> = request
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionCall { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    request
+        .contents
+        .retain(|content| !content.parts.is_empty() && !is_confirmation_notice(content, &called));
+    drop_answered_replay_markers(&mut request.contents);
     close_abandoned_calls(&mut request.contents, &results);
     Ok(request)
+}
+
+/// ADK records a paused confirmation as a model-role text, "Tool confirmation
+/// required for '<tool>'. Provide approve/deny decision to continue.". It is
+/// runtime bookkeeping the model never produced, not conversation content, so
+/// a continuation's provider request never carries it: the request then has
+/// the shape of the original turn (call, result) and nothing the provider could
+/// read as an instruction. Only that exact text for a tool this history calls
+/// is removed.
+const CONFIRMATION_NOTICE_PREFIX: &str = "Tool confirmation required for '";
+const CONFIRMATION_NOTICE_SUFFIX: &str = "'. Provide approve/deny decision to continue.";
+
+fn is_confirmation_notice(content: &Content, called: &std::collections::HashSet<String>) -> bool {
+    const PREFIX: &str = CONFIRMATION_NOTICE_PREFIX;
+    const SUFFIX: &str = CONFIRMATION_NOTICE_SUFFIX;
+    if content.role != "model" && content.role != "assistant" {
+        return false;
+    }
+    let [Part::Text { text }] = content.parts.as_slice() else {
+        return false;
+    };
+    text.strip_prefix(PREFIX)
+        .and_then(|rest| rest.strip_suffix(SUFFIX))
+        .is_some_and(|tool| called.contains(tool))
+}
+
+/// The runtime's replay marker asks the model to continue a decided call. Once
+/// the replayed call follows it in the history, a later turn does not resend
+/// it: the request keeps the continuation's shape (the call, its result or
+/// block, which carries any reviewer comment) plus the new turns. A marker no
+/// call follows yet stays, so a pending continuation keeps its instruction.
+fn drop_answered_replay_markers(contents: &mut Vec<Content>) {
+    let Some(last_call) = contents.iter().rposition(|content| {
+        content
+            .parts
+            .iter()
+            .any(|part| matches!(part, Part::FunctionCall { .. }))
+    }) else {
+        return;
+    };
+    let mut index = 0;
+    contents.retain(|content| {
+        let keep = index > last_call || !super::direct_hitl::is_replay_marker(content);
+        index += 1;
+        keep
+    });
 }
 
 /// A later user turn can follow a failed child without a recorded tool result.
@@ -230,6 +288,110 @@ mod tests {
             role: role.into(),
             parts,
         }
+    }
+
+    #[test]
+    fn a_later_turn_drops_the_answered_replay_marker_and_keeps_user_text() {
+        let marker = |decision: &str| {
+            content(
+                "user",
+                vec![Part::Text {
+                    text: format!(
+                        "[Elitea direct HITL hitl_e1:{}] The pending tool call was {decision}",
+                        "a".repeat(43)
+                    ),
+                }],
+            )
+        };
+        let text = |role: &str, text: &str| content(role, vec![Part::Text { text: text.into() }]);
+        let request = LlmRequest {
+            contents: vec![
+                text("user", "task"),
+                marker("approved. Continue the original request."),
+                content("model", vec![call(1)]),
+                content("user", vec![result(1)]),
+                text("model", "done"),
+                text("user", "[Elitea direct HITL typed by a person"),
+                // A marker no call follows yet keeps its instruction.
+                marker("rejected. Continue without executing it."),
+            ],
+            ..LlmRequest::new("model", Vec::new())
+        };
+        let projected = model_history(request).expect("projected");
+        let texts: Vec<_> = projected
+            .contents
+            .iter()
+            .map(|content| match content.parts.as_slice() {
+                [Part::Text { text }] => text.chars().take(24).collect::<String>(),
+                _ => content.role.clone(),
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "task",
+                "model",
+                "user",
+                "done",
+                "[Elitea direct HITL type",
+                "[Elitea direct HITL hitl"
+            ],
+            "only the answered marker is dropped"
+        );
+    }
+
+    /// The vendored ADK writes the notice this projection removes; a changed
+    /// text there must fail here instead of reaching the provider again.
+    #[test]
+    fn the_removed_notice_is_the_text_the_vendored_adk_writes() {
+        let adk = include_str!("../../../../libs/rust/vendor/adk-agent/src/llm_agent.rs");
+        let expected = format!("\"{CONFIRMATION_NOTICE_PREFIX}{{}}{CONFIRMATION_NOTICE_SUFFIX}\"");
+        assert!(adk.contains(&expected), "ADK no longer writes {expected}");
+    }
+
+    #[test]
+    fn a_continuation_never_sends_the_confirmation_notice_to_the_provider() {
+        let notice = |tool: &str| {
+            content(
+                "model",
+                vec![Part::Text {
+                    text: format!(
+                        "Tool confirmation required for '{tool}'. Provide approve/deny decision to continue."
+                    ),
+                }],
+            )
+        };
+        let request = LlmRequest {
+            contents: vec![
+                content(
+                    "user",
+                    vec![Part::Text {
+                        text: "task".into(),
+                    }],
+                ),
+                notice("read"),
+                content("model", vec![call(1)]),
+                content("user", vec![result(1)]),
+                // Same text for a tool this history never called: ordinary content.
+                notice("other"),
+            ],
+            ..LlmRequest::new("model", Vec::new())
+        };
+        let projected = model_history(request).expect("projected");
+        let roles: Vec<_> = projected
+            .contents
+            .iter()
+            .map(|content| (content.role.as_str(), content.parts.len()))
+            .collect();
+        assert_eq!(
+            roles,
+            [("user", 1), ("model", 1), ("user", 1), ("model", 1)],
+            "the notice for the called tool is dropped, nothing else"
+        );
+        assert!(matches!(
+            &projected.contents[1].parts[0],
+            Part::FunctionCall { .. }
+        ));
     }
 
     #[test]

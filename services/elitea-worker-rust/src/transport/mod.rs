@@ -30,6 +30,8 @@ pub(crate) mod platform_writer;
 pub(crate) mod runtime_context;
 #[cfg(test)]
 mod runtime_context_tests;
+#[cfg(test)]
+mod runtime_context_workspace_tests;
 mod summary_model;
 #[cfg(test)]
 mod summary_selection_tests;
