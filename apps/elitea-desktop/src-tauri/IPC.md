@@ -570,7 +570,44 @@ default**, in one of two ways the policy may allow (both also need
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `index_embeddings_get` | `{workspace_id}` | `string` — the setting (`off` when unset or the index is not open) |
-| `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now). `off` is always accepted. |
+| `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. `remote:<model>` is probed with one short embedding in the bound project and stored as `remote:<dim>:<model>`. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now), `workspace_unbound`, `embeddings_probe_failed`. `off` is always accepted. |
+| `index_embeddings_status` | `{workspace_id}` | `EmbedStatus \| null` — `null` when the folder does not embed or its index is not open |
+| `index_embeddings_rebuild` | `{workspace_id, full?}` | `null` — embed now whatever the power state (until done); `full` deletes the folder's vectors first. Rejects `embeddings_off`, `index_off` |
+| `index_models` | `{}` | `{models: ModelInfo[], local_allowed, remote_allowed, cache_bytes}` |
+| `index_model_download` | `{model_id, confirm: true}` | `ModelInfo` — starts (or resumes) the download in the background; progress on `index://event`. Rejects `confirmation_required` (no `confirm`: the person must have seen the size), `model_unknown`, `embeddings_not_allowed`, `model_busy` |
+| `index_model_cancel` | `{model_id}` | `boolean` — whether a download ran; what was fetched is kept for a resume |
+| `index_model_import` | `{model_id, folder}` | `ModelInfo` — copies the model's files from a folder (no network); each is checked against its pinned SHA-256 |
+| `index_model_remove` | `{model_id}` | `ModelInfo` — deletes the model's files; `model_busy` while it downloads |
+
+Models are downloaded only when the person asks (`confirm`), from Hugging
+Face's CDN at a pinned revision, each file resumable (`.part` + `Range`)
+and verified against the SHA-256 compiled into the app before it is ever
+loaded. They live once per computer under `<app data>/models/<sha256>/`
+(owner-only), shared by every workspace.
+
+```ts
+type ModelInfo = {
+  id: string; display_name: string; summary: string; license: string;
+  download_bytes: number; ram_mb: number; dimension: number;
+  downloading: boolean;
+} & ({ state: "missing" } | { state: "partial"; have: number; total: number } | { state: "ready" });
+
+type EmbedStatus = {
+  choice: string; state: "waiting" | "running" | "paused" | "done" | "error";
+  done: number; total: number;               // distinct chunk texts
+  held: "turn" | "on_battery" | "low_power" | null;
+  error: string | null; forced: boolean;
+};
+```
+
+`index://event` carries two more payloads beside a build's (which has no
+`kind`):
+
+```ts
+{ kind: "model"; model: string; phase: "downloading" | "ready" | "cancelled" | "failed";
+  done: number; total: number; error: string | null }
+{ kind: "embeddings"; workspace_id: string; status: EmbedStatus }
+```
 
 One background thread embeds every open, turned-on index whose setting
 names an embedder: after each build, in batches of 32 distinct chunk texts,

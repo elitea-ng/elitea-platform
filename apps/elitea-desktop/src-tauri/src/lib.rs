@@ -25,6 +25,7 @@ mod local_commands;
 mod logging;
 mod loopback;
 mod menu;
+mod models;
 mod net;
 mod pkce;
 mod platform;
@@ -256,24 +257,46 @@ pub fn run() {
                 Arc::new(MainWindowIndexEvents(app.handle().clone())),
             )
             .with_deny_list(host_deny);
+            let remote_embeddings = match tauri::async_runtime::handle() {
+                tauri::async_runtime::RuntimeHandle::Tokio(runtime) => {
+                    Some(embeddings::RemoteDeps {
+                        http: http.clone(),
+                        credentials: Arc::new(AuthCredentials(auth.clone())),
+                        workspaces: workspaces.clone(),
+                        runtime,
+                    })
+                }
+            };
+            let index_events: models::Emit = {
+                let handle = app.handle().clone();
+                Arc::new(move |payload: serde_json::Value| {
+                    use tauri::Emitter as _;
+                    if let Err(error) = handle.emit_to("main", index::EVENT_NAME, &payload) {
+                        log::warn!("could not deliver an index event: {error}");
+                    }
+                })
+            };
+            app.manage(Arc::new(models::ModelHost::new(
+                &data_dir,
+                policy.clone(),
+                remote_embeddings.clone(),
+                index_events.clone(),
+            )));
             let index = match Embedding::start(
                 Arc::new(embeddings::Embedders {
                     local: embeddings::LocalModels::new(&data_dir),
-                    remote: match tauri::async_runtime::handle() {
-                        tauri::async_runtime::RuntimeHandle::Tokio(runtime) => {
-                            Some(embeddings::RemoteDeps {
-                                http: http.clone(),
-                                credentials: Arc::new(AuthCredentials(auth.clone())),
-                                workspaces: workspaces.clone(),
-                                runtime,
-                            })
-                        }
-                    },
+                    remote: remote_embeddings,
                     policy: policy.clone(),
                 }),
                 Arc::new(embeddings::Power::default()),
                 EmbedConfig::default(),
-                Arc::new(|_: &str, _: &EmbedStatus| {}),
+                Arc::new(move |workspace_id: &str, status: &EmbedStatus| {
+                    index_events(serde_json::json!({
+                        "kind": "embeddings",
+                        "workspace_id": workspace_id,
+                        "status": status,
+                    }));
+                }),
             ) {
                 Ok(embedding) => index.with_embedding(Arc::new(embedding)),
                 Err(error) => {
@@ -401,7 +424,14 @@ pub fn run() {
             index::index_refresh,
             index::index_cancel,
             index::index_embeddings_get,
-            index::index_embeddings_set,
+            models::index_embeddings_set,
+            models::index_embeddings_status,
+            models::index_embeddings_rebuild,
+            models::index_models,
+            models::index_model_download,
+            models::index_model_cancel,
+            models::index_model_import,
+            models::index_model_remove,
             index::index_remove,
             platform::app_platform,
             context_menu::context_menu_show,

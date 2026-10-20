@@ -7,12 +7,16 @@
 import type { IndexIpc } from '@/shared/desktop/indexIpc';
 
 import { useIndexIpc } from '../model/ipcContext';
+import { useEmbeddings } from '../model/useEmbeddings';
 import { useWorkspaceIndex } from '../model/useWorkspaceIndex';
 import { IndexSettingsPanel } from './IndexSettingsDialog';
 
 function Host({ ipc, workspaceId }: { ipc: IndexIpc; workspaceId: string }): React.JSX.Element {
   const index = useWorkspaceIndex(ipc, workspaceId, { open: true });
-  return <IndexSettingsPanel index={index} />;
+  // The pane is on screen whenever it is mounted: read while the index is on.
+  const on = index.view?.kind === 'status' && index.view.status.state !== 'off';
+  const embeddings = useEmbeddings(ipc, workspaceId, on);
+  return <IndexSettingsPanel index={index} embeddings={embeddings} />;
 }
 
 export function IndexPanelHost({ workspaceId }: { workspaceId: string }): React.JSX.Element | null {

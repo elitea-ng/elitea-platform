@@ -52,7 +52,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use elitea_local_index::embedding::{Embedding, OFF, SETTING, TurnGuard, choice_of};
+use elitea_local_index::embedding::{EmbedStatus, Embedding, OFF, SETTING, TurnGuard, choice_of};
 
 use crate::embeddings::{Allowed, Choice};
 use elitea_local_index::service::{
@@ -749,6 +749,61 @@ impl IndexRegistry {
         Ok(stored)
     }
 
+    /// The workspace's embedding progress.
+    #[must_use]
+    pub fn embedding_status(&self, workspace_id: &str) -> Option<EmbedStatus> {
+        self.embedding.as_ref()?.status(workspace_id)
+    }
+
+    /// Embed the workspace now whatever the power state (`full`: its
+    /// vectors are dropped first and every chunk embedded again).
+    ///
+    /// # Errors
+    ///
+    /// `local_index_disabled`, `index_off`, `embeddings_off` (the setting
+    /// names no embedder), or the index could not be written.
+    pub async fn rebuild_embeddings(
+        &self,
+        workspace_id: &str,
+        full: bool,
+    ) -> Result<(), TurnError> {
+        let (policy, _) = self.policy_now().gate()?;
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        if !self.enabled(workspace_id, &mut slot).await? {
+            return Err(TurnError::new(
+                "index_off",
+                "Turn the index on for this workspace first.",
+            ));
+        }
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
+        drop(slot);
+        let Some(embedding) = &self.embedding else {
+            return Err(TurnError::new(
+                "embeddings_off",
+                "Embeddings are not available.",
+            ));
+        };
+        let reader = service.clone();
+        if blocking(move || choice_of(&reader)).await? == OFF {
+            return Err(TurnError::new(
+                "embeddings_off",
+                "Choose how to embed this workspace first.",
+            ));
+        }
+        if full {
+            let writer = service.clone();
+            blocking(move || writer.store().prune_vectors(None))
+                .await?
+                .map_err(IndexError::from)?;
+        }
+        embedding.add(&service);
+        embedding.force(workspace_id);
+        Ok(())
+    }
+
     /// The workspace's embeddings setting (`off` when the index is not
     /// open or never set).
     pub async fn embeddings(&self, workspace_id: &str) -> String {
@@ -1053,20 +1108,6 @@ pub async fn index_embeddings_get(
     workspace_id: String,
 ) -> Result<String, IpcError> {
     Ok(state.index.embeddings(&workspace_id).await)
-}
-
-/// Set the workspace's embeddings: `off`, `local:<model id>` or
-/// `remote:<dim>:<model>` (IPC.md, "Index embeddings").
-#[tauri::command(rename_all = "snake_case")]
-pub async fn index_embeddings_set(
-    state: State<'_, LocalState>,
-    workspace_id: String,
-    embeddings: String,
-) -> Result<String, IpcError> {
-    Ok(state
-        .index
-        .set_embeddings(&workspace_id, &embeddings)
-        .await?)
 }
 
 /// Refresh the index (`full`: rebuild it from nothing).

@@ -48,6 +48,37 @@ describe('createIndexIpc', () => {
     expect(listen.mock.calls[0]?.[0]).toBe(INDEX_EVENT_CHANNEL);
     expect(handler).toHaveBeenCalledWith(event);
   });
+
+  it('splits index://event by kind: a build, a model download, a workspace embedding', async () => {
+    const build: IndexEvent = { workspace_id: 'w1', phase: 'ready', message: null, status: { ...OFF_STATUS, state: 'ready' } };
+    const model = { kind: 'model', model: 'multilingual-e5-small', phase: 'downloading', done: 10, total: 100, error: null };
+    const embedding = { kind: 'embeddings', workspace_id: 'w1', status: { choice: 'off', state: 'done', done: 0, total: 0, held: null, error: null, forced: false } };
+    const listen = vi.fn<ListenFn>((_channel, handler) => {
+      [build, model, embedding].forEach((payload) => handler(payload));
+      return Promise.resolve(() => undefined);
+    });
+    const ipc = createIndexIpc(vi.fn(), listen);
+    const [builds, models, embeddings] = [vi.fn(), vi.fn(), vi.fn()];
+    await ipc.onEvent(builds);
+    await ipc.onModelEvent(models);
+    await ipc.onEmbeddingsEvent(embeddings);
+    expect(builds.mock.calls).toEqual([[build]]);
+    expect(models.mock.calls).toEqual([[model]]);
+    expect(embeddings.mock.calls).toEqual([[embedding]]);
+  });
+
+  it('sends the embeddings commands with the host argument names', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const ipc = createIndexIpc(invoke, noListen);
+    await ipc.downloadModel('multilingual-e5-small');
+    await ipc.setEmbeddings('w1', 'local:multilingual-e5-small');
+    await ipc.rebuildEmbeddings('w1', true);
+    expect(invoke.mock.calls).toEqual([
+      ['index_model_download', { model_id: 'multilingual-e5-small', confirm: true }],
+      ['index_embeddings_set', { workspace_id: 'w1', embeddings: 'local:multilingual-e5-small' }],
+      ['index_embeddings_rebuild', { workspace_id: 'w1', full: true }],
+    ]);
+  });
 });
 
 describe('createFakeIndexIpc', () => {

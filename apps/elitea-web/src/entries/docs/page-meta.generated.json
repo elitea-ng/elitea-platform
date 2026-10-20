@@ -285,6 +285,11 @@
     "description": "Find, pin, tag, and group your agents, pipelines, toolkits, credentials, and MCPs as your project grows."
   },
   {
+    "slug": "how-tos/indexing/desktop-local-index",
+    "title": "Search a local folder (desktop)",
+    "description": "How the Elitea desktop app indexes a folder on your computer for agents, and how to add search by meaning with a model that runs locally or, if your organisation allows it, through your deployment."
+  },
+  {
     "slug": "how-tos/indexing/index-sources",
     "title": "Index data from a source",
     "description": "The credential and scope fields each supported source needs before you index it, with the shared setup steps done once."

@@ -2,8 +2,8 @@
  * A workspace's code index settings: turn it on (the code structure, parsed
  * on this computer, free), refresh it (only what changed is read) or rebuild
  * it (everything is read again), cancel a running build, turn it off (the
- * build is kept), or remove it (asks first). Embeddings come later and
- * show as such. When the policy turns the index off, the dialog says so
+ * build is kept), or remove it (asks first), and choose how it searches by
+ * meaning (`EmbeddingsSection`). When the policy turns the index off, the dialog says so
  * instead of offering controls.
  */
 import { useState } from 'react';
@@ -15,9 +15,7 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import FormControlLabel from '@mui/material/FormControlLabel';
 import type { Theme } from '@mui/material/styles';
-import Switch from '@mui/material/Switch';
 import Typography from '@mui/material/Typography';
 
 import type { IndexStatus } from '@/shared/desktop/indexIpc';
@@ -25,7 +23,9 @@ import { t } from '@/shared/i18n';
 
 import { describeIndexError } from '../model/describeIndexError';
 import type { IndexProgress } from '../model/progress';
+import type { WorkspaceEmbeddings } from '../model/useEmbeddings';
 import type { IndexAction, WorkspaceIndex } from '../model/useWorkspaceIndex';
+import { EmbeddingsSection } from './EmbeddingsSection';
 
 export interface IndexSettingsDialogProps {
   open: boolean;
@@ -33,6 +33,8 @@ export interface IndexSettingsDialogProps {
   /** The folder's name, for the title. */
   name: string;
   index: WorkspaceIndex;
+  /** Semantic search, once the index is on. */
+  embeddings?: WorkspaceEmbeddings;
 }
 
 const mutedSx = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
@@ -78,20 +80,6 @@ function Details({ status, progress }: { status: IndexStatus; progress: IndexPro
           {t('workspace.index.notChecked', 'Not checked since the app started; it is checked when you open this folder.')}
         </Typography>
       )}
-    </Box>
-  );
-}
-
-function Embeddings(): React.JSX.Element {
-  return (
-    <Box component="section" data-testid="index-embeddings" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-      <Typography variant="labelMedium" component="h3" sx={{ margin: 0 }}>
-        {t('workspace.index.embeddings.title', 'Semantic search')}
-      </Typography>
-      <FormControlLabel disabled control={<Switch size="small" checked={false} />} label={t('workspace.index.embeddings.toggle', 'Embeddings (coming soon)')} />
-      <Typography variant="bodySmall" sx={mutedSx}>
-        {t('workspace.index.embeddings.body', 'Searching by meaning needs embeddings from your deployment’s models. This is not available yet.')}
-      </Typography>
     </Box>
   );
 }
@@ -191,13 +179,30 @@ function Footer({ actions, index, confirming, onConfirming, onClose }: FooterPro
   );
 }
 
+/** What a folder's index holds, and its semantic search once it is on. */
+function Built({ status, progress, embeddings }: { status: IndexStatus; progress: IndexProgress | null; embeddings: WorkspaceEmbeddings | undefined }): React.JSX.Element {
+  return (
+    <>
+      <Typography variant="bodySmall" sx={mutedSx}>
+        {t(
+          'workspace.index.intro',
+          'Agents can search this folder’s code structure (files, symbols and how they relate). It is parsed on this computer, kept in the app’s data, and costs nothing.',
+        )}
+      </Typography>
+      <Details status={status} progress={progress} />
+      {embeddings !== undefined && status.state !== 'off' && <EmbeddingsSection embeddings={embeddings} />}
+    </>
+  );
+}
+
 interface BodyProps {
   index: WorkspaceIndex;
   confirming: boolean;
+  embeddings?: WorkspaceEmbeddings;
 }
 
 /** Everything the settings say, without a frame: the dialog puts it in its content, the inspector in its pane. */
-function Body({ index, confirming }: BodyProps): React.JSX.Element {
+function Body({ index, confirming, embeddings }: BodyProps): React.JSX.Element {
   const { view, loadError, progress, actionError } = index;
   const status = view?.kind === 'status' ? view.status : undefined;
   return (
@@ -208,18 +213,7 @@ function Body({ index, confirming }: BodyProps): React.JSX.Element {
         </Alert>
       )}
       {view === undefined && loadError !== null && <Alert severity="error">{describeIndexError(loadError)}</Alert>}
-      {status !== undefined && (
-        <>
-          <Typography variant="bodySmall" sx={mutedSx}>
-            {t(
-              'workspace.index.intro',
-              'Agents can search this folder’s code structure (files, symbols and how they relate). It is parsed on this computer, kept in the app’s data, and costs nothing.',
-            )}
-          </Typography>
-          <Details status={status} progress={progress} />
-          <Embeddings />
-        </>
-      )}
+      {status !== undefined && <Built status={status} progress={progress} embeddings={embeddings} />}
       {confirming && (
         <Alert severity="warning" data-testid="index-remove-confirm">
           {t('workspace.index.removeConfirm', 'Remove this folder’s index? What was built is deleted; you can build it again.')}
@@ -230,7 +224,7 @@ function Body({ index, confirming }: BodyProps): React.JSX.Element {
   );
 }
 
-export function IndexSettingsDialog({ open, onClose, name, index }: IndexSettingsDialogProps): React.JSX.Element {
+export function IndexSettingsDialog({ open, onClose, name, index, embeddings }: IndexSettingsDialogProps): React.JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const close = (): void => {
     setConfirming(false);
@@ -242,7 +236,7 @@ export function IndexSettingsDialog({ open, onClose, name, index }: IndexSetting
     <Dialog open={open} onClose={close} aria-labelledby="workspace-index-title" fullWidth maxWidth="sm">
       <DialogTitle id="workspace-index-title">{t('workspace.index.title', 'Code index · {{name}}', { name })}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <Body index={index} confirming={confirming} />
+        <Body index={index} confirming={confirming} embeddings={embeddings} />
       </DialogContent>
       <DialogActions>
         {actions === null ? (
@@ -256,12 +250,12 @@ export function IndexSettingsDialog({ open, onClose, name, index }: IndexSetting
 }
 
 /** The same settings as a pane (the inspector's Index segment): the actions sit under the text, no Close. */
-export function IndexSettingsPanel({ index }: { index: WorkspaceIndex }): React.JSX.Element {
+export function IndexSettingsPanel({ index, embeddings }: { index: WorkspaceIndex; embeddings?: WorkspaceEmbeddings }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const actions = footerActions(index, () => setConfirming(true));
   return (
     <Box data-testid="index-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Body index={index} confirming={confirming} />
+      <Body index={index} confirming={confirming} embeddings={embeddings} />
       {actions !== null && (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
           {confirming ? <Footer actions={actions} index={index} confirming onConfirming={setConfirming} onClose={() => setConfirming(false)} /> : actions}
