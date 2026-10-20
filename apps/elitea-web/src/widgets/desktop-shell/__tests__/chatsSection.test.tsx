@@ -1,9 +1,12 @@
 /**
  * The conversations under the sidebar's Chats row: Pinned first, then the
  * date buckets with their captions, the open conversation highlighted, Local
- * work threads left out, Archive asks first and takes the row away, and the
- * trailing "Archived" row opens the archived chats page.
+ * work threads left out, Archive asks first and takes the row away (and keeps
+ * it away when the list mounts again), and the trailing "Archived" row opens
+ * the archived chats page.
  */
+import { useState } from 'react';
+
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useLocation } from '@tanstack/react-router';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -35,9 +38,14 @@ const LISTING = {
 
 function Section(): React.JSX.Element {
   const location = useLocation();
+  // A remount of the list over the same query cache (the sidebar collapsed and opened again).
+  const [shown, setShown] = useState(true);
   return (
     <>
-      <ChatsSection projectId="42" pathname={location.pathname} />
+      <button type="button" onClick={() => setShown((current) => !current)}>
+        toggle list
+      </button>
+      {shown && <ChatsSection projectId="42" pathname={location.pathname} />}
       <p data-testid="where">{location.pathname}</p>
       <Outlet />
     </>
@@ -74,7 +82,13 @@ beforeEach(() => {
   server.use(
     http.get('*/auth/permissions/prompt_lib/:projectId', () => HttpResponse.json([{ name: 'models.chat.folders.get', enabled: true }])),
     http.get('*/social/author', () => HttpResponse.json({ id: 3, name: 'Me' })),
-    http.get('*/elitea_core/folder/prompt_lib/:projectId', () => HttpResponse.json(LISTING)),
+    // The server leaves an archived conversation out of the listing.
+    http.get('*/elitea_core/folder/prompt_lib/:projectId', () =>
+      HttpResponse.json({
+        ...LISTING,
+        date_groups: LISTING.date_groups.map((group) => ({ ...group, conversations: group.conversations.filter((item) => !archived.includes(item.id)) })),
+      }),
+    ),
     http.put('*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId', ({ params }) => {
       archived.push(String(params['conversationId']));
       return HttpResponse.json({ ok: true });
@@ -121,6 +135,24 @@ describe('ChatsSection', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(screen.queryByText('Postgres connection math')).not.toBeInTheDocument());
     expect(archived).toEqual(['75']);
+  });
+
+  it('keeps an archived row out of the list when the list mounts again over the same cache', async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText('Postgres connection math');
+    const target = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('Postgres'));
+    await user.click(within(target as HTMLElement).getByTestId('shell-conversation-more'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(screen.queryByText('Postgres connection math')).not.toBeInTheDocument());
+    expect(archived).toEqual(['75']);
+
+    await user.click(screen.getByRole('button', { name: 'toggle list' }));
+    expect(screen.queryByTestId('shell-chats')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'toggle list' }));
+    await screen.findByText('quick overview');
+    expect(screen.queryByText('Postgres connection math')).not.toBeInTheDocument();
   });
 
   it('opens the archived chats page from the trailing Archived row, and marks it there', async () => {

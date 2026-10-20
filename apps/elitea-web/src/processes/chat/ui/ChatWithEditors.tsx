@@ -10,6 +10,7 @@ import Typography from '@mui/material/Typography';
 
 import ChatPage from '@/pages/chat';
 import { useInspectorSlot } from '@/shared/desktop/inspectorSlot';
+import { useSidebarChatList } from '@/shared/desktop/sidebarChatList';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { useSelectedProject } from '@/widgets/app-shell';
@@ -201,8 +202,12 @@ export function ChatWithEditors(): ReactNode {
   const isAnyEditorOpen = isEditingAgent || isEditingPipeline || isEditingToolkit;
 
   // Inside the desktop frame (it provides the inspector slot) the conversations
-  // are rows of the frame's own sidebar, so the page drops its in-page list.
+  // are rows of the frame's own sidebar, so the page drops its in-page list —
+  // but only while that sidebar list is on screen. With the sidebar hidden, or
+  // its Elitea section or Chats disclosure collapsed, the page keeps its list.
   const inDesktopFrame = useInspectorSlot() !== null;
+  const sidebarChatList = useSidebarChatList();
+  const showInPageList = sidebarChatList?.mounted !== true;
 
   /*
    * The pipeline editor's EDIT-mode Configuration tab and its Save
@@ -254,7 +259,7 @@ export function ChatWithEditors(): ReactNode {
         * with a height.
         */}
       <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%', boxSizing: 'border-box', py: 2, pl: 3, pr: inDesktopFrame ? 3 : 0 }}>
-        {!inDesktopFrame && <ChatConversationSidebar />}
+        {showInPageList && <ChatConversationSidebar />}
         <Box
           sx={{
             flexGrow: 1,

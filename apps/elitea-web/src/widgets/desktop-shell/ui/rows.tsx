@@ -28,6 +28,8 @@ export interface ShellRowProps {
   /** Shown at the right edge; `trailingOnHover` hides it until the row is hovered or focused. */
   trailing?: ReactNode;
   trailingOnHover?: boolean;
+  /** The room the hover actions take at the right edge (the label truncates before it); two buttons by default. */
+  trailingRoom?: string;
   /** Quiet text after the label, on the same line (a folder's project); gives way to `trailing` on hover. */
   meta?: string;
   /** A secondary row (an empty state, "Show all"): the label in the muted colour. */
@@ -48,7 +50,7 @@ function labelColor(theme: Theme, selected: boolean, muted: boolean): string {
 }
 
 export function ShellRow(props: ShellRowProps): React.JSX.Element {
-  const { label, icon, selected = false, indent = 0, onClick, trailing, trailingOnHover = false, meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
+  const { label, icon, selected = false, indent = 0, onClick, trailing, trailingOnHover = false, trailingRoom = '3.75rem', meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
   const swaps = trailing !== undefined && trailingOnHover;
   return (
     <Box
@@ -68,7 +70,7 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
           ? {
               '&:hover .shell-row-meta, &:focus-within .shell-row-meta': { display: 'none' },
               // Room for the actions, so the label truncates before them.
-              '&:hover .shell-row-main, &:focus-within .shell-row-main': { paddingRight: '3.75rem' },
+              '&:hover .shell-row-main, &:focus-within .shell-row-main': { paddingRight: trailingRoom },
             }
           : {}),
       })}

@@ -3,7 +3,8 @@
  * key, swept by logout like every `el.` key): the "Elitea" section
  * (`el.desktop.eliteaOpen` — collapsed, it keeps only the page on screen, so
  * local work gets the room) and the conversations under its Chats row
- * (`el.desktop.chatsOpen`).
+ * (`el.desktop.chatsOpen`). The third element expands the section (and
+ * remembers it): opening the chat expands both, so its conversations show.
  */
 import { useCallback, useState } from 'react';
 
@@ -25,26 +26,34 @@ function readOpen(key: string): boolean {
   }
 }
 
-function usePersistedOpen(key: string): [boolean, () => void] {
+type SectionOpen = [open: boolean, toggle: () => void, expand: () => void];
+
+function usePersistedOpen(key: string): SectionOpen {
   const [open, setOpen] = useState(() => readOpen(key));
-  const toggle = useCallback(() => {
-    setOpen((current) => {
-      const next = !current;
-      try {
-        createStorage('local').setJSON(key, next);
-      } catch {
-        // Not remembered.
-      }
-      return next;
-    });
-  }, [key]);
-  return [open, toggle];
+  const change = useCallback(
+    (decide: (current: boolean) => boolean) => {
+      setOpen((current) => {
+        const next = decide(current);
+        if (next === current) return current;
+        try {
+          createStorage('local').setJSON(key, next);
+        } catch {
+          // Not remembered.
+        }
+        return next;
+      });
+    },
+    [key],
+  );
+  const toggle = useCallback(() => change((current) => !current), [change]);
+  const expand = useCallback(() => change(() => true), [change]);
+  return [open, toggle, expand];
 }
 
-export function useEliteaSectionOpen(): [boolean, () => void] {
+export function useEliteaSectionOpen(): SectionOpen {
   return usePersistedOpen(ELITEA_KEY);
 }
 
-export function useChatsSectionOpen(): [boolean, () => void] {
+export function useChatsSectionOpen(): SectionOpen {
   return usePersistedOpen(CHATS_KEY);
 }

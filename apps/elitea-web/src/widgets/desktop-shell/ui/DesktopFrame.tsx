@@ -8,7 +8,9 @@
  * changes panel; every other page (the Elitea features, Settings) gets a slim
  * title row with the way back to the folders. A page with an inspector (the
  * chat's participants) fills the frame's full-height right pane through
- * `shared/desktop/inspectorSlot` (`InspectorPane.tsx`).
+ * `shared/desktop/inspectorSlot` (`InspectorPane.tsx`). The sidebar's Chats
+ * list tells the chat page that it is on screen (`shared/desktop/sidebarChatList`),
+ * so the page shows its own list only while the sidebar's is gone.
  */
 import { useEffect, useMemo, type ReactNode } from 'react';
 
@@ -21,6 +23,7 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 
 import type { Project } from '@/entities/project';
+import { SidebarChatListProvider } from '@/shared/desktop/sidebarChatList';
 import { t } from '@/shared/i18n';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
@@ -96,51 +99,53 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
 
   return (
     <NativeLook>
-      <InspectorSlotScope host={inspector}>
-        {/* `clip`, not `hidden`: a hidden box can still be scrolled by code (a pane's scrollIntoView), which shifted the whole window. */}
-        <Box data-testid="desktop-frame" sx={{ display: 'flex', height: '100vh', overflow: 'clip' }}>
-          {sidebarOpen && (
-            <DesktopSidebar
-              location={location}
-              run={run}
-              permissions={permissions}
-              projects={projects}
-              selectedProjectId={selectedProjectId}
-              onSelectProject={onSelectProject}
-            />
-          )}
-          <Box
-            component="main"
-            sx={(theme: Theme) => ({
-              flex: 1,
-              minWidth: 0,
-              height: '100vh',
-              display: 'flex',
-              flexDirection: 'column',
-              background: theme.vars.palette.background.default,
-              position: 'relative',
-            })}
-          >
-            {!location.inFolders && (
-              <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-                <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
-                  <ShowSidebarButton />
-                  <Button size="small" startIcon={<ArrowBackIcon />} onClick={() => run({ type: 'folders' })}>
-                    {t('desktop.shell.backToLocalWork', 'Local work')}
-                  </Button>
-                </TitleBarSpacer>
-              </Box>
+      <SidebarChatListProvider>
+        <InspectorSlotScope host={inspector}>
+          {/* `clip`, not `hidden`: a hidden box can still be scrolled by code (a pane's scrollIntoView), which shifted the whole window. */}
+          <Box data-testid="desktop-frame" sx={{ display: 'flex', height: '100vh', overflow: 'clip' }}>
+            {sidebarOpen && (
+              <DesktopSidebar
+                location={location}
+                run={run}
+                permissions={permissions}
+                projects={projects}
+                selectedProjectId={selectedProjectId}
+                onSelectProject={onSelectProject}
+              />
             )}
-            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
-            <BannerStack>
-              <ShellNotice />
-              <ReclaimRequestToast run={run} />
-            </BannerStack>
+            <Box
+              component="main"
+              sx={(theme: Theme) => ({
+                flex: 1,
+                minWidth: 0,
+                height: '100vh',
+                display: 'flex',
+                flexDirection: 'column',
+                background: theme.vars.palette.background.default,
+                position: 'relative',
+              })}
+            >
+              {!location.inFolders && (
+                <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
+                  <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={<InspectorToggle host={inspector} />}>
+                    <ShowSidebarButton />
+                    <Button size="small" startIcon={<ArrowBackIcon />} onClick={() => run({ type: 'folders' })}>
+                      {t('desktop.shell.backToLocalWork', 'Local work')}
+                    </Button>
+                  </TitleBarSpacer>
+                </Box>
+              )}
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>{children}</Box>
+              <BannerStack>
+                <ShellNotice />
+                <ReclaimRequestToast run={run} />
+              </BannerStack>
+            </Box>
+            <InspectorPane host={inspector} />
+            <CommandPalette items={items} run={run} />
           </Box>
-          <InspectorPane host={inspector} />
-          <CommandPalette items={items} run={run} />
-        </Box>
-      </InspectorSlotScope>
+        </InspectorSlotScope>
+      </SidebarChatListProvider>
     </NativeLook>
   );
 }

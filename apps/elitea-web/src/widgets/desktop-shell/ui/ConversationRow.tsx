@@ -2,7 +2,9 @@
  * One conversation in the sidebar's Chats list: a native row (`ShellRow`)
  * that opens it, with the same actions on a right-click (the OS menu,
  * `useContextMenu`) and on its hover "⋯" button: Pin / Unpin, Rename,
- * Archive, Copy Link, Delete. Rename edits the title in place. Archive and
+ * Move to folder…, Archive, Copy Link, Delete. Rename edits the title in
+ * place; Move to folder… lists the project's chat folders (a pinned chat is
+ * not moved, as in the web list). Archive and
  * Delete ask first: the archive is the project's (it takes the chat out of
  * every member's list; any member can unarchive it). Rename and Delete are
  * the author's, as in the web list.
@@ -25,6 +27,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
 import { conversationLink, copyText } from '../lib/conversationLink';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
+import { MoveToFolderDialog, type FolderChoice } from './MoveToFolderDialog';
 import { ShellRow } from './rows';
 
 export interface ConversationRowActions {
@@ -34,6 +37,11 @@ export interface ConversationRowActions {
   readonly archive: (conversation: Conversation) => void;
   readonly remove: (conversation: Conversation) => void;
   readonly canModify: (conversation: Conversation) => boolean;
+  /** The project's chat folders, for Move to folder…. */
+  readonly folders: readonly FolderChoice[];
+  /** The folder that holds the conversation now; `null` when none does. */
+  readonly folderOf: (conversation: Conversation) => string | null;
+  readonly moveToFolder: (conversation: Conversation, folderId: string | null) => void;
 }
 
 export interface ConversationRowProps {
@@ -46,6 +54,7 @@ export interface ConversationRowProps {
 /** The row's actions, once, for both menus. Leaves only (the ⋯ menu renders the same list). */
 interface RowAsks {
   readonly rename: () => void;
+  readonly move: () => void;
   readonly archive: () => void;
   readonly remove: () => void;
 }
@@ -59,6 +68,12 @@ function conversationActions(conversation: Conversation, actions: ConversationRo
     { separator: true },
     { id: 'pin', label: pinned ? t('desktop.chats.unpin', 'Unpin') : t('desktop.chats.pin', 'Pin'), run: () => actions.pin(conversation, !pinned) },
     { id: 'rename', label: t('desktop.chats.rename', 'Rename'), enabled: mine, run: asks.rename },
+    {
+      id: 'move',
+      label: t('desktop.chats.moveToFolder', 'Move to folder…'),
+      enabled: !pinned && (actions.folders.length > 0 || actions.folderOf(conversation) !== null),
+      run: asks.move,
+    },
     { id: 'archive', label: t('desktop.chats.archive', 'Archive'), run: asks.archive },
     { separator: true },
     { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },
@@ -131,8 +146,10 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [moving, setMoving] = useState(false);
   const label = conversation.name === '' ? t('desktop.chats.untitled', 'Untitled chat') : conversation.name;
-  const items = conversationActions(conversation, actions, { rename: () => setRenaming(true), archive: () => setArchiving(true), remove: () => setDeleting(true) });
+  const asks: RowAsks = { rename: () => setRenaming(true), move: () => setMoving(true), archive: () => setArchiving(true), remove: () => setDeleting(true) };
+  const items = conversationActions(conversation, actions, asks);
 
   return (
     <>
@@ -156,6 +173,16 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
           onContextMenu={(event) => showMenu(event, items)}
           trailingOnHover
           trailing={<RowMenu items={items} label={t('desktop.chats.more', 'More for {{name}}', { name: label })} />}
+        />
+      )}
+      {moving && (
+        <MoveToFolderDialog
+          open
+          name={label}
+          folders={actions.folders}
+          currentFolderId={actions.folderOf(conversation)}
+          onClose={() => setMoving(false)}
+          onMove={(folderId) => actions.moveToFolder(conversation, folderId)}
         />
       )}
       <BaseModal

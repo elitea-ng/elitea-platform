@@ -5,13 +5,22 @@
  * owns for the web rail and fills them through the SAME hooks — the grouped
  * listing (`useQueryFoldersList`, so one `['folder', 'list', …]` cache entry
  * serves both lists), the optimistic pin (`usePinConversation`), the per-bucket
- * pages (`mergeLoadMorePage`) — plus rename and delete through
- * `entities/conversation`'s API, the calls the web rail makes.
+ * pages (`mergeLoadMorePage`), the folders (`useCreateFolder`,
+ * `useMoveToFolderConversation`, see `useConversationRailFolders`) — plus
+ * rename and delete through `entities/conversation`'s API, the calls the web
+ * rail makes.
  *
  * There is no second cache: the listing is the folders query, and every
- * change is applied to the containers the way the web rail applies it.
+ * change is applied to the containers the way the web rail applies it. Each
+ * change also marks the cached listing stale (`invalidate`), so the other
+ * list (the chat page's own, which the desktop shows while the sidebar's is
+ * hidden) and a remount read the change instead of the old rows. The chat
+ * page does the same for a conversation it creates, renames or deletes, so
+ * this list learns of those through the same refetch.
  */
 import { useCallback, useRef, useState } from 'react';
+
+import { useQueryClient } from '@tanstack/react-query';
 
 import type { Conversation } from '@/entities/conversation';
 import { conversationApi } from '@/entities/conversation';
@@ -23,10 +32,12 @@ import { mergeLoadMorePage, type LoadMorePage } from '../../ui/conversations/Con
 import { conversationListErrorMessage } from '../errorMessage';
 import type { DateGroupListItem, FolderListItem } from './conversationListState.types';
 import { useArchiveConversation } from './useArchiveConversation.hooks';
+import { useConversationRailFolders } from './useConversationRailFolders.hooks';
 import { usePinConversation } from './usePinConversation.hooks';
 import { useQueryFoldersList } from './useQueryFoldersList.hooks';
 
 const PAGE_SIZE = 10;
+const FOLDER_LIST_KEY = ['folder', 'list'] as const;
 
 export interface ConversationRail {
   readonly pinned: readonly Conversation[];
@@ -43,8 +54,10 @@ export interface ConversationRail {
   readonly remove: (conversation: Conversation) => Promise<boolean>;
   /** Archives for the caller: the row leaves the lists at once (`useArchiveConversation`). */
   readonly archive: (conversation: Conversation) => void;
-  /** Applies one change to every container that holds rows (archive, a server delta). */
-  readonly transform: (change: (items: readonly Conversation[]) => readonly Conversation[]) => void;
+  /** Creates a folder with this name. */
+  readonly createFolder: (name: string) => Promise<void>;
+  /** Moves the conversation into a folder, or out of every folder with `null`. */
+  readonly moveToFolder: (conversation: Conversation, folderId: string | null) => Promise<void>;
   readonly loadMoreInGroup: (groupName: string) => void;
   readonly loadMoreInFolder: (folderId: string) => void;
   /** Whether a date group or folder has rows the listing did not deliver yet. */
@@ -121,16 +134,19 @@ function useLoadMore(projectId: string | undefined, containers: Containers, toas
 }
 
 /** Rename and delete, as the web rail does them: the request first, then the rows (no optimistic write). */
-function useEdits(projectId: string | undefined, transform: Containers['transform'], toastError: (message: string) => void) {
+function useEdits(projectId: string | undefined, transform: Containers['transform'], toastError: (message: string) => void, invalidate: () => void) {
   const rename = useCallback(
     (conversation: Conversation, name: string) => {
       if (projectId === undefined || name.trim() === '' || name === conversation.name) return;
       void conversationApi
         .edit({ projectId, id: conversation.id, name })
-        .then(() => transform((items) => items.map((item) => (item.id === conversation.id ? { ...item, name } : item))))
+        .then(() => {
+          transform((items) => items.map((item) => (item.id === conversation.id ? { ...item, name } : item)));
+          invalidate();
+        })
         .catch(() => toastError('Failed to rename the conversation'));
     },
-    [projectId, toastError, transform],
+    [invalidate, projectId, toastError, transform],
   );
   const remove = useCallback(
     async (conversation: Conversation): Promise<boolean> => {
@@ -138,13 +154,14 @@ function useEdits(projectId: string | undefined, transform: Containers['transfor
       try {
         await conversationApi.remove({ projectId, id: conversation.id });
         transform((items) => items.filter((item) => item.id !== conversation.id));
+        invalidate();
         return true;
       } catch {
         toastError('Failed to delete the conversation');
         return false;
       }
     },
-    [projectId, toastError, transform],
+    [invalidate, projectId, toastError, transform],
   );
   return { rename, remove };
 }
@@ -155,6 +172,8 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
   const toastError = useCallback((message: string) => setError(message), []);
   const dismissError = useCallback(() => setError(undefined), []);
   const currentUserId = useCurrentUserId();
+  const queryClient = useQueryClient();
+  const invalidate = useCallback(() => void queryClient.invalidateQueries({ queryKey: FOLDER_LIST_KEY }), [queryClient]);
 
   const listing = useQueryFoldersList({
     projectId,
@@ -178,7 +197,8 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
     toastError,
   });
   const pin = useCallback((conversation: Conversation, shouldPin: boolean) => void onPinConversation(conversation, shouldPin), [onPinConversation]);
-  const { rename, remove } = useEdits(projectId, containers.transform, toastError);
+  const { rename, remove } = useEdits(projectId, containers.transform, toastError, invalidate);
+  const { createFolder, moveToFolder } = useConversationRailFolders(projectId, containers, toastError, invalidate);
   const { loadMoreInGroup, loadMoreInFolder } = useLoadMore(projectId, containers, toastError);
   const { transform } = containers;
   const removeRow = useCallback((conversationId: string) => transform((items) => items.filter((item) => item.id !== conversationId)), [transform]);
@@ -201,7 +221,8 @@ export function useConversationRail({ projectId }: { readonly projectId: string 
     rename,
     remove,
     archive,
-    transform,
+    createFolder,
+    moveToFolder,
     loadMoreInGroup,
     loadMoreInFolder,
     hasMore,

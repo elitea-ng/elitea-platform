@@ -8,10 +8,16 @@
  * The data is the web chat list's (`useConversationRail` over
  * `features/chat-conversation-list`): the same grouped listing and cache, so
  * Local work threads and hidden conversations are left out exactly as the
- * web list leaves them out. The chat page drops its own in-page list inside
- * the desktop frame; this replaces it.
+ * web list leaves them out. While this list is mounted it tells the frame so
+ * (`shared/desktop/sidebarChatList`), and the chat page drops its own in-page
+ * list; when it is not (the sidebar hidden, a section collapsed) the page
+ * shows its list again.
+ *
+ * Folders are managed here as in the web list, through its hooks: the Chats
+ * row's "New folder" opens a name field at the top of the folders, and a
+ * row's "Move to folder…" moves the conversation.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -19,11 +25,13 @@ import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
+import InputBase from '@mui/material/InputBase';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import type { Conversation } from '@/entities/conversation';
 import { useConversationRail } from '@/features/chat-conversation-list';
+import { useAnnounceSidebarChatList } from '@/shared/desktop/sidebarChatList';
 import { t } from '@/shared/i18n';
 import { isLocalWorkConversation } from '@/shared/lib/localWork';
 
@@ -139,6 +147,36 @@ function useErrorNotice(rail: Rail): void {
   }, [error, dismissError]);
 }
 
+/** The new folder's name: Enter creates it, Escape or leaving the field cancels. */
+function NewFolderField({ onDone }: { readonly onDone: (name: string | null) => void }): React.JSX.Element {
+  const [value, setValue] = useState('');
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') onDone(value.trim());
+    else if (event.key === 'Escape') onDone(null);
+  };
+  return (
+    <Box component="li" sx={{ paddingLeft: 1 + CHILD_INDENT, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center' }}>
+      <InputBase
+        value={value}
+        placeholder={t('desktop.chats.newFolderPlaceholder', 'Folder name')}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={() => onDone(null)}
+        inputRef={(node: HTMLInputElement | null) => node?.focus()}
+        inputProps={{ 'aria-label': t('desktop.chats.newFolderLabel', 'New folder name'), 'data-testid': 'shell-chats-new-folder-name' }}
+        sx={(theme: Theme) => ({
+          flex: 1,
+          paddingX: 0.5,
+          borderRadius: theme.vars.shape.radiusSm,
+          border: `1px solid ${theme.vars.palette.primary.main}`,
+          background: theme.vars.palette.background.default,
+          typography: 'labelSmall',
+        })}
+      />
+    </Box>
+  );
+}
+
 function useRowActions(rail: Rail, openId: string): ConversationRowActions {
   const navigate = useNavigate();
   return {
@@ -152,11 +190,24 @@ function useRowActions(rail: Rail, openId: string): ConversationRowActions {
       void rail.remove(conversation).then((removed) => {
         if (removed && conversation.id === openId) void navigate({ to: '/chat' });
       }),
+    folders: rail.folders.map((folder) => ({ id: folder.id, name: folder.name })),
+    folderOf: (conversation) => rail.folders.find((folder) => folder.conversations.some((item) => item.id === conversation.id))?.id ?? null,
+    moveToFolder: (conversation, folderId) => void rail.moveToFolder(conversation, folderId),
   };
 }
 
-export function ChatsSection({ projectId, pathname }: { readonly projectId: string | undefined; readonly pathname: string }): React.JSX.Element {
+export interface ChatsSectionProps {
+  readonly projectId: string | undefined;
+  readonly pathname: string;
+  /** The Chats row's "New folder" was chosen: show the name field. */
+  readonly creatingFolder?: boolean;
+  /** The name field closed (created or cancelled). */
+  readonly onCreatingFolderDone?: () => void;
+}
+
+export function ChatsSection({ projectId, pathname, creatingFolder = false, onCreatingFolderDone }: ChatsSectionProps): React.JSX.Element {
   const rail = useConversationRail({ projectId });
+  useAnnounceSidebarChatList();
   useErrorNotice(rail);
   const openId = openConversationId(pathname);
   const actions = useRowActions(rail, openId);
@@ -173,6 +224,14 @@ export function ChatsSection({ projectId, pathname }: { readonly projectId: stri
             <Rows conversations={rail.pinned} openId={openId} indent={CHILD_INDENT} actions={actions} />
           </Box>
         </li>
+      )}
+      {creatingFolder && (
+        <NewFolderField
+          onDone={(name) => {
+            onCreatingFolderDone?.();
+            if (name !== null && name !== '') void rail.createFolder(name);
+          }}
+        />
       )}
       <Folders rail={rail} openId={openId} actions={actions} />
       {groups.map((group) => (

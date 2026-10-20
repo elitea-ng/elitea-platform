@@ -39,6 +39,7 @@ import { useSelectedProject } from '@/widgets/app-shell';
 
 import { chatBasename, desktopLocalThreadFor, draftFolderId } from './conversationSidebar.helpers';
 import { useDuplicateConversation } from './useDuplicateConversation';
+import { useInvalidateFolderListing } from './useInvalidateFolderListing';
 
 /** What the component needs beyond the `Conversations` prop bundle itself. */
 export interface UseConversationSidebarResult {
@@ -100,6 +101,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
 
   const toastError = useCallback((message: string) => setErrorMessage(message), []);
   const onDismissError = useCallback(() => setErrorMessage(undefined), []);
+  const invalidateListing = useInvalidateFolderListing(); // after a create, rename, visibility change or delete
 
   /**
    * The list's own restore-on-load path and a user CLICK are deliberately two
@@ -250,6 +252,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
           // (`Conversations.body.tsx`) — filtering only `conversations` and
           // `pinnedConversations`, as this used to, left the row on screen.
           transformEveryConversationList((items) => items.filter((item) => item.id !== conversation.id));
+          invalidateListing();
           // Read the active conversation LIVE (see `activeConversationRef`).
           if (activeConversationRef.current?.id === conversation.id) {
             // Route still points at the deleted transcript; fall back to the
@@ -260,7 +263,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
         })
         .catch(() => toastError('Failed to delete the conversation'));
     },
-    [projectId, navigate, toastError, transformEveryConversationList],
+    [projectId, navigate, toastError, transformEveryConversationList, invalidateListing],
   );
 
   const renameConversation = useCallback(
@@ -269,24 +272,25 @@ export function useConversationSidebar(): UseConversationSidebarResult {
       // when this callback was built (see `activeConversationRef`).
       const active = activeConversationRef.current;
       if (projectId === undefined || active === undefined) return;
-      void conversationApi.edit({ projectId, id: active.id, name }).catch(() => toastError('Failed to rename the conversation'));
+      void conversationApi.edit({ projectId, id: active.id, name }).then(invalidateListing, () => toastError('Failed to rename the conversation'));
     },
-    [projectId, toastError],
+    [projectId, toastError, invalidateListing],
   );
 
   const createConversation = useCallback(
     async (conversation: Conversation): Promise<unknown> => {
       if (projectId === undefined) return undefined;
       try {
-        // `is_private` is required by the wire contract; the baseline's own create
-        // path (`NewChat.jsx`'s `onCreateConversation`) defaults it to private.
-        return await conversationApi.create({ projectId, name: conversation.name, is_private: conversation.isPrivate ?? true });
+        // `is_private` is required; the baseline (`NewChat.jsx`'s `onCreateConversation`) defaults it to private.
+        const created = await conversationApi.create({ projectId, name: conversation.name, is_private: conversation.isPrivate ?? true });
+        invalidateListing();
+        return created;
       } catch {
         toastError('Failed to create the conversation');
         return undefined;
       }
     },
-    [projectId, toastError],
+    [projectId, toastError, invalidateListing],
   );
 
   /**
@@ -320,30 +324,28 @@ export function useConversationSidebar(): UseConversationSidebarResult {
   const duplicateConversation = useDuplicateConversation({ projectId, toastError, setActiveConversation });
 
   /**
-   * `ConversationItem` calls `onEdit` with the ALREADY-updated conversation for
-   * both the rename editor's save (`ConversationItem.tsx`'s `onSave`) and the
-   * menu's "Make public" (`handleMakePublic`), so this must persist, not merely
-   * select — it used to be `setActiveConversation(conversation)` only, which
-   * made both gestures silent no-ops. Baseline: `useEditConversation.hooks.js`
-   * — same PUT (name + is_private), same skip for a playback conversation, same
-   * patch-on-success ordering (no optimistic write, so a failed PUT leaves the
-   * list truthful).
+   * `ConversationItem` calls `onEdit` with the ALREADY-updated conversation (the
+   * rename editor's `onSave`, the menu's "Make public"), so this persists, not
+   * merely selects. Baseline `useEditConversation.hooks.js`: same PUT, same
+   * playback skip, patch-on-success (a failed PUT leaves the list truthful).
    */
   const onEditConversation = useCallback(
     (conversation: Conversation) => {
       if (conversation.isPlayback === true) {
-        // Baseline skips the network call for a playback conversation but
-        // still applies the local patch (`useEditConversation.hooks.js:23`).
+        // Baseline skips the network call for a playback conversation but patches (`useEditConversation.hooks.js:23`).
         patchConversationEverywhere(conversation);
         return;
       }
       if (projectId === undefined) return;
       void conversationApi
         .edit({ projectId, id: conversation.id, name: conversation.name, is_private: conversation.isPrivate })
-        .then(() => patchConversationEverywhere(conversation))
+        .then(() => {
+          patchConversationEverywhere(conversation);
+          invalidateListing();
+        })
         .catch(() => toastError('Failed to edit the conversation'));
     },
-    [projectId, patchConversationEverywhere, toastError],
+    [projectId, patchConversationEverywhere, toastError, invalidateListing],
   );
   const onCancelCreateConversation = useCallback(() => setActiveConversation(undefined), []);
 
@@ -362,9 +364,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     onEditConversation,
     onPlaybackConversation,
     onDeleteConversation: deleteConversation,
-    // `usePinConversation` returns a Promise-valued handler; the prop is `(c,
-    // shouldPin) => void`. Wrapped so the floating promise is explicitly discarded
-    // (`typescript/no-misused-promises`); the hook toasts its own errors already.
+    // Discards the hook's promise (`typescript/no-misused-promises`); the hook toasts its own errors.
     onPinConversation: (conversation, shouldPin) => void onPinConversation(conversation, shouldPin),
     onDuplicateConversation: (conversation) => void duplicateConversation(conversation),
     onArchiveConversation: (conversation) => void archive(conversation),

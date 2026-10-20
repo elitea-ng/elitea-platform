@@ -1706,17 +1706,21 @@ export const getArchiveConversationUrl = (
  * the conversation. It stays open by id, it keeps its project pin, and
  * new turns work as before.
  *
- * Needs `models.chat.conversation.details` and access to the
- * conversation itself (the chat authority's detail rule, the same one
- * the conversation pin passes). A conversation the caller cannot see
+ * Needs `models.chat.conversation.edit`, because an archive changes
+ * every member's default list (a default-mode viewer does not hold
+ * it), and access to the conversation itself (the chat authority's
+ * detail rule, the same one the conversation pin passes). A
+ * conversation the caller cannot see
  * answers 404 and archives nothing. A repeated request succeeds and
  * keeps the FIRST archive: its `archived_by` and `archived_at` do not
  * change, and nothing is re-delivered.
  *
  * The archive re-delivers the conversation's list row, with
  * `is_archived: true`, in the `changes_since` delta of every member who
- * can see the conversation. It does not change `updated_at`. It never
- * writes a tombstone: a tombstone means a deletion or a loss of access.
+ * can see the conversation. It does not change `updated_at`. It writes
+ * no tombstone: a tombstone means a deletion or a loss of access. Only
+ * a delta call without `archived` (a client before contract 1.10) gets
+ * the archived row as an `access_lost` tombstone; see listConversations.
  * @summary Archive a conversation in its project
  */
 export const archiveConversation = async (

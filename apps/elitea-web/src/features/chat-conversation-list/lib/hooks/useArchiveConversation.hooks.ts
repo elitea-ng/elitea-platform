@@ -8,8 +8,10 @@
  * container at once (`removeRow`), then the request runs. On a failure the
  * grouped listing is read again — the server's answer puts the row back where
  * it belongs, which a hand-written rollback could only guess — and the person
- * is told. Both directions refresh the archived list (`archived=only`), and
- * unarchive refreshes the grouped listing, where the row returns.
+ * is told. Both directions refresh the archived list (`archived=only`) and
+ * the grouped listing: the row returns there on an unarchive, and on an
+ * archive the cached listing must drop it too, or a list that mounts later
+ * (the chat page's own on the desktop, a remount) would show it again.
  */
 import { useCallback } from 'react';
 
@@ -51,7 +53,7 @@ export function useArchiveConversation({ projectId, removeRow, toastError }: Use
       removeRow(conversation.id);
       try {
         await archiveConversation(projectId, conversation.id);
-        refresh('archived');
+        refresh('both');
         return true;
       } catch {
         refresh('both');
