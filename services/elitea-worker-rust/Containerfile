@@ -130,9 +130,13 @@ ARG CARGO_BUILD_JOBS
 # is compiled from this context; registry and git crates are untouched.
 # `sharing=locked` keeps a concurrent build from compiling or overwriting the
 # binary between this step's touch and its copy.
+# `id=` gives this image's target directory a cache of its own. With the
+# default id (the path) every Rust image's `sharing=locked` /cargo-target was ONE
+# lock, so five images' cargo builds ran one after another inside a single bake.
+# .github/actions/build-stack-images maps the same id in its cache-map.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target,sharing=locked \
+    --mount=type=cache,id=elitea-worker-rust-cargo-target,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-worker-rust /usr/local/bin/elitea-worker-rust
@@ -157,7 +161,7 @@ ARG CARGO_BUILD_JOBS
 # Local sources are touched under the lock for the reason given in `builder`.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target,sharing=locked \
+    --mount=type=cache,id=elitea-worker-rust-cargo-target,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
       --features sandbox-supervisor --bin elitea-sandbox-supervisor && \

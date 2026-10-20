@@ -64,9 +64,13 @@ COPY services/elitea-doc-extractor ./
 # would ship that build's binary. Touching /src under the lock recompiles the
 # local crates from this context while registry crates stay cached (see the
 # worker's Containerfile).
+# `id=` gives this image's target directory a cache of its own. With the
+# default id (the path) every Rust image's `sharing=locked` /cargo-target was ONE
+# lock, so five images' cargo builds ran one after another inside a single bake.
+# .github/actions/build-stack-images maps the same id in its cache-map.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target,sharing=locked \
+    --mount=type=cache,id=elitea-doc-extractor-cargo-target,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-doc-extractor /usr/local/bin/elitea-doc-extractor
