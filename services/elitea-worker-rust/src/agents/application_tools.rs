@@ -102,6 +102,11 @@ const ADK_LLM_REQUEST_METADATA_KEY: &str = "gcp.vertex.agent.llm_request";
 const ADK_LLM_RESPONSE_METADATA_KEY: &str = "gcp.vertex.agent.llm_response";
 const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
 const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
+/// The execution whose ROOT continuation emitted a replay batch. A key of its
+/// own beside the batch (whose schema is strict), so a Worker without it still
+/// reads the batch; only that execution's replacement may continue behind it
+/// (`live_nested_events`).
+const APPLICATION_REPLAY_OWNER_KEY: &str = "elitea.application.replay_owner.v1";
 const APPLICATION_RETAINED_PAUSE_KEY: &str = "elitea.application.retained_pause.v1";
 const MAX_RETAINED_PAUSE_BYTES: usize = 512 * 1_024;
 const APPLICATION_RETAINED_PIPELINE_KEY: &str = "elitea.application.retained_pipeline.v1";
@@ -113,10 +118,6 @@ struct ApplicationReplayBatch {
     event_id: String,
     interrupt_ids: BTreeSet<String>,
     call_ordinals: BTreeMap<String, usize>,
-    /// The execution whose root continuation emitted this batch. Only that
-    /// execution's replacement may continue behind it (`live_nested_events`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    owner: Option<super::dispatch_journal::DispatchOwner>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -690,14 +691,13 @@ pub(crate) async fn prepare_nested_application_resume(
             &super::direct_hitl::DirectHitlError::new(
                 super::direct_hitl::DirectHitlErrorCode::MayHaveStarted,
             ),
-            "the approved nested agent tool call may already have started",
+            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
         ));
     }
     let (child_resumes, submitted_interrupt_ids) =
         build_nested_application_resume(events, decisions, applications)?;
     let calls = application_replay_calls(&child_resumes)?;
-    let mut batch = application_replay_batch(&child_resumes, &submitted_interrupt_ids)?;
-    batch.owner = Some(owner.clone());
+    let batch = application_replay_batch(&child_resumes, &submitted_interrupt_ids)?;
     coordinator.install_root(child_resumes).await?;
     let user_content = nested_resume_user_content(&submitted_interrupt_ids);
     Ok(PreparedNestedApplicationResume {
@@ -708,6 +708,7 @@ pub(crate) async fn prepare_nested_application_resume(
             batch,
             previous_markers: nested_resume_markers(events)?,
             replay_marker: user_content.clone(),
+            owner: Some(owner.clone()),
         }),
         user_content,
         run_config: application_run_config(),
@@ -748,13 +749,21 @@ fn live_nested_events<'a>(
     };
     let mut dead = None;
     for (index, event) in events.iter().enumerate() {
+        // A child's own replay batch (forwarded with its descendant route)
+        // carries a grandchild's cards too; only the root batch consumes them.
+        if event
+            .provider_metadata
+            .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
+        {
+            continue;
+        }
         let Some(batch) = replay_batch(event)? else {
             continue;
         };
         if batch.interrupt_ids.is_disjoint(&expected) {
             continue;
         }
-        if batch.interrupt_ids != expected || batch.owner.as_ref() != Some(owner) {
+        if batch.interrupt_ids != expected || replay_owner(event)?.as_ref() != Some(owner) {
             return Err(stale());
         }
         if dead.is_none() {
@@ -1616,12 +1625,17 @@ fn resume_interrupt_ids(
     Ok(interrupt_ids)
 }
 
-fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+/// One typed value of a replayed model response's provider metadata: the live
+/// response's and ADK's serialized copy must agree.
+fn replay_metadata<T: serde::de::DeserializeOwned + PartialEq>(
+    event: &Event,
+    key: &str,
+) -> Result<Option<T>, NativeAgentAssemblyError> {
     let live = event
         .llm_response
         .provider_metadata
         .as_ref()
-        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+        .and_then(|metadata| metadata.get(key));
     let encoded = event
         .provider_metadata
         .get(ADK_LLM_RESPONSE_METADATA_KEY)
@@ -1632,20 +1646,30 @@ fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeA
     let serialized = encoded
         .as_ref()
         .and_then(|response| response.provider_metadata.as_ref())
-        .and_then(|metadata| metadata.get(APPLICATION_REPLAY_BATCH_KEY));
+        .and_then(|metadata| metadata.get(key));
     let decode = |raw: Option<&Value>| {
-        raw.map(|raw| {
-            serde_json::from_value::<ApplicationReplayBatch>(raw.clone())
-                .map_err(|_| invalid_configuration())
-        })
-        .transpose()
+        raw.map(|raw| serde_json::from_value::<T>(raw.clone()).map_err(|_| invalid_configuration()))
+            .transpose()
     };
-    let live = decode(live)?;
-    let serialized = decode(serialized)?;
-    let batch = match (live, serialized) {
-        (Some(live), Some(serialized)) if live != serialized => return Err(invalid_configuration()),
-        (Some(value), _) | (_, Some(value)) => value,
-        (None, None) => return Ok(None),
+    match (decode(live)?, decode(serialized)?) {
+        (Some(live), Some(serialized)) if live != serialized => Err(invalid_configuration()),
+        (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+        (None, None) => Ok(None),
+    }
+}
+
+/// The execution whose root continuation emitted this replay batch, if stamped.
+fn replay_owner(
+    event: &Event,
+) -> Result<Option<super::dispatch_journal::DispatchOwner>, NativeAgentAssemblyError> {
+    replay_metadata(event, APPLICATION_REPLAY_OWNER_KEY)
+}
+
+fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeAgentAssemblyError> {
+    let Some(batch) =
+        replay_metadata::<ApplicationReplayBatch>(event, APPLICATION_REPLAY_BATCH_KEY)?
+    else {
+        return Ok(None);
     };
     if batch.event_id.is_empty()
         || batch.event_id.len() > 512
@@ -1717,7 +1741,6 @@ fn application_replay_batch(
             .iter()
             .map(|(id, resume)| (id.clone(), resume.ordinal))
             .collect(),
-        owner: None,
     })
 }
 
@@ -2437,6 +2460,8 @@ struct ApplicationReplayModel {
     batch: ApplicationReplayBatch,
     previous_markers: Vec<Content>,
     replay_marker: Content,
+    /// Set for the ROOT batch only (`APPLICATION_REPLAY_OWNER_KEY`).
+    owner: Option<super::dispatch_journal::DispatchOwner>,
 }
 
 #[async_trait]
@@ -2483,7 +2508,13 @@ impl Llm for ApplicationReplayModel {
                     }),
                     finish_reason: Some(FinishReason::Stop),
                     turn_complete: true,
-                    provider_metadata: Some(json!({APPLICATION_REPLAY_BATCH_KEY: self.batch})),
+                    provider_metadata: Some(match &self.owner {
+                        Some(owner) => json!({
+                            APPLICATION_REPLAY_BATCH_KEY: self.batch,
+                            APPLICATION_REPLAY_OWNER_KEY: owner,
+                        }),
+                        None => json!({APPLICATION_REPLAY_BATCH_KEY: self.batch}),
+                    }),
                     ..LlmResponse::default()
                 };
                 Ok(Box::pin(stream::once(async move { Ok(response) })))
@@ -3820,6 +3851,7 @@ impl LazyNestedAgent {
                     batch,
                     previous_markers: Vec::new(),
                     replay_marker: user_content.clone(),
+                    owner: None,
                 });
                 Ok(PreparedChildApplicationResume {
                     agent: self.build_agent(
@@ -5269,7 +5301,7 @@ fn direct_hitl_execution_error(error: &super::direct_hitl::DirectHitlError) -> A
             ErrorComponent::Agent,
             ErrorCategory::Unsupported,
             crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
-            "the approved nested agent tool call may already have started",
+            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
         ),
         code => AdkError::new(
             ErrorComponent::Agent,
@@ -5883,6 +5915,94 @@ mod tests {
 }
 
 #[cfg(test)]
+mod live_nested_events_tests {
+    use super::*;
+    use crate::agents::dispatch_journal::{DispatchOwner, test_dispatched_record};
+
+    fn owner() -> DispatchOwner {
+        DispatchOwner::new("execution-1", 1)
+    }
+
+    fn batch_event(branch: &str, owner: Option<&DispatchOwner>, child: bool) -> Event {
+        let batch = ApplicationReplayBatch {
+            event_id: "original-batch".to_owned(),
+            interrupt_ids: BTreeSet::from(["hitl-1".to_owned()]),
+            call_ordinals: BTreeMap::from([("call_child".to_owned(), 1)]),
+        };
+        let mut event = Event::new("inv-2");
+        "elitea-agent".clone_into(&mut event.author);
+        branch.clone_into(&mut event.branch);
+        event.llm_response.content = Some(Content {
+            role: "model".to_owned(),
+            parts: vec![Part::FunctionCall {
+                name: "elitea_agent_31_v_41".to_owned(),
+                args: json!({}),
+                id: Some("call_child".to_owned()),
+                thought_signature: None,
+            }],
+        });
+        event.llm_response.provider_metadata = Some(match owner {
+            Some(owner) => json!({
+                APPLICATION_REPLAY_BATCH_KEY: batch,
+                APPLICATION_REPLAY_OWNER_KEY: owner,
+            }),
+            None => json!({ APPLICATION_REPLAY_BATCH_KEY: batch }),
+        });
+        if child {
+            event.provider_metadata.insert(
+                DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+                "elitea-child-1".to_owned(),
+            );
+        }
+        event
+    }
+
+    fn dead_continuation(root_owner: Option<&DispatchOwner>) -> Vec<Event> {
+        let submitted = HashSet::from(["hitl-1".to_owned()]);
+        let mut earlier = Event::new("inv-1");
+        earlier.llm_response.content = Some(Content::new("user").with_text("current"));
+        let mut marker = Event::new("inv-2");
+        "user".clone_into(&mut marker.author);
+        marker.llm_response.content = Some(nested_resume_user_content(&submitted));
+        vec![
+            earlier,
+            marker,
+            batch_event("elitea.saved_applications", root_owner, false),
+            // A depth-2 child forwards its own batch for the same grandchild card.
+            batch_event("elitea.saved_applications.application_1", None, true),
+            test_dispatched_record("elitea-child-2", "hitl-1", "call_mcp", owner()),
+        ]
+    }
+
+    /// #1321 code review round 3: the replacement of the same execution sets the
+    /// dead continuation aside, also when a depth-2 child forwarded its own batch;
+    /// another execution, or a batch without an owner, is stale.
+    #[test]
+    fn only_this_executions_dead_root_continuation_is_set_aside() {
+        let submitted = HashSet::from(["hitl-1".to_owned()]);
+        let events = dead_continuation(Some(&owner()));
+        let live = live_nested_events(&events, &submitted, &owner()).expect("same execution");
+        assert_eq!(
+            live.len(),
+            1,
+            "everything from the dead marker on is set aside"
+        );
+        assert!(
+            live_nested_events(&events, &submitted, &DispatchOwner::new("execution-2", 1)).is_err()
+        );
+        let unstamped = dead_continuation(None);
+        assert!(live_nested_events(&unstamped, &submitted, &owner()).is_err());
+        // No consumer of the card: the session is used as it is.
+        assert_eq!(
+            live_nested_events(&events[..1], &submitted, &owner())
+                .expect("untouched")
+                .len(),
+            1
+        );
+    }
+}
+
+#[cfg(test)]
 mod pipeline_call_lineage_transport_tests {
     use super::*;
     #[test]
@@ -5891,7 +6011,6 @@ mod pipeline_call_lineage_transport_tests {
             event_id: "original-batch".to_owned(),
             interrupt_ids: BTreeSet::from(["leaf-1".to_owned()]),
             call_ordinals: BTreeMap::from([("call-1".to_owned(), 2)]),
-            owner: None,
         };
         let mut event = Event::new("replay-runtime");
         event.llm_response.provider_metadata = Some(

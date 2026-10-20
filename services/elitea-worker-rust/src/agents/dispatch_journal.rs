@@ -157,6 +157,29 @@ pub(crate) fn records_bound_to(
     Ok(any)
 }
 
+/// Whether every record for `interrupt_id` was written by `owner`. A record of
+/// another execution means that execution already continued this card: this
+/// submission is a duplicate or late one.
+///
+/// # Errors
+///
+/// A malformed record, or a record of another execution for this card.
+pub(crate) fn interrupt_records_owned_by(
+    events: &[Event],
+    owner: &DispatchOwner,
+    interrupt_id: &str,
+) -> Result<(), InvalidDispatchRecord> {
+    for event in events {
+        if let Some(record) = dispatch_record(event)?
+            && record.interrupt_id == interrupt_id
+            && &record.owner != owner
+        {
+            return Err(InvalidDispatchRecord);
+        }
+    }
+    Ok(())
+}
+
 /// Read the records of one paused message from the root session's events.
 pub(crate) fn recorded_dispatches(
     events: &[Event],

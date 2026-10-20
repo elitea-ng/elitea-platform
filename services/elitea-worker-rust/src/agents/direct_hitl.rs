@@ -123,14 +123,18 @@ pub(crate) fn assembly_error(
         }
         DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
     };
-    let assembly = NativeAgentAssemblyError::new(code, message);
     if error.code() == DirectHitlErrorCode::MayHaveStarted {
-        return assembly.with_cause(
+        // One detail for every "may have started" refusal, whatever the caller.
+        return NativeAgentAssemblyError::new(
+            code,
+            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+        )
+        .with_cause(
             crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
             None,
         );
     }
-    assembly.with_cause(error.code().as_str(), None)
+    NativeAgentAssemblyError::new(code, message).with_cause(error.code().as_str(), None)
 }
 
 /// Data-free direct-HITL error.

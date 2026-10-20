@@ -65,6 +65,8 @@ pub(crate) struct SensitiveToolCatalog {
     other_tools: BTreeMap<SensitiveToolIdentity, bool>,
     /// Provider names of read-only `other_tools`, each naming exactly one tool.
     read_only_provider_names: BTreeSet<Box<str>>,
+    /// Provider names of every `other_tools` entry, read-only or not.
+    other_provider_names: BTreeSet<Box<str>>,
     /// Test-only: how often the unqualified names were rebuilt (budget test).
     #[cfg(test)]
     rebuilds: usize,
@@ -141,7 +143,7 @@ impl SensitiveToolCatalog {
         };
         if self.scoped_entries.contains_key(&identity)
             || self.provider_entries.contains_key(TOOL)
-            || self.read_only_provider_names.contains(TOOL)
+            || self.other_provider_names.contains(TOOL)
         {
             return Err(invalid_configuration());
         }
@@ -195,9 +197,7 @@ impl SensitiveToolCatalog {
             }
         }
         for (identity, read_only) in other.other_tools {
-            if self.other_tools.insert(identity, read_only).is_some() {
-                return Err(invalid_configuration());
-            }
+            self.insert_other_identity(identity, read_only);
         }
         self.rebuild_unqualified_provider_entries();
         Ok(())
@@ -228,14 +228,16 @@ impl SensitiveToolCatalog {
             else {
                 continue;
             };
-            if self.provider_entries.contains_key(provider_name)
-                || read_only
-                    .insert(provider_name.into(), *is_read_only)
-                    .is_some()
-            {
+            if self.provider_entries.contains_key(provider_name) {
                 return Err(invalid_configuration());
             }
+            // A name two tools share is ambiguous: never re-run after a dispatch.
+            read_only
+                .entry(provider_name.into())
+                .and_modify(|shared| *shared = false)
+                .or_insert(*is_read_only);
         }
+        self.other_provider_names = read_only.keys().cloned().collect();
         self.read_only_provider_names = read_only
             .into_iter()
             .filter_map(|(name, is_read_only)| is_read_only.then_some(name))
@@ -252,14 +254,25 @@ impl SensitiveToolCatalog {
         if !valid_identity(toolkit_name) || !valid_identity(tool_name) {
             return Err(invalid_configuration());
         }
-        let identity = SensitiveToolIdentity {
-            toolkit_name: toolkit_name.into(),
-            tool_name: tool_name.into(),
-        };
-        if self.other_tools.insert(identity, read_only).is_some() {
-            return Err(invalid_configuration());
-        }
+        self.insert_other_identity(
+            SensitiveToolIdentity {
+                toolkit_name: toolkit_name.into(),
+                tool_name: tool_name.into(),
+            },
+            read_only,
+        );
         Ok(())
+    }
+
+    /// Record one non-sensitive tool. A second tool with the same identity
+    /// (one MCP server listing a name twice, or two kinds sharing a toolkit
+    /// name) is not a configuration error: the identity is just ambiguous, so
+    /// it is never treated as read-only.
+    fn insert_other_identity(&mut self, identity: SensitiveToolIdentity, read_only: bool) {
+        self.other_tools
+            .entry(identity)
+            .and_modify(|shared| *shared = false)
+            .or_insert(read_only);
     }
 
     fn insert_scoped(
@@ -302,6 +315,11 @@ impl SensitiveToolCatalog {
         for identity in self.other_tools.keys() {
             *counts.entry(&identity.tool_name).or_default() += 1;
         }
+        self.other_provider_names = self
+            .other_tools
+            .keys()
+            .map(|identity| identity.tool_name.clone())
+            .collect();
         self.read_only_provider_names = self
             .other_tools
             .iter()
@@ -663,6 +681,32 @@ mod tests {
             catalog.with_workspace_command().is_err(),
             "a second workspace command is refused"
         );
+        // A data-changing, non-sensitive tool already named `run_command` is not
+        // taken over by the workspace's conditional entry.
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_other_tool("kit", "run_command", false)
+                .with_workspace_command()
+                .is_err()
+        );
+    }
+
+    /// #1321 code review round 3: a non-sensitive tool listed twice (or two kinds
+    /// sharing a toolkit name) is ambiguous, not a configuration error.
+    #[test]
+    fn a_duplicate_non_sensitive_tool_is_ambiguous_not_fatal() {
+        let mut catalog = SensitiveToolCatalog::default()
+            .with_other_tool("kit", "search", true)
+            .with_other_tool("kit", "search", true);
+        assert_eq!(catalog.reruns_after_dispatch("search"), None);
+        let other = SensitiveToolCatalog::default().with_other_tool("kit", "lookup", true);
+        catalog
+            .merge(SensitiveToolCatalog::default().with_other_tool("kit", "lookup", true))
+            .expect("first kind");
+        catalog
+            .merge(other)
+            .expect("a second kind with the same toolkit name");
+        assert_eq!(catalog.reruns_after_dispatch("lookup"), None);
     }
 
     /// #1321 review round 2 item 6 (budget): enumerating N tools derives the

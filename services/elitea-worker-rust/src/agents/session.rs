@@ -43,7 +43,8 @@ use super::attachments;
 use super::context_management::ContextManagementPlan;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecision, DirectHitlDecisionSet,
-    DirectHitlError, DirectHitlRunInput, ResolvedDirectHitlDecision, ResolvedDirectHitlStart,
+    DirectHitlError, DirectHitlErrorCode, DirectHitlRunInput, ResolvedDirectHitlDecision,
+    ResolvedDirectHitlStart,
 };
 use super::events::{
     AgentEventProjectionContext, AgentEventProjectionError, AgentEventProjectionErrorCode,
@@ -2772,6 +2773,16 @@ async fn prepare_direct_resume(
     } = application_runtime;
     let (model, run_input, toolsets, parallel_applications) = match resolved {
         ResolvedDirectHitlStart::Direct(decision) => {
+            // Another execution's dispatch record for this card: it already
+            // continued it, so this submission is stale (not "may have started").
+            super::dispatch_journal::interrupt_records_owned_by(
+                &stored.events().all(),
+                journal.owner(),
+                decision.interrupt_id(),
+            )
+            .map_err(|_| {
+                direct_hitl_error(&DirectHitlError::new(DirectHitlErrorCode::StaleDecision))
+            })?;
             decision.restore_authorization_scope(&mut delegated_authorization);
             let replay = if decision.is_delegated_authorization() {
                 (*decision)
@@ -3423,7 +3434,7 @@ fn pipeline_resume_error(error: &PipelineResumeError) -> NativeAgentAssemblyErro
         PipelineResumeErrorCode::MayHaveStarted => {
             return NativeAgentAssemblyError::new(
                 NativeAgentAssemblyErrorCode::UnsupportedCapability,
-                "the approved tool call may already have started",
+                crate::protocol::output::RECOVERY_REFUSED_DETAIL,
             )
             .with_cause(
                 crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,

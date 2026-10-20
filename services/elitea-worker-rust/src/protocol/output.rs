@@ -799,6 +799,11 @@ pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline
 /// runtime (nested agents, pipeline nodes, root assembly causes).
 pub(crate) const RECOVERY_REFUSED_UPSTREAM_CODE: &str = "agent.recovery_refused";
 
+/// The internal (never user-facing) detail every "may have started" refusal
+/// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].
+pub(crate) const RECOVERY_REFUSED_DETAIL: &str =
+    "the approved tool call may already have started; it was not repeated";
+
 /// Registered text of [`RuntimeFailureKind::RecoveryRefused`]; Main holds the same text.
 pub(crate) const RECOVERY_REFUSED_MESSAGE: &str = "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.";
 

@@ -59,6 +59,14 @@ fn phases(scenario: &str) -> &'static [(&'static str, i32)] {
             ("block_recover", 0),
         ],
         "crash_after_dispatch" => &[("start", 0), ("crash", EXIT_AFTER_DISPATCH), ("recover", 0)],
+        // Another execution submits the same approval after the dead one dispatched:
+        // stale, not "may have started"; the dead execution's replacement refuses.
+        "duplicate_after_dispatch" => &[
+            ("start", 0),
+            ("crash", EXIT_AFTER_DISPATCH),
+            ("duplicate", 0),
+            ("recover", 0),
+        ],
         "stale" => &[("start", 0), ("stale", 0)],
         // The tool runs and its result is persisted; the Worker dies at the next model
         // request, twice; the third Worker continues with the recorded result.
@@ -151,6 +159,11 @@ async fn postgres_root_blocked_effectful_call_never_runs() {
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_root_worker_replaced_after_dispatch_refuses_as_may_have_started() {
     run_scenario("crash_after_dispatch").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_root_duplicate_after_a_dispatch_is_stale_and_runs_nothing() {
+    run_scenario("duplicate_after_dispatch").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -626,7 +639,7 @@ async fn postgres_root_effect_child() {
             let invocation = assembler
                 .assemble(turn(
                     &decision(&card(), "approve", "", 44),
-                    "execution-crash",
+                    APPROVAL_EXECUTION,
                     2,
                 ))
                 .await
@@ -642,11 +655,17 @@ async fn postgres_root_effect_child() {
                 ))],
                 false,
             );
+            // Claims are monotonic per session: after `duplicate`, the replacement's is 4.
+            let attempt = if scenario == "duplicate_after_dispatch" {
+                4
+            } else {
+                3
+            };
             let Err(error) = assembler
                 .assemble(turn(
                     &decision(&card(), "approve", "", 44),
-                    "execution-recover",
-                    3,
+                    APPROVAL_EXECUTION,
+                    attempt,
                 ))
                 .await
             else {
@@ -662,6 +681,33 @@ async fn postgres_root_effect_child() {
             assert_eq!(calls.load(Ordering::Acquire), 0, "recover: never repeated");
             assert_eq!(captured.lock().expect("captured").len(), 0);
         }
+        "duplicate" => {
+            let (assembler, captured, calls) = worker(&pool, Vec::new(), true);
+            let Err(error) = assembler
+                .assemble(turn(
+                    &decision(&card(), "approve", "", 44),
+                    "execution-duplicate",
+                    3,
+                ))
+                .await
+            else {
+                panic!("duplicate: a second execution's approval was assembled");
+            };
+            assert_eq!(
+                error.code(),
+                crate::agents::runtime::NativeAgentAssemblyErrorCode::InvalidInput,
+                "duplicate: stale, got {error}"
+            );
+            assert_ne!(
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+                Some(crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE),
+                "duplicate: not the may-have-started reason"
+            );
+            assert_eq!(calls.load(Ordering::Acquire), 0);
+            assert_eq!(captured.lock().expect("captured").len(), 0);
+        }
         "outcome_crash" | "outcome_crash_again" => {
             // The second Worker's tool dies if it is ever called: reaching the model
             // request (exit 87) instead proves the recorded outcome was served.
@@ -673,7 +719,7 @@ async fn postgres_root_effect_child() {
             let invocation = assembler
                 .assemble(turn(
                     &decision(&card(), "approve", "", 46),
-                    &format!("execution-{phase}"),
+                    APPROVAL_EXECUTION,
                     if phase == "outcome_crash" { 2 } else { 3 },
                 ))
                 .await
@@ -690,7 +736,7 @@ async fn postgres_root_effect_child() {
             let invocation = assembler
                 .assemble(turn(
                     &decision(&card(), "approve", "", 46),
-                    "execution-outcome-recover",
+                    APPROVAL_EXECUTION,
                     4,
                 ))
                 .await

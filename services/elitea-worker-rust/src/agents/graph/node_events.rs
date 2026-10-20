@@ -222,8 +222,7 @@ impl PipelineNodeEventSender {
             .ok()?;
         Some(adk_rust::graph::GraphError::NodeExecutionFailed {
             node: node.to_owned(),
-            message: "the approved tool call may already have started; it was not repeated"
-                .to_owned(),
+            message: crate::protocol::output::RECOVERY_REFUSED_DETAIL.to_owned(),
         })
     }
 
