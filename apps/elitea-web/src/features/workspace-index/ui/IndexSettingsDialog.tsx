@@ -34,7 +34,7 @@ export interface IndexSettingsDialogProps {
   name: string;
   index: WorkspaceIndex;
   /** Semantic search, once the index is on. */
-  embeddings?: WorkspaceEmbeddings;
+  embeddings?: WorkspaceEmbeddings | undefined;
 }
 
 const mutedSx = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
@@ -198,7 +198,7 @@ function Built({ status, progress, embeddings }: { status: IndexStatus; progress
 interface BodyProps {
   index: WorkspaceIndex;
   confirming: boolean;
-  embeddings?: WorkspaceEmbeddings;
+  embeddings?: WorkspaceEmbeddings | undefined;
 }
 
 /** Everything the settings say, without a frame: the dialog puts it in its content, the inspector in its pane. */
@@ -250,7 +250,7 @@ export function IndexSettingsDialog({ open, onClose, name, index, embeddings }: 
 }
 
 /** The same settings as a pane (the inspector's Index segment): the actions sit under the text, no Close. */
-export function IndexSettingsPanel({ index, embeddings }: { index: WorkspaceIndex; embeddings?: WorkspaceEmbeddings }): React.JSX.Element {
+export function IndexSettingsPanel({ index, embeddings }: { index: WorkspaceIndex; embeddings?: WorkspaceEmbeddings | undefined }): React.JSX.Element {
   const [confirming, setConfirming] = useState(false);
   const actions = footerActions(index, () => setConfirming(true));
   return (
