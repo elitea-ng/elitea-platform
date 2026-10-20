@@ -228,8 +228,12 @@ impl SensitiveToolCatalog {
             else {
                 continue;
             };
-            if self.provider_entries.contains_key(provider_name) {
-                return Err(invalid_configuration());
+            if let Some(entry) = self.provider_entries.get_mut(provider_name) {
+                // A sensitive and a non-sensitive tool behind one identity (two
+                // kinds sharing a toolkit name): the name stays confirmed and,
+                // being ambiguous, is never re-run after a dispatch.
+                entry.read_only = false;
+                continue;
             }
             // A name two tools share is ambiguous: never re-run after a dispatch.
             read_only
@@ -689,6 +693,49 @@ mod tests {
                 .with_workspace_command()
                 .is_err()
         );
+    }
+
+    /// #1321 code review round 3: a sensitive and a non-sensitive tool behind one
+    /// identity (two kinds sharing a toolkit name) bind; the name stays confirmed
+    /// and is never re-run after a dispatch.
+    #[tokio::test]
+    async fn a_sensitive_and_a_plain_tool_sharing_an_identity_bind_conservatively() {
+        let policy = policy(json!({"sensitive_tools": {"mcp": ["lookup"]}}));
+        let mut catalog = SensitiveToolCatalog::default();
+        catalog
+            .insert_scoped(
+                "kit",
+                "lookup",
+                SensitiveToolEntry {
+                    policy: policy
+                        .sensitive_tool("mcp", "kit", "lookup")
+                        .expect("sensitive fixture policy"),
+                    read_only: true,
+                    conditional: false,
+                },
+            )
+            .expect("sensitive tool");
+        catalog
+            .insert_other("kit", "lookup", true)
+            .expect("plain tool");
+        catalog.rebuild_unqualified_provider_entries();
+        let tool: Arc<dyn Tool> = Arc::new(FunctionTool::new(
+            "lookup",
+            "fixture",
+            |_context, _arguments| async { Ok(json!({})) },
+        ));
+        let binding = bind_toolsets(
+            vec![Arc::new(BasicToolset::new("kit", vec![tool])) as Arc<dyn Toolset>],
+            &BTreeSet::new(),
+            "shared_identity_test",
+        )
+        .await
+        .expect("provider binding");
+        let catalog = catalog
+            .bind_provider_names(&binding)
+            .expect("a shared identity binds");
+        assert!(catalog.policy_for("lookup").is_some(), "still confirmed");
+        assert_eq!(catalog.reruns_after_dispatch("lookup"), Some(false));
     }
 
     /// #1321 code review round 3: a non-sensitive tool listed twice (or two kinds

@@ -2754,6 +2754,7 @@ async fn prepare_direct_resume(
         lazy_tools_index: _,
         tool_call_confirmation,
     } = runtime;
+    let events = stored.events().all();
     let resolved = match start {
         DirectResumeStart::Sensitive(decisions) => decisions
             .resolve(stored)
@@ -2775,14 +2776,20 @@ async fn prepare_direct_resume(
         ResolvedDirectHitlStart::Direct(decision) => {
             // Another execution's dispatch record for this card: it already
             // continued it, so this submission is stale (not "may have started").
-            super::dispatch_journal::interrupt_records_owned_by(
-                &stored.events().all(),
+            let owned = super::dispatch_journal::decision_records_owned_by(
+                &events,
                 journal.owner(),
+                decision.invocation_id(),
                 decision.interrupt_id(),
             )
             .map_err(|_| {
-                direct_hitl_error(&DirectHitlError::new(DirectHitlErrorCode::StaleDecision))
+                direct_hitl_error(&DirectHitlError::new(DirectHitlErrorCode::CorruptSession))
             })?;
+            if !owned {
+                return Err(direct_hitl_error(&DirectHitlError::new(
+                    DirectHitlErrorCode::StaleDecision,
+                )));
+            }
             decision.restore_authorization_scope(&mut delegated_authorization);
             let replay = if decision.is_delegated_authorization() {
                 (*decision)
@@ -2815,7 +2822,7 @@ async fn prepare_direct_resume(
         ResolvedDirectHitlStart::StaticTools(decisions) => {
             let coordinator = resume.as_ref().ok_or_else(invalid_configuration)?;
             let prepared = super::application_tools::prepare_static_application_resume(
-                &stored.events().all(),
+                &events,
                 decisions,
                 &application_tools,
                 coordinator,
@@ -2833,7 +2840,7 @@ async fn prepare_direct_resume(
         ResolvedDirectHitlStart::Nested(decisions) => {
             let coordinator = resume.as_ref().ok_or_else(invalid_configuration)?;
             let prepared = prepare_nested_application_resume(
-                &stored.events().all(),
+                &events,
                 decisions,
                 &application_tools,
                 coordinator,

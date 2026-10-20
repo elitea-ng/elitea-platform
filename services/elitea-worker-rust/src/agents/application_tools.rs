@@ -687,12 +687,7 @@ pub(crate) async fn prepare_nested_application_resume(
         // An approved nested call was dispatched without a recorded outcome. It
         // is never repeated: the run ends with the registered reason before any
         // parent or child call, not as a tool error the parent model could read past.
-        return Err(super::direct_hitl::assembly_error(
-            &super::direct_hitl::DirectHitlError::new(
-                super::direct_hitl::DirectHitlErrorCode::MayHaveStarted,
-            ),
-            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
-        ));
+        return Err(super::direct_hitl::recovery_refused_error());
     }
     let (child_resumes, submitted_interrupt_ids) =
         build_nested_application_resume(events, decisions, applications)?;
@@ -749,12 +744,10 @@ fn live_nested_events<'a>(
     };
     let mut dead = None;
     for (index, event) in events.iter().enumerate() {
-        // A child's own replay batch (forwarded with its descendant route)
-        // carries a grandchild's cards too; only the root batch consumes them.
-        if event
-            .provider_metadata
-            .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY)
-        {
+        // A descendant's own replay batch (a child agent, or an agent inside a
+        // pipeline tool) carries a grandchild's cards too; only the root
+        // Agent's batch, on the root application branch, consumes them.
+        if event.branch != super::events::APPLICATION_BRANCH_ROOT {
             continue;
         }
         let Some(batch) = replay_batch(event)? else {

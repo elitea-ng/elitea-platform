@@ -157,27 +157,36 @@ pub(crate) fn records_bound_to(
     Ok(any)
 }
 
-/// Whether every record for `interrupt_id` was written by `owner`. A record of
-/// another execution means that execution already continued this card: this
-/// submission is a duplicate or late one.
+/// Whether every record of one decision (its paused message's invocation and
+/// card) was written by `owner`. `Ok(false)`: another execution already
+/// continued this card, so this submission is a duplicate or late one. Only
+/// that decision's records are parsed (a record event carries the decision's
+/// invocation id).
 ///
 /// # Errors
 ///
-/// A malformed record, or a record of another execution for this card.
-pub(crate) fn interrupt_records_owned_by(
+/// A malformed or forged record of this decision.
+pub(crate) fn decision_records_owned_by(
     events: &[Event],
     owner: &DispatchOwner,
+    decision_invocation_id: &str,
     interrupt_id: &str,
-) -> Result<(), InvalidDispatchRecord> {
-    for event in events {
-        if let Some(record) = dispatch_record(event)?
-            && record.interrupt_id == interrupt_id
-            && &record.owner != owner
-        {
+) -> Result<bool, InvalidDispatchRecord> {
+    for event in events
+        .iter()
+        .filter(|event| event.invocation_id == decision_invocation_id)
+    {
+        let Some(record) = dispatch_record(event)? else {
+            continue;
+        };
+        if record.decision_invocation_id != decision_invocation_id {
             return Err(InvalidDispatchRecord);
         }
+        if record.interrupt_id == interrupt_id && &record.owner != owner {
+            return Ok(false);
+        }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Read the records of one paused message from the root session's events.

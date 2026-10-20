@@ -107,9 +107,23 @@ impl DirectHitlErrorCode {
     }
 }
 
-/// The assembly error of a direct-HITL refusal, keeping its typed cause. A
-/// "may have started" refusal carries the registered recovery-refused cause, so
-/// the run ends with that reason instead of a configuration failure.
+/// The one assembly error of every "may have started" refusal: the registered
+/// recovery-refused cause and its fixed detail, so the run ends with that
+/// reason instead of a configuration failure.
+pub(crate) fn recovery_refused_error() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+    )
+    .with_cause(
+        crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+        None,
+    )
+}
+
+/// The assembly error of a direct-HITL refusal, keeping its typed cause.
+/// `message` is used for every code but `MayHaveStarted`, which is always
+/// [`recovery_refused_error`].
 pub(crate) fn assembly_error(
     error: &DirectHitlError,
     message: &'static str,
@@ -118,22 +132,12 @@ pub(crate) fn assembly_error(
         DirectHitlErrorCode::InvalidInput
         | DirectHitlErrorCode::StaleDecision
         | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability | DirectHitlErrorCode::MayHaveStarted => {
+        DirectHitlErrorCode::UnsupportedCapability => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
+        DirectHitlErrorCode::MayHaveStarted => return recovery_refused_error(),
         DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
     };
-    if error.code() == DirectHitlErrorCode::MayHaveStarted {
-        // One detail for every "may have started" refusal, whatever the caller.
-        return NativeAgentAssemblyError::new(
-            code,
-            crate::protocol::output::RECOVERY_REFUSED_DETAIL,
-        )
-        .with_cause(
-            crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
-            None,
-        );
-    }
     NativeAgentAssemblyError::new(code, message).with_cause(error.code().as_str(), None)
 }
 
