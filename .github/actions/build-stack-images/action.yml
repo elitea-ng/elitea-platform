@@ -215,10 +215,12 @@ runs:
         # (`.buildkit-mounts/cargo-target-<image>`, below). A v2 entry restored
         # through the suffix-only prefix would carry the old shared
         # `cargo-target` directory, which nothing maps any more, and a writer
-        # would re-save it for ever. The hash names EVERY Cargo.lock a stack
-        # image builds from; it used to name only the worker's and DeepWiki's,
-        # so an inventory/vector/extractor dependency bump hit the old key.
-        MOUNT_BASE: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-deepwiki-engine/Cargo.lock', 'services/elitea-inventory-engine/Cargo.lock', 'services/elitea-vector/Cargo.lock', 'services/elitea-doc-extractor/Cargo.lock', 'libs/rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum') }}
+        # would re-save it for ever. The hash is EVERY Cargo.lock and go.sum in
+        # the tree, by glob: a hand list named only the worker's and DeepWiki's
+        # lockfiles and three of five go.sum files, so a dependency bump in an
+        # unlisted one hit the old key. A lockfile no image builds from only
+        # costs a new key, which restores from the prefix like any other.
+        MOUNT_BASE: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('**/Cargo.lock', '**/go.sum', '!**/node_modules/**') }}
         MOUNT_PREFIX: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
         RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
@@ -297,31 +299,20 @@ runs:
 
     # ── The size cap (writers only) ───────────────────────────────────────
     #
-    # A writer restores the newest older entry, builds, extracts the WHOLE
-    # mount and saves it, so stale artefacts from every past Cargo.lock pile
-    # up in the target directories and the entry only ever grows. Measured
-    # 2026-10-20 the single rust entry was already 3.55 GB of a 10 GB cache.
-    # Above the cap the largest target directories are dropped (those images
-    # build cold ONCE on main and are saved fresh); the registry, git and Go
-    # caches are never dropped. Readers save nothing, so they are not capped.
-    - name: Cap the restored cargo target caches (writers)
+    # The cap applies to what is SAVED, so it runs between the dance's post
+    # extraction and actions/cache's post save. Registered HERE — after the
+    # writer's actions/cache, before the dance — its post step runs in exactly
+    # that slot (post steps run in reverse). cap-saved-mounts/cap.sh holds the
+    # policy: above 4 GB, drop the largest cargo-target-<image> directory from
+    # the saved entry, so that image builds cold ONCE and is saved fresh. A
+    # restore-time cap (the first version of this) left the saved entry
+    # uncapped and made the trimmed image cold on every main run.
+    - name: Cap the saved cache mounts (writers, post step)
       if: steps.policy.outputs.write-mounts == 'true'
-      shell: bash
-      env:
-        CAP_MB: "4096"
-      run: |
-        set -euo pipefail
-        root=.buildkit-mounts
-        [ -d "$root" ] || { echo "nothing restored"; exit 0; }
-        total() { du -sm "$root" | cut -f1; }
-        echo "restored mounts: $(total) MB (cap ${CAP_MB} MB)"
-        du -sm "$root"/* 2>/dev/null | sort -rn || true
-        while [ "$(total)" -gt "$CAP_MB" ]; do
-          biggest="$(du -sm "$root"/cargo-target-* 2>/dev/null | sort -rn | head -1 | cut -f2 || true)"
-          [ -n "$biggest" ] || { echo "::warning::mounts are $(total) MB with no cargo target left to drop"; break; }
-          echo "dropping $biggest ($(du -sm "$biggest" | cut -f1) MB): over the cap"
-          rm -rf "$biggest"
-        done
+      uses: ./.github/actions/build-stack-images/cap-saved-mounts
+      with:
+        path: .buildkit-mounts
+        cap-mb: "4096"
 
     # Injects the restored directories into the builder's cache mounts before
     # the build and, only when this run will save them, extracts them back

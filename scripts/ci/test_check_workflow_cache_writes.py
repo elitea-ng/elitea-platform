@@ -54,7 +54,7 @@ class CacheWriteChecks(unittest.TestCase):
                 code = checker.main(["--root", str(root)])
             return code, out.getvalue()
 
-    def check_raw(self, subject: str):
+    def check_raw(self, subject: str, extra: dict | None = None):
         """Like check(), with the whole subject workflow given verbatim."""
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
@@ -63,6 +63,8 @@ class CacheWriteChecks(unittest.TestCase):
             for i in range(checker.MINIMUM_WORKFLOWS):
                 (wf / f"filler{i}.yml").write_text(workflow("- uses: actions/cache/restore@v4\n  with: {path: x, key: k}\n- uses: actions/cache/restore@v4\n  with: {path: x, key: k}\n"))
             (wf / "subject.yml").write_text(subject)
+            for fname, text in (extra or {}).items():
+                (wf / fname).write_text(text)
             out = io.StringIO()
             with redirect_stdout(out):
                 code = checker.main(["--root", str(root)])
@@ -161,6 +163,9 @@ class CacheWriteChecks(unittest.TestCase):
     def test_rust_cache_with_save_if_passes(self):
         self.assertClean("- uses: Swatinem/rust-cache@v2\n  with:\n    save-if: ${{ github.ref == 'refs/heads/main' }}\n")
 
+    def test_rust_cache_with_save_if_false_passes(self):
+        self.assertClean("- uses: Swatinem/rust-cache@v2\n  with: {save-if: false}\n")
+
     def test_golangci_lint_default_cache_is_refused(self):
         self.assertWrites("- uses: golangci/golangci-lint-action@v9\n  with: {version: latest}\n", "golangci-lint-action saves")
 
@@ -214,7 +219,7 @@ class CacheWriteChecks(unittest.TestCase):
             """)
         code, out = self.check_raw(two)
         self.assertEqual(code, 1, out)
-        self.assertIn("exactly one may save the mounts", out)
+        self.assertIn("exactly one job in the repository", out)
 
     def test_stack_images_one_mount_writer_per_suffix_passes(self):
         ok = PR_AND_PUSH + textwrap.dedent("""\
@@ -237,6 +242,21 @@ class CacheWriteChecks(unittest.TestCase):
             """)
         code, out = self.check_raw(ok)
         self.assertEqual(code, 0, out)
+
+    def test_stack_images_mount_writers_in_two_workflows_for_one_suffix_are_refused(self):
+        # The cache key is repository-wide, so a second writer in ANOTHER file races too.
+        one = PR_AND_PUSH + textwrap.dedent("""\
+            jobs:
+              a:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: ./.github/actions/build-stack-images
+                    with: {mount-cache-suffix: rust, mount-cache-writer: "true"}
+            """)
+        code, out = self.check_raw(one, extra={"other.yml": one})
+        self.assertEqual(code, 1, out)
+        self.assertIn("exactly one job in the repository", out)
+        self.assertIn("other.yml", out)
 
     def test_stack_images_mount_writer_on_a_matrix_job_is_refused(self):
         matrix = PR_AND_PUSH + textwrap.dedent("""\

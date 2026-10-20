@@ -660,9 +660,10 @@ jobs:
     # Decides, on a pull request, which lanes below run. Two outputs:
     #
     #   reaches-stack — false when EVERY changed path is outside the stack:
-    #     docs (*.md, the embedded docs SPA), the desktop host or the helm
-    #     chart (scripts/ci/e2e-lane-filter.sh says exactly which, and why
-    #     each is safe). The six stack lanes then SKIP. Measured 2026-10-20:
+    #     prose (*.md at the root, under docs/ or .github/), the desktop host
+    #     or the helm chart minus what a compose stack mounts
+    #     (scripts/ci/e2e-lane-filter.sh says exactly which, and why each is
+    #     safe). The six stack lanes then SKIP. Measured 2026-10-20:
     #     this workflow ran on 97% of pull-request SHAs.
     #   reaches-model — the real-model lane's signal (the gateway's SSE relay
     #     against a vendor's real chunks, a tool call the model chose) changes
@@ -678,36 +679,46 @@ jobs:
     # job fails, the lanes are skipped too — but this job is then red, so the
     # skip cannot read as green.
     #
-    # A plain `git diff` against the pull request's base, not a third-party
-    # path-filter action: the script is the whole mechanism, it needs no
-    # extra token scope, and its own test runs first.
+    # A plain `git diff`, not a third-party path-filter action: the script is
+    # the whole mechanism and it needs no extra token scope. It is on every
+    # stack lane's critical path, so it is cheap: a push or a dispatch answers
+    # from the expressions below with NO step run at all, and a pull request
+    # checks out its merge commit at depth 2 — the commit and its first
+    # parent, the base it merges onto — which is exactly the diff.
+    #
+    # Matrix lanes skipped by this gate report ONE check each, under the
+    # unexpanded name (e.g. `E2E (${{ matrix.leg }})`), not one per leg. No
+    # status check is required on main today; anyone making these lanes
+    # required must require that skipped name too, or gate inside the steps.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      reaches-model: ${{ steps.filter.outputs.reaches-model }}
-      reaches-stack: ${{ steps.filter.outputs.reaches-stack }}
+      reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
+      reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
     steps:
       - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
         with:
-          fetch-depth: 0
+          fetch-depth: 2
       - name: The lane filter decides every case it is tested on
+        if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
         run: bash scripts/ci/e2e-lane-filter-test.sh
       - id: filter
+        if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "reaches-stack=true" >> "$GITHUB_OUTPUT"
-            echo "reaches-model=true" >> "$GITHUB_OUTPUT"
-            echo "not a pull request: every lane runs"
-            exit 0
+          # The pull_request checkout is refs/pull/N/merge: parents (base, head).
+          # Anything else and HEAD^1 is not the base, so fail rather than
+          # diff against the wrong commit.
+          parents="$(git rev-list --parents -n 1 HEAD | wc -w)"
+          if [ "$parents" -ne 3 ]; then
+            echo "::error::HEAD is not a two-parent merge commit (rev-list printed ${parents} ids); cannot diff the pull request against its base"
+            exit 1
           fi
           # A failed diff fails this job (pipefail), never an empty list.
-          git diff --name-only "${BASE_SHA}...HEAD" > "$RUNNER_TEMP/changed.txt"
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
           bash scripts/ci/e2e-lane-filter.sh < "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
 
   chat-stream-real:

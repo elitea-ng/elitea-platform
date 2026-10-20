@@ -15,32 +15,59 @@
 # service) and a README or a chart edit under them starts six stack lanes. A
 # changed path is OUTSIDE the stack, and does not count, when it is:
 #
-#   deploy/helm/**                     the chart. No stack lane renders it;
-#                                      helm-lint.yml and helm-install-smoke.yml do.
-#   apps/elitea-desktop/**             the Tauri host. No stack lane runs it;
-#                                      ci-desktop.yml does.
-#   apps/elitea-web/src/entries/docs/** the embedded docs SPA. No journey opens
-#                                      /docs; ci-web.yml's `npm run build`
-#                                      builds it (build:docs), so a broken
-#                                      page still fails a gate.
-#   *.md                               prose — EXCEPT under apps/elitea-web/src/
-#                                      (the app imports .md with `?raw`, e.g.
-#                                      entries/desktop/agents/local-coding-agent.md)
-#                                      and under any test, fixture, testdata,
-#                                      e2e or conformance path, where a .md
-#                                      file is test input.
+#   deploy/helm/**     the chart. No stack lane renders it; helm-lint.yml and
+#                      helm-install-smoke.yml do. EXCEPT every path under it
+#                      that a deploy/*.yml compose file references (today
+#                      ./helm/nats-bootstrap/files/bootstrap.sh, bind-mounted
+#                      by the standalone stacks). That list is READ from the
+#                      compose files on every run, never written here, so a
+#                      new bind mount reaches the stack without editing this.
+#   apps/elitea-desktop/**
+#                      the Tauri host. No stack lane runs it, nothing under
+#                      apps/elitea-web or deploy imports it; ci-desktop.yml
+#                      builds it.
+#   *.md at the repository root, or under docs/ or .github/
+#                      prose. NOT a .md anywhere else: services/** and
+#                      libs/** embed some (`//go:embed templates/README.md`
+#                      in elitea-main's brandpackage), apps/elitea-web imports
+#                      some with `?raw`, and fixtures are test input.
 #
-# NOT skipped: apps/elitea-web/src/entries/desktop/**. It is not separable —
-# the main app imports from it (useLocalCodingAgent.ts) — so it reaches the
-# web image like any other source.
+# NOT skipped, with the reason:
+#   apps/elitea-web/src/entries/docs/**  vite.config.ts imports from it
+#       (entries/docs/mdx/remark-mermaid) and the docs SPA ships in the web image.
+#   apps/elitea-web/src/entries/desktop/**  the main app imports from it
+#       (useLocalCodingAgent.ts imports its .md with `?raw`).
 #
 # Anything else reaches the stack. An EMPTY list (a failed diff, an empty pull
 # request) reaches everything: "nothing changed" must never read as "nothing
 # to test". scripts/ci/e2e-lane-filter-test.sh drives every arm.
+#
+# COMPOSE_DIR (default deploy) is where the compose files are read; the test
+# points it at a fixture.
 set -euo pipefail
 
-SKIP_TREE='^(deploy/helm/|apps/elitea-desktop/|apps/elitea-web/src/entries/docs/)'
-MD_KEEP='^(apps/elitea-web/src/|conformance/)|(^|/)(tests?|fixtures|testdata|e2e)/'
+SKIP_TREE='^(deploy/helm/|apps/elitea-desktop/)'
+# A .md is prose only here: the repository root, docs/, .github/.
+MD_PROSE='^([^/]+|docs/.+|\.github/.+)\.md$'
+COMPOSE_DIR="${COMPOSE_DIR:-deploy}"
+
+# Every deploy/helm path a compose file references, as a repository path.
+# A compose file names it relative to deploy/ (`./helm/...`).
+helm_used=()
+while IFS= read -r ref; do
+  [ -n "$ref" ] && helm_used+=("deploy/${ref#./}")
+done < <(cat "$COMPOSE_DIR"/*.yml "$COMPOSE_DIR"/*.yaml 2>/dev/null | grep -oE '\./helm/[^[:space:]:"'"'"']+' | sort -u)
+
+used_by_compose() {
+  local f="$1" u
+  for u in ${helm_used[@]+"${helm_used[@]}"}; do
+    # A file, or anything under a referenced directory.
+    if [ "$f" = "$u" ] || [[ "$f" == "$u"/* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 MODEL='^(services/elitea-llm-gateway/|services/elitea-worker-rust/|libs/rust/llm-wire/|libs/rust/agent-runtime/|libs/rust/connectors/|services/elitea-main/internal/api/v2/executions/|services/elitea-main/internal/llmproxy/|services/elitea-main/internal/runtimecomposition/|apps/elitea-web/src/features/chat-|apps/elitea-web/e2e/|apps/elitea-web/scripts/chat-stream-e2e\.sh|apps/elitea-web/playwright\.config\.ts|deploy/docker-compose\.standalone-(full|rust-agent)\.yml|deploy/scripts/|deploy/ci/|\.github/actions/|\.github/workflows/ci-web-e2e\.yml)'
 
 total=0
@@ -48,10 +75,10 @@ reaching=()
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   total=$((total + 1))
-  if [[ "$f" =~ $SKIP_TREE ]]; then
+  if [[ "$f" =~ $SKIP_TREE ]] && ! used_by_compose "$f"; then
     continue
   fi
-  if [[ "$f" == *.md && ! "$f" =~ $MD_KEEP ]]; then
+  if [[ "$f" =~ $MD_PROSE ]]; then
     continue
   fi
   reaching+=("$f")

@@ -174,9 +174,11 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # The two jobs get separate cache entries (rust-cache keys on the job),
-      # which is correct: `quality` builds --release and docs, `test` builds
-      # test targets, and one shared entry would thrash between them.
+      # `quality` keeps its own entry (rust-cache keys on the job id when no
+      # shared-key is set): it builds --release and docs, `test` builds test
+      # targets, and one shared entry would thrash between them. `test`
+      # shares its entry with `workspace-run-docker` (shared-key
+      # worker-rust-test), which builds the same test profile.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -245,9 +247,11 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # The two jobs get separate cache entries (rust-cache keys on the job),
-      # which is correct: `quality` builds --release and docs, `test` builds
-      # test targets, and one shared entry would thrash between them.
+      # `quality` keeps its own entry (rust-cache keys on the job id when no
+      # shared-key is set): it builds --release and docs, `test` builds test
+      # targets, and one shared entry would thrash between them. `test`
+      # shares its entry with `workspace-run-docker` (shared-key
+      # worker-rust-test), which builds the same test profile.
       #
       # `test` and `workspace-run-docker` build the same `--all-features` test
       # profile: measured 2026-10-20 each saved an entry of exactly
@@ -588,7 +592,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: worker-rust-test
-          save-if: ${{ github.ref == 'refs/heads/main' && github.job == 'test' }}
+          # Never saves: `test` is the one writer of this key. `false`, not a
+          # main-ref expression: scripts/ci/check_workflow_cache_writes.py
+          # accepts a literal false as the strongest form.
+          save-if: false
           workspaces: services/elitea-worker-rust
 
       - name: Build and push the workspace runner image
