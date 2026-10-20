@@ -168,8 +168,19 @@ struct State {
     priorities: HashMap<String, Vec<String>>,
     /// Workspaces whose priorities changed since their pass was planned.
     reprioritised: HashSet<String>,
+    /// Workspaces to look at: added, woken (a build committed, a setting
+    /// changed), forced, reprioritised, or with a pass under way or to
+    /// retry. One that is done or off is not looked at again (no prune, no
+    /// scan of its chunks) until something marks it.
+    dirty: HashSet<String>,
+    /// When every workspace was last marked (a slow sweep: the policy may
+    /// have changed what is allowed without telling anyone).
+    swept: Option<Instant>,
     woken: bool,
 }
+
+/// How often every workspace is looked at again, dirty or not.
+const SWEEP_EVERY: Duration = Duration::from_mins(10);
 
 struct Shared {
     source: Arc<dyn EmbedderSource>,
@@ -215,6 +226,11 @@ impl Shared {
     fn set_status(&self, workspace_id: &str, status: &EmbedStatus) {
         let changed = {
             let mut state = self.state();
+            // Removed (turned off, deleted) while a pass was under way: its
+            // last batch reports nothing.
+            if !state.services.contains_key(workspace_id) {
+                return;
+            }
             let before = state
                 .statuses
                 .insert(workspace_id.to_owned(), status.clone());
@@ -361,10 +377,12 @@ impl Embedding {
         let queries: Weak<dyn QueryEmbedder> =
             Arc::downgrade(&self.shared) as Weak<dyn QueryEmbedder>;
         service.attach_query_embedder(queries);
-        self.shared
-            .state()
-            .services
-            .insert(service.workspace_id().to_owned(), Arc::downgrade(service));
+        {
+            let mut state = self.shared.state();
+            let id = service.workspace_id().to_owned();
+            state.services.insert(id.clone(), Arc::downgrade(service));
+            state.dirty.insert(id);
+        }
         self.shared.notify();
     }
 
@@ -377,11 +395,29 @@ impl Embedding {
         state.retry_at.remove(workspace_id);
         state.priorities.remove(workspace_id);
         state.reprioritised.remove(workspace_id);
+        state.dirty.remove(workspace_id);
     }
 
-    /// Look again now (a build committed, a setting changed).
+    /// Look at every workspace again now (a build committed, a setting
+    /// changed).
     pub fn wake(&self) {
-        self.shared.state().retry_at.clear();
+        {
+            let mut state = self.shared.state();
+            state.retry_at.clear();
+            let all: Vec<String> = state.services.keys().cloned().collect();
+            state.dirty.extend(all);
+        }
+        self.shared.notify();
+    }
+
+    /// Look at one workspace again now (its build committed, its setting
+    /// changed).
+    pub fn wake_workspace(&self, workspace_id: &str) {
+        {
+            let mut state = self.shared.state();
+            state.retry_at.remove(workspace_id);
+            state.dirty.insert(workspace_id.to_owned());
+        }
         self.shared.notify();
     }
 
@@ -405,6 +441,7 @@ impl Embedding {
             merged.truncate(MAX_PRIORITY_PATHS);
             *list = merged;
             state.reprioritised.insert(workspace_id.to_owned());
+            state.dirty.insert(workspace_id.to_owned());
         }
         self.shared.notify();
     }
@@ -416,6 +453,7 @@ impl Embedding {
             let mut state = self.shared.state();
             state.forced.insert(workspace_id.to_owned());
             state.retry_at.remove(workspace_id);
+            state.dirty.insert(workspace_id.to_owned());
         }
         self.shared.notify();
     }
@@ -503,24 +541,38 @@ fn run(shared: &Shared) {
     }
 }
 
+/// The workspaces to look at now (dirty, not waiting for a retry), each
+/// with whether it is forced; every one is marked dirty once per sweep.
+fn candidates(shared: &Shared) -> Vec<(String, Weak<IndexService>, bool)> {
+    let mut state = shared.state();
+    state
+        .services
+        .retain(|_, service| service.strong_count() > 0);
+    let now = Instant::now();
+    if state
+        .swept
+        .is_none_or(|at| now.duration_since(at) >= SWEEP_EVERY)
+    {
+        state.swept = Some(now);
+        let all: Vec<String> = state.services.keys().cloned().collect();
+        state.dirty.extend(all);
+    }
+    let retry_at = state.retry_at.clone();
+    let forced = state.forced.clone();
+    let dirty = state.dirty.clone();
+    state
+        .services
+        .iter()
+        .filter(|(id, _)| dirty.contains(*id))
+        .filter(|(id, _)| retry_at.get(*id).is_none_or(|at| *at <= now))
+        .map(|(id, service)| (id.clone(), service.clone(), forced.contains(id)))
+        .collect()
+}
+
 /// The next workspace with chunks to embed (pruning what each no longer
-/// needs on the way).
+/// needs on the way); a workspace found done or off is not dirty any more.
 fn pick(shared: &Shared) -> Option<Job> {
-    let candidates: Vec<(String, Weak<IndexService>, bool)> = {
-        let mut state = shared.state();
-        state
-            .services
-            .retain(|_, service| service.strong_count() > 0);
-        let now = Instant::now();
-        let retry_at = state.retry_at.clone();
-        let forced = state.forced.clone();
-        state
-            .services
-            .iter()
-            .filter(|(id, _)| retry_at.get(*id).is_none_or(|at| *at <= now))
-            .map(|(id, service)| (id.clone(), service.clone(), forced.contains(id)))
-            .collect()
-    };
+    let candidates = candidates(shared);
     // Forced workspaces first.
     let mut candidates = candidates;
     candidates.sort_by_key(|(_, _, forced)| !forced);
@@ -543,6 +595,7 @@ fn pick(shared: &Shared) -> Option<Job> {
             let mut state = shared.state();
             state.statuses.remove(&workspace_id);
             state.forced.remove(&workspace_id);
+            state.dirty.remove(&workspace_id);
             continue;
         };
         let stamp = set.stamp();
@@ -577,7 +630,12 @@ fn pick(shared: &Shared) -> Option<Job> {
         };
         put_first(shared, &service, &workspace_id, &mut missing);
         if missing.is_empty() {
-            shared.state().forced.remove(&workspace_id);
+            {
+                let mut state = shared.state();
+                state.forced.remove(&workspace_id);
+                // Done: not looked at again until something changes.
+                state.dirty.remove(&workspace_id);
+            }
             shared.set_status(
                 &workspace_id,
                 &EmbedStatus {
@@ -766,24 +824,29 @@ fn work(shared: &Shared, job: &Job) {
 /// One batch: read the texts, embed, store. Returns the vectors written.
 fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u64, String> {
     let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
-    let texts: HashMap<i64, String> = job
+    let texts: HashMap<i64, (String, String)> = job
         .service
         .store()
         .chunks_by_id(&ids)
         .map_err(|error| error.to_string())?
         .into_iter()
-        .map(|chunk| (chunk.id, chunk.text))
+        .map(|chunk| (chunk.id, (chunk.text, chunk.text_hash)))
         .collect();
-    // Chunks a build replaced meanwhile are skipped (the next pass sees
-    // their successors).
-    let present: Vec<&(i64, String)> = batch
+    // Chunks a build replaced meanwhile are skipped: gone, or an id reused
+    // by another text (chunk ids are rowids, reused once the highest are
+    // deleted). The next pass sees their successors. A vector is only ever
+    // stored under the hash of the text it was made from.
+    let present: Vec<(&str, &str)> = batch
         .iter()
-        .filter(|(id, _)| texts.contains_key(id))
+        .filter_map(|(id, planned)| {
+            let (text, hash) = texts.get(id)?;
+            (hash == planned).then_some((text.as_str(), hash.as_str()))
+        })
         .collect();
     if present.is_empty() {
         return Ok(0);
     }
-    let inputs: Vec<&str> = present.iter().map(|(id, _)| texts[id].as_str()).collect();
+    let inputs: Vec<&str> = present.iter().map(|(text, _)| *text).collect();
     let embedder = shared
         .embedder(&job.choice, &job.workspace_id)
         .map_err(|error| error.to_string())?;
@@ -806,7 +869,7 @@ fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u6
                 job.dim
             ));
         }
-        rows.push((hash.clone(), vector::quantize(&values)));
+        rows.push(((*hash).to_owned(), vector::quantize(&values)));
     }
     job.service
         .store()

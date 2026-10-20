@@ -374,6 +374,38 @@ mod download {
     const MAX_REDIRECTS: usize = 8;
     /// Progress is reported at most once per this many bytes.
     const REPORT_EVERY: u64 = 4 << 20;
+    /// A server that sends nothing (no answer, no bytes) for this long
+    /// failed the transfer (the `.part` is kept for a resume).
+    pub const STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+    /// How often a wait for the server looks at `cancel`.
+    const CANCEL_POLL: std::time::Duration = std::time::Duration::from_millis(200);
+
+    /// Wait for `step` (a request's answer, the next bytes), giving up
+    /// when `cancel` is set (`Paused`) or nothing came for `stall`.
+    async fn wait_for<T>(
+        step: impl std::future::Future<Output = Result<T, reqwest::Error>>,
+        cancel: &AtomicBool,
+        stall: std::time::Duration,
+    ) -> Result<T, EmbedError> {
+        let step = std::pin::pin!(step);
+        let mut step = step;
+        let started = tokio::time::Instant::now();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(EmbedError::Paused);
+            }
+            match tokio::time::timeout(CANCEL_POLL, step.as_mut()).await {
+                Ok(done) => return done.map_err(failed),
+                Err(_) if started.elapsed() >= stall => {
+                    return Err(failed(format!(
+                        "the server sent nothing for {} s",
+                        stall.as_secs()
+                    )));
+                }
+                Err(_) => {}
+            }
+        }
+    }
 
     fn failed(error: impl std::fmt::Display) -> EmbedError {
         EmbedError::Remote(format!("the model download failed: {error}"))
@@ -401,6 +433,24 @@ mod download {
             progress: &(dyn Fn(Progress) + Send + Sync),
             cancel: &AtomicBool,
         ) -> Result<(), EmbedError> {
+            self.download_with(spec, client, base, progress, cancel, STALL_TIMEOUT)
+                .await
+        }
+
+        /// [`Self::download`] with another stall timeout (tests).
+        ///
+        /// # Errors
+        ///
+        /// As [`Self::download`].
+        pub async fn download_with(
+            &self,
+            spec: &'static ModelSpec,
+            client: &reqwest::Client,
+            base: &str,
+            progress: &(dyn Fn(Progress) + Send + Sync),
+            cancel: &AtomicBool,
+            stall: std::time::Duration,
+        ) -> Result<(), EmbedError> {
             let dir = self.ensure_dir(spec)?;
             let total = spec.download_bytes();
             let mut done = 0;
@@ -410,7 +460,7 @@ mod download {
                     continue;
                 }
                 let url = spec.file_url(base, file);
-                fetch(client, &url, &dir, file, cancel, &|have| {
+                fetch(client, &url, &dir, file, cancel, stall, &|have| {
                     progress(Progress {
                         model: spec.id,
                         file: file.name,
@@ -437,6 +487,7 @@ mod download {
         dir: &Path,
         file: &'static ModelFile,
         cancel: &AtomicBool,
+        stall: std::time::Duration,
         report: &(dyn Fn(u64) + Send + Sync),
     ) -> Result<(), EmbedError> {
         let part = dir.join(part_name(file));
@@ -458,7 +509,7 @@ mod download {
             if have > 0 {
                 request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
             }
-            let answer = request.send().await.map_err(failed)?;
+            let answer = wait_for(request.send(), cancel, stall).await?;
             if answer.status().is_redirection() {
                 let location = answer
                     .headers()
@@ -500,7 +551,7 @@ mod download {
             .map_err(failed)?;
         if status != reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
             let mut reported = have;
-            while let Some(chunk) = response.chunk().await.map_err(failed)? {
+            while let Some(chunk) = wait_for(response.chunk(), cancel, stall).await? {
                 if cancel.load(Ordering::Relaxed) {
                     return Err(EmbedError::Paused);
                 }
@@ -731,5 +782,85 @@ mod download_tests {
             .unwrap_err();
         assert!(error.to_string().contains("SHA-256"), "{error}");
         assert_eq!(store.state(spec), ModelState::Missing);
+    }
+
+    /// A server that answers `body`'s headers and half of it, then sends
+    /// nothing more (the connection stays open).
+    fn hanging(body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let body = body.clone();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body[..body.len() / 2]);
+                    let _ = stream.flush();
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                });
+            }
+        });
+        base
+    }
+
+    #[tokio::test]
+    async fn a_stalled_download_fails_and_keeps_its_part() {
+        let bytes = vec![7_u8; 50_000];
+        let spec = spec_for(vec![("model.safetensors", bytes.clone())]);
+        let base = hanging(bytes);
+        let cache = tempfile::tempdir().unwrap();
+        let store = ModelStore::new(cache.path().join("models"));
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let error = store
+            .download_with(
+                spec,
+                &client(),
+                &base,
+                &|_| {},
+                &cancel,
+                std::time::Duration::from_millis(400),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("sent nothing"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(matches!(store.state(spec), ModelState::Partial { have, .. } if have > 0));
+    }
+
+    #[tokio::test]
+    async fn a_cancel_stops_a_download_that_waits_for_bytes() {
+        let bytes = vec![7_u8; 50_000];
+        let spec = spec_for(vec![("model.safetensors", bytes.clone())]);
+        let base = hanging(bytes);
+        let cache = tempfile::tempdir().unwrap();
+        let store = ModelStore::new(cache.path().join("models"));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let outcome = store
+            .download(spec, &client(), &base, &|_| {}, &cancel)
+            .await;
+        assert!(matches!(outcome, Err(EmbedError::Paused)), "{outcome:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "stopped while no bytes came, not at the 60 s stall"
+        );
     }
 }

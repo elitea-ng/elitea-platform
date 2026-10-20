@@ -34,6 +34,8 @@ elitea-local-tools = { path = "../local-tools" }
 # The Embedder trait and the int8 vector blobs (no backend: the desktop
 # links candle and the model cache).
 elitea-local-embed = { path = "../local-embed" }
+# `path_glob` (the line local-tools already links): linear matching.
+globset = "0.4.20"
 # The `.gitignore` rules a folder watch filters its events with (the line
 # local-tools' walk already links).
 ignore = "0.4.33"

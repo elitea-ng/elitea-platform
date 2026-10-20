@@ -277,12 +277,16 @@ pub struct IndexService {
 /// A loaded vector matrix and what it was loaded at.
 struct CachedMatrix {
     version: u64,
+    /// The store's chunks version it was loaded at: another one, and its
+    /// chunk ids are stale (never reused, whatever its age).
+    chunks: u64,
     at: Instant,
     matrix: Arc<VectorMatrix>,
 }
 
-/// A matrix older than the vectors is reused for this long (the background
-/// embedder writes a batch every second or so).
+/// A matrix older than the vectors is reused for this long while only new
+/// vectors were added (the background embedder writes a batch every second
+/// or so); a build or a prune reloads it at once.
 const MATRIX_RELOAD: Duration = Duration::from_secs(30);
 
 impl std::fmt::Debug for IndexService {
@@ -572,9 +576,11 @@ impl IndexService {
         let set = provider.vector_set(&choice)?;
         let stamp = set.stamp();
         let version = self.store.vectors_version();
+        let chunks = self.store.chunks_version();
         let mut cached = self.matrix.lock().unwrap_or_else(PoisonError::into_inner);
         let fresh = cached.as_ref().is_some_and(|known| {
             known.matrix.stamp() == stamp
+                && known.chunks == chunks
                 && (known.version == version
                     || (!known.matrix.is_empty() && known.at.elapsed() < MATRIX_RELOAD))
         });
@@ -582,6 +588,7 @@ impl IndexService {
             let matrix = VectorMatrix::load(&self.store, &set).ok()?;
             *cached = Some(CachedMatrix {
                 version,
+                chunks,
                 at: Instant::now(),
                 matrix: Arc::new(matrix),
             });
@@ -1030,6 +1037,8 @@ impl IndexService {
                 Some(&self.policy),
                 Some(ChunkUpdate {
                     generation: chunks::GENERATION,
+                    // Every file was read again: none keeps old chunks.
+                    replace: full || rechunk,
                 }),
             )?;
             let report = RunReport {

@@ -657,6 +657,8 @@ impl IndexRegistry {
         let (entry, mut slot) = self.lock(workspace_id).await;
         let open = Self::take_open(&entry, &mut slot);
         slot.peeked = None;
+        // Its embedding status, Embed now and retry wait go with it.
+        self.forget_embedding(workspace_id);
         let dir = self.index_dir(workspace_id);
         let on_disk = blocking(move || {
             if let Some(open) = open {
@@ -760,7 +762,7 @@ impl IndexRegistry {
             .map_err(IndexError::from)?;
         if let Some(embedding) = &self.embedding {
             embedding.add(&service);
-            embedding.wake();
+            embedding.wake_workspace(workspace_id);
         }
         Ok(stored)
     }
@@ -953,6 +955,7 @@ impl IndexRegistry {
         }
         self.workspace(workspace_id).await?;
         let dir = self.index_dir(workspace_id);
+        self.forget_embedding(workspace_id);
         self.with_closed(workspace_id, move || match std::fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -962,6 +965,14 @@ impl IndexRegistry {
             )),
         })
         .await?
+    }
+
+    /// Drop what the embedder keeps for the workspace (its service, status,
+    /// forced flag, retry wait and priorities).
+    fn forget_embedding(&self, workspace_id: &str) {
+        if let Some(embedding) = &self.embedding {
+            embedding.remove(workspace_id);
+        }
     }
 
     /// The service whose tools a turn in the workspace is offered: when the
@@ -1105,10 +1116,12 @@ struct WakeAfterBuild {
 
 impl IndexEvents for WakeAfterBuild {
     fn emit(&self, event: IndexEvent) {
-        let ready = event.phase == "ready";
+        let ready = (event.phase == "ready").then(|| event.workspace_id.clone());
         self.inner.emit(event);
-        if ready && let Some(embedding) = self.embedding.upgrade() {
-            embedding.wake();
+        if let Some(workspace_id) = ready
+            && let Some(embedding) = self.embedding.upgrade()
+        {
+            embedding.wake_workspace(&workspace_id);
         }
     }
 }
@@ -1773,6 +1786,19 @@ mod tests {
         let service = registry.for_turn(&id).await.unwrap();
         let (with, all) = service.store().vector_coverage("local:fake:2").unwrap();
         assert!(all > 0 && with == all, "resumed: {with}/{all}");
+        assert!(embedding.status(&id).is_some());
+        // Turned off: the embedder forgets it (no stale status).
+        drop(service);
+        registry.disable(&id).await.unwrap();
+        assert!(
+            embedding.status(&id).is_none(),
+            "{:?}",
+            embedding.status(&id)
+        );
+        registry.enable(&id).await.unwrap();
+        until_built(&registry, &id).await;
+        registry.remove(&id, true).await.unwrap();
+        assert!(embedding.status(&id).is_none());
     }
 
     /// Embeddings are off until set, and only to a way the policy allows.

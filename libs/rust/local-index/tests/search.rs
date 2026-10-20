@@ -317,3 +317,56 @@ async fn staged_chunks_stay_invisible_until_a_build_commits() {
     assert_eq!(store.chunk_count().unwrap(), before);
     assert!(store.chunks_of("src/ghost.py").unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_graph_neighbour_whose_chunk_no_word_matches_is_still_a_hit() {
+    let folder = tempfile::tempdir().unwrap();
+    write(
+        folder.path(),
+        "pkg/caller.py",
+        "from pkg.target import quietly_answers\n\n\ndef alpha_helper():\n    return quietly_answers()\n",
+    );
+    write(
+        folder.path(),
+        "pkg/target.py",
+        "def quietly_answers():\n    return 42\n",
+    );
+    let data = tempfile::tempdir().unwrap();
+    let service = IndexService::open(
+        "ws",
+        folder.path(),
+        &[],
+        &data.path().join("index"),
+        Arc::new(NoEvents),
+    )
+    .unwrap();
+    service.refresh(false).await.unwrap();
+    // No word of the query is in target.py: the full-text side never sees
+    // its chunk; only the graph (one hop from alpha_helper) does.
+    let fts = service
+        .store()
+        .search_fts(
+            &elitea_local_index::search::fts_expression("alpha helper").unwrap(),
+            50,
+        )
+        .unwrap();
+    let target: Vec<i64> = service
+        .store()
+        .chunks_of("pkg/target.py")
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert!(fts.iter().all(|(id, _)| !target.contains(id)), "{fts:?}");
+    let (answer, _) = service.search(&request("alpha helper"), None).unwrap();
+    let hit = answer
+        .hits
+        .iter()
+        .find(|hit| hit.path == "pkg/target.py")
+        .unwrap_or_else(|| panic!("the neighbour is a hit: {answer:#?}"));
+    assert_eq!(hit.matched_by, ["neighbour"], "{hit:?}");
+    // And a filter admits it (its chunk is loaded, not only listed).
+    let mut filtered = request("alpha helper");
+    filtered.path_glob = Some("pkg/target.py".to_owned());
+    assert_eq!(paths(&service, &filtered), ["pkg/target.py"]);
+}

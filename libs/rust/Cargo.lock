@@ -2050,6 +2050,7 @@ dependencies = [
  "elitea-local-embed",
  "elitea-local-tools",
  "encoding_rs",
+ "globset",
  "ignore",
  "log",
  "notify",

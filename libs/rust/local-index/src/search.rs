@@ -87,6 +87,11 @@ impl Request {
             .map(str::trim)
             .filter(|g| !g.is_empty())
             .map(str::to_owned);
+        if let Some(glob) = &path_glob
+            && PathGlob::new(glob).is_none()
+        {
+            return Err(format!("path_glob {glob:?} is not a glob"));
+        }
         let kind = match args.get("kind").and_then(Value::as_str).unwrap_or("any") {
             "any" => None,
             other => Some(
@@ -156,40 +161,49 @@ pub struct Answer {
     pub note: Option<String>,
 }
 
-/// Whether `path` matches the glob: `**` any run of characters, `*` any
-/// within one path segment, `?` one character. A pattern without a `/`
-/// matches the file name or the whole path.
+/// A `path_glob`, compiled once per search (globset, linear in the path
+/// whatever the pattern): `**` any run of path segments, `*` any run
+/// within one segment, `?` one character. A pattern without a `/` matches
+/// the file name or the whole path.
+#[derive(Debug, Clone)]
+pub struct PathGlob {
+    matcher: globset::GlobMatcher,
+    /// No `/` in the pattern: the file name may match too.
+    name_too: bool,
+}
+
+impl PathGlob {
+    /// `None` when the pattern does not parse.
+    #[must_use]
+    pub fn new(pattern: &str) -> Option<Self> {
+        let pattern = pattern.trim_start_matches("./");
+        let matcher = globset::GlobBuilder::new(pattern)
+            .literal_separator(true)
+            .backslash_escape(true)
+            .build()
+            .ok()?
+            .compile_matcher();
+        Some(Self {
+            matcher,
+            name_too: !pattern.contains('/'),
+        })
+    }
+
+    #[must_use]
+    pub fn is_match(&self, path: &str) -> bool {
+        self.matcher.is_match(path)
+            || (self.name_too
+                && self
+                    .matcher
+                    .is_match(path.rsplit('/').next().unwrap_or(path)))
+    }
+}
+
+/// Whether `path` matches the glob ([`PathGlob`]); a pattern that does not
+/// parse matches nothing.
 #[must_use]
 pub fn glob_match(pattern: &str, path: &str) -> bool {
-    fn matches(p: &[char], s: &[char]) -> bool {
-        match p.first() {
-            None => s.is_empty(),
-            Some('*') if p.get(1) == Some(&'*') => {
-                let rest = if p.get(2) == Some(&'/') {
-                    &p[3..]
-                } else {
-                    &p[2..]
-                };
-                (0..=s.len()).any(|i| matches(rest, &s[i..]))
-                    || (p.get(2) == Some(&'/') && matches(&p[2..], s))
-            }
-            Some('*') => (0..=s.len())
-                .take_while(|&i| i == 0 || s[i - 1] != '/')
-                .any(|i| matches(&p[1..], &s[i..])),
-            Some('?') => s.first().is_some_and(|c| *c != '/') && matches(&p[1..], &s[1..]),
-            Some(c) => s.first() == Some(c) && matches(&p[1..], &s[1..]),
-        }
-    }
-    let pattern: Vec<char> = pattern.trim_start_matches("./").chars().collect();
-    let full: Vec<char> = path.chars().collect();
-    if matches(&pattern, &full) {
-        return true;
-    }
-    if !pattern.contains(&'/') {
-        let name: Vec<char> = path.rsplit('/').next().unwrap_or(path).chars().collect();
-        return matches(&pattern, &name);
-    }
-    false
+    PathGlob::new(pattern).is_some_and(|glob| glob.is_match(path))
 }
 
 /// The FTS5 expression of a query: its terms (compound identifiers split
@@ -242,13 +256,10 @@ impl<'a> Chunks<'a> {
         Ok(found)
     }
 
-    fn admits(&self, id: i64, request: &Request) -> bool {
+    fn admits(&self, id: i64, request: &Request, glob: Option<&Option<PathGlob>>) -> bool {
         self.by_id.get(&id).is_some_and(|chunk| {
             request.kind.is_none_or(|kind| chunk.kind == kind)
-                && request
-                    .path_glob
-                    .as_deref()
-                    .is_none_or(|glob| glob_match(glob, &chunk.path))
+                && glob.is_none_or(|glob| glob.as_ref().is_some_and(|g| g.is_match(&chunk.path)))
         })
     }
 }
@@ -450,11 +461,13 @@ fn fuse(
     chunks: &Chunks<'_>,
     request: &Request,
 ) -> Vec<(i64, f64, Vec<&'static str>)> {
+    // Compiled once (`Some(None)`: it does not parse, nothing is admitted).
+    let glob = request.path_glob.as_deref().map(PathGlob::new);
     let mut fused: HashMap<i64, (f64, Vec<&'static str>)> = HashMap::new();
     for (name, weight, ids) in lists {
         let mut rank = 0_u32;
         for id in ids {
-            if !chunks.admits(*id, request) {
+            if !chunks.admits(*id, request, glob.as_ref()) {
                 continue;
             }
             rank += 1;
@@ -538,6 +551,10 @@ pub fn search_workspace(
         chunks.load(&lexical)?;
         lists.push(("lexical", text_weight, lexical));
         let (graph, neighbours) = graph_lists(view, names, &mut chunks, request, &mut entity_of)?;
+        // Their chunks are often not among the full-text hits: loaded too,
+        // or the filters would see nothing to admit.
+        chunks.load(&graph)?;
+        chunks.load(&neighbours)?;
         lists.push(("graph", text_weight, graph));
         lists.push(("neighbour", text_weight / 2.0, neighbours));
     }
@@ -580,6 +597,23 @@ mod tests {
         assert!(!glob_match("src/*.rs", "src/a/b.rs"));
         assert!(!glob_match("*.go", "src/index.rs"));
         assert!(glob_match("docs/?.md", "docs/a.md"));
+        assert!(glob_match("./src/*.rs", "src/a.rs"));
+        assert!(!glob_match("[", "src/a.rs"), "does not parse: nothing");
+    }
+
+    #[test]
+    fn a_pathological_glob_answers_at_once() {
+        let pattern = "**a".repeat(40) + "**b";
+        let path = "a".repeat(400);
+        let started = std::time::Instant::now();
+        for _ in 0..100 {
+            assert!(!glob_match(&pattern, &path));
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

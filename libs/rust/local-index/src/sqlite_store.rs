@@ -247,6 +247,11 @@ pub struct Staged {
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkUpdate<'a> {
     pub generation: &'a str,
+    /// The refresh read every file again (a full rebuild, a new chunker):
+    /// every document's chunks are replaced by what was staged, even at an
+    /// unchanged version (and dropped when nothing was). Also implied when
+    /// the stored chunks are of another generation.
+    pub replace: bool,
 }
 
 /// The staging table of a build's chunks (the writer connection's own).
@@ -321,6 +326,10 @@ pub struct SqliteGraphStore {
     /// build, new vectors, a prune): what a cached vector matrix is
     /// checked against.
     vectors_version: AtomicU64,
+    /// Bumped by every write that changes the chunks or drops vectors (a
+    /// build, a prune): a cached matrix of another chunks version holds
+    /// chunk ids that may be gone or reused, and is never served.
+    chunks_version: AtomicU64,
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
@@ -413,6 +422,7 @@ impl SqliteGraphStore {
             last_commit_rows: AtomicU64::new(0),
             loads: AtomicU64::new(0),
             vectors_version: AtomicU64::new(0),
+            chunks_version: AtomicU64::new(0),
         })
     }
 
@@ -777,7 +787,8 @@ impl SqliteGraphStore {
 
     /// The chunks matching an FTS5 `MATCH` expression, best first (BM25,
     /// the identifier column weighted 0.75 of the text): `(id, score)`,
-    /// higher is better. An expression FTS5 refuses finds nothing.
+    /// higher is better. An expression FTS5 refuses (a syntax error) finds
+    /// nothing; every other failure (busy, I/O, a damaged index) is an error.
     ///
     /// # Errors
     ///
@@ -792,9 +803,10 @@ impl SqliteGraphStore {
                 params![expression, i64::try_from(limit).unwrap_or(i64::MAX)],
                 |row| Ok((row.get::<_, i64>(0)?, -row.get::<_, f64>(1)?)),
             );
-            match rows {
-                Ok(rows) => Ok(rows.collect::<rusqlite::Result<_>>().unwrap_or_default()),
-                Err(_) => Ok(Vec::new()),
+            match rows.and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>()) {
+                Ok(found) => Ok(found),
+                Err(error) if is_fts_syntax_error(&error) => Ok(Vec::new()),
+                Err(error) => Err(error.into()),
             }
         })
     }
@@ -873,6 +885,12 @@ impl SqliteGraphStore {
     #[must_use]
     pub fn vectors_version(&self) -> u64 {
         self.vectors_version.load(Ordering::SeqCst)
+    }
+
+    /// The version of the chunks (see the field).
+    #[must_use]
+    pub fn chunks_version(&self) -> u64 {
+        self.chunks_version.load(Ordering::SeqCst)
     }
 
     /// Record the vector set `set` (idempotent).
@@ -1045,6 +1063,7 @@ impl SqliteGraphStore {
             tx.commit()?;
             if deleted > 0 {
                 self.vectors_version.fetch_add(1, Ordering::SeqCst);
+                self.chunks_version.fetch_add(1, Ordering::SeqCst);
             }
             Ok(deleted as u64)
         })
@@ -1221,6 +1240,7 @@ impl SqliteGraphStore {
         let (revision, rows) = self.with(|conn| commit(conn, key, graph, completion, &written))?;
         self.last_commit_rows.store(rows, Ordering::SeqCst);
         self.vectors_version.fetch_add(1, Ordering::SeqCst);
+        self.chunks_version.fetch_add(1, Ordering::SeqCst);
         Ok(revision)
     }
 }
@@ -1712,6 +1732,14 @@ fn write_chunks(
     update: ChunkUpdate<'_>,
 ) -> Result<u64> {
     conn.execute_batch(STAGING)?;
+    let generation: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'chunks_generation'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let replace = update.replace || generation.as_deref() != Some(update.generation);
     let stored: HashMap<String, String> = {
         let mut statement = conn.prepare("SELECT DISTINCT path, version FROM chunks")?;
         let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
@@ -1737,14 +1765,22 @@ fn write_chunks(
     )?;
     let mut rows = staged.query([])?;
     let mut current: Option<(String, bool)> = None;
+    // The documents whose staged rows were taken.
+    let mut taken: HashSet<String> = HashSet::new();
     while let Some(row) = rows.next()? {
         let path: String = row.get(0)?;
         let version: String = row.get(1)?;
         if current.as_ref().is_none_or(|(at, _)| *at != path) {
             let committed = completion.documents.get(&path).map(|state| &state.version);
-            let take = committed == Some(&version) && stored.get(&path) != Some(&version);
-            if take && stored.contains_key(&path) {
-                written += delete_chunks_of(conn, &path)?;
+            let again = taken.contains(&path);
+            let take = again
+                || (committed == Some(&version)
+                    && (replace || stored.get(&path) != Some(&version)));
+            if take && !again {
+                if stored.contains_key(&path) {
+                    written += delete_chunks_of(conn, &path)?;
+                }
+                taken.insert(path.clone());
             }
             current = Some((path.clone(), take));
         }
@@ -1767,6 +1803,17 @@ fn write_chunks(
     }
     drop(rows);
     drop(staged);
+    // A document kept at a new version (or read again) with nothing staged
+    // (over the size cap, not decodable, no text): its old chunks describe
+    // what it no longer is, and go (their vectors with the next prune).
+    for (path, version) in &stored {
+        let Some(state) = completion.documents.get(path) else {
+            continue;
+        };
+        if !taken.contains(path) && (replace || state.version != *version) {
+            written += delete_chunks_of(conn, path)?;
+        }
+    }
     conn.execute("DELETE FROM temp.chunk_staging", [])?;
     conn.execute(
         "INSERT INTO meta (key, value) VALUES ('chunks_generation', ?1)
@@ -1774,6 +1821,19 @@ fn write_chunks(
         [update.generation],
     )?;
     Ok(written)
+}
+
+/// Whether FTS5 refused the `MATCH` expression itself (`fts5: syntax error
+/// near …`, an unknown column, an unterminated string): the query finds
+/// nothing. Anything else is the store failing.
+fn is_fts_syntax_error(error: &rusqlite::Error) -> bool {
+    match error {
+        rusqlite::Error::SqliteFailure(failure, Some(message)) => {
+            failure.code == rusqlite::ErrorCode::Unknown
+                && (message.starts_with("fts5:") || message.contains("unterminated string"))
+        }
+        _ => false,
+    }
 }
 
 fn policy_of(conn: &Connection) -> Result<Option<String>> {
@@ -2318,5 +2378,47 @@ impl GraphStore for SqliteGraphStore {
             transaction.commit()?;
             Ok(Imported::Saved { revision })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failure(code: std::ffi::c_int, message: &str) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), Some(message.to_owned()))
+    }
+
+    #[test]
+    fn only_a_refused_expression_finds_nothing() {
+        assert!(is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_ERROR,
+            "fts5: syntax error near \"(\""
+        )));
+        assert!(is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_ERROR,
+            "unterminated string"
+        )));
+        assert!(!is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_BUSY,
+            "database is locked"
+        )));
+        assert!(!is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_CORRUPT,
+            "database disk image is malformed"
+        )));
+        assert!(!is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_ERROR,
+            "no such table: chunks_fts"
+        )));
+    }
+
+    #[test]
+    fn a_bad_expression_finds_nothing_and_a_good_one_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
+        assert!(store.search_fts("\"unterminated", 10).unwrap().is_empty());
+        assert!(store.search_fts("AND OR (", 10).unwrap().is_empty());
+        assert!(store.search_fts("\"word\"", 10).unwrap().is_empty());
     }
 }

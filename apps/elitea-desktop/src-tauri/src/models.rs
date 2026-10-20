@@ -67,6 +67,18 @@ pub struct ModelHost {
     emit: Emit,
 }
 
+/// A running download's entry in [`ModelHost::running`], removed on drop.
+struct RunningEntry {
+    host: Arc<ModelHost>,
+    id: &'static str,
+}
+
+impl Drop for RunningEntry {
+    fn drop(&mut self) {
+        self.host.running().remove(self.id);
+    }
+}
+
 fn error(code: &str, message: impl Into<String>) -> IpcError {
     IpcError {
         code: code.to_owned(),
@@ -196,7 +208,14 @@ impl ModelHost {
         let base = crate::embeddings::model_base(self.policy.as_ref())
             .unwrap_or_else(|| HUGGING_FACE.to_owned());
         let this = Arc::clone(self);
+        // Cleared however the task ends (done, failed, cancelled, panicked
+        // or dropped with the runtime): a model is never left "busy".
+        let entry = RunningEntry {
+            host: Arc::clone(self),
+            id: spec.id,
+        };
         remote.runtime.spawn(async move {
+            let entry = entry;
             this.report(spec, "downloading", 0, None);
             let client = remote.http.client().await;
             let progress = |p: Progress| this.report(spec, "downloading", p.done, None);
@@ -204,7 +223,7 @@ impl ModelHost {
                 .store
                 .download(spec, client, &base, &progress, &cancel)
                 .await;
-            this.running().remove(spec.id);
+            drop(entry);
             match outcome {
                 Ok(()) => this.report(spec, "ready", spec.download_bytes(), None),
                 Err(EmbedError::Paused) => this.report(spec, "cancelled", 0, None),

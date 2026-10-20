@@ -23,6 +23,18 @@ struct Fake {
     loads: AtomicUsize,
     /// Every text embedded, in order.
     texts: Mutex<Vec<String>>,
+    /// Run once, at the start of the next embedding call.
+    hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+/// The vector the fake makes from `text`.
+fn fake_vector(text: &str) -> Vec<f32> {
+    let mut v = vec![0.0_f32; DIM];
+    for (i, b) in text.bytes().enumerate() {
+        v[i % DIM] += f32::from(b);
+    }
+    elitea_local_embed::vector::normalize(&mut v);
+    v
 }
 
 impl Embedder for Fake {
@@ -35,22 +47,16 @@ impl Embedder for Fake {
     }
 
     fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        let hook = self.hook.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
         self.embedded.fetch_add(texts.len(), Ordering::SeqCst);
         self.texts
             .lock()
             .unwrap()
             .extend(texts.iter().map(|text| (*text).to_owned()));
-        Ok(texts
-            .iter()
-            .map(|text| {
-                let mut v = vec![0.0_f32; DIM];
-                for (i, b) in text.bytes().enumerate() {
-                    v[i % DIM] += f32::from(b);
-                }
-                elitea_local_embed::vector::normalize(&mut v);
-                v
-            })
-            .collect())
+        Ok(texts.iter().map(|text| fake_vector(text)).collect())
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
@@ -431,4 +437,150 @@ async fn a_restarted_pass_embeds_only_what_is_missing_and_reports_an_eta() {
                 .all(|text| text.contains("hanged") || text.contains("33")),
         "{again:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chunk_id_reused_mid_pass_never_gets_another_texts_vector() {
+    let s = setup().await;
+    // The last file written holds the highest chunk ids.
+    write(
+        s.folder.path(),
+        "z/x.py",
+        "def original_x():\n    return 'old text'\n",
+    );
+    s.service.refresh(false).await.unwrap();
+    let store = s.service.store();
+    let max_of = |path: &str| store.chunks_of(path).unwrap().iter().map(|c| c.id).max();
+    let x_ids: Vec<i64> = store
+        .chunks_of("z/x.py")
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    let others = (0..12)
+        .filter_map(|n| max_of(&format!("src/m{n}.py")))
+        .max()
+        .unwrap();
+    assert!(
+        x_ids.iter().all(|id| *id > others),
+        "{x_ids:?} after {others}"
+    );
+    store.set_setting(SETTING, "local:fake").unwrap();
+    // While the first batch embeds (the pass planned already), a build
+    // rewrites z/x.py: its first new chunk (another text) takes the freed
+    // id, and its old text lives on in the chunk after it.
+    let (folder, service) = (s.folder.path().to_owned(), s.service.clone());
+    let runtime = tokio::runtime::Handle::current();
+    *s.fake.hook.lock().unwrap() = Some(Box::new(move || {
+        std::fs::write(
+            folder.join("z/x.py"),
+            "def rewritten_x():\n    return 'new text!'\n\n\ndef original_x():\n    return 'old text'\n",
+        )
+        .unwrap();
+        runtime.block_on(service.refresh(false)).unwrap();
+    }));
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    embedding.add(&s.service);
+    std::thread::sleep(Duration::from_millis(50));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (with, all) = store.vector_coverage(STAMP).unwrap();
+        if with == all
+            && embedding
+                .status("ws")
+                .is_some_and(|st| st.state == EmbedState::Done)
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{with}/{all}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let now = store.chunks_of("z/x.py").unwrap();
+    assert!(
+        now.iter()
+            .any(|c| x_ids.contains(&c.id) && c.text.contains("rewritten_x")),
+        "an old id now holds another text: {now:?} {x_ids:?}"
+    );
+    assert!(now.iter().any(|c| c.text.contains("original_x")), "{now:?}");
+    // Every chunk's vector is the one its own text makes.
+    let vectors: std::collections::HashMap<i64, Vec<u8>> =
+        store.chunk_vectors(STAMP).unwrap().into_iter().collect();
+    for path in ["z/x.py", "src/m0.py"] {
+        for chunk in store.chunks_of(path).unwrap() {
+            assert_eq!(
+                vectors[&chunk.id],
+                elitea_local_embed::vector::quantize(&fake_vector(&chunk.text)),
+                "{path}: {:?}",
+                chunk.text
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_reloads_the_vector_matrix_at_once() {
+    let s = setup().await;
+    s.service
+        .store()
+        .set_setting(SETTING, "local:fake")
+        .unwrap();
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    embedding.add(&s.service);
+    wait(&embedding, |st| st.state == EmbedState::Done);
+    let before = s.service.dense().expect("vectors exist");
+    let gone: Vec<i64> = s
+        .service
+        .store()
+        .chunks_of("src/m11.py")
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    let near = |dense: &dyn elitea_local_index::search::Dense| -> Vec<i64> {
+        dense
+            .nearest("class Model11:", 100, None)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    };
+    assert!(near(before.as_ref()).iter().any(|id| gone.contains(id)));
+    // A build drops m11's chunks: well within the 30 s a matrix is reused
+    // while vectors are added, the next search loads the chunks now.
+    std::fs::remove_file(s.folder.path().join("src/m11.py")).unwrap();
+    s.service.refresh(false).await.unwrap();
+    let after = s.service.dense().expect("vectors exist");
+    let ids = near(after.as_ref());
+    assert!(!ids.is_empty());
+    assert!(ids.iter().all(|id| !gone.contains(id)), "{ids:?} {gone:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_done_workspace_is_not_scanned_again_until_something_changes() {
+    let s = setup().await;
+    s.service
+        .store()
+        .set_setting(SETTING, "local:fake")
+        .unwrap();
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    embedding.add(&s.service);
+    wait(&embedding, |st| st.state == EmbedState::Done);
+    // Changed behind the embedder's back: several polls go by and the
+    // workspace (done) is not looked at, so its status stays.
+    s.service.store().set_setting(SETTING, "off").unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        embedding.status("ws").map(|st| st.state),
+        Some(EmbedState::Done)
+    );
+    let (kept, _) = s.service.store().vector_coverage(STAMP).unwrap();
+    assert!(kept > 0, "not pruned without a look");
+    // Told (a setting change): looked at, turned off, vectors dropped.
+    embedding.wake_workspace("ws");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while embedding.status("ws").is_some() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(s.service.store().vector_coverage(STAMP).unwrap().0, 0);
 }
