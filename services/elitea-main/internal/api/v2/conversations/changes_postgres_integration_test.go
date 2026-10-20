@@ -35,7 +35,11 @@ func newChangesPool(t *testing.T) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, `DROP SCHEMA p_1 CASCADE; CREATE SCHEMA p_1`); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"tenant/0123_agent_chat_message_tables.sql", "tenant/0144_chat_sync.sql"} {
+	for _, path := range []string{
+		"tenant/0123_agent_chat_message_tables.sql",
+		"tenant/0144_chat_sync.sql",
+		"tenant/0151_chat_conversation_archives.sql", // client contract 1.10: is_archived
+	} {
 		sql, err := platformmigrations.Files.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -179,10 +183,11 @@ func TestConversationDeltaLegacyResponseIsUnchanged(t *testing.T) {
 	}
 	var rows []map[string]json.RawMessage
 	_ = json.Unmarshal(keys["rows"], &rows)
-	// Nine keys: the seven of the legacy row, `is_pinned` (client contract
-	// 1.4) and `workspace_executor` (client contract 1.8), both additive.
-	if len(rows) != 1 || len(rows[0]) != 9 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
-		string(rows[0]["workspace_executor"]) != `"local"` {
+	// Ten keys: the seven of the legacy row, `is_pinned` (client contract
+	// 1.4), `workspace_executor` (client contract 1.8) and `is_archived`
+	// (client contract 1.10), all additive.
+	if len(rows) != 1 || len(rows[0]) != 10 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
+		string(rows[0]["workspace_executor"]) != `"local"` || string(rows[0]["is_archived"]) != "false" {
 		t.Fatalf("legacy row shape changed: %s", body)
 	}
 }

@@ -919,7 +919,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// bump writes chat_conversations.updated_at as the UTC wall clock (now()
 	// AT TIME ZONE 'UTC'), like every Go writer of the naive chat columns. A
 	// function body and no permission, so no shared sibling.
-	require.EqualValues(t, 150, Head(tenant))
+	// 151: tenant/0151_chat_conversation_archives.sql, the project's
+	// conversation archive (client contract 1.10), one row per archived
+	// conversation with a cascading key to chat_conversations. Its routes
+	// reuse models.chat.conversation.details, so no shared sibling.
+	require.EqualValues(t, 151, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

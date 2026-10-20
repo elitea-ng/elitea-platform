@@ -541,17 +541,24 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		filters += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
 	}
 
-	baseWhere := "WHERE " + visibility + " AND " + filters
+	// The project's archive (client contract 1.10). Kept out of `filters`:
+	// the delta treats it differently (see conversationChangesQuery).
+	mode := archivedMode(r.URL.Query())
+	archived := archivedFilter(s, mode)
+
+	baseWhere := "WHERE " + visibility + " AND " + filters + " AND " + archived
 
 	if raw, delta := changesync.Requested(r.URL.Query()); delta {
 		h.listChanges(w, r, pool, conversationChangesQuery{
-			schema:     s,
-			projectID:  projectID,
-			visibility: visibility,
-			filters:    filters,
-			args:       args,
-			admin:      access.Admin,
-			raw:        raw,
+			schema:       s,
+			projectID:    projectID,
+			visibility:   visibility,
+			filters:      filters,
+			archived:     archived,
+			archivedMode: mode,
+			args:         args,
+			admin:        access.Admin,
+			raw:          raw,
 		})
 		return
 	}
@@ -594,6 +601,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
+	annotateArchivers(ctx, pool, result)
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 
