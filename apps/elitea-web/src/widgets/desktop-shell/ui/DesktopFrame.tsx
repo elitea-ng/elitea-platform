@@ -27,6 +27,7 @@ import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 import { eliteaItems } from '../lib/eliteaSections';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { useAppIpc } from '../model/appIpcContext';
+import { useActivityFeedSources } from '../model/useActivityFeedSources';
 import { useHostIntegration } from '../model/useHostIntegration';
 import { useNativeWindowTheme } from '../model/useNativeWindowTheme';
 import { useRouteLogging } from '../model/useRouteLogging';
@@ -78,6 +79,7 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
   useHostIntegration(run, ipc);
   useNativeWindowTheme(ipc);
   useRouteLogging();
+  useActivityFeedSources();
   const location = useShellLocation();
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   const items = useMemo(() => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)), [permissions, selectedProjectId]);

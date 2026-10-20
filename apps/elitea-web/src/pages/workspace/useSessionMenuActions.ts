@@ -7,7 +7,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import { useDesktopLayout } from '@/widgets/desktop-shell';
+import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ThreadHandoff } from './useThreadHandoff';
 
@@ -17,10 +17,13 @@ export interface SessionMenuInput {
   hasIndex: boolean;
   agentRef: RefObject<HTMLDivElement | null>;
   openIndexSettings: () => void;
+  /** The folder, for the island's cloud line. */
+  workspace: { id: string; name: string };
 }
 
 export function useSessionMenuActions(input: SessionMenuInput): void {
   const navigate = useNavigate();
+  useCloudActivity(input);
   const latest = useRef(input);
   useEffect(() => {
     latest.current = input;
@@ -43,4 +46,15 @@ export function useSessionMenuActions(input: SessionMenuInput): void {
       },
     });
   }, [navigate]);
+}
+
+/** A thread running in the cloud (or on its way back) is an activity of the window, whichever screen is open. */
+function useCloudActivity({ handoff, conversationId, workspace }: SessionMenuInput): void {
+  const { uuid, offLaptop, status } = handoff;
+  const state = status?.state;
+  useEffect(() => {
+    if (uuid === undefined || !offLaptop || state === undefined) return undefined;
+    useActivityFeed.getState().setCloud(uuid, { conversationUuid: uuid, state, title: workspace.name, workspaceId: workspace.id, conversationId });
+    return () => useActivityFeed.getState().setCloud(uuid, null);
+  }, [uuid, offLaptop, state, workspace.id, workspace.name, conversationId]);
 }

@@ -6,7 +6,7 @@
  * native app keeps it: the agent, mode and run location in the composer's
  * footer; the index in the inspector; the rest in the Thread and Folder menus.
  */
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -31,7 +31,8 @@ import { readThreads, type ProjectChoice } from '@/features/workspace';
 import { getConfig } from '@/shared/config';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
+import { IndexIdleLine } from '@/features/workspace-index';
+import { ActivityIsland, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { PanelToggle } from './sessionParts';
 
@@ -49,12 +50,10 @@ export interface ThreadToolbarProps {
   /** Items the inspector's badge counts. */
   attention: number;
   onIndexSettings?: (() => void) | undefined;
-  /** The activity island, centred. */
-  centre?: ReactNode;
 }
 
 /** The deployment's link to a conversation, for Copy Link. */
-export function conversationLink(conversationId: string): string | null {
+function conversationLink(conversationId: string): string | null {
   const config = getConfig();
   if (config.status !== 'ok' || conversationId === '') return null;
   return `${config.config.vite_server_url.replace(/\/$/, '')}/chat/${conversationId}`;
@@ -254,7 +253,9 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
         <Box sx={{ flex: '0 1 auto', minWidth: 0 }}>
           <ThreadTitle {...props} />
         </Box>
-        <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>{props.centre}</Box>
+        <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+          <IndexIdleLine workspaceId={props.workspace.id}>{(line) => <ActivityIsland idle={line} />}</IndexIdleLine>
+        </Box>
       </TitleBarSpacer>
     </Box>
   );

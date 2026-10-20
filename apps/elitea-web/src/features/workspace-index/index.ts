@@ -7,3 +7,5 @@
 export { WorkspaceIndexControl } from './ui/WorkspaceIndexControl';
 export { IndexIpcProvider } from './model/ipcContext';
 export { IndexSettingsHost, useHasIndexHost } from './ui/IndexSettingsHost';
+export { useIndexIpc } from './model/ipcContext';
+export { IndexIdleLine } from './ui/IndexIdleLine';

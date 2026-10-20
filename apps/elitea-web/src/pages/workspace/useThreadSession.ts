@@ -21,7 +21,7 @@ import {
 } from '@/features/workspace';
 import type { ApprovalDecision, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { useSelectedProject } from '@/widgets/app-shell';
-import { useDesktopLayout } from '@/widgets/desktop-shell';
+import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
@@ -144,6 +144,12 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
       turn.adopt(running.turn_id, running.events);
     }
   }
+  // The activity feed learns which folder and thread this turn belongs to (events carry only the turn).
+  const liveTurnId = turn.turnId;
+  useEffect(() => {
+    if (liveTurnId === null) return;
+    useActivityFeed.getState().registerTurn(liveTurnId, { workspaceId: workspace.id, workspaceName: workspace.name, conversationId });
+  }, [liveTurnId, workspace.id, workspace.name, conversationId]);
   const shown = new Set([...turn.earlier.map((entry) => entry.turnId), ...(turn.turnId === null ? [] : [turn.turnId])]);
 
   // The URL's thread is the conversation (adjusted during render, once per mount).

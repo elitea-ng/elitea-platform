@@ -132,24 +132,34 @@ function locationLabel(executor: HandoffExecutor): string {
   }
 }
 
+function LocationMenu({ handoff, anchor, onClose }: { handoff: ThreadHandoff; anchor: HTMLElement | null; onClose: () => void }): React.JSX.Element {
+  const run = (action: () => void) => (): void => {
+    onClose();
+    action();
+  };
+  return (
+    <Menu anchorEl={anchor} open={anchor !== null} onClose={onClose} anchorOrigin={{ vertical: 'top', horizontal: 'left' }} transformOrigin={{ vertical: 'bottom', horizontal: 'left' }} slotProps={{ list: { dense: true } }}>
+      {handoff.canSend && <MenuItem onClick={run(() => handoff.open('send'))}>{t('workspace.handoff.sendMenu', 'Send to cloud…')}</MenuItem>}
+      {handoff.offLaptop && <MenuItem onClick={run(() => handoff.open('takeBack'))}>{t('workspace.handoff.takeBackMenu', 'Take back…')}</MenuItem>}
+      {handoff.offLaptop && <MenuItem onClick={run(() => handoff.open('erase'))}>{t('workspace.handoff.eraseMenu', 'Erase cloud copy…')}</MenuItem>}
+      {handoff.canSend && <Divider />}
+      {handoff.canSend && <MenuItem onClick={run(() => handoff.open('settings'))}>{t('workspace.handoff.settingsMenu', 'Handoff settings…')}</MenuItem>}
+    </Menu>
+  );
+}
+
 /** "⌂ Local ⌄": where the thread runs; the menu moves it. */
 export function RunLocationChip({ handoff }: { handoff: ThreadHandoff }): React.JSX.Element | null {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   if (handoff.ipc === undefined || (handoff.status === undefined && !handoff.canSend)) return null;
   const executor: HandoffExecutor = handoff.status?.executor ?? 'local';
   const label = locationLabel(executor);
-  const close = (): void => setAnchor(null);
-  const interactive = handoff.canSend || handoff.offLaptop;
-  const run = (action: () => void) => (): void => {
-    close();
-    action();
-  };
   return (
     <>
       <ButtonBase
         data-testid="executor-badge"
         data-executor={executor}
-        disabled={!interactive}
+        disabled={!(handoff.canSend || handoff.offLaptop)}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
         aria-label={t('workspace.handoff.where', 'Runs: {{where}}', { where: label })}
@@ -160,13 +170,7 @@ export function RunLocationChip({ handoff }: { handoff: ThreadHandoff }): React.
         <Box component="span">{label}</Box>
         <ExpandMoreIcon />
       </ButtonBase>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} anchorOrigin={{ vertical: 'top', horizontal: 'left' }} transformOrigin={{ vertical: 'bottom', horizontal: 'left' }} slotProps={{ list: { dense: true } }}>
-        {handoff.canSend && <MenuItem onClick={run(() => handoff.open('send'))}>{t('workspace.handoff.sendMenu', 'Send to cloud…')}</MenuItem>}
-        {handoff.offLaptop && <MenuItem onClick={run(() => handoff.open('takeBack'))}>{t('workspace.handoff.takeBackMenu', 'Take back…')}</MenuItem>}
-        {handoff.offLaptop && <MenuItem onClick={run(() => handoff.open('erase'))}>{t('workspace.handoff.eraseMenu', 'Erase cloud copy…')}</MenuItem>}
-        {handoff.canSend && <Divider />}
-        {handoff.canSend && <MenuItem onClick={run(() => handoff.open('settings'))}>{t('workspace.handoff.settingsMenu', 'Handoff settings…')}</MenuItem>}
-      </Menu>
+      <LocationMenu handoff={handoff} anchor={anchor} onClose={() => setAnchor(null)} />
     </>
   );
 }

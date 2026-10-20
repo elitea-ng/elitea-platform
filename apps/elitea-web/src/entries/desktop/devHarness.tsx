@@ -32,7 +32,7 @@ import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
-import { AppIpcProvider, DesktopFrame } from '@/widgets/desktop-shell';
+import { AppIpcProvider, DesktopFrame, useActivityFeed } from '@/widgets/desktop-shell';
 
 const FOLDERS: Workspace[] = [
   { id: 'w1', path: '/Users/me/code/elitea-platform', name: 'elitea-platform', project_id: 42, is_git: true },
@@ -190,7 +190,21 @@ export function mountDesktopHarness(container: HTMLElement): void {
   (window as unknown as { __harness: unknown }).__harness = {
     ipc,
     appIpc,
+    indexIpc,
+    handoffIpc,
+    feed: useActivityFeed,
     router,
+    /** The index builds: `n` of `total` files read (the island and the inspector follow). */
+    playIndex(done = 40, total = 120) {
+      const building = { state: 'building' as const, files: 0, entities: 0, relations: 0, vectors: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true };
+      indexIpc.emit({ workspace_id: 'w1', phase: 'listing', message: null, status: building });
+      indexIpc.emit({ workspace_id: 'w1', phase: 'parsing', message: `[extract] Parsing ${String(total)} files`, status: building });
+      indexIpc.emit({ workspace_id: 'w1', phase: 'building', message: `[progress] Processed ${String(done)} files`, status: building });
+    },
+    /** A send to the cloud, part way through the upload. */
+    playHandoff(done = 3, total = 10) {
+      handoffIpc.emit({ conversation_uuid: 'c0ffee00-0000-4000-8000-000000000072', phase: 'upload', done, total, message: null });
+    },
     playTurn(stage: 'running' | 'approval' | 'done' = 'done') {
       const id = turnId();
       const at = (seq: number) => ({ turn_id: id, seq });

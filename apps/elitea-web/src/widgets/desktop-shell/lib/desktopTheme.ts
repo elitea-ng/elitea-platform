@@ -24,7 +24,7 @@ const SIZES: Record<string, number> = {
 };
 
 /** Controls stay between 22 and 28px: small 22, medium 28. */
-export const CONTROL = { small: 22, medium: 28 } as const;
+const CONTROL = { small: 22, medium: 28 } as const;
 
 function withNativeFont(outer: Theme): Record<string, unknown> {
   const brandFamily = outer.typography.fontFamily;

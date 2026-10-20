@@ -73,7 +73,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
   const codingAgent = useLocalCodingAgent(projectId, raw.empty);
 
-  useSessionMenuActions({ handoff, conversationId, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => setIndexOpen(true) });
+  useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => setIndexOpen(true) });
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the

@@ -16,3 +16,5 @@ export type { DoctorPanelProps } from './ui/DoctorPanel';
 export { DesktopThemeLayer } from './ui/DesktopThemeLayer';
 export { Segmented } from './ui/Segmented';
 export type { SegmentedOption } from './ui/Segmented';
+export { ActivityIsland } from './ui/ActivityIsland';
+export { useActivityFeed } from './model/activityFeed.store';

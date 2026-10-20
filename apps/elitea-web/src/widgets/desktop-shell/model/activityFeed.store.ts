@@ -1,0 +1,246 @@
+/**
+ * The window's activity feed: what the app is doing right now, folded from
+ * the three host channels — `agent://event` (turns), `index://event` (index
+ * builds) and `handoff://event` (sends to the cloud) — plus the few facts the
+ * open thread registers (which workspace a turn belongs to, a thread running
+ * in the cloud). The island and its popover read it; nothing else does.
+ *
+ * Events are not replayed, so a lost one would leave an activity on screen
+ * for good: `useActivityFeedSources` reconciles unfinished turns against
+ * `agent_turn_status` when the window gets focus and while a commit is
+ * pending. The store holds raw facts; `buildActivities` (pure) turns them
+ * into the ranked list the island shows.
+ */
+import { create, type StoreApi, type UseBoundStore } from 'zustand';
+
+import type { AgentEvent, ApprovalRequestPayload, TurnDonePayload, TurnPhase } from '@/shared/desktop/workspaceIpc';
+import type { HandoffEvent } from '@/shared/desktop/handoffIpc';
+import type { IndexEvent, IndexStatus } from '@/shared/desktop/indexIpc';
+
+export interface PendingApproval {
+  requestId: string;
+  tool: string;
+  title: string;
+}
+
+export interface TrackedTurn {
+  turnId: string;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  conversationId: string | null;
+  phase: TurnPhase;
+  /** Epoch ms the feed first heard of the turn. */
+  startedAt: number;
+  /** The tool running now (a `tool_call` without its `tool_result`). */
+  tool: string | null;
+  /** Tool calls so far. */
+  steps: number;
+  approvals: PendingApproval[];
+  /** After `done`: `pending` while the turn is being saved, `failed` once the retries ran out. */
+  commit: 'none' | 'pending' | 'failed';
+  finished: boolean;
+  changedFiles: number;
+}
+
+export interface TrackedIndex {
+  workspaceId: string;
+  workspaceName: string | null;
+  state: IndexStatus['state'];
+  entities: number;
+  done: number;
+  total: number | null;
+}
+
+export interface TrackedSend {
+  conversationUuid: string;
+  phase: HandoffEvent['phase'];
+  done: number;
+  total: number;
+}
+
+export interface TrackedCloud {
+  conversationUuid: string;
+  /** The thread's state: `CLOUD_IDLE`, `CLOUD_RUNNING`, `RECLAIMING`, … */
+  state: string;
+  title: string;
+  workspaceId: string | null;
+  conversationId: string | null;
+}
+
+const SEND_OVER: ReadonlySet<HandoffEvent['phase']> = new Set(['complete', 'cancelled', 'error']);
+const PROGRESS = /Processed (\d+) files/;
+const PARSING = /Parsing (\d+) files/;
+
+export interface ActivityFeedState {
+  readonly turns: Readonly<Record<string, TrackedTurn>>;
+  readonly indexes: Readonly<Record<string, TrackedIndex>>;
+  readonly sends: Readonly<Record<string, TrackedSend>>;
+  readonly cloud: Readonly<Record<string, TrackedCloud>>;
+  /** A turn the open thread started: where it belongs. */
+  readonly registerTurn: (turnId: string, owner: { workspaceId: string; workspaceName: string; conversationId: string }) => void;
+  readonly applyAgentEvent: (event: AgentEvent, now?: number) => void;
+  /** What `agent_turn_status` answered for a turn the feed believes unfinished. */
+  readonly reconcileTurn: (turnId: string, status: { state: 'running' | 'committing' | 'done'; done: TurnDonePayload | null } | null) => void;
+  readonly applyIndexEvent: (event: IndexEvent, workspaceName?: string | null) => void;
+  readonly applyHandoffEvent: (event: HandoffEvent) => void;
+  readonly setCloud: (conversationUuid: string, cloud: TrackedCloud | null) => void;
+  readonly reset: () => void;
+}
+
+type FeedStore = UseBoundStore<StoreApi<ActivityFeedState>>;
+
+function blankTurn(turnId: string, now: number): TrackedTurn {
+  return {
+    turnId,
+    workspaceId: null,
+    workspaceName: null,
+    conversationId: null,
+    phase: 'resolving',
+    startedAt: now,
+    tool: null,
+    steps: 0,
+    approvals: [],
+    commit: 'none',
+    finished: false,
+    changedFiles: 0,
+  };
+}
+
+function withApproval(turn: TrackedTurn, payload: ApprovalRequestPayload): TrackedTurn {
+  const label = payload.kind === 'continue' ? 'continue' : payload.tool;
+  return { ...turn, approvals: [...turn.approvals.filter((a) => a.requestId !== payload.request_id), { requestId: payload.request_id, tool: label, title: payload.title }] };
+}
+
+/** `done`: finished unless its commit is still to land. */
+function settled(turn: TrackedTurn, done: TurnDonePayload): TrackedTurn {
+  const commit = done.commit === 'pending' ? 'pending' : 'none';
+  return { ...turn, approvals: [], tool: null, commit, finished: commit === 'none', changedFiles: done.changed_files };
+}
+
+/** Folds one agent event into a turn. Pure. */
+export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
+  switch (event.kind) {
+    case 'status':
+      return { ...turn, phase: event.payload.phase, approvals: event.payload.phase === 'running' ? [] : turn.approvals };
+    case 'tool_call':
+      return { ...turn, tool: event.payload.tool, steps: turn.steps + 1 };
+    case 'tool_result':
+      return { ...turn, tool: null, approvals: [] };
+    case 'text_delta':
+      return turn.approvals.length === 0 ? turn : { ...turn, approvals: [] };
+    case 'approval_request':
+      return withApproval(turn, event.payload);
+    case 'error':
+      return { ...turn, phase: 'error', approvals: [] };
+    case 'done':
+      return settled(turn, event.payload);
+    case 'commit_failed':
+      return { ...turn, commit: 'failed', finished: false };
+  }
+}
+
+function foldIndex(previous: TrackedIndex | undefined, event: IndexEvent, name: string | null): TrackedIndex {
+  const status = event.status;
+  const base: TrackedIndex = previous ?? { workspaceId: event.workspace_id, workspaceName: name, state: status.state, entities: 0, done: 0, total: null };
+  let { done, total } = status.state === 'building' ? base : { done: 0, total: null as number | null };
+  if (status.state === 'building') {
+    if (event.phase === 'listing') {
+      done = 0;
+      total = null;
+    }
+    const message = event.message ?? '';
+    const parsing = PARSING.exec(message);
+    const processed = processedFiles(message);
+    if (parsing !== null) {
+      done = 0;
+      total = Number(parsing[1]);
+    } else if (processed !== null) done = processed;
+  }
+  return { ...base, workspaceName: name ?? base.workspaceName, state: status.state, entities: status.entities, done, total };
+}
+
+function processedFiles(message: string): number | null {
+  const hit = PROGRESS.exec(message);
+  return hit === null ? null : Number(hit[1]);
+}
+
+export function createActivityFeedStore(): FeedStore {
+  return create<ActivityFeedState>((set) => ({
+    turns: {},
+    indexes: {},
+    sends: {},
+    cloud: {},
+    registerTurn: (turnId, owner) =>
+      set((state) => {
+        const turn = state.turns[turnId] ?? blankTurn(turnId, Date.now());
+        return { turns: { ...state.turns, [turnId]: { ...turn, ...owner } } };
+      }),
+    applyAgentEvent: (event, now = Date.now()) =>
+      set((state) => {
+        const turn = state.turns[event.turn_id] ?? blankTurn(event.turn_id, now);
+        const next = foldTurn(turn, event);
+        const turns = { ...state.turns, [event.turn_id]: next };
+        // Settled turns do not pile up: keep only the unfinished ones and the newest few.
+        return { turns: prune(turns) };
+      }),
+    reconcileTurn: (turnId, status) =>
+      set((state) => {
+        const turn = state.turns[turnId];
+        if (turn === undefined) return {};
+        // The host forgot the turn (an app restart): it is over.
+        if (status === null) return { turns: prune({ ...state.turns, [turnId]: { ...turn, finished: true, commit: 'none', approvals: [], tool: null } }) };
+        if (status.state === 'running') return {};
+        if (status.state === 'committing') return { turns: { ...state.turns, [turnId]: { ...turn, commit: 'pending', approvals: [], tool: null } } };
+        const failed = status.done?.commit === 'failed';
+        const next: TrackedTurn = { ...turn, approvals: [], tool: null, commit: failed ? 'failed' : 'none', finished: !failed, changedFiles: status.done?.changed_files ?? turn.changedFiles };
+        return { turns: prune({ ...state.turns, [turnId]: next }) };
+      }),
+    applyIndexEvent: (event, name = null) =>
+      set((state) => {
+        const next = foldIndex(state.indexes[event.workspace_id], event, name);
+        return { indexes: { ...state.indexes, [event.workspace_id]: next } };
+      }),
+    applyHandoffEvent: (event) =>
+      set((state) => {
+        const sends = { ...state.sends };
+        if (SEND_OVER.has(event.phase)) delete sends[event.conversation_uuid];
+        else sends[event.conversation_uuid] = { conversationUuid: event.conversation_uuid, phase: event.phase, done: event.done, total: event.total };
+        return { sends };
+      }),
+    setCloud: (uuid, cloud) =>
+      set((state) => {
+        const next = { ...state.cloud };
+        if (cloud === null) delete next[uuid];
+        else next[uuid] = cloud;
+        return { cloud: next };
+      }),
+    reset: () => set({ turns: {}, indexes: {}, sends: {}, cloud: {} }),
+  }));
+}
+
+const KEEP_FINISHED = 3;
+
+function prune(turns: Record<string, TrackedTurn>): Record<string, TrackedTurn> {
+  const all = Object.values(turns);
+  const finished = all.filter((turn) => turn.finished).sort((a, b) => b.startedAt - a.startedAt);
+  const drop = new Set(finished.slice(KEEP_FINISHED).map((turn) => turn.turnId));
+  if (drop.size === 0) return turns;
+  return Object.fromEntries(all.filter((turn) => !drop.has(turn.turnId)).map((turn) => [turn.turnId, turn]));
+}
+
+let instance: FeedStore | undefined;
+
+function resolveStore(): FeedStore {
+  instance ??= createActivityFeedStore();
+  return instance;
+}
+
+function useActivityFeedHook<T>(selector: (state: ActivityFeedState) => T): T {
+  return resolveStore()(selector);
+}
+
+/** The lazily-constructed singleton, with the zustand `getState`/`subscribe` surface. */
+export const useActivityFeed = Object.assign(useActivityFeedHook, {
+  getState: (): ActivityFeedState => resolveStore().getState(),
+  subscribe: (listener: (state: ActivityFeedState) => void): (() => void) => resolveStore().subscribe(listener),
+});
