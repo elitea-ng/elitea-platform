@@ -60,8 +60,8 @@ WORKDIR /src
 # what a scan of the base layers alone is. Dropping this line would not turn
 # the scan red — it would make it pass while measuring the base image, which is
 # the exact "absence reads as correctness" shape #433 was about.
-RUN --mount=type=cache,id=elitea-worker-rust-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=elitea-worker-rust-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo install cargo-auditable --locked --version 0.7.5
 
 # Resolve every shipped ELF dependency against the final runtime without starting the application.
@@ -130,8 +130,8 @@ ARG CARGO_BUILD_JOBS
 # is compiled from this context; registry and git crates are untouched.
 # `sharing=locked` keeps a concurrent build from compiling or overwriting the
 # binary between this step's touch and its copy.
-RUN --mount=type=cache,id=elitea-worker-rust-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=elitea-worker-rust-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
@@ -155,8 +155,8 @@ FROM builder-base AS supervisor-builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
 # Local sources are touched under the lock for the reason given in `builder`.
-RUN --mount=type=cache,id=elitea-worker-rust-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=elitea-worker-rust-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release \
