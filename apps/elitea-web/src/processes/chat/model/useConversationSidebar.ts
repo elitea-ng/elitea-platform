@@ -27,6 +27,7 @@ import {
   useCreateFolder,
   useDeleteFolder,
   useEditFolder,
+  useForkConversation,
   useMoveToFolderConversation,
   usePinConversation,
   useQueryFoldersList,
@@ -241,6 +242,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
   // Archive (client contract 1.10) leaves the open transcript open: the archive changes the lists, not the conversation.
   const removeRow = useCallback((id: string) => transformEveryConversationList((items) => items.filter((item) => item.id !== id)), [transformEveryConversationList]);
   const { archive } = useArchiveConversation({ projectId, removeRow, toastError });
+  const fork = useForkConversation({ projectId, toastError }); // client contract 1.11: the new conversation opens at once
 
   const deleteConversation = useCallback(
     (conversation: Conversation) => {
@@ -317,10 +319,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     [navigate],
   );
 
-  // Issue 940/A6 — Chat "Duplicate" action. Its own hook
-  // (`useDuplicateConversation.ts`) purely for the §3.5 400-line file
-  // budget — see that file's own module doc for the full behaviour and the
-  // ELITEA-2616..2624 case-by-case rationale.
+  // Issue 940/A6 — Chat "Duplicate": its own hook (`useDuplicateConversation.ts`, see its module doc) for the §3.5 400-line budget.
   const duplicateConversation = useDuplicateConversation({ projectId, toastError, setActiveConversation });
 
   /**
@@ -368,6 +367,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     onPinConversation: (conversation, shouldPin) => void onPinConversation(conversation, shouldPin),
     onDuplicateConversation: (conversation) => void duplicateConversation(conversation),
     onArchiveConversation: (conversation) => void archive(conversation),
+    onForkConversation: (conversation) => void fork(conversation.id).then((made) => made && onSelectConversation({ id: made.id, name: made.name, isPrivate: true, ...(made.source !== undefined ? { source: made.source } : {}) })),
     onOpenArchived: () => void navigate({ to: '/chat/archived' }),
     onCreateConversation: createConversation,
     onCancelCreateConversation,

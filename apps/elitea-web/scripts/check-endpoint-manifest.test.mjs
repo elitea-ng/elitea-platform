@@ -958,8 +958,12 @@ const GENERATED_OPERATION_COUNT = 338;
  * 279 -> 281 (project-level chat archive): conversation.archive and
  * conversation.unarchive, the chat lists' Archive and the Archived chats
  * page's Unarchive (pages/chat-archived). Generated.
+ *
+ * 281 -> 282 (client contract 1.11): conversation.fork, "Fork" on a chat
+ * list row and "Fork from here" on a message, in the web and desktop chat
+ * and in the desktop's Local work view. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 281;
+const MANIFEST_ENTRY_COUNT = 282;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

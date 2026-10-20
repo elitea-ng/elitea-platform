@@ -233,3 +233,21 @@ describe('buildActiveMenuItems — the Archive entry', () => {
     expect(onArchive).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('buildActiveMenuItems — the Fork entry', () => {
+  const forkItem = (items: readonly ControlsDropdownItem[]) => items.find((item) => item.key === 'fork');
+
+  it('is left out when no fork handler is wired', () => {
+    expect(forkItem(buildActiveMenuItems(params(conversation, 'user-1')))).toBeUndefined();
+  });
+
+  it('forks at once, for any viewer (not only the author)', () => {
+    const onFork = vi.fn();
+    const item = forkItem(buildActiveMenuItems({ ...params({ ...conversation, authorId: 'someone-else' }, 'user-1'), onFork }));
+    expect(item?.label).toBe('Fork');
+    expect(item?.disabled).toBe(false);
+    expect(item?.confirm).toBeUndefined();
+    item?.onClick?.();
+    expect(onFork).toHaveBeenCalledTimes(1);
+  });
+});

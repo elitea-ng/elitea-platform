@@ -2,7 +2,8 @@
  * One conversation in the sidebar's Chats list: a native row (`ShellRow`)
  * that opens it, with the same actions on a right-click (the OS menu,
  * `useContextMenu`) and on its hover "⋯" button: Pin / Unpin, Rename,
- * Move to folder…, Archive, Copy Link, Delete. Rename edits the title in
+ * Move to folder…, Fork (a new chat with the whole history, client contract
+ * 1.11), Archive, Copy Link, Delete. Rename edits the title in
  * place; Move to folder… lists the project's chat folders (a pinned chat is
  * not moved, as in the web list). Archive and
  * Delete ask first: the archive is the project's (it takes the chat out of
@@ -42,6 +43,8 @@ export interface ConversationRowActions {
   readonly pin: (conversation: Conversation, shouldPin: boolean) => void;
   readonly rename: (conversation: Conversation, name: string) => void;
   readonly archive: (conversation: Conversation) => void;
+  /** Forks the whole history into a new chat of the caller, and opens it. */
+  readonly fork: (conversation: Conversation) => void;
   readonly remove: (conversation: Conversation) => void;
   readonly canModify: (conversation: Conversation) => boolean;
   /** Holds the project's archive right (`PERMISSIONS.chat.archive`); without it the server answers 403. */
@@ -85,6 +88,7 @@ function conversationActions(conversation: Conversation, actions: ConversationRo
       enabled: actions.canMoveToFolder && !pinned && (actions.folders.length > 0 || actions.folderOf(conversation) !== null),
       run: asks.move,
     },
+    { id: 'fork', label: t('desktop.chats.fork', 'Fork'), run: () => actions.fork(conversation) },
     { id: 'archive', label: t('desktop.chats.archive', 'Archive'), enabled: actions.canArchive, run: asks.archive },
     { separator: true },
     { id: 'link', label: t('workspace.copyLink', 'Copy Link'), enabled: link !== null, run: () => link !== null && copyText(link) },

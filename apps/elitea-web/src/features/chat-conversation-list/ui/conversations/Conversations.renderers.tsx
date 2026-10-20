@@ -41,6 +41,8 @@ export interface UseRenderConversationItemParams {
   readonly onDuplicateConversation: (conversation: Conversation) => void;
   /** Archives a conversation for the caller (client contract 1.10); absent hides the menu entry. */
   readonly onArchiveConversation?: ((conversation: Conversation) => void) | undefined;
+  /** Forks a conversation's whole history into a new one (client contract 1.11); absent hides the menu entry. */
+  readonly onForkConversation?: ((conversation: Conversation) => void) | undefined;
   readonly onCreateConversation: (conversation: Conversation) => Promise<unknown>;
   readonly onCancelCreateConversation: () => void;
   readonly onChangeActiveConversationName: (name: string) => void;
@@ -75,6 +77,7 @@ export function useRenderConversationItem(params: UseRenderConversationItemParam
       onPinConversation,
       onDuplicateConversation,
       onArchiveConversation,
+      onForkConversation,
       onCreateConversation,
       onCancelCreateConversation,
       onChangeActiveConversationName,
@@ -102,6 +105,7 @@ export function useRenderConversationItem(params: UseRenderConversationItemParam
         onPin={onPinConversation}
         onDuplicate={onDuplicateConversation}
         onArchive={onArchiveConversation}
+        onFork={onForkConversation}
         onCreateConversation={onCreateConversation}
         onCancelCreate={onCancelCreateConversation}
         onChangeActiveConversationName={onChangeActiveConversationName}

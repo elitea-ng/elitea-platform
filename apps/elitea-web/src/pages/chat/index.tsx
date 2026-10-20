@@ -48,6 +48,7 @@ import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
 import { ContextBudgetIndicator } from '@/widgets/context-budget';
 
+import { ForkErrorSnackbar, ForkedFromLink, useChatFork } from './ChatFork';
 import { ChatParticipantsPanel } from './ChatParticipantsPanel';
 import { handoffExtensions } from './handoffExtensions';
 import { useChatPageData } from './useChatPageData';
@@ -167,7 +168,8 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const queryClient = useQueryClient();
   const { conversationId: routeConversationId } = useParams({ strict: false }) as { conversationId?: string };
   const { conversationId, messageId } = useDeepLinkedConversationId(routeConversationId);
-  const { projectId, user, activeConversation, isLoadingConversation, localWork, handoff } = useChatPageData({ conversationId });
+  const { projectId, user, activeConversation, isLoadingConversation, localWork, handoff, forkedFrom } = useChatPageData({ conversationId });
+  const fork = useChatFork(projectId, conversationId); // "Fork from here" (client contract 1.11)
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();
@@ -274,7 +276,9 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
 
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, width: '100%' }}>
-      <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%' }}>
+      <Box sx={{ flexGrow: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <ForkedFromLink forkedFrom={forkedFrom} />
+        <Box sx={{ flex: '1 1 0', minHeight: 0 }}>
         <ChatBox
           conversation={{
             ...(activeConversation ? { active: activeConversation } : {}),
@@ -289,6 +293,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
           extensions={{
             ...(editorCallbacks ? { editorCallbacks } : {}),
             ...(entitySubmenus ? { entitySubmenus } : {}),
+            onForkFromMessage: fork.onForkFromMessage,
             ...handoffExtensions({
               localWork,
               handoff,
@@ -299,6 +304,8 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
             }),
           }}
         />
+        </Box>
+        <ForkErrorSnackbar fork={fork} />
       </Box>
       {/*
         * The participants rail. `features/chat-participants` was complete and
