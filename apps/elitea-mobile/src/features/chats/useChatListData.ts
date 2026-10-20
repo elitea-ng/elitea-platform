@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { speaksContract } from '@/api/discovery';
 import type { ConversationSummary } from '@/api/queries/conversations';
 import { offlineStore } from '@/db/offlineStore';
+import type { ListKind } from '@/db/repo';
 import { readPinnedConversationRows, searchConversations, type SearchHit } from '@/db/search';
 import { log } from '@/lib/log';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
@@ -75,7 +76,7 @@ export const SEARCH_SETTLE_MS = 150;
  * ask (the store is closed: offline storage off, or locked), so the screen falls back to the
  * title filter. Also null for a blank query.
  */
-export function useConversationSearch(projectId: number | null, query: string): SearchHit[] | null {
+export function useConversationSearch(projectId: number | null, query: string, kind: ListKind = 'chat'): SearchHit[] | null {
   const [settled, setSettled] = useState(query);
   useEffect(() => {
     const timer = setTimeout(() => setSettled(query), SEARCH_SETTLE_MS);
@@ -86,8 +87,8 @@ export function useConversationSearch(projectId: number | null, query: string): 
     null,
     (id) => {
       const db = offlineStore.get();
-      return db === null ? null : searchConversations(db, id, settled);
+      return db === null ? null : searchConversations(db, id, settled, undefined, kind);
     },
-    [settled],
+    [settled, kind],
   );
 }

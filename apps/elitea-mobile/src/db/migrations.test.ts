@@ -55,4 +55,12 @@ describe('migrate', () => {
     await db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 5};`);
     await expect(migrate(db)).rejects.toBeInstanceOf(FutureSchemaError);
   });
+
+  it('migration 4 puts the rows already stored in the Chats list', async () => {
+    const db = new Db(openNodeSqlite());
+    await migrate(db, MIGRATIONS.slice(0, 3));
+    await db.run("INSERT INTO conversations (project_id, id, name, row_json) VALUES (7, 1, 'old', '{}')");
+    await migrate(db);
+    expect(await db.get('SELECT list_kind FROM conversations WHERE id = 1')).toEqual({ list_kind: 'chat' });
+  });
 });

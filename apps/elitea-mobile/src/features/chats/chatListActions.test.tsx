@@ -38,6 +38,45 @@ describe('buildChatRows', () => {
   });
 });
 
+describe('the Local work list (desktop threads)', () => {
+  const thread = (id: number, name: string, workspace_executor?: string) => ({ ...summary(id, name, '2026-10-07T11:00:00Z'), ...(workspace_executor ? { workspace_executor } : {}) });
+
+  it('carries where each thread runs, and nothing on the Chats list', () => {
+    const loaded = [thread(1, 'Refactor', 'cloud'), thread(2, 'Docs', 'returning'), thread(3, 'Tests', 'local'), thread(4, 'Old row')];
+    const rows = buildChatRows({ loaded, savedPinned: [], overlay: new Map(), now: NOW, localWork: true });
+    expect(rows.map((r) => [r.id, r.executor])).toEqual([
+      [1, 'cloud'],
+      [2, 'returning'],
+      [3, 'local'],
+      [4, 'local'],
+    ]);
+    expect(buildChatRows({ loaded, savedPinned: [], overlay: new Map(), now: NOW }).every((r) => r.executor === undefined)).toBe(true);
+  });
+
+  it('search results keep the badge', () => {
+    const loaded = [thread(1, 'Refactor parser', 'cloud')];
+    expect(buildSearchRows({ hits: null, loaded, query: 'refactor', overlay: new Map(), localWork: true }).map((r) => r.executor)).toEqual(['cloud']);
+  });
+
+  it('draws the badge on the row and reads it to screen readers', async () => {
+    const rows: ChatListItem[] = [
+      { id: 1, name: 'Refactor', updated_at: '2026-10-07T11:00:00Z', age: '1h', executor: 'cloud' },
+      { id: 2, name: 'Docs', updated_at: '2026-10-07T10:00:00Z', age: '2h', executor: 'returning' },
+      { id: 3, name: 'Tests', updated_at: '2026-10-07T09:00:00Z', age: '3h', executor: 'local' },
+    ];
+    await render(<ConversationList rows={rows} now={NOW} onOpen={jest.fn()} empty={<Text>none</Text>} />);
+    expect(screen.getByText('In cloud')).toBeTruthy();
+    expect(screen.getByText('Returning')).toBeTruthy();
+    expect(screen.getByText('On laptop')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refactor, In cloud, 1h' })).toBeTruthy();
+  });
+
+  it('a Chats row has no badge', async () => {
+    await render(<ConversationList rows={ROWS} now={NOW} onOpen={jest.fn()} empty={<Text>none</Text>} />);
+    expect(screen.queryByTestId('executor-badge')).toBeNull();
+  });
+});
+
 describe('buildSearchRows', () => {
   it('lists index hits with their passage, then loaded title matches the index lacks', () => {
     const hits = [{ id: 5, name: 'Trip', updatedAt: '2026-10-01T09:00:00Z', row: null, snippet: [{ text: 'nata', match: true }] }];

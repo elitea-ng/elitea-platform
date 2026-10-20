@@ -15,7 +15,12 @@ export interface FakeServer {
   /** The transport, e.g. to install as `globalThis.fetch` for code that uses the session client. */
   fetch: BaseFetch;
   requests: { method: string; url: URL; body: string | null }[];
-  /** Queues answers for requests whose path (without /api/v2) starts with `prefix`. */
+  /**
+   * Queues answers for requests whose path (without /api/v2) starts with `prefix`. A prefix may end
+   * in `?name=value&...`: the request must carry those query parameters. A request for the Local
+   * work list (`source=local_work`) is answered only by a route that names it, so the Chats list's
+   * scripted answers are never consumed by it (an unscripted one is a 404, which sync ignores).
+   */
   on(method: string, prefix: string, ...answers: Answer[]): void;
 }
 
@@ -29,7 +34,14 @@ export function fakeServer(): FakeServer {
     const body = input.method === 'GET' ? null : await input.clone().text();
     requests.push({ method: input.method, url, body });
     const path = url.pathname.replace(/^\/api\/v2/, '');
-    const route = [...routes].reverse().find((r) => r.method === input.method && path.startsWith(r.prefix));
+    const localWork = url.searchParams.get('source') === 'local_work';
+    const route = [...routes].reverse().find((r) => {
+      const [routePath, routeQuery] = r.prefix.split('?');
+      if (r.method !== input.method || !path.startsWith(routePath)) return false;
+      if (routeQuery === undefined) return !localWork;
+      for (const [name, value] of new URLSearchParams(routeQuery)) if (url.searchParams.get(name) !== value) return false;
+      return true;
+    });
     if (!route) return new Response(JSON.stringify({ error: 'no route' }), { status: 404 });
     const answer = route.answers.length > 1 ? route.answers.shift()! : route.answers[0];
     if (answer === 'network_error') throw new TypeError('Network request failed');

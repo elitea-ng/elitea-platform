@@ -56,6 +56,7 @@ jest.mock('@/api/queries/conversations', () => ({
     refetch: jest.fn(),
     fetchNextPage: jest.fn(),
   }),
+  useLocalWorkConversations: () => ({ data: undefined, isLoading: false, error: null }),
   flattenConversationPages: (pages: { rows: unknown[] }[] | undefined) => (pages ?? []).flatMap((page) => page.rows),
 }));
 jest.mock('@/features/projects/useProjectSelection', () => ({ useProjectSelection: () => ({ projectId: 90501, noProject: false }) }));

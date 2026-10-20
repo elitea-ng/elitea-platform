@@ -7,6 +7,12 @@ export const queryKeys = {
   projects: () => ['projects'] as const,
   projectRoot: (projectId: number) => ['p', projectId] as const,
   conversations: (projectId: number) => ['p', projectId, 'conversations'] as const,
+  /** The Local work list (desktop agent threads, `source=local_work`); a separate list from `conversations`. */
+  localWork: (projectId: number) => ['p', projectId, 'localWork'] as const,
+  /** One Local work thread's handoff state (the cloud executor banner), keyed below by conversation uuid. */
+  handoff: (projectId: number, conversationUuid: string) => ['p', projectId, 'handoff', conversationUuid] as const,
+  /** The caller's permissions in a project (who may erase a cloud copy). */
+  permissions: (projectId: number) => ['p', projectId, 'permissions'] as const,
   conversation: (projectId: number, conversationId: string) =>
     ['p', projectId, 'conversation', conversationId] as const,
   agents: (projectId: number) => ['p', projectId, 'agents'] as const,

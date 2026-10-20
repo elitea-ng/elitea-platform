@@ -50,6 +50,8 @@ export interface ChatMessage {
    * regeneration. How the app proves a regeneration replaced the answer.
    */
   generation: string | null;
+  /** Where the answer ran (`meta.executed_by`: `desktop` for a Local work turn on a laptop), when recorded. */
+  executedBy?: string | null;
 }
 
 /** One file of a message. */
@@ -243,6 +245,7 @@ export function toChatMessages(
       error: groupError(group),
       replyToGroupId: asInt(group.reply_to_id),
       generation: asString((asRecord(group.meta) ?? asRecord(group.metadata))?.execution_generation),
+      executedBy: asString((asRecord(group.meta) ?? asRecord(group.metadata))?.executed_by),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.

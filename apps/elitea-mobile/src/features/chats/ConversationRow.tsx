@@ -1,8 +1,9 @@
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import type { SwipeRowA11y } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
 import type { SnippetPart } from '@/db/search';
+import { executorBadge, type WorkspaceExecutor } from '@/features/localWork/model';
 import { Icon, ListRow, Text } from '@/ui';
 
 export const UNTITLED = 'Untitled conversation';
@@ -21,6 +22,7 @@ export function ConversationRow({
   age,
   pinned = false,
   snippet = null,
+  executor,
   onPress,
   onLongPress,
   a11y,
@@ -31,6 +33,8 @@ export function ConversationRow({
   age: string;
   pinned?: boolean;
   snippet?: readonly SnippetPart[] | null;
+  /** A Local work thread: where it runs now, drawn as a badge under the title ("In cloud", "Returning", "On laptop"). */
+  executor?: WorkspaceExecutor;
   onPress: () => void;
   onLongPress?: () => void;
   a11y?: SwipeRowA11y;
@@ -42,6 +46,7 @@ export function ConversationRow({
   const { colors } = useDesign();
   const name = title || UNTITLED;
   const passage = snippet && snippet.length > 0 ? snippet.map((part) => part.text).join('') : null;
+  const badge = executor === undefined ? null : executorBadge(executor);
   return (
     <View style={{ backgroundColor: current ? colors.accentSoft : colors.surface }}>
       <ListRow
@@ -49,21 +54,34 @@ export function ConversationRow({
         value={age}
         leading={pinned ? <Icon name="pin" size={17} tone="secondaryBrand" /> : undefined}
         footer={
-          snippet && passage ? (
-            <Text variant="footnote" tone="secondary" numberOfLines={2} testID="chat-snippet">
-              {snippet.map((part, i) =>
-                part.match ? (
-                  <Text key={i} variant="footnote" tone="primary" emphasized>
-                    {part.text}
+          badge !== null || (snippet && passage) ? (
+            <View style={styles.footer}>
+              {badge !== null ? (
+                <View
+                  testID="executor-badge"
+                  style={[styles.badge, { backgroundColor: current ? colors.surface : executor === 'cloud' ? colors.accentSoft : colors.surfaceSunken, borderColor: current ? colors.separatorStrong : 'transparent' }]}>
+                  <Text variant="footnote" color={executor === 'cloud' && !current ? colors.accentSoftOn : colors.textPrimary} emphasized>
+                    {badge}
                   </Text>
-                ) : (
-                  part.text
-                ),
-              )}
-            </Text>
+                </View>
+              ) : null}
+              {snippet && passage ? (
+                <Text variant="footnote" tone="secondary" numberOfLines={2} testID="chat-snippet">
+                  {snippet.map((part, i) =>
+                    part.match ? (
+                      <Text key={i} variant="footnote" tone="primary" emphasized>
+                        {part.text}
+                      </Text>
+                    ) : (
+                      part.text
+                    ),
+                  )}
+                </Text>
+              ) : null}
+            </View>
           ) : undefined
         }
-        accessibilityLabel={[name, pinned ? 'pinned' : null, age, passage].filter(Boolean).join(', ')}
+        accessibilityLabel={[name, pinned ? 'pinned' : null, badge, age, passage].filter(Boolean).join(', ')}
         onPress={onPress}
         onLongPress={onLongPress}
         accessibilityActions={a11y?.accessibilityActions}
@@ -75,3 +93,8 @@ export function ConversationRow({
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  footer: { gap: 4, alignItems: 'flex-start' },
+  badge: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 9999, paddingHorizontal: 8, paddingVertical: 2 },
+});

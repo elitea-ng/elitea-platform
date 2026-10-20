@@ -1,5 +1,6 @@
 import type { components } from '@/api/generated/elitea.gen';
 import type { Db, SqlExecutor, SqlValue } from '@/db/sql';
+import { isLocalWork } from '@/features/localWork/model';
 import { parseServerTime } from '@/lib/time';
 
 /**
@@ -24,6 +25,14 @@ export const DETAIL_ONLY_GEN = -1;
 /** The sync scope of a project's conversation list (the app always lists with `mine=true`). */
 export function conversationsScope(projectId: number): string {
   return `conv:${projectId}:mine`;
+}
+
+/** Which list a stored conversation row belongs to: the Chats list or the Local work list. */
+export type ListKind = 'chat' | 'local_work';
+
+/** The sync scope of a project's Local work list (`source=local_work&mine=true`; its own cursor). */
+export function localWorkScope(projectId: number): string {
+  return `conv:${projectId}:local_work`;
 }
 
 /** The sync scope of one conversation's transcript. */
@@ -87,18 +96,23 @@ export async function upsertConversationRow(
   projectId: number,
   row: ConversationSummary,
   gen: number,
+  kind: ListKind = 'chat',
 ): Promise<void> {
   const json = JSON.stringify(row);
   await tx.run(
-    `INSERT INTO conversations (project_id, id, name, updated_ms, row_json, sync_gen, messages_dirty)
-     VALUES (?, ?, ?, ?, ?, ?, 1)
+    `INSERT INTO conversations (project_id, id, name, updated_ms, row_json, sync_gen, messages_dirty, list_kind)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?)
      ON CONFLICT (project_id, id) DO UPDATE SET
        messages_dirty = 1,
+       list_kind = excluded.list_kind,
        name = excluded.name,
        updated_ms = excluded.updated_ms,
        row_json = excluded.row_json,
-       sync_gen = excluded.sync_gen`,
-    [projectId, row.id, typeof row.name === 'string' ? row.name : '', parseServerTime(row.updated_at), json, gen],
+       sync_gen = excluded.sync_gen
+     -- A Local work row never goes back to the Chats list (the chat delta cannot demote it, nor
+     -- take over its generation); a Chats row delivered by the Local work delta is promoted.
+     WHERE conversations.list_kind = 'chat' OR excluded.list_kind = 'local_work'`,
+    [projectId, row.id, typeof row.name === 'string' ? row.name : '', parseServerTime(row.updated_at), json, gen, kind],
   );
 }
 
@@ -116,9 +130,10 @@ export async function saveConversationDetail(
   if (!Number.isSafeInteger(id) || id <= 0) return;
   const { message_groups: _omit, ...rest } = detail;
   await db.run(
-    `INSERT INTO conversations (project_id, id, uuid, name, updated_ms, detail_json, opened_ms, sync_gen)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO conversations (project_id, id, uuid, name, updated_ms, detail_json, opened_ms, sync_gen, list_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (project_id, id) DO UPDATE SET
+       list_kind = CASE WHEN excluded.list_kind = 'local_work' THEN 'local_work' ELSE conversations.list_kind END,
        uuid = excluded.uuid,
        name = excluded.name,
        updated_ms = MAX(COALESCE(conversations.updated_ms, 0), COALESCE(excluded.updated_ms, 0)),
@@ -133,6 +148,7 @@ export async function saveConversationDetail(
       JSON.stringify(rest),
       now,
       DETAIL_ONLY_GEN,
+      isLocalWork(detail) ? 'local_work' : 'chat',
     ],
   );
 }
@@ -142,15 +158,16 @@ export async function readConversationRows(
   projectId: number,
   limit: number,
   offset: number,
+  kind: ListKind = 'chat',
 ): Promise<{ rows: ConversationSummary[]; total: number }> {
   const rows = await db.all<{ row_json: string }>(
-    `SELECT row_json FROM conversations WHERE project_id = ? AND row_json IS NOT NULL
+    `SELECT row_json FROM conversations WHERE project_id = ? AND row_json IS NOT NULL AND list_kind = ?
      ORDER BY COALESCE(updated_ms, 0) DESC, id DESC LIMIT ? OFFSET ?`,
-    [projectId, limit, offset],
+    [projectId, kind, limit, offset],
   );
   const total = await db.get<{ n: number }>(
-    'SELECT count(*) AS n FROM conversations WHERE project_id = ? AND row_json IS NOT NULL',
-    [projectId],
+    'SELECT count(*) AS n FROM conversations WHERE project_id = ? AND row_json IS NOT NULL AND list_kind = ?',
+    [projectId, kind],
   );
   return { rows: rows.map((r) => JSON.parse(r.row_json) as ConversationSummary), total: total?.n ?? 0 };
 }

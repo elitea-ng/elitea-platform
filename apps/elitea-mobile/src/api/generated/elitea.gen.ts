@@ -6,8 +6,8 @@
  * native-gap overlay and pruned to contract/client-operations.json.
  *
  * upstream sha256:    4b0307162a8f95fb401f64dfb4c71eb8ac2abde2dacdb06502b72d7a26ca21b1
- * overlay sha256:     150a9e084a8afb335b2a43841256b5be5399f5514dd438d01ee437d2604c992f
- * operations sha256:  c350fd90f6b306c1b70751f6f4b3a5128a8fe54bb5aeae6180a4793b31eff1f9
+ * overlay sha256:     5cc6ac6ff6b28f3719b507f7850a0e4be538d51952716b1c2989e0b21eb7538c
+ * operations sha256:  3565355ea2be2b8a03d2e07d7da128a5b5d10560e645af834eef981f2ebd87b2
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -160,6 +160,31 @@ export interface paths {
          *     NOTE(W2): internal/api/nativeauth/token.go:47.
          */
         post: operations["exchangeNativeToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/permissions/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List permissions for a project (authenticated)
+         * @description NOTE(W2): PLAIN ARRAY of {name, enabled} — static defaults today,
+         *     internal/api/v2/eliteacore/handler.go:2993-3018; [] when the request
+         *     carries no user identity.
+         */
+        get: operations["permissionList"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1187,6 +1212,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the owner's desktop to take a thread back
+         * @description Sends the owner a notification (`workspace_reclaim_requested`) and changes no state. The owner only.
+         */
+        post: operations["requestWorkspaceHandoffReclaim"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read a thread's handoff state
+         * @description The banner state. A thread with no handoff answers `{"state": "LOCAL", "epoch": 0}`.
+         */
+        get: operations["getWorkspaceHandoff"];
+        put?: never;
+        post?: never;
+        /**
+         * Erase a thread's cloud copy
+         * @description Ends the handoff in any state, cancels a running cloud turn and sets the state to LOCAL. The owner, or a caller with `models.project_settings.edit`. Idempotent.
+         */
+        delete: operations["eraseWorkspaceHandoff"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications/notification/prompt_lib/{project_id}/{notification_id}": {
         parameters: {
             query?: never;
@@ -2025,6 +2104,8 @@ export interface components {
             updated_at: string;
             /** Format: uuid */
             uuid?: string;
+            /** @description Who runs a Local work thread now: `local`, `cloud` or `returning`. */
+            workspace_executor?: string;
         };
         /** @description The `format=json` body. The Markdown document is rendered from this same model, so the two formats cannot describe different conversations. */
         ConversationExport: {
@@ -2191,6 +2272,8 @@ export interface components {
             } | null;
             name: string;
             updated_at: string;
+            /** @description Who runs a Local work thread now: `local`, `cloud` or `returning`. */
+            workspace_executor?: string;
         };
         /** @description A conversation as the create route answers it (201). `id` is the numeric id AS A STRING; `uuid` is the id the chat send path takes. NOTE(W2): internal/api/v2/conversations/handler.go:32 (`Conversation`), written at :740 (201). */
         CreatedConversation: {
@@ -2668,6 +2751,11 @@ export interface components {
             next_cursor: string | null;
             rows: components["schemas"]["ParticipantCandidate"][];
         };
+        /** @description NOTE(W2): defaultPermissions(), internal/api/v2/eliteacore/handler.go:3003-3018 — static list, enabled always true; empty array when the request carries no user identity. */
+        Permission: {
+            enabled: boolean;
+            name: string;
+        };
         PipelineSettings: {
             [key: string]: unknown;
         };
@@ -3061,6 +3149,24 @@ export interface components {
             name?: string | null;
             value?: string | null;
         };
+        WorkspaceHandoffErased: {
+            /** Format: int64 */
+            epoch: number;
+            state: string;
+        };
+        /** @description The banner state; only `state` and `epoch` when the thread has no handoff. */
+        WorkspaceHandoffState: {
+            /** Format: date-time */
+            delete_after?: string | null;
+            device_name?: string;
+            /** Format: int64 */
+            epoch: number;
+            reclaim_pending?: boolean;
+            /** @description LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING. */
+            state: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
     };
     responses: {
         /** @description Bad request */
@@ -3092,6 +3198,15 @@ export interface components {
         };
         /** @description Not found */
         404: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Conflict */
+        409: {
             headers: {
                 [name: string]: unknown;
             };
@@ -3404,6 +3519,31 @@ export interface operations {
                     "application/json": components["schemas"]["NativeOAuthError"];
                 };
             };
+        };
+    };
+    permissionList: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Permission array */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Permission"][];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
         };
     };
     getBrandingPackJSON: {
@@ -5113,6 +5253,100 @@ export interface operations {
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    requestWorkspaceHandoffReclaim: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The notification is sent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+        };
+    };
+    getWorkspaceHandoff: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffState"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+        };
+    };
+    eraseWorkspaceHandoff: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The Local work thread's conversation UUID, lowercase canonical. */
+                conversation_uuid: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The thread is LOCAL. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceHandoffErased"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            409: components["responses"]["409"];
         };
     };
     markNotificationSeen: {

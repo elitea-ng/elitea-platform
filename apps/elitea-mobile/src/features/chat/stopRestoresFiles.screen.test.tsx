@@ -210,11 +210,22 @@ describe('Stop before any output with files (#29)', () => {
     first.unmount();
     await waitFor(() => expect(mockDeleted).toContain(PICKED));
     render(<QueryClientProvider client={queries as QueryClient}><ThreadScreen /></QueryClientProvider>);
-    await waitFor(() => expect(mockStream.connections.length).toBeGreaterThanOrEqual(2));
-    mockStream.connections[mockStream.connections.length - 1].push(
-      `id: 90\nevent: execution.node_event\ndata: ${JSON.stringify({ type: 'agent_start', stream_id: UUID, message_id: ANSWER, question_id: null, content: null })}\n\n`,
+    // The reopened screen's stream: under load it may reconnect, so the event goes to every live
+    // connection it opened (never the first screen's), and the wait allows for a slow render.
+    const agentStart = `id: 90\nevent: execution.node_event\ndata: ${JSON.stringify({ type: 'agent_start', stream_id: UUID, message_id: ANSWER, question_id: null, content: null })}\n\n`;
+    const pushed = new Set<number>();
+    await waitFor(
+      () => {
+        mockStream.connections.forEach((connection, index) => {
+          if (index === 0 || pushed.has(index) || connection.signal.aborted) return;
+          connection.push(agentStart);
+          pushed.add(index);
+        });
+        expect(screen.getByRole('button', { name: 'Stop answer' })).toBeTruthy();
+      },
+      { timeout: 5000 },
     );
-    await fireEvent.press(await screen.findByRole('button', { name: 'Stop answer' }));
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
     await waitFor(() => expect(server.requests.some((r) => r.method === 'DELETE' && r.url.pathname.endsWith(STOP))).toBe(true));
     // Nothing came back to the tray, so the file must be named, not silently dropped.
     await waitFor(() =>

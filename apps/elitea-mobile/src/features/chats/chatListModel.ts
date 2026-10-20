@@ -2,6 +2,7 @@ import type { ConversationSummary } from '@/api/queries/conversations';
 import type { SearchHit } from '@/db/search';
 import type { ChatListItem } from '@/features/chats/ConversationList';
 import { filterConversations } from '@/features/chats/filterConversations';
+import { executorOf } from '@/features/localWork/model';
 import { formatAge, parseServerTime } from '@/lib/time';
 import { applyOverlay, type ConversationOverlay } from '@/sync/conversationOps';
 
@@ -19,6 +20,7 @@ export function buildChatRows({
   overlay,
   hidden,
   now,
+  localWork = false,
 }: {
   loaded: readonly ConversationSummary[];
   savedPinned: readonly ConversationSummary[];
@@ -26,6 +28,8 @@ export function buildChatRows({
   /** Rows on their way out (a delete waiting out its undo). */
   hidden?: ReadonlySet<number>;
   now?: number;
+  /** The Local work list: every row carries where its thread runs (the badge). */
+  localWork?: boolean;
 }): ChatListItem[] {
   const byId = new Set(loaded.map((row) => row.id));
   const merged = [...loaded, ...savedPinned.filter((row) => !byId.has(row.id))];
@@ -33,11 +37,24 @@ export function buildChatRows({
   const pinned = visible.filter((row) => row.is_pinned === true);
   pinned.sort((a, b) => (parseServerTime(b.updated_at) ?? 0) - (parseServerTime(a.updated_at) ?? 0) || b.id - a.id);
   const rest = visible.filter((row) => row.is_pinned !== true);
-  return [...pinned, ...rest].map((row) => toItem(row, now));
+  return [...pinned, ...rest].map((row) => toItem(row, now, null, localWork));
 }
 
-function toItem(row: Pick<ConversationSummary, 'id' | 'name' | 'updated_at' | 'is_pinned'>, now?: number, snippet: ChatListItem['snippet'] = null): ChatListItem {
-  return { id: row.id, name: row.name, updated_at: row.updated_at, age: formatAge(row.updated_at, now), pinned: row.is_pinned === true, snippet };
+function toItem(
+  row: Pick<ConversationSummary, 'id' | 'name' | 'updated_at' | 'is_pinned'> & { workspace_executor?: string },
+  now?: number,
+  snippet: ChatListItem['snippet'] = null,
+  localWork = false,
+): ChatListItem {
+  return {
+    id: row.id,
+    name: row.name,
+    updated_at: row.updated_at,
+    age: formatAge(row.updated_at, now),
+    pinned: row.is_pinned === true,
+    snippet,
+    ...(localWork ? { executor: executorOf(row) } : {}),
+  };
 }
 
 /**
@@ -52,6 +69,7 @@ export function buildSearchRows({
   overlay,
   hidden,
   now,
+  localWork = false,
 }: {
   hits: readonly SearchHit[] | null;
   loaded: readonly ConversationSummary[];
@@ -59,6 +77,7 @@ export function buildSearchRows({
   overlay: ReadonlyMap<number, ConversationOverlay>;
   hidden?: ReadonlySet<number>;
   now?: number;
+  localWork?: boolean;
 }): ChatListItem[] {
   const fromIndex = (hits ?? []).map((hit) => ({
     id: hit.id,
@@ -66,12 +85,13 @@ export function buildSearchRows({
     updated_at: hit.updatedAt,
     is_pinned: hit.row?.is_pinned === true,
     snippet: hit.snippet,
+    workspace_executor: hit.row?.workspace_executor,
   }));
   const seen = new Set(fromIndex.map((hit) => hit.id));
   const byTitle = filterConversations(applyOverlay(loaded, overlay), query)
     .filter((row) => !seen.has(row.id))
-    .map((row) => ({ id: row.id, name: row.name, updated_at: row.updated_at, is_pinned: row.is_pinned === true, snippet: null }));
+    .map((row) => ({ id: row.id, name: row.name, updated_at: row.updated_at, is_pinned: row.is_pinned === true, snippet: null, workspace_executor: row.workspace_executor }));
   return applyOverlay([...fromIndex, ...byTitle], overlay)
     .filter((row) => !hidden?.has(row.id))
-    .map((row) => toItem(row, now, row.snippet));
+    .map((row) => toItem(row, now, row.snippet, localWork));
 }

@@ -4,6 +4,9 @@ import { saveConversationDetail, type ConversationDetail } from '@/db/repo';
 import { offlineStore, type OfflineStore } from '@/db/offlineStore';
 import { appActivity } from '@/lib/appActivity';
 import { log } from '@/lib/log';
+import { speaksContract } from '@/api/discovery';
+import { HANDOFF_CONTRACT } from '@/features/localWork/model';
+import { getWorkspaceInfo } from '@/state/workspaceInfo';
 import { getSession, subscribeSession, type SessionState } from '@/state/session';
 import { SyncManager } from '@/sync/syncManager';
 
@@ -23,6 +26,8 @@ export function subscribeSyncChanges(listener: (projectId: number) => void): () 
 /** The app's sync manager, over the app's offline store. */
 export const syncManager = new SyncManager({
   getDb: () => offlineStore.get(),
+  // The Local work list exists from client contract 1.8 (the same gate as the Chats filter).
+  localWork: () => speaksContract(getWorkspaceInfo()?.discovery, HANDOFF_CONTRACT.major, HANDOFF_CONTRACT.minor),
   onChanged: (projectId) => {
     for (const listener of [...changeListeners]) {
       try {

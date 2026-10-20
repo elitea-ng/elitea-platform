@@ -5,12 +5,14 @@ import {
   deleteConversations,
   dirtyConversations,
   dropProject,
+  localWorkScope,
   messageGroupId,
   messagesScope,
   notificationsScope,
   upsertConversationRow,
   upsertMessageRow,
   upsertNotificationRow,
+  type ListKind,
   type ConversationMessage,
   type ConversationSummary,
   type Notification,
@@ -23,7 +25,8 @@ import { syncScope, tombstoneIds, type ScopeSpec, type SyncOutcome } from '@/syn
 /**
  * What is synced, and when it stops:
  *
- * 1. the project's conversation list (`mine=true`), then
+ * 1. the project's conversation list (`mine=true`), then its Local work list
+ *    (`mine=true&source=local_work`, the desktop's threads; its own cursor), then
  * 2. the transcripts of conversations whose row was delivered since their last
  *    transcript sync (most recently updated first, `TRANSCRIPTS_PER_RUN` per
  *    run; the rest follow on the next run), then
@@ -51,21 +54,25 @@ export interface SyncManagerDeps {
   getDb: () => Db | null;
   client?: () => ApiClient;
   now?: () => number;
+  /** Does the server have a Local work list (client contract 1.8)? Default: yes. No request otherwise. */
+  localWork?: () => boolean;
   /** Called after a run changed stored data (screens reading the store refresh). */
   onChanged?: (projectId: number) => void;
 }
 
-function conversationsSpec(db: Db, client: ApiClient, projectId: number): ScopeSpec<ConversationSummary> {
+function conversationsSpec(_db: Db, client: ApiClient, projectId: number, kind: ListKind = 'chat'): ScopeSpec<ConversationSummary> {
   return {
-    scope: conversationsScope(projectId),
+    scope: kind === 'chat' ? conversationsScope(projectId) : localWorkScope(projectId),
     projectId,
-    fetch: (cursor) => fetchConversationChanges(client, projectId, cursor),
+    fetch: (cursor) => fetchConversationChanges(client, projectId, cursor, undefined, kind),
     apply: async (tx, page, gen) => {
       for (const id of tombstoneIds(page.tombstones)) await deleteConversation(tx, projectId, id);
-      for (const row of page.rows) await upsertConversationRow(tx, projectId, row, gen);
+      for (const row of page.rows) await upsertConversationRow(tx, projectId, row, gen, kind);
     },
-    // Conversations known only from a thread read (sync_gen -1) are not part of the list.
-    sweep: (tx, gen) => deleteConversations(tx, 'project_id = ? AND sync_gen >= 0 AND sync_gen < ?', [projectId, gen]).then(() => {}),
+    // Conversations known only from a thread read (sync_gen -1) are not part of the list. Each
+    // list sweeps its own kind: the two lists count generations apart.
+    sweep: (tx, gen) =>
+      deleteConversations(tx, 'project_id = ? AND list_kind = ? AND sync_gen >= 0 AND sync_gen < ?', [projectId, kind, gen]).then(() => {}),
   };
 }
 
@@ -173,6 +180,10 @@ export class SyncManager {
     }
     if (conversations.status === 'ok') {
       changed ||= conversations.rows + conversations.tombstones > 0 || conversations.resynced;
+      // A server without Local work answers an empty list; any failure here leaves the Chats
+      // list and the rest of the run as they are (403 is the project's, the first list saw it).
+      const localWork = this.deps.localWork?.() === false ? null : await syncScope(db, conversationsSpec(db, client, projectId, 'local_work'), { now: this.deps.now });
+      if (localWork?.status === 'ok') changed ||= localWork.rows + localWork.tombstones > 0 || localWork.resynced;
       for (const conversationId of await dirtyConversations(db, projectId, TRANSCRIPTS_PER_RUN)) {
         const outcome = await this.syncTranscriptIn(db, client, projectId, conversationId);
         if (outcome === 'offline') break;

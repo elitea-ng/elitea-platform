@@ -49,6 +49,10 @@
     "revokeNativeDevice",
     "updateConversation",
     "pinEntity",
-    "unpinEntity"
+    "unpinEntity",
+    "getWorkspaceHandoff",
+    "eraseWorkspaceHandoff",
+    "requestWorkspaceHandoffReclaim",
+    "permissionList"
   ]
 }

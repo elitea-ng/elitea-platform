@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 import type { ApiClient } from '@/api/client';
 import { unwrap } from '@/api/errors';
-import type { ConversationMessage, ConversationSummary, Notification } from '@/db/repo';
+import type { ConversationMessage, ConversationSummary, ListKind, Notification } from '@/db/repo';
+import { LOCAL_WORK_SOURCE } from '@/features/localWork/model';
 import { log } from '@/lib/log';
 
 /**
@@ -75,13 +76,15 @@ export async function fetchConversationChanges(
   projectId: number,
   cursor: string,
   signal?: AbortSignal,
+  kind: ListKind = 'chat',
 ): Promise<DeltaPage<ConversationSummary>> {
   const body = await unwrap(
     client.GET('/elitea_core/conversations/prompt_lib/{project_id}', {
       params: {
         path: { project_id: String(projectId) },
-        // The cursor is bound to the filter: always the same `mine=true` list.
-        query: { mine: true, limit: DELTA_LIMIT, changes_since: cursor },
+        // The cursor is bound to the filter: always the same list, `mine=true` (and, for the
+        // Local work list, `source=local_work`, which the Chats list never carries).
+        query: { mine: true, limit: DELTA_LIMIT, changes_since: cursor, ...(kind === 'local_work' ? { source: LOCAL_WORK_SOURCE } : {}) },
       },
       signal,
     }),

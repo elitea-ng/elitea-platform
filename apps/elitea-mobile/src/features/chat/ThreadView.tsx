@@ -78,6 +78,9 @@ import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn } from '@/features/chat/turnController';
 import { ATTACHMENT_ONLY_TEXT, useTurn } from '@/features/chat/useTurn';
+import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
+import { lastAnswerRanOnDesktop } from '@/features/localWork/model';
+import { useLocalWork } from '@/features/localWork/useLocalWork';
 import { useSelfUserId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
 import { useOutboxItems } from '@/sync/appOutbox';
@@ -239,6 +242,17 @@ export function ThreadView({
    */
   const [threadNote, setNote] = useState<{ text: string; kind: 'error' | 'info' } | null>(null);
   const setThreadNote = useCallback((text: string | null) => setNote(text === null ? null : { text, kind: 'error' }), []);
+  // A Local work thread (a desktop agent's): where it runs decides what the composer may do.
+  const { toast, show: showToast, hide: hideToast } = useToast();
+  const localWork = useLocalWork({
+    projectId,
+    conversationRef: ref,
+    detail,
+    offlineCopy: isOfflineCopy(detail),
+    selfUserId: me,
+    notify: showToast,
+    fail: setThreadNote,
+  });
   // Once the persisted copy is back from the server, the live bubbles go.
   useEffect(() => {
     if (live?.settled) dismiss();
@@ -251,8 +265,12 @@ export function ThreadView({
       [...messages].reverse().find((m) => m.role === 'user' && (m.createdAt ?? 0) <= (newestAnswer.createdAt ?? Infinity)) ??
       null)
     : null;
+  // The server refuses to regenerate an answer a desktop produced (409 local_work_turn).
+  const newestRanOnDesktop = localWork.thread !== null && lastAnswerRanOnDesktop(messages);
   const canRegenerate = (message: ChatMessage | null): boolean =>
     message !== null &&
+    !newestRanOnDesktop &&
+    localWork.blockedReason === null &&
     newestAnswer !== null &&
     message.key === newestAnswer.key &&
     regenerateQuestion?.uuid != null &&
@@ -560,7 +578,6 @@ export function ThreadView({
     const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
     return <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mascot={primary} />;
   };
-  const { toast, show: showToast, hide: hideToast } = useToast();
   const [draft, setDraft] = useState<{ text: string; key: number } | null>(null);
   const list = useRef<ComponentRef<typeof FlatList<Row>>>(null);
   const [scrolledAway, setScrolledAway] = useState(false);
@@ -603,7 +620,9 @@ export function ThreadView({
   }
 
   const pauseBlocks = pause !== null && pause.kind !== 'output_limit' && !(pause.kind === 'hitl' && pause.shape === 'fanout');
-  const disabledReason = pauseBlocks
+  const disabledReason = localWork.blockedReason
+    ? localWork.blockedReason
+    : pauseBlocks
     ? pause?.kind === 'auth'
       ? 'Skip the toolkit sign-in above, or continue in the web app.'
       : 'Waiting for your approval above.'
@@ -755,7 +774,7 @@ export function ThreadView({
                           live={item.live}
                           author={targetName}
                           avatar={avatarFor(primaryParticipant, targetName)}
-                          onRetry={turn.retry}
+                          onRetry={localWork.blockedReason === null ? turn.retry : null}
                           onReconnect={turn.reconnect}
                           onDismiss={turn.dismiss}
                           onOpenTool={setOpenStep}
@@ -779,6 +798,18 @@ export function ThreadView({
                 </Text>
                 <IconButton icon="stop" variant="tonal" size={32} iconSize={14} accessibilityLabel="Stop reading aloud" onPress={stopReading} />
               </GlassSurface>
+            ) : null}
+            {localWork.thread !== null && localWork.thread.executor !== 'local' && (localWork.thread.executor === 'cloud' || localWork.canErase) ? (
+              <CloudExecutorNotice
+                executor={localWork.thread.executor}
+                canTakeBack={localWork.canTakeBack}
+                canErase={localWork.canErase}
+                takeBackRequested={localWork.takeBackRequested}
+                requesting={localWork.requesting}
+                erasing={localWork.erasing}
+                onTakeBack={localWork.takeBack}
+                onErase={localWork.erase}
+              />
             ) : null}
             {threadNote ? (
               <Pressable accessibilityRole="button" accessibilityHint="Dismisses the note" onPress={() => setThreadNote(null)} style={styles.noteWrap}>

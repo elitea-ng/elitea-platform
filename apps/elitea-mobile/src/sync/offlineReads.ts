@@ -4,6 +4,7 @@ import { offlineStore } from '@/db/offlineStore';
 import {
   conversationsScope,
   countUnseenNotifications,
+  localWorkScope,
   hasSynced,
   notificationsScope,
   readConversation,
@@ -13,6 +14,7 @@ import {
   type ConversationDetail,
   type ConversationMessage,
   type ConversationSummary,
+  type ListKind,
   type Notification,
 } from '@/db/repo';
 import type { Db } from '@/db/sql';
@@ -163,12 +165,13 @@ export async function offlineConversationRows(
   offset: number,
   limit: number,
   getDb: () => Db | null = storeDb,
+  kind: ListKind = 'chat',
 ): Promise<{ rows: ConversationSummary[]; total: number } | null> {
   const db = getDb();
   if (db === null) return null;
-  const stored = await readConversationRows(db, projectId, limit, offset);
+  const stored = await readConversationRows(db, projectId, limit, offset, kind);
   // A list never synced on this device is no copy (not an empty one).
-  if (stored.total === 0 && !(await hasSynced(db, conversationsScope(projectId)))) return null;
+  if (stored.total === 0 && !(await hasSynced(db, kind === 'chat' ? conversationsScope(projectId) : localWorkScope(projectId)))) return null;
   return mark(stored);
 }
 

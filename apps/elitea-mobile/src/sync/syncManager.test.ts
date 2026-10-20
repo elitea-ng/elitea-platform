@@ -1,5 +1,6 @@
 import { migrate } from '@/db/migrations';
-import { conversationsScope, messagesScope } from '@/db/repo';
+import { conversationsScope, localWorkScope, messagesScope, readConversationRows, saveConversationDetail } from '@/db/repo';
+import { searchConversations } from '@/db/search';
 import { Db } from '@/db/sql';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { SyncManager } from '@/sync/syncManager';
@@ -33,7 +34,7 @@ async function setup() {
 
 const ids = async (db: Db, sql: string) => (await db.all<{ id: number }>(sql)).map((r) => r.id);
 const requested = (server: FakeServer, prefix: string) =>
-  server.requests.filter((r) => r.url.pathname === `/api/v2${prefix}`).map((r) => r.url.searchParams.get('changes_since'));
+  server.requests.filter((r) => r.url.pathname === `/api/v2${prefix}` && r.url.searchParams.get('source') === null).map((r) => r.url.searchParams.get('changes_since'));
 
 beforeEach(() => {
   __resetSessionForTests();
@@ -278,5 +279,127 @@ describe('several workspaces', () => {
     expect(await ids(a, 'SELECT id FROM conversations')).toEqual([41]);
     expect(await ids(b, 'SELECT id FROM conversations')).toEqual([77]);
     expect(serverB.requests.every((r) => !r.url.pathname.includes('/41'))).toBe(true);
+  });
+});
+
+// Local work threads (a desktop agent's, `source=local_work`) are a second list of the same table,
+// synced under their own cursor, and never mixed into the Chats list.
+describe('SyncManager: the Local work list', () => {
+  const LOCAL = `${CONV}?source=local_work`;
+  const cloud = (id: number, overrides: Record<string, unknown> = {}) =>
+    conversationRow(id, { name: `Thread ${id}`, meta: { local_work: { folder_name: 'api' } }, workspace_executor: 'cloud', ...overrides });
+
+  async function synced() {
+    const { db, server, manager, onChanged } = await setup();
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41)], { next: 'conv-1' }) });
+    server.on('GET', LOCAL, { status: 200, body: conversationDelta([cloud(61), cloud(62, { workspace_executor: 'local' })], { next: 'lw-1' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41' }) });
+    server.on('GET', msgs(61), { status: 200, body: messageDelta([messageRow(1, { conversation_id: '61', content: 'refactor the parser' })], { next: 'm61' }) });
+    server.on('GET', msgs(62), { status: 200, body: messageDelta([], { next: 'm62' }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    await manager.syncProject(7);
+    return { db, server, manager, onChanged };
+  }
+
+  it('asks for the Local work list with mine=true&source=local_work and its own cursor', async () => {
+    const { db, server } = await synced();
+    const local = server.requests.filter((r) => r.url.searchParams.get('source') === 'local_work');
+    expect(local).toHaveLength(1);
+    expect(local[0].url.searchParams.get('mine')).toBe('true');
+    expect(local[0].url.searchParams.get('changes_since')).toBe('0');
+    // The Chats list never carries the source filter.
+    const chats = server.requests.filter((r) => r.url.pathname === `/api/v2${CONV}` && r.url.searchParams.get('source') === null);
+    expect(chats).toHaveLength(1);
+    expect(await db.get('SELECT cursor FROM sync_state WHERE scope = ?', [localWorkScope(7)])).toEqual({ cursor: 'lw-1' });
+    expect(await db.get('SELECT cursor FROM sync_state WHERE scope = ?', [conversationsScope(7)])).toEqual({ cursor: 'conv-1' });
+  });
+
+  it('keeps the two lists apart in storage, offline reads and search', async () => {
+    const { db } = await synced();
+    expect((await readConversationRows(db, 7, 10, 0)).rows.map((r) => r.id)).toEqual([41]);
+    const local = await readConversationRows(db, 7, 10, 0, 'local_work');
+    expect(local.rows.map((r) => r.id).sort()).toEqual([61, 62]);
+    expect(local.total).toBe(2);
+    expect(local.rows.find((r) => r.id === 61)?.workspace_executor).toBe('cloud');
+    // Search stays inside one list; the transcript of a Local work thread is synced too.
+    expect((await searchConversations(db, 7, 'parser')).map((h) => h.id)).toEqual([]);
+    expect((await searchConversations(db, 7, 'parser', 50, 'local_work')).map((h) => h.id)).toEqual([61]);
+    expect((await searchConversations(db, 7, 'Thread', 50, 'local_work')).map((h) => h.id).sort()).toEqual([61, 62]);
+  });
+
+  it('a full resync of one list sweeps only its own rows', async () => {
+    const { db, server, manager } = await synced();
+    // The Local work cursor expires: it resyncs and 62 is gone; the Chats list keeps 41.
+    server.on('GET', LOCAL, { status: 410, body: cursorExpired }, { status: 200, body: conversationDelta([cloud(61)], { next: 'lw-2' }) });
+    server.on('GET', CONV, { status: 200, body: conversationDelta([], { next: 'conv-2' }) });
+    await manager.syncProject(7);
+    expect(await ids(db, 'SELECT id FROM conversations ORDER BY id')).toEqual([41, 61]);
+
+    // And the Chats list resyncing never takes a Local work row with it.
+    server.on('GET', CONV, { status: 410, body: cursorExpired }, { status: 200, body: conversationDelta([conversationRow(41)], { next: 'conv-3' }) });
+    server.on('GET', LOCAL, { status: 200, body: conversationDelta([], { next: 'lw-3' }) });
+    await manager.syncProject(7);
+    expect(await ids(db, 'SELECT id FROM conversations ORDER BY id')).toEqual([41, 61]);
+  });
+
+  it('a handoff re-delivers the row with its new executor, and a tombstone removes it', async () => {
+    const { db, server, manager } = await synced();
+    server.on('GET', LOCAL, { status: 200, body: conversationDelta([cloud(62, { workspace_executor: 'cloud' })], { tombstones: [tombstone(61)], next: 'lw-2' }) });
+    server.on('GET', msgs(62), { status: 200, body: messageDelta([], { next: 'm62-2' }) });
+    await manager.syncProject(7);
+    const local = await readConversationRows(db, 7, 10, 0, 'local_work');
+    expect(local.rows.map((r) => [r.id, r.workspace_executor])).toEqual([[62, 'cloud']]);
+  });
+
+  it('a server without Local work (404/error on the filtered list) leaves the Chats list and the run alone', async () => {
+    const { db, server, manager } = await setup();
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41)], { next: 'conv-1' }) });
+    server.on('GET', LOCAL, { status: 500, body: {} });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41' }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    expect(await manager.syncProject(7)).toEqual({ conversations: 'ok', transcripts: 1, notifications: 'ok', dropped: false });
+    expect(await ids(db, 'SELECT id FROM conversations')).toEqual([41]);
+  });
+
+  it('asks for no Local work list from a server older than client contract 1.8', async () => {
+    const { db } = await setup();
+    const server = fakeServer();
+    const manager = new SyncManager({ getDb: () => db, client: () => server.client, localWork: () => false });
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41)], { next: 'conv-1' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41' }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    await manager.syncProject(7);
+    expect(server.requests.some((r) => r.url.searchParams.get('source') !== null)).toBe(false);
+  });
+
+  it('a row delivered by both deltas stays in the Local work list, with its own generation', async () => {
+    const { db, server, manager } = await setup();
+    server.on('GET', LOCAL, { status: 200, body: conversationDelta([cloud(61)], { next: 'lw-1' }) });
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41), conversationRow(61, { name: 'from chat delta' })], { next: 'conv-1' }) });
+    for (const id of [41, 61]) server.on('GET', msgs(id), { status: 200, body: messageDelta([], { next: `m${id}` }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    await manager.syncProject(7);
+    // Chat delta first, then promoted by the Local work delta; never demoted.
+    const kinds = await db.all<{ id: number; list_kind: string }>('SELECT id, list_kind FROM conversations ORDER BY id');
+    expect(kinds).toEqual([{ id: 41, list_kind: 'chat' }, { id: 61, list_kind: 'local_work' }]);
+    // The chat delta again (full resync) must neither demote 61 nor sweep it.
+    server.on('GET', CONV, { status: 410, body: cursorExpired }, { status: 200, body: conversationDelta([conversationRow(41), conversationRow(61, { name: 'again' })], { next: 'conv-2' }) });
+    server.on('GET', LOCAL, { status: 200, body: conversationDelta([], { next: 'lw-2' }) });
+    await manager.syncProject(7);
+    expect(await db.all<{ id: number; list_kind: string; name: string }>('SELECT id, list_kind, name FROM conversations ORDER BY id')).toEqual([
+      { id: 41, list_kind: 'chat', name: 'Conversation 41' },
+      { id: 61, list_kind: 'local_work', name: 'Thread 61' },
+    ]);
+  });
+
+  it('a thread read of a Local work conversation files it under Local work', async () => {
+    const { db } = await setup();
+    const detail = { id: '70', uuid: '7cbc0244-366e-40b9-ba65-35fcbfb50ce1', name: 'x', source: 'local_work', meta: {}, participants: [] } as never;
+    await saveConversationDetail(db, 7, detail);
+    await saveConversationDetail(db, 7, { ...(detail as object), id: '71', source: 'chat' } as never);
+    expect(await db.all('SELECT id, list_kind FROM conversations ORDER BY id')).toEqual([
+      { id: 70, list_kind: 'local_work' },
+      { id: 71, list_kind: 'chat' },
+    ]);
   });
 });

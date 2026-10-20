@@ -23,21 +23,24 @@ import { ConversationOpsDrainer, enqueueOp, listOps, overlayOf, type Conversatio
 
 /** Patches the loaded list pages so a taken action shows before the refetch lands. */
 export function patchConversationPages(client: QueryClient, projectId: number, conversationId: number, action: ConversationAction): void {
-  client.setQueryData<InfiniteData<ConversationPage, number>>(queryKeys.conversations(projectId), (data) => {
-    if (!data) return data;
-    return {
-      ...data,
-      pages: data.pages.map((page) => ({
-        ...page,
-        rows:
-          action.kind === 'delete'
-            ? page.rows.filter((row) => row.id !== conversationId)
-            : page.rows.map((row) =>
-                row.id !== conversationId ? row : action.kind === 'rename' ? { ...row, name: action.name } : { ...row, is_pinned: action.pinned },
-              ),
-      })),
-    };
-  });
+  // Both lists: a Local work thread is deleted from its own list (rename and pin only match the Chats one).
+  for (const key of [queryKeys.conversations(projectId), queryKeys.localWork(projectId)]) {
+    client.setQueryData<InfiniteData<ConversationPage, number>>(key, (data) => {
+      if (!data) return data;
+      return {
+        ...data,
+        pages: data.pages.map((page) => ({
+          ...page,
+          rows:
+            action.kind === 'delete'
+              ? page.rows.filter((row) => row.id !== conversationId)
+              : page.rows.map((row) =>
+                  row.id !== conversationId ? row : action.kind === 'rename' ? { ...row, name: action.name } : { ...row, is_pinned: action.pinned },
+                ),
+        })),
+      };
+    });
+  }
 }
 
 const failureListeners = new Set<(op: Pick<ConversationOp, 'projectId' | 'conversationId' | 'action'>) => void>();
@@ -75,6 +78,7 @@ export const conversationOpsDrainer = new ConversationOpsDrainer({
     else if (outcome === 'gone') patchConversationPages(queryClient, op.projectId, op.conversationId, { kind: 'delete' });
     else patchConversationPages(queryClient, op.projectId, op.conversationId, op.action);
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(op.projectId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.localWork(op.projectId) });
     if (op.action.kind !== 'pin') void queryClient.invalidateQueries({ queryKey: [...queryKeys.projectRoot(op.projectId), 'conversation'] });
     syncManager.requestSync(op.projectId);
   },
@@ -113,6 +117,7 @@ export async function runConversationAction(projectId: number, conversationId: n
     // Same as the queue: a rename or pin of a conversation that is gone takes it off the list.
     else if (result.outcome === 'gone') patchConversationPages(queryClient, projectId, conversationId, { kind: 'delete' });
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.localWork(projectId) });
     return ok ? 'done' : 'failed';
   } finally {
     inFlight.set(

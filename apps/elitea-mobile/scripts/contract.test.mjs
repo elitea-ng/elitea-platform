@@ -278,12 +278,17 @@ describe('buildContract (real inputs)', () => {
 });
 
 describe('client contract 1.4 (pinned upstream)', () => {
-  it('pins a server that speaks client contract 1.4; the overlay is empty', () => {
+  it('pins a server that speaks client contract 1.4; the overlay carries only the 1.8 handoff gap', () => {
     const { doc } = buildContract();
     assert.equal(doc.info['x-elitea-client-contract'], '1.4');
     const overlay = YAML.parse(readFileSync(new URL('../contract/overlay/native-gap.yaml', import.meta.url), 'utf8'));
-    assert.deepEqual(overlay.paths, {});
-    assert.equal(overlay['x-zefir-extend'], undefined);
+    assert.deepEqual(Object.keys(overlay.paths).sort(), [
+      '/elitea_core/workspace_handoff/prompt_lib/{project_id}/{conversation_uuid}',
+      '/elitea_core/workspace_handoff_reclaim_request/prompt_lib/{project_id}/{conversation_uuid}',
+    ]);
+    assert.deepEqual(Object.keys(overlay['x-zefir-extend'].schemas).sort(), ['ConversationDetail', 'ConversationSummary']);
+    const ids = Object.values(doc.paths).flatMap((item) => Object.values(item).map((op) => op?.operationId));
+    for (const id of ['getWorkspaceHandoff', 'eraseWorkspaceHandoff', 'requestWorkspaceHandoffReclaim', 'permissionList']) assert.ok(ids.includes(id), id);
   });
 
   it('defines rename (updateConversation, name alone), pin/unpin and is_pinned upstream, tagged client', () => {

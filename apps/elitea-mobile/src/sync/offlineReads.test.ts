@@ -1,3 +1,6 @@
+import { discoveryDocument13 } from '@/api/__fixtures__/nativeClient';
+import { DiscoveryDocumentSchema } from '@/api/discovery';
+import { setWorkspaceInfo } from '@/state/workspaceInfo';
 import { createApiClient } from '@/api/client';
 import type { BaseFetch } from '@/api/middleware';
 import { fetchConversationPage, savedFirstPage } from '@/api/queries/conversations';
@@ -263,6 +266,24 @@ describe('offline cold start answers from the saved copy quickly (DEF-R5)', () =
     expect(await offlineNotifications(7, 30)).toEqual([]);
     expect(await offlineUnseenCount(7)).toBe(0);
     expect(db.isClosed).toBe(false);
+  });
+
+  it('the Local work list is its own saved copy: never synced is no copy, and rows of the Chats list are not in it', async () => {
+    await storeWith();
+    setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13({ client_contract: '1.8' })) });
+    const server = installServer();
+    server.on('GET', '/elitea_core/conversations/prompt_lib/7?source=local_work', {
+      status: 200,
+      body: conversationDelta([conversationRow(61, { workspace_executor: 'cloud' })]),
+    });
+    server.on('GET', '/elitea_core/conversations/prompt_lib/7', { status: 200, body: conversationDelta([conversationRow(41)]) });
+    server.on('GET', '/elitea_core/messages/', { status: 200, body: messageDelta([]) });
+    server.on('GET', '/notifications/', { status: 200, body: notificationDelta([]) });
+    expect(await offlineConversationRows(7, 0, 30, undefined, 'local_work')).toBeNull();
+    await syncManager.syncProject(7);
+    const local = await offlineConversationRows(7, 0, 30, undefined, 'local_work');
+    expect(local?.rows.map((r) => [r.id, r.workspace_executor])).toEqual([[61, 'cloud']]);
+    expect((await offlineConversationRows(7, 0, 30))?.rows.map((r) => r.id)).toEqual([41]);
   });
 
   it('shows the saved first page as placeholder data, without the offline notice', () => {

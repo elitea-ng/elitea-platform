@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { flattenConversationPages, useConversations } from '@/api/queries/conversations';
+import { speaksContract } from '@/api/discovery';
+import { flattenConversationPages, useConversations, useLocalWorkConversations } from '@/api/queries/conversations';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useDesign } from '@/design/DesignProvider';
@@ -17,12 +18,14 @@ import { useConversationSearch, useListActionsAvailable, useSavedPinnedRows } fr
 import { usePendingDelete } from '@/features/chats/usePendingDelete';
 import { clearSelectedChat, selectChat, useSelectedChat } from '@/features/chats/selectedChat';
 import { isTwoPane, listPaneWidth, useScreenWidth } from '@/features/chats/twoPane';
+import { HANDOFF_CONTRACT } from '@/features/localWork/model';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { WorkspacePill } from '@/features/workspaces/WorkspacePill';
 import { log } from '@/lib/log';
 import { getSession, useSession } from '@/state/session';
+import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { runConversationAction, subscribeActionFailures, useConversationOverlay } from '@/sync/appConversationOps';
-import { Button, EmptyState, haptic, searchBarOptions } from '@/ui';
+import { Button, EmptyState, haptic, searchBarOptions, SegmentedControl } from '@/ui';
 
 interface DeleteScope {
   workspaceId: string | null;
@@ -54,7 +57,15 @@ export default function ConversationsScreen() {
   const { colors } = design;
   const selection = useProjectSelection();
   const projectId = selection.projectId;
-  const conversations = useConversations(projectId);
+  const chats = useConversations(projectId);
+  // The Local work filter (desktop agent threads, `source=local_work`): its own list, cache and
+  // cursor; offered from the server version that has the cloud handoff (client contract 1.8).
+  const workspace = useWorkspaceInfo();
+  const localWorkOffered = speaksContract(workspace?.discovery, HANDOFF_CONTRACT.major, HANDOFF_CONTRACT.minor);
+  const [filter, setFilter] = useState<'chats' | 'local_work'>('chats');
+  const localWorkOnly = localWorkOffered && filter === 'local_work';
+  const localWork = useLocalWorkConversations(projectId, localWorkOnly);
+  const conversations = localWorkOnly ? localWork : chats;
   const all = flattenConversationPages(conversations.data?.pages);
   const offline = conversations.data?.pages.some((page) => page.offline === true) ?? false;
   const [query, setQuery] = useState('');
@@ -62,7 +73,7 @@ export default function ConversationsScreen() {
   const actionsAvailable = useListActionsAvailable();
   const overlay = useConversationOverlay(projectId);
   const savedPinned = useSavedPinnedRows(projectId, actionsAvailable);
-  const hits = useConversationSearch(projectId, query);
+  const hits = useConversationSearch(projectId, query, localWorkOnly ? 'local_work' : 'chat');
   const workspaceId = useSession((session) => session.workspaceId);
   const deleteScope = useMemo(() => ({ workspaceId, projectId }), [workspaceId, projectId]);
   const screen = useScreenWidth();
@@ -103,9 +114,9 @@ export default function ConversationsScreen() {
   const rows = useMemo(
     () =>
       searching
-        ? buildSearchRows({ hits, loaded: all, query, overlay, hidden })
-        : buildChatRows({ loaded: all, savedPinned: actionsAvailable ? savedPinned : [], overlay, hidden }),
-    [searching, hits, all, query, overlay, hidden, savedPinned, actionsAvailable],
+        ? buildSearchRows({ hits, loaded: all, query, overlay, hidden, localWork: localWorkOnly })
+        : buildChatRows({ loaded: all, savedPinned: actionsAvailable && !localWorkOnly ? savedPinned : [], overlay, hidden, localWork: localWorkOnly }),
+    [searching, hits, all, query, overlay, hidden, savedPinned, actionsAvailable, localWorkOnly],
   );
 
   // A queued action the workspace refused: the list goes back to what it says; say why.
@@ -143,12 +154,14 @@ export default function ConversationsScreen() {
       return (
         <StatusScreen mascot="bust" title={OFFLINE_EMPTY.title} body={OFFLINE_EMPTY.body}>
           <Button title="Try again" size="small" variant="tonal" onPress={() => void conversations.refetch()} />
+        {localWorkOnly ? <Button title="Show chats" size="small" variant="plain" onPress={() => setFilter('chats')} /> : null}
         </StatusScreen>
       );
     }
     return (
       <StatusScreen title="Couldn't load conversations" body="Check your connection and try again.">
         <Button title="Try again" size="small" variant="tonal" onPress={() => void conversations.refetch()} />
+        {localWorkOnly ? <Button title="Show chats" size="small" variant="plain" onPress={() => setFilter('chats')} /> : null}
       </StatusScreen>
     );
   }
@@ -183,8 +196,9 @@ export default function ConversationsScreen() {
 
   const actions: ChatRowActions = {
     onDelete: projectId === null ? null : confirmDelete,
+    // Pin and rename are the Chats list's; the Local work list offers Delete only.
     onTogglePin:
-      actionsAvailable && projectId !== null
+      actionsAvailable && !localWorkOnly && projectId !== null
         ? (row) => {
             haptic('tabOrChipChange');
             void runConversationAction(projectId, row.id, { kind: 'pin', pinned: row.pinned !== true }).then((result) => {
@@ -192,7 +206,7 @@ export default function ConversationsScreen() {
             });
           }
         : null,
-    onRename: actionsAvailable ? (row) => router.push({ pathname: '/rename', params: { id: String(row.id), name: row.name ?? '' } }) : null,
+    onRename: actionsAvailable && !localWorkOnly ? (row) => router.push({ pathname: '/rename', params: { id: String(row.id), name: row.name ?? '' } }) : null,
   };
 
   const open = (row: ChatListItem) => {
@@ -221,6 +235,19 @@ export default function ConversationsScreen() {
         header={
           <>
             <WorkspacePill />
+            {localWorkOffered ? (
+              <View style={styles.filter}>
+                <SegmentedControl
+                  accessibilityLabel="Show"
+                  value={filter}
+                  onChange={setFilter}
+                  segments={[
+                    { value: 'chats', label: 'Chats' },
+                    { value: 'local_work', label: 'Local work' },
+                  ]}
+                />
+              </View>
+            ) : null}
             <OfflineNotice visible={offline} />
           </>
         }
@@ -232,6 +259,11 @@ export default function ConversationsScreen() {
         empty={
           searching ? (
             <EmptyState mascot="bust" title={`Nothing found for “${query.trim()}”`} body="Try another word from the chat's title or its messages." />
+          ) : localWorkOnly ? (
+            <EmptyState
+              title="No Local work yet"
+              body="Threads you start in the Elitea desktop app appear here. Send one to the cloud to continue it from your phone."
+            />
           ) : (
             <EmptyState
               title="Ask me anything"
@@ -289,6 +321,7 @@ export default function ConversationsScreen() {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   footer: { padding: 16 },
+  filter: { paddingHorizontal: 16, paddingBottom: 8 },
   flex: { flex: 1 },
   row: { flex: 1, flexDirection: 'row' },
   listPane: { borderEndWidth: StyleSheet.hairlineWidth },

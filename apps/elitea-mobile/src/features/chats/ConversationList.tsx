@@ -6,6 +6,7 @@ import type { SnippetPart } from '@/db/search';
 import { useDesign } from '@/design/DesignProvider';
 import { ActionMenu, type ActionMenuItem } from '@/features/chat/ActionMenu';
 import { ConversationRow, UNTITLED } from '@/features/chats/ConversationRow';
+import type { WorkspaceExecutor } from '@/features/localWork/model';
 import { CHAT_SECTION_TITLE, groupChatsByDate, type ChatSection } from '@/features/chats/sections';
 import { ListSection, uiPlatform } from '@/ui';
 
@@ -19,6 +20,8 @@ export interface ChatListItem {
   pinned?: boolean;
   /** A search hit in a message: the matched passage. */
   snippet?: readonly SnippetPart[] | null;
+  /** The Local work list only: where the desktop thread runs now (the row's badge). */
+  executor?: WorkspaceExecutor;
 }
 
 /** What the rows can do; each is absent when it is not possible (an older server, the offline copy). */
@@ -140,6 +143,7 @@ export function ConversationList({
                       age={row.age}
                       pinned={row.pinned === true}
                       snippet={row.snippet}
+                      executor={row.executor}
                       onPress={() => onOpen(row)}
                       onLongPress={hasMenu ? () => setMenu(row) : undefined}
                       a11y={a11y}

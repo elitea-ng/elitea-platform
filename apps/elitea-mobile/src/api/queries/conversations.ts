@@ -2,7 +2,8 @@ import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
 import { unwrap } from '@/api/errors';
-import type { ConversationSummary } from '@/db/repo';
+import type { ConversationSummary, ListKind } from '@/db/repo';
+import { LOCAL_WORK_SOURCE } from '@/features/localWork/model';
 import { queryKeys } from '@/api/queries/keys';
 import { syncManager } from '@/sync/appSync';
 import { useDeviceCopy } from '@/api/queries/deviceCopy';
@@ -31,6 +32,7 @@ export async function fetchConversationPage(
   offset: number,
   client: ApiClient = sessionApiClient(),
   signal?: AbortSignal,
+  kind: ListKind = 'chat',
 ): Promise<ConversationPage> {
   const online = await readWithFallback<{ page: { rows?: ConversationSummary[]; total?: number } | undefined } | ConversationPage>(
     async (deadline) => ({
@@ -38,14 +40,15 @@ export async function fetchConversationPage(
         client.GET('/elitea_core/conversations/prompt_lib/{project_id}', {
           params: {
             path: { project_id: String(projectId) },
-            query: { mine: true, limit: CONVERSATIONS_PAGE_SIZE, offset },
+            // The Chats listing leaves Local work threads out unless asked for by name.
+            query: { mine: true, limit: CONVERSATIONS_PAGE_SIZE, offset, ...(kind === 'local_work' ? { source: LOCAL_WORK_SOURCE } : {}) },
           },
           signal: deadline,
         }),
       ),
     }),
     async () => {
-      const stored = await offlineConversationRows(projectId, offset, CONVERSATIONS_PAGE_SIZE);
+      const stored = await offlineConversationRows(projectId, offset, CONVERSATIONS_PAGE_SIZE, undefined, kind);
       return stored === null ? null : { ...stored, offset, offline: true };
     },
     { signal },
@@ -94,6 +97,25 @@ export function savedFirstPage(
 ): InfiniteData<ConversationPage, number> | undefined {
   if (saved === null || saved.rows.length === 0) return undefined;
   return { pages: [{ rows: saved.rows, total: saved.total, offset: 0 }], pageParams: [0] };
+}
+
+/**
+ * The caller's Local work threads (desktop agent threads): the same paging, its own cache key
+ * and saved copy. Only fetched once `enabled` (the Local work filter is open).
+ */
+export function useLocalWorkConversations(projectId: number | null, enabled: boolean) {
+  const on = enabled && projectId !== null;
+  const saved = useDeviceCopy(queryKeys.localWork(projectId ?? 0), on, () =>
+    offlineConversationRows(projectId as number, 0, CONVERSATIONS_PAGE_SIZE, undefined, 'local_work'),
+  );
+  return useInfiniteQuery({
+    queryKey: queryKeys.localWork(projectId ?? 0),
+    enabled: on,
+    placeholderData: savedFirstPage(saved),
+    initialPageParam: 0,
+    queryFn: ({ pageParam, signal }) => fetchConversationPage(projectId as number, pageParam, sessionApiClient(), signal, 'local_work'),
+    getNextPageParam: nextConversationOffset,
+  });
 }
 
 export function useConversations(projectId: number | null) {

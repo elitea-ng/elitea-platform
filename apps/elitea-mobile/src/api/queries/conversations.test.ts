@@ -68,4 +68,22 @@ describe('fetchConversationPage', () => {
     expect(url).toContain(`limit=${CONVERSATIONS_PAGE_SIZE}`);
     expect(url).toContain('offset=30');
   });
+
+  it('the Local work list adds source=local_work to the same paging; the Chats list never does', async () => {
+    const urls: string[] = [];
+    const fetch: BaseFetch = async (input) => {
+      urls.push(input.url);
+      return new Response(JSON.stringify({ total: 1, rows: [{ ...row(9), workspace_executor: 'cloud' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const client = createApiClient({ origin: ORIGIN, auth: { kind: 'session' }, fetch });
+    const page = await fetchConversationPage(7, 0, client, undefined, 'local_work');
+    expect(page.rows[0].workspace_executor).toBe('cloud');
+    expect(urls[0]).toContain('mine=true');
+    expect(urls[0]).toContain('source=local_work');
+    await fetchConversationPage(7, 0, client);
+    expect(urls[1]).not.toContain('source=');
+  });
 });

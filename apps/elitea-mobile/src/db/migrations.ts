@@ -16,6 +16,7 @@ import type { Db } from '@/db/sql';
  *   the generation counters a full resync sweeps by;
  * - `meta`: key/value (origin);
  * - `outbox` (2): sends waiting for the workspace (src/sync/outbox.ts);
+ * - `list_kind` (4) on `conversations`: `chat` or `local_work`, the list a row was synced for;
  * - `conversation_search`, `message_search` (3): the offline chat search, FTS5
  *   tables INSIDE this encrypted file (no plaintext side table or file),
  *   kept in step with `conversations` and `messages` by triggers, so every
@@ -173,6 +174,15 @@ export const MIGRATIONS: readonly Migration[] = [
         created_ms INTEGER NOT NULL,
         PRIMARY KEY (project_id, conversation_id, kind)
       );
+    `,
+  },
+  {
+    // Local work threads (desktop agent threads, `source=local_work`) are a second list of
+    // the same table, synced under their own cursor: `list_kind` keeps the two lists apart
+    // (the Chats list, its search, its sweep and the Local work list each read one kind).
+    version: 4,
+    sql: `
+      ALTER TABLE conversations ADD COLUMN list_kind TEXT NOT NULL DEFAULT 'chat';
     `,
   },
 ];
