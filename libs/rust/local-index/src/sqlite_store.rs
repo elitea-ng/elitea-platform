@@ -299,6 +299,10 @@ pub struct SqliteGraphStore {
     last_commit_rows: AtomicU64,
     /// How many times a graph was loaded from the database.
     loads: AtomicU64,
+    /// Bumped by every write that changes which chunks have vectors (a
+    /// build, new vectors, a prune): what a cached vector matrix is
+    /// checked against.
+    vectors_version: AtomicU64,
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
@@ -390,6 +394,7 @@ impl SqliteGraphStore {
             leases: Arc::default(),
             last_commit_rows: AtomicU64::new(0),
             loads: AtomicU64::new(0),
+            vectors_version: AtomicU64::new(0),
         })
     }
 
@@ -764,6 +769,13 @@ impl SqliteGraphStore {
         })
     }
 
+    /// The version of the vectors (see the field): equal versions, same
+    /// vectors.
+    #[must_use]
+    pub fn vectors_version(&self) -> u64 {
+        self.vectors_version.load(Ordering::SeqCst)
+    }
+
     /// Record the vector set `set` (idempotent).
     ///
     /// # Errors
@@ -850,6 +862,7 @@ impl SqliteGraphStore {
                 }
             }
             tx.commit()?;
+            self.vectors_version.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })
     }
@@ -909,6 +922,9 @@ impl SqliteGraphStore {
                 [keep],
             )?;
             tx.commit()?;
+            if deleted > 0 {
+                self.vectors_version.fetch_add(1, Ordering::SeqCst);
+            }
             Ok(deleted as u64)
         })
     }
@@ -919,7 +935,7 @@ impl SqliteGraphStore {
     ///
     /// The store failed.
     pub fn setting(&self, name: &str) -> Result<Option<String>> {
-        self.with(|conn| {
+        self.read(|conn| {
             Ok(conn
                 .query_row(
                     "SELECT value FROM meta WHERE key = ?1",
@@ -1086,6 +1102,7 @@ impl SqliteGraphStore {
         };
         let (revision, rows) = self.with(|conn| commit(conn, key, graph, completion, &written))?;
         self.last_commit_rows.store(rows, Ordering::SeqCst);
+        self.vectors_version.fetch_add(1, Ordering::SeqCst);
         Ok(revision)
     }
 }

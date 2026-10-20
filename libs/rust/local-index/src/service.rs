@@ -30,6 +30,7 @@
 //! The tools never touch SQLite: they read the view held here.
 
 use crate::chunks;
+use crate::dense::{DenseSearch, QueryEmbedder, VectorMatrix};
 use crate::search::{Answer, Dense, NameIndex, Request};
 use crate::source::{LocalFolderSource, SOURCE_NAME};
 use crate::sqlite_store::{ChunkUpdate, SqliteGraphStore, StoreError};
@@ -48,7 +49,8 @@ use elitea_local_tools::workspace::Workspace;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 const KEY: GraphKey = GraphKey::LOCAL;
@@ -257,7 +259,23 @@ pub struct IndexService {
     /// [`policy_fingerprint`] of the policy it was opened under.
     policy: String,
     inner: Mutex<Inner>,
+    /// What embeds a search's query (the background embedder, once it
+    /// knows this index).
+    query_embedder: Mutex<Option<Weak<dyn QueryEmbedder>>>,
+    /// The vectors of the dense side, cached.
+    matrix: Mutex<Option<CachedMatrix>>,
 }
+
+/// A loaded vector matrix and what it was loaded at.
+struct CachedMatrix {
+    version: u64,
+    at: Instant,
+    matrix: Arc<VectorMatrix>,
+}
+
+/// A matrix older than the vectors is reused for this long (the background
+/// embedder writes a batch every second or so).
+const MATRIX_RELOAD: Duration = Duration::from_secs(30);
 
 impl std::fmt::Debug for IndexService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -371,6 +389,8 @@ impl IndexService {
                 closed: false,
                 names: None,
             }),
+            query_embedder: Mutex::new(None),
+            matrix: Mutex::new(None),
         }))
     }
 
@@ -508,10 +528,59 @@ impl IndexService {
         names
     }
 
-    /// The dense side of a search, when this index has vectors.
+    /// Embed this index's search queries with `embedder` (the background
+    /// embedder calls this when it is given the index).
+    pub fn attach_query_embedder(&self, embedder: Weak<dyn QueryEmbedder>) {
+        *self
+            .query_embedder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(embedder);
+    }
+
+    /// The dense side of a search, when this index's setting names an
+    /// embedder that is allowed now and vectors of it exist. Loads the
+    /// vectors (blocking) when they changed, at most every 30 s while
+    /// they are being written.
     #[must_use]
     pub fn dense(&self) -> Option<Arc<dyn Dense>> {
-        None
+        let provider = self
+            .query_embedder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()?
+            .upgrade()?;
+        let choice = crate::embedding::choice_of(self);
+        if choice == crate::embedding::OFF || self.is_closed() {
+            return None;
+        }
+        let set = provider.vector_set(&choice)?;
+        let stamp = set.stamp();
+        let version = self.store.vectors_version();
+        let mut cached = self.matrix.lock().unwrap_or_else(PoisonError::into_inner);
+        let fresh = cached.as_ref().is_some_and(|known| {
+            known.matrix.stamp() == stamp
+                && (known.version == version
+                    || (!known.matrix.is_empty() && known.at.elapsed() < MATRIX_RELOAD))
+        });
+        if !fresh {
+            let matrix = VectorMatrix::load(&self.store, &set).ok()?;
+            *cached = Some(CachedMatrix {
+                version,
+                at: Instant::now(),
+                matrix: Arc::new(matrix),
+            });
+        }
+        let matrix = Arc::clone(&cached.as_ref()?.matrix);
+        drop(cached);
+        if matrix.is_empty() {
+            return None;
+        }
+        Some(Arc::new(DenseSearch {
+            matrix,
+            embedder: provider,
+            choice,
+            workspace_id: self.workspace_id.clone(),
+        }))
     }
 
     /// `search_workspace` over the build the tools answer from (and the
@@ -591,6 +660,7 @@ impl IndexService {
             inner.view = None;
             inner.state = IndexState::Off;
         }
+        *self.matrix.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.store.close();
     }
 

@@ -57,6 +57,9 @@ pub struct Request {
     pub path_glob: Option<String>,
     pub kind: Option<ChunkKind>,
     pub mode: Mode,
+    /// The agent turn the search runs for (never an argument: the host
+    /// sets it); a remote query embedding is attributed to it.
+    pub execution_id: Option<String>,
 }
 
 impl Request {
@@ -107,6 +110,7 @@ impl Request {
             path_glob,
             kind,
             mode,
+            execution_id: None,
         })
     }
 }
@@ -119,7 +123,12 @@ pub trait Dense: Send + Sync {
     ///
     /// The query could not be embedded (the model failed, the service
     /// refused): the search goes on without the dense side, saying why.
-    fn nearest(&self, query: &str, limit: usize) -> Result<Vec<(i64, f32)>, String>;
+    fn nearest(
+        &self,
+        query: &str,
+        limit: usize,
+        execution_id: Option<&str>,
+    ) -> Result<Vec<(i64, f32)>, String>;
 }
 
 /// One result.
@@ -491,7 +500,11 @@ pub fn search_workspace(
     let use_dense = request.mode != Mode::Lexical;
     if use_dense {
         match dense {
-            Some(dense) => match dense.nearest(&request.query, CANDIDATES * 2) {
+            Some(dense) => match dense.nearest(
+                &request.query,
+                CANDIDATES * 2,
+                request.execution_id.as_deref(),
+            ) {
                 Ok(ranked) => dense_ids = ranked.into_iter().map(|(id, _)| id).collect(),
                 Err(why) => note = Some(format!("semantic search was skipped: {why}")),
             },

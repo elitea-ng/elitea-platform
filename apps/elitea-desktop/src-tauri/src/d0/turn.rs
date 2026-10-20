@@ -2073,7 +2073,9 @@ impl AgentHost {
         };
         let mut provider = LocalToolProvider::new(workspace.session.clone());
         if let Some(index) = index {
-            provider = provider.with(Arc::new(IndexToolProvider::new(index)));
+            provider = provider.with(Arc::new(
+                IndexToolProvider::new(index).with_execution_id(started.execution_id.clone()),
+            ));
         }
         let provider = provider.with(Arc::new(RemoteToolProvider::new(&remote_specs, &remote)));
         let toolsets = provider

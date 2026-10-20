@@ -80,7 +80,7 @@ impl EmbedderSource for LocalModels {
         }
     }
 
-    fn load(&self, choice: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+    fn load(&self, choice: &str, _workspace_id: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
         let Choice::Local(spec) = Choice::parse(choice) else {
             return Err(EmbedError::Load(format!("no embedder is called {choice}")));
         };
@@ -202,7 +202,10 @@ mod tests {
         assert_eq!(set.stamp(), "local:qwen3-embedding-0.6b:512");
         assert!(models.vector_set("off").is_none());
         // Not downloaded: refused before anything loads.
-        let refused = models.load("local:multilingual-e5-small").err().unwrap();
+        let refused = models
+            .load("local:multilingual-e5-small", "ws")
+            .err()
+            .unwrap();
         assert!(refused.to_string().contains("not downloaded"), "{refused}");
     }
 

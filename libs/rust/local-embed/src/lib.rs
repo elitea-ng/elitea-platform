@@ -84,4 +84,20 @@ pub trait Embedder: Send + Sync {
     ///
     /// As [`Embedder::embed_documents`].
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError>;
+
+    /// [`Embedder::embed_query`] on behalf of an agent turn
+    /// (`execution_id`): a remote embedder attributes the call to it; a
+    /// local one ignores it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Embedder::embed_documents`].
+    fn embed_query_for(
+        &self,
+        text: &str,
+        execution_id: Option<&str>,
+    ) -> Result<Vec<f32>, EmbedError> {
+        let _ = execution_id;
+        self.embed_query(text)
+    }
 }

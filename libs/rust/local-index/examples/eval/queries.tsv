@@ -1,0 +1,51 @@
+# query	relevant files (comma separated, relative to libs/rust)
+how is the cosine similarity computed on quantised int8 vectors	local-embed/src/vector.rs,local-index/src/dense.rs
+resume an interrupted model download with a range request	local-embed/src/manager.rs
+which models can a person pick for on-device embeddings	local-embed/src/catalog.rs
+notice files edited outside the app and refresh after things go quiet	local-index/src/watch.rs
+hold background embedding while the agent is answering	local-index/src/embedding.rs
+reciprocal rank fusion of lexical and graph results	local-index/src/search.rs
+split camelCase identifiers into words for full text search	local-index/src/chunks.rs
+create files readable only by their owner	local-index/src/fs.rs,local-embed/src/fsx.rs
+detect communities in the knowledge graph	graph-algos/src/leiden.rs,inventory-core/src/retrieval/community_tools.rs
+parse a server-sent events stream from the model	llm-wire/src/sse.rs
+what the gateway's refusal means when payment is required	llm-wire/src/refusal.rs
+a credential that never shows up in debug output or logs	engine-core/src/secret.rs
+the unix socket a sidecar listens on	engine-sidecar/src/socket.rs
+read the container memory limit	engine-sidecar/src/cgroup.rs
+turn a python expression tree back into source text	code-parsers/src/python/unparse.rs
+limits on hostile input every parser applies	code-parsers/src/limits.rs
+extract declarations from kotlin files	code-parsers/src/kotlin/visitor.rs,code-parsers/src/kotlin/mod.rs
+the go language parser	code-parsers/src/go/visitor.rs,code-parsers/src/go/mod.rs
+which hosts outbound requests may reach	connectors/src/egress.rs
+an azure devops wiki as a content source	connectors/src/ado/wiki_source.rs
+who may read a document	content-source/src/acl.rs
+summarise a conversation that grew too long	conversation/src/lib.rs
+split json documents recursively into chunks	doc-chunk/src/json.rs
+cut text into token windows	doc-chunk/src/tokens.rs
+pick a chunker from the file extension	doc-chunk/src/route.rs
+get text out of a pdf or word document	doc-extract/src/lib.rs
+python string semantics the builder depends on	engine-core/src/pystr.rs
+how entity ids are generated during ingestion	inventory-core/src/ingest/ids.rs
+rank entities by similarity to the question embedding	inventory-core/src/retrieval/semantic.rs
+the test suite every graph store must pass	inventory-core/src/store_conformance.rs
+header names a model request carries	llm-wire/src/headers.rs
+qwen decoder pooling of the last token	local-embed/src/qwen3.rs
+bert encoder with fused attention	local-embed/src/bert.rs
+apply a unified diff to a repository file	agent-runtime/src/toolkits/families/github/patch.rs
+cache the tool listings of remote MCP servers	agent-runtime/src/toolkits/mcp_tool_cache.rs
+parse yaml without running out of memory	agent-runtime/src/bounded_yaml.rs
+read json numbers exactly without floating point	agent-runtime/src/exact_number.rs
+how full is the model's context window	agent-runtime/src/context_status.rs,agent-runtime/src/context_budget.rs
+pause a pipeline to ask a human	agent-runtime/src/graph/hitl.rs
+python repr of json values	agent-runtime/src/toolkits/families/python_repr.rs
+run analysis code in the sandbox	agent-runtime/src/toolkits/families/data_analysis/code.rs
+design tokens from a figma file	agent-runtime/src/toolkits/families/figma/tokens.rs
+strip html and embedded images from qtest content	agent-runtime/src/toolkits/families/qtest/html.rs
+microsoft graph client for sharepoint	connectors/src/sharepoint/graph.rs
+classify a failed model call for a pipeline node	agent-runtime/src/graph/llm_failure.rs
+reducers on pipeline state channels	agent-runtime/src/graph/state_reducers.rs
+tools the cloud executor offers over the desktop's workspace	agent-runtime/src/workspace_tools.rs
+let the model choose which tools to load	agent-runtime/src/lazy_tools.rs
+find calls and references between typescript symbols	code-parsers/src/typescript/relations.rs
+a workspace folder read as a content source	local-index/src/source.rs

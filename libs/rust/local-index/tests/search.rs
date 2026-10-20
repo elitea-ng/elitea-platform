@@ -68,6 +68,7 @@ fn request(query: &str) -> Request {
         path_glob: None,
         kind: None,
         mode: Mode::Auto,
+        execution_id: None,
     }
 }
 

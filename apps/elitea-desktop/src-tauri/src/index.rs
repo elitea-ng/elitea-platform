@@ -1458,7 +1458,7 @@ mod tests {
                     dim: 2,
                 })
             }
-            fn load(&self, _: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+            fn load(&self, _: &str, _: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
                 Ok(Arc::new(Fake))
             }
         }

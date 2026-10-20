@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# The recall harness (`examples/search_eval.rs`): runs a catalogue model
+# through candle.
+eval = ["elitea-local-embed/candle"]
+
 [dependencies]
 # Tilde, like agent-runtime and local-tools: adk breaks its API between
 # minors. The index tools are adk `Tool`s in one `Toolset`.
@@ -60,6 +65,10 @@ encoding_rs = "0.8.42"
 elitea-inventory-core = { path = "../inventory-core", features = ["test-support"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+
+[[example]]
+name = "search_eval"
+required-features = ["eval"]
 
 [lints]
 workspace = true

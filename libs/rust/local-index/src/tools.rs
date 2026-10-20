@@ -353,6 +353,8 @@ fn entity_content(
 pub struct IndexTool {
     spec: &'static IndexToolSpec,
     service: Arc<IndexService>,
+    /// The turn the tool runs for (remote query embeddings name it).
+    execution_id: Option<String>,
 }
 
 impl IndexTool {
@@ -394,10 +396,11 @@ impl IndexTool {
     /// runtime's threads.
     async fn call_local(&self, args: Value) -> Value {
         let params = args.as_object().cloned().unwrap_or_default();
-        let request = match Request::from_args(&params) {
+        let mut request = match Request::from_args(&params) {
             Ok(request) => request,
             Err(message) => return failure("index.invalid_arguments", message),
         };
+        request.execution_id.clone_from(&self.execution_id);
         let service = Arc::clone(&self.service);
         tokio::task::spawn_blocking(move || {
             let dense = service.dense();
@@ -469,12 +472,23 @@ impl Tool for IndexTool {
 /// The index tools of one workspace.
 pub struct IndexToolset {
     service: Arc<IndexService>,
+    execution_id: Option<String>,
 }
 
 impl IndexToolset {
     #[must_use]
     pub fn new(service: Arc<IndexService>) -> Self {
-        Self { service }
+        Self {
+            service,
+            execution_id: None,
+        }
+    }
+
+    /// Attribute the searches' remote query embeddings to this turn.
+    #[must_use]
+    pub fn with_execution_id(mut self, execution_id: impl Into<String>) -> Self {
+        self.execution_id = Some(execution_id.into());
+        self
     }
 
     /// The tools, whatever the index's state (a tool answers
@@ -488,6 +502,7 @@ impl IndexToolset {
                 Arc::new(IndexTool {
                     spec,
                     service: Arc::clone(&self.service),
+                    execution_id: self.execution_id.clone(),
                 })
             })
             .collect()
@@ -513,12 +528,23 @@ impl Toolset for IndexToolset {
 /// after its local tools.
 pub struct IndexToolProvider {
     service: Arc<IndexService>,
+    execution_id: Option<String>,
 }
 
 impl IndexToolProvider {
     #[must_use]
     pub fn new(service: Arc<IndexService>) -> Self {
-        Self { service }
+        Self {
+            service,
+            execution_id: None,
+        }
+    }
+
+    /// Attribute the searches' remote query embeddings to this turn.
+    #[must_use]
+    pub fn with_execution_id(mut self, execution_id: impl Into<String>) -> Self {
+        self.execution_id = Some(execution_id.into());
+        self
     }
 }
 
@@ -528,6 +554,8 @@ impl ToolProvider for IndexToolProvider {
         &self,
         _request: &ToolsetRequest,
     ) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
-        Ok(vec![Arc::new(IndexToolset::new(Arc::clone(&self.service)))])
+        let mut toolset = IndexToolset::new(Arc::clone(&self.service));
+        toolset.execution_id.clone_from(&self.execution_id);
+        Ok(vec![Arc::new(toolset)])
     }
 }

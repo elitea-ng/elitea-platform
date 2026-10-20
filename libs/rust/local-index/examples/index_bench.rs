@@ -77,6 +77,7 @@ async fn main() {
                 path_glob: None,
                 kind: None,
                 mode: Mode::Lexical,
+                execution_id: None,
             };
             let (answer, _) = service.search(&request, None).unwrap();
             println!("{query}");
@@ -102,6 +103,7 @@ async fn main() {
                 path_glob: None,
                 kind: None,
                 mode: Mode::Lexical,
+                execution_id: None,
             };
             let started = Instant::now();
             let (answer, _) = service.search(&request, None).unwrap();

@@ -23,6 +23,7 @@
 //! pruned. Never in a build's transaction: a build in progress is waited
 //! for.
 
+use crate::dense::QueryEmbedder;
 use crate::service::IndexService;
 use crate::sqlite_store::VectorSet;
 use elitea_local_embed::{EmbedError, Embedder, vector};
@@ -46,12 +47,21 @@ pub trait EmbedderSource: Send + Sync {
     /// policy turned remote embeddings off): its vectors are dropped.
     fn vector_set(&self, choice: &str) -> Option<VectorSet>;
 
-    /// Load the embedder of `choice`. Blocking; may take seconds.
+    /// Load the embedder of `choice` for `workspace_id`'s index. Blocking;
+    /// may take seconds.
     ///
     /// # Errors
     ///
     /// The model is not downloaded, does not verify, or does not load.
-    fn load(&self, choice: &str) -> Result<Arc<dyn Embedder>, EmbedError>;
+    fn load(&self, choice: &str, workspace_id: &str) -> Result<Arc<dyn Embedder>, EmbedError>;
+
+    /// Whether `choice`'s embedder is made per workspace and cheap to make
+    /// (a remote one, bound to the workspace's project): it is made for
+    /// every use and never takes the one model slot.
+    fn per_workspace(&self, choice: &str) -> bool {
+        let _ = choice;
+        false
+    }
 }
 
 /// Whether the computer is in a state to embed in the background.
@@ -198,7 +208,10 @@ impl Shared {
 
     /// The embedder of `choice`, loaded if it is not (another one is
     /// dropped first: one model in memory).
-    fn embedder(&self, choice: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+    fn embedder(&self, choice: &str, workspace_id: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+        if self.source.per_workspace(choice) {
+            return self.source.load(choice, workspace_id);
+        }
         let mut model = self.model.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(loaded) = model.as_mut()
             && loaded.choice == choice
@@ -207,7 +220,7 @@ impl Shared {
             return Ok(Arc::clone(&loaded.embedder));
         }
         *model = None;
-        let embedder = self.source.load(choice)?;
+        let embedder = self.source.load(choice, workspace_id)?;
         *model = Some(Loaded {
             choice: choice.to_owned(),
             embedder: Arc::clone(&embedder),
@@ -227,6 +240,16 @@ impl Shared {
         } else {
             Some(self.config.idle_unload.saturating_sub(idle))
         }
+    }
+}
+
+impl QueryEmbedder for Shared {
+    fn vector_set(&self, choice: &str) -> Option<VectorSet> {
+        self.source.vector_set(choice)
+    }
+
+    fn embedder(&self, choice: &str, workspace_id: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+        Shared::embedder(self, choice, workspace_id)
     }
 }
 
@@ -316,6 +339,9 @@ impl Embedding {
     /// Embed `service`'s chunks whenever its setting names an embedder
     /// (looked at on every pass; the service is held weakly).
     pub fn add(&self, service: &Arc<IndexService>) {
+        let queries: Weak<dyn QueryEmbedder> =
+            Arc::downgrade(&self.shared) as Weak<dyn QueryEmbedder>;
+        service.attach_query_embedder(queries);
         self.shared
             .state()
             .services
@@ -368,8 +394,12 @@ impl Embedding {
     /// # Errors
     ///
     /// As [`EmbedderSource::load`].
-    pub fn embedder(&self, choice: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
-        self.shared.embedder(choice)
+    pub fn embedder(
+        &self,
+        choice: &str,
+        workspace_id: &str,
+    ) -> Result<Arc<dyn Embedder>, EmbedError> {
+        self.shared.embedder(choice, workspace_id)
     }
 
     /// The vector set `choice` makes now (`None`: unknown or not allowed).
@@ -645,7 +675,7 @@ fn embed_batch(shared: &Shared, job: &Job, batch: &[(i64, String)]) -> Result<u6
     }
     let inputs: Vec<&str> = present.iter().map(|(id, _)| texts[id].as_str()).collect();
     let embedder = shared
-        .embedder(&job.choice)
+        .embedder(&job.choice, &job.workspace_id)
         .map_err(|error| error.to_string())?;
     let vectors = embedder
         .embed_documents(&inputs)

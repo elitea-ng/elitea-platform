@@ -63,7 +63,7 @@ impl EmbedderSource for Source {
         })
     }
 
-    fn load(&self, _choice: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
+    fn load(&self, _choice: &str, _workspace_id: &str) -> Result<Arc<dyn Embedder>, EmbedError> {
         self.0.loads.fetch_add(1, Ordering::SeqCst);
         Ok(self.0.clone())
     }
@@ -289,4 +289,67 @@ async fn an_unknown_choice_keeps_no_vectors_and_a_dropped_service_is_forgotten()
     embedding.wake();
     std::thread::sleep(Duration::from_millis(200));
     drop(embedding); // stops and joins
+}
+
+fn request(query: &str, mode: &str) -> elitea_local_index::search::Request {
+    let args = serde_json::json!({"query": query, "mode": mode});
+    elitea_local_index::search::Request::from_args(args.as_object().unwrap()).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vectors_join_the_search_once_they_exist() {
+    let s = setup().await;
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    embedding.add(&s.service);
+    assert!(s.service.dense().is_none(), "off: no dense side");
+    let (answer, _) = s
+        .service
+        .search(&request("run model", "semantic"), None)
+        .unwrap();
+    assert!(answer.note.is_some(), "semantic without vectors says so");
+
+    s.service
+        .store()
+        .set_setting(SETTING, "local:fake")
+        .unwrap();
+    embedding.wake();
+    wait(&embedding, |st| st.state == EmbedState::Done);
+    let dense = s.service.dense().expect("vectors exist");
+    let (semantic, _) = s
+        .service
+        .search(&request("class Model7:", "semantic"), Some(dense.as_ref()))
+        .unwrap();
+    assert!(!semantic.hits.is_empty());
+    assert!(
+        semantic
+            .hits
+            .iter()
+            .all(|hit| hit.matched_by == ["semantic"]),
+        "{:?}",
+        semantic.hits
+    );
+    let (hybrid, _) = s
+        .service
+        .search(&request("Model7 run_7", "auto"), Some(dense.as_ref()))
+        .unwrap();
+    assert_eq!(hybrid.hits[0].path, "src/m7.py", "{:?}", hybrid.hits);
+    assert!(
+        hybrid
+            .hits
+            .iter()
+            .any(|hit| hit.matched_by.contains(&"semantic"))
+    );
+    let (lexical, _) = s
+        .service
+        .search(&request("Model7 run_7", "lexical"), Some(dense.as_ref()))
+        .unwrap();
+    assert!(
+        lexical
+            .hits
+            .iter()
+            .all(|hit| !hit.matched_by.contains(&"semantic"))
+    );
+    // Turned off: no dense side any more.
+    s.service.store().set_setting(SETTING, "off").unwrap();
+    assert!(s.service.dense().is_none());
 }
