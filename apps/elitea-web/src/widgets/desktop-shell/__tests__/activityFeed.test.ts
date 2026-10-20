@@ -91,6 +91,19 @@ describe('the activity feed', () => {
   });
 });
 
+describe('token usage', () => {
+  it('sums what the calls sent, keeps the latest call as the context in use, and shows it with the turn', () => {
+    const store = createActivityFeedStore();
+    const at = (seq: number) => ({ turn_id: 't1', seq });
+    store.getState().applyAgentEvent({ ...at(1), kind: 'status', payload: { phase: 'running' } }, 1);
+    expect(buildActivities(facts(store))[0]?.stats).toBe('');
+    store.getState().applyAgentEvent({ ...at(2), kind: 'usage', payload: { prompt_tokens: 3000, completion_tokens: 200, total_tokens: 3200 } }, 2);
+    store.getState().applyAgentEvent({ ...at(3), kind: 'usage', payload: { prompt_tokens: 12_400, completion_tokens: 1000, total_tokens: 13_400 } }, 3);
+    expect(store.getState().turns['t1']?.usage).toEqual({ inputTokens: 15_400, outputTokens: 1200, contextTokens: 12_400 });
+    expect(buildActivities(facts(store))[0]?.stats).toBe('12.4K context · 1.2K out');
+  });
+});
+
 describe('formatElapsed', () => {
   it('counts m:ss and h:mm:ss', () => {
     expect(formatElapsed(42_000)).toBe('0:42');

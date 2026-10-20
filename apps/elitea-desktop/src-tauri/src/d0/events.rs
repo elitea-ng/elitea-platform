@@ -311,6 +311,21 @@ impl TurnEvents {
         }
     }
 
+    /// One model call's token usage, as the gateway reported it (`prompt_tokens`
+    /// is what that call sent: the context in use; `completion_tokens` what it
+    /// produced). Sent once the call's stream has ended, only when the gateway
+    /// reported usage.
+    pub fn usage(&self, prompt_tokens: u32, completion_tokens: u32, total_tokens: u32) {
+        self.send(
+            "usage",
+            json!({
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }),
+        );
+    }
+
     pub fn error(&self, code: &str, message: &str) {
         self.send("error", json!({ "code": code, "message": message }));
     }

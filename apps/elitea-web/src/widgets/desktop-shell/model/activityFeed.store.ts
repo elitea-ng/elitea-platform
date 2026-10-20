@@ -23,6 +23,13 @@ export interface PendingApproval {
   title: string;
 }
 
+/** A turn's tokens: what its calls sent (summed), what they produced, and the context the latest call used. */
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  contextTokens: number;
+}
+
 export interface TrackedTurn {
   turnId: string;
   workspaceId: string | null;
@@ -40,6 +47,8 @@ export interface TrackedTurn {
   commit: 'none' | 'pending' | 'failed';
   finished: boolean;
   changedFiles: number;
+  /** Tokens over the turn's model calls so far; `null` until the gateway reported usage. */
+  usage: TurnUsage | null;
 }
 
 export interface TrackedIndex {
@@ -103,12 +112,26 @@ function blankTurn(turnId: string, now: number): TrackedTurn {
     commit: 'none',
     finished: false,
     changedFiles: 0,
+    usage: null,
   };
 }
 
 function withApproval(turn: TrackedTurn, payload: ApprovalRequestPayload): TrackedTurn {
   const label = payload.kind === 'continue' ? 'continue' : payload.tool;
   return { ...turn, approvals: [...turn.approvals.filter((a) => a.requestId !== payload.request_id), { requestId: payload.request_id, tool: label, title: payload.title }] };
+}
+
+/** Each model call re-sends the conversation: the turn's input is the sum, the context in use the latest call's. */
+function withUsage(turn: TrackedTurn, usage: { prompt_tokens: number; completion_tokens: number }): TrackedTurn {
+  const before = turn.usage ?? { inputTokens: 0, outputTokens: 0, contextTokens: 0 };
+  return {
+    ...turn,
+    usage: {
+      inputTokens: before.inputTokens + usage.prompt_tokens,
+      outputTokens: before.outputTokens + usage.completion_tokens,
+      contextTokens: usage.prompt_tokens,
+    },
+  };
 }
 
 /** `done`: finished unless its commit is still to land. */
@@ -134,6 +157,8 @@ export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
       return { ...turn, phase: 'error', approvals: [] };
     case 'done':
       return settled(turn, event.payload);
+    case 'usage':
+      return withUsage(turn, event.payload);
     case 'commit_failed':
       return { ...turn, commit: 'failed', finished: false };
   }

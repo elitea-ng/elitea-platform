@@ -132,6 +132,11 @@ function ActivityRow({ activity, now, reduced, onFocus }: { activity: Activity; 
               {activity.detail}
             </Box>
           )}
+          {activity.stats !== '' && (
+            <Box component="span" data-testid="island-stats" sx={(theme: Theme) => ({ fontSize: '0.6875rem', fontVariantNumeric: 'tabular-nums', color: theme.vars.palette.text.metrics, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}>
+              {activity.stats}
+            </Box>
+          )}
         </ButtonBase>
         {activity.since !== null && (
           <Box component="span" sx={(theme: Theme) => ({ fontSize: '0.6875rem', fontVariantNumeric: 'tabular-nums', color: theme.vars.palette.text.secondary })}>
