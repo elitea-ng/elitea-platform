@@ -215,6 +215,41 @@ pub struct SandboxConfig {
     /// (requests with [`SandboxRequest::git_roots`], which `run_command`
     /// builds and host git does not). Empty everywhere else.
     pub container_env: ContainerEnv,
+    /// With [`Self::container`]: the one directory git may trust although
+    /// another user owns it (`safe.directory`), the workspace root. A
+    /// Kubernetes run Pod's workspace volume is an emptyDir whose top the
+    /// kubelet creates owned by root, so git refuses it as of "dubious
+    /// ownership". Host git gets `-c safe.directory=<root>`; workspace
+    /// commands get it through `GIT_CONFIG_COUNT`, so an agent's own `git
+    /// status` works. Ignored unless [`Self::container`] is set: the
+    /// desktop keeps git's ownership check (a repository someone else owns
+    /// is exactly what it must not trust). `None` everywhere else.
+    pub git_safe_directory: Option<PathBuf>,
+}
+
+impl SandboxConfig {
+    /// [`Self::git_safe_directory`], when it applies (in a container only).
+    #[must_use]
+    pub fn trusted_git_directory(&self) -> Option<&Path> {
+        self.git_safe_directory
+            .as_deref()
+            .filter(|_| self.container)
+    }
+
+    /// The environment that makes a workspace command's git trust
+    /// [`Self::trusted_git_directory`] (empty when none applies).
+    #[must_use]
+    pub fn git_trust_env(&self) -> Vec<(String, String)> {
+        self.trusted_git_directory()
+            .map(|root| {
+                vec![
+                    ("GIT_CONFIG_COUNT".to_owned(), "1".to_owned()),
+                    ("GIT_CONFIG_KEY_0".to_owned(), "safe.directory".to_owned()),
+                    ("GIT_CONFIG_VALUE_0".to_owned(), root.display().to_string()),
+                ]
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// Environment values a container host adds to its workspace commands.

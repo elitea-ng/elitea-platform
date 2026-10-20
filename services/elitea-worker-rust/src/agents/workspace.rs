@@ -29,6 +29,11 @@ fn code_for(error: &WorkspaceRunError) -> NativeAgentAssemblyErrorCode {
         WorkspaceRunError::Codec(crate::workspace_run::codec::CodecError::TooLarge) => {
             NativeAgentAssemblyErrorCode::ResourceExhausted
         }
+        // The runner failed inside the sandbox: a platform fault, not the
+        // person's input.
+        WorkspaceRunError::Sandbox(
+            crate::workspace_run::sandbox::SandboxRunError::RunnerFailed,
+        ) => NativeAgentAssemblyErrorCode::InvalidResult,
         _ => NativeAgentAssemblyErrorCode::InvalidInput,
     }
 }
@@ -49,4 +54,29 @@ pub(crate) fn publish_error(error: &WorkspaceRunError) -> NativeAgentAssemblyErr
         "the cloud turn's changes could not be published",
     )
     .with_cause(error.code(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hydrate_error;
+    use crate::workspace_run::sandbox::SandboxRunError;
+    use crate::workspace_run::turn::WorkspaceRunError;
+    use elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause;
+
+    /// A runner that failed preparing the workspace (a git baseline that
+    /// could not be made) is an internal fault with its own cause, not the
+    /// person's invalid input nor an out-of-protocol answer.
+    #[test]
+    fn a_runner_failure_is_an_internal_fault_with_its_own_cause() {
+        let error = hydrate_error(&WorkspaceRunError::Sandbox(SandboxRunError::RunnerFailed));
+        assert_eq!(error.code().as_str(), "native_agent.invalid_result");
+        assert_eq!(
+            error.cause().map(NativeAgentAssemblyCause::code),
+            Some("workspace_run.runner_failed")
+        );
+        assert_eq!(
+            error.to_string(),
+            "the handed-off workspace could not be prepared"
+        );
+    }
 }

@@ -169,6 +169,11 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     shell.sandbox.container = true;
     shell.sandbox.container_env =
         elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
+    // The workspace volume's top directory is not owned by the runner's uid
+    // in a Kubernetes Pod (see [`baseline_git_args`]): the tools' git and
+    // the agent's own git through `run_command` trust exactly this root.
+    shell.sandbox.git_safe_directory =
+        Some(std::fs::canonicalize(&config.root).unwrap_or_else(|_| config.root.clone()));
     let session = LocalSession::open(SessionConfig {
         root: config.root.clone(),
         session_id: "cloud".to_owned(),
@@ -447,7 +452,7 @@ where
 ///
 /// # Errors
 ///
-/// A refused archive, or git failing.
+/// A refused archive (its code), or git failing ([`GIT_BASELINE_FAILED`]).
 pub fn unpack(
     input: &mut dyn std::io::Read,
     root: &Path,
@@ -492,39 +497,59 @@ pub fn pack(
     workspace_archive::write_tree(root, output, limits).map_err(|error| error.code().to_owned())
 }
 
+/// The one stable code every baseline failure reports (git's own stderr is
+/// never forwarded: it can quote paths of the person's tree).
+pub const GIT_BASELINE_FAILED: &str = "runner.git_baseline_failed";
+
+/// The argv (after `git`) of one baseline git call in `root` (canonical).
+///
+/// `safe.directory=<root>`: in a Kubernetes run Pod the workspace volume's
+/// top directory is an emptyDir the kubelet creates owned by root (group
+/// 10001 through `fsGroup`), not by the runner's uid, so git refuses the
+/// repository as of "dubious ownership" without it. Exactly this root,
+/// never `*`; the command line is a protected scope git honours it from.
+#[must_use]
+pub fn baseline_git_args(root: &Path, args: &[&str]) -> Vec<String> {
+    let mut words: Vec<String> = [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "user.name=Elitea cloud executor",
+        "-c",
+        "user.email=cloud-executor@elitea.invalid",
+        "-c",
+    ]
+    .iter()
+    .map(|word| (*word).to_owned())
+    .collect();
+    words.push(format!("safe.directory={}", root.display()));
+    words.extend(args.iter().map(|arg| (*arg).to_owned()));
+    words
+}
+
 /// `git init` and one commit of the checkout, with no hook, no global or
 /// system config, and no signing. Inside the container only.
 fn git_baseline(root: &Path) -> Result<(), String> {
+    let root = std::fs::canonicalize(root).map_err(|_| GIT_BASELINE_FAILED.to_owned())?;
     let git = |args: &[&str]| -> Result<(), String> {
         let status = std::process::Command::new("git")
-            .args([
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "commit.gpgSign=false",
-                "-c",
-                "user.name=Elitea cloud executor",
-                "-c",
-                "user.email=cloud-executor@elitea.invalid",
-            ])
-            .args(args)
-            .current_dir(root)
+            .args(baseline_git_args(&root, args))
+            .current_dir(&root)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .map_err(|_| "git is not available in the runner image".to_owned())?;
+            .map_err(|_| GIT_BASELINE_FAILED.to_owned())?;
         if status.success() {
             Ok(())
         } else {
-            Err(format!(
-                "git {} failed",
-                args.first().copied().unwrap_or("")
-            ))
+            Err(GIT_BASELINE_FAILED.to_owned())
         }
     };
     git(&["init", "-q", "-b", "main"])?;
@@ -537,4 +562,26 @@ fn git_baseline(root: &Path) -> Result<(), String> {
         "-m",
         "Elitea cloud checkout",
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::baseline_git_args;
+
+    /// The baseline trusts exactly the workspace root, and the trust comes
+    /// before the subcommand (a `-c` after it would be an argument).
+    #[test]
+    fn baseline_git_trusts_exactly_the_workspace_root() {
+        let argv = baseline_git_args(Path::new("/workspace"), &["add", "-A"]);
+        let at = argv
+            .iter()
+            .position(|word| word == "safe.directory=/workspace")
+            .expect("safe.directory");
+        assert_eq!(argv[at - 1], "-c");
+        assert!(at < argv.iter().position(|word| word == "add").expect("add"));
+        assert!(!argv.iter().any(|word| word == "safe.directory=*"));
+        assert_eq!(&argv[argv.len() - 2..], ["add", "-A"]);
+    }
 }

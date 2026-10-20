@@ -80,6 +80,10 @@ pub(crate) enum SandboxRunError {
     Timeout,
     /// The workspace grew past its cap (the runner refused to pack it).
     WorkspaceOverCap,
+    /// The runner ran and failed an operation with a code this worker has
+    /// no meaning for (`runner.git_baseline_failed`, or none at all); the
+    /// code itself is logged where it is read (`workspace_run_exec_failed`).
+    RunnerFailed,
 }
 
 impl SandboxRunError {
@@ -93,6 +97,7 @@ impl SandboxRunError {
             Self::Protocol => "workspace_run.sandbox_protocol",
             Self::Timeout => "workspace_run.timeout",
             Self::WorkspaceOverCap => "workspace_run.workspace_over_cap",
+            Self::RunnerFailed => "workspace_run.runner_failed",
         }
     }
 }

@@ -296,6 +296,11 @@ fn environment(config: &ShellConfig) -> Vec<(String, String)> {
         ]
         .map(|(name, value)| (name.to_owned(), value)),
     );
+    // A container host's workspace root that git must trust although
+    // another uid owns it (empty on the desktop).
+    let trust = config.sandbox.git_trust_env();
+    out.retain(|(name, _)| !trust.iter().any(|(trusted, _)| trusted == name));
+    out.extend(trust);
     out
 }
 
@@ -692,6 +697,35 @@ mod tests {
             mode,
             network: false,
         }
+    }
+
+    /// In a container with a trusted root, a workspace command's git
+    /// trusts exactly that root (`GIT_CONFIG_COUNT`); off (the desktop, or
+    /// no root), nothing is added.
+    #[test]
+    fn a_container_root_reaches_the_commands_git_config_only_when_on() {
+        let (_dir, _workspace, mut config) = setup();
+        let git_env = |config: &ShellConfig| -> Vec<(String, String)> {
+            super::environment(config)
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("GIT_CONFIG_"))
+                .collect()
+        };
+        assert!(git_env(&config).is_empty());
+        config.sandbox.git_safe_directory = Some("/workspace".into());
+        assert!(git_env(&config).is_empty(), "not a container: unchanged");
+        config.sandbox.container = true;
+        assert_eq!(
+            git_env(&config),
+            [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "safe.directory"),
+                ("GIT_CONFIG_VALUE_0", "/workspace"),
+            ]
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        );
+        config.sandbox.git_safe_directory = None;
+        assert!(git_env(&config).is_empty());
     }
 
     #[tokio::test]

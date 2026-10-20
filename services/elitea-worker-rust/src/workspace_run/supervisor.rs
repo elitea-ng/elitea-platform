@@ -137,14 +137,24 @@ impl Exec {
     }
 }
 
-/// The exit of a finished operation, as the turn reads it.
-fn exit_error(code: i32, failure: &str) -> Result<(), SandboxRunError> {
-    match (code, failure) {
-        (0, _) => Ok(()),
-        (_, "runner.workspace_too_large") => Err(SandboxRunError::WorkspaceOverCap),
-        (_, code) if code.ends_with("too_large") => Err(SandboxRunError::TooLarge),
-        _ => Err(SandboxRunError::Protocol),
-    }
+/// The exit of a finished operation of the run `run`, as the turn reads it.
+/// A failure is logged with the runner's code (a stable `runner.*` word the
+/// backend already filtered, never stderr text or workspace content).
+fn exit_error(run: &str, code: i32, failure: &str) -> Result<(), SandboxRunError> {
+    let error = match (code, failure) {
+        (0, _) => return Ok(()),
+        (_, "runner.workspace_too_large") => SandboxRunError::WorkspaceOverCap,
+        (_, code) if code.ends_with("too_large") => SandboxRunError::TooLarge,
+        _ => SandboxRunError::RunnerFailed,
+    };
+    tracing::warn!(
+        event = "workspace_run_exec_failed",
+        run,
+        exit_code = code,
+        failure_code = failure,
+        cause_code = error.code(),
+    );
+    Err(error)
 }
 
 /// One running workspace sandbox on the supervisor.
@@ -267,7 +277,9 @@ impl WorkspaceSandbox for SupervisorSandbox {
             loop {
                 match exec.next().await? {
                     Output::Chunk(_) => {}
-                    Output::Exit { code, failure } => return exit_error(code, &failure),
+                    Output::Exit { code, failure } => {
+                        return exit_error(&self.wire.name, code, &failure);
+                    }
                 }
             }
         };
@@ -396,7 +408,9 @@ impl SupervisorSandbox {
                             .await
                             .map_err(|_| SandboxRunError::Protocol)?;
                     }
-                    Output::Exit { code, failure } => return exit_error(code, &failure),
+                    Output::Exit { code, failure } => {
+                        return exit_error(&self.wire.name, code, &failure);
+                    }
                 }
             }
         };
@@ -561,6 +575,37 @@ impl WorkspaceRunGrants for ClaimWorkspaceGrants {
             .authorize_workspace_run(&self.authority, &self.audience, activation_id, &digest)
             .await
             .map_err(|_| SandboxRunError::Unavailable)
+    }
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::{SandboxRunError, exit_error};
+
+    /// Every runner failure is a stable cause: the known ones keep their
+    /// meaning, any other (`runner.git_baseline_failed`, or no code at all)
+    /// is a runner failure, never "out of protocol".
+    #[test]
+    fn runner_failures_map_to_stable_causes() {
+        assert_eq!(exit_error("r", 0, ""), Ok(()));
+        assert_eq!(
+            exit_error("r", 1, "runner.workspace_too_large"),
+            Err(SandboxRunError::WorkspaceOverCap)
+        );
+        assert_eq!(
+            exit_error("r", 1, "workspace_archive.too_large"),
+            Err(SandboxRunError::TooLarge)
+        );
+        for failure in [
+            "runner.git_baseline_failed",
+            "runner.workspace_unavailable",
+            "",
+        ] {
+            let error = exit_error("r", 1, failure).expect_err(failure);
+            assert_eq!(error, SandboxRunError::RunnerFailed);
+            assert_eq!(error.code(), "workspace_run.runner_failed");
+        }
+        assert_eq!(exit_error("r", -1, ""), Err(SandboxRunError::RunnerFailed));
     }
 }
 
