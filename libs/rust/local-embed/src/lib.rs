@@ -11,8 +11,8 @@
 //! * [`catalog`] — the models the person can choose, pinned by SHA-256;
 //! * [`vector`] — normalisation, Matryoshka truncation and the int8 blobs
 //!   the index stores;
-//! * `manager` (feature `download`) — the owner-only model cache shared by
-//!   every workspace, resumable verified downloads, manual import;
+//! * [`manager`] — the owner-only model cache shared by every workspace,
+//!   manual import, and (feature `download`) resumable verified downloads;
 //! * `candle_backend` (feature `candle`; Metal on macOS) — the
 //!   catalogue's models on this computer.
 #![cfg_attr(
@@ -28,6 +28,7 @@
 
 pub mod catalog;
 pub mod fsx;
+pub mod manager;
 pub mod vector;
 
 #[cfg(feature = "candle")]

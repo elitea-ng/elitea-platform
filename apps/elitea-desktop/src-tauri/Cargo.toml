@@ -60,6 +60,10 @@ elitea-workspace-store = { path = "../../../libs/rust/workspace-store", features
 # SQLite store and the index tools. It brings engine-core, code-parsers and
 # inventory-core, all order-free in their normal builds (see above).
 elitea-local-index = { path = "../../../libs/rust/local-index" }
+# Embeddings for the local index, off by default: the pinned model
+# catalogue, the owner-only model cache with verified resumable downloads,
+# and candle running the chosen model (Metal on Apple silicon).
+elitea-local-embed = { path = "../../../libs/rust/local-embed", features = ["candle", "download"] }
 elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
 # Tilde, like the runtime: adk breaks its API between minors. adk-agent and
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.

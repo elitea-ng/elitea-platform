@@ -141,7 +141,7 @@ pub const MULTILINGUAL_E5_SMALL: ModelSpec = ModelSpec {
     native_dimension: 384,
     dimension: 384,
     max_tokens: 512,
-    ram_mb: 900,
+    ram_mb: 1400,
     summary: "Small and fast (118M parameters, 384 dimensions); good for prose in many languages, weaker on code.",
     license: "MIT",
 };

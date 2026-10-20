@@ -49,6 +49,7 @@
 compile_error!("elitea-local-index supports macOS and Linux; Windows is ADR-0029 phase D3");
 
 pub mod chunks;
+pub mod embedding;
 pub mod fs;
 pub mod search;
 pub mod service;

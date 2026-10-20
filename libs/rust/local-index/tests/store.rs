@@ -349,6 +349,7 @@ fn a_version_1_index_gains_the_embedding_hash_column() {
     let raw = rusqlite::Connection::open(index.join(FILE_NAME)).unwrap();
     raw.execute_batch(
         "ALTER TABLE entities DROP COLUMN embedding_hash;
+         DROP TABLE chunk_vectors; DROP TABLE vector_sets;
          DROP TABLE chunks; DROP TABLE chunks_fts;
          UPDATE meta SET value = '1' WHERE key = 'schema_version';
          PRAGMA user_version = 1;",

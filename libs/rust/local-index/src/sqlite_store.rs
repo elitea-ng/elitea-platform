@@ -1,9 +1,10 @@
 //! The index's [`GraphStore`]: one owner-only SQLite file per workspace
 //! (`<app data>/workspaces/<id>/index/index.sqlite`).
 //!
-//! Schema version 3 (`PRAGMA user_version`; a newer one is refused, the app
+//! Schema version 4 (`PRAGMA user_version`; a newer one is refused, the app
 //! that wrote it knows it and this one does not; version 1 gains the
-//! `embedding_hash` column when it is opened, version 2 the chunk tables):
+//! `embedding_hash` column when it is opened, version 2 the chunk tables,
+//! version 3 the chunk vectors):
 //!
 //! ```sql
 //! meta      (key TEXT PRIMARY KEY, value TEXT)            -- schema_version, revision_seq, setting:*,
@@ -26,7 +27,18 @@
 //! chunks_fts(text, idents)                                 -- FTS5, contentless, rowid = chunks.id;
 //!                                                          -- porter + unicode61; idents: the
 //!                                                          -- identifier column
+//! vector_sets  (stamp PRIMARY KEY, origin, model, dim, created_at)
+//!                                                          -- one per embedder the chunks were
+//!                                                          -- embedded with (`local:<model>:<dim>`)
+//! chunk_vectors(stamp, text_hash, vector BLOB)             -- int8 `[scale][dim × i8]`, keyed by the
+//!                                                          -- chunk text's hash: an unchanged chunk
+//!                                                          -- keeps its vector across refreshes
 //! ```
+//!
+//! **Vectors follow the chunks.** They are written by the background
+//! embedder after a build, never in a build's transaction; a vector whose
+//! text no chunk has any more is pruned by the next pass
+//! ([`SqliteGraphStore::prune_vectors`]).
 //!
 //! **Chunks are committed with the build.** A refresh stages the chunks of
 //! every file it read (from exactly the bytes it parsed) and the commit
@@ -75,7 +87,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 /// The database's file name in its directory.
 pub const FILE_NAME: &str = "index.sqlite";
 
@@ -128,6 +140,17 @@ CREATE INDEX chunks_by_path ON chunks (path, line_start);
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
     text, idents, content='', contentless_delete=1,
     tokenize='porter unicode61 remove_diacritics 2');
+";
+
+/// The chunk vectors (schema 4).
+const VECTOR_SCHEMA: &str = "
+CREATE TABLE vector_sets (
+    stamp TEXT PRIMARY KEY, origin TEXT NOT NULL, model TEXT NOT NULL,
+    dim INTEGER NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE chunk_vectors (
+    stamp TEXT NOT NULL, text_hash TEXT NOT NULL, vector BLOB NOT NULL,
+    PRIMARY KEY (stamp, text_hash)) WITHOUT ROWID;
+CREATE INDEX chunks_by_hash ON chunks (text_hash);
 ";
 
 /// ISO 8601 in UTC with milliseconds, as SQLite writes it.
@@ -217,6 +240,24 @@ pub struct ChunkUpdate<'a> {
     pub generation: &'a str,
 }
 
+/// What a set of chunk vectors was made with: `origin` (`local` or
+/// `remote`), the model, and the stored width. Vectors of one set are only
+/// ever compared with queries embedded the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSet {
+    pub origin: String,
+    pub model: String,
+    pub dim: usize,
+}
+
+impl VectorSet {
+    /// `origin:model:dim`.
+    #[must_use]
+    pub fn stamp(&self) -> String {
+        format!("{}:{}:{}", self.origin, self.model, self.dim)
+    }
+}
+
 /// One stored chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredChunk {
@@ -277,23 +318,25 @@ fn migrate(conn: &Connection) -> Result<()> {
     match version {
         0 => {
             conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA} {CHUNK_SCHEMA}
+                "BEGIN; {SCHEMA} {CHUNK_SCHEMA} {VECTOR_SCHEMA}
                  INSERT INTO meta (key, value) VALUES ('schema_version', '{SCHEMA_VERSION}');
                  INSERT INTO meta (key, value) VALUES ('revision_seq', '0');
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?;
             Ok(())
         }
-        1 | 2 => {
+        1..=3 => {
             // Version 2 records the hash of each vector's text; version 3
-            // adds the search chunks (made by the next refresh).
+            // adds the search chunks (made by the next refresh); version 4
+            // the chunk vectors (made by the background embedder).
             let embedding_hash = if version == 1 {
                 "ALTER TABLE entities ADD COLUMN embedding_hash TEXT;"
             } else {
                 ""
             };
+            let chunks = if version < 3 { CHUNK_SCHEMA } else { "" };
             conn.execute_batch(&format!(
-                "BEGIN; {embedding_hash} {CHUNK_SCHEMA}
+                "BEGIN; {embedding_hash} {chunks} {VECTOR_SCHEMA}
                  UPDATE meta SET value = '{SCHEMA_VERSION}' WHERE key = 'schema_version';
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?;
@@ -718,6 +761,155 @@ impl SqliteGraphStore {
                 out.push(row??);
             }
             Ok(out)
+        })
+    }
+
+    /// Record the vector set `set` (idempotent).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn ensure_vector_set(&self, set: &VectorSet) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO vector_sets (stamp, origin, model, dim, created_at)
+                     VALUES (?1, ?2, ?3, ?4, {NOW}) ON CONFLICT (stamp) DO NOTHING"
+                ),
+                params![
+                    set.stamp(),
+                    set.origin,
+                    set.model,
+                    i64::try_from(set.dim).unwrap_or(i64::MAX)
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The vector sets stored, with how many vectors each holds.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn vector_sets(&self) -> Result<Vec<(VectorSet, u64)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT s.origin, s.model, s.dim,
+                        (SELECT count(*) FROM chunk_vectors v WHERE v.stamp = s.stamp)
+                   FROM vector_sets s ORDER BY s.stamp",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    VectorSet {
+                        origin: row.get(0)?,
+                        model: row.get(1)?,
+                        dim: usize::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                    },
+                    u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+                ))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// The chunks with no vector in `stamp`: `(id, text_hash)`, one per
+    /// distinct text, in id order.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunks_missing_vectors(&self, stamp: &str) -> Result<Vec<(i64, String)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT min(c.id), c.text_hash FROM chunks c
+                  WHERE NOT EXISTS (SELECT 1 FROM chunk_vectors v
+                                     WHERE v.stamp = ?1 AND v.text_hash = c.text_hash)
+                  GROUP BY c.text_hash ORDER BY min(c.id)",
+            )?;
+            let rows = statement.query_map([stamp], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Store vectors of `stamp` by text hash, in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn put_vectors(&self, stamp: &str, vectors: &[(String, Vec<u8>)]) -> Result<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut insert = tx.prepare_cached(
+                    "INSERT INTO chunk_vectors (stamp, text_hash, vector) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (stamp, text_hash) DO UPDATE SET vector = excluded.vector",
+                )?;
+                for (hash, blob) in vectors {
+                    insert.execute(params![stamp, hash, blob])?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// How many chunks have a vector in `stamp`, of how many chunks.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn vector_coverage(&self, stamp: &str) -> Result<(u64, u64)> {
+        self.read(|conn| {
+            let (with, all): (i64, i64) = conn.query_row(
+                "SELECT count(v.text_hash), count(*) FROM chunks c
+                   LEFT JOIN chunk_vectors v ON v.stamp = ?1 AND v.text_hash = c.text_hash",
+                [stamp],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((
+                u64::try_from(with).unwrap_or(0),
+                u64::try_from(all).unwrap_or(0),
+            ))
+        })
+    }
+
+    /// Every chunk's vector in `stamp`: `(chunk id, blob)`.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_vectors(&self, stamp: &str) -> Result<Vec<(i64, Vec<u8>)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT c.id, v.vector FROM chunks c
+                   JOIN chunk_vectors v ON v.stamp = ?1 AND v.text_hash = c.text_hash",
+            )?;
+            let rows = statement.query_map([stamp], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Drop every vector set but `keep` (`None`: all of them), and the
+    /// vectors of `keep` whose text no chunk has any more. Returns the
+    /// vectors deleted.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn prune_vectors(&self, keep: Option<&str>) -> Result<u64> {
+        self.with(|conn| {
+            let keep = keep.unwrap_or("");
+            let tx = conn.transaction()?;
+            let mut deleted = tx.execute("DELETE FROM chunk_vectors WHERE stamp <> ?1", [keep])?;
+            tx.execute("DELETE FROM vector_sets WHERE stamp <> ?1", [keep])?;
+            deleted += tx.execute(
+                "DELETE FROM chunk_vectors WHERE stamp = ?1 AND NOT EXISTS
+                   (SELECT 1 FROM chunks c WHERE c.text_hash = chunk_vectors.text_hash)",
+                [keep],
+            )?;
+            tx.commit()?;
+            Ok(deleted as u64)
         })
     }
 

@@ -15,6 +15,7 @@ mod credentials_file;
 mod d0;
 mod discovery;
 mod doctor;
+mod embeddings;
 mod error;
 mod handoff;
 mod handoff_settings;
@@ -62,6 +63,7 @@ use crate::sessions::DesktopStateStore;
 use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
+use elitea_local_index::embedding::{EmbedConfig, EmbedStatus, Embedding};
 
 /// The credentials file's slots (src/credentials_file.rs).
 const SESSION_SLOT: &str = "device-session";
@@ -246,12 +248,26 @@ pub fn run() {
             let handoff_policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on
             // first use; kept across sign-out and wipe (src/index.rs).
+            // Their embeddings, off unless a workspace turns them on
+            // (src/embeddings.rs): one background thread, one model in memory.
             let index = IndexRegistry::new(
                 workspaces.clone(),
                 policy.clone(),
                 Arc::new(MainWindowIndexEvents(app.handle().clone())),
             )
-            .with_deny_list(host_deny)
+            .with_deny_list(host_deny);
+            let index = match Embedding::start(
+                Arc::new(embeddings::LocalModels::new(&data_dir)),
+                Arc::new(embeddings::Power::default()),
+                EmbedConfig::default(),
+                Arc::new(|_: &str, _: &EmbedStatus| {}),
+            ) {
+                Ok(embedding) => index.with_embedding(Arc::new(embedding)),
+                Err(error) => {
+                    log::warn!("the index embedder did not start: {error}");
+                    index
+                }
+            }
             .shared();
             let agents = Arc::new(
                 AgentHost::new(HostDeps {

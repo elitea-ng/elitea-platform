@@ -26,9 +26,15 @@ elitea-inventory-core = { path = "../inventory-core" }
 # The confined workspace (openat / O_NOFOLLOW reads, `path_deny`) and the
 # walk every local tool lists a folder with.
 elitea-local-tools = { path = "../local-tools" }
+# The Embedder trait and the int8 vector blobs (no backend: the desktop
+# links candle and the model cache).
+elitea-local-embed = { path = "../local-embed" }
 # The `.gitignore` rules a folder watch filters its events with (the line
 # local-tools' walk already links).
 ignore = "0.4.33"
+log = "0.4.29"
+# The background embedder lowers its thread's priority.
+thread-priority = "3.1.1"
 # The folder watch (FSEvents on macOS, inotify on Linux).
 notify = "8.2.0"
 # The same line as the desktop host (`bundled`: the SQLite the app ships

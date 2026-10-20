@@ -40,6 +40,8 @@ pub struct CandleEmbedder {
     network: Network,
     device: Device,
     micro_batch: usize,
+    /// The CPU work's own pool (`None`: rayon's global one).
+    pool: Option<rayon::ThreadPool>,
 }
 
 impl std::fmt::Debug for CandleEmbedder {
@@ -127,7 +129,32 @@ impl CandleEmbedder {
             network,
             device,
             micro_batch: micro_batch(spec.family, gpu),
+            pool: None,
         })
+    }
+
+    /// Run the CPU side (tokenising; the whole forward pass on the CPU
+    /// device) on at most `threads` threads of its own, so a background
+    /// build never takes every core.
+    ///
+    /// # Errors
+    ///
+    /// The pool could not be made.
+    pub fn with_threads(mut self, threads: usize) -> Result<Self, EmbedError> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads.max(1))
+            .thread_name(|n| format!("embed-{n}"))
+            .build()
+            .map_err(load_error)?;
+        self.pool = Some(pool);
+        Ok(self)
+    }
+
+    fn run(&self, prepared: Vec<String>) -> Result<Vec<Vec<f32>>, EmbedError> {
+        match &self.pool {
+            Some(pool) => pool.install(|| self.embed_prepared(prepared)),
+            None => self.embed_prepared(prepared),
+        }
     }
 
     /// `metal` or `cpu`.
@@ -240,11 +267,11 @@ impl Embedder for CandleEmbedder {
             return Ok(Vec::new());
         }
         let prepared = texts.iter().map(|t| self.spec.document_text(t)).collect();
-        self.embed_prepared(prepared)
+        self.run(prepared)
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
-        self.embed_prepared(vec![self.spec.query_text(text)])?
+        self.run(vec![self.spec.query_text(text)])?
             .pop()
             .ok_or_else(|| EmbedError::Shape("no vector".into()))
     }

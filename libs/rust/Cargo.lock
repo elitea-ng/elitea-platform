@@ -2022,6 +2022,8 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "rayon",
+ "reqwest 0.12.28",
  "rustix",
  "serde",
  "serde_json",
@@ -2029,6 +2031,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokenizers",
+ "tokio",
 ]
 
 [[package]]
@@ -2044,9 +2047,11 @@ dependencies = [
  "elitea-doc-extract",
  "elitea-engine-core",
  "elitea-inventory-core",
+ "elitea-local-embed",
  "elitea-local-tools",
  "encoding_rs",
  "ignore",
+ "log",
  "notify",
  "rusqlite",
  "rustix",
@@ -2055,6 +2060,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
+ "thread-priority",
  "tokio",
 ]
 
@@ -8213,6 +8219,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "thread-priority"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d2e834949be5111506bb252643498af1514f600d9e1dceedaa42afae155b67f"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows",
 ]
 
 [[package]]

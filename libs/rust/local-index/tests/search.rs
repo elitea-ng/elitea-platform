@@ -260,7 +260,8 @@ async fn an_index_from_before_chunks_gains_them_without_a_reparse() {
     service.close();
     let raw = rusqlite::Connection::open(dir.join("index.sqlite")).unwrap();
     raw.execute_batch(
-        "DROP TABLE chunks; DROP TABLE chunks_fts;
+        "DROP TABLE chunk_vectors; DROP TABLE vector_sets;
+         DROP TABLE chunks; DROP TABLE chunks_fts;
          DELETE FROM meta WHERE key = 'chunks_generation';
          UPDATE meta SET value = '2' WHERE key = 'schema_version';
          PRAGMA user_version = 2;",
