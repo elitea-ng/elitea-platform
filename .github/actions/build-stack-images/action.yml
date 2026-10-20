@@ -14,9 +14,10 @@ description: >-
 # of those mounts died with the runner. A push to main then built the same
 # images twice more, under two unrelated GHA cache scopes.
 #
-# This action makes the three consumers share ONE content-addressed layer
-# cache per image (scope `<image>-linux-amd64`, the name publish.yml's amd64
-# build already uses) and persists the cache mounts through actions/cache.
+# This action makes the consumers share ONE content-addressed layer cache per
+# image — since 2026-10-20 a registry ref, `ghcr.io/elitea-ng/ci-cache-<image>`
+# (deploy/ci/bake-cache.hcl says why it left the 10 GB Actions cache) — and
+# persists the cache mounts through actions/cache.
 #
 # ── What it does NOT change ─────────────────────────────────────────────────
 #
@@ -365,22 +366,26 @@ runs:
         n_from=0
         while IFS= read -r f; do
           [ -n "$f" ] || continue
-          this=$(grep -c 'cache-from = \["type=gha,scope=' "$f" || true)
+          this=$(grep -c 'cache-from = \["type=registry,ref=' "$f" || true)
           # Per FILE, not only in total: a file that contributes zero scopes
           # lowers both counts equally and the total check below stays green
           # while that file's image builds with no layer cache at all.
           [ "$this" -gt 0 ] || { echo "::error::$f declares no cache-from scope; nothing to derive a cache-to from"; exit 1; }
           n_from=$(( n_from + this ))
           # One `target "<name>" { cache-to = [...] }` block per cache-from line,
-          # named after the target block the line sits in.
-          # ignore-error=true: the image is already built when the export runs, and the
-          # 10 GB Actions cache evicts entries mid-write ("cache entry no longer
-          # exists"); a lost cache write must cost the next run time, not fail this one.
+          # named after the target block the line sits in, writing the SAME ref
+          # it reads.
+          # image-manifest=true + oci-mediatypes=true: the cache is stored as an
+          # ordinary OCI image manifest, the shape ghcr serves reliably (a bare
+          # BuildKit cache index is what registries have rejected).
+          # ignore-error=true: the image is already built (and, on the build-once
+          # job, already pushed) when the export runs; a lost cache write must
+          # cost the next run time, not fail this one.
           awk -v mode="$MODE" '
             /^target "/ { name = $2 }
-            /cache-from = \["type=gha,scope=/ {
-              sub(/.*scope=/, ""); sub(/".*/, "")
-              printf "target %s {\n  cache-to = [\"type=gha,mode=%s,scope=%s,ignore-error=true\"]\n}\n", name, mode, $0
+            /cache-from = \["type=registry,ref=/ {
+              sub(/.*ref=/, ""); sub(/".*/, "")
+              printf "target %s {\n  cache-to = [\"type=registry,ref=%s,mode=%s,image-manifest=true,oci-mediatypes=true,ignore-error=true\"]\n}\n", name, $0, mode
             }' "$f" >> "$out"
         done <<< "$CACHE_HCL"
         if [ "$MODE" = "none" ]; then
