@@ -1,10 +1,11 @@
-# Manual EAS Submit of a finished production build to TestFlight (iOS) and the
-# Play internal testing track (Android), docs/release.md "Submit".
+# Manual EAS Submit of a finished apps/elitea-mobile production build to TestFlight
+# (iOS) and the Play internal testing track (Android),
+# apps/elitea-mobile/docs/release.md "Submit".
 #
 # Needs the EXPO_TOKEN repository secret, and on EAS: the App Store Connect API
 # key and the Google Play service account key (`eas credentials`), plus
 # submit.production.ios.ascAppId in eas.json once the App Store Connect app exists.
-name: EAS submit
+name: Mobile EAS submit
 
 on:
   workflow_dispatch:
@@ -24,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: eas-submit-${{ inputs.platform }}
+  group: mobile-eas-submit-${{ inputs.platform }}
   cancel-in-progress: false
 
 env:
@@ -35,25 +36,30 @@ jobs:
     name: EAS submit (${{ inputs.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/elitea-mobile
     steps:
       - name: Require the EXPO_TOKEN secret
+        working-directory: .
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
           if [ -z "$EXPO_TOKEN" ]; then
-            echo "::error::Repository secret EXPO_TOKEN is not set (docs/release.md, 'GitHub Actions secret')."
+            echo "::error::Repository secret EXPO_TOKEN is not set (apps/elitea-mobile/docs/release.md, 'GitHub Actions secret')."
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
-          cache: npm
+          node-version: "26"
+          # Stated, not defaulted (scripts/ci/check_workflow_cache_writes.py).
+          package-manager-cache: false
 
       - name: Install
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - uses: expo/expo-github-action@v9
         with:

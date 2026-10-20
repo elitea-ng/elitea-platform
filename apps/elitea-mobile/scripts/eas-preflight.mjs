@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Preflight for the manual EAS workflows (.github/workflows/eas-*.yml): fails
+ * Preflight for the manual EAS workflows (.github/workflows/mobile-eas-*.yml at the repository root): fails
  * fast, with the runbook section to read, when the repository is not ready yet
  * (docs/release.md), instead of a long EAS error after the queue.
  *
