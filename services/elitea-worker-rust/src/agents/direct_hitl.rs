@@ -1619,11 +1619,12 @@ fn authorization_scope(
 }
 
 impl DirectHitlReplay {
-    /// `(call id, tool name)` of the calls an approved sensitive-tool replay
-    /// really executes: every call of the message not served a local or
-    /// recorded result. Clarifying-question and authorization continuations run
-    /// only the one non-sensitive call they name and are not journaled.
-    fn executed_calls(&self) -> Vec<(String, String)> {
+    /// `(call id, tool name)` of the calls the dispatch journal may own: for an
+    /// approved sensitive-tool replay, every call of the message not served a
+    /// local or recorded result. Empty for clarifying-question and authorization
+    /// continuations, which run only the one non-sensitive call they name (it
+    /// still never starts after the invocation's stop).
+    fn journal_candidates(&self) -> Vec<(String, String)> {
         if !self.journals {
             return Vec::new();
         }
@@ -1642,7 +1643,7 @@ impl DirectHitlReplay {
     /// The executed calls the dispatch journal must own (see [`journal_set`]).
     #[cfg(test)]
     pub(crate) fn journaled_call_ids(&self, catalog: &SensitiveToolCatalog) -> BTreeSet<String> {
-        journal_set(&self.executed_calls(), catalog)
+        journal_set(&self.journal_candidates(), catalog)
     }
 
     pub(super) fn emits_pending_call(&self) -> bool {
@@ -1688,7 +1689,7 @@ impl DirectHitlReplay {
 
     /// Bind the one-shot replay model and exact ADK confirmation decision.
     pub(crate) fn bind(self, delegate: Arc<dyn Llm>) -> PreparedDirectHitlReplay {
-        let executed = self.executed_calls();
+        let journal_candidates = self.journal_candidates();
         let hidden = self
             .blocked
             .iter()
@@ -1732,7 +1733,7 @@ impl DirectHitlReplay {
                 run_config,
             },
             blocked: self.blocked,
-            executed,
+            journal_candidates,
             decision_invocation_id: self.decision_invocation_id,
             interrupt_id: self.interrupt_id,
         }
@@ -1762,8 +1763,8 @@ pub(crate) struct PreparedDirectHitlReplay {
     model: Arc<dyn Llm>,
     run: DirectHitlRunInput,
     blocked: Vec<BlockedToolReplay>,
-    /// `(call id, tool name)` of every call the replay really executes.
-    executed: Vec<(String, String)>,
+    /// `(call id, tool name)` of the calls the dispatch journal may own.
+    journal_candidates: Vec<(String, String)>,
     decision_invocation_id: String,
     interrupt_id: String,
 }
@@ -1809,7 +1810,7 @@ impl PreparedDirectHitlReplay {
         outcomes: super::dispatch_journal::JournalOutcomes,
         catalog: &SensitiveToolCatalog,
     ) -> Result<DirectHitlReplayParts, DirectHitlError> {
-        let journaled = journal_set(&self.executed, catalog);
+        let journaled = journal_set(&self.journal_candidates, catalog);
         let mut toolsets = match journal {
             Some(journal) => journal.wrap(
                 toolsets,

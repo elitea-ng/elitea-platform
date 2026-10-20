@@ -2446,9 +2446,12 @@ impl ContinuationSuffix {
         if event.actions.tool_confirmation.is_some() {
             return false;
         }
-        // Model-checkpoint bookkeeping carries its record in the state delta.
+        // A model-checkpoint record (`elitea-recovery`, always with its state
+        // delta) of the dead invocation would stay live for model recovery while
+        // the continuation is rebuilt; two recoveries must never act on one
+        // continuation, so such a suffix is not a dead one (stale, F).
         if event.author == "elitea-recovery" {
-            return event.llm_response.content.is_none();
+            return false;
         }
         if let Some(parent_call) = event.provider_metadata.get(DESCENDANT_PARENT_CALL_KEY) {
             self.child_calls.insert(parent_call.clone());
@@ -3892,10 +3895,12 @@ impl LazyNestedAgent {
                 .map_err(|error| direct_hitl_execution_error(&error))?;
                 let bound = self.bind_model()?;
                 let replay_pending = replay.emits_pending_call();
-                // Every call of the replay that will really run and may not simply
-                // run again journals its dispatch in the root session first, so a
-                // later continuation never runs it twice and serves its recorded
-                // outcome instead. A call that can re-run costs no journal writes.
+                // An approved sensitive-tool replay journals each call that may not
+                // simply run again in the root session first, so a later
+                // continuation never runs it twice and serves its recorded outcome
+                // instead. A call that can re-run costs no journal writes; a
+                // clarifying or authorization continuation journals nothing, and no
+                // tool of either starts after the invocation's stop.
                 let journal = self
                     .model_scopes
                     .as_ref()
@@ -6144,7 +6149,7 @@ mod live_nested_events_tests {
         other_user.llm_response.content = Some(Content::new("user").with_text("a new turn"));
         assert!(!owns(&[&other_user]));
 
-        // Model-checkpoint bookkeeping carries its record in the state delta.
+        // A model-checkpoint record is never set aside (no double recovery).
         let mut recovery = Event::new("inv-2");
         "elitea-recovery".clone_into(&mut recovery.author);
         recovery
@@ -6152,8 +6157,8 @@ mod live_nested_events_tests {
             .state_delta
             .insert("elitea.agent.recovery.v1".to_owned(), json!({"version": 1}));
         assert!(
-            owns(&[&marker, &recovery, &replayed]),
-            "recovery bookkeeping is owned"
+            !owns(&[&marker, &recovery, &replayed]),
+            "a model-checkpoint record is not a dead continuation's"
         );
         // A child agent's state-only start (its instruction or planner state).
         let mut start = Event::new(&child_call.invocation_id);

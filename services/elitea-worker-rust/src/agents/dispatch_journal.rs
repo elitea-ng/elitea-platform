@@ -323,6 +323,12 @@ impl DispatchAbort {
         let _ = self.0.failed.set(());
     }
 
+    /// Order one approved call's stop check and `dispatched` append against
+    /// every other approved call of the invocation.
+    async fn lock_dispatch(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.0.dispatch.lock().await
+    }
+
     /// The stop, once a dispatch record failed.
     pub(crate) fn error(&self) -> Option<adk_rust::AdkError> {
         self.0.failed.get().map(|()| {
@@ -509,9 +515,8 @@ impl DispatchJournal {
         call_ids: BTreeSet<String>,
         outcomes: JournalOutcomes,
     ) -> Vec<Arc<dyn Toolset>> {
-        if call_ids.is_empty() {
-            return toolsets;
-        }
+        // Wrapped even when nothing is journaled: no tool of the replay starts
+        // after the invocation's stop (`DispatchAbort`).
         let scope = Arc::new(JournalScope {
             journal: self.clone(),
             decision_invocation_id: decision.invocation_id.to_owned(),
@@ -689,13 +694,18 @@ impl Tool for JournalTool {
     ) -> adk_rust::Result<Value> {
         let call_id = context.function_call_id().to_owned();
         if !self.scope.call_ids.contains(&call_id) {
+            // Not journaled (it may re-run, or its continuation runs one
+            // non-sensitive call), but it still never starts after the stop.
+            if let Some(error) = self.scope.journal.abort.error() {
+                return Err(error);
+            }
             return self.inner.execute(context, arguments).await;
         }
         {
             // One at a time per invocation, so no other approved call (a
             // concurrent sibling or a parallel child's) starts after this call's
             // dispatch record failed.
-            let _dispatch = self.scope.journal.abort.0.dispatch.lock().await;
+            let _dispatch = self.scope.journal.abort.lock_dispatch().await;
             // An earlier call's dispatch record failed: the invocation is
             // stopping, and no further approved effect starts.
             if let Some(error) = self.scope.journal.abort.error() {
@@ -1242,17 +1252,17 @@ mod tests {
             self.inner.delete(req).await
         }
         async fn append_event(&self, session_id: &str, event: Event) -> adk_rust::Result<()> {
-            self.fail_first()?;
+            self.fail_first().await?;
             self.inner.append_event(session_id, event).await
         }
         async fn append_event_for_identity(&self, req: AppendEventRequest) -> adk_rust::Result<()> {
-            self.fail_first()?;
+            self.fail_first().await?;
             self.inner.append_event_for_identity(req).await
         }
     }
 
     impl FailingAppends {
-        fn fail_first(&self) -> adk_rust::Result<()> {
+        async fn fail_first(&self) -> adk_rust::Result<()> {
             use std::sync::atomic::Ordering;
             if self
                 .failures
@@ -1261,6 +1271,8 @@ mod tests {
                 })
                 .is_ok()
             {
+                // A slow failure: other approved calls get to run meanwhile.
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 return Err(adk_rust::AdkError::new(
                     adk_rust::ErrorComponent::Session,
                     adk_rust::ErrorCategory::Unavailable,
@@ -1270,6 +1282,92 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    fn failing_journal(
+        abort: &DispatchAbort,
+        sessions: Arc<adk_rust::session::InMemorySessionService>,
+    ) -> DispatchJournal {
+        let failing: Arc<dyn SessionService> = Arc::new(FailingAppends {
+            inner: sessions,
+            code: "session.storage_unavailable",
+            failures: std::sync::atomic::AtomicUsize::new(1),
+        });
+        DispatchJournal::new(
+            failing,
+            AdkIdentity::new(
+                adk_rust::AppName::new("elitea-agent-v1").expect("app"),
+                adk_rust::UserId::new("user-1").expect("user"),
+                adk_rust::SessionId::new("session-1").expect("session"),
+            ),
+            owner(),
+            abort.clone(),
+        )
+    }
+
+    async fn counting_tool(
+        journal: &DispatchJournal,
+        interrupt_id: &str,
+        journaled: &[&str],
+        calls: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Arc<dyn Tool> {
+        let inner: Arc<dyn Toolset> = Arc::new(adk_rust::tool::BasicToolset::new(
+            "fixture",
+            vec![Arc::new(Counting {
+                calls: Arc::clone(calls),
+                fail: false,
+            })],
+        ));
+        journal.wrap(
+            vec![inner],
+            &JournalDecision {
+                invocation_id: "inv-1",
+                interrupt_id,
+            },
+            journaled.iter().map(|id| (*id).to_owned()).collect(),
+            JournalOutcomes::Recorded,
+        )[0]
+        .tools(Arc::new(adk_rust::tool::SimpleToolContext::new("fixture")))
+        .await
+        .expect("tools")
+        .remove(0)
+    }
+
+    /// #1321 review round 8: the dispatch lock and the stop are invocation-wide.
+    /// Two parallel children (two journal scopes of one invocation): while the
+    /// first child's `dispatched` append is slowly failing, the second child's
+    /// approved call waits for it and is refused; a call that is not journaled
+    /// (an authorization continuation's) never starts after the stop either.
+    #[tokio::test(flavor = "current_thread")]
+    async fn no_approved_effect_of_the_invocation_starts_after_a_failed_record() {
+        let (sessions, _) = journal_session().await;
+        let abort = DispatchAbort::default();
+        let journal = failing_journal(&abort, sessions);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let child_a = counting_tool(&journal, "hitl-a", &["call-a"], &calls).await;
+        let child_b = counting_tool(&journal, "hitl-b", &["call-b"], &calls).await;
+        let authorization = counting_tool(&journal, "hitl-c", &[], &calls).await;
+        let (a, b) = tokio::join!(child_a.execute(call_context("call-a"), json!({})), async {
+            // Starts while A's append is still in flight.
+            tokio::task::yield_now().await;
+            child_b.execute(call_context("call-b"), json!({})).await
+        },);
+        assert!(
+            a.is_err() && b.is_err(),
+            "both children's calls are refused"
+        );
+        assert!(
+            authorization
+                .execute(call_context("call-c"), json!({}))
+                .await
+                .is_err(),
+            "an unjournaled call does not start after the stop"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Acquire),
+            0,
+            "no effect of the invocation started"
+        );
     }
 
     struct EchoModel;

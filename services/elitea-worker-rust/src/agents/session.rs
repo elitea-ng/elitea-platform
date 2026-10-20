@@ -2850,9 +2850,11 @@ async fn prepare_direct_resume(
                     .into_direct_replay(&sensitive_tools)
                     .map_err(|error| direct_hitl_error(&error))?
             };
-            // Each approved call that may not simply run again journals its
-            // dispatch before its effect (one root append; the Runner persists
-            // the outcome). Read-only calls re-run and cost none.
+            // An approved sensitive-tool replay journals each call that may not
+            // simply run again before its effect (one root append; the Runner
+            // persists the outcome). Read-only calls re-run and cost none; a
+            // clarifying or authorization continuation journals nothing, and no
+            // tool of either starts after the invocation's stop.
             let (replay_model, run_input, toolsets) = replay
                 .bind(model)
                 .into_parts(
