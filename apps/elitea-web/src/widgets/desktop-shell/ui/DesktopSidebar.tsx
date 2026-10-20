@@ -169,7 +169,7 @@ function isChatPath(pathname: string): boolean {
  * Opening the chat expands the Elitea section and the Chats disclosure, so its
  * conversations are on screen. It runs on each navigation to a chat route, not
  * on every render: a person who collapses them on the chat page keeps them
- * collapsed (the page then shows its own list) until the next navigation.
+ * collapsed until the next navigation.
  */
 function useExpandOnChat(pathname: string, expandElitea: () => void, expandChats: () => void): void {
   const onChat = isChatPath(pathname);
@@ -291,7 +291,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
                     : {})}
                 />
                 {item.value === 'chat' && chatsOpen && (
-                  <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} canArchive={permissions.has(PERMISSIONS.chat.archive)} />
+                  <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} canArchive={permissions.has(PERMISSIONS.chat.archive)} canMoveToFolder={permissions.has(PERMISSIONS.chat.folders.update)} />
                 )}
               </li>
             ))}

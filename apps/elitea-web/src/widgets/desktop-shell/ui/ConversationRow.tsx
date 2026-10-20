@@ -8,8 +8,15 @@
  * Delete ask first: the archive is the project's (it takes the chat out of
  * every member's list; any member can unarchive it). Rename and Delete are
  * the author's, as in the web list.
+ *
+ * A row the person may move (not pinned, with the folder right) is a drag
+ * source (`@dnd-kit`, `useDraggable` with the conversation id, the web
+ * list's id scheme); `ChatsSection` owns the drop. The open conversation's
+ * row scrolls into view when it becomes the selection.
  */
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+
+import { useDraggable } from '@dnd-kit/core';
 
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import Box from '@mui/material/Box';
@@ -28,7 +35,7 @@ import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { conversationLink, copyText } from '../lib/conversationLink';
 import { useContextMenu, type ContextAction } from '../model/useContextMenu';
 import { MoveToFolderDialog, type FolderChoice } from './MoveToFolderDialog';
-import { ShellRow } from './rows';
+import { CHILD_INDENT, ShellRow } from './rows';
 
 export interface ConversationRowActions {
   readonly open: (conversation: Conversation) => void;
@@ -44,6 +51,8 @@ export interface ConversationRowActions {
   /** The folder that holds the conversation now; `null` when none does. */
   readonly folderOf: (conversation: Conversation) => string | null;
   readonly moveToFolder: (conversation: Conversation, folderId: string | null) => void;
+  /** Holds the folder right (`PERMISSIONS.chat.folders.update`): Move to folder… and the drag. */
+  readonly canMoveToFolder: boolean;
 }
 
 export interface ConversationRowProps {
@@ -73,7 +82,7 @@ function conversationActions(conversation: Conversation, actions: ConversationRo
     {
       id: 'move',
       label: t('desktop.chats.moveToFolder', 'Move to folder…'),
-      enabled: !pinned && (actions.folders.length > 0 || actions.folderOf(conversation) !== null),
+      enabled: actions.canMoveToFolder && !pinned && (actions.folders.length > 0 || actions.folderOf(conversation) !== null),
       run: asks.move,
     },
     { id: 'archive', label: t('desktop.chats.archive', 'Archive'), enabled: actions.canArchive, run: asks.archive },
@@ -122,7 +131,7 @@ function RenameField({ conversation, indent, onDone }: { readonly conversation: 
     else if (event.key === 'Escape') onDone(null);
   };
   return (
-    <Box sx={{ paddingLeft: 1 + indent, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center' }}>
+    <Box sx={{ paddingLeft: 1 + indent + CHILD_INDENT, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center' }}>
       <InputBase
         value={value}
         onChange={(event) => setValue(event.target.value)}
@@ -143,8 +152,27 @@ function RenameField({ conversation, indent, onDone }: { readonly conversation: 
   );
 }
 
+/** The row as a drag source, while it may move; the wrapper takes pointer events only (the keyboard way is Move to folder…). */
+function useRowDrag(conversation: Conversation, actions: ConversationRowActions) {
+  const movable = actions.canMoveToFolder && conversation.isPinned !== true;
+  const { listeners, setNodeRef, isDragging } = useDraggable({ id: conversation.id, disabled: !movable });
+  const onPointerDown = movable ? (listeners?.['onPointerDown'] as React.PointerEventHandler | undefined) : undefined;
+  return { ref: setNodeRef, onPointerDown, isDragging };
+}
+
+/** The selected row scrolls into view: after a navigation, a refetch, or a group or folder that opened for it. */
+function useScrollIntoViewWhenSelected(selected: boolean) {
+  const node = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected) node.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [selected]);
+  return node;
+}
+
 export function ConversationRow({ conversation, selected, indent, actions }: ConversationRowProps): React.JSX.Element {
   const showMenu = useContextMenu();
+  const drag = useRowDrag(conversation, actions);
+  const scrollTarget = useScrollIntoViewWhenSelected(selected);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -165,17 +193,28 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
           }}
         />
       ) : (
-        <ShellRow
-          testId="shell-conversation"
-          label={label}
-          title={label}
-          indent={indent}
-          selected={selected}
-          onClick={() => actions.open(conversation)}
-          onContextMenu={(event) => showMenu(event, items)}
-          trailingOnHover
-          trailing={<RowMenu items={items} label={t('desktop.chats.more', 'More for {{name}}', { name: label })} />}
-        />
+        <Box
+          ref={(element: HTMLDivElement | null) => {
+            drag.ref(element);
+            scrollTarget.current = element;
+          }}
+          data-conversation-id={conversation.id}
+          onPointerDown={drag.onPointerDown}
+          sx={{ opacity: drag.isDragging ? 0.5 : 1 }}
+        >
+          <ShellRow
+            testId="shell-conversation"
+            label={label}
+            title={label}
+            indent={indent}
+            reserveIcon
+            selected={selected}
+            onClick={() => actions.open(conversation)}
+            onContextMenu={(event) => showMenu(event, items)}
+            trailingOnHover
+            trailing={<RowMenu items={items} label={t('desktop.chats.more', 'More for {{name}}', { name: label })} />}
+          />
+        </Box>
       )}
       {moving && (
         <MoveToFolderDialog

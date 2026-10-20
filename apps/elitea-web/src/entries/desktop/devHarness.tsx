@@ -34,7 +34,7 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
-import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
+import { PERMISSION_GROUPS, PERMISSIONS } from '@/shared/lib/permissions';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
@@ -201,7 +201,8 @@ export function mountDesktopHarness(container: HTMLElement): void {
   const appIpc = createFakeAppIpc(
     params.get('chrome') === 'mac' || vibrancy ? { ...MACOS_PLATFORM, vibrancy } : BROWSER_PLATFORM,
   );
-  const permissions = new Set(Object.values(PERMISSION_GROUPS).flat());
+  // The folder rights too: New folder, Move to folder… and the drag in the Chats list.
+  const permissions = new Set([...Object.values(PERMISSION_GROUPS).flat(), PERMISSIONS.chat.folders.create, PERMISSIONS.chat.folders.update, PERMISSIONS.chat.archive]);
 
   const rootRoute = createRootRoute({
     component: () => (

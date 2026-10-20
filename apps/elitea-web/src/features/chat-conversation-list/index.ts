@@ -94,6 +94,7 @@ export type { ConversationsDateGroup, ConversationsFolder, ConversationsProps } 
 export type { DateGroupListItem, FolderListItem, NewFolderDraft } from './lib/hooks/conversationListState.types';
 
 export { useArchiveConversation } from './lib/hooks/useArchiveConversation.hooks';
+export { useConversationActivity } from './lib/hooks/useConversationActivity.hooks';
 export { useConversationRail } from './lib/hooks/useConversationRail.hooks';
 export { useCreateFolder } from './lib/hooks/useCreateFolder.hooks';
 export { useDateGroupExpansion } from './lib/hooks/useDateGroupExpansion.hooks';

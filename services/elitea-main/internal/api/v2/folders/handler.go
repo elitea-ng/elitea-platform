@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -130,9 +131,17 @@ type conversationItem struct {
 	// `chat_conversations.source`. The rail reads it to tell a Local work
 	// thread (conversations.LocalWorkSource) from an ordinary chat: a search
 	// lists both, and the desktop opens a Local work row in its thread.
-	Source    string     `json:"source,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	Source    string    `json:"source,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is the row's revision time. For a row of a date group it is
+	// the conversation's last activity instead (see groupByDate), so the
+	// rail's own sort (`updatedAt ?? createdAt`) agrees with the bucket order.
 	UpdatedAt *time.Time `json:"updated_at"`
+	// activity is the conversation's last activity: the newest of its
+	// creation, its last revision and its newest message group. A message
+	// does not revise the conversation row, so without the message read a
+	// conversation someone writes in stays in the bucket of its creation.
+	activity time.Time
 }
 
 type dateGroup struct {
@@ -238,7 +247,10 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		                         AND p.project_id = $2::text::integer
 		                         AND p.entity_id = c.id) AS is_pinned,
 		       c.is_private, COALESCE(c.source, ''),
-		       c.created_at, c.updated_at
+		       c.created_at, c.updated_at,
+		       GREATEST(c.created_at, c.updated_at,
+		                (SELECT g.created_at FROM %[1]s.chat_message_group g
+		                  WHERE g.conversation_id = c.id ORDER BY g.id DESC LIMIT 1)) AS activity
 		FROM %[1]s.chat_conversations c
 		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %[2]s AND %[3]s
 		  AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_conversation_archives ca WHERE ca.conversation_id = c.id)
@@ -253,7 +265,7 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	for rows.Next() {
 		var c conversationItem
 		var updatedAt *time.Time
-		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.Source, &c.CreatedAt, &updatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.UUID, &c.AuthorID, &c.FolderID, &c.IsPinned, &c.IsPrivate, &c.Source, &c.CreatedAt, &updatedAt, &c.activity); err != nil {
 			return nil, fmt.Errorf("folders: scan conversation: %w", err)
 		}
 		c.UpdatedAt = updatedAt
@@ -322,9 +334,17 @@ func partitionConversations(conversations []conversationItem) (pinned []conversa
 	return pinned, foldered, ungrouped
 }
 
-// groupByDate buckets ungrouped conversations by recency, keyed by the labels
-// in groupOrder. Every label is present in the returned map, possibly empty.
-func groupByDate(ungrouped []conversationItem, now time.Time) map[string][]conversationItem {
+// groupByDate buckets ungrouped conversations by their last activity
+// (conversationItem.activity), keyed by the labels in groupOrder. Every label
+// is present in the returned map, possibly empty.
+//
+// A message moves a conversation to Today: the bucket reads the newest message
+// group, not only the row's own timestamps. With the default sort (`updated_at`,
+// the rail's) each bucket is ordered by that activity too, newest first unless
+// `sort_order=asc`, so the conversation written in last is at the top. Each row
+// then reports its activity as `updated_at`, so the client's re-sort agrees.
+// Pinned and folder rows are not bucketed here and keep the listing's order.
+func groupByDate(ungrouped []conversationItem, now time.Time, r *http.Request) map[string][]conversationItem {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	yesterday := today.AddDate(0, 0, -1)
 	weekAgo := today.AddDate(0, 0, -7)
@@ -336,10 +356,9 @@ func groupByDate(ungrouped []conversationItem, now time.Time) map[string][]conve
 	}
 
 	for _, c := range ungrouped {
-		ts := c.CreatedAt
-		if c.UpdatedAt != nil {
-			ts = *c.UpdatedAt
-		}
+		ts := activityOf(c)
+		activity := ts
+		c.UpdatedAt = &activity
 		switch {
 		case !ts.Before(today):
 			groups["Today"] = append(groups["Today"], c)
@@ -353,7 +372,38 @@ func groupByDate(ungrouped []conversationItem, now time.Time) map[string][]conve
 			groups["Older"] = append(groups["Older"], c)
 		}
 	}
+	if sortBy := r.URL.Query().Get("sort_by"); sortBy == "" || sortBy == "updated_at" {
+		ascending := r.URL.Query().Get("sort_order") == "asc"
+		for label := range groups {
+			sortByActivity(groups[label], ascending)
+		}
+	}
 	return groups
+}
+
+// activityOf is the row's last activity; a row read without the activity
+// column (the zero time) falls back to its revision or creation time.
+func activityOf(c conversationItem) time.Time {
+	ts := c.CreatedAt
+	if c.UpdatedAt != nil && c.UpdatedAt.After(ts) {
+		ts = *c.UpdatedAt
+	}
+	if c.activity.After(ts) {
+		ts = c.activity
+	}
+	return ts
+}
+
+// sortByActivity orders one bucket by last activity, with the id as the
+// tie-break in the same direction (the SQL sort's rule, see loadConversations).
+func sortByActivity(bucket []conversationItem, ascending bool) {
+	sort.SliceStable(bucket, func(i, j int) bool {
+		a, b := activityOf(bucket[i]), activityOf(bucket[j])
+		if !a.Equal(b) {
+			return a.After(b) != ascending
+		}
+		return (bucket[i].ID > bucket[j].ID) != ascending
+	})
 }
 
 // normaliseGroupLabel folds a date-group name to a comparison key, so the
@@ -500,7 +550,7 @@ func (h *Handler) listDateGroupConversations(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	_, _, ungrouped := partitionConversations(conversations)
-	groups := groupByDate(ungrouped, time.Now())
+	groups := groupByDate(ungrouped, time.Now(), r)
 
 	want := normaliseGroupLabel(dateGroup)
 	matched := make([]conversationItem, 0)
@@ -538,7 +588,7 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 	}
 
 	pinned, foldered, ungrouped := partitionConversations(conversations)
-	groups := groupByDate(ungrouped, time.Now())
+	groups := groupByDate(ungrouped, time.Now(), r)
 
 	// One page per bucket, and a `total` that says how much is behind it.
 	// See firstPage for why a filtered listing is served whole.

@@ -115,6 +115,8 @@ CREATE TABLE p_1.chat_conversations (
     sync_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE TABLE p_1.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
+-- The listing buckets by last activity, which reads the newest message group.
+CREATE TABLE p_1.chat_message_group(id serial PRIMARY KEY,conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id),created_at timestamp NOT NULL DEFAULT now());
 -- tenant/0151: an archived conversation leaves this listing (client contract 1.10).
 CREATE TABLE p_1.chat_conversation_archives(conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,archived_by bigint NOT NULL,archived_at timestamp NOT NULL DEFAULT now());
 CREATE TABLE p_1.chat_selected_conversations(id serial PRIMARY KEY,user_id integer NOT NULL,conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE);

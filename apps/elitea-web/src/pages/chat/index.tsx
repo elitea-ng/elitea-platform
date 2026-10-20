@@ -36,6 +36,7 @@ import Box from '@mui/material/Box';
 
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
+import { useConversationActivity } from '@/features/chat-conversation-list';
 import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
 import {
   AddNewUserModal,
@@ -227,6 +228,9 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, activeConversation?.participants]);
 
+  // A turn moves the conversation to the top of Today in the conversation lists (not out of a folder).
+  const onConversationActivity = useConversationActivity();
+
   const handleChangeParticipant = (participant: unknown) => {
     setActiveParticipant(participant);
     const id = (participant as { readonly id?: string } | null)?.id;
@@ -276,6 +280,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
             ...(activeConversation ? { active: activeConversation } : {}),
             isLoading: isLoadingConversation,
             onCreated: handleConversationCreated,
+            onTurn: onConversationActivity,
           }}
           {...(projectId !== undefined ? { projectId } : {})}
           {...(user ? { user } : {})}

@@ -1,9 +1,11 @@
 /**
  * The conversations under the sidebar's Chats row: Pinned first, then the
- * date buckets with their captions, the open conversation highlighted, Local
- * work threads left out, Archive asks first and takes the row away (and keeps
- * it away when the list mounts again), and the trailing "Archived" row opens
- * the archived chats page.
+ * date buckets with their disclosure captions (Pinned and Today open, older
+ * groups closed with a count, each remembered; the group that holds the open
+ * conversation opens for it), the open conversation highlighted (also after
+ * the list is read again), Local work threads left out, Archive asks first
+ * and takes the row away (and keeps it away when the list mounts again), and
+ * the trailing "Archived" row opens the archived chats page.
  */
 import { useState } from 'react';
 
@@ -79,16 +81,18 @@ beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
   clearNamespace();
   archived = [];
+  listingReads = 0;
   server.use(
     http.get('*/auth/permissions/prompt_lib/:projectId', () => HttpResponse.json([{ name: 'models.chat.folders.get', enabled: true }])),
     http.get('*/social/author', () => HttpResponse.json({ id: 3, name: 'Me' })),
     // The server leaves an archived conversation out of the listing.
-    http.get('*/elitea_core/folder/prompt_lib/:projectId', () =>
-      HttpResponse.json({
+    http.get('*/elitea_core/folder/prompt_lib/:projectId', () => {
+      listingReads += 1;
+      return HttpResponse.json({
         ...LISTING,
         date_groups: LISTING.date_groups.map((group) => ({ ...group, conversations: group.conversations.filter((item) => !archived.includes(item.id)) })),
-      }),
-    ),
+      });
+    }),
     http.put('*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId', ({ params }) => {
       archived.push(String(params['conversationId']));
       return HttpResponse.json({ ok: true });
@@ -103,14 +107,61 @@ afterEach(() => {
   delete globals['elitea_ui_config'];
 });
 
-const labels = (): string[] => screen.getAllByTestId(/^shell-(chats-group|conversation)$/).map((node) => node.textContent ?? '');
+let listingReads: number;
+
+const labels = (): string[] =>
+  screen.getAllByTestId(/^shell-(chats-group|conversation)$/).map((node) => node.querySelector('.shell-group-caption')?.textContent ?? node.textContent ?? '');
+const caption = (name: string): HTMLElement => screen.getAllByTestId('shell-chats-group').find((node) => node.querySelector('.shell-group-caption')?.textContent === name) as HTMLElement;
 
 describe('ChatsSection', () => {
   it('lists Pinned first, then the date buckets with native captions, and leaves Local work threads out', async () => {
     mount();
     await screen.findByText('quick overview');
-    expect(labels()).toEqual(['Pinned', 'Release checklist', 'Today', 'quick overview', 'Yesterday', 'Postgres connection math', 'Previous 7 days', 'Helm values']);
+    // Pinned and Today are open; Yesterday and Previous 7 days are closed and show their counts.
+    expect(labels()).toEqual(['Pinned', 'Release checklist', 'Today', 'quick overview', 'Yesterday', 'Previous 7 days']);
+    expect(caption('Yesterday')).toHaveAttribute('aria-expanded', 'false');
+    expect(within(caption('Yesterday')).getByTestId('shell-chats-group-count')).toHaveTextContent('1');
+    expect(caption('Today')).toHaveAttribute('aria-expanded', 'true');
     expect(screen.queryByText('local thread')).not.toBeInTheDocument();
+  });
+
+  it('opens and closes a group from its caption, and remembers it when the list mounts again', async () => {
+    const user = userEvent.setup();
+    mount('/chat');
+    await screen.findByText('quick overview');
+    await user.click(caption('Yesterday'));
+    expect(await screen.findByText('Postgres connection math')).toBeInTheDocument();
+    await user.click(caption('Today'));
+    expect(screen.queryByText('quick overview')).not.toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem('el.desktop.chatGroupsOpen') ?? '{}')).toEqual({ yesterday: true, today: false });
+
+    await user.click(screen.getByRole('button', { name: 'toggle list' }));
+    await user.click(screen.getByRole('button', { name: 'toggle list' }));
+    expect(await screen.findByText('Postgres connection math')).toBeInTheDocument();
+    expect(screen.queryByText('quick overview')).not.toBeInTheDocument();
+  });
+
+  it('opens a closed group that holds the open conversation, keeps it selected after the list is read again, and lets the person close the group', async () => {
+    const user = userEvent.setup();
+    mount('/chat/77');
+    const open = await screen.findByText('Helm values');
+    expect(open.closest('button')).toHaveAttribute('aria-current', 'page');
+    expect(caption('Previous 7 days')).toHaveAttribute('aria-expanded', 'true');
+    // Opened for the conversation, not remembered.
+    expect(window.localStorage.getItem('el.desktop.chatGroupsOpen')).toBeNull();
+
+    // An archive of another row reads the listing again: the open row is still the selected one.
+    const reads = listingReads;
+    const other = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('quick overview'));
+    await user.click(within(other as HTMLElement).getByTestId('shell-conversation-more'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(listingReads).toBeGreaterThan(reads));
+    await waitFor(() => expect(screen.queryByText('quick overview')).not.toBeInTheDocument());
+    expect((await screen.findByText('Helm values')).closest('button')).toHaveAttribute('aria-current', 'page');
+
+    await user.click(caption('Previous 7 days'));
+    expect(screen.queryByText('Helm values')).not.toBeInTheDocument();
   });
 
   it('highlights the open conversation and opens another on click', async () => {
@@ -118,6 +169,7 @@ describe('ChatsSection', () => {
     const router = mount('/chat/72');
     const open = await screen.findByText('quick overview');
     expect(open.closest('button')).toHaveAttribute('aria-current', 'page');
+    await user.click(caption('Previous 7 days'));
     expect(screen.getByText('Helm values').closest('button')).not.toHaveAttribute('aria-current');
     await user.click(screen.getByText('Helm values'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
@@ -126,6 +178,8 @@ describe('ChatsSection', () => {
   it('archives from the ⋯ menu after a confirmation, and the row leaves the list', async () => {
     const user = userEvent.setup();
     mount();
+    await screen.findByText('quick overview');
+    await user.click(caption('Yesterday'));
     await screen.findByText('Postgres connection math');
     const target = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('Postgres'));
     await user.click(within(target as HTMLElement).getByTestId('shell-conversation-more'));
@@ -140,6 +194,8 @@ describe('ChatsSection', () => {
   it('disables Archive without the archive right (the server would answer 403)', async () => {
     const user = userEvent.setup();
     mount('/chat/72', false);
+    await screen.findByText('quick overview');
+    await user.click(caption('Yesterday'));
     await screen.findByText('Postgres connection math');
     const target = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('Postgres'));
     await user.click(within(target as HTMLElement).getByTestId('shell-conversation-more'));
@@ -149,6 +205,8 @@ describe('ChatsSection', () => {
   it('keeps an archived row out of the list when the list mounts again over the same cache', async () => {
     const user = userEvent.setup();
     mount();
+    await screen.findByText('quick overview');
+    await user.click(caption('Yesterday'));
     await screen.findByText('Postgres connection math');
     const target = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('Postgres'));
     await user.click(within(target as HTMLElement).getByTestId('shell-conversation-more'));
