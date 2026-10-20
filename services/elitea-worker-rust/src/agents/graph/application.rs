@@ -457,14 +457,10 @@ impl ApplicationNode {
         let Some(events) = &self.failure_events else {
             return node_failure(self.name());
         };
-        let typed = if error.code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
-            events.recovery_refused(self.name()).await
-        } else if error.code == crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE {
-            events.dispatch_unrecorded(self.name()).await
-        } else {
-            None
-        };
-        typed.unwrap_or_else(|| node_failure(self.name()))
+        events
+            .approved_call_stop(error.code, self.name())
+            .await
+            .unwrap_or_else(|| node_failure(self.name()))
     }
 
     pub(super) fn new(

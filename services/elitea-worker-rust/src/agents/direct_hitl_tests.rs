@@ -1053,6 +1053,7 @@ impl SameToolReplayFixture {
                 vec![Arc::new(BasicToolset::new("fixture-tools", vec![tool]))],
                 None,
                 crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+                &sensitive_catalog(true),
             )
             .expect("a read-only replay needs no journal");
         let mut agent = LlmAgentBuilder::new("elitea-agent")
@@ -1623,6 +1624,7 @@ async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approve
             Vec::new(),
             None,
             crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+            &catalog,
         )
         .expect("the workspace command needs no journal");
     let (user_content, run_config) = input.into_parts();
@@ -1828,6 +1830,7 @@ pub(super) async fn approved_push_resume(
             Vec::new(),
             None,
             crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+            &catalog,
         )
         .expect("the workspace command needs no journal");
     let (user_content, run_config) = input.into_parts();

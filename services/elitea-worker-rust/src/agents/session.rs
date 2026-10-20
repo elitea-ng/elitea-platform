@@ -2016,9 +2016,12 @@ async fn resolve_pipeline_start(
                         plan.session_id.as_ref(),
                     )
                 },
-                super::application_tools::is_pipeline_continuation_event,
+                super::application_tools::pipeline_continuation_suffix(),
             )
-            .ok_or_else(invalid_configuration)?;
+            .ok_or_else(|| {
+                // Advanced, or another execution's continuation: a stale card.
+                pipeline_resume_error(&super::graph::resume::PipelineResumeError::stale())
+            })?;
             let binding = super::events::pipeline_application_event_binding(
                 interrupt,
                 ROOT_AGENT_NAME,
@@ -2067,9 +2070,9 @@ async fn resolve_pipeline_start(
                 pause_id,
                 pause_invocation_id,
                 binding,
+                events,
             }) = application
             {
-                let events = session.events().all();
                 let card = decisions
                     .first()
                     .map(|decision| decision.interrupt_id().to_owned())
@@ -2856,6 +2859,7 @@ async fn prepare_direct_resume(
                     toolsets,
                     Some(journal),
                     super::dispatch_journal::JournalOutcomes::ByRunner,
+                    &sensitive_tools,
                 )
                 .map_err(|error| direct_hitl_error(&error))?;
             (replay_model, run_input, toolsets, false)

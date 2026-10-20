@@ -1256,8 +1256,6 @@ pub(crate) struct DirectHitlReplay {
     decision_invocation_id: String,
     /// The card this replay answers.
     interrupt_id: String,
-    /// The executed calls the dispatch journal must own (see `journaled_call_ids`).
-    journaled: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1476,10 +1474,9 @@ impl ResolvedDirectHitlDecision {
                 }),
             }
         }
-        let mut replay = DirectHitlReplay {
+        let replay = DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
-            journaled: BTreeSet::new(),
             calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
@@ -1489,8 +1486,6 @@ impl ResolvedDirectHitlDecision {
             approvals,
             blocked,
         };
-        // The replay owns its journal set, so no caller can run it unjournaled.
-        replay.journaled = replay.journaled_call_ids(sensitive_tools);
         Ok(replay)
     }
 
@@ -1523,8 +1518,6 @@ impl ResolvedDirectHitlDecision {
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
-            // A clarifying or authorization replay runs no approved effect.
-            journaled: BTreeSet::new(),
             approvals: vec![(self.call_id.clone(), self.fingerprint.clone())],
             blocked: vec![BlockedToolReplay {
                 call_id: self.call_id.clone(),
@@ -1579,8 +1572,6 @@ impl ResolvedDirectHitlDecision {
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
-            // A clarifying or authorization replay runs no approved effect.
-            journaled: BTreeSet::new(),
             approvals: blocked_result
                 .as_ref()
                 .map(|_| (self.call_id.clone(), self.fingerprint.clone()))
@@ -1725,6 +1716,18 @@ impl DirectHitlReplay {
             }
             ReplayResumeMode::ContinueAfterResult => REPLAY_EMITTED,
         };
+        // Every call the replay really runs: those not served a local result.
+        let executed = self
+            .calls
+            .iter()
+            .filter(|call| {
+                !self
+                    .blocked
+                    .iter()
+                    .any(|blocked| blocked.call_id == call.call_id)
+            })
+            .map(|call| (call.call_id.clone(), call.tool_name.clone()))
+            .collect();
         let model: Arc<dyn Llm> = Arc::new(DirectHitlReplayModel {
             delegate,
             state: AtomicU8::new(state),
@@ -1740,7 +1743,7 @@ impl DirectHitlReplay {
                 run_config,
             },
             blocked: self.blocked,
-            journaled: self.journaled,
+            executed,
             decision_invocation_id: self.decision_invocation_id,
             interrupt_id: self.interrupt_id,
         }
@@ -1758,7 +1761,8 @@ pub(crate) struct PreparedDirectHitlReplay {
     model: Arc<dyn Llm>,
     run: DirectHitlRunInput,
     blocked: Vec<BlockedToolReplay>,
-    journaled: BTreeSet<String>,
+    /// `(call id, tool name)` of every call the replay really executes.
+    executed: Vec<(String, String)>,
     decision_invocation_id: String,
     interrupt_id: String,
 }
@@ -1788,10 +1792,12 @@ impl PreparedDirectHitlReplay {
         ids
     }
 
-    /// The replay model, run input and toolsets. Each executed call that may not
-    /// simply run again is journaled before its effect, and the model stops the
-    /// run after a failed dispatch record (`journal.abort()`): neither can be
-    /// skipped by a caller.
+    /// The replay model, run input and toolsets. Every executed call of any
+    /// replay kind (sensitive, clarifying, authorization) that may not simply run
+    /// again (`catalog`) is journaled before its effect; this cannot be skipped
+    /// by a caller. The model is returned unguarded: the invocation guards every
+    /// model it runs with its `DispatchAbort` (the root Runner and each child's
+    /// `build_agent`).
     ///
     /// # Errors
     ///
@@ -1801,7 +1807,14 @@ impl PreparedDirectHitlReplay {
         toolsets: Vec<Arc<dyn Toolset>>,
         journal: Option<&super::dispatch_journal::DispatchJournal>,
         outcomes: super::dispatch_journal::JournalOutcomes,
+        catalog: &SensitiveToolCatalog,
     ) -> Result<DirectHitlReplayParts, DirectHitlError> {
+        let journaled = self
+            .executed
+            .iter()
+            .filter(|(_, tool_name)| catalog.reruns_after_dispatch(tool_name) != Some(true))
+            .map(|(call_id, _)| call_id.clone())
+            .collect::<BTreeSet<_>>();
         let mut toolsets = match journal {
             Some(journal) => journal.wrap(
                 toolsets,
@@ -1809,17 +1822,16 @@ impl PreparedDirectHitlReplay {
                     invocation_id: &self.decision_invocation_id,
                     interrupt_id: &self.interrupt_id,
                 },
-                self.journaled.clone(),
+                journaled,
                 outcomes,
             ),
-            None if self.journaled.is_empty() => toolsets,
+            None if journaled.is_empty() => toolsets,
             None => {
                 return Err(DirectHitlError::new(
                     DirectHitlErrorCode::UnsupportedCapability,
                 ));
             }
         };
-        // The caller guards the model with the invocation's `DispatchAbort`.
         let model = Arc::clone(&self.model);
         for blocked in self.blocked.iter().filter(|blocked| {
             blocked.response["type"] == "mcp_auth_decision"

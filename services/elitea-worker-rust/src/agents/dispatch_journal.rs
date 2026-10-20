@@ -264,7 +264,7 @@ pub(crate) fn continuation_pause<'a>(
     is_pause: impl Fn(&Event) -> bool,
     owner: &DispatchOwner,
     interrupt_ids: impl FnOnce(&Event) -> Option<BTreeSet<String>>,
-    is_continuation_event: impl Fn(&Event) -> bool,
+    mut is_continuation_event: impl FnMut(&Event) -> bool,
 ) -> Option<&'a Event> {
     let last = events.last()?;
     if is_pause(last) {
@@ -294,6 +294,9 @@ pub(crate) fn continuation_pause<'a>(
 /// invocation starts. The run fails (not retryable): another submission of the
 /// card is stale behind this execution's continuation.
 pub(crate) const DISPATCH_UNRECORDED_CODE: &str = "agent.dispatch_unrecorded";
+/// The internal (never user-facing) detail of [`DISPATCH_UNRECORDED_CODE`].
+pub(crate) const DISPATCH_UNRECORDED_DETAIL: &str =
+    "an approved tool call's dispatch could not be recorded; it was not run";
 
 /// One invocation's stop after a failed `dispatched` append.
 ///
@@ -311,14 +314,15 @@ impl DispatchAbort {
         let _ = self.0.set(());
     }
 
-    fn error(&self) -> Option<adk_rust::AdkError> {
+    /// The stop, once a dispatch record failed.
+    pub(crate) fn error(&self) -> Option<adk_rust::AdkError> {
         self.0.get().map(|()| {
             adk_rust::AdkError::new(
                 adk_rust::ErrorComponent::Session,
                 // Not retryable: the run stops.
                 adk_rust::ErrorCategory::Internal,
                 DISPATCH_UNRECORDED_CODE,
-                "an approved tool call's dispatch could not be recorded; it was not run",
+                DISPATCH_UNRECORDED_DETAIL,
             )
         })
     }
@@ -505,6 +509,7 @@ impl DispatchJournal {
             interrupt_id: decision.interrupt_id.to_owned(),
             call_ids,
             outcomes,
+            dispatch: tokio::sync::Mutex::new(()),
         });
         toolsets
             .into_iter()
@@ -582,6 +587,9 @@ struct JournalScope {
     interrupt_id: String,
     call_ids: BTreeSet<String>,
     outcomes: JournalOutcomes,
+    /// Orders the stop check and the `dispatched` append of concurrently run
+    /// calls of one message: once one append failed, no sibling starts.
+    dispatch: tokio::sync::Mutex<()>,
 }
 
 impl JournalScope {
@@ -678,22 +686,27 @@ impl Tool for JournalTool {
         if !self.scope.call_ids.contains(&call_id) {
             return self.inner.execute(context, arguments).await;
         }
-        // An earlier call's dispatch record failed: the invocation is stopping,
-        // and no further approved effect starts.
-        if let Some(error) = self.scope.journal.abort.error() {
-            return Err(error);
-        }
-        // The dispatch is durable before the effect, or the effect never starts.
-        // A failed append stops the whole invocation at its next model step
-        // (`DispatchAbort`): the tool error alone would be read by the model.
-        if let Err(error) = self
-            .scope
-            .journal
-            .append(&self.scope.record(Phase::Dispatched, call_id.clone(), None))
-            .await
         {
-            self.scope.journal.abort.record();
-            return Err(error);
+            // One at a time per message, so a sibling never starts after this
+            // call's dispatch record failed (concurrent tool execution).
+            let _dispatch = self.scope.dispatch.lock().await;
+            // An earlier call's dispatch record failed: the invocation is
+            // stopping, and no further approved effect starts.
+            if let Some(error) = self.scope.journal.abort.error() {
+                return Err(error);
+            }
+            // The dispatch is durable before the effect, or the effect never
+            // starts. A failed append stops the whole invocation
+            // (`DispatchAbort`): the tool error alone would be read by the model.
+            if let Err(error) = self
+                .scope
+                .journal
+                .append(&self.scope.record(Phase::Dispatched, call_id.clone(), None))
+                .await
+            {
+                self.scope.journal.abort.record();
+                return Err(error);
+            }
         }
         let outcome = self.inner.execute(context, arguments).await;
         if self.scope.outcomes == JournalOutcomes::ByRunner {
@@ -1319,12 +1332,13 @@ mod tests {
             .await
             .expect("tools")
             .remove(0);
-            for call in ["call-1", "call-2"] {
-                assert!(
-                    tool.execute(call_context(call), json!({})).await.is_err(),
-                    "{call} is refused"
-                );
-            }
+            // Both approved calls of the message run concurrently, as ADK may run
+            // them: neither effect starts once the first dispatch record failed.
+            let (first, second) = tokio::join!(
+                tool.execute(call_context("call-1"), json!({})),
+                tool.execute(call_context("call-2"), json!({})),
+            );
+            assert!(first.is_err() && second.is_err(), "both calls are refused");
             assert_eq!(
                 calls.load(std::sync::atomic::Ordering::Acquire),
                 0,

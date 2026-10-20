@@ -342,12 +342,10 @@ impl PipelineApplicationNodeRuntime {
     /// The run ends with the refusal's registered reason, as an unscoped Agent
     /// node does (`graph/application.rs` `child_failure`).
     async fn typed_refusal(&self, code: &str) -> GraphError {
-        let typed = if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
-            self.events.recovery_refused(&self.node_name).await
-        } else {
-            self.events.dispatch_unrecorded(&self.node_name).await
-        };
-        typed.unwrap_or_else(failure)
+        self.events
+            .approved_call_stop(code, &self.node_name)
+            .await
+            .unwrap_or_else(failure)
     }
 
     async fn drain(

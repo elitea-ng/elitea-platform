@@ -636,7 +636,7 @@ impl PipelineContinuationDecision {
                     |event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY),
                     owner,
                     |pause| pause_interrupt_ids(pause, root_agent_name, thread_id),
-                    crate::agents::application_tools::is_pipeline_continuation_event,
+                    crate::agents::application_tools::pipeline_continuation_suffix(),
                 )
                 .ok_or_else(PipelineResumeError::stale)?;
                 if let Ok(binding) =
@@ -689,13 +689,16 @@ impl PipelineContinuationDecision {
                     if submitted.is_empty() || !submitted.is_subset(&expected) {
                         return Err(PipelineResumeError::stale());
                     }
+                    let pause_id = interrupt.id.clone();
+                    let pause_invocation_id = interrupt.invocation_id.clone();
                     return Ok(ResolvedPipelineContinuation::application(
                         PipelineResume::empty(),
                         PipelineApplicationContinuation {
                             decisions,
-                            pause_id: interrupt.id.clone(),
-                            pause_invocation_id: interrupt.invocation_id.clone(),
+                            pause_id,
+                            pause_invocation_id,
                             binding,
+                            events,
                         },
                     ));
                 }
@@ -739,6 +742,8 @@ pub(crate) struct PipelineApplicationContinuation {
     pub(crate) pause_id: String,
     pub(crate) pause_invocation_id: String,
     pub(crate) binding: crate::agents::events::PipelineApplicationHitlEventBinding,
+    /// The session events the pause was proven against.
+    pub(crate) events: Vec<adk_rust::Event>,
 }
 
 impl ResolvedPipelineContinuation {
@@ -1382,7 +1387,7 @@ impl PipelineResumeError {
         Self::new(PipelineResumeErrorCode::InvalidInput)
     }
 
-    pub(super) const fn stale() -> Self {
+    pub(crate) const fn stale() -> Self {
         Self::new(PipelineResumeErrorCode::StaleDecision)
     }
 
