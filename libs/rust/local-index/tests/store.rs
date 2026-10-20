@@ -276,10 +276,10 @@ fn an_index_from_a_newer_app_is_refused() {
     SqliteGraphStore::open(&index).unwrap().close();
     rusqlite::Connection::open(index.join(FILE_NAME))
         .unwrap()
-        .execute_batch("PRAGMA user_version = 3;")
+        .execute_batch("PRAGMA user_version = 99;")
         .unwrap();
     match SqliteGraphStore::open(&index) {
-        Err(StoreError::NewerSchema(3)) => {}
+        Err(StoreError::NewerSchema(99)) => {}
         other => panic!("a newer schema is refused, got {other:?}"),
     }
 }
@@ -349,6 +349,7 @@ fn a_version_1_index_gains_the_embedding_hash_column() {
     let raw = rusqlite::Connection::open(index.join(FILE_NAME)).unwrap();
     raw.execute_batch(
         "ALTER TABLE entities DROP COLUMN embedding_hash;
+         DROP TABLE chunks; DROP TABLE chunks_fts;
          UPDATE meta SET value = '1' WHERE key = 'schema_version';
          PRAGMA user_version = 1;",
     )

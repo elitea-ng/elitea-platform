@@ -17,9 +17,14 @@
 //!   under another `path_deny` is never answered from (`index.not_ready`
 //!   until the rebuild commits).
 //!
+//! `search_workspace` is local only (no cloud tool has its name): one ranked
+//! list of file locations from the chunks' full-text index, the graph and
+//! (when turned on) the vectors ([`crate::search`]).
+//!
 //! Every tool only reads, so each runs without an approval, in plan mode
 //! too, and calls may run concurrently.
 
+use crate::search::Request;
 use crate::service::{IndexService, IndexState};
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
@@ -181,8 +186,31 @@ pub static TOOLS: [IndexToolSpec; 7] = [
     },
 ];
 
+fn search_workspace() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What to look for: a question, a phrase, or identifiers (e.g. 'where are refresh tokens rotated', 'IndexRegistry for_turn')"},
+            "top_k": {"type": "integer", "description": "Maximum number of results (1-50)", "default": 10},
+            "path_glob": {"type": "string", "description": "Only files matching this glob, e.g. 'src/**/*.rs' or '*.md'"},
+            "kind": {"type": "string", "enum": ["code", "docs", "any"], "description": "Only code, only documentation, or both", "default": "any"},
+            "mode": {"type": "string", "enum": ["auto", "lexical", "semantic"], "description": "auto: every signal the index has; lexical: words and identifiers only; semantic: meaning only (needs embeddings)", "default": "auto"}
+        },
+        "required": ["query"]
+    })
+}
+
+/// The tools only the local index has (no cloud tool takes these names).
+pub static LOCAL_TOOLS: [IndexToolSpec; 1] = [IndexToolSpec {
+    name: "search_workspace",
+    family: "local",
+    description: "Search the workspace's files for a question or identifiers and get the best places to read: path, line range, a snippet, a score and which signals matched (words, the code graph, its neighbours, meaning). Start here before reading files; pass entity_ref to get_entity_details for an entity's relations.",
+    parameters: search_workspace,
+}];
+
 /// The index tools' names: the names a remote toolkit's tool must not take.
-pub const NAMES: [&str; 7] = [
+pub const NAMES: [&str; 8] = [
+    "search_workspace",
     "search_knowledge_graph",
     "get_entity_details",
     "get_related_entities",
@@ -331,6 +359,9 @@ impl IndexTool {
     /// Run the tool without the agent runtime (the host's tests, a UI
     /// preview).
     pub async fn call(&self, args: Value) -> Value {
+        if self.spec.family == "local" {
+            return self.call_local(args).await;
+        }
         if self.service.is_closed() {
             // Removed, turned off, or reopened under another policy since
             // the turn was offered it: answer nothing from it.
@@ -352,6 +383,55 @@ impl IndexTool {
         // The handlers walk the whole graph: off the runtime's threads.
         tokio::task::spawn_blocking(move || {
             answer(spec, &view, &workspace, &args, notice.as_deref())
+        })
+        .await
+        .unwrap_or_else(|_| failure("index.failed", "the index tool stopped unexpectedly"))
+    }
+}
+
+impl IndexTool {
+    /// `search_workspace`: the chunks (SQLite) and the view, off the
+    /// runtime's threads.
+    async fn call_local(&self, args: Value) -> Value {
+        let params = args.as_object().cloned().unwrap_or_default();
+        let request = match Request::from_args(&params) {
+            Ok(request) => request,
+            Err(message) => return failure("index.invalid_arguments", message),
+        };
+        let service = Arc::clone(&self.service);
+        tokio::task::spawn_blocking(move || {
+            let dense = service.dense();
+            match service.search(&request, dense.as_deref()) {
+                Ok((answer, notice)) => {
+                    let mut text = String::new();
+                    if let Some(notice) = notice {
+                        text.push_str(&notice);
+                        text.push_str("\n\n");
+                    }
+                    if let Some(note) = &answer.note {
+                        text.push_str("Note: ");
+                        text.push_str(note);
+                        text.push_str("\n\n");
+                    }
+                    if answer.hits.is_empty() {
+                        text.push_str("No matches in the workspace index.");
+                    } else {
+                        text.push_str(
+                            &serde_json::to_string_pretty(&answer.hits).unwrap_or_default(),
+                        );
+                    }
+                    json!({"status": "ok", "result": text})
+                }
+                Err(error) if error.code == "index_closed" => failure(
+                    "index.closed",
+                    "The workspace index was removed or turned off; use the file tools.",
+                ),
+                Err(error) if error.code == "index_not_ready" => failure(
+                    "index.not_ready",
+                    "The workspace index has not been built yet; use the file tools.",
+                ),
+                Err(error) => failure("index.failed", error.message),
+            }
         })
         .await
         .unwrap_or_else(|_| failure("index.failed", "the index tool stopped unexpectedly"))
@@ -401,8 +481,9 @@ impl IndexToolset {
     /// `index.not_ready` before the first build).
     #[must_use]
     pub fn current_tools(&self) -> Vec<Arc<IndexTool>> {
-        TOOLS
+        LOCAL_TOOLS
             .iter()
+            .chain(TOOLS.iter())
             .map(|spec| {
                 Arc::new(IndexTool {
                     spec,

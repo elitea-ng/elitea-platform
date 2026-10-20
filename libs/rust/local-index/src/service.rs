@@ -29,8 +29,10 @@
 //!
 //! The tools never touch SQLite: they read the view held here.
 
+use crate::chunks;
+use crate::search::{Answer, Dense, NameIndex, Request};
 use crate::source::{LocalFolderSource, SOURCE_NAME};
-use crate::sqlite_store::{SqliteGraphStore, StoreError};
+use crate::sqlite_store::{ChunkUpdate, SqliteGraphStore, StoreError};
 use elitea_content_source::content_version;
 use elitea_engine_core::stream::{Context, Line, StopSignal};
 use elitea_inventory_core::graph::Graph;
@@ -242,6 +244,8 @@ struct Inner {
     /// from nothing, and nothing is served until it commits.
     policy_mismatch: bool,
     closed: bool,
+    /// The graph's names for `search_workspace`, of the view's revision.
+    names: Option<Arc<NameIndex>>,
 }
 
 /// One workspace's index.
@@ -365,6 +369,7 @@ impl IndexService {
                 changed_at_start: 0,
                 policy_mismatch,
                 closed: false,
+                names: None,
             }),
         }))
     }
@@ -482,6 +487,58 @@ impl IndexService {
             )),
         };
         Some((view, notice))
+    }
+
+    /// The name index of `view` (built on first use after a build).
+    fn names_of(&self, view: &GraphView) -> Arc<NameIndex> {
+        if let Some(names) = self.inner().names.clone()
+            && names.revision == view.revision
+        {
+            return names;
+        }
+        let names = Arc::new(NameIndex::build(view));
+        let mut inner = self.inner();
+        if inner
+            .view
+            .as_ref()
+            .is_some_and(|current| current.revision == view.revision)
+        {
+            inner.names = Some(Arc::clone(&names));
+        }
+        names
+    }
+
+    /// The dense side of a search, when this index has vectors.
+    #[must_use]
+    pub fn dense(&self) -> Option<Arc<dyn Dense>> {
+        None
+    }
+
+    /// `search_workspace` over the build the tools answer from (and the
+    /// chunks committed with it), with the notice an answer starts with.
+    /// Blocking (SQLite).
+    ///
+    /// # Errors
+    ///
+    /// `index_closed`, `index_not_ready` (no build under the current
+    /// policy yet), or the store failed.
+    pub fn search(
+        &self,
+        request: &Request,
+        dense: Option<&dyn Dense>,
+    ) -> Result<(Answer, Option<String>), IndexError> {
+        if self.is_closed() {
+            return Err(closed_error());
+        }
+        let (view, notice) = self.view().ok_or_else(|| {
+            IndexError::new(
+                "index_not_ready",
+                "The workspace index has not been built yet.",
+            )
+        })?;
+        let names = self.names_of(&view);
+        let answer = crate::search::search_workspace(&self.store, &view, &names, request, dense)?;
+        Ok((answer, notice))
     }
 
     /// Note that `files` files changed (a turn wrote them): a ready index
@@ -755,7 +812,11 @@ impl IndexService {
             };
             // A build from another policy is never the start of this one.
             let full = full || self.inner().policy_mismatch;
-            let (mut graph, previous, stat_cache) = if full {
+            // Chunks made by another chunker (or none yet, an index built
+            // before chunks): every file is read once more to cut them;
+            // the unchanged ones are not parsed again.
+            let rechunk = self.store.chunk_generation()?.as_deref() != Some(chunks::GENERATION);
+            let (mut graph, previous, mut stat_cache) = if full {
                 (
                     Graph::new(),
                     BTreeMap::new(),
@@ -768,11 +829,15 @@ impl IndexService {
                     self.store.document_stats(KEY, SOURCE_NAME)?,
                 )
             };
+            if rechunk {
+                stat_cache.clear();
+            }
             self.store.start(KEY, &source_status).await?;
             started = true;
             let source = LocalFolderSource::new(Arc::clone(&self.workspace))
                 .with_previous(stat_cache)
-                .selecting(Selection::default());
+                .selecting(Selection::default())
+                .chunking();
             let outcome = ingest_documents(
                 &mut graph,
                 &SourceSelection::all(SOURCE_NAME),
@@ -798,12 +863,19 @@ impl IndexService {
                 },
                 commit_sha: None,
             };
-            let revision = self.store.complete_with_stats(
+            let threads =
+                std::thread::available_parallelism().map_or(2, std::num::NonZero::get) / 2;
+            let staged = source.take_staged(threads);
+            let revision = self.store.complete_with_chunks(
                 KEY,
                 &graph,
                 &completion,
                 &source.stats(),
                 Some(&self.policy),
+                Some(ChunkUpdate {
+                    staged: &staged,
+                    generation: chunks::GENERATION,
+                }),
             )?;
             let report = RunReport {
                 read: count(outcome.documents_processed),

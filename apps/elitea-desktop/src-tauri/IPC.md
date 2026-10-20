@@ -515,13 +515,30 @@ structure of the person's own folder and no account data. `index_remove`
 or `workspace_remove` deletes it.
 
 A turn in a workspace whose index is on and built is offered its tools
-(toolset `workspace_index`, reported `remote: false`): `search_knowledge_graph`,
+(toolset `workspace_index`, reported `remote: false`): `search_workspace`
+(local only, below), then `search_knowledge_graph`,
 `get_entity_details`, `get_related_entities`, `query_graph`,
 `list_entity_types`, `impact_analysis` and `get_entity_content`, with the
 cloud Inventory tools' names and arguments. They only read, so they run
 without approval and in plan mode too. An answer from a build that may be
 out of date starts with a one-line `Note:`. A toolkit tool never takes one
 of these names (it gets a `_2` suffix), whether or not the index is on.
+
+`search_workspace {query, top_k = 10 (≤ 50), path_glob?, kind = code | docs
+| any, mode = auto | lexical | semantic}` answers a JSON list of
+`{path, line_start, line_end, snippet, score, matched_by[], entity_ref?}`:
+the build's search chunks (every line of every text file, cut by the
+cloud index's chunkers, with the lines those leave out as chunks of their
+own; lock files, minified bundles and data files over 256 KB are not
+chunked) ranked by BM25 over their text and an identifier column
+(`camelCase` / `snake_case` split, path parts), fused by weighted
+reciprocal rank (k = 60) with the code graph's name matches and their
+one-hop neighbours (`matched_by`: `lexical`, `graph`, `neighbour`).
+`entity_ref` is the entity a hit holds, as `get_entity_details` takes it.
+The chunks are committed in the same transaction as the build, so they
+always describe the documents it holds; an index built before chunks
+existed reads every file once on its next refresh to cut them (nothing is
+parsed again).
 
 ## Cloud handoff (`src/handoff.rs`, ADR-0034)
 
