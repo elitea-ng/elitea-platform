@@ -92,6 +92,12 @@ EXEMPT_WORKFLOWS = {
         "PR-time checks of the image list, the exemption register and the "
         "gate rule are in image-matrix.yml."
     ),
+    "ci-image-cleanup.yml": (
+        "No push arm, deliberately: it deletes old versions of the CI-only "
+        "ci-* container packages on a daily schedule (plus dispatch), and a "
+        "merge is no reason to delete anything. Its pull_request arm runs it "
+        "as a dry run when the workflow or its policy changes."
+    ),
     "ci-web-mutation.yml": (
         "It has no push arm at all. It is a weekly cadence job plus manual "
         "dispatch, not a per-merge gate."
