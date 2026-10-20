@@ -42,6 +42,9 @@ jobs:
       # rust-version, held to the repository-root pin. This workflow has no
       # path filter, so the gate runs on whatever file moved. The second
       # command proves the gate red, once per assertion, on a broken copy.
+      # check-rust-toolchain.mjs reads the YAML files with the `yaml` package.
+      - name: Install the toolchain check's one dependency
+        uses: ./.github/actions/ci-scripts-deps
       - name: One Rust toolchain across cargo, CI and images
         run: |
           bash scripts/ci/check-rust-toolchain.sh
