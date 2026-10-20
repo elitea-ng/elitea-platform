@@ -29,6 +29,16 @@ of each enclosing [workspace] those packages inherit fields from (cargo loads
 the whole workspace to resolve `workspace = true`), plus that workspace's
 root manifest.
 
+LOCAL CRATES A REGISTRY CRATE DEPENDS ON ARE COPIED WHOLE. A `[patch]` swaps
+a registry crate for a local one, so a REGISTRY crate can depend on a LOCAL
+crate (the worker: registry adk-rust uses the vendored adk-runner and
+adk-agent). A placeholder there makes the registry crate fail to compile in
+the dependency layer ("unresolved import adk_runner::Launcher", measured).
+So every local crate reachable from a non-local one in the resolve graph,
+and every local crate those reach, is copied with its real sources. They
+are vendored third-party crates that change rarely; the real build still
+recompiles them after the touch.
+
 THE PLACEHOLDERS. One file per target cargo reports, at the path it reports:
 `fn main() {}` for binaries, build scripts, tests, benches and examples, and a
 crate doc comment for libraries. Nothing in this repository denies a lint an
@@ -77,6 +87,21 @@ def enclosing_workspace(package_dir: pathlib.Path, root: pathlib.Path) -> pathli
     return None
 
 
+def whole_crates(full: dict, by_id: dict) -> set[str]:
+    """Manifest paths of the local crates that must keep their real sources."""
+    deps = {node["id"]: [d["pkg"] for d in node.get("deps", [])] for node in (full.get("resolve") or {}).get("nodes", [])}
+    local = {pid for pid, pkg in by_id.items() if pkg["source"] is None}
+    frontier = [d for pid, ds in deps.items() if pid not in local for d in ds if d in local]
+    seen: set[str] = set()
+    while frontier:
+        pid = frontier.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        frontier.extend(d for d in deps.get(pid, []) if d in local)
+    return {by_id[pid]["manifest_path"] for pid in seen}
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
         print(__doc__.split("\n\n", 1)[0], file=sys.stderr)
@@ -88,9 +113,12 @@ def main(argv: list[str]) -> int:
     root = service.parents[1]
 
     packages: dict[str, dict] = {}
-    for package in metadata(service / "Cargo.toml", "--all-features")["packages"]:
+    full = metadata(service / "Cargo.toml", "--all-features")
+    by_id = {package["id"]: package for package in full["packages"]}
+    for package in full["packages"]:
         if package["source"] is None:
             packages[package["manifest_path"]] = package
+    whole = whole_crates(full, by_id)
     patches = tomllib.loads((service / "Cargo.toml").read_text()).get("patch", {})
     for table in patches.values():
         for spec in table.values():
@@ -115,6 +143,11 @@ def main(argv: list[str]) -> int:
     for manifest_path, package in packages.items():
         manifest = pathlib.Path(manifest_path)
         files[manifest.relative_to(root)] = manifest
+        if manifest_path in whole:
+            for source in sorted(manifest.parent.rglob("*")):
+                if source.is_file() and "target" not in source.relative_to(manifest.parent).parts:
+                    files[source.relative_to(root)] = source
+            continue
         for target in package["targets"]:
             src = pathlib.Path(target["src_path"]).relative_to(root)
             is_library = bool(LIBRARY_KINDS.intersection(target["kind"]))
@@ -134,7 +167,7 @@ def main(argv: list[str]) -> int:
         else:
             destination.write_text(source)
     local = sum(1 for p in packages if pathlib.Path(p).is_relative_to(root))
-    print(f"dependency skeleton: {local} local crate(s), {len(files)} file(s) under {out}")
+    print(f"dependency skeleton: {local} local crate(s), {len(whole)} copied whole, {len(files)} file(s) under {out}")
     return 0
 
 
