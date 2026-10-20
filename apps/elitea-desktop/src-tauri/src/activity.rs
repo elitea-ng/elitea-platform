@@ -1,0 +1,656 @@
+//! What the app is doing, for the places outside the window: the menu-bar
+//! item (a compact title such as `◐ 0:42` or `⚠ 1`, and a menu of the turns
+//! that run or wait) and the Dock's progress bar (index builds and sends to
+//! the cloud).
+//!
+//! [`ActivityState`] is the pure core — fed with the same agent / index /
+//! handoff events the window gets, it answers "what is the title, the menu,
+//! the dock progress now" and is tested without a window. [`Activity`] is
+//! the app side: it feeds the state from the event emitters and applies the
+//! answers on the main thread.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::window::{ProgressBarState, ProgressBarStatus};
+use tauri::{AppHandle, Manager as _, Wry};
+
+use crate::app_events;
+use crate::d0::events::AgentEvent;
+use crate::local_commands::LocalState;
+
+/// The tray item's id (`AppHandle::tray_by_id`).
+const TRAY_ID: &str = "elitea";
+/// Menu ids: a turn's item carries its id after the prefix.
+const TURN_PREFIX: &str = "tray_turn:";
+const SHOW: &str = "tray_show";
+const QUIT: &str = "tray_quit";
+/// A menu shows at most this many turns; the title says the rest.
+const MAX_ENTRIES: usize = 8;
+
+/// A tool's approval waiting for the person.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Approval {
+    turn_id: String,
+    tool: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Progress {
+    done: u64,
+    total: Option<u64>,
+}
+
+/// The Dock's progress bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dock {
+    /// No bar.
+    None,
+    /// Busy, how far unknown.
+    Indeterminate,
+    /// 0–100.
+    Percent(u64),
+}
+
+/// One line of the tray menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// A line that does nothing ("Nothing running").
+    Note(String),
+    /// A turn: choosing it shows the window on its folder.
+    Turn {
+        turn_id: String,
+        label: String,
+    },
+    Separator,
+    Show,
+    Quit,
+}
+
+#[derive(Default)]
+pub struct ActivityState {
+    /// Running turns and when they were first heard of.
+    turns: BTreeMap<String, Instant>,
+    approvals: BTreeMap<String, Approval>,
+    index: HashMap<String, Progress>,
+    sends: HashMap<String, Progress>,
+}
+
+fn shown(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(limit - 1).collect();
+    out.push('…');
+    out
+}
+
+/// `m:ss`, or `h:mm:ss` past an hour.
+#[must_use]
+pub fn clock(elapsed: Duration) -> String {
+    let total = elapsed.as_secs();
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+fn parse_after(message: &str, before: &str, after: &str) -> Option<u64> {
+    let start = message.find(before)? + before.len();
+    let rest = &message[start..];
+    rest[..rest.find(after)?].trim().parse().ok()
+}
+
+impl ActivityState {
+    /// Fold one agent event. `now` is when it was heard.
+    pub fn observe_agent(&mut self, event: &AgentEvent, now: Instant) {
+        let turn = event.turn_id.as_str();
+        match event.kind {
+            "status" => {
+                let phase = event.payload["phase"].as_str().unwrap_or("");
+                if matches!(phase, "resolving" | "starting" | "running" | "committing") {
+                    self.turns.entry(turn.to_owned()).or_insert(now);
+                }
+                // The run went on: whatever it asked was answered.
+                if phase == "running" {
+                    self.approvals.retain(|_, a| a.turn_id != turn);
+                }
+            }
+            "approval_request" => {
+                if let Some(id) = event.payload["request_id"].as_str() {
+                    let tool = if event.payload["kind"] == "continue" {
+                        "continue".to_owned()
+                    } else {
+                        shown(event.payload["tool"].as_str().unwrap_or("a tool"), 40)
+                    };
+                    self.turns.entry(turn.to_owned()).or_insert(now);
+                    self.approvals.insert(
+                        id.to_owned(),
+                        Approval {
+                            turn_id: turn.to_owned(),
+                            tool,
+                        },
+                    );
+                }
+            }
+            "tool_result" | "text_delta" => self.approvals.retain(|_, a| a.turn_id != turn),
+            "done" => {
+                self.turns.remove(turn);
+                self.approvals.retain(|_, a| a.turn_id != turn);
+            }
+            _ => {}
+        }
+    }
+
+    /// `approval_respond` answered a request.
+    pub fn answered(&mut self, request_id: &str) {
+        self.approvals.remove(request_id);
+    }
+
+    /// An index report: `building` says whether it is (still) building.
+    pub fn observe_index(&mut self, workspace_id: &str, building: bool, message: Option<&str>) {
+        if !building {
+            self.index.remove(workspace_id);
+            return;
+        }
+        let progress = self.index.entry(workspace_id.to_owned()).or_default();
+        let message = message.unwrap_or("");
+        if let Some(total) = parse_after(message, "Parsing ", " files") {
+            *progress = Progress {
+                done: 0,
+                total: Some(total),
+            };
+        } else if let Some(done) = parse_after(message, "Processed ", " files") {
+            progress.done = done;
+        }
+    }
+
+    /// A send to the cloud's report (`complete`, `cancelled` and `error` end it).
+    pub fn observe_send(&mut self, uuid: &str, phase: &str, done: u64, total: u64) {
+        if matches!(phase, "complete" | "cancelled" | "error") {
+            self.sends.remove(uuid);
+        } else {
+            self.sends.insert(
+                uuid.to_owned(),
+                Progress {
+                    done,
+                    total: (total > 0).then_some(total),
+                },
+            );
+        }
+    }
+
+    /// Whether a timer is on screen (so something must re-render each second).
+    #[must_use]
+    pub fn has_timer(&self) -> bool {
+        !self.turns.is_empty()
+    }
+
+    /// The menu-bar title: `⚠ n` for approvals waiting, else `◐ m:ss` for the
+    /// longest-running turn, else empty (the icon alone).
+    #[must_use]
+    pub fn title(&self, now: Instant) -> String {
+        if !self.approvals.is_empty() {
+            return format!("⚠ {}", self.approvals.len());
+        }
+        match self.turns.values().min() {
+            Some(start) => format!("◐ {}", clock(now.saturating_duration_since(*start))),
+            None => String::new(),
+        }
+    }
+
+    /// The Dock bar: a send to the cloud first, else the index builds.
+    #[must_use]
+    pub fn dock(&self) -> Dock {
+        let bars = if self.sends.is_empty() {
+            &self.index
+        } else {
+            &self.sends
+        };
+        if bars.is_empty() {
+            return Dock::None;
+        }
+        let (mut done, mut total) = (0_u64, 0_u64);
+        for progress in bars.values() {
+            match progress.total {
+                Some(t) if t > 0 => {
+                    done += progress.done.min(t);
+                    total += t;
+                }
+                _ => return Dock::Indeterminate,
+            }
+        }
+        Dock::Percent(done * 100 / total)
+    }
+
+    /// The tray menu: approvals first, then the other running turns.
+    #[must_use]
+    pub fn entries(&self, workspace_of: &dyn Fn(&str) -> Option<String>) -> Vec<Entry> {
+        let place = |turn: &str| workspace_of(turn).map(|name| shown(&name, 40));
+        let mut list: Vec<Entry> = Vec::new();
+        for approval in self.approvals.values() {
+            let label = match place(&approval.turn_id) {
+                Some(name) => format!("Approve {} — {name}", approval.tool),
+                None => format!("Approve {}", approval.tool),
+            };
+            list.push(Entry::Turn {
+                turn_id: approval.turn_id.clone(),
+                label,
+            });
+        }
+        for turn in self.turns.keys() {
+            if self.approvals.values().any(|a| &a.turn_id == turn) {
+                continue;
+            }
+            let label = match place(turn) {
+                Some(name) => format!("Running — {name}"),
+                None => "Running".to_owned(),
+            };
+            list.push(Entry::Turn {
+                turn_id: turn.clone(),
+                label,
+            });
+        }
+        list.truncate(MAX_ENTRIES);
+        if list.is_empty() {
+            list.push(Entry::Note("Nothing running".to_owned()));
+        }
+        list.extend([Entry::Separator, Entry::Show, Entry::Quit]);
+        list
+    }
+}
+
+/// The turn a tray menu id names.
+#[must_use]
+pub fn turn_of(menu_id: &str) -> Option<&str> {
+    menu_id.strip_prefix(TURN_PREFIX)
+}
+
+/// The app side: the state, the tray item and the dock.
+pub struct Activity {
+    app: AppHandle,
+    state: Mutex<ActivityState>,
+    ticking: AtomicBool,
+    /// The menu last applied, to rebuild it only when it changed.
+    applied: Mutex<Vec<Entry>>,
+}
+
+impl Activity {
+    #[must_use]
+    pub fn new(app: AppHandle) -> Self {
+        Self {
+            app,
+            state: Mutex::new(ActivityState::default()),
+            ticking: AtomicBool::new(false),
+            applied: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, ActivityState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn agent(&self, event: &AgentEvent) {
+        self.state().observe_agent(event, Instant::now());
+        self.changed();
+    }
+
+    pub fn answered(&self, request_id: &str) {
+        self.state().answered(request_id);
+        self.changed();
+    }
+
+    pub fn index(&self, workspace_id: &str, building: bool, message: Option<&str>) {
+        self.state().observe_index(workspace_id, building, message);
+        self.changed();
+    }
+
+    pub fn send(&self, uuid: &str, phase: &str, done: u64, total: u64) {
+        self.state().observe_send(uuid, phase, done, total);
+        self.changed();
+    }
+
+    /// Re-render now, and keep re-rendering each second while a timer shows.
+    fn changed(&self) {
+        self.render();
+        if self.state().has_timer() && !self.ticking.swap(true, Ordering::AcqRel) {
+            let app = self.app.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let Some(activity) = app.try_state::<std::sync::Arc<Activity>>() else {
+                        break;
+                    };
+                    activity.render();
+                    if !activity.state().has_timer() {
+                        activity.ticking.store(false, Ordering::Release);
+                        // One last look: a turn may have started in between.
+                        if activity.state().has_timer()
+                            && !activity.ticking.swap(true, Ordering::AcqRel)
+                        {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            });
+        }
+    }
+
+    fn workspace_name(app: &AppHandle, turn_id: &str) -> Option<String> {
+        let local = app.try_state::<LocalState>()?;
+        let workspace_id = local.agents.turn_workspace(turn_id)?;
+        local
+            .workspaces
+            .get(&workspace_id)
+            .ok()
+            .flatten()
+            .map(|w| w.name)
+    }
+
+    /// Apply the state to the tray and the dock, on the main thread.
+    fn render(&self) {
+        let (title, dock, entries) = {
+            let state = self.state();
+            (
+                state.title(Instant::now()),
+                state.dock(),
+                state.entries(&|turn| Self::workspace_name(&self.app, turn)),
+            )
+        };
+        let changed = {
+            let mut applied = self
+                .applied
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let changed = *applied != entries;
+            if changed {
+                applied.clone_from(&entries);
+            }
+            changed
+        };
+        let app = self.app.clone();
+        let _ = self.app.run_on_main_thread(move || {
+            apply(&app, &title, dock, changed.then_some(&entries));
+        });
+    }
+}
+
+fn apply(app: &AppHandle, title: &str, dock: Dock, entries: Option<&Vec<Entry>>) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_title((!title.is_empty()).then_some(title));
+        let _ = tray.set_tooltip(Some(if title.is_empty() { "Elitea" } else { title }));
+        if let Some(entries) = entries
+            && let Ok(menu) = build_menu(app, entries)
+        {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let state = match dock {
+            Dock::None => ProgressBarState {
+                status: Some(ProgressBarStatus::None),
+                progress: None,
+            },
+            Dock::Indeterminate => ProgressBarState {
+                status: Some(ProgressBarStatus::Indeterminate),
+                progress: None,
+            },
+            Dock::Percent(p) => ProgressBarState {
+                status: Some(ProgressBarStatus::Normal),
+                progress: Some(p),
+            },
+        };
+        let _ = window.set_progress_bar(state);
+    }
+}
+
+fn build_menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<Wry>> {
+    let menu = Menu::new(app)?;
+    for entry in entries {
+        match entry {
+            Entry::Note(text) => menu.append(&MenuItem::new(app, text, false, None::<&str>)?)?,
+            Entry::Turn { turn_id, label } => menu.append(&MenuItem::with_id(
+                app,
+                format!("{TURN_PREFIX}{turn_id}"),
+                label,
+                true,
+                None::<&str>,
+            )?)?,
+            Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
+            Entry::Show => menu.append(&MenuItem::with_id(
+                app,
+                SHOW,
+                "Show Elitea",
+                true,
+                None::<&str>,
+            )?)?,
+            Entry::Quit => menu.append(&MenuItem::with_id(
+                app,
+                QUIT,
+                "Quit Elitea",
+                true,
+                Some("CmdOrCtrl+Q"),
+            )?)?,
+        }
+    }
+    Ok(menu)
+}
+
+/// Create the menu-bar item. A system without a tray (some Linux desktops)
+/// reports an error the caller logs; the app works without it.
+///
+/// # Errors
+///
+/// The OS refused the tray item.
+pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
+    let icon = Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    let menu = build_menu(app, &ActivityState::default().entries(&|_| None))?;
+    TrayIconBuilder::with_id(TRAY_ID)
+        .icon(icon)
+        .icon_as_template(true)
+        .tooltip("Elitea")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+            if id == SHOW {
+                app_events::show_main(app);
+            } else if id == QUIT {
+                app.exit(0);
+            } else if let Some(turn) = turn_of(id) {
+                focus_turn(app, turn);
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// Bring the window forward on the folder a turn runs in.
+fn focus_turn(app: &AppHandle, turn_id: &str) {
+    app_events::show_main(app);
+    if let Some(workspace_id) = app
+        .try_state::<LocalState>()
+        .and_then(|local| local.agents.turn_workspace(turn_id))
+    {
+        app_events::emit(
+            app,
+            "focus_turn",
+            Some(serde_json::json!({ "workspace_id": workspace_id, "turn_id": turn_id })),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn event(turn: &str, kind: &'static str, payload: Value) -> AgentEvent {
+        AgentEvent {
+            turn_id: turn.into(),
+            seq: 0,
+            kind,
+            payload,
+        }
+    }
+
+    fn running(turn: &str) -> AgentEvent {
+        event(turn, "status", json!({"phase": "running"}))
+    }
+
+    fn approval(turn: &str, request: &str, tool: &str) -> AgentEvent {
+        event(
+            turn,
+            "approval_request",
+            json!({"request_id": request, "tool": tool, "title": "Run `curl -H secret`"}),
+        )
+    }
+
+    fn names(turn: &str) -> Option<String> {
+        Some(
+            match turn {
+                "t1" => "elitea-platform",
+                "t2" => "docs",
+                _ => return None,
+            }
+            .to_owned(),
+        )
+    }
+
+    #[test]
+    fn clock_counts_minutes_and_hours() {
+        assert_eq!(clock(Duration::from_secs(42)), "0:42");
+        assert_eq!(clock(Duration::from_secs(125)), "2:05");
+        assert_eq!(clock(Duration::from_secs(3725)), "1:02:05");
+    }
+
+    #[test]
+    fn the_title_is_the_timer_of_the_oldest_turn_and_an_approval_beats_it() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        assert_eq!(state.title(t0), "");
+        state.observe_agent(&running("t1"), t0);
+        state.observe_agent(&running("t2"), t0 + Duration::from_secs(10));
+        assert_eq!(state.title(t0 + Duration::from_secs(42)), "◐ 0:42");
+        assert!(state.has_timer());
+        state.observe_agent(&approval("t2", "r1", "run_command"), t0);
+        assert_eq!(state.title(t0 + Duration::from_secs(42)), "⚠ 1");
+        // Answered by the person: back to the timer.
+        state.answered("r1");
+        assert_eq!(state.title(t0 + Duration::from_secs(42)), "◐ 0:42");
+        state.observe_agent(&event("t1", "done", json!({"committed": true})), t0);
+        state.observe_agent(&event("t2", "done", json!({"committed": true})), t0);
+        assert_eq!(state.title(t0), "");
+        assert!(!state.has_timer());
+    }
+
+    #[test]
+    fn an_approval_clears_when_the_turn_goes_on() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        state.observe_agent(&approval("t1", "r1", "run_command"), t0);
+        assert_eq!(state.title(t0), "⚠ 1");
+        state.observe_agent(&event("t1", "tool_result", json!({"call_id": "c"})), t0);
+        assert_eq!(state.title(t0), "◐ 0:00");
+    }
+
+    #[test]
+    fn the_menu_lists_approvals_first_then_running_turns_and_never_a_command() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        assert_eq!(
+            state.entries(&names),
+            [
+                Entry::Note("Nothing running".into()),
+                Entry::Separator,
+                Entry::Show,
+                Entry::Quit
+            ]
+        );
+        state.observe_agent(&running("t1"), t0);
+        state.observe_agent(&approval("t2", "r1", "run_command"), t0);
+        let entries = state.entries(&names);
+        assert_eq!(
+            entries[..2],
+            [
+                Entry::Turn {
+                    turn_id: "t2".into(),
+                    label: "Approve run_command — docs".into()
+                },
+                Entry::Turn {
+                    turn_id: "t1".into(),
+                    label: "Running — elitea-platform".into()
+                },
+            ]
+        );
+        let text = format!("{entries:?}");
+        assert!(!text.contains("curl") && !text.contains("secret"));
+        assert_eq!(turn_of("tray_turn:t2"), Some("t2"));
+        assert_eq!(turn_of("tray_show"), None);
+    }
+
+    #[test]
+    fn the_menu_is_bounded() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        for n in 0..20 {
+            state.observe_agent(&running(&format!("turn-{n}")), t0);
+        }
+        let turns = state
+            .entries(&names)
+            .into_iter()
+            .filter(|e| matches!(e, Entry::Turn { .. }))
+            .count();
+        assert_eq!(turns, MAX_ENTRIES);
+    }
+
+    #[test]
+    fn the_dock_follows_a_send_before_an_index_build() {
+        let mut state = ActivityState::default();
+        assert_eq!(state.dock(), Dock::None);
+        state.observe_index("w1", true, None);
+        assert_eq!(
+            state.dock(),
+            Dock::Indeterminate,
+            "files to read not known yet"
+        );
+        state.observe_index("w1", true, Some("[extract] Parsing 120 files"));
+        state.observe_index("w1", true, Some("[progress] Processed 30 files"));
+        assert_eq!(state.dock(), Dock::Percent(25));
+        state.observe_index("w2", true, Some("[extract] Parsing 80 files"));
+        state.observe_index("w2", true, Some("[progress] Processed 70 files"));
+        assert_eq!(
+            state.dock(),
+            Dock::Percent(50),
+            "100 of 200 files across both"
+        );
+        state.observe_send("u1", "upload", 3, 10);
+        assert_eq!(state.dock(), Dock::Percent(30));
+        state.observe_send("u1", "complete", 10, 10);
+        assert_eq!(state.dock(), Dock::Percent(50));
+        state.observe_index("w1", false, None);
+        state.observe_index("w2", false, None);
+        assert_eq!(state.dock(), Dock::None);
+    }
+
+    #[test]
+    fn a_send_without_a_total_is_indeterminate() {
+        let mut state = ActivityState::default();
+        state.observe_send("u1", "scan", 0, 0);
+        assert_eq!(state.dock(), Dock::Indeterminate);
+        state.observe_send("u1", "cancelled", 0, 0);
+        assert_eq!(state.dock(), Dock::None);
+    }
+}

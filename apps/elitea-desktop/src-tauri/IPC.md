@@ -860,7 +860,17 @@ type AppCommand = { id: string; args?: object };
 | `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
 | `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
 | `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
-| `focus_turn` | `{workspace_id: string, turn_id: string}` | Reserved: show this turn. Not sent yet — the notification plugin has no click callback on desktop, so clicking a notification only activates the app. |
+| `focus_turn` | `{workspace_id: string, turn_id: string}` | A running or waiting turn was chosen in the menu-bar item's menu (see below): show its folder. (A notification click still only activates the app: the notification plugin has no click callback on desktop.) |
+
+**Menu-bar item and Dock** (`src/activity.rs`, host-side; the page does nothing for
+them). The host folds the same `agent://event`, `index://event` and
+`handoff://event` streams the window gets: the menu-bar item's title is
+`⚠ n` while n approvals wait, else `◐ m:ss` (the longest-running turn), else
+only the icon; its menu lists the waiting approvals (tool and folder, never a
+command or a path) and the running turns, then Show / Quit, and choosing a
+turn shows the window and sends `focus_turn`. The Dock's progress bar follows a
+send to the cloud (`done`/`total`), else the index builds (files read of files
+to read; indeterminate until that is known), and is removed when they end.
 
 **Open Folder… is host-side**: the menu item runs the native folder picker
 in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)

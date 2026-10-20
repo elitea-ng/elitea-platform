@@ -34,7 +34,7 @@ export type AppCommand =
   | { id: 'workspace_open_failed'; args: { message: string } }
   /** Absolute paths of files (not folders) dropped on the window. */
   | { id: 'files_dropped'; args: { paths: string[] } }
-  /** Reserved: not sent yet (no notification click callback on desktop). */
+  /** A turn was chosen in the menu-bar item's menu: show its folder. */
   | { id: 'focus_turn'; args: { workspace_id: string; turn_id: string } };
 
 export type AppCommandId = AppCommand['id'];

@@ -5,10 +5,12 @@
 //! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
+mod activity;
 mod app_events;
 mod attention;
 mod auth;
 mod commands;
+mod context_menu;
 mod credentials_file;
 mod d0;
 mod discovery;
@@ -21,7 +23,6 @@ mod index;
 mod local_commands;
 mod logging;
 mod loopback;
-mod context_menu;
 mod menu;
 mod net;
 mod pkce;
@@ -323,6 +324,11 @@ pub fn run() {
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
+            app.manage(Arc::new(activity::Activity::new(app.handle().clone())));
+            // The menu-bar item: a compact state and the turns that run or wait.
+            if let Err(error) = activity::create_tray(app.handle()) {
+                log::warn!("no menu-bar item: {error}");
+            }
             #[cfg(target_os = "macos")]
             window::quiet_input_source_indicator();
             window::create_main_window(app.handle())?;

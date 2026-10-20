@@ -781,9 +781,19 @@ pub struct MainWindowIndexEvents(pub tauri::AppHandle);
 
 impl IndexEvents for MainWindowIndexEvents {
     fn emit(&self, event: IndexEvent) {
-        use tauri::Emitter as _;
+        use tauri::{Emitter as _, Manager as _};
         if let Err(error) = self.0.emit_to("main", EVENT_NAME, &event) {
             log::warn!("could not deliver an index event: {error}");
+        }
+        if let Some(activity) = self
+            .0
+            .try_state::<std::sync::Arc<crate::activity::Activity>>()
+        {
+            activity.index(
+                &event.workspace_id,
+                event.status.state == IndexState::Building,
+                event.message.as_deref(),
+            );
         }
     }
 }

@@ -184,9 +184,10 @@ mod tests {
 
     #[test]
     fn items_deserialize_with_defaults() {
-        let items: Vec<ContextItem> =
-            serde_json::from_str(r#"[{"id":"a","label":"A"},{"separator":true},{"id":"b","label":"B","enabled":false}]"#)
-                .unwrap();
+        let items: Vec<ContextItem> = serde_json::from_str(
+            r#"[{"id":"a","label":"A"},{"separator":true},{"id":"b","label":"B","enabled":false}]"#,
+        )
+        .unwrap();
         assert!(items[0].enabled && !items[0].separator);
         assert!(items[1].separator);
         assert!(!items[2].enabled);
