@@ -199,9 +199,13 @@ on:
     # workflow_dispatch on their own, which is what has actually been running
     # them; removing the dead arm changes no execution, only the claim.
 
+# A newer push cancels a pull request's run; main runs finish, because a
+# main run is the only writer of the build caches the next runs read (a
+# cancelled writer saves nothing). GitHub still holds at most one pending run
+# per group, so main cannot pile up a backlog.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
