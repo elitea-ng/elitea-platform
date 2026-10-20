@@ -485,6 +485,8 @@ jobs:
           done
       - name: CI-only images are referenced only by CI
         run: python scripts/ci/check_ci_image_references.py
+      - name: The E2E workflow starts on every input of its stack
+        run: python scripts/ci/check_e2e_paths.py
       - name: actionlint over every workflow
         env:
           ACTIONLINT_VERSION: 1.7.12

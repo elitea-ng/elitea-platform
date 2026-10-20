@@ -1,0 +1,53 @@
+name: Stack images for a journey lane
+description: >-
+  Puts every image the lane's compose files would build into the local store,
+  asserted: pulled by digest from ci-web-e2e.yml's build-once jobs when they
+  ran (pull-stack-images), or built in the job when they were skipped — a
+  fork's or Dependabot's pull request, whose token cannot push packages
+  (build-stack-images, load mode, reading the public registry cache and
+  writing nothing).
+#
+# One step per lane instead of a pull step and a build step with mirrored
+# `if:`s that could drift apart. The caller states which case it is in with
+# `built`, from its `needs:` results — the one fact only the workflow has.
+inputs:
+  built:
+    description: >-
+      "true" when every build-once job this lane needs succeeded; anything
+      else builds in the job. A lane runs only on success or skipped, so
+      "not true" means skipped.
+    required: true
+  compose-files:
+    description: Newline-separated compose files RELATIVE TO deploy/, as both actions take them.
+    required: true
+  digests-pattern:
+    description: The digest-map artifacts to pull from (pull path).
+    required: false
+    default: stack-image-digests-*
+  cache-hcl:
+    description: The bake cache HCL files (build path).
+    required: true
+  targets:
+    description: The bake group or targets (build path).
+    required: true
+  mount-cache-suffix:
+    description: The mount-cache suffix (build path).
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Pull the stack images built for this commit
+      if: inputs.built == 'true'
+      uses: ./.github/actions/pull-stack-images
+      with:
+        compose-files: ${{ inputs.compose-files }}
+        digests-pattern: ${{ inputs.digests-pattern }}
+    - name: Build the stack images in this job (fork or Dependabot pull request)
+      if: inputs.built != 'true'
+      uses: ./.github/actions/build-stack-images
+      with:
+        compose-files: ${{ inputs.compose-files }}
+        cache-hcl: ${{ inputs.cache-hcl }}
+        targets: ${{ inputs.targets }}
+        mount-cache-suffix: ${{ inputs.mount-cache-suffix }}

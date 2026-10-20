@@ -66,9 +66,11 @@ runs:
         merge-multiple: true
         path: ${{ runner.temp }}/stack-image-digests
 
-    # The ci-* packages are created private by GitHub on first push (see
-    # mirror-buildkit.yml); the job token reads them either way, because the
-    # pushing workflow is this repository's.
+    # The ci-* packages are public (the org's default on first push; GHCR
+    # has no API to change it, and build-stack-images asserts it for the
+    # layer cache it writes). Logging in anyway keeps the pull off the
+    # anonymous rate limit, and keeps it working if one ever goes private:
+    # the pushing workflow is this repository's, so the job token reads it.
     - name: Log in to the registry (read)
       shell: bash
       env:

@@ -145,7 +145,10 @@ def main(argv: list[str]) -> int:
         files[manifest.relative_to(root)] = manifest
         if manifest_path in whole:
             for source in sorted(manifest.parent.rglob("*")):
-                if source.is_file() and "target" not in source.relative_to(manifest.parent).parts:
+                # Only the crate's own build output (<crate>/target/) is
+                # skipped; a source directory named `target` deeper down is
+                # source.
+                if source.is_file() and source.relative_to(manifest.parent).parts[0] != "target":
                     files[source.relative_to(root)] = source
             continue
         for target in package["targets"]:

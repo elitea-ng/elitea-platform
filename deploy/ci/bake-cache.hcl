@@ -11,13 +11,21 @@
 // WHY THE REGISTRY AND NOT `type=gha` (2026-10-20). The GHA layer cache lived
 // in the repository's Actions cache, which is capped at 10 GB and evicted
 // least-recently-used; it sat at the cap and churned, so a layer one run
-// wrote was often gone by the next. A registry ref is outside that cap, is
-// public (so a fork pull request's in-job fallback build can read it with no
-// token), and holds a dependency layer of any size — which is what lets the
-// Rust Containerfiles build their dependencies in a layer at all (see
-// services/elitea-worker-rust/Containerfile). publish.yml and
-// ci-image-scan.yml keep their own `type=gha` scopes; they no longer share
-// these.
+// wrote was often gone by the next. A registry ref is outside that cap and
+// holds a dependency layer of any size — which is what lets the Rust
+// Containerfiles build their dependencies in a layer at all (see
+// services/elitea-worker-rust/Containerfile).
+//
+// PUBLIC, so a fork pull request's in-job fallback build reads it with no
+// token. GHCR creates a package with the org's default visibility on its
+// first push and has no API to change it; the build-once job asserts after
+// every write that an anonymous client can read each ref it wrote, and fails
+// naming the package if not (build-stack-images, "publicly readable"). The
+// fallback build also logs in with the job token, so a package that went
+// private costs nothing worse than that red.
+//
+// The same packages hold the release's cache under a `release-<platform>`
+// tag (publish.yml, also main-only), and docker-bake.hcl reads both.
 //
 // READ side only. The WRITE side (cache-to) is derived from these lines by
 // .github/actions/build-stack-images at run time, because what a run may

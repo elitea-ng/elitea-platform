@@ -54,16 +54,22 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 WORKDIR /src/services/elitea-doc-extractor
 
+# The build context's sources, laid out under /src, in ONE place: the
+# planner and the builder both copy this stage's /src, so the two cannot
+# drift apart.
+FROM scratch AS sources
+# The repository layout is kept under /src: build.rs reads ../../libs/proto,
+# and the path dependencies are under ../../libs/rust.
+COPY libs/proto /src/libs/proto
+COPY libs/rust /src/libs/rust
+COPY services/elitea-doc-extractor /src/services/elitea-doc-extractor
+
 # The dependency skeleton: every local manifest, the lockfile, no sources
 # (libs/rust/scripts/cargo-dependency-skeleton.py; the worker's Containerfile
 # carries the full note). It is a function of the manifests alone, so the
 # dependency layer below is reused across every source-only change.
 FROM toolchain AS planner
-# The repository layout is kept under /src: build.rs reads ../../libs/proto,
-# and the path dependencies are under ../../libs/rust.
-COPY libs/proto /src/libs/proto
-COPY libs/rust /src/libs/rust
-COPY services/elitea-doc-extractor ./
+COPY --from=sources /src/ /src/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     flock /usr/local/cargo/registry/.elitea-fetch.lock python3 /src/libs/rust/scripts/cargo-dependency-skeleton.py . /skeleton
@@ -72,17 +78,21 @@ FROM toolchain AS builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
 # Every registry and git dependency, compiled into THIS layer from the
-# lockfile, by the same `cargo auditable build --locked --release` as the real
+# lockfile, by the same `cargo auditable build --frozen --release` as the real
 # build below, so the real build finds them fresh.
+# The registry/git mounts are SHARED between images, and cargo's own package
+# lock lives outside them, so two images building at once unpacked the same
+# crate together ("failed to unpack package ... .cargo-ok", run 39433053742 on
+# PR #1328). `flock` on a file INSIDE the mount serialises the download and
+# unpack only (the skeleton's `cargo metadata` too); the compiles run
+# `--frozen` (no network, no registry writes) in parallel.
 COPY --from=planner /skeleton/ /src/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
     CARGO_TARGET_DIR=/build-target cargo auditable build --frozen --release
 
-COPY libs/proto /src/libs/proto
-COPY libs/rust /src/libs/rust
-COPY services/elitea-doc-extractor ./
+COPY --from=sources /src/ /src/
 
 # Cargo judges a path crate fresh by mtime, and COPY keeps the build context's
 # mtimes, which can be OLDER than the placeholder build above: a placeholder

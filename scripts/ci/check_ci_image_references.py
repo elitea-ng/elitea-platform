@@ -5,8 +5,10 @@ ci-web-e2e.yml builds each stack image once per commit and pushes it to
 `ghcr.io/elitea-ng/ci-<image>:<sha>`, and the layer cache lives at
 `ghcr.io/elitea-ng/ci-cache-<image>`. Those are built from pull-request code,
 pruned after 7 days (ci-image-cleanup.yml) and never scanned or signed, so
-nothing that ships may name them: not the Helm chart, not publish.yml, not
-docker-bake.hcl, not a compose file a deployment copies. (The argocd
+nothing that ships may name them: not the Helm chart, not a compose file a
+deployment copies. publish.yml, docker-bake.hcl and helm-install-smoke.yml
+may name the LAYER CACHE (`ci-cache-`) and nothing else: a cache ref decides
+how fast a build runs, never what it runs. (The argocd
 deployment lives in a separate repository; it pins the RELEASE images, which
 publish.yml writes under their own names.)
 
@@ -40,6 +42,14 @@ ALLOWED = {
     "scripts/ci/check_ci_image_references.py": "this check's own description",
 }
 
+# Files that may name the layer cache, and only the layer cache.
+CACHE_ONLY = {
+    ".github/workflows/publish.yml": "the release's registry layer cache",
+    ".github/workflows/helm-install-smoke.yml": "reads the E2E stacks' layer cache",
+    "docker-bake.hcl": "reads the release's and the E2E stacks' layer cache",
+}
+CACHE_PATTERN = re.compile(r"ghcr\.io/[A-Za-z0-9_.-]+/" + "ci-" + "cache-")
+
 # References the allowed files must hold between them (measured when this was
 # written: ci-web-e2e.yml's push prefix, the 14 + 1 cache refs in the HCL).
 MINIMUM_ALLOWED_REFERENCES = 15
@@ -64,6 +74,8 @@ def scan(root: pathlib.Path, files: list[str]) -> tuple[list[str], int]:
                 continue
             if name in ALLOWED:
                 allowed_hits += 1
+            elif name in CACHE_ONLY and len(PATTERN.findall(line)) == len(CACHE_PATTERN.findall(line)):
+                allowed_hits += 1
             else:
                 violations.append(f"{name}:{number}: {line.strip()}")
     return violations, allowed_hits
@@ -71,7 +83,7 @@ def scan(root: pathlib.Path, files: list[str]) -> tuple[list[str], int]:
 
 def main() -> int:
     files = tracked_files(REPOSITORY_ROOT)
-    missing = [name for name in ALLOWED if name not in files]
+    missing = [name for name in [*ALLOWED, *CACHE_ONLY] if name not in files]
     if missing:
         print(f"::error::allowed file(s) no longer tracked: {missing}; update ALLOWED in {__file__}")
         return 1
@@ -86,7 +98,7 @@ def main() -> int:
             f"{MINIMUM_ALLOWED_REFERENCES} — the pattern stopped matching, so this check saw nothing"
         )
         return 1
-    print(f"CI-only images: {allowed_hits} reference(s), all in the {len(ALLOWED)} files that build, pull, cache or prune them")
+    print(f"CI-only images: {allowed_hits} reference(s), all in the {len(ALLOWED) + len(CACHE_ONLY)} files that build, pull, cache or prune them")
     return 0
 
 

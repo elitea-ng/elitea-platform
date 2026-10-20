@@ -92,9 +92,10 @@ VERIFY
 
 WORKDIR /src/services/elitea-worker-rust
 
-# The sources, for the stages that build from them directly (the planner
-# below and the supervisor).
-FROM toolchain AS builder-base
+# The build context's sources, laid out under /src, in ONE place: every stage
+# that needs them (the planner, the builder after its dependency layer, the
+# supervisor) copies this stage's /src, so the three cannot drift apart.
+FROM scratch AS sources
 WORKDIR /src
 COPY libs/proto ./libs/proto
 # The /llm caller contract crate (elitea-llm-wire) and the shared agent
@@ -106,6 +107,10 @@ COPY libs/proto ./libs/proto
 COPY libs/rust ./libs/rust
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
+# The sources over the toolchain, for the stages that build from them directly
+# (the planner below and the supervisor).
+FROM toolchain AS builder-base
+COPY --from=sources /src/ /src/
 WORKDIR /src/services/elitea-worker-rust
 
 # ── THE DEPENDENCY BUILD IS ITS OWN LAYER ───────────────────────────────────
@@ -130,8 +135,8 @@ WORKDIR /src/services/elitea-worker-rust
 # the real sources over it and compiles only the local crates (this one,
 # libs/rust/*, vendor/*, the libs/proto build script).
 #
-# Both steps run the same `cargo auditable build --locked --release`, so the
-# lockfile is enforced in both and the final binary carries the audit data
+# Both steps run the same `cargo auditable build --frozen --release` after a
+# `cargo fetch --locked`, so the lockfile is enforced in both and the final binary carries the audit data
 # of the real build (verify-runtime asserts `.dep-v0` below).
 FROM builder-base AS planner
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -147,18 +152,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
     CARGO_TARGET_DIR=/build-target cargo auditable build --frozen --release
 
-WORKDIR /src
-COPY libs/proto ./libs/proto
-# The /llm caller contract crate (elitea-llm-wire) and the shared agent
-# runtime (elitea-agent-runtime, ADR-0029) are path dependencies under
-# ../../libs/rust, and so are the patched adk crates the worker's
-# [patch.crates-io] names (libs/rust/vendor). The whole libs/rust workspace
-# comes with them: the crates inherit their package fields and lints from
-# libs/rust/Cargo.toml.
-COPY libs/rust ./libs/rust
-COPY services/elitea-worker-rust ./services/elitea-worker-rust
-
-WORKDIR /src/services/elitea-worker-rust
+COPY --from=sources /src/ /src/
 
 # ── EVERY LOCAL CRATE IS REBUILT; ONLY REGISTRY CRATES COME FROM THE LAYER ──
 #
@@ -195,8 +189,9 @@ FROM builder-base AS supervisor-builder
 # Optional build-only concurrency bound for shared development hosts.
 ARG CARGO_BUILD_JOBS
 # Built only by the release (publish.yml), so it keeps the shared cache-mount
-# shape rather than the dependency layer `builder` uses. /cargo-target is one
-# mount for every build on a host (every worktree, every image), and cargo
+# shape rather than the dependency layer `builder` uses. /cargo-target is this
+# image's mount (`id=`), shared by every build of it on a host (every
+# worktree), and cargo
 # judges a path crate fresh by mtime: a context older than another checkout's
 # build would ship that build's binary. Touching /src under `sharing=locked`
 # recompiles every local crate from this context; registry crates stay cached.

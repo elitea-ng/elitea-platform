@@ -7,8 +7,9 @@ WHICH PACKAGES. Not an org listing: `GET /orgs/{org}/packages` needs an
 org-level read:packages token, and the job's GITHUB_TOKEN cannot enumerate
 the organisation's packages (measured: the first run of this workflow
 failed there). The names come from the image list itself instead — every
-`ci-cache-<image>` ref in deploy/ci/*.hcl, the one-ref-per-image list the
-stack images are built from — giving `ci-<image>` and `ci-cache-<image>`
+`ci-cache-<image>` ref in deploy/ci/*.hcl (the one-ref-per-image list the
+stack images are built from) and in docker-bake.hcl (the release images,
+whose builds share the same cache packages under `release-<platform>`) — giving `ci-<image>` and `ci-cache-<image>`
 for each. Those packages are linked to this repository (each push labels
 `org.opencontainers.image.source`), so the token may read and delete their
 versions. A package that does not exist yet (a cache main has not written)
@@ -17,7 +18,8 @@ is skipped.
 ci-web-e2e.yml pushes every stack image it builds to `ci-<image>:<sha>` (one
 version per commit) and, on a push to main, the layer cache to
 `ci-cache-<image>:linux-amd64` (the tag moves; every move strands the previous
-manifest as an untagged version). Nothing that ships references them
+manifest as an untagged version); publish.yml does the same with
+`ci-cache-<image>:release-<platform>`. Nothing that ships references them
 (scripts/ci/check_ci_image_references.py), so they are disposable:
 
   ci-cache-*   delete UNTAGGED versions older than --days. The tagged version
@@ -113,11 +115,12 @@ def main(argv=None) -> int:
     now = dt.datetime.now(dt.timezone.utc)
     org = urllib.parse.quote(args.org)
     root = pathlib.Path(__file__).resolve().parents[2]
-    ci = ci_packages([p.read_text() for p in sorted((root / "deploy" / "ci").glob("*.hcl"))])
+    sources = [*sorted((root / "deploy" / "ci").glob("*.hcl")), root / "docker-bake.hcl"]
+    ci = ci_packages([p.read_text() for p in sources])
     if len(ci) < 20:
-        print(f"::error::derived {len(ci)} CI package name(s) from deploy/ci/*.hcl, expected at least 20 — the ref pattern stopped matching")
+        print(f"::error::derived {len(ci)} CI package name(s) from deploy/ci/*.hcl and docker-bake.hcl, expected at least 20 — the ref pattern stopped matching")
         return 1
-    print(f"{len(ci)} CI-only package name(s) from deploy/ci/*.hcl: {', '.join(ci)}")
+    print(f"{len(ci)} CI-only package name(s) from deploy/ci/*.hcl and docker-bake.hcl: {', '.join(ci)}")
     deleted = 0
     for name in ci:
         quoted = urllib.parse.quote(name, safe="")

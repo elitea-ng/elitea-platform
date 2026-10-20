@@ -38,9 +38,13 @@ WHAT IT CHECKS, in every .github/workflows/*.yml and .github/actions/*/action.ym
                           caller passes anything but "false"; `mount-cache-writer`
                           is "true" or "false", "true" on at most ONE job per
                           mount-cache-suffix across ALL workflows (the key is
-                          repository-wide), and never on a
+                          repository-wide), and never on every leg of a
                           matrix job (one job, not N legs, saves the mounts:
-                          N writers raced for one key, measured 2026-10-20)
+                          N writers raced for one key, measured 2026-10-20).
+                          A matrix job names its writer legs with
+                          `${{ matrix.<key> }}` over an include-only matrix
+                          whose entries give the literal; each "true" leg
+                          counts as one writer of that leg's suffix.
   deploy/ci/*.hcl         declares no cache-to (it is merged into every bake)
 
 A workflow whose ONLY trigger is a push to main/next (publish.yml, the release)
@@ -93,6 +97,24 @@ def _negated_main_push(expr) -> bool:
     """`!(main && push)` — the skip-side spelling of the same gate."""
     text = _norm(expr).replace(" ", "")
     return _gated_on_main_push(expr) and "!(" in text
+
+
+MATRIX_REF = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
+
+
+def _include_only_legs(job: dict) -> list[dict] | None:
+    """The legs of a matrix made of `include:` entries alone, else None.
+
+    With any other axis, an include entry can merge into several legs, so a
+    per-entry value would not be a per-leg one.
+    """
+    matrix = (job.get("strategy") or {}).get("matrix")
+    if not isinstance(matrix, dict) or set(matrix) != {"include"}:
+        return None
+    include = matrix["include"]
+    if not isinstance(include, list) or not all(isinstance(e, dict) for e in include):
+        return None
+    return include
 
 
 def _cache_to_gated(value) -> bool:
@@ -205,12 +227,29 @@ def check_document(name: str, doc: dict, report: Report) -> None:
             if "cache-write" in with_ and not _is_false(with_["cache-write"]):
                 report.fail(where, "build-stack-images `cache-write` may only be omitted (a push to main writes) or \"false\"")
             writer = str(with_.get("mount-cache-writer", "false")).strip().lower()
-            if writer not in ("true", "false"):
-                report.fail(where, f"build-stack-images `mount-cache-writer` must be the literal \"true\" or \"false\", got {with_.get('mount-cache-writer')!r}; an expression can make every leg a writer")
+            job = (doc.get("jobs") or {}).get(job_id) or {}
+            legs = _include_only_legs(job)
+            if MATRIX_REF.fullmatch(writer) and legs is not None:
+                # One writer per LEG, named in an include-only matrix: every
+                # leg is exactly one include entry, so the literal each entry
+                # gives is the whole truth about that leg. The suffix is read
+                # per leg the same way, and each "true" leg counts as one
+                # writer below, so two legs of one suffix are still refused.
+                writer_key = MATRIX_REF.fullmatch(writer).group(1)
+                suffix_raw = str(with_.get("mount-cache-suffix", ""))
+                suffix_key = MATRIX_REF.fullmatch(suffix_raw.strip())
+                for index, leg in enumerate(legs):
+                    value = str(leg.get(writer_key, "")).strip().lower()
+                    if value not in ("true", "false"):
+                        report.fail(where, f"matrix leg {index} gives `{writer_key}` = {leg.get(writer_key)!r}; each include entry must give the literal \"true\" or \"false\"")
+                    elif value == "true":
+                        suffix = str(leg.get(suffix_key.group(1), "")) if suffix_key else suffix_raw
+                        report.mount_writers.setdefault(suffix, []).append(f"{name} [{job_id} leg {index}]")
+            elif writer not in ("true", "false"):
+                report.fail(where, f"build-stack-images `mount-cache-writer` must be the literal \"true\" or \"false\", or `${{{{ matrix.<key> }}}}` of an include-only matrix whose entries give the literal; got {with_.get('mount-cache-writer')!r}; an expression can make every leg a writer")
             elif writer == "true":
-                job = (doc.get("jobs") or {}).get(job_id) or {}
                 if (job.get("strategy") or {}).get("matrix"):
-                    report.fail(where, "build-stack-images `mount-cache-writer: \"true\"` on a matrix job makes every leg a writer racing for one cache key; designate one non-matrix job")
+                    report.fail(where, "build-stack-images `mount-cache-writer: \"true\"` on a matrix job makes every leg a writer racing for one cache key; designate one non-matrix job, or one leg through an include-only matrix")
                 suffix = str(with_.get("mount-cache-suffix", ""))
                 report.mount_writers.setdefault(suffix, []).append(f"{name} [{job_id}]")
 

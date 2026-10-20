@@ -71,7 +71,11 @@ inputs:
     required: false
     default: ""
   push-tag:
-    description: Push mode only. The tag every pushed image gets (the commit SHA).
+    description: >-
+      Push mode only. The tag every pushed image gets. It must be unique to
+      the run and attempt (`<sha>-<run_id>-<attempt>`): the digest is read
+      back from it after the push, and a tag another run could push to would
+      let that read race.
     required: false
     default: ""
   digests-file:
@@ -354,9 +358,12 @@ runs:
     # Injects the restored directories into the builder's cache mounts before
     # the build and, only when this run will save them, extracts them back
     # after it (a post step). Mount ids default to their target path, except
-    # the per-image cargo target mounts: each Rust Containerfile names
-    # `id=<image>-cargo-target`, so the five builds no longer queue on one
-    # `sharing=locked` lock, and each id is mapped to its own directory here.
+    # the per-image cargo target mount: a Rust Containerfile that still builds
+    # on a /cargo-target mount names `id=<image>-cargo-target` (so builds do
+    # not queue on one `sharing=locked` lock), and the id is mapped to its own
+    # directory here. Only the worker's sandbox supervisor does today; the
+    # five stack images build their dependencies in a LAYER (the registry
+    # layer cache), so they have no target mount to map.
     - name: Inject cache mounts into the builder
       uses: reproducible-containers/buildkit-cache-dance@v3
       with:
@@ -373,10 +380,6 @@ runs:
             ".buildkit-mounts/cargo-registry": "/usr/local/cargo/registry",
             ".buildkit-mounts/cargo-git": "/usr/local/cargo/git",
             ".buildkit-mounts/cargo-target-worker-rust": {"target": "/cargo-target", "id": "elitea-worker-rust-cargo-target"},
-            ".buildkit-mounts/cargo-target-deepwiki-engine": {"target": "/cargo-target", "id": "elitea-deepwiki-engine-cargo-target"},
-            ".buildkit-mounts/cargo-target-inventory-engine": {"target": "/cargo-target", "id": "elitea-inventory-engine-cargo-target"},
-            ".buildkit-mounts/cargo-target-vector": {"target": "/cargo-target", "id": "elitea-vector-cargo-target"},
-            ".buildkit-mounts/cargo-target-doc-extractor": {"target": "/cargo-target", "id": "elitea-doc-extractor-cargo-target"},
             ".buildkit-mounts/go-mod": "/go/pkg/mod",
             ".buildkit-mounts/go-build": "/root/.cache/go-build",
             ".buildkit-mounts/pip": "/root/.cache/pip"
@@ -488,6 +491,21 @@ runs:
     # `source: .` builds from the checked-out tree, not from a fresh git
     # context; `workdir: deploy` puts bake where the compose files are, so their
     # relative contexts resolve as compose resolves them.
+    # Load mode reads the registry layer cache. The ci-cache-* packages are
+    # public (the step after the bake asserts it wherever one is written), so
+    # this login is not what makes a fork's read work; it only means a
+    # package that somehow went private still reads with the job's
+    # packages:read token instead of costing a cold build. Allowed to fail:
+    # a token without that scope must not stop a build that can go cold.
+    - name: Log in to the registry to read the layer cache
+      if: inputs.push-prefix == ''
+      continue-on-error: true
+      shell: bash
+      env:
+        TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
     - name: Bake the stack images
       uses: docker/bake-action@v6
       with:
@@ -511,8 +529,10 @@ runs:
     # The digest of each tag just pushed, read back from the registry. Not
     # from bake's `metadata` output: for a multi-target leg it exceeds the
     # 128 KiB a single environment variable may hold ("Argument list too
-    # long", measured on the mocks leg). The tag is this commit's SHA, so it
-    # names exactly what this step's bake pushed.
+    # long", measured on the mocks leg) — the metadata was right, only too
+    # big to hand to a step. The tag is unique to this run and attempt
+    # (push-tag), so nothing else can have pushed to it: it names exactly
+    # what this step's bake pushed.
     - name: Record the pushed digests
       if: inputs.push-prefix != ''
       shell: bash
@@ -532,6 +552,39 @@ runs:
         mkdir -p "$(dirname "$DIGESTS_FILE")"
         python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" record "$plan" "$meta" > "$DIGESTS_FILE"
         cat "$DIGESTS_FILE"
+
+    # A fork's pull request builds in its job and reads this cache with no
+    # usable token, so the cache is only worth writing if it is PUBLIC. GHCR
+    # has no API to set a package's visibility (PATCH is a 404), and the
+    # org's default is what decided it on the first push; assert it here,
+    # on every run that wrote, instead of assuming it. Anonymous token + tag
+    # list is exactly what an unauthenticated BuildKit does.
+    - name: The layer cache this run wrote is publicly readable
+      if: inputs.push-prefix != '' && steps.policy.outputs.layer-mode != 'none'
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        OVERLAY: ${{ steps.overlay.outputs.file }}
+      run: |
+        set -euo pipefail
+        refs="$(grep -o 'ref=[^,"]*' "$OVERLAY" | sed 's/^ref=//' | sort -u)"
+        [ -n "$refs" ] || { echo "::error::the overlay names no cache ref to check"; exit 1; }
+        bad=0
+        for ref in $refs; do
+          repo="${ref#ghcr.io/}"; repo="${repo%:*}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r '.token // empty' || true)"
+          if [ -n "$token" ] && curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" "https://ghcr.io/v2/${repo}/tags/list"; then
+            echo "public: ${ref}"
+          elif docker buildx imagetools inspect "$ref" > /dev/null 2>&1; then
+            echo "::error::${ref} exists but an anonymous client cannot read it: make ghcr.io/${repo} public (package settings), or every fork pull request builds cold"
+            bad=1
+          else
+            # ignore-error=true lets an export fail without failing the bake;
+            # a ref that does not exist is a lost write, not a private one.
+            echo "::warning::${ref} was not written by this run (export failed); the next main run writes it"
+          fi
+        done
+        exit "$bad"
 
     # The guard. Reads the image tags compose would build from the SAME files
     # and requires each to exist locally. A tag that is missing here would
