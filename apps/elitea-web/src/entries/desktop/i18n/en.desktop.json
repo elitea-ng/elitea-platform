@@ -438,5 +438,9 @@
   "workspace.changes.summaryOne": "1 file, +{{added}} -{{removed}}",
   "workspace.cloud.agentHint": "The cloud copy answers with this thread’s own agent.",
   "workspace.cloud.noTransport": "The cloud copy could not be reached.",
-  "workspace.cloud.placeholder": "Message the cloud copy…"
+  "workspace.cloud.placeholder": "Message the cloud copy…",
+  "workspace.cloud.answerInChat": "Answer in chat",
+  "workspace.cloud.cannotAnswer": "This cannot be answered here. Answer it in the chat.",
+  "workspace.cloud.continue": "Continue?",
+  "workspace.cloud.waiting": "The cloud copy is waiting for an answer that only the chat can take."
 }

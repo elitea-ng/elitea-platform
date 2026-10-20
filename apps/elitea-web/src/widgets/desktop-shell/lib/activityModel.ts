@@ -132,21 +132,17 @@ function cloudActivity(cloud: TrackedCloud): Activity {
   };
 }
 
-/** A cloud turn streaming into this window: "Running in cloud" with its timer. */
-function cloudRunActivity(run: TrackedCloudRun): Activity {
-  return {
-    ...NO_TARGET,
-    id: `cloudrun:${run.conversationUuid}`,
-    kind: 'cloud',
-    label: t('desktop.island.cloudRunning', 'Running in cloud'),
-    detail: run.title,
-    progress: null,
-    since: run.startedAt,
-    tone: 'active',
-    workspaceId: run.workspaceId,
-    conversationId: run.conversationId,
-    cancelKey: null,
-  };
+/** A cloud turn streaming into this window ("Running in cloud" with its timer), and/or waiting on the person (an approval). */
+function cloudRunActivities(run: TrackedCloudRun): Activity[] {
+  const base = { ...NO_TARGET, progress: null, workspaceId: run.workspaceId, conversationId: run.conversationId, cancelKey: null, detail: run.title };
+  const out: Activity[] = [];
+  if (run.waiting !== null) {
+    out.push({ ...base, id: `cloudwait:${run.conversationUuid}`, kind: 'approval', label: run.waiting, since: null, tone: 'attention' });
+  }
+  if (run.running) {
+    out.push({ ...base, id: `cloudrun:${run.conversationUuid}`, kind: 'cloud', label: t('desktop.island.cloudRunning', 'Running in cloud'), since: run.startedAt, tone: 'active' });
+  }
+  return out;
 }
 
 function indexActivity(index: TrackedIndex): Activity {
@@ -172,7 +168,7 @@ export function buildActivities(state: FeedFacts): Activity[] {
     ...Object.values(state.turns).flatMap(turnActivities),
     ...Object.values(state.sends).map(sendActivity),
     // A thread whose turn streams here shows that (with its timer) instead of the plain "in cloud" line.
-    ...Object.values(state.cloudRuns ?? {}).map(cloudRunActivity),
+    ...Object.values(state.cloudRuns ?? {}).flatMap(cloudRunActivities),
     ...Object.values(state.cloud).filter((cloud) => state.cloudRuns?.[cloud.conversationUuid] === undefined).map(cloudActivity),
     ...Object.values(state.indexes).filter((index) => index.state === 'building').map(indexActivity),
   ];

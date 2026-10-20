@@ -50,6 +50,7 @@ const API: [string, RegExp, unknown][] = [
   ],
   ['POST', /\/elitea_core\/conversations\/prompt_lib\/42$/, { id: 77, name: 'quick overview' }],
   ['GET', /\/elitea_core\/conversation\/prompt_lib\/42\/\d+$/, { id: 72, uuid: 'c0ffee00-0000-4000-8000-000000000072', name: 'quick overview', participants: [{ id: 3, entity_name: 'application', name: 'Coder', meta: {} }] }],
+  ['POST', /\/elitea_core\/continue_predict\/prompt_lib\/42\/c0ffee00-0000-4000-8000-000000000072$/, { events_url: '/api/v2/executions/42/exec-1/events', response_message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44' }],
   // The cloud copy's messages (`&cloud`), and the start route a message to it goes through.
   ['GET', /\/elitea_core\/messages\/prompt_lib\/42\/72$/, { items: [{ id: 'm1', uid: 'm1', role: 'user', content: 'Give me a quick overview of the repo', conversation_id: '72', created_at: '2026-10-20T08:00:00Z' }, { id: 'm2', uid: 'm2', role: 'assistant', content: 'The repository is a **Go monorepo** with the desktop app in `apps/elitea-desktop`.', conversation_id: '72', created_at: '2026-10-20T08:00:05Z' }], total: 2, page: 1, page_size: 100, total_pages: 1 }],
   ['POST', /\/elitea_core\/messages\/prompt_lib\/42\/c0ffee00-0000-4000-8000-000000000072$/, { task_id: 'exec-1', events_url: '/api/v2/executions/42/exec-1/events', response_message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44' }],
@@ -200,6 +201,16 @@ export function mountDesktopHarness(container: HTMLElement): void {
     indexIpc,
     handoffIpc,
     feed: useActivityFeed,
+    /** The cloud copy stops on an approval (`&cloud`, after a message was sent); `cards: 2` is a pause only the chat can answer. */
+    playCloudApproval(cards = 1) {
+      const digest = `sha256:${'a'.repeat(64)}`;
+      const card = (n: number) => ({ type: 'hitl', interrupt_id: `int-${String(n)}`, call_digest: digest, guardrail_type: 'sensitive_tool', node_name: 'sensitive_tool_guard', message: 'Deleting a file requires approval.', available_actions: ['approve', 'reject'], routes: {}, tool_call_id: `call-${String(n)}`, tool_name: 'delete_file', toolkit_name: 'artifacts', toolkit_type: 'artifact', action_label: 'Delete file', tool_args: { path: 'report.pdf' } });
+      const list = Array.from({ length: cards }, (_, i) => card(i + 1));
+      const meta = { thread_id: 'thread-root', chat_project_id: 42, message: 'Deleting a file requires approval.', hitl_interrupt: list[0], hitl_interrupts: list, node_name: 'sensitive_tool_guard', available_actions: ['approve', 'reject'], routes: {}, edit_state_key: null };
+      const frame = (payload: Record<string, unknown>): string => JSON.stringify({ message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44', question_id: null, ...payload });
+      streams.emit('execution.node_event', frame({ type: 'agent_start' }));
+      streams.emit('execution.node_event', frame({ type: 'agent_hitl_interrupt', content: 'Deleting a file requires approval.', response_metadata: meta }));
+    },
     /** A reply streaming from the cloud copy of a thread (`&cloud`): `stage` 'running' stops mid-answer, 'done' finishes it. */
     playCloudReply(stage: 'running' | 'done' = 'done') {
       const frame = (payload: Record<string, unknown>): string => JSON.stringify({ message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44', question_id: null, ...payload });

@@ -66,11 +66,12 @@ export interface AppIpc {
    */
   contextMenu(items: readonly ContextMenuItem[]): Promise<string | null>;
   /**
-   * Tell the host a cloud turn of this window started (`running`) or ended
-   * (completion and errors both end it): the menu-bar item shows it like a
-   * local turn. The stream runs in the page, so the host cannot see it.
+   * Tell the host a cloud turn of this window is streaming (`running`) and/or
+   * waits on the person (`waiting`: an approval): the menu-bar item and the Dock
+   * badge show it like a local turn. Both false ends it (completion and errors
+   * both end it). The stream runs in the page, so the host cannot see it.
    */
-  cloudRun(run: { conversationUuid: string; running: boolean; workspaceId?: string; workspaceName?: string }): Promise<void>;
+  cloudRun(run: { conversationUuid: string; running: boolean; waiting: boolean; workspaceId?: string; workspaceName?: string }): Promise<void>;
 }
 
 /** One entry of a native context menu (`context_menu_show`). A separator carries no id or label; a submenu holds one level of entries. */
@@ -110,10 +111,11 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     onCommand: (handler) => listen(APP_COMMAND_CHANNEL, (payload) => handler(payload as AppCommand)),
     ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
-    cloudRun: ({ conversationUuid, running, workspaceId, workspaceName }) =>
+    cloudRun: ({ conversationUuid, running, waiting, workspaceId, workspaceName }) =>
       invoke<void>('activity_cloud_run', {
         conversation_uuid: conversationUuid,
         running,
+        waiting,
         ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }),
         ...(workspaceName === undefined ? {} : { workspace_name: workspaceName }),
       }),

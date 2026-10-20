@@ -358,4 +358,87 @@ describe('chatting with the cloud copy', () => {
     expect(screen.getByRole('menuitem', { name: 'Erase cloud copy…' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Open in chat' })).toBeInTheDocument();
   });
+
+  describe('a cloud turn that waits on the person', () => {
+    const DIGEST = `sha256:${'a'.repeat(64)}`;
+    const card = (id: string, call: string): Record<string, unknown> => ({
+      type: 'hitl', interrupt_id: id, call_digest: DIGEST, guardrail_type: 'sensitive_tool', node_name: 'sensitive_tool_guard',
+      message: 'Deleting a file requires approval.', available_actions: ['approve', 'reject'], routes: {}, tool_call_id: call,
+      tool_name: 'delete_file', toolkit_name: 'artifacts', toolkit_type: 'artifact', action_label: 'Delete file', tool_args: { path: 'report.pdf' },
+    });
+    const pause = (cards: Record<string, unknown>[]): string =>
+      frame({
+        type: 'agent_hitl_interrupt',
+        content: 'Deleting a file requires approval.',
+        response_metadata: { thread_id: 'thread-root', chat_project_id: 42, message: 'Deleting a file requires approval.', hitl_interrupt: cards[0], hitl_interrupts: cards, node_name: 'sensitive_tool_guard', available_actions: ['approve', 'reject'], routes: {}, edit_state_key: null },
+      });
+    let resumed: { query: string | null; body: Record<string, unknown> }[];
+
+    /** Starts a cloud turn that stops on the given approval cards. */
+    async function pausedOn(cards: Record<string, unknown>[]): Promise<ReturnType<typeof userEvent.setup>> {
+      resumed = [];
+      serve([{ id: 'm1', role: 'user', content: 'Fix the build' }]);
+      acceptStart();
+      server.use(
+        http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/42/${UUID}`, async ({ request }) => {
+          resumed.push({ query: new URL(request.url).searchParams.get('execution_contract'), body: (await request.json()) as Record<string, unknown> });
+          return HttpResponse.json({ events_url: EVENTS_URL, response_message_id: RESPONSE_ID });
+        }),
+      );
+      const user = userEvent.setup();
+      mount(createFakeHandoffIpc({ status: cloud }));
+      await typeAndSend(user, 'delete the old report');
+      await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+      act(() => {
+        registry.emit('execution.node_event', frame({ type: 'agent_start' }));
+        registry.emit('execution.node_event', pause(cards));
+      });
+      return user;
+    }
+
+    it('shows the approval inline and raises the attention state (island, tray, Dock) for it', async () => {
+      await pausedOn([card('int-1', 'call-1')]);
+      const transcript = await screen.findByTestId('cloud-transcript');
+      expect(await within(transcript).findByTestId('sensitive-action-authorize-button')).toBeInTheDocument();
+      await waitFor(() => expect(useActivityFeed.getState().cloudRuns[UUID]).toMatchObject({ running: false, waiting: 'Approve: delete_file' }));
+    });
+
+    it('answers the approval through the chat\'s resume route, and the turn resumes and finishes', async () => {
+      const user = await pausedOn([card('int-1', 'call-1')]);
+      const transcript = await screen.findByTestId('cloud-transcript');
+      await user.click(await within(transcript).findByTestId('sensitive-action-authorize-button'));
+      await waitFor(() => expect(resumed).toHaveLength(1));
+      expect(resumed[0]?.query).toBe('agent.continue.hitl.v1');
+      expect(resumed[0]?.body).toEqual({
+        project_id: 42, conversation_uuid: UUID, message_id: RESPONSE_ID, thread_id: 'thread-root', hitl_resume: true,
+        hitl_decisions: [{ interrupt_id: 'int-1', tool_call_id: 'call-1', action: 'approve', value: '' }],
+      });
+      // The turn is running again: its stream is open, the waiting state is gone.
+      await waitFor(() => expect(useActivityFeed.getState().cloudRuns[UUID]).toMatchObject({ running: true, waiting: null }));
+      act(() => {
+        registry.emit('execution.node_event', frame({ type: 'agent_llm_chunk', content: 'Deleted report.pdf.' }));
+        registry.emit('execution.node_event', frame({ type: 'pipeline_finish' }));
+      });
+      expect(await within(screen.getByTestId('cloud-transcript')).findByText(/Deleted report\.pdf/)).toBeInTheDocument();
+      await waitFor(() => expect(useActivityFeed.getState().cloudRuns).toEqual({}));
+    });
+
+    it('shows the server\'s refusal when the answer is not accepted, and keeps the approval answerable', async () => {
+      const user = await pausedOn([card('int-1', 'call-1')]);
+      server.use(
+        http.post(`${BASE}/elitea_core/continue_predict/prompt_lib/42/${UUID}`, () => HttpResponse.json({ message: 'This pause is no longer open.' }, { status: 422 })),
+      );
+      await user.click(await within(await screen.findByTestId('cloud-transcript')).findByTestId('sensitive-action-authorize-button'));
+      expect(await screen.findByText('This pause is no longer open.')).toBeInTheDocument();
+      expect(await within(screen.getByTestId('cloud-transcript')).findByTestId('sensitive-action-authorize-button')).toBeInTheDocument();
+    });
+
+    it('sends the person to the chat in one click for a pause only the chat can answer (several approvals at once)', async () => {
+      const user = await pausedOn([card('int-1', 'call-1'), card('int-2', 'call-2')]);
+      const inChat = await screen.findByTestId('cloud-answer-in-chat');
+      expect(useActivityFeed.getState().cloudRuns[UUID]).toMatchObject({ waiting: 'Answer in chat' });
+      await user.click(within(inChat).getByRole('button', { name: 'Answer in chat' }));
+      expect(await screen.findByText('chat page')).toBeInTheDocument();
+    });
+  });
 });

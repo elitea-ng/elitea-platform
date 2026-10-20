@@ -753,7 +753,7 @@ for one send and restores it.
 | --- | --- | --- |
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
 | `context_menu_show` | `{request_id: string, items: Item[]}`; `Item` is `{id, label, enabled?}`, `{separator: true}` or a submenu `{label, enabled?, children: {id, label, enabled?}[]}` (one level) | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The outcome arrives on `app://context-menu` as `{request_id, id}`: `id` is the id the page gave the item, or `null` when the menu was dismissed (sent by the host ~150 ms after the menu closed with no choice). The page ignores events whose `request_id` is not its own. `request_id`: ≤ 64 chars of `[A-Za-z0-9_-]`. At most 60 choosable items across the menu and its submenu; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
-| `activity_cloud_run` | `{conversation_uuid: string, running: boolean, workspace_id?: string, workspace_name?: string}` | `null` — the page tells the host a cloud turn of this window started (`running: true`) or ended (completion and errors both send `false`); the menu-bar item then shows it like a local turn (`◐ m:ss`, a "Running in cloud" entry whose click sends `focus_turn`). The chat stream to a cloud thread runs in the page (the web chat transport), so the host cannot see it itself. |
+| `activity_cloud_run` | `{conversation_uuid: string, running: boolean, waiting?: boolean, workspace_id?: string, workspace_name?: string}` | `null` — the page tells the host a cloud turn of this window is streaming (`running`) and/or waits on the person (`waiting`: an approval or continue prompt); both `false` ends it (completion and errors both send that). The menu-bar item shows it like a local turn (`◐ m:ss`, a "Running in cloud" entry); a waiting thread counts in `⚠ n`, adds an "Approve in cloud" entry and is counted on the Dock badge with the local approvals. A click sends `focus_turn`. The chat stream to a cloud thread runs in the page (the web chat transport), so the host cannot see it itself. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
 | `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
@@ -882,7 +882,7 @@ both together:
   total and resets the count; `Processed <n> files` sets the count; leaving the
   `building` state clears it. (Web: `foldProgress`, `features/workspace-index/
   model/progress.ts`; host: `ActivityState::observe_index`.)
-- A cloud turn streaming into the window runs from `activity_cloud_run(running: true)` to `running: false` (completion and errors both end it); web: `cloudRuns` in the feed.
+- A cloud turn streaming into the window runs from `activity_cloud_run(running: true)` until both `running` and `waiting` are false (completion and errors both end it); it waits on the person while `waiting` is true, which counts like an approval; web: `cloudRuns` in the feed.
 - A send to the cloud runs until its `handoff://event` phase is `complete`,
   `cancelled` or `error`; its bar is `done` of `total` (indeterminate when
   `total` is 0).

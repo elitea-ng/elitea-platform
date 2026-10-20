@@ -71,18 +71,23 @@ export function useActivityFeedSources(): void {
     return subscribe<HandoffEvent>((h) => handoffIpc.onEvent(h), (event) => useActivityFeed.getState().applyHandoffEvent(event));
   }, [handoffIpc]);
 
-  // A cloud turn streams into this window (the page's chat transport): the host's menu-bar item shows it too.
+  // A cloud turn streams into this window (the page's chat transport) or waits on the person: the host's
+  // menu-bar item and Dock badge show it too.
   useEffect(() => {
     if (appIpc === undefined) return undefined;
-    let known = new Map<string, true>();
+    let known = new Map<string, string>();
+    const signature = (run: { running: boolean; waiting: string | null }): string => `${String(run.running)}|${run.waiting ?? ''}`;
     return useActivityFeed.subscribe((state) => {
-      const now = new Map<string, true>(Object.keys(state.cloudRuns).map((uuid) => [uuid, true]));
-      for (const uuid of now.keys()) {
+      const now = new Map(Object.entries(state.cloudRuns).map(([uuid, run]) => [uuid, signature(run)]));
+      for (const [uuid, sig] of now) {
         const run = state.cloudRuns[uuid];
-        if (!known.has(uuid) && run !== undefined) void appIpc.cloudRun({ conversationUuid: uuid, running: true, ...(run.workspaceId === null ? {} : { workspaceId: run.workspaceId }), workspaceName: run.title }).catch(() => undefined);
+        if (run === undefined || known.get(uuid) === sig) continue;
+        void appIpc
+          .cloudRun({ conversationUuid: uuid, running: run.running, waiting: run.waiting !== null, ...(run.workspaceId === null ? {} : { workspaceId: run.workspaceId }), workspaceName: run.title })
+          .catch(() => undefined);
       }
       for (const uuid of known.keys()) {
-        if (!now.has(uuid)) void appIpc.cloudRun({ conversationUuid: uuid, running: false }).catch(() => undefined);
+        if (!now.has(uuid)) void appIpc.cloudRun({ conversationUuid: uuid, running: false, waiting: false }).catch(() => undefined);
       }
       known = now;
     });

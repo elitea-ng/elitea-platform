@@ -80,11 +80,11 @@ describe('createAppIpc', () => {
   it('tells the host a cloud turn started and ended', async () => {
     const invoke = vi.fn().mockResolvedValue(null);
     const ipc = createAppIpc(invoke, () => Promise.resolve(() => undefined));
-    await ipc.cloudRun({ conversationUuid: 'u1', running: true, workspaceId: 'w1', workspaceName: 'app' });
-    await ipc.cloudRun({ conversationUuid: 'u1', running: false });
+    await ipc.cloudRun({ conversationUuid: 'u1', running: true, waiting: false, workspaceId: 'w1', workspaceName: 'app' });
+    await ipc.cloudRun({ conversationUuid: 'u1', running: false, waiting: true });
     expect(invoke.mock.calls).toEqual([
-      ['activity_cloud_run', { conversation_uuid: 'u1', running: true, workspace_id: 'w1', workspace_name: 'app' }],
-      ['activity_cloud_run', { conversation_uuid: 'u1', running: false }],
+      ['activity_cloud_run', { conversation_uuid: 'u1', running: true, waiting: false, workspace_id: 'w1', workspace_name: 'app' }],
+      ['activity_cloud_run', { conversation_uuid: 'u1', running: false, waiting: true }],
     ]);
   });
 

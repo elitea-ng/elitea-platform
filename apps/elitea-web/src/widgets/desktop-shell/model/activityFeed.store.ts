@@ -82,6 +82,10 @@ export interface TrackedCloudRun {
   conversationUuid: string;
   /** Epoch ms the stream began. */
   startedAt: number;
+  /** A stream is running now. */
+  running: boolean;
+  /** What the thread waits on the person for ("Approve: run_command"), or `null`. */
+  waiting: string | null;
   title: string;
   workspaceId: string | null;
   conversationId: string | null;

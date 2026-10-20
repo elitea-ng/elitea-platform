@@ -83,6 +83,10 @@ pub enum Entry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CloudRun {
     since: Instant,
+    /// A stream is running now.
+    running: bool,
+    /// The thread waits on the person (an approval).
+    waiting: bool,
     workspace_id: Option<String>,
     workspace_name: Option<String>,
 }
@@ -215,24 +219,40 @@ impl ActivityState {
         }
     }
 
-    /// The page's cloud turn started or ended (completion and errors both end it).
+    /// The page's cloud turn: streaming (`running`) and/or waiting on the
+    /// person (`waiting`). Neither ends it (completion and errors both do).
     pub fn observe_cloud(
         &mut self,
         uuid: &str,
-        running: bool,
-        workspace_id: Option<String>,
-        workspace_name: Option<String>,
+        (running, waiting): (bool, bool),
+        (workspace_id, workspace_name): (Option<String>, Option<String>),
         now: Instant,
     ) {
-        if !running {
+        if !running && !waiting {
             self.cloud.remove(uuid);
             return;
         }
-        self.cloud.entry(uuid.to_owned()).or_insert(CloudRun {
+        let entry = self.cloud.entry(uuid.to_owned()).or_insert(CloudRun {
             since: now,
-            workspace_id,
-            workspace_name,
+            running,
+            waiting,
+            workspace_id: workspace_id.clone(),
+            workspace_name: workspace_name.clone(),
         });
+        // A new stream restarts the timer; a pause does not.
+        if running && !entry.running {
+            entry.since = now;
+        }
+        entry.running = running;
+        entry.waiting = waiting;
+        entry.workspace_id = workspace_id;
+        entry.workspace_name = workspace_name;
+    }
+
+    /// Cloud threads waiting on the person (they count with the approvals).
+    #[must_use]
+    pub fn cloud_waiting(&self) -> usize {
+        self.cloud.values().filter(|run| run.waiting).count()
     }
 
     /// The folder a cloud run belongs to.
@@ -246,20 +266,26 @@ impl ActivityState {
     /// Whether a timer is on screen (so something must re-render each second).
     #[must_use]
     pub fn has_timer(&self) -> bool {
-        !self.turns.is_empty() || !self.cloud.is_empty()
+        !self.turns.is_empty() || self.cloud.values().any(|run| run.running)
     }
 
     /// The menu-bar title: `⚠ n` for approvals waiting, else `◐ m:ss` for the
     /// longest-running turn, else empty (the icon alone).
     #[must_use]
     pub fn title(&self, now: Instant) -> String {
-        if !self.approvals.is_empty() {
-            return format!("⚠ {}", self.approvals.len());
+        let waiting = self.approvals.len() + self.cloud_waiting();
+        if waiting > 0 {
+            return format!("⚠ {waiting}");
         }
         let oldest = self
             .turns
             .values()
-            .chain(self.cloud.values().map(|run| &run.since))
+            .chain(
+                self.cloud
+                    .values()
+                    .filter(|run| run.running)
+                    .map(|run| &run.since),
+            )
             .min();
         match oldest {
             Some(start) => format!("◐ {}", clock(now.saturating_duration_since(*start))),
@@ -319,15 +345,28 @@ impl ActivityState {
                 label,
             });
         }
+        let cloud_label = |what: &str, run: &CloudRun| match run.workspace_name.as_deref() {
+            Some(name) => format!("{what} — {}", shown(name, 40)),
+            None => what.to_owned(),
+        };
         for (uuid, run) in &self.cloud {
-            let label = match run.workspace_name.as_deref() {
-                Some(name) => format!("Running in cloud — {}", shown(name, 40)),
-                None => "Running in cloud".to_owned(),
-            };
-            list.push(Entry::Cloud {
-                uuid: uuid.clone(),
-                label,
-            });
+            if run.waiting {
+                list.insert(
+                    0,
+                    Entry::Cloud {
+                        uuid: uuid.clone(),
+                        label: cloud_label("Approve in cloud", run),
+                    },
+                );
+            }
+        }
+        for (uuid, run) in &self.cloud {
+            if run.running {
+                list.push(Entry::Cloud {
+                    uuid: uuid.clone(),
+                    label: cloud_label("Running in cloud", run),
+                });
+            }
         }
         list.truncate(MAX_ENTRIES);
         if list.is_empty() {
@@ -420,15 +459,19 @@ impl Activity {
             .retain(|turn, _| state.knows(turn));
     }
 
-    pub fn cloud(
-        &self,
-        uuid: &str,
-        running: bool,
-        workspace_id: Option<String>,
-        workspace_name: Option<String>,
-    ) {
-        self.state()
-            .observe_cloud(uuid, running, workspace_id, workspace_name, Instant::now());
+    pub fn cloud(&self, uuid: &str, flags: (bool, bool), place: (Option<String>, Option<String>)) {
+        let waiting = {
+            let mut state = self.state();
+            state.observe_cloud(uuid, flags, place, Instant::now());
+            state.cloud_waiting()
+        };
+        // The Dock badge counts them with the approvals.
+        if let Some(attention) = self
+            .app
+            .try_state::<std::sync::Arc<crate::attention::Attention>>()
+        {
+            attention.set_external(waiting);
+        }
         self.changed();
     }
 
@@ -650,6 +693,7 @@ pub fn activity_cloud_run(
     activity: tauri::State<'_, std::sync::Arc<Activity>>,
     conversation_uuid: String,
     running: bool,
+    waiting: Option<bool>,
     workspace_id: Option<String>,
     workspace_name: Option<String>,
 ) -> Result<(), String> {
@@ -659,9 +703,8 @@ pub fn activity_cloud_run(
     let hint = |text: Option<String>| text.map(|t| shown(&t, 80));
     activity.cloud(
         &conversation_uuid,
-        running,
-        hint(workspace_id),
-        hint(workspace_name),
+        (running, waiting.unwrap_or(false)),
+        (hint(workspace_id), hint(workspace_name)),
     );
     Ok(())
 }
@@ -828,9 +871,8 @@ mod tests {
         let mut state = ActivityState::default();
         state.observe_cloud(
             "u1",
-            true,
-            Some("w1".into()),
-            Some("elitea-platform".into()),
+            (true, false),
+            (Some("w1".into()), Some("elitea-platform".into())),
             t0,
         );
         assert!(state.has_timer());
@@ -845,9 +887,44 @@ mod tests {
         );
         assert_eq!(state.cloud_workspace("u1").as_deref(), Some("w1"));
         // Completion or an error both end it.
-        state.observe_cloud("u1", false, None, None, t0);
+        state.observe_cloud("u1", (false, false), (None, None), t0);
         assert!(!state.has_timer());
         assert_eq!(state.title(t0), "");
+    }
+
+    #[test]
+    fn a_cloud_thread_waiting_on_an_approval_raises_the_attention_state() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        state.observe_cloud(
+            "u1",
+            (false, true),
+            (Some("w1".into()), Some("app".into())),
+            t0,
+        );
+        assert_eq!(state.cloud_waiting(), 1);
+        assert!(!state.has_timer(), "paused: no stream, no timer");
+        assert_eq!(state.title(t0), "⚠ 1");
+        state.observe_agent(&approval("t2", "r1", "run_command"), t0);
+        assert_eq!(state.title(t0), "⚠ 2", "counts with the local approvals");
+        assert_eq!(
+            state.entries(&names)[0],
+            Entry::Cloud {
+                uuid: "u1".into(),
+                label: "Approve in cloud — app".into()
+            }
+        );
+        // Answered: it resumes streaming; then it ends.
+        state.observe_cloud(
+            "u1",
+            (true, false),
+            (Some("w1".into()), Some("app".into())),
+            t0,
+        );
+        assert_eq!(state.cloud_waiting(), 0);
+        assert!(state.has_timer());
+        state.observe_cloud("u1", (false, false), (None, None), t0);
+        assert_eq!(state.cloud_waiting(), 0);
     }
 
     #[test]
