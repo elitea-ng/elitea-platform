@@ -618,6 +618,7 @@ impl PipelineContinuationDecision {
         checkpointer: &dyn Checkpointer,
         root_agent_name: &str,
         thread_id: &str,
+        owner: &crate::agents::dispatch_journal::DispatchOwner,
     ) -> Result<ResolvedPipelineContinuation, PipelineResumeError> {
         match self {
             Self::Node(decision) => decision
@@ -630,7 +631,14 @@ impl PipelineContinuationDecision {
                 authorization,
             } => {
                 let events = session.events().all();
-                let interrupt = events.last().ok_or_else(PipelineResumeError::stale)?;
+                let interrupt = crate::agents::dispatch_journal::continuation_pause(
+                    &events,
+                    |event| event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY),
+                    owner,
+                    |pause| pause_interrupt_ids(pause, root_agent_name, thread_id),
+                    crate::agents::application_tools::pipeline_continuation_suffix(),
+                )
+                .ok_or_else(PipelineResumeError::stale)?;
                 if let Ok(binding) =
                     pipeline_application_event_binding(interrupt, root_agent_name, thread_id)
                 {
@@ -681,9 +689,17 @@ impl PipelineContinuationDecision {
                     if submitted.is_empty() || !submitted.is_subset(&expected) {
                         return Err(PipelineResumeError::stale());
                     }
+                    let pause_id = interrupt.id.clone();
+                    let pause_invocation_id = interrupt.invocation_id.clone();
                     return Ok(ResolvedPipelineContinuation::application(
                         PipelineResume::empty(),
-                        decisions,
+                        PipelineApplicationContinuation {
+                            decisions,
+                            pause_id,
+                            pause_invocation_id,
+                            binding,
+                            events,
+                        },
                     ));
                 }
                 if let Some(authorization) = authorization {
@@ -703,31 +719,50 @@ impl PipelineContinuationDecision {
     }
 }
 
+/// The cards of one pipeline Application pause, as the browser saw them.
+pub(crate) fn pause_interrupt_ids(
+    pause: &adk_rust::Event,
+    root_agent_name: &str,
+    thread_id: &str,
+) -> Option<BTreeSet<String>> {
+    pipeline_application_event_binding(pause, root_agent_name, thread_id)
+        .ok()
+        .map(|binding| binding.interrupt_ids().iter().cloned().collect())
+}
+
 pub(crate) struct ResolvedPipelineContinuation {
     resume: PipelineResume,
-    application_decisions: Option<Vec<ResolvedDirectHitlDecision>>,
+    application: Option<PipelineApplicationContinuation>,
+}
+
+/// The nested Agent decisions of one pipeline Application pause, with the pause
+/// they were proven against (one scan and one decode, reused by the caller).
+pub(crate) struct PipelineApplicationContinuation {
+    pub(crate) decisions: Vec<ResolvedDirectHitlDecision>,
+    pub(crate) pause_id: String,
+    pub(crate) pause_invocation_id: String,
+    pub(crate) binding: crate::agents::events::PipelineApplicationHitlEventBinding,
+    /// The session events the pause was proven against.
+    pub(crate) events: Vec<adk_rust::Event>,
 }
 
 impl ResolvedPipelineContinuation {
     fn graph(resume: PipelineResume) -> Self {
         Self {
             resume,
-            application_decisions: None,
+            application: None,
         }
     }
 
-    fn application(
-        resume: PipelineResume,
-        application_decisions: Vec<ResolvedDirectHitlDecision>,
-    ) -> Self {
+    fn application(resume: PipelineResume, application: PipelineApplicationContinuation) -> Self {
         Self {
             resume,
-            application_decisions: Some(application_decisions),
+            application: Some(application),
         }
     }
 
-    pub(crate) fn into_parts(self) -> (PipelineResume, Option<Vec<ResolvedDirectHitlDecision>>) {
-        (self.resume, self.application_decisions)
+    pub(crate) fn into_parts(self) -> (PipelineResume, Option<PipelineApplicationContinuation>) {
+        (self.resume, self.application)
     }
 }
 
@@ -1250,6 +1285,9 @@ fn direct_hitl_resume_error(error: &DirectHitlError) -> PipelineResumeError {
         DirectHitlErrorCode::UnsupportedCapability => {
             PipelineResumeError::new(PipelineResumeErrorCode::UnsupportedCapability)
         }
+        DirectHitlErrorCode::MayHaveStarted => {
+            PipelineResumeError::new(PipelineResumeErrorCode::MayHaveStarted)
+        }
         DirectHitlErrorCode::StaleDecision => PipelineResumeError::stale(),
         DirectHitlErrorCode::CorruptSession => PipelineResumeError::corrupt(),
     }
@@ -1317,6 +1355,8 @@ pub(crate) enum PipelineResumeErrorCode {
     StaleDecision,
     CorruptSession,
     DependencyUnavailable,
+    /// An approved call was dispatched without a recorded outcome.
+    MayHaveStarted,
 }
 
 impl PipelineResumeErrorCode {
@@ -1328,6 +1368,7 @@ impl PipelineResumeErrorCode {
             Self::StaleDecision => "pipeline_hitl.stale_decision",
             Self::CorruptSession => "pipeline_hitl.corrupt_session",
             Self::DependencyUnavailable => "pipeline_hitl.dependency_unavailable",
+            Self::MayHaveStarted => "pipeline_hitl.may_have_started",
         }
     }
 }
@@ -1346,7 +1387,7 @@ impl PipelineResumeError {
         Self::new(PipelineResumeErrorCode::InvalidInput)
     }
 
-    pub(super) const fn stale() -> Self {
+    pub(crate) const fn stale() -> Self {
         Self::new(PipelineResumeErrorCode::StaleDecision)
     }
 

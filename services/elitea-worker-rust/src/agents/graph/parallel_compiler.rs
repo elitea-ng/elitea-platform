@@ -365,6 +365,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         execution: ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
         let definition = self.definition(branch)?.clone();
+        let mut failure_events = None;
         let resolver = match self.events.as_ref() {
             Some(events) => {
                 let parent = super::super::node_events::PipelineNodeEventScope::from_state(
@@ -382,6 +383,8 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                             "the fixed Parallel event branch is unproved".to_owned(),
                         )
                     })?;
+                // A branch's typed refusal reaches the run's terminal (RECOVERY_REFUSED).
+                failure_events = Some(events.clone());
                 self.resolver.for_parallel_events(events).map_err(|_| {
                     GraphError::InvalidGraph(
                         "the fixed Parallel event resolver is unavailable".to_owned(),
@@ -401,7 +404,8 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 "the fixed Parallel Agent participant is unavailable".to_owned(),
             )
         })?
-        .with_parallel_inputs();
+        .with_parallel_inputs()
+        .with_failure_events(failure_events);
         let mut channels = BTreeSet::from([
             "input".to_owned(),
             "messages".to_owned(),

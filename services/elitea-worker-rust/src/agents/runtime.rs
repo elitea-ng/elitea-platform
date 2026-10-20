@@ -24,7 +24,7 @@ use super::attachment_tools::AttachmentLibrary;
 use super::attachments;
 use super::direct_hitl::{
     DirectDelegatedAuthorizationContinuation, DirectHitlDecisionSet, DirectHitlError,
-    DirectHitlErrorCode, DirectHitlRunInput,
+    DirectHitlRunInput,
 };
 use super::events::{
     AgentEventProjectionError, AgentEventProjector, CompletedAgentBrowserOutput,
@@ -747,16 +747,7 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
 }
 
 fn direct_hitl_admission_error(error: &DirectHitlError) -> NativeAgentAssemblyError {
-    let code = match error.code() {
-        DirectHitlErrorCode::InvalidInput
-        | DirectHitlErrorCode::StaleDecision
-        | DirectHitlErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        DirectHitlErrorCode::UnsupportedCapability => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        DirectHitlErrorCode::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
-    };
-    NativeAgentAssemblyError::new(code, "the direct sensitive-tool continuation is malformed")
+    super::direct_hitl::assembly_error(error, "the direct sensitive-tool continuation is malformed")
 }
 
 fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAssemblyError {
@@ -764,7 +755,9 @@ fn pipeline_hitl_admission_error(error: &PipelineResumeError) -> NativeAgentAsse
         PipelineResumeErrorCode::InvalidInput
         | PipelineResumeErrorCode::StaleDecision
         | PipelineResumeErrorCode::CorruptSession => NativeAgentAssemblyErrorCode::InvalidInput,
-        PipelineResumeErrorCode::UnsupportedCapability => {
+        // Admission parses a payload; it never resolves a dispatch.
+        PipelineResumeErrorCode::UnsupportedCapability
+        | PipelineResumeErrorCode::MayHaveStarted => {
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         }
         PipelineResumeErrorCode::DependencyUnavailable => {
@@ -1184,7 +1177,7 @@ impl NativeAgentInvocation {
         }
     }
 
-    /// Seal a read-only direct-HITL replay prepared from one persisted call.
+    /// Seal a direct-HITL replay prepared from one persisted call.
     pub(crate) fn new_direct_hitl(
         runner: Runner,
         user_id: UserId,

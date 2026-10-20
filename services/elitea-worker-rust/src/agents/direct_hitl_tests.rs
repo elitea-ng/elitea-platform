@@ -364,19 +364,79 @@ fn delegated_authorization_decision_is_bound_to_interrupt_action_and_server_auth
 }
 
 #[test]
-fn direct_replay_rejects_effectful_tools_before_model_or_tool_execution() {
+fn an_approved_effectful_call_runs_once_and_is_refused_after_its_dispatch() {
     let arguments = json!({"value": 21});
-    let events = pending_events(arguments.clone());
+    let mut events = pending_events(arguments.clone());
     let (interrupt_id, _) = sensitive_call_identity("invocation-1", "call-1", "double", &arguments)
         .expect("call identity");
-    let resolved = DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
-        .expect("decision admission")
-        .resolve(&session(events))
-        .expect("exact session call");
-    let Err(error) = resolved.into_direct_replay(&sensitive_catalog(false)) else {
-        panic!("effectful direct tool was admitted for replay");
+    let approve = || {
+        DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
+            .expect("decision admission")
     };
-    assert_eq!(error.code(), DirectHitlErrorCode::UnsupportedCapability);
+    // Never dispatched: the approved effect is admitted for its one run.
+    let replay = approve()
+        .resolve(&session(events.clone()))
+        .expect("exact session call")
+        .into_direct_replay(&sensitive_catalog(false))
+        .expect("an approved, never-dispatched effectful call runs");
+    assert_eq!(replay.approved_call_ids(), vec!["call-1"]);
+
+    // A continuation that persisted only its replay marker never dispatched it.
+    let marker_text = format!(
+        "[Elitea direct HITL {interrupt_id}] The pending tool call was approved. Continue the original request."
+    );
+    let mut marker = Event::with_id("resume-user", "invocation-2");
+    marker.author = "user".to_owned();
+    marker.llm_response.content = Some(Content::new("user").with_text(marker_text));
+    events.push(marker);
+    approve()
+        .resolve(&session(events.clone()))
+        .expect("marker-only suffix")
+        .into_direct_replay(&sensitive_catalog(false))
+        .expect("a marker without the replayed call is not a dispatch");
+
+    // The replayed call is persisted before ADK runs the tool: it may have run.
+    let mut call = Event::with_id("resume-call", "invocation-2");
+    call.author = "elitea-agent".to_owned();
+    call.llm_response.content = Some(Content {
+        role: "model".to_owned(),
+        parts: vec![Part::FunctionCall {
+            name: "double".to_owned(),
+            args: arguments.clone(),
+            id: Some("call-1".to_owned()),
+            thought_signature: None,
+        }],
+    });
+    events.push(call);
+    // The persisted replayed message alone is no dispatch: ADK's confirmation
+    // pre-check may persist it and pause without running any tool (#1321 review
+    // round 2 item 2).
+    approve()
+        .resolve(&session(events.clone()))
+        .expect("exact call suffix")
+        .into_direct_replay(&sensitive_catalog(false))
+        .expect("a replayed message without a journaled dispatch runs once");
+    // The journal records the dispatch before the effect: it may have run.
+    events.push(crate::agents::dispatch_journal::test_dispatched_record(
+        "invocation-1",
+        &interrupt_id,
+        "call-1",
+        crate::agents::dispatch_journal::DispatchOwner::new("execution-1", 1),
+    ));
+    let Err(error) = approve()
+        .resolve(&session(events.clone()))
+        .expect("exact call suffix")
+        .into_direct_replay(&sensitive_catalog(false))
+    else {
+        panic!("a dispatched effectful call was admitted again");
+    };
+    assert_eq!(error.code(), DirectHitlErrorCode::MayHaveStarted);
+    // A read-only call with the same suffix still re-runs.
+    approve()
+        .resolve(&session(events))
+        .expect("exact call suffix")
+        .into_direct_replay(&sensitive_catalog(true))
+        .expect("a read-only call is re-run");
 }
 
 #[test]
@@ -433,6 +493,23 @@ fn exact_partial_replay_suffix_is_restartable_but_completed_output_is_stale() {
         .resolve(&session(events.clone()))
         .expect("exact persisted result");
     assert!(completed.has_persisted_result());
+
+    // A later continuation of the same decision appends the same marker again
+    // and dies before its first model answer: the recorded result stays the
+    // decision's result, so the effect is served and never re-run.
+    let mut marker_again = Event::with_id("resume-user-2", "invocation-3");
+    marker_again.author = "user".to_owned();
+    marker_again.llm_response.content = events
+        .iter()
+        .find(|event| event.id == "resume-user")
+        .and_then(|event| event.llm_response.content.clone());
+    let mut after_second_marker = events.clone();
+    after_second_marker.push(marker_again);
+    let again = DirectHitlDecision::from_payload(&direct_payload("approve", "", &interrupt_id))
+        .expect("second continuation decision")
+        .resolve(&session(after_second_marker))
+        .expect("recorded result survives a second marker");
+    assert!(again.has_persisted_result());
 
     let mut final_output = Event::with_id("resume-final", "invocation-2");
     final_output.author = "elitea-agent".to_owned();
@@ -971,10 +1048,14 @@ impl SameToolReplayFixture {
         let prepared = replay.bind(Arc::new(ReplayFinalLlm {
             requests: Arc::clone(&self.requests),
         }));
-        let (model, input, toolsets) = prepared.into_parts(vec![Arc::new(BasicToolset::new(
-            "fixture-tools",
-            vec![tool],
-        ))]);
+        let (model, input, toolsets) = prepared
+            .into_parts(
+                vec![Arc::new(BasicToolset::new("fixture-tools", vec![tool]))],
+                None,
+                crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+                &sensitive_catalog(true),
+            )
+            .expect("a read-only replay needs no journal");
         let mut agent = LlmAgentBuilder::new("elitea-agent")
             .model(model)
             .require_tool_confirmation("double");
@@ -1490,7 +1571,8 @@ async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approve
         0,
         "not a name-wide confirmation"
     );
-    assert_eq!(catalog.replays_approved("run_command"), Some(true));
+    // An effectful command: its approval runs it once (no read-only gate).
+    assert_eq!(catalog.is_read_only("run_command"), Some(false));
     assert!(catalog.policy_for("run_command").is_some());
 
     // The person approves: the continuation replays the call, approved.
@@ -1537,7 +1619,14 @@ async fn a_destructive_workspace_command_pauses_for_approval_and_replays_approve
         command: "unused".to_owned(),
         turns: Mutex::new(1),
     }));
-    let (model, input, _) = prepared.into_parts(Vec::new());
+    let (model, input, _) = prepared
+        .into_parts(
+            Vec::new(),
+            None,
+            crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+            &catalog,
+        )
+        .expect("the workspace command needs no journal");
     let (user_content, run_config) = input.into_parts();
     let resumed = workspace_turn(
         Arc::clone(&sessions),
@@ -1737,7 +1826,13 @@ pub(super) async fn approved_push_resume(
             command: "unused".to_owned(),
             turns: Mutex::new(1),
         }))
-        .into_parts(Vec::new());
+        .into_parts(
+            Vec::new(),
+            None,
+            crate::agents::dispatch_journal::JournalOutcomes::ByRunner,
+            &catalog,
+        )
+        .expect("the workspace command needs no journal");
     let (user_content, run_config) = input.into_parts();
     (model, run_config, user_content)
 }
@@ -1901,4 +1996,151 @@ async fn an_approval_is_consumed_by_its_first_claim() {
     assert!(records.iter().all(|event| {
         event.llm_response.content.is_none() && event.actions.state_delta.is_empty()
     }));
+}
+
+/// A dispatched sibling that is not sensitive re-runs only when its own tool is
+/// read-only (#1321 review item 6): an unknown or data-changing one may have run.
+#[test]
+fn a_dispatched_non_sensitive_sibling_reruns_only_when_read_only() {
+    let calls = [
+        ("call-1", "double", json!({"value": 21})),
+        ("call-2", "lookup", json!({"key": "a"})),
+    ];
+    let mut events = multi_call_events(&calls, 0);
+    let (interrupt_id, _) =
+        sensitive_call_identity("invocation-1", "call-1", "double", &calls[0].2)
+            .expect("call identity");
+    let mut marker = Event::with_id("resume-user", "invocation-2");
+    marker.author = "user".to_owned();
+    marker.llm_response.content = Some(Content::new("user").with_text(format!(
+        "[Elitea direct HITL {interrupt_id}] The pending tool call was approved. Continue the original request."
+    )));
+    events.push(marker);
+    // The dead continuation re-emitted the whole message: both calls dispatched.
+    let mut replayed = Event::with_id("resume-call", "invocation-2");
+    replayed.author = "elitea-agent".to_owned();
+    replayed.llm_response.content = Some(Content {
+        role: "model".to_owned(),
+        parts: calls
+            .iter()
+            .map(|(call_id, tool_name, arguments)| Part::FunctionCall {
+                name: (*tool_name).to_owned(),
+                args: arguments.clone(),
+                id: Some((*call_id).to_owned()),
+                thought_signature: None,
+            })
+            .collect(),
+    });
+    events.push(replayed);
+    for call_id in ["call-1", "call-2"] {
+        events.push(crate::agents::dispatch_journal::test_dispatched_record(
+            "invocation-1",
+            &interrupt_id,
+            call_id,
+            crate::agents::dispatch_journal::DispatchOwner::new("execution-1", 1),
+        ));
+    }
+    let replay = |catalog: SensitiveToolCatalog| {
+        DirectHitlDecision::from_payload(&multi_call_payload(
+            "approve",
+            "",
+            &interrupt_id,
+            "call-1",
+        ))
+        .expect("decision admission")
+        .resolve(&session(events.clone()))
+        .expect("exact replayed suffix")
+        .into_direct_replay(&catalog)
+    };
+    // The decided call is read-only, so only the sibling's class decides.
+    replay(sensitive_catalog_for(&["double"], true).with_other_tool("fixture", "lookup", true))
+        .expect("a read-only sibling re-runs");
+    for catalog in [
+        sensitive_catalog_for(&["double"], true).with_other_tool("fixture", "lookup", false),
+        sensitive_catalog_for(&["double"], true),
+    ] {
+        let Err(error) = replay(catalog) else {
+            panic!("a sibling that may change data was admitted again");
+        };
+        assert_eq!(error.code(), DirectHitlErrorCode::MayHaveStarted);
+    }
+}
+
+/// A nested decision's journal is per call (#1321 review item 5): the decided
+/// call's dispatch says nothing about a sibling the journal never saw start.
+#[test]
+fn a_journaled_dispatch_of_the_decided_call_does_not_refuse_an_unstarted_sibling() {
+    let calls = [
+        ("call-1", "double", json!({"value": 21})),
+        ("call-2", "lookup", json!({"key": "a"})),
+    ];
+    let events = multi_call_events(&calls, 0);
+    let (interrupt_id, _) =
+        sensitive_call_identity("invocation-1", "call-1", "double", &calls[0].2)
+            .expect("call identity");
+    let resolved = || {
+        DirectHitlDecision::from_payload(&multi_call_payload(
+            "approve",
+            "",
+            &interrupt_id,
+            "call-1",
+        ))
+        .expect("decision admission")
+        .resolve(&session(events.clone()))
+        .expect("pending message")
+    };
+    // The decided call is read-only and was journaled; the effectful sibling never started.
+    let catalog =
+        || sensitive_catalog_for(&["double"], true).with_other_tool("fixture", "lookup", false);
+    resolved()
+        .with_journaled_dispatch(true, std::collections::BTreeSet::new())
+        .into_direct_replay(&catalog())
+        .expect("an unstarted sibling runs once");
+    // Journaled as dispatched itself, the same sibling is refused.
+    let Err(error) = resolved()
+        .with_journaled_dispatch(
+            true,
+            std::collections::BTreeSet::from(["call-2".to_owned()]),
+        )
+        .into_direct_replay(&catalog())
+    else {
+        panic!("a dispatched effectful sibling was admitted again");
+    };
+    assert_eq!(error.code(), DirectHitlErrorCode::MayHaveStarted);
+}
+
+/// Performance (#1321 review item 9): only calls that may not re-run are
+/// journaled; a read-only call re-runs after a crash and costs no root writes.
+#[test]
+fn only_calls_that_may_not_rerun_are_journaled() {
+    let calls = [
+        ("call-1", "double", json!({"value": 21})),
+        ("call-2", "lookup", json!({"key": "a"})),
+    ];
+    let events = multi_call_events(&calls, 0);
+    let (interrupt_id, _) =
+        sensitive_call_identity("invocation-1", "call-1", "double", &calls[0].2)
+            .expect("call identity");
+    let replay = |catalog: &SensitiveToolCatalog| {
+        DirectHitlDecision::from_payload(&multi_call_payload(
+            "approve",
+            "",
+            &interrupt_id,
+            "call-1",
+        ))
+        .expect("decision admission")
+        .resolve(&session(events.clone()))
+        .expect("pending message")
+        .into_direct_replay(catalog)
+        .expect("replay")
+    };
+    let effectful =
+        sensitive_catalog_for(&["double"], false).with_other_tool("fixture", "lookup", false);
+    assert_eq!(
+        replay(&effectful).journaled_call_ids(&effectful),
+        std::collections::BTreeSet::from(["call-1".to_owned(), "call-2".to_owned()])
+    );
+    let read_only =
+        sensitive_catalog_for(&["double"], true).with_other_tool("fixture", "lookup", true);
+    assert!(replay(&read_only).journaled_call_ids(&read_only).is_empty());
 }

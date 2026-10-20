@@ -300,9 +300,20 @@ impl PipelineApplicationNodeRuntime {
         terminal: &mut Option<Event>,
     ) -> Result<Value, GraphError> {
         let mut future = DrivenTask::new(work);
+        let mut typed_refusal = None;
         let result = loop {
             tokio::select! {
-                value = &mut future => break match value { Ok(Ok(value)) => Ok(value), _ => Err(failure()) },
+                value = &mut future => break match value {
+                    Ok(Ok(value)) => Ok(value),
+                    // The nested Agent's approved call may have run (not repeated), or
+                    // its dispatch record could not be written (it never ran).
+                    Ok(Err(error)) if error.code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE
+                        || error.code == crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE => {
+                        typed_refusal = Some(error.code);
+                        Err(failure())
+                    }
+                    _ => Err(failure()),
+                },
                 signal = receiver.recv() => match signal {
                     Some(signal) => if let Err(error) = self.drain(signal, receipt, graph_scope, root_container, terminal).await { break Err(error); },
                     None => break Err(failure()),
@@ -322,7 +333,19 @@ impl PipelineApplicationNodeRuntime {
                 break;
             }
         }
+        if let Some(code) = typed_refusal {
+            return Err(self.typed_refusal(code).await);
+        }
         result
+    }
+
+    /// The run ends with the refusal's registered reason, as an unscoped Agent
+    /// node does (`graph/application.rs` `child_failure`).
+    async fn typed_refusal(&self, code: &str) -> GraphError {
+        self.events
+            .approved_call_stop(code, &self.node_name)
+            .await
+            .unwrap_or_else(failure)
     }
 
     async fn drain(

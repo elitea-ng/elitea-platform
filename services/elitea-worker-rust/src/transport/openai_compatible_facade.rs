@@ -1053,14 +1053,14 @@ fn append_openai_messages(
 
 fn openai_assistant_message(content: &Content) -> Result<serde_json::Value, AdkError> {
     let mut text = String::new();
-    let mut text_blocks = Vec::new();
+    let mut has_text = false;
     let mut reasoning = String::new();
     let mut calls = Vec::new();
     for part in &content.parts {
         match part {
             Part::Text { text: value } => {
                 text.push_str(value);
-                text_blocks.push(serde_json::json!({"type": "text", "text": value}));
+                has_text = true;
             }
             Part::Thinking {
                 thinking: value, ..
@@ -1083,11 +1083,15 @@ fn openai_assistant_message(content: &Content) -> Result<serde_json::Value, AdkE
         "role".to_owned(),
         serde_json::Value::String("assistant".to_owned()),
     );
+    // A streamed answer is stored as one text part per chunk. The provider
+    // gets it as one string, the shape of the answer it produced: one block
+    // per chunk costs ~30 bytes each on every later turn, and some upstream
+    // edges refuse the fragment pattern.
     message.insert(
         "content".to_owned(),
-        if calls.is_empty() && reasoning.is_empty() && !text_blocks.is_empty() {
-            serde_json::Value::Array(text_blocks)
-        } else if text.is_empty() {
+        // Null only when no text part carries the message: an empty text-only
+        // answer stays an empty string.
+        if text.is_empty() && (!calls.is_empty() || !reasoning.is_empty() || !has_text) {
             serde_json::Value::Null
         } else {
             serde_json::Value::String(text)
@@ -1911,6 +1915,9 @@ pub(crate) enum TestModelGatewayOutcome {
     },
     Unavailable,
     Pending,
+    /// End the test process at this model request: a Worker that dies after
+    /// everything before the request is durable (process-replacement proofs).
+    ExitProcess(i32),
 }
 
 #[cfg(test)]
@@ -1981,6 +1988,7 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
             | TestModelGatewayOutcome::ResponseForModel { response, .. } => Ok(response),
             TestModelGatewayOutcome::Unavailable => Err(ModelGatewayTransportError::Unavailable),
             TestModelGatewayOutcome::Pending => std::future::pending().await,
+            TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
         }
     }
 }

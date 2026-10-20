@@ -212,6 +212,36 @@ impl PipelineNodeEventSender {
             .map_err(|_| pipeline_node_event_channel_error())
     }
 
+    /// End the run with a registered approved-call stop: the call may already
+    /// have started (`RECOVERY_REFUSED_UPSTREAM_CODE`, not repeated), or its
+    /// dispatch record could not be written (`DISPATCH_UNRECORDED_CODE`, it never
+    /// ran). `None` for any other code, or when the failure channel is closed
+    /// (the caller keeps its ordinary node failure).
+    pub(crate) async fn approved_call_stop(
+        &self,
+        code: &str,
+        node: &str,
+    ) -> Option<adk_rust::graph::GraphError> {
+        let (code, detail) = if code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE {
+            (
+                crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+            )
+        } else if code == crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE {
+            (
+                crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE,
+                crate::agents::dispatch_journal::DISPATCH_UNRECORDED_DETAIL,
+            )
+        } else {
+            return None;
+        };
+        self.send_execution_failure(code).await.ok()?;
+        Some(adk_rust::graph::GraphError::NodeExecutionFailed {
+            node: node.to_owned(),
+            message: detail.to_owned(),
+        })
+    }
+
     /// Preserve safe codes and typed continuation causes, never provider messages.
     pub(crate) async fn send_model_failure(&self, error: &AdkError) -> adk_rust::Result<()> {
         self.inner

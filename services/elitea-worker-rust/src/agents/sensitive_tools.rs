@@ -60,6 +60,16 @@ pub(crate) fn policy_for_guardrails(
 pub(crate) struct SensitiveToolCatalog {
     scoped_entries: BTreeMap<SensitiveToolIdentity, SensitiveToolEntry>,
     provider_entries: BTreeMap<Box<str>, SensitiveToolEntry>,
+    /// Every other enumerated tool and whether it is read-only. A dispatched
+    /// sibling that is read-only re-runs (no effect to repeat).
+    other_tools: BTreeMap<SensitiveToolIdentity, bool>,
+    /// Provider names of read-only `other_tools`, each naming exactly one tool.
+    read_only_provider_names: BTreeSet<Box<str>>,
+    /// Provider names of every `other_tools` entry, read-only or not.
+    other_provider_names: BTreeSet<Box<str>>,
+    /// Test-only: how often the unqualified names were rebuilt (budget test).
+    #[cfg(test)]
+    rebuilds: usize,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -93,13 +103,21 @@ impl SensitiveToolCatalog {
             .map(|(name, _)| name.as_ref())
     }
 
-    /// Whether an APPROVED call of this tool may be replayed by the direct
-    /// HITL resume: a read-only tool, or a conditional workspace command.
+    /// Whether an approved call of this tool that an earlier continuation
+    /// dispatched without a recorded outcome may run again: a read-only tool
+    /// has no effect to repeat, and the workspace command's own run ledger
+    /// (ADR-0034 decision 9) serves its earlier result instead of re-running.
+    /// Every other tool is refused as "may have started".
     #[must_use]
-    pub(crate) fn replays_approved(&self, tool_name: &str) -> Option<bool> {
+    pub(crate) fn reruns_after_dispatch(&self, tool_name: &str) -> Option<bool> {
         self.provider_entries
             .get(tool_name)
             .map(|entry| entry.read_only || entry.conditional)
+            .or_else(|| {
+                self.read_only_provider_names
+                    .contains(tool_name)
+                    .then_some(true)
+            })
     }
 
     /// Add the cloud workspace's conditional `run_command` (ADR-0034).
@@ -107,16 +125,30 @@ impl SensitiveToolCatalog {
     /// # Errors
     ///
     /// The catalog already holds a `local.run_command` entry.
+    /// The catalog's provider names are kept as they are: it is added after
+    /// `bind_provider_names`, and rebuilding the unqualified names here would
+    /// drop every renamed tool's binding. A provider name already taken by
+    /// another tool is ambiguous and refused.
     pub(crate) fn with_workspace_command(mut self) -> Result<Self, NativeAgentAssemblyError> {
-        self.insert_scoped(
-            "local",
-            "run_command",
-            SensitiveToolEntry {
-                policy: SensitiveToolPolicy::workspace_command(),
-                read_only: false,
-                conditional: true,
-            },
-        )?;
+        const TOOLKIT: &str = "local";
+        const TOOL: &str = "run_command";
+        let entry = SensitiveToolEntry {
+            policy: SensitiveToolPolicy::workspace_command(),
+            read_only: false,
+            conditional: true,
+        };
+        let identity = SensitiveToolIdentity {
+            toolkit_name: TOOLKIT.into(),
+            tool_name: TOOL.into(),
+        };
+        if self.scoped_entries.contains_key(&identity)
+            || self.provider_entries.contains_key(TOOL)
+            || self.other_provider_names.contains(TOOL)
+        {
+            return Err(invalid_configuration());
+        }
+        self.scoped_entries.insert(identity, entry.clone());
+        self.provider_entries.insert(TOOL.into(), entry);
         Ok(self)
     }
 
@@ -142,9 +174,7 @@ impl SensitiveToolCatalog {
 
     /// Return whether one exact sensitive tool was admitted as read-only.
     ///
-    /// This is execution metadata, not authorization. It only permits the
-    /// capability-disabled direct-HITL replay seam to exclude effects while
-    /// the durable effect owner is still absent.
+    /// This is execution metadata, not authorization.
     #[must_use]
     pub(crate) fn is_read_only(&self, tool_name: &str) -> Option<bool> {
         self.provider_entries
@@ -165,6 +195,9 @@ impl SensitiveToolCatalog {
             if self.scoped_entries.insert(identity, policy).is_some() {
                 return Err(invalid_configuration());
             }
+        }
+        for (identity, read_only) in other.other_tools {
+            self.insert_other_identity(identity, read_only);
         }
         self.rebuild_unqualified_provider_entries();
         Ok(())
@@ -187,7 +220,63 @@ impl SensitiveToolCatalog {
             }
         }
         self.provider_entries = provider_entries;
+        let mut read_only = BTreeMap::<Box<str>, bool>::new();
+        for (identity, is_read_only) in &self.other_tools {
+            // A tool this binding does not offer the model cannot be a replayed call.
+            let Some(provider_name) =
+                binding.provider_name(&identity.toolkit_name, &identity.tool_name)
+            else {
+                continue;
+            };
+            if let Some(entry) = self.provider_entries.get_mut(provider_name) {
+                // A sensitive and a non-sensitive tool behind one identity (two
+                // kinds sharing a toolkit name): the name stays confirmed and,
+                // being ambiguous, is never re-run after a dispatch.
+                entry.read_only = false;
+                continue;
+            }
+            // A name two tools share is ambiguous: never re-run after a dispatch.
+            read_only
+                .entry(provider_name.into())
+                .and_modify(|shared| *shared = false)
+                .or_insert(*is_read_only);
+        }
+        self.other_provider_names = read_only.keys().cloned().collect();
+        self.read_only_provider_names = read_only
+            .into_iter()
+            .filter_map(|(name, is_read_only)| is_read_only.then_some(name))
+            .collect();
         Ok(self)
+    }
+
+    fn insert_other(
+        &mut self,
+        toolkit_name: &str,
+        tool_name: &str,
+        read_only: bool,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        if !valid_identity(toolkit_name) || !valid_identity(tool_name) {
+            return Err(invalid_configuration());
+        }
+        self.insert_other_identity(
+            SensitiveToolIdentity {
+                toolkit_name: toolkit_name.into(),
+                tool_name: tool_name.into(),
+            },
+            read_only,
+        );
+        Ok(())
+    }
+
+    /// Record one non-sensitive tool. A second tool with the same identity
+    /// (one MCP server listing a name twice, or two kinds sharing a toolkit
+    /// name) is not a configuration error: the identity is just ambiguous, so
+    /// it is never treated as read-only.
+    fn insert_other_identity(&mut self, identity: SensitiveToolIdentity, read_only: bool) {
+        self.other_tools
+            .entry(identity)
+            .and_modify(|shared| *shared = false)
+            .or_insert(read_only);
     }
 
     fn insert_scoped(
@@ -206,11 +295,16 @@ impl SensitiveToolCatalog {
         if self.scoped_entries.insert(identity, entry).is_some() {
             return Err(invalid_configuration());
         }
-        self.rebuild_unqualified_provider_entries();
         Ok(())
     }
 
+    /// Derive the unqualified provider names from every scoped and other tool.
+    /// Callers insert first and rebuild once (O(N) per catalog, not per tool).
     fn rebuild_unqualified_provider_entries(&mut self) {
+        #[cfg(test)]
+        {
+            self.rebuilds += 1;
+        }
         let mut counts = BTreeMap::<&str, usize>::new();
         for identity in self.scoped_entries.keys() {
             *counts.entry(&identity.tool_name).or_default() += 1;
@@ -221,6 +315,37 @@ impl SensitiveToolCatalog {
             .filter(|(identity, _)| counts.get(identity.tool_name.as_ref()) == Some(&1))
             .map(|(identity, entry)| (identity.tool_name.clone(), entry.clone()))
             .collect();
+        // A name shared with any other tool, sensitive or not, is ambiguous.
+        for identity in self.other_tools.keys() {
+            *counts.entry(&identity.tool_name).or_default() += 1;
+        }
+        self.other_provider_names = self
+            .other_tools
+            .keys()
+            .map(|identity| identity.tool_name.clone())
+            .collect();
+        self.read_only_provider_names = self
+            .other_tools
+            .iter()
+            .filter(|(identity, read_only)| {
+                **read_only && counts.get(identity.tool_name.as_ref()) == Some(&1)
+            })
+            .map(|(identity, _)| identity.tool_name.clone())
+            .collect();
+    }
+
+    /// Test-only: record one non-sensitive enumerated tool.
+    #[cfg(test)]
+    pub(crate) fn with_other_tool(
+        mut self,
+        toolkit_name: &str,
+        tool_name: &str,
+        read_only: bool,
+    ) -> Self {
+        self.insert_other(toolkit_name, tool_name, read_only)
+            .expect("fixture tool identity");
+        self.rebuild_unqualified_provider_entries();
+        self
     }
 
     #[cfg(test)]
@@ -243,6 +368,7 @@ impl SensitiveToolCatalog {
                 conditional: false,
             },
         )?;
+        catalog.rebuild_unqualified_provider_entries();
         Ok(catalog)
     }
 }
@@ -292,6 +418,7 @@ pub(crate) async fn sensitive_tools_for_kind(
             let Some(sensitive) =
                 policy.sensitive_tool(reference.tool_type(), reference.toolkit_name(), tool.name())
             else {
+                catalog.insert_other(reference.toolkit_name(), tool.name(), tool.is_read_only())?;
                 continue;
             };
             catalog.insert_scoped(
@@ -308,6 +435,7 @@ pub(crate) async fn sensitive_tools_for_kind(
     if !toolsets_by_name.is_empty() {
         return Err(invalid_configuration());
     }
+    catalog.rebuild_unqualified_provider_entries();
     Ok(catalog)
 }
 
@@ -490,6 +618,174 @@ mod tests {
             Some("audit intelligence")
         );
         assert!(catalog.policy_for("lookup").is_none());
+    }
+
+    /// #1321 review round 2 item 4: the workspace command joins a catalog that
+    /// is already bound, and must not reset the bound (renamed) provider names.
+    #[tokio::test]
+    async fn the_workspace_command_keeps_bound_aliased_names() {
+        let policy = policy(json!({"sensitive_tools": {"mcp": ["lookup"]}}));
+        let mut catalog = SensitiveToolCatalog::default();
+        let mut toolsets = Vec::new();
+        for toolkit_name in ["release intelligence", "audit intelligence"] {
+            catalog
+                .insert_scoped(
+                    toolkit_name,
+                    "lookup",
+                    SensitiveToolEntry {
+                        policy: policy
+                            .sensitive_tool("mcp", toolkit_name, "lookup")
+                            .expect("sensitive fixture policy"),
+                        read_only: false,
+                        conditional: false,
+                    },
+                )
+                .expect("scoped sensitive tool");
+            catalog
+                .insert_other(toolkit_name, "search", true)
+                .expect("read-only sibling");
+            let tools: Vec<Arc<dyn Tool>> = ["lookup", "search"]
+                .into_iter()
+                .map(|name| {
+                    Arc::new(FunctionTool::new(
+                        name,
+                        "fixture",
+                        |_context, _arguments| async { Ok(json!({})) },
+                    )) as Arc<dyn Tool>
+                })
+                .collect();
+            toolsets.push(Arc::new(BasicToolset::new(toolkit_name, tools)) as Arc<dyn Toolset>);
+        }
+        catalog.rebuild_unqualified_provider_entries();
+        let binding = bind_toolsets(toolsets, &BTreeSet::new(), "sensitive_alias_test")
+            .await
+            .expect("provider binding");
+        let catalog = catalog
+            .bind_provider_names(&binding)
+            .expect("bound sensitive catalog")
+            .with_workspace_command()
+            .expect("workspace command");
+        for aliased in ["release_intelligence__lookup", "audit_intelligence__lookup"] {
+            assert!(
+                catalog.policy_for(aliased).is_some(),
+                "{aliased} stays sensitive"
+            );
+            assert_eq!(catalog.reruns_after_dispatch(aliased), Some(false));
+        }
+        for aliased in ["release_intelligence__search", "audit_intelligence__search"] {
+            assert_eq!(
+                catalog.reruns_after_dispatch(aliased),
+                Some(true),
+                "the aliased read-only sibling {aliased} re-runs"
+            );
+        }
+        assert_eq!(catalog.reruns_after_dispatch("run_command"), Some(true));
+        assert!(catalog.policy_for("run_command").is_some());
+        assert!(
+            catalog.with_workspace_command().is_err(),
+            "a second workspace command is refused"
+        );
+        // A data-changing, non-sensitive tool already named `run_command` is not
+        // taken over by the workspace's conditional entry.
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_other_tool("kit", "run_command", false)
+                .with_workspace_command()
+                .is_err()
+        );
+    }
+
+    /// #1321 code review round 3: a sensitive and a non-sensitive tool behind one
+    /// identity (two kinds sharing a toolkit name) bind; the name stays confirmed
+    /// and is never re-run after a dispatch.
+    #[tokio::test]
+    async fn a_sensitive_and_a_plain_tool_sharing_an_identity_bind_conservatively() {
+        let policy = policy(json!({"sensitive_tools": {"mcp": ["lookup"]}}));
+        let mut catalog = SensitiveToolCatalog::default();
+        catalog
+            .insert_scoped(
+                "kit",
+                "lookup",
+                SensitiveToolEntry {
+                    policy: policy
+                        .sensitive_tool("mcp", "kit", "lookup")
+                        .expect("sensitive fixture policy"),
+                    read_only: true,
+                    conditional: false,
+                },
+            )
+            .expect("sensitive tool");
+        catalog
+            .insert_other("kit", "lookup", true)
+            .expect("plain tool");
+        catalog.rebuild_unqualified_provider_entries();
+        let tool: Arc<dyn Tool> = Arc::new(FunctionTool::new(
+            "lookup",
+            "fixture",
+            |_context, _arguments| async { Ok(json!({})) },
+        ));
+        let binding = bind_toolsets(
+            vec![Arc::new(BasicToolset::new("kit", vec![tool])) as Arc<dyn Toolset>],
+            &BTreeSet::new(),
+            "shared_identity_test",
+        )
+        .await
+        .expect("provider binding");
+        let catalog = catalog
+            .bind_provider_names(&binding)
+            .expect("a shared identity binds");
+        assert!(catalog.policy_for("lookup").is_some(), "still confirmed");
+        assert_eq!(catalog.reruns_after_dispatch("lookup"), Some(false));
+    }
+
+    /// #1321 code review round 3: a non-sensitive tool listed twice (or two kinds
+    /// sharing a toolkit name) is ambiguous, not a configuration error.
+    #[test]
+    fn a_duplicate_non_sensitive_tool_is_ambiguous_not_fatal() {
+        let mut catalog = SensitiveToolCatalog::default()
+            .with_other_tool("kit", "search", true)
+            .with_other_tool("kit", "search", true);
+        assert_eq!(catalog.reruns_after_dispatch("search"), None);
+        let other = SensitiveToolCatalog::default().with_other_tool("kit", "lookup", true);
+        catalog
+            .merge(SensitiveToolCatalog::default().with_other_tool("kit", "lookup", true))
+            .expect("first kind");
+        catalog
+            .merge(other)
+            .expect("a second kind with the same toolkit name");
+        assert_eq!(catalog.reruns_after_dispatch("lookup"), None);
+    }
+
+    /// #1321 review round 2 item 6 (budget): enumerating N tools derives the
+    /// unqualified names once, not once per tool.
+    #[tokio::test]
+    async fn enumeration_rebuilds_the_unqualified_names_once() {
+        const TOOLS: usize = 256;
+        let policy = policy(json!({"sensitive_tools": {"mcp": ["tool_0"]}}));
+        let version = json!({
+            "tools": [{"id": 1, "type": "mcp", "toolkit_name": "kit", "settings": {}}]
+        });
+        let snapshot =
+            FrozenToolSnapshot::from_version_details(version.as_object().expect("version object"))
+                .expect("frozen tools")
+                .apply_policy(policy.as_ref());
+        let tools = (0..TOOLS)
+            .map(|index| {
+                Arc::new(FunctionTool::new(
+                    format!("tool_{index}"),
+                    "fixture",
+                    |_context, _arguments| async { Ok(json!({})) },
+                )) as Arc<dyn Tool>
+            })
+            .collect();
+        let toolsets = vec![Arc::new(BasicToolset::new("kit", tools)) as Arc<dyn Toolset>];
+        let catalog =
+            sensitive_tools_for_kind(&snapshot, FrozenToolKind::Mcp, &toolsets, policy.as_ref())
+                .await
+                .expect("catalog");
+        assert_eq!(catalog.rebuilds, 1);
+        assert!(catalog.policy_for("tool_0").is_some());
+        assert_eq!(catalog.other_tools.len(), TOOLS - 1);
     }
 
     #[tokio::test]
