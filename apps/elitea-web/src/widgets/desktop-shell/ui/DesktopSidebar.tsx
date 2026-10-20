@@ -10,11 +10,15 @@
  */
 import { useMemo, useState } from 'react';
 
+import { useNavigate } from '@tanstack/react-router';
+
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -42,7 +46,8 @@ import { eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/el
 import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
-import { useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
+import { useChatsSectionOpen, useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
+import { ChatsSection } from './ChatsSection';
 import type { ShellLocation } from '../model/useShellLocation';
 import { LocalWorkSection } from './LocalWorkSection';
 import { ShellRow, SectionCaption } from './rows';
@@ -112,6 +117,34 @@ function ProjectCaption({
   );
 }
 
+/** The Chats row's hover actions: a new chat, and the disclosure of the conversations under it. */
+function ChatsRowActions({ open, onToggle }: { readonly open: boolean; readonly onToggle: () => void }): React.JSX.Element {
+  const navigate = useNavigate();
+  const newChat = t('desktop.chats.new', 'New chat');
+  const disclosure = open ? t('desktop.chats.hide', 'Hide chats') : t('desktop.chats.show', 'Show chats');
+  return (
+    <>
+      <Tooltip title={newChat}>
+        {/* `create=1` starts a new chat even on `/chat` itself (`processes/chat/ui/useCreateChatReset.ts`). */}
+        <IconButton size="small" aria-label={newChat} data-testid="shell-chats-new" onClick={() => void navigate({ to: '/chat', search: { create: '1' } as never })}>
+          <AddOutlinedIcon fontSize="inherit" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title={disclosure}>
+        <IconButton size="small" aria-label={disclosure} aria-expanded={open} data-testid="shell-chats-toggle" onClick={onToggle}>
+          {open ? <ExpandMoreIcon fontSize="inherit" /> : <ChevronRightIcon fontSize="inherit" />}
+        </IconButton>
+      </Tooltip>
+    </>
+  );
+}
+
+/** Which Elitea row is highlighted: on a conversation (or the archived page) its own row is, not Chats. */
+function highlightedItem(pathname: string, selected: EliteaItemValue | undefined): EliteaItemValue | undefined {
+  if (selected === 'chat' && pathname !== '/chat' && pathname !== '/chat/') return undefined;
+  return selected;
+}
+
 export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   const { location, run, permissions, selectedProjectId } = props;
   const items = useMemo(
@@ -121,6 +154,8 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   const selected = selectedEliteaItem(location.pathname, items);
   const vibrancy = useDesktopLayout((state) => state.platform.vibrancy);
   const [eliteaOpen, toggleElitea] = useEliteaSectionOpen();
+  const [chatsOpen, toggleChats] = useChatsSectionOpen();
+  const highlighted = highlightedItem(location.pathname, selected);
 
   return (
     <Box
@@ -200,9 +235,11 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
                   testId={`shell-elitea-${item.value}`}
                   icon={ITEM_ICONS[item.value]}
                   label={item.label}
-                  selected={selected === item.value}
+                  selected={highlighted === item.value}
                   onClick={() => run({ type: 'go', to: item.url })}
+                  {...(item.value === 'chat' ? { ariaExpanded: chatsOpen, trailingOnHover: true, trailing: <ChatsRowActions open={chatsOpen} onToggle={toggleChats} /> } : {})}
                 />
+                {item.value === 'chat' && chatsOpen && <ChatsSection projectId={selectedProjectId} pathname={location.pathname} />}
               </li>
             ))}
           </Box>
