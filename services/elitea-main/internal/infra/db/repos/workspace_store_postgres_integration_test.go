@@ -77,6 +77,22 @@ WHERE b.bucket_type = 'workspace' AND b.name = $1 AND g.key = $2 AND g.max_bytes
 			t.Fatalf("facade URL = %q, want %q", grant.PutURL, want)
 		}
 	})
+	t.Run("S3 with presigning off streams every size through the facade", func(t *testing.T) {
+		// S3_PRESIGN=false: checksums and copies stay, presigned URLs and
+		// part URLs go. Even a multipart-sized segment gets the facade URL.
+		store := workspacestoretest.New(false)
+		store.Checksum = true
+		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
+		big := digestOf([]byte("big over the facade"))
+		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: big, Bytes: 130 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := workspacestore.ObjectRoutePrefix + "1/" + fixture.thread.ConversationUUID + "/" + big
+		if grant.Multipart != nil || grant.PutURL != want {
+			t.Fatalf("grant = %+v, want the facade URL %q and no multipart", grant, want)
+		}
+	})
 	t.Run("multipart above 64 MiB", func(t *testing.T) {
 		store := workspacestoretest.New(true)
 		store.Multipart = true

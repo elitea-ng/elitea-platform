@@ -42,6 +42,13 @@ type Config struct {
 	// through to ObjectRef.StorageKey/BucketPrefix. Optional, empty by
 	// default.
 	KeyPrefix string
+
+	// NoPresign turns presigning off: Capabilities reports neither Presign
+	// nor NativeMultipart, so every client upload and download goes through
+	// Main's streaming facade. For an endpoint only Main can reach, such as
+	// an in-cluster RustFS, whose presigned URLs name a host the desktop
+	// cannot resolve.
+	NoPresign bool
 }
 
 // Backend implements storage.ObjectStore using S3-compatible APIs (AWS S3,
@@ -53,6 +60,7 @@ type Backend struct {
 
 	bucket    string
 	keyPrefix string
+	noPresign bool
 }
 
 var _ storage.ObjectStore = (*Backend)(nil)
@@ -97,6 +105,7 @@ func New(ctx context.Context, cfg Config) (*Backend, error) {
 		}),
 		bucket:    cfg.Bucket,
 		keyPrefix: cfg.KeyPrefix,
+		noPresign: cfg.NoPresign,
 	}, nil
 }
 
@@ -137,7 +146,8 @@ func (b *Backend) ConfigureRetentionLifecycle(ctx context.Context) error {
 }
 
 func (b *Backend) Capabilities() storage.Capabilities {
-	return storage.Capabilities{Presign: true, NativeMultipart: true, ServerSideCopy: true, ChecksumSHA256: true}
+	// Native multipart is offered only through presigned part URLs.
+	return storage.Capabilities{Presign: !b.noPresign, NativeMultipart: !b.noPresign, ServerSideCopy: true, ChecksumSHA256: true}
 }
 
 func (b *Backend) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {

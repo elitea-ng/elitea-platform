@@ -31,6 +31,11 @@ func TestArtifactConfigFromEnvRejectsInvalidInput(t *testing.T) {
 			"AZURE_STORAGE_KEY":      "key",
 			"AZURE_STORAGE_ENDPOINT": "http://azurite:10000",
 		},
+		"s3 with a presign switch that is not a boolean": {
+			"STORAGE_BACKEND":   "s3",
+			"STORAGE_CONTAINER": "bucket",
+			"S3_PRESIGN":        "no",
+		},
 		"gcs with both endpoint and credentials file": {
 			"STORAGE_BACKEND":                "gcs",
 			"STORAGE_CONTAINER":              "bucket",
@@ -81,6 +86,25 @@ func TestArtifactConfigFromEnvAcceptsValidS3(t *testing.T) {
 	}
 	if cfg.S3.Region != "us-east-1" {
 		t.Errorf("S3.Region = %q, want default us-east-1", cfg.S3.Region)
+	}
+	if cfg.S3.NoPresign {
+		t.Errorf("S3.NoPresign = true with S3_PRESIGN unset, want presigning on by default")
+	}
+}
+
+func TestArtifactConfigFromEnvS3PresignSwitch(t *testing.T) {
+	for value, want := range map[string]bool{"true": false, "false": true} {
+		cfg, err := ConfigFromEnv(lookupFrom(map[string]string{
+			"STORAGE_BACKEND":   "s3",
+			"STORAGE_CONTAINER": "bucket",
+			"S3_PRESIGN":        value,
+		}))
+		if err != nil {
+			t.Fatalf("S3_PRESIGN=%s: ConfigFromEnv returned %v", value, err)
+		}
+		if cfg.S3.NoPresign != want {
+			t.Errorf("S3_PRESIGN=%s: NoPresign = %v, want %v", value, cfg.S3.NoPresign, want)
+		}
 	}
 }
 

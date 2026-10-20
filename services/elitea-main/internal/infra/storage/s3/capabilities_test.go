@@ -13,3 +13,13 @@ func TestArtifactCapabilitiesAreHonest(t *testing.T) {
 		t.Fatalf("Capabilities() = %+v, want Presign/NativeMultipart/ServerSideCopy all true", got)
 	}
 }
+
+func TestArtifactCapabilitiesWithoutPresignSendClientsToTheFacade(t *testing.T) {
+	got := (&Backend{noPresign: true}).Capabilities()
+	if got.Presign || got.NativeMultipart {
+		t.Fatalf("Capabilities() = %+v, want Presign and NativeMultipart off: a part URL is a presigned URL", got)
+	}
+	if !got.ChecksumSHA256 || !got.ServerSideCopy {
+		t.Fatalf("Capabilities() = %+v, want ChecksumSHA256 and ServerSideCopy kept", got)
+	}
+}

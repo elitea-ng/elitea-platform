@@ -1401,6 +1401,12 @@ main:
     S3_ENDPOINT_URL: ""
     S3_REGION: ""
     S3_FORCE_PATH_STYLE: ""
+    # S3-only. Empty or "true": clients (the desktop app, workers) get
+    # presigned URLs on S3_ENDPOINT_URL and move bytes to the store directly.
+    # "false": they stream through Main instead. Set "false" when clients
+    # cannot reach S3_ENDPOINT_URL, as with an in-cluster RustFS behind no
+    # ingress, whose presigned http:// URLs the desktop refuses.
+    S3_PRESIGN: ""
     # S3-only. The AWS SDK's own setting, read by the SDK, not by Main's code.
     # Empty keeps the SDK default: a CRC32 on every upload. "when_required"
     # sends a checksum only where Main asks for one (presigned SHA-256
