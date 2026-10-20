@@ -42,8 +42,11 @@ on:
       - "services/elitea-main/cmd/elitea-migrate/**"
       - "services/elitea-main/internal/infra/db/migrate/**"
       - "scripts/runtime/test_sandbox_ledger.py"
-      - "scripts/ci/check_worker_ignored_tests.py"
-      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/check-worker-ignored-tests.mjs"
+      - "scripts/ci/check-worker-ignored-tests.test.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/worker-ignored-tests-allowlist.txt"
       - ".github/workflows/ci-rust.yml"
   push:
@@ -89,8 +92,11 @@ on:
       - "services/elitea-main/cmd/elitea-migrate/**"
       - "services/elitea-main/internal/infra/db/migrate/**"
       - "scripts/runtime/test_sandbox_ledger.py"
-      - "scripts/ci/check_worker_ignored_tests.py"
-      - "scripts/ci/test_check_worker_ignored_tests.py"
+      - "scripts/ci/check-worker-ignored-tests.mjs"
+      - "scripts/ci/check-worker-ignored-tests.test.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/worker-ignored-tests-allowlist.txt"
       - ".github/workflows/ci-rust.yml"
   workflow_dispatch:
@@ -524,6 +530,9 @@ jobs:
       # tests once sat ignored with no step to run them, reading like passes.
       # The list comes from the compiled binaries; the checker also counts the
       # #[ignore] attributes in the sources so an empty list cannot pass.
+      - name: Install the ignored-test guard's one dependency
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/ci-scripts-deps
       - name: Every ignored worker test runs somewhere
         # Not gated on the Docker step: an unrun test is reported either way.
         if: ${{ !cancelled() }}
@@ -533,17 +542,17 @@ jobs:
           # checker needs them to tell which target each test belongs to.
           cargo test --locked --all-features --lib --bins --tests -- --list --ignored \
             > "${RUNNER_TEMP}/worker-ignored-tests.txt" 2>&1
-          python3 ../../scripts/ci/check_worker_ignored_tests.py \
+          node ../../scripts/ci/check-worker-ignored-tests.mjs \
             --list "${RUNNER_TEMP}/worker-ignored-tests.txt" \
             --workflow ../../.github/workflows/ci-rust.yml \
             --allowlist ../../scripts/ci/worker-ignored-tests-allowlist.txt \
             --sources .
-          expected="$(grep -c '^    def test_' ../../scripts/ci/test_check_worker_ignored_tests.py)"
-          output="$(python3 -m unittest discover -s ../../scripts/ci -p 'test_check_worker_ignored_tests.py' -v 2>&1)"
+          expected="$(grep -c '^test(' ../../scripts/ci/check-worker-ignored-tests.test.mjs)"
+          output="$(node --test --test-reporter=tap ../../scripts/ci/check-worker-ignored-tests.test.mjs 2>&1)"
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${expected}" -lt 10 ]; then
-            echo "::error::the guard's own suite ran ${ran:-no} of ${expected} scenario(s)"
+            echo "::error::the guard's own suite passed ${ran:-no} of ${expected} scenario(s)"
             exit 1
           fi
 
