@@ -24,6 +24,7 @@ prototype shortcuts into new code merely to preserve current behavior.
 | --- | --- |
 | `services/elitea-main/` | Go API, auth, control plane, persistence, and browser streaming |
 | `apps/elitea-ui/` | EliteaUI Git submodule; make UI changes in its owning repository |
+| `apps/elitea-mobile/` | Mobile app "Elitea AI" (Expo / React Native): a standalone npm project with its own `AGENTS.md`; its API client is generated from `services/elitea-main/api/openapi/v2.yaml`, and `ci-mobile.yml` fails when it is stale |
 | `libs/go/` | Shared Go libraries; keep dependencies narrow and consumer-driven |
 | `libs/proto/` | Versioned cross-language contracts and generated-code inputs |
 | `deploy/` | Local compose and Kubernetes packaging |

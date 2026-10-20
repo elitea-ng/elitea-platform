@@ -12,6 +12,8 @@ elitea-platform/
 │   ├── elitea-scheduler/    # Background workers: price sync, budget write-back, retention sweeps (Go)
 │   └── elitea-worker-python/# Python worker runtime and SDK
 ├── apps/
+│   ├── elitea-desktop/      # Desktop app (Tauri 2 host around the elitea-web desktop build)
+│   ├── elitea-mobile/       # Mobile app "Elitea AI" (Expo / React Native, iOS + Android)
 │   ├── elitea-ui/           # React SPA (git submodule)
 │   └── elitea-web/          # React SPA rewrite; also builds the admin console
 │                            #   (src/entries/admin) served by elitea-main
