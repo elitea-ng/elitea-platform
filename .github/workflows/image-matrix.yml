@@ -96,10 +96,17 @@ jobs:
             echo "::error::found ${expected} scenario(s), expected at least 15 — the pattern stopped matching"
             exit 1
           fi
-          output="$(node --test --test-reporter=tap scripts/ci/image-scan-issue.test.mjs 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/image-scan-issue.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
           ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
             echo "::error::the suite holds ${expected} scenario(s) and node --test passed ${ran:-none}"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test image-scan-issue.test.mjs exited ${status}"
+            exit "${status}"
           fi

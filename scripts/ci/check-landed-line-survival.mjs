@@ -71,6 +71,9 @@ lengths and slices counted in code points.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+
+import { pyRepr, pyStr, splitlines } from "./py-compat.mjs";
 
 // A line must carry this much text before its absence means anything. A brace,
 // a bracket or a one-word statement appears everywhere.
@@ -105,17 +108,9 @@ const DESCRIPTION = "Check that the work of a merged pull request is still in th
 const PY_SPACE = "\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 const STRIP = new RegExp(`^[${PY_SPACE}]+|[${PY_SPACE}]+$`, "gu");
 const SPLIT_WS = new RegExp(`[${PY_SPACE}]+`, "u");
-const LINE_BREAK = /\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]/;
 
 export function pyStrip(text) {
   return text.replace(STRIP, "");
-}
-
-export function pySplitlines(text) {
-  if (text === "") return [];
-  const lines = text.split(LINE_BREAK);
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines;
 }
 
 /** text[:n], counted in code points. */
@@ -130,10 +125,6 @@ function codePointLength(text) {
 }
 
 const ALNUM = /[\p{L}\p{N}]/u;
-
-function pyStr(value) {
-  return value === null || value === undefined ? "None" : String(value);
-}
 
 // ── git ──────────────────────────────────────────────────────────────────
 
@@ -360,7 +351,7 @@ export function diffLines(repo, commit, knownPaths) {
   const wanted = new Set(knownPaths);
   const result = new Map();
   let current = null;
-  for (const line of pySplitlines(out)) {
+  for (const line of splitlines(out)) {
     if (line.startsWith("diff --git ")) {
       current = null;
       continue;
@@ -427,7 +418,7 @@ function partition(text, separator) {
  */
 export async function findCulprit(repo, reader, finding, tip, preBlob) {
   const out = git(repo, "log", "--first-parent", "--reverse", "--format=%H%x1f%s", `${finding.commit}..${tip}`, "--", finding.path);
-  for (const record of pySplitlines(out)) {
+  for (const record of splitlines(out)) {
     if (!record) continue;
     const [sha, subject] = partition(record, "\x1f");
     let blob;
@@ -465,7 +456,7 @@ export async function oldTextIsBack(reader, sourceBlob, tipText) {
   if (!sourceBlob) return false;
   const old = await reader.text(sourceBlob);
   if (old === null) return false;
-  const oldLines = pySplitlines(old).filter(measurable).map(pyStrip);
+  const oldLines = splitlines(old).filter(measurable).map(pyStrip);
   if (!oldLines.length) return false;
   const back = oldLines.filter((line) => tipText.includes(line)).length;
   return back >= MIN_OLD_TEXT_BACK * oldLines.length;
@@ -520,7 +511,7 @@ export function loadAllowlist(file) {
  * from an entry that matches nothing.
  */
 export async function audit(repo, tip, limit, allowlist) {
-  const chain = pySplitlines(git(repo, "log", "--first-parent", "--format=%H%x1f%s", `-${limit}`, tip)).filter((line) => line);
+  const chain = splitlines(git(repo, "log", "--first-parent", "--format=%H%x1f%s", `-${limit}`, tip)).filter((line) => line);
   const reader = new BlobReader(repo);
   const faults = [];
   const rewrites = [];
@@ -557,7 +548,7 @@ export async function audit(repo, tip, limit, allowlist) {
         let restored = false;
         if (sourceBlob) {
           const out = git(repo, "log", "--first-parent", "--format=%H", `${sha}..${tip}`, "--", file);
-          for (const later of pySplitlines(out)) {
+          for (const later of splitlines(out)) {
             if (!later) continue;
             let blob;
             try {
@@ -648,74 +639,53 @@ options:
 
 class UsageError extends Error {}
 
-const VALUE_OPTIONS = { "--repo": "repo", "--tip": "tip", "--limit": "limit", "--allowlist": "allowlist" };
-const FLAG_OPTIONS = { "--allow-shallow": "allowShallow", "--report-only": "reportOnly" };
-
-/** argparse's reading of this command line, including unique-prefix options. */
-export function parseArgs(argv) {
-  const args = {
-    repo: ".",
-    tip: "HEAD",
-    limit: DEFAULT_LIMIT,
-    allowlist: DEFAULT_ALLOWLIST,
-    allowShallow: false,
-    reportOnly: false,
-    help: false,
-  };
-  const all = [...Object.keys(VALUE_OPTIONS), ...Object.keys(FLAG_OPTIONS), "--help"];
-  for (let i = 0; i < argv.length; i += 1) {
-    const word = argv[i];
-    if (word === "-h") {
-      args.help = true;
-      continue;
-    }
-    if (!word.startsWith("--") || word === "--") {
-      throw new UsageError(`unrecognized arguments: ${argv.slice(i).join(" ")}`);
-    }
-    const [flag, inline] = word.includes("=") ? [word.slice(0, word.indexOf("=")), word.slice(word.indexOf("=") + 1)] : [word, undefined];
-    let name = all.includes(flag) ? flag : null;
-    if (!name) {
-      const matches = all.filter((option) => option.startsWith(flag));
-      if (matches.length > 1) {
-        throw new UsageError(`ambiguous option: ${flag} could match ${matches.join(", ")}`);
-      }
-      if (matches.length === 0) throw new UsageError(`unrecognized arguments: ${word}`);
-      name = matches[0];
-    }
-    if (name === "--help") {
-      args.help = true;
-      continue;
-    }
-    if (name in FLAG_OPTIONS) {
-      if (inline !== undefined) throw new UsageError(`argument ${name}: ignored explicit argument '${inline}'`);
-      args[FLAG_OPTIONS[name]] = true;
-      continue;
-    }
-    let value = inline;
-    if (value === undefined) {
-      if (i + 1 >= argv.length || (argv[i + 1].startsWith("-") && !/^-\d/.test(argv[i + 1]))) {
-        throw new UsageError(`argument ${name}: expected one argument`);
-      }
-      i += 1;
-      value = argv[i];
-    }
-    if (name === "--limit") {
-      if (!/^[\s]*[+-]?\d+(?:_\d+)*[\s]*$/.test(value)) {
-        throw new UsageError(`argument --limit: invalid int value: '${value}'`);
-      }
-      args.limit = Number.parseInt(value.trim().replace(/_/g, ""), 10);
-    } else {
-      args[VALUE_OPTIONS[name]] = value;
-    }
+/** The command line, read by node:util parseArgs: `--x v` or `--x=v`. */
+export function parseArguments(argv) {
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      strict: true,
+      allowPositionals: false,
+      options: {
+        help: { type: "boolean", short: "h" },
+        repo: { type: "string", default: "." },
+        tip: { type: "string", default: "HEAD" },
+        limit: { type: "string" },
+        allowlist: { type: "string", default: DEFAULT_ALLOWLIST },
+        "allow-shallow": { type: "boolean", default: false },
+        "report-only": { type: "boolean", default: false },
+      },
+    }));
+  } catch (error) {
+    if (typeof error?.code === "string" && error.code.startsWith("ERR_PARSE_ARGS_")) throw new UsageError(error.message);
+    throw error;
   }
-  return args;
+  let limit = DEFAULT_LIMIT;
+  if (values.limit !== undefined) {
+    // argparse's `type=int`: int() of the string, so `_` separators and
+    // surrounding whitespace are allowed.
+    if (!/^[\s]*[+-]?\d+(?:_\d+)*[\s]*$/.test(values.limit)) {
+      throw new UsageError(`argument --limit: invalid int value: ${pyRepr(values.limit)}`);
+    }
+    limit = Number.parseInt(values.limit.trim().replace(/_/g, ""), 10);
+  }
+  return {
+    repo: values.repo,
+    tip: values.tip,
+    limit,
+    allowlist: values.allowlist,
+    allowShallow: values["allow-shallow"],
+    reportOnly: values["report-only"],
+    help: values.help === true,
+  };
 }
 
 export async function main(argv = process.argv.slice(2), out = (line) => process.stdout.write(`${line}\n`)) {
   const print = (line = "") => out(line);
   let args;
   try {
-    args = parseArgs(argv);
+    args = parseArguments(argv);
   } catch (error) {
     if (!(error instanceof UsageError)) throw error;
     process.stderr.write(`${USAGE}\ncheck-landed-line-survival.mjs: error: ${error.message}\n`);

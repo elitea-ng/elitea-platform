@@ -138,3 +138,26 @@ test("an API failure other than 404 fails the run", async () => {
   };
   await assert.rejects(run(github), /versions failed: Server Error/);
 });
+
+test("an unreadable updated_at fails the package and selects nothing", () => {
+  for (const bad of [undefined, null, "", "yesterday", "2026-10-01", "2026-10-01T00:00:00", "2026-13-45T00:00:00Z", "2026-02-30T00:00:00Z", 1700000000]) {
+    const broken = v(9, 30);
+    if (bad === undefined) delete broken.updated_at;
+    else broken.updated_at = bad;
+    assert.throws(() => p.select("ci-elitea-main", [v(1, 30), broken, v(2, 1)], NOW, 7), /unreadable updated_at/, String(bad));
+  }
+  // The forms the packages API and fromisoformat both read still parse.
+  for (const good of ["2026-09-01T00:00:00Z", "2026-09-01T00:00:00.123Z", "2026-09-01T00:00:00+00:00", "2026-09-01 00:00:00+0000"]) {
+    const version = v(9, 0);
+    version.updated_at = good;
+    assert.deepEqual(ids(p.select("ci-elitea-main", [version, v(2, 1)], NOW, 7)), [9], good);
+  }
+});
+
+test("a run with an unreadable updated_at fails before deleting from that package", async () => {
+  const broken = v(2, 30);
+  broken.updated_at = "not a date";
+  const github = new FakeGithub({ "ci-cache-elitea-main": [v(1, 30), broken, v(3, 1)] });
+  await assert.rejects(run(github), /ci-cache-elitea-main: version 2 has an unreadable updated_at 'not a date'/);
+  assert.deepEqual(github.deleted, []);
+});

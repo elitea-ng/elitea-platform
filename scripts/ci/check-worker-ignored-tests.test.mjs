@@ -499,3 +499,27 @@ test("two cargo test names are refused", () => {
 test("a file that is not a workflow is refused", () => {
   raisesSystemExit(() => run({ workflow: "run: cargo test --lib x -- --ignored\n" }), "not a workflow");
 });
+
+test("the command line takes --x=v, repeats --workflow, and refuses misuse with exit 2", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "worker-ignored-"));
+  try {
+    for (const [name, text] of [["ci.yml", WORKFLOW], ["list.txt", LIST], ["allow.txt", ALLOW]]) fs.writeFileSync(path.join(root, name), text);
+    const file = (name) => path.join(root, name);
+    const out = [];
+    const code = main([`--list=${file("list.txt")}`, "--workflow", file("ci.yml"), `--workflow=${file("ci.yml")}`, "--allowlist", file("allow.txt")], (line) => out.push(line));
+    assert.equal(code, 0, out.join("\n"));
+    // Both --workflow values are read: each credits its three invocations.
+    assert.ok(out.at(-1).includes("run by 6 CI invocation(s)"), out.join("\n"));
+    const usage = (argv, needle) =>
+      assert.throws(() => main(argv, () => {}), (error) =>
+        error instanceof SystemExit && error.code === 2 &&
+        error.message.startsWith("usage: check-worker-ignored-tests.mjs") && error.message.includes(needle));
+    usage(["--list", file("list.txt")], "the following arguments are required: --workflow, --allowlist");
+    usage(["--bogus"], "check-worker-ignored-tests.mjs: error: ");
+    usage(["--list"], "check-worker-ignored-tests.mjs: error: ");
+    usage(["stray"], "check-worker-ignored-tests.mjs: error: ");
+    assert.throws(() => main(["-h"], () => {}), (error) => error instanceof SystemExit && error.code === 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -2,13 +2,9 @@ name: scripts/ci dependencies
 description: >-
   Installs scripts/ci's npm dependencies (the `yaml` package, pinned in
   scripts/ci/package-lock.json) with `npm ci --prefix scripts/ci`, for the
-  runner's preinstalled node. The npm download cache is restored on every run
-  and saved only on a push to main (.github/actions/main-write-cache).
-#
-# Why not .github/actions/npm-cache: its restore-keys fall back to ANY
-# `node-cache-<os>-<arch>-npm-` entry, which on a miss restores the web app's
-# full npm cache (hundreds of MB) for a one-package install. This key has no
-# fallback: a miss costs one ~100 kB download.
+  runner's preinstalled node. The npm download cache is the shared one
+  (.github/actions/npm-cache), keyed on scripts/ci/package-lock.json:
+  restored on every run, saved only on a push to main.
 #
 # Why the runner's node and no setup-node (owner decision 2026-10-20): the CI
 # scripts are native to GitHub Actions. They are written for Node 20 and need
@@ -16,18 +12,13 @@ description: >-
 runs:
   using: composite
   steps:
-    - name: Resolve the npm cache path
-      id: npm
+    - name: Report the runner's node
       shell: bash
-      run: |
-        set -euo pipefail
-        echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
-        echo "node $(node --version), npm $(npm --version)"
+      run: echo "node $(node --version), npm $(npm --version)"
     - name: Restore the npm cache (save on a push to main)
-      uses: ./.github/actions/main-write-cache
+      uses: ./.github/actions/npm-cache
       with:
-        path: ${{ steps.npm.outputs.dir }}
-        key: ci-scripts-npm-${{ runner.os }}-${{ hashFiles('scripts/ci/package-lock.json') }}
+        cache-dependency-path: scripts/ci/package-lock.json
     - name: Install scripts/ci dependencies
       shell: bash
       run: npm ci --prefix "${GITHUB_WORKSPACE}/scripts/ci" --no-audit --no-fund --ignore-scripts

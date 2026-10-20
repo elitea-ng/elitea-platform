@@ -46,8 +46,13 @@ on:
       - "scripts/ci/check-worker-ignored-tests.test.mjs"
       - "scripts/ci/ci-compat.mjs"
       - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/package.json"
       - "scripts/ci/package-lock.json"
       - "scripts/ci/worker-ignored-tests-allowlist.txt"
+      # The guard's install: ci-scripts-deps and the npm cache actions it uses.
+      - ".github/actions/ci-scripts-deps/**"
+      - ".github/actions/npm-cache/**"
+      - ".github/actions/main-write-cache/**"
       - ".github/workflows/ci-rust.yml"
   push:
     branches:
@@ -96,8 +101,13 @@ on:
       - "scripts/ci/check-worker-ignored-tests.test.mjs"
       - "scripts/ci/ci-compat.mjs"
       - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/package.json"
       - "scripts/ci/package-lock.json"
       - "scripts/ci/worker-ignored-tests-allowlist.txt"
+      # The guard's install: ci-scripts-deps and the npm cache actions it uses.
+      - ".github/actions/ci-scripts-deps/**"
+      - ".github/actions/npm-cache/**"
+      - ".github/actions/main-write-cache/**"
       - ".github/workflows/ci-rust.yml"
   workflow_dispatch:
 
@@ -548,12 +558,19 @@ jobs:
             --allowlist ../../scripts/ci/worker-ignored-tests-allowlist.txt \
             --sources .
           expected="$(grep -c '^test(' ../../scripts/ci/check-worker-ignored-tests.test.mjs)"
-          output="$(node --test --test-reporter=tap ../../scripts/ci/check-worker-ignored-tests.test.mjs 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap ../../scripts/ci/check-worker-ignored-tests.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
           ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${expected}" -lt 10 ]; then
             echo "::error::the guard's own suite passed ${ran:-no} of ${expected} scenario(s)"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-worker-ignored-tests.test.mjs exited ${status}"
+            exit "${status}"
           fi
 
   # ADR-0034 decision 9: the cloud executor's workspace runs on the real

@@ -377,7 +377,10 @@ jobs:
             echo "::error::found ${expected} scenario(s) in the suite, expected at least 8 — the pattern stopped matching, so this step checked nothing"
             exit 1
           fi
-          output="$(node --test --test-reporter=tap scripts/ci/check-landed-line-survival.test.mjs 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-landed-line-survival.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
           ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ]; then
@@ -387,6 +390,10 @@ jobs:
           if [ "${ran}" -ne "${expected}" ]; then
             echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran}; a scenario that does not run is not a passed scenario"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-landed-line-survival.test.mjs exited ${status}"
+            exit "${status}"
           fi
           echo "line-survival checker: ${ran} of ${expected} scenarios ran"
       - name: The lines the last merged pull requests added are still on the trunk
@@ -457,12 +464,19 @@ jobs:
             echo "::error::found ${expected} scenario(s) in the suite, expected at least 30 — the pattern stopped matching, so this step checked nothing"
             exit 1
           fi
-          output="$(node --test --test-reporter=tap scripts/ci/check-workflow-cache-writes.test.mjs 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-workflow-cache-writes.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
           ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
             echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran:-none}"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-workflow-cache-writes.test.mjs exited ${status}"
+            exit "${status}"
           fi
           echo "cache-write checker: ${ran} of ${expected} scenarios passed"
       - name: No workflow cache step writes from a pull request
@@ -479,12 +493,19 @@ jobs:
           for suite in stack-images.test.mjs prune-ci-images.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
-            output="$(node --test --test-reporter=tap "scripts/ci/${suite}" 2>&1)"
+            # Capture the status: under `set -e` a failing command substitution
+            # exits at the assignment and the output is never printed.
+            status=0
+            output="$(node --test --test-reporter=tap "scripts/ci/${suite}" 2>&1)" || status=$?
             printf '%s\n' "${output}"
             ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
             if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
               echo "::error::${suite} holds ${expected} scenario(s) and node --test passed ${ran:-none}"
               exit 1
+            fi
+            if [ "${status}" -ne 0 ]; then
+              echo "::error::node --test ${suite} exited ${status}"
+              exit "${status}"
             fi
           done
       - name: CI-only images are referenced only by CI

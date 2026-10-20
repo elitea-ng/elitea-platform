@@ -341,3 +341,22 @@ test("a deleted path is not reported as lost work", scenario((repo) => {
   assert.equal(result.returncode, 0, result.stdout);
   assert.ok(!result.stdout.includes("src/legacy.ts"), result.stdout);
 }));
+
+// -- scenario 8: the command line ------------------------------------
+
+test("the command line takes --x v and --x=v and refuses what it does not know", scenario((repo) => {
+  staleSquashHistory(repo);
+  const surveyed = repo.check("--limit=10", "--report-only");
+  assert.equal(surveyed.returncode, 0, surveyed.stdout);
+  assert.ok(surveyed.stdout.includes("LOST WORK"), surveyed.stdout);
+  assert.ok(surveyed.stdout.includes("--report-only: exit 0"), surveyed.stdout);
+  for (const extra of [["--limit", "x"], ["--bogus"], ["--allow-shallow=yes"], ["--tip"], ["stray"]]) {
+    const result = repo.check(...extra);
+    assert.equal(result.returncode, 2, `${extra.join(" ")}: ${result.stdout}`);
+    assert.ok(result.stdout.startsWith("usage: check-landed-line-survival.mjs"), result.stdout);
+    assert.ok(result.stdout.includes("check-landed-line-survival.mjs: error: "), result.stdout);
+  }
+  const help = repo.check("-h");
+  assert.equal(help.returncode, 0, help.stdout);
+  assert.ok(help.stdout.includes("--report-only         print the findings"), help.stdout);
+}));

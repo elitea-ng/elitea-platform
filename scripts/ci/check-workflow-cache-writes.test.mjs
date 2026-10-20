@@ -384,3 +384,41 @@ test("the repository itself is clean", () => {
   const [code, out] = runChecker([]);
   assert.equal(code, 0, out);
 });
+
+test("a composite action in a dot-directory is still read, as Python's pathlib glob read it", () => {
+  // `uses: ./.github/actions/.hidden` runs it like any other action, and
+  // pathlib's `*/action.yml` matched the directory, so skipping it would let
+  // an unguarded cache step hide there.
+  const root = tree(workflow(FILLER));
+  try {
+    const dir = path.join(root, ".github", "actions", ".hidden");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "action.yml"), "runs:\n  using: composite\n  steps:\n    - uses: actions/cache@v4\n      with: {path: x, key: k}\n");
+    const [code, out] = runChecker(["--root", root]);
+    assert.equal(code, 1, out);
+    assert.ok(out.includes(".github/actions/.hidden/action.yml"), out);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the command line takes --x v and --x=v and refuses what it does not know", () => {
+  const root = tree(workflow(FILLER));
+  try {
+    assert.equal(runChecker([`--root=${root}`, "--min-workflows=3", "--min-cache-steps", "2"])[0], 0);
+    const [floor, floorOut] = runChecker(["--root", root, "--min-workflows", "999"]);
+    assert.equal(floor, 1, floorOut);
+    assert.ok(floorOut.includes("expected at least 999"), floorOut);
+    for (const argv of [["--bogus"], ["--root"], ["--min-workflows", "x"], ["positional"]]) {
+      const [code, out] = runChecker(argv);
+      assert.equal(code, 2, `${argv.join(" ")}: ${out}`);
+      assert.ok(out.startsWith("usage: check-workflow-cache-writes.mjs"), out);
+      assert.ok(out.includes("check-workflow-cache-writes.mjs: error: "), out);
+    }
+    const [help, helpOut] = runChecker(["-h"]);
+    assert.equal(help, 0);
+    assert.ok(helpOut.startsWith("usage: "), helpOut);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

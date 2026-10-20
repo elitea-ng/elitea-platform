@@ -60,13 +60,35 @@ function tagsOf(version) {
   return ((version.metadata || {}).container || {}).tags || [];
 }
 
+// An ISO 8601 timestamp WITH a zone, the form the packages API returns. The
+// Python script read it with datetime.fromisoformat and compared it to an
+// aware "now": a missing, malformed or zone-less value raised and the run
+// failed. Date.parse would return NaN instead, NaN compares as neither new nor
+// old, and the version would be deleted. So an unreadable value throws.
+const ISO_WITH_ZONE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+export function parseUpdated(name, version) {
+  const value = version.updated_at;
+  const ms = typeof value === "string" && ISO_WITH_ZONE.test(value) ? Date.parse(value) : Number.NaN;
+  // Date.parse rolls 2026-02-30 over to March; fromisoformat refused it.
+  const [y, m, d] = typeof value === "string" ? value.slice(0, 10).split("-").map(Number) : [];
+  const realDay = !Number.isNaN(ms) && new Date(Date.UTC(y, m - 1, d)).getUTCDate() === d;
+  if (!realDay) {
+    throw new Error(`${name}: version ${version.id} has an unreadable updated_at ${pyRepr(value === undefined ? null : value)}; refusing to judge its age`);
+  }
+  return ms;
+}
+
 /** The versions of package `name` to delete under the policy above. */
 export function select(name, versions, now, days) {
   if (!isCiPackage(name)) return [];
   const cutoff = now.getTime() - days * DAY_MS;
+  // Every timestamp is read before anything is selected: one unreadable
+  // value fails the package whole.
+  const updatedOf = new Map(versions.map((version) => [version, parseUpdated(name, version)]));
   let doomed = [];
   for (const version of versions) {
-    const updated = Date.parse(version.updated_at);
+    const updated = updatedOf.get(version);
     if (updated >= cutoff) continue;
     if (name.startsWith(CACHE_PREFIX) && tagsOf(version).length) continue;
     doomed.push(version);

@@ -47,8 +47,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
-import { loadYaml, pyRepr, pyStr } from "./ci-compat.mjs";
+import { loadYaml, pyRepr, pyStr, splitlines } from "./ci-compat.mjs";
 
 /** The Python script's `raise SystemExit("message")`: message to stderr, exit 1. */
 export class SystemExit extends Error {
@@ -75,16 +76,6 @@ const UNCONDITIONAL = new Set(["success()", "always()", "!cancelled()"]);
 // scripts/runtime/test_sandbox_ledger.py provisions Docker fixtures, then runs
 // `cargo test ... --lib <--test-filter> -- --ignored` itself.
 const LEDGER_WRAPPER = /test_sandbox_ledger\.py\b.*--test-filter[ =](\S+)/;
-
-// Python's str.splitlines() line breaks.
-const SPLITLINES = /\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]/;
-
-function splitlines(text) {
-  if (text === "") return [];
-  const lines = text.split(SPLITLINES);
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
 
 /** Path.read_text(): UTF-8, a BOM kept, universal newlines. */
 function readText(file) {
@@ -732,45 +723,39 @@ export function check(tests, invocations, allowlist, sourceCount) {
 }
 
 const USAGE = "usage: check-worker-ignored-tests.mjs [-h] --list LIST --workflow WORKFLOW --allowlist ALLOWLIST [--sources SOURCES]";
-const OPTIONS = ["--list", "--workflow", "--allowlist", "--sources"];
-
-/** argparse's reading of the four options: `--x v`, `--x=v`, unique prefixes; exit 2 on misuse. */
+/** The command line, read by node:util parseArgs (`--x v` or `--x=v`); exit 2 on misuse. */
 export function parseArguments(argv) {
-  const values = { "--list": [], "--workflow": [], "--allowlist": [], "--sources": [] };
   const usageError = (message) => new SystemExit(`${USAGE}\ncheck-worker-ignored-tests.mjs: error: ${message}`, 2);
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === "-h" || argument === "--help") {
-      throw new SystemExit(`${USAGE}\n\nFail when a Rust worker \`#[ignore]\` test is run by nothing.`, 0);
-    }
-    const [flag, inline] = argument.startsWith("--") && argument.includes("=")
-      ? [argument.slice(0, argument.indexOf("=")), argument.slice(argument.indexOf("=") + 1)]
-      : [argument, null];
-    const candidates = flag.startsWith("--") ? OPTIONS.filter((option) => option.startsWith(flag)) : [];
-    const option = OPTIONS.includes(flag) ? flag : candidates.length === 1 ? candidates[0] : null;
-    if (candidates.length > 1 && !OPTIONS.includes(flag)) {
-      throw usageError(`ambiguous option: ${flag} could match ${candidates.join(", ")}`);
-    }
-    if (!option) throw usageError(`unrecognized arguments: ${argv.slice(index).join(" ")}`);
-    let value = inline;
-    if (value === null) {
-      index += 1;
-      if (index >= argv.length || (argv[index].startsWith("-") && argv[index] !== "-")) {
-        throw usageError(`argument ${option}: expected one argument`);
-      }
-      value = argv[index];
-    }
-    values[option].push(value);
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      strict: true,
+      allowPositionals: false,
+      options: {
+        help: { type: "boolean", short: "h" },
+        list: { type: "string" },
+        // argparse's action="append": every --workflow is read.
+        workflow: { type: "string", multiple: true },
+        allowlist: { type: "string" },
+        sources: { type: "string" },
+      },
+    }));
+  } catch (error) {
+    if (typeof error?.code === "string" && error.code.startsWith("ERR_PARSE_ARGS_")) throw usageError(error.message);
+    throw error;
   }
-  const missing = ["--list", "--workflow", "--allowlist"].filter((option) => !values[option].length);
+  if (values.help) {
+    throw new SystemExit(`${USAGE}\n\nFail when a Rust worker \`#[ignore]\` test is run by nothing.`, 0);
+  }
+  const missing = ["list", "workflow", "allowlist"].filter((name) => values[name] === undefined).map((name) => `--${name}`);
   if (missing.length) throw usageError(`the following arguments are required: ${missing.join(", ")}`);
-  const last = (option) => values[option][values[option].length - 1];
   // `type=Path`: each value is read, and printed, as str(Path(value)).
   return {
-    list: pyPath(last("--list")),
-    workflow: values["--workflow"].map(pyPath),
-    allowlist: pyPath(last("--allowlist")),
-    sources: values["--sources"].length ? pyPath(last("--sources")) : null,
+    list: pyPath(values.list),
+    workflow: values.workflow.map(pyPath),
+    allowlist: pyPath(values.allowlist),
+    sources: values.sources === undefined ? null : pyPath(values.sources),
   };
 }
 

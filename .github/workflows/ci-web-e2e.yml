@@ -128,7 +128,8 @@ on:
       - "scripts/ci/e2e-lane-filter-test.sh"
       # The rest of what the stack images COPY and what this workflow runs:
       # scripts/ci/check-e2e-paths.mjs derives that set from the compose
-      # files' Containerfiles and this workflow's `scripts/` calls, and fails
+      # files' Containerfiles and this workflow's `scripts/` calls (with what
+      # each .mjs one imports), and fails
       # when this list stops covering it (the scheduler, the inventory engine,
       # the shared Go libraries and the protos were missing until it ran).
       - "services/elitea-scheduler/**"
@@ -137,6 +138,9 @@ on:
       - "libs/proto/**"
       - "scripts/ci/stack-images.mjs"
       - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/package.json"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check-ci-image-references.mjs"
       - "scripts/ci/check-workflow-cache-writes.mjs"
@@ -181,7 +185,8 @@ on:
       - "scripts/ci/e2e-lane-filter-test.sh"
       # The rest of what the stack images COPY and what this workflow runs:
       # scripts/ci/check-e2e-paths.mjs derives that set from the compose
-      # files' Containerfiles and this workflow's `scripts/` calls, and fails
+      # files' Containerfiles and this workflow's `scripts/` calls (with what
+      # each .mjs one imports), and fails
       # when this list stops covering it (the scheduler, the inventory engine,
       # the shared Go libraries and the protos were missing until it ran).
       - "services/elitea-scheduler/**"
@@ -190,6 +195,9 @@ on:
       - "libs/proto/**"
       - "scripts/ci/stack-images.mjs"
       - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/package.json"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check-ci-image-references.mjs"
       - "scripts/ci/check-workflow-cache-writes.mjs"

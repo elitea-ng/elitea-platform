@@ -60,6 +60,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 import { loadYaml } from "./ci-compat.mjs";
 import { pyRepr, pyStr, pyTruthy, splitlines } from "./py-compat.mjs";
@@ -380,39 +381,39 @@ export function run(root) {
 
 const PROG = "check-workflow-cache-writes.mjs";
 const USAGE = `usage: ${PROG} [-h] [--root ROOT] [--min-workflows MIN_WORKFLOWS] [--min-cache-steps MIN_CACHE_STEPS]`;
-const OPTIONS = { "--root": "root", "--min-workflows": "minWorkflows", "--min-cache-steps": "minCacheSteps" };
-
 class UsageError extends Error {}
 
-/** argparse's reading of the three options: `--x v`, `--x=v`, unique prefixes. */
+/** An option's integer value, as argparse's `type=int` read it. */
+function intOption(name, value) {
+  if (!/^\s*[-+]?\d+\s*$/.test(value)) throw new UsageError(`argument ${name}: invalid int value: ${pyRepr(value)}`);
+  return Number.parseInt(value, 10);
+}
+
+/** The command line, read by node:util parseArgs: `--x v` or `--x=v`. */
 export function parseArguments(argv) {
-  const args = { root: REPOSITORY_ROOT, minWorkflows: MINIMUM_WORKFLOWS, minCacheSteps: MINIMUM_CACHE_STEPS, help: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const raw = argv[i];
-    if (raw === "-h" || raw === "--help") {
-      args.help = true;
-      continue;
-    }
-    const [flag, inline] = raw.startsWith("--") && raw.includes("=") ? [raw.slice(0, raw.indexOf("=")), raw.slice(raw.indexOf("=") + 1)] : [raw, undefined];
-    const candidates = Object.keys(OPTIONS).filter((o) => o.startsWith(flag) && flag.startsWith("--"));
-    const option = Object.hasOwn(OPTIONS, flag) ? flag : candidates.length === 1 ? candidates[0] : null;
-    if (candidates.length > 1 && !option) throw new UsageError(`ambiguous option: ${flag} could match ${candidates.join(", ")}`);
-    if (!option) throw new UsageError(`unrecognized arguments: ${argv.slice(i).join(" ")}`);
-    let value = inline;
-    if (value === undefined) {
-      i += 1;
-      if (i >= argv.length || (argv[i].startsWith("-") && argv[i] !== "-")) throw new UsageError(`argument ${option}: expected one argument`);
-      value = argv[i];
-    }
-    const key = OPTIONS[option];
-    if (key === "root") {
-      args.root = value;
-    } else {
-      if (!/^\s*[-+]?\d+\s*$/.test(value)) throw new UsageError(`argument ${option}: invalid int value: ${pyRepr(value)}`);
-      args[key] = Number.parseInt(value, 10);
-    }
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      strict: true,
+      allowPositionals: false,
+      options: {
+        help: { type: "boolean", short: "h" },
+        root: { type: "string" },
+        "min-workflows": { type: "string" },
+        "min-cache-steps": { type: "string" },
+      },
+    }));
+  } catch (error) {
+    if (typeof error?.code === "string" && error.code.startsWith("ERR_PARSE_ARGS_")) throw new UsageError(error.message);
+    throw error;
   }
-  return args;
+  return {
+    root: values.root ?? REPOSITORY_ROOT,
+    minWorkflows: values["min-workflows"] === undefined ? MINIMUM_WORKFLOWS : intOption("--min-workflows", values["min-workflows"]),
+    minCacheSteps: values["min-cache-steps"] === undefined ? MINIMUM_CACHE_STEPS : intOption("--min-cache-steps", values["min-cache-steps"]),
+    help: values.help === true,
+  };
 }
 
 export function main(argv = process.argv.slice(2), log = console.log, err = console.error) {

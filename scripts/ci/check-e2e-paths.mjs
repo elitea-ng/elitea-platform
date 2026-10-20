@@ -9,7 +9,9 @@
 //   * every `build:` service of the compose files the lanes run: its
 //     Containerfile and every COPY source (from the build context), and
 //   * every repository script the workflow or the local actions it uses call
-//     (`scripts/...` references in their YAML),
+//     (`scripts/...` references in their YAML), and what each `.mjs` one
+//     imports: its relative imports, transitively, and for a bare package
+//     import the package.json and package-lock.json `npm ci` installs from,
 //
 // and fails, naming the path, when the `pull_request` filter covers none of
 // them — or when the `push` filter differs from the `pull_request` one. It
@@ -115,6 +117,71 @@ export function scriptReferences(text) {
   return new Set([...text.matchAll(/\b(scripts\/[A-Za-z0-9_./-]+\.(?:sh|py|mjs))\b/g)].map((m) => m[1]));
 }
 
+// The module specifiers a script loads: its static imports and re-exports
+// (`import x from "s"`, `import "s"`, `export { y } from "s"`), which ES
+// modules hold at top level, so they are read from the start of a line, and
+// its literal dynamic imports (`import("s")`) on any line that is not a
+// comment. Prose that mentions an import is not a dependency.
+const STATIC_IMPORT = /^(?:import|export)\s+(?:[^;'"]*?\sfrom\s*)?["']([^"'\n]+)["']/gm;
+const DYNAMIC_IMPORT = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
+
+export function importSpecifiers(text) {
+  const specs = [...text.matchAll(STATIC_IMPORT)].map((m) => m[1]);
+  for (const line of splitlines(text)) {
+    if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) continue;
+    for (const m of line.matchAll(DYNAMIC_IMPORT)) specs.push(m[1]);
+  }
+  return specs;
+}
+
+// The package.json that governs `dir`, walking up no further than `root`.
+function governingManifest(dir, root) {
+  for (let at = dir; at === root || at.startsWith(root + "/"); at = path.dirname(at)) {
+    if (exists(path.join(at, "package.json"))) return at;
+    if (at === root) break;
+  }
+  return null;
+}
+
+/**
+ * Everything a referenced script needs besides itself, as a Map of
+ * repository path -> the script that needs it: each `.mjs` follows its
+ * relative imports transitively; a bare package import (not `node:`) makes
+ * the governing package.json and package-lock.json inputs too, since they
+ * pick the version `npm ci` installs.
+ */
+export function scriptDependencies(scripts, root = ROOT) {
+  const deps = new Map();
+  const seen = new Set();
+  const queue = [...scripts].filter((s) => s.endsWith(".mjs")).map((s) => [s, s]);
+  while (queue.length) {
+    const [file, via] = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const abs = path.join(root, file);
+    if (!exists(abs)) continue;
+    for (const spec of importSpecifiers(fs.readFileSync(abs, "utf8"))) {
+      if (spec.startsWith("node:")) continue;
+      if (spec.startsWith("./") || spec.startsWith("../")) {
+        const dep = path.relative(root, path.resolve(path.dirname(abs), spec));
+        if (dep.startsWith("..")) throw new Error(`${file} imports ${spec}, outside the repository`);
+        if (!exists(path.join(root, dep))) throw new Error(`${file} imports ${spec}, and ${dep} does not exist`);
+        if (!deps.has(dep) && !scripts.has(dep)) deps.set(dep, via);
+        if (dep.endsWith(".mjs")) queue.push([dep, via]);
+        continue;
+      }
+      if (spec.startsWith("/")) throw new Error(`${file} imports the absolute path ${spec}`);
+      const manifest = governingManifest(path.dirname(abs), root);
+      if (manifest === null) throw new Error(`${file} imports the package ${spec} and no package.json governs it`);
+      for (const name of ["package.json", "package-lock.json"]) {
+        const dep = path.relative(root, path.join(manifest, name));
+        if (exists(path.join(root, dep)) && !deps.has(dep)) deps.set(dep, via);
+      }
+    }
+  }
+  return deps;
+}
+
 const ACTION_USE = /uses: \.\/(\.github\/actions\/[A-Za-z0-9_-]+)/g;
 const sorted = (items) => [...items].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
@@ -162,11 +229,16 @@ export function main(log = console.log) {
       texts.set(`${nested}/action.yml`, fs.readFileSync(path.join(ROOT, nested, "action.yml"), "utf8"));
     }
   }
+  const scripts = new Set();
   for (const [where, text] of texts) {
     for (const script of scriptReferences(text)) {
-      if (exists(path.join(ROOT, script))) setDefault(script, `called from ${where}`);
+      if (exists(path.join(ROOT, script))) {
+        setDefault(script, `called from ${where}`);
+        scripts.add(script);
+      }
     }
   }
+  for (const [dep, script] of scriptDependencies(scripts)) setDefault(dep, `imported by ${script}`);
 
   if (services < MINIMUM_BUILD_SERVICES || inputs.size < MINIMUM_INPUTS) {
     errors.push(`found ${services} build service(s) and ${inputs.size} input(s), below the floors ${MINIMUM_BUILD_SERVICES}/${MINIMUM_INPUTS}: the reader stopped finding things`);

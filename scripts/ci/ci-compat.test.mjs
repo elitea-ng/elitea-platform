@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { loadYaml, loadYamlNodes } from "./ci-compat.mjs";
+import { loadYaml, loadYamlNodes, pyyamlTags } from "./ci-compat.mjs";
 import { fnmatchcase, pyRepr, pyStr, splitlines } from "./py-compat.mjs";
 
 test("an unquoted on key is PyYAML's True, a quoted one stays a string", () => {
@@ -25,6 +25,71 @@ test("booleans and floats resolve as PyYAML resolves them, not as YAML 1.2 or th
   assert.deepEqual(loadYaml("a: .\nb: -.5\nc: .5\nd: 09\ne: 08:30\nf: 1:30\ng: 010\n"), {
     a: ".", b: "-.5", c: 0.5, d: "09", e: "08:30", f: 90, g: 8,
   });
+});
+
+// One scenario per form where the yaml package's 1.1 resolvers and PyYAML's
+// disagree. Each value is PyYAML 6.0.3's safe_load of `k: <form>`.
+const pyyaml = (form) => loadYaml(`k: ${form}`).k;
+
+test("a y/n/Y/N is a string, not a boolean", () => {
+  for (const form of ["y", "n", "Y", "N"]) assert.equal(pyyaml(form), form);
+  assert.equal(pyyaml("Yes"), true);
+  assert.equal(pyyaml("OFF"), false);
+});
+
+test("an exponent without a dot, or without a sign, is a string", () => {
+  for (const form of ["1e5", "1E5", ".5e5", "1.0e5"]) assert.equal(pyyaml(form), form);
+  assert.equal(pyyaml("1.0e+5"), 100000);
+  assert.equal(pyyaml("1.0E-5"), 1e-5);
+  assert.equal(pyyaml(".5e+3"), 500);
+});
+
+test("a float needs a digit before the dot unless the dot leads one", () => {
+  for (const form of [".", "-.5", "+.5"]) assert.equal(pyyaml(form), form);
+  assert.equal(pyyaml(".5"), 0.5);
+  assert.equal(pyyaml("1."), 1);
+  assert.equal(pyyaml("-1."), -1);
+  assert.equal(pyyaml("1_000.5"), 1000.5);
+  assert.equal(pyyaml(".inf"), Infinity);
+  assert.equal(pyyaml("-.Inf"), -Infinity);
+  assert.ok(Number.isNaN(pyyaml(".NaN")));
+  assert.equal(pyyaml("inf"), "inf");
+});
+
+test("a leading zero is octal, or a string when it is not octal", () => {
+  for (const form of ["09", "08"]) assert.equal(pyyaml(form), form);
+  assert.equal(pyyaml("010"), 8);
+  assert.equal(pyyaml("00"), 0);
+  assert.equal(pyyaml("0_7"), 7);
+  assert.equal(pyyaml("-0"), 0);
+  assert.equal(pyyaml("1_000"), 1000);
+  assert.equal(pyyaml("-0x1F"), -31);
+  assert.equal(pyyaml("-0b1_0"), -2);
+  for (const form of ["0x", "0b2"]) assert.equal(pyyaml(form), form);
+});
+
+test("a sexagesimal int starts 1-9; a sexagesimal float may start with 0", () => {
+  for (const form of ["08:30", "0:30", "1:60"]) assert.equal(pyyaml(form), form);
+  assert.equal(pyyaml("1:30"), 90);
+  assert.equal(pyyaml("-1:30"), -90);
+  assert.equal(pyyaml("190:20:30"), 685230);
+  assert.equal(pyyaml("1:30.5"), 90.5);
+  assert.equal(pyyaml("08:30.5"), 510.5);
+});
+
+test("a yaml package whose 1.1 number or bool tags change fails the read, not skips it", () => {
+  const INT = "tag:yaml.org,2002:int";
+  const shipped = [
+    { tag: "tag:yaml.org,2002:bool", test: /^y$/ },
+    { tag: "tag:yaml.org,2002:bool", test: /^n$/ },
+    ...["", "BIN", "HEX", "OCT", "TIME"].map((format) => ({ tag: INT, format: format || undefined, test: /x/ })),
+    ...["", "", "EXP", "TIME"].map((format) => ({ tag: "tag:yaml.org,2002:float", format: format || undefined, test: /x/ })),
+  ];
+  const replaced = pyyamlTags()(shipped);
+  assert.equal(replaced.length, 4);
+  assert.ok(replaced.every((tag) => !["/x/", "/^y$/", "/^n$/"].includes(String(tag.test))));
+  assert.throws(() => pyyamlTags()([...shipped, { tag: INT, format: "DURATION", test: /x/ }]), /int tags with formats/);
+  assert.throws(() => pyyamlTags()(shipped.filter((tag) => tag.format !== "EXP")), /float tags with formats/);
 });
 
 test("merge keys merge, a repeated key keeps the last value, an empty document is null", () => {
