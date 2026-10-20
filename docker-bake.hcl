@@ -9,7 +9,7 @@
 // 2026-10-20 every target exported `type=gha,mode=max` into the Actions cache,
 // whose 10 GB cap evicted it.) These are layer caches, not images: nothing
 // here, or in the chart or a release, runs a ci-* image
-// (scripts/ci/check_ci_image_references.py).
+// (scripts/ci/check-ci-image-references.mjs).
 
 variable "TAG" {
   default = "dev"

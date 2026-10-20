@@ -138,7 +138,7 @@ on:
       - "scripts/ci/stack-images.mjs"
       - "scripts/ci/py-compat.mjs"
       - "scripts/ci/pull-third-party-images.sh"
-      - "scripts/ci/check_ci_image_references.py"
+      - "scripts/ci/check-ci-image-references.mjs"
       - "scripts/ci/check_workflow_cache_writes.py"
       - "scripts/ci/check_e2e_paths.py"
       - ".github/workflows/ci-web-e2e.yml"
@@ -191,7 +191,7 @@ on:
       - "scripts/ci/stack-images.mjs"
       - "scripts/ci/py-compat.mjs"
       - "scripts/ci/pull-third-party-images.sh"
-      - "scripts/ci/check_ci_image_references.py"
+      - "scripts/ci/check-ci-image-references.mjs"
       - "scripts/ci/check_workflow_cache_writes.py"
       - "scripts/ci/check_e2e_paths.py"
       - ".github/workflows/ci-web-e2e.yml"
@@ -250,7 +250,7 @@ jobs:
       # The ONLY jobs in this workflow that write packages: they push the
       # CI-only `ghcr.io/elitea-ng/ci-<image>` and, on a push to main, the
       # `ci-cache-<image>` layer cache. Nothing that ships references either
-      # (scripts/ci/check_ci_image_references.py).
+      # (scripts/ci/check-ci-image-references.mjs).
       packages: write
     strategy:
       fail-fast: false

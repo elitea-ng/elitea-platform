@@ -485,7 +485,10 @@ jobs:
             fi
           done
       - name: CI-only images are referenced only by CI
-        run: python scripts/ci/check_ci_image_references.py
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-ci-image-references.test.mjs
+          node scripts/ci/check-ci-image-references.mjs
       - name: The E2E workflow starts on every input of its stack
         run: python scripts/ci/check_e2e_paths.py
       - name: actionlint over every workflow

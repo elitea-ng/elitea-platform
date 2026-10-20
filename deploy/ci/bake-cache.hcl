@@ -36,7 +36,7 @@
 //
 // The `ci-cache-` and `ci-` packages are CI-only. Nothing that ships (the
 // chart, publish.yml, docker-bake.hcl) may name them:
-// scripts/ci/check_ci_image_references.py holds that.
+// scripts/ci/check-ci-image-references.mjs holds that.
 //
 // The worker service's ref depends on WHICH worker the stack runs:
 // bake-cache-rust.hcl overrides it for the native runtime.
