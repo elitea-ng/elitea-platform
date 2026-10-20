@@ -135,7 +135,8 @@ on:
       - "services/elitea-inventory-engine/**"
       - "libs/go/**"
       - "libs/proto/**"
-      - "scripts/ci/stack_images.py"
+      - "scripts/ci/stack-images.mjs"
+      - "scripts/ci/py-compat.mjs"
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check_ci_image_references.py"
       - "scripts/ci/check_workflow_cache_writes.py"
@@ -187,7 +188,8 @@ on:
       - "services/elitea-inventory-engine/**"
       - "libs/go/**"
       - "libs/proto/**"
-      - "scripts/ci/stack_images.py"
+      - "scripts/ci/stack-images.mjs"
+      - "scripts/ci/py-compat.mjs"
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check_ci_image_references.py"
       - "scripts/ci/check_workflow_cache_writes.py"
@@ -285,7 +287,7 @@ jobs:
           # The superset stack: every image any lane runs is a `build:`
           # service here, with the SAME build spec the e2e compose declares
           # (elitea-main at its `e2e` target, the others at their default).
-          # stack_images.py records each spec and the pulling lane refuses an
+          # stack-images.mjs records each spec and the pulling lane refuses an
           # entry whose spec differs from its own compose.
           compose-files: |
             docker-compose.standalone-full.yml
