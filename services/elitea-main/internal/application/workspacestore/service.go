@@ -258,8 +258,9 @@ func (s *Service) RequestUpload(ctx context.Context, request UploadRequest) (Upl
 	// checksum-bound PUT up to its single-PUT ceiling: the digest is bound
 	// here, and publish reads it back with HEAD instead of the bytes. A
 	// multipart upload has only a composite checksum, so it is verified by
-	// streaming at publish.
-	case request.Bytes > MultipartThreshold && capabilities.NativeMultipart &&
+	// streaming at publish. Parts go up on presigned URLs, so a backend
+	// that cannot presign has no multipart here, whatever it reports.
+	case request.Bytes > MultipartThreshold && capabilities.Presign && capabilities.NativeMultipart &&
 		(!capabilities.ChecksumSHA256 || request.Bytes > SinglePutMaxBytes):
 		id, err := target.Store.StartMultipart(ctx, ref, storage.PutOptions{ContentType: MediaType, ContentLength: -1})
 		if err != nil {

@@ -93,7 +93,7 @@ func TestArtifactConfigFromEnvAcceptsValidS3(t *testing.T) {
 }
 
 func TestArtifactConfigFromEnvS3PresignSwitch(t *testing.T) {
-	for value, want := range map[string]bool{"true": false, "false": true} {
+	for value, want := range map[string]bool{"true": false, "false": true, "FALSE": true, "0": true} {
 		cfg, err := ConfigFromEnv(lookupFrom(map[string]string{
 			"STORAGE_BACKEND":   "s3",
 			"STORAGE_CONTAINER": "bucket",

@@ -1,6 +1,13 @@
 package s3
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
+)
 
 func TestArtifactCapabilitiesAreHonest(t *testing.T) {
 	b := &Backend{}
@@ -21,5 +28,23 @@ func TestArtifactCapabilitiesWithoutPresignSendClientsToTheFacade(t *testing.T) 
 	}
 	if !got.ChecksumSHA256 || !got.ServerSideCopy {
 		t.Fatalf("Capabilities() = %+v, want ChecksumSHA256 and ServerSideCopy kept", got)
+	}
+}
+
+func TestArtifactPresignRefusedWhenPresignIsOff(t *testing.T) {
+	b := &Backend{noPresign: true}
+	ref, err := storage.NewObjectRef("1", "elitea-workspaces", "t/seg/a.seg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := b.PresignGet(ctx, ref, time.Minute); !errors.Is(err, storage.ErrNotSupported) {
+		t.Errorf("PresignGet error = %v, want ErrNotSupported", err)
+	}
+	if _, err := b.PresignPut(ctx, ref, time.Minute, storage.PutOptions{}); !errors.Is(err, storage.ErrNotSupported) {
+		t.Errorf("PresignPut error = %v, want ErrNotSupported", err)
+	}
+	if _, err := b.PresignPart(ctx, ref, "u", 1, time.Minute); !errors.Is(err, storage.ErrNotSupported) {
+		t.Errorf("PresignPart error = %v, want ErrNotSupported", err)
 	}
 }

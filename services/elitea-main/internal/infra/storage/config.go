@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"fmt"
+	"strconv"
 )
 
 const (
@@ -95,9 +96,13 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		secretKey, _ := lookup("S3_SECRET_KEY")
 		endpoint, _ := lookup("S3_ENDPOINT_URL")
 		forcePathStyle, _ := lookup("S3_FORCE_PATH_STYLE")
-		presign, _ := lookup("S3_PRESIGN")
-		if presign != "" && presign != "true" && presign != "false" {
-			return Config{}, fmt.Errorf("storage: S3_PRESIGN must be \"true\" or \"false\" (got %q)", presign)
+		presign := true
+		if value, _ := lookup("S3_PRESIGN"); value != "" {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("storage: S3_PRESIGN must be true or false (got %q)", value)
+			}
+			presign = parsed
 		}
 		cfg.S3 = S3Config{
 			Endpoint:       endpoint,
@@ -107,7 +112,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 			ForcePathStyle: forcePathStyle == "true",
 			Bucket:         container,
 			KeyPrefix:      keyPrefix,
-			NoPresign:      presign == "false",
+			NoPresign:      !presign,
 		}
 
 	case backendAzure:

@@ -79,9 +79,10 @@ WHERE b.bucket_type = 'workspace' AND b.name = $1 AND g.key = $2 AND g.max_bytes
 	})
 	t.Run("S3 with presigning off streams every size through the facade", func(t *testing.T) {
 		// S3_PRESIGN=false: checksums and copies stay, presigned URLs and
-		// part URLs go. Even a multipart-sized segment gets the facade URL.
+		// part URLs go. Even a multipart-sized segment gets the facade URL,
+		// and a backend that still reports multipart does not get parts.
 		store := workspacestoretest.New(false)
-		store.Checksum = true
+		store.Checksum, store.Multipart = true, true
 		service, _ := newWorkspaceStoreService(t, pool, store, defaultWorkspaceLimits())
 		big := digestOf([]byte("big over the facade"))
 		grant, err := service.RequestUpload(ctx, workspacestore.UploadRequest{Thread: fixture.thread, Caller: desktop, Epoch: 1, SHA256: big, Bytes: 130 << 20})

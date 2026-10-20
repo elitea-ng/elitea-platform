@@ -429,6 +429,9 @@ func (b *Backend) List(ctx context.Context, q storage.ListQuery) (storage.ListPa
 }
 
 func (b *Backend) PresignGet(ctx context.Context, ref storage.ObjectRef, ttl time.Duration) (string, error) {
+	if b.noPresign {
+		return "", storage.ErrNotSupported
+	}
 	presigned, err := s3.NewPresignClient(b.client).PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(ref.StorageKey(b.keyPrefix)),
@@ -443,6 +446,9 @@ func (b *Backend) PresignGet(ctx context.Context, ref storage.ObjectRef, ttl tim
 // presigned PUT does not enforce media type at the storage layer. S15
 // verifies it on commit instead.
 func (b *Backend) PresignPut(ctx context.Context, ref storage.ObjectRef, ttl time.Duration, opts storage.PutOptions) (string, error) {
+	if b.noPresign {
+		return "", storage.ErrNotSupported
+	}
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(b.bucket),
 		Key:    aws.String(ref.StorageKey(b.keyPrefix)),
@@ -478,6 +484,9 @@ func (b *Backend) StartMultipart(ctx context.Context, ref storage.ObjectRef, opt
 }
 
 func (b *Backend) PresignPart(ctx context.Context, ref storage.ObjectRef, id storage.UploadID, part int32, ttl time.Duration) (string, error) {
+	if b.noPresign {
+		return "", storage.ErrNotSupported
+	}
 	presigned, err := s3.NewPresignClient(b.client).PresignUploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(b.bucket),
 		Key:        aws.String(ref.StorageKey(b.keyPrefix)),
