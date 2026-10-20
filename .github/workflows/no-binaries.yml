@@ -473,7 +473,7 @@ jobs:
       - name: The build-once contract and the CI-image prune policy hold
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs; do
+          for suite in stack-images.test.mjs prune-ci-images.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             output="$(node --test --test-reporter=tap "scripts/ci/${suite}" 2>&1)"
@@ -481,17 +481,6 @@ jobs:
             ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
             if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
               echo "::error::${suite} holds ${expected} scenario(s) and node --test passed ${ran:-none}"
-              exit 1
-            fi
-          done
-          for suite in test_prune_ci_images.py; do
-            expected="$(grep -c '^    def test_' "scripts/ci/${suite}")"
-            [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
-            output="$(python -m unittest discover -s scripts/ci -p "${suite}" -v 2>&1)"
-            printf '%s\n' "${output}"
-            ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
-            if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-              echo "::error::${suite} holds ${expected} scenario(s) and unittest ran ${ran:-none}"
               exit 1
             fi
           done
