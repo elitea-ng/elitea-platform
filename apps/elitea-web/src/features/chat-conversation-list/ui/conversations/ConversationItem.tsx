@@ -296,6 +296,7 @@ export const ConversationItem = memo(function ConversationItem(props: Conversati
   const row = (
     <ConversationItemRow
       conversationId={conversation.id}
+      activityRow={conversation}
       name={name}
       firstMessagePreview={firstMessagePreview(chatHistory)}
       isPlayback={isPlayback}

@@ -4941,5 +4941,10 @@
   "pages.chatArchived.title": "Archived chats",
   "pages.chatArchived.unarchive": "Unarchive",
   "pages.chatArchived.untitled": "Untitled conversation",
-  "desktop.inspector.chat": "Conversation"
+  "desktop.inspector.chat": "Conversation",
+  "conversationActivity.running": "Running",
+  "conversationActivity.needsYou": "Needs your input",
+  "conversationActivity.unread": "Finished, unread",
+  "conversationActivity.done": "Finished",
+  "conversationActivity.needsYouCount": "{{count}} needs you"
 }

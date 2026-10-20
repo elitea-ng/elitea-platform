@@ -55,6 +55,7 @@ import type {
   ConversationListing,
   ConversationMessageListing,
   ConversationParticipant,
+  ConversationReadState,
   ConversationSummary,
   CreatedConversation,
   ExecutionInterruptDecisionResult,
@@ -286,6 +287,19 @@ export const getUnarchiveConversationResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
 
+export const getMarkConversationReadResponseMock = (
+  overrideResponse: Partial<Extract<ConversationReadState, object>> = {},
+): ConversationReadState => ({
+  conversation_id: faker.number.int(),
+  read_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  last_read_message_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    undefined,
+  ]),
+  unread: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
 export const getForkConversationResponseMock = (
   overrideResponse: Partial<Extract<ConversationSummary, object>> = {},
 ): ConversationSummary => ({
@@ -342,6 +356,18 @@ export const getForkConversationResponseMock = (
     },
     undefined,
   ]),
+  activity: faker.helpers.arrayElement([
+    {
+      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      since: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    undefined,
+  ]),
+  last_activity_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    undefined,
+  ]),
+  unread: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
   meta: faker.helpers.arrayElement([
     faker.helpers.arrayElement([null]),
     undefined,
@@ -457,6 +483,18 @@ export const getListConversationsResponseMock = (
       },
       undefined,
     ]),
+    activity: faker.helpers.arrayElement([
+      {
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        since: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      undefined,
+    ]),
+    last_activity_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
+    unread: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
     meta: faker.helpers.arrayElement([
       faker.helpers.arrayElement([null]),
       undefined,
@@ -2202,6 +2240,32 @@ export const getUnarchiveConversationMockHandler = (
   );
 };
 
+export const getMarkConversationReadMockHandler = (
+  overrideResponse?:
+    | ConversationReadState
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ConversationReadState> | ConversationReadState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/conversation_read/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkConversationReadResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getForkConversationMockHandler = (
   overrideResponse?:
     | ConversationSummary
@@ -3423,6 +3487,7 @@ export const getChatMock = () => [
   getHeartbeatCanvasPresenceMockHandler(),
   getArchiveConversationMockHandler(),
   getUnarchiveConversationMockHandler(),
+  getMarkConversationReadMockHandler(),
   getForkConversationMockHandler(),
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),

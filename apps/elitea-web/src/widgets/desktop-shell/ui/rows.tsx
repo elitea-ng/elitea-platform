@@ -55,6 +55,10 @@ export interface ShellRowProps {
   labelClassName?: string;
   /** A test id on the meta text (a closed group's count). */
   metaTestId?: string;
+  /** The label in bold: the row has something the person did not open yet (client contract 1.12). */
+  bold?: boolean;
+  /** An always-shown status at the label's end (the activity glyph); gives way to `trailing` on hover, as `meta` does. */
+  status?: ReactNode;
 }
 
 const ONE_LINE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
@@ -110,6 +114,40 @@ function RowMeta({ meta, testId }: { readonly meta: string | undefined; readonly
   );
 }
 
+interface RowLabelProps {
+  readonly label: string;
+  readonly className: string | undefined;
+  /** Bold while the row has something the person did not open yet (client contract 1.12). */
+  readonly bold: boolean | undefined;
+  readonly selected: boolean;
+  readonly muted: boolean;
+}
+
+/** The row's label, one line. */
+function RowLabel({ label, className, bold = false, selected, muted }: RowLabelProps): React.JSX.Element {
+  return (
+    <Typography
+      className={className}
+      variant="labelSmall"
+      component="span"
+      data-unread={bold ? 'true' : undefined}
+      sx={(theme: Theme) => ({ ...ONE_LINE, flex: 1, minWidth: 0, color: labelColor(theme, selected, muted), ...(bold ? { fontWeight: 700 } : {}) })}
+    >
+      {label}
+    </Typography>
+  );
+}
+
+/** An always-shown status after the label (the activity glyph). */
+function RowStatus({ status }: { readonly status: ReactNode }): React.JSX.Element | null {
+  if (status === undefined || status === null) return null;
+  return (
+    <Box component="span" className="shell-row-meta" sx={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+      {status}
+    </Box>
+  );
+}
+
 /** The row's leading columns: the disclosure chevron (one level left) and the icon column. */
 function RowLeading({ disclosure, icon, reserveIcon, indent }: { readonly disclosure: boolean | undefined; readonly icon: ReactNode; readonly reserveIcon: boolean; readonly indent: number }): React.JSX.Element {
   return (
@@ -152,7 +190,7 @@ function RowLeading({ disclosure, icon, reserveIcon, indent }: { readonly disclo
 
 export function ShellRow(props: ShellRowProps): React.JSX.Element {
   const { label, icon, selected = false, indent = 0, onClick, trailing, trailingOnHover = false, trailingRoom = '3.75rem', meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
-  const { disclosure, reserveIcon = false, dropActive = false, labelClassName, metaTestId } = props;
+  const { disclosure, reserveIcon = false, dropActive = false, labelClassName, metaTestId, bold, status } = props;
   const swaps = trailing !== undefined && trailingOnHover;
   return (
     <Box
@@ -180,15 +218,9 @@ export function ShellRow(props: ShellRowProps): React.JSX.Element {
         })}
       >
         <RowLeading disclosure={disclosure} icon={icon} reserveIcon={reserveIcon} indent={indent} />
-        <Typography
-          className={labelClassName}
-          variant="labelSmall"
-          component="span"
-          sx={(theme: Theme) => ({ ...ONE_LINE, flex: 1, minWidth: 0, color: labelColor(theme, selected, muted) })}
-        >
-          {label}
-        </Typography>
+        <RowLabel label={label} className={labelClassName} bold={bold} selected={selected} muted={muted} />
         <RowMeta meta={meta} testId={metaTestId} />
+        <RowStatus status={status} />
       </ButtonBase>
       {trailing !== undefined && (
         <Box className="shell-row-trailing" sx={{ display: 'flex', alignItems: 'center', paddingRight: 0.5 }}>

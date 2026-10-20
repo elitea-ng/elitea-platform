@@ -127,7 +127,7 @@ function ChatsList({ rail, projectId, pathname, creatingFolder = false, onCreati
     <DndContext sensors={drag.sensors} collisionDetection={pointerWithin} onDragStart={drag.handleDragStart} onDragEnd={(event) => void drag.handleDragEnd(event)} autoScroll={false}>
       <Box component="ul" data-testid="shell-chats" aria-label={t('desktop.chats.label', 'Chats')} sx={LIST_SX}>
         {rail.pinned.length > 0 && (
-          <Group caption={t('desktop.chats.pinned', 'Pinned')} count={rail.pinned.length} open={open.groupOpen(PINNED_GROUP)} onToggle={() => open.toggleGroup(PINNED_GROUP)}>
+          <Group caption={t('desktop.chats.pinned', 'Pinned')} count={rail.pinned.length} rows={rail.pinned} open={open.groupOpen(PINNED_GROUP)} onToggle={() => open.toggleGroup(PINNED_GROUP)}>
             <Rows conversations={rail.pinned} openId={openId} indent={CHILD_INDENT} actions={actions} />
           </Group>
         )}
@@ -154,7 +154,7 @@ function ChatsList({ rail, projectId, pathname, creatingFolder = false, onCreati
         ))}
         <RecentArea drag={drag}>
           {groups.map((group) => (
-            <Group key={group.name} caption={groupCaption(group.name)} count={group.total ?? group.conversations.length} open={open.groupOpen(group.name)} onToggle={() => open.toggleGroup(group.name)}>
+            <Group key={group.name} caption={groupCaption(group.name)} count={group.total ?? group.conversations.length} rows={group.conversations} serverNeedsYou={group.needsYou} open={open.groupOpen(group.name)} onToggle={() => open.toggleGroup(group.name)}>
               <Rows conversations={group.conversations} openId={openId} indent={CHILD_INDENT} actions={actions} />
               {rail.hasMore(group) && <ShowMore indent={CHILD_INDENT} onClick={() => rail.loadMoreInGroup(group.name)} />}
             </Group>

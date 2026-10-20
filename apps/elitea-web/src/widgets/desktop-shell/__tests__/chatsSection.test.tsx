@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { installTestEventSource } from '@/shared/api/sse/testing';
+import { resetConversationActivityOverlay } from '@/shared/lib/conversationActivity';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { clearNamespace } from '@/shared/lib/storage';
 import { server } from '@/test/setup';
@@ -108,6 +110,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetConversationActivityOverlay();
   resetGeneratedClient();
   resetConfigForTests();
   delete globals['elitea_ui_config'];
@@ -251,5 +254,54 @@ describe('ChatsSection', () => {
     expect(within(screen.getByTestId('shell-chats-archived')).getByRole('button')).toHaveAttribute('aria-current', 'page');
     await screen.findByText('quick overview');
     expect(screen.getByText('quick overview').closest('button')).not.toHaveAttribute('aria-current');
+  });
+
+  it('shows the activity of each row, counts what needs the person, and follows the live frames (client contract 1.12)', async () => {
+    const registry = installTestEventSource();
+    try {
+      const now = new Date().toISOString();
+      const later = new Date(Date.now() + 5_000).toISOString();
+      const act = (state: string, unread: boolean) => ({ activity: { state, since: now }, last_activity_at: now, unread });
+      server.use(
+        http.get('*/elitea_core/folder/prompt_lib/:projectId', () =>
+          HttpResponse.json({
+            pinned: { conversations: [row('81', 'Release checklist', act('idle', false))], needs_you: 0 },
+            folders: [],
+            date_groups: [
+              { name: 'Today', total: 2, offset: 2, needs_you: 1, conversations: [row('72', 'quick overview', act('running', false)), row('74', 'waiting on me', act('needs_you', true))] },
+              { name: 'Yesterday', total: 1, offset: 1, needs_you: 0, conversations: [row('75', 'Postgres connection math', act('idle', true))] },
+            ],
+            total_folders: 0,
+          }),
+        ),
+      );
+      const user = userEvent.setup();
+      mount('/chat');
+      await screen.findByText('quick overview');
+      // Yesterday starts closed; open it to see its row.
+      await user.click(caption('Yesterday'));
+      const glyphOf = (name: string) => within(screen.getByText(name).closest('[data-testid="shell-conversation"]') as HTMLElement).queryByTestId('conversation-activity-glyph');
+      expect(glyphOf('quick overview')).toHaveAttribute('data-kind', 'running');
+      expect(glyphOf('waiting on me')).toHaveAttribute('data-kind', 'needs_you');
+      expect(glyphOf('Postgres connection math')).toHaveAttribute('data-kind', 'unread');
+      expect(screen.getByText('Postgres connection math')).toHaveAttribute('data-unread', 'true');
+      expect(glyphOf('Release checklist')).toHaveAttribute('data-kind', 'done');
+      expect(screen.getByText('Release checklist')).not.toHaveAttribute('data-unread');
+      expect(screen.getAllByTestId('activity-needs-you').map((node) => node.textContent)).toEqual(['1 needs you']);
+
+      // The turn finishes while the person looks at the list: the row turns unread, without a refetch.
+      await waitFor(() => expect(registry.getOpen().some((source) => source.url === 'https://elitea.example/events/prompt_lib/42')).toBe(true));
+      registry.emit('conversation_activity', JSON.stringify({ conversation_id: 72, state: 'idle', since: later, last_activity_at: later, unread_hint: true }));
+      await waitFor(() => expect(glyphOf('quick overview')).toHaveAttribute('data-kind', 'unread'));
+      expect(screen.getByText('quick overview')).toHaveAttribute('data-unread', 'true');
+      // Another turn pauses: the group counts it at once.
+      registry.emit('conversation_activity', JSON.stringify({ conversation_id: 75, state: 'needs_you', since: later, last_activity_at: later, unread_hint: true }));
+      await waitFor(() => expect(screen.getAllByTestId('activity-needs-you').map((node) => node.textContent)).toEqual(['1 needs you', '1 needs you']));
+      // The person read it on another device.
+      registry.emit('conversation_activity', JSON.stringify({ conversation_id: 72, unread_hint: false, read_at: new Date(Date.now() + 10_000).toISOString() }));
+      await waitFor(() => expect(glyphOf('quick overview')).toHaveAttribute('data-kind', 'done'));
+    } finally {
+      registry.restore();
+    }
   });
 });

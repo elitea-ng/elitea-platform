@@ -19,6 +19,7 @@ import { useMemo } from 'react';
 import { useEventSource } from '@/shared/api/sse';
 import { getConfig } from '@/shared/config';
 import { WORKSPACE_HANDOFF_STATES } from '@/shared/api/workspaceHandoffApi';
+import { applyActivityFrame, CONVERSATION_ACTIVITY_EVENT, parseActivityFrame } from '@/shared/lib/conversationActivity';
 import type { WorkspaceHandoffState } from '@/shared/api/workspaceHandoffApi';
 
 import { handoffStatusKey, handoffStatusManyKey } from './useHandoffStatus';
@@ -90,6 +91,13 @@ export function useHandoffLiveEvents(projectId: string | number | null | undefin
         const change = parseHandoffEvent(String(event.data));
         if (change === null || project === null) return;
         applyHandoffEvent(queryClient, project, change);
+      },
+      // The same stream carries the conversation activity frames (client
+      // contract 1.12): the Local work rows of a thread that runs in the cloud
+      // follow them without a second connection.
+      [CONVERSATION_ACTIVITY_EVENT]: (event: MessageEvent) => {
+        const frame = parseActivityFrame(String(event.data));
+        if (frame !== null) applyActivityFrame(frame);
       },
     },
     {

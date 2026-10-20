@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConversationActivity } from "./conversationActivity.zod";
 import { ConversationArchivedBy } from "./conversationArchivedBy.zod";
 import { ConversationForkedFrom } from "./conversationForkedFrom.zod";
 
@@ -94,6 +95,19 @@ export const ConversationSummary = zod
       .optional()
       .describe(
         "Client contract 1.11, forkConversation's answer only. Maps the UUID of each message group the fork copied to the UUID of its copy in the new conversation; empty when nothing was copied. A client that recorded message ids of the source (the desktop's turn history) rewrites them with it. No other read carries it.\n",
+      ),
+    activity: ConversationActivity.optional(),
+    last_activity_at: zod.iso
+      .datetime({ offset: true })
+      .optional()
+      .describe(
+        "Client contract 1.12. The last write of any message of the conversation (a message, the start of a turn, or a change of its state), in UTC. The creation time when the conversation has no message.\n",
+      ),
+    unread: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.12. For the CALLER: an answer of the conversation (a message that no user participant wrote, that does not stream, including a pause for the user) changed after the caller's read marker (markConversationRead). A message of a user never makes the conversation unread. The value is personal: two members can see different values on the same row. A server before 1.12 omits the field, which means read.\n",
       ),
     meta: zod
       .record(zod.string(), zod.unknown())

@@ -36,7 +36,7 @@ import Box from '@mui/material/Box';
 
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
-import { useConversationActivity } from '@/features/chat-conversation-list';
+import { useConversationActivity, useMarkConversationReadOnView } from '@/features/chat-conversation-list';
 import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
 import {
   AddNewUserModal,
@@ -119,6 +119,11 @@ function participantRows(activeConversation: { readonly participants?: readonly 
   return (activeConversation?.participants ?? []) as readonly Record<string, unknown>[];
 }
 
+/** The open conversation's message count: a new message reads the conversation again. */
+function messageCountOf(activeConversation: unknown): number | undefined {
+  return (activeConversation as { readonly chat_history?: readonly unknown[] } | undefined)?.chat_history?.length;
+}
+
 function conversationIdOf(activeConversation: unknown): string | undefined {
   return (activeConversation as { readonly id?: string } | undefined)?.id;
 }
@@ -170,6 +175,8 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const { conversationId, messageId } = useDeepLinkedConversationId(routeConversationId);
   const { projectId, user, activeConversation, isLoadingConversation, localWork, handoff, forkedFrom } = useChatPageData({ conversationId });
   const fork = useChatFork(projectId, conversationId); // "Fork from here" (client contract 1.11)
+  // Client contract 1.12: the open conversation is read while the person can see it.
+  useMarkConversationReadOnView({ projectId, conversationId, revision: messageCountOf(activeConversation) });
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();
