@@ -15,6 +15,7 @@ mod credentials_file;
 mod d0;
 mod discovery;
 mod doctor;
+mod embeddings;
 mod error;
 mod handoff;
 mod handoff_settings;
@@ -24,6 +25,7 @@ mod local_commands;
 mod logging;
 mod loopback;
 mod menu;
+mod models;
 mod net;
 mod pkce;
 mod platform;
@@ -62,6 +64,7 @@ use crate::sessions::DesktopStateStore;
 use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
+use elitea_local_index::embedding::{EmbedConfig, EmbedStatus, Embedding};
 
 /// The credentials file's slots (src/credentials_file.rs).
 const SESSION_SLOT: &str = "device-session";
@@ -246,14 +249,74 @@ pub fn run() {
             let handoff_policy = Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone())));
             // The local workspace indexes (ADR-0029 decision 7), opened on
             // first use; kept across sign-out and wipe (src/index.rs).
-            let index = Arc::new(
-                IndexRegistry::new(
-                    workspaces.clone(),
-                    policy.clone(),
-                    Arc::new(MainWindowIndexEvents(app.handle().clone())),
-                )
-                .with_deny_list(host_deny),
-            );
+            // Their embeddings, off unless a workspace turns them on
+            // (src/embeddings.rs): one background thread, one model in memory.
+            let index = IndexRegistry::new(
+                workspaces.clone(),
+                policy.clone(),
+                Arc::new(MainWindowIndexEvents(app.handle().clone())),
+            )
+            .with_deny_list(host_deny);
+            let remote_embeddings = match tauri::async_runtime::handle() {
+                tauri::async_runtime::RuntimeHandle::Tokio(runtime) => {
+                    Some(embeddings::RemoteDeps {
+                        http: http.clone(),
+                        credentials: Arc::new(AuthCredentials(auth.clone())),
+                        workspaces: workspaces.clone(),
+                        runtime,
+                    })
+                }
+            };
+            let index_events: models::Emit = {
+                let handle = app.handle().clone();
+                Arc::new(move |payload: serde_json::Value| {
+                    use tauri::Emitter as _;
+                    if let Err(error) = handle.emit_to("main", index::EVENT_NAME, &payload) {
+                        log::warn!("could not deliver an index event: {error}");
+                    }
+                })
+            };
+            app.manage(Arc::new(models::ModelHost::new(
+                &data_dir,
+                policy.clone(),
+                remote_embeddings.clone(),
+                index_events.clone(),
+            )));
+            let index = match Embedding::start(
+                Arc::new(embeddings::Embedders {
+                    local: embeddings::LocalModels::new(&data_dir),
+                    remote: remote_embeddings,
+                    policy: policy.clone(),
+                }),
+                Arc::new(embeddings::Power::default()),
+                EmbedConfig::default(),
+                Arc::new(move |workspace_id: &str, status: &EmbedStatus| {
+                    index_events(serde_json::json!({
+                        "kind": "embeddings",
+                        "workspace_id": workspace_id,
+                        "status": status,
+                    }));
+                }),
+            ) {
+                Ok(embedding) => index.with_embedding(Arc::new(embedding)),
+                Err(error) => {
+                    log::warn!("the index embedder did not start: {error}");
+                    index
+                }
+            }
+            .shared();
+            // An embedding pass the app quit in the middle of resumes once
+            // start-up settles (only the chunks still missing a vector).
+            {
+                let index = index.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(index::RESUME_EMBEDDINGS_AFTER).await;
+                    let resumed = index.resume_embeddings().await;
+                    if resumed > 0 {
+                        log::info!("resumed embedding {resumed} workspace index(es)");
+                    }
+                });
+            }
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
                     http: http.clone(),
@@ -372,6 +435,16 @@ pub fn run() {
             index::index_disable,
             index::index_refresh,
             index::index_cancel,
+            index::index_embeddings_get,
+            models::index_embeddings_set,
+            models::index_embeddings_status,
+            models::index_embeddings_rebuild,
+            models::index_models,
+            models::index_model_download,
+            models::index_model_cancel,
+            models::index_model_import,
+            models::index_model_remove,
+            models::index_remote_models,
             index::index_remove,
             platform::app_platform,
             context_menu::context_menu_show,

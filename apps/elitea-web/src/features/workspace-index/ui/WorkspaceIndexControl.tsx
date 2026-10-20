@@ -9,6 +9,7 @@ import { useState } from 'react';
 import type { IndexIpc } from '@/shared/desktop/indexIpc';
 
 import { useIndexIpc } from '../model/ipcContext';
+import { useEmbeddings } from '../model/useEmbeddings';
 import { useWorkspaceIndex } from '../model/useWorkspaceIndex';
 import { IndexSettingsDialog } from './IndexSettingsDialog';
 import { IndexStatusChip } from './IndexStatusChip';
@@ -24,10 +25,13 @@ export interface WorkspaceIndexControlProps {
 function Control({ ipc, workspaceId, name, open: opensIndex = false }: WorkspaceIndexControlProps & { ipc: IndexIpc }): React.JSX.Element {
   const index = useWorkspaceIndex(ipc, workspaceId, { open: opensIndex });
   const [open, setOpen] = useState(false);
+  // Read only while the dialog shows an index that is on.
+  const on = index.view?.kind === 'status' && index.view.status.state !== 'off';
+  const embeddings = useEmbeddings(ipc, workspaceId, open && on);
   return (
     <>
       <IndexStatusChip view={index.view} loadError={index.loadError} progress={index.progress} onClick={() => setOpen(true)} />
-      <IndexSettingsDialog open={open} onClose={() => setOpen(false)} name={name} index={index} />
+      <IndexSettingsDialog open={open} onClose={() => setOpen(false)} name={name} index={index} embeddings={embeddings} />
     </>
   );
 }

@@ -7,7 +7,7 @@ import { buildActivities, formatElapsed } from '../lib/activityModel';
 import { createActivityFeedStore } from '../model/activityFeed.store';
 
 const at = (seq: number) => ({ turn_id: 't1', seq });
-const building: IndexStatus = { state: 'building', files: 0, entities: 0, relations: 0, vectors: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true };
+const building: IndexStatus = { state: 'building', files: 0, entities: 0, relations: 0, vectors: 0, chunks: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true };
 
 function facts(store: ReturnType<typeof createActivityFeedStore>) {
   const { turns, indexes, sends, cloud } = store.getState();

@@ -445,6 +445,7 @@ type IndexStatus = {
   entities: number;
   relations: number;
   vectors: number;        // 0 until embeddings exist
+  chunks: number;         // search chunks of the last build
   last_run: string | null; // when the last build was committed (UTC, ISO 8601)
   changed_files: number;  // files turns changed since the last build
   error: string | null;   // why the last refresh failed
@@ -485,6 +486,17 @@ and checks the folder for what changed while it was closed, on
 `index_enable` / `index_refresh`. Refreshes run one at a time across every
 folder; a waiting one reports `queued`.
 
+**Watched.** While an index is open and turned on, its folder is watched
+for changes made outside the app (an editor, `git pull`, a build): once the
+folder has been quiet for 3 s, and at most every 30 s, an incremental
+refresh runs under the policy then, as after a turn (no event is sent for
+the watch itself; the refresh reports as any other). A change only counts
+where a build would look: not under `.git`, not denied (`path_deny`, the
+host's deny list), not ignored by a `.gitignore` (or `.git/info/exclude`);
+a changed `.gitignore` always counts. Turning the index off, closing it,
+or a policy change stops (or restarts) the watch. The watch never reads a
+file.
+
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `index_status` | `{workspace_id}` | `IndexStatus` — never opens an index that is not open (above); `policy_off` instead of rejecting. |
@@ -515,13 +527,116 @@ structure of the person's own folder and no account data. `index_remove`
 or `workspace_remove` deletes it.
 
 A turn in a workspace whose index is on and built is offered its tools
-(toolset `workspace_index`, reported `remote: false`): `search_knowledge_graph`,
+(toolset `workspace_index`, reported `remote: false`): `search_workspace`
+(local only, below), then `search_knowledge_graph`,
 `get_entity_details`, `get_related_entities`, `query_graph`,
 `list_entity_types`, `impact_analysis` and `get_entity_content`, with the
 cloud Inventory tools' names and arguments. They only read, so they run
 without approval and in plan mode too. An answer from a build that may be
 out of date starts with a one-line `Note:`. A toolkit tool never takes one
 of these names (it gets a `_2` suffix), whether or not the index is on.
+
+`search_workspace {query, top_k = 10 (≤ 50), path_glob?, kind = code | docs
+| any, mode = auto | lexical | semantic}` answers a JSON list of
+`{path, line_start, line_end, snippet, score, matched_by[], entity_ref?}`:
+the build's search chunks (every line of every text file, cut by the
+cloud index's chunkers, with the lines those leave out as chunks of their
+own; lock files, minified bundles and data files over 256 KB are not
+chunked) ranked by BM25 over their text and an identifier column
+(`camelCase` / `snake_case` split, path parts), fused by weighted
+reciprocal rank (k = 60) with the code graph's name matches and their
+one-hop neighbours (`matched_by`: `lexical`, `graph`, `neighbour`).
+`entity_ref` is the entity a hit holds, as `get_entity_details` takes it.
+The chunks are committed in the same transaction as the build, so they
+always describe the documents it holds (a build reads, chunks and parses
+the folder in bounded batches — each parsed language together, other files
+512 at a time — staging the chunks in a temporary table on the writer's
+connection that no reader sees, and moves them in at commit); an index built before chunks
+existed reads every file once on its next refresh to cut them (nothing is
+parsed again).
+
+### Index embeddings (`src/embeddings.rs`, `libs/rust/local-embed`)
+
+A local index needs no embedding model: the text index and the code graph
+answer on their own. Vectors are an option per workspace, **off by
+default**, in one of two ways the policy may allow (both also need
+`allowed && local_index`):
+
+* `local:<model id>` — `local_work.index_local_embeddings` (server default
+  true; absent = false). A model of the pinned catalogue run on this
+  computer by candle (Metal on Apple silicon); nothing leaves the device.
+* `remote:<dim>:<model>` — `local_work.index_remote_embeddings` (default
+  false). The deployment's `/llm/v1/embeddings` with the native token and
+  `X-Project-Id` = the folder's bound project. Background embedding sends
+  no `X-Elitea-Execution-Id`; a `search_workspace` call inside a turn
+  sends that turn's id for its query.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `index_embeddings_get` | `{workspace_id}` | `string` — the setting (`off` when unset), from the open index or a small read of its file |
+| `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. `remote:<model>` is probed with one short embedding in the bound project and stored as `remote:<dim>:<model>`. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now), `workspace_unbound`, `embeddings_probe_failed`. `off` is always accepted. |
+| `index_embeddings_status` | `{workspace_id}` | `EmbedStatus \| null` — `null` when the folder does not embed or its index is not open |
+| `index_embeddings_rebuild` | `{workspace_id, full?}` | `null` — embed now whatever the power state (until done); `full` deletes the folder's vectors first. Rejects `embeddings_off`, `index_off` |
+| `index_models` | `{}` | `{models: ModelInfo[], local_allowed, remote_allowed, cache_bytes, mirror: string \| null}` — `mirror`: the host downloads come from when the policy names one |
+| `index_remote_models` | `{workspace_id}` | `{name, display_name: string \| null}[]` — the bound project's embedding models (its own and shared: `GET /api/v2/configurations/models/{project_id}?section=embedding&include_shared=true`, client contract 1.9), for the picker. Rejects `embeddings_not_allowed`, `workspace_unbound`, `models_unavailable` (the UI then takes a typed name) |
+| `index_model_download` | `{model_id, confirm: true}` | `ModelInfo` — starts (or resumes) the download in the background; progress on `index://event`. Rejects `confirmation_required` (no `confirm`: the person must have seen the size), `model_unknown`, `embeddings_not_allowed`, `model_busy` |
+| `index_model_cancel` | `{model_id}` | `boolean` — whether a download ran; what was fetched is kept for a resume |
+| `index_model_import` | `{model_id, folder?}` | `ModelInfo \| null` — copies the model's files from `folder`, or (without it) from the folder the person picks in the native dialog (`null`: cancelled); no network; each file is checked against its pinned SHA-256 |
+| `index_model_remove` | `{model_id}` | `ModelInfo` — deletes the model's files; `model_busy` while it downloads |
+
+Models are downloaded only when the person asks (`confirm`), from Hugging
+Face's CDN at a pinned revision (or, when `local_work.index_model_mirror_url`
+names one, from that `https` mirror laid out the same way:
+`<mirror>/<repo>/resolve/<revision>/<file>`), each file resumable (`.part` + `Range`)
+and verified against the SHA-256 compiled into the app before it is ever
+loaded. They live once per computer under `<app data>/models/<sha256>/`
+(owner-only), shared by every workspace.
+
+```ts
+type ModelInfo = {
+  id: string; display_name: string; summary: string; license: string;
+  download_bytes: number; ram_mb: number; dimension: number;
+  downloading: boolean;
+} & ({ state: "missing" } | { state: "partial"; have: number; total: number } | { state: "ready" });
+
+type EmbedStatus = {
+  choice: string; state: "waiting" | "running" | "paused" | "done" | "error";
+  done: number; total: number;               // distinct chunk texts
+  held: "turn" | "on_battery" | "low_power" | null;
+  error: string | null; forced: boolean;
+  eta_seconds: number | null;                // left at the pace so far, while running
+};
+```
+
+A pass is resumable: vectors are stored batch by batch, keyed by chunk
+text, so a pass the app quit in the middle of embeds only what is still
+missing. About 20 s after start-up the app reopens every turned-on index
+whose chosen model has fewer vectors than distinct chunk texts, and the
+pass resumes. The files a turn changed and the files a message
+`@`-references are embedded first (the latest 200 per workspace).
+
+`index://event` carries two more payloads beside a build's (which has no
+`kind`):
+
+```ts
+{ kind: "model"; model: string; phase: "downloading" | "ready" | "cancelled" | "failed";
+  done: number; total: number; error: string | null }
+{ kind: "embeddings"; workspace_id: string; status: EmbedStatus }
+```
+
+One background thread embeds every open, turned-on index whose setting
+names an embedder: after each build, in batches of 32 distinct chunk texts,
+at the lowest thread priority (CPU work on half the cores), pausing between
+batches while any turn runs, and only on mains power outside Low Power
+Mode. One model is in memory at a time, dropped after two idle minutes.
+Vectors (int8, `[scale][dim]`, keyed by the chunk text's hash: unchanged
+chunks keep theirs across refreshes) are stamped `origin:model:dim`; only
+queries embedded the same way are compared with them. With vectors,
+`search_workspace` adds a `semantic` list to the fusion (text 0.3, vectors
+0.7; `mode: semantic` uses the vectors alone). **The policy is read on
+every pass**: a way it no longer allows makes no vectors, its vectors are
+deleted, and searches lose their dense side, as a `path_deny` change drops
+what it covers. Turning embeddings `off` deletes them too.
 
 ## Cloud handoff (`src/handoff.rs`, ADR-0034)
 

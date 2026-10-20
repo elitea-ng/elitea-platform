@@ -54,7 +54,7 @@ pub enum Status {
 pub struct Check {
     /// Stable: `credentials`, `dir.config`, `dir.data`, `dir.logs`,
     /// `history`, `workspaces`, `index.<workspace id>` (one per workspace
-    /// with a local index), `deployment`, `session`, `local_work`,
+    /// with a local index), `models`, `deployment`, `session`, `local_work`,
     /// `pending_revokes`.
     pub id: String,
     pub title: &'static str,
@@ -372,7 +372,51 @@ impl LocalDoctor {
         checks.push(self.sessions_check());
         checks.push(self.workspaces_check());
         checks.extend(self.index_checks());
+        checks.push(self.models_check());
         checks
+    }
+
+    /// The embedding model cache (`<data>/models`): owner-only like the
+    /// rest, and which catalogue models are on this computer (sizes only:
+    /// every load verifies the files against their pinned digests).
+    fn models_check(&self) -> Check {
+        use elitea_local_embed::catalog::MODELS;
+        use elitea_local_embed::manager::{ModelState, ModelStore};
+        let root = self.data_dir.join("models");
+        let mut check = dir_check("models", "Embedding models", &root, "dir.tighten.models");
+        if check.status != Status::Ok || fs::symlink_metadata(&root).is_err() {
+            if fs::symlink_metadata(&root).is_err() {
+                check.message =
+                    "No embedding model downloaded (embeddings are off unless you choose one)."
+                        .into();
+            }
+            return check;
+        }
+        let store = ModelStore::new(&root);
+        let states: Vec<String> = MODELS
+            .into_iter()
+            .filter_map(|spec| match store.state(spec) {
+                ModelState::Missing => None,
+                ModelState::Ready => Some(format!("{} (ready)", spec.display_name)),
+                ModelState::Partial { have, total } => Some(format!(
+                    "{} (partly downloaded, {} of {} MB)",
+                    spec.display_name,
+                    have / 1_000_000,
+                    total / 1_000_000
+                )),
+            })
+            .collect();
+        check.message = if states.is_empty() {
+            format!("{} holds no model.", root.display())
+        } else {
+            format!(
+                "{} — {}; {} MB in all.",
+                root.display(),
+                states.join(", "),
+                store.disk_bytes() / 1_000_000
+            )
+        };
+        check
     }
 
     fn credentials_check(&self) -> Check {
@@ -657,6 +701,9 @@ impl LocalDoctor {
                 tighten_dir(&self.config_dir).map(|()| "Restricted to you.".into())
             }
             "dir.tighten.data" => tighten_dir(&self.data_dir).map(|()| "Restricted to you.".into()),
+            "dir.tighten.models" => {
+                tighten_dir(&self.data_dir.join("models")).map(|()| "Restricted to you.".into())
+            }
             "dir.tighten.logs" => match &self.log_dir {
                 Some(logs) => tighten_dir(logs).map(|()| "Restricted to you.".into()),
                 None => Err(HostError::Storage("there is no logs folder".into())),
@@ -1345,6 +1392,45 @@ mod tests {
             doctor,
             hooks,
         }
+    }
+
+    /// The model cache: absent is fine, a loose one is tightened, and a
+    /// partial download is named with its size.
+    #[test]
+    fn the_model_cache_is_checked_and_tightened() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let models = |f: &Fixture| {
+            f.doctor
+                .checks()
+                .into_iter()
+                .find(|check| check.id == "models")
+                .unwrap()
+        };
+        let absent = models(&f);
+        assert_eq!(absent.status, Status::Ok);
+        assert!(
+            absent.message.contains("No embedding model"),
+            "{}",
+            absent.message
+        );
+        let root = f.doctor.data_dir.join("models");
+        let spec = elitea_local_embed::catalog::MODELS[0];
+        let dir = root.join(spec.cache_key());
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("model.safetensors.part"), vec![0_u8; 2_000_000]).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let loose = models(&f);
+        assert_eq!(loose.status, Status::Warn);
+        assert_eq!(loose.fix_id.as_deref(), Some("dir.tighten.models"));
+        f.doctor.fix("dir.tighten.models", false).unwrap();
+        let tight = models(&f);
+        assert_eq!(tight.status, Status::Ok);
+        assert!(
+            tight.message.contains("partly downloaded, 2 of"),
+            "{}",
+            tight.message
+        );
     }
 
     struct NoBrowser;

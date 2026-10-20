@@ -25,7 +25,7 @@ import { ActivityIsland, DesktopFrame, useActivityFeed } from '../index';
 
 const globals = globalThis as unknown as Record<string, unknown>;
 const APP: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
-const building: IndexStatus = { state: 'building', files: 0, entities: 0, relations: 0, vectors: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true };
+const building: IndexStatus = { state: 'building', files: 0, entities: 0, relations: 0, vectors: 0, chunks: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true };
 
 function mount() {
   const ipc = createFakeWorkspaceIpc({ workspaces: [APP] });

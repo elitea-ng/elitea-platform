@@ -1,9 +1,10 @@
 //! The index's [`GraphStore`]: one owner-only SQLite file per workspace
 //! (`<app data>/workspaces/<id>/index/index.sqlite`).
 //!
-//! Schema version 2 (`PRAGMA user_version`; a newer one is refused, the app
+//! Schema version 4 (`PRAGMA user_version`; a newer one is refused, the app
 //! that wrote it knows it and this one does not; version 1 gains the
-//! `embedding_hash` column when it is opened):
+//! `embedding_hash` column when it is opened, version 2 the chunk tables,
+//! version 3 the chunk vectors):
 //!
 //! ```sql
 //! meta      (key TEXT PRIMARY KEY, value TEXT)            -- schema_version, revision_seq, setting:*,
@@ -19,7 +20,35 @@
 //! sources   (project_id, application_id, toolkit_id, ... the status document's fields)
 //! runs      (id, project_id, application_id, toolkit_id, started_at, finished_at, status,
 //!            counts, error, tokens)
+//! chunks    (id, path, version, line_start, line_end, kind, text, text_hash)
+//!                                                          -- the search chunks of each document
+//!                                                          -- (`chunks.rs`), at the version the
+//!                                                          -- graph was parsed from
+//! chunks_fts(text, idents)                                 -- FTS5, contentless, rowid = chunks.id;
+//!                                                          -- porter + unicode61; idents: the
+//!                                                          -- identifier column
+//! vector_sets  (stamp PRIMARY KEY, origin, model, dim, created_at)
+//!                                                          -- one per embedder the chunks were
+//!                                                          -- embedded with (`local:<model>:<dim>`)
+//! chunk_vectors(stamp, text_hash, vector BLOB)             -- int8 `[scale][dim × i8]`, keyed by the
+//!                                                          -- chunk text's hash: an unchanged chunk
+//!                                                          -- keeps its vector across refreshes
 //! ```
+//!
+//! **Vectors follow the chunks.** They are written by the background
+//! embedder after a build, never in a build's transaction; a vector whose
+//! text no chunk has any more is pruned by the next pass
+//! ([`SqliteGraphStore::prune_vectors`]).
+//!
+//! **Chunks are committed with the build.** A refresh stages the chunks of
+//! every file it read (from exactly the bytes it parsed) as it goes, into a
+//! `TEMP` table of the writer connection ([`SqliteGraphStore::stage_chunks`]:
+//! a few hundred files at a time, never visible to a reader), and the
+//! commit moves them into `chunks` and `chunks_fts` in the same transaction
+//! as the graph and the documents, dropping the chunks of documents that
+//! are gone: the chunks always describe the committed documents, and no
+//! build holds every chunk in memory. `meta.chunks_generation` records the
+//! chunker that made them ([`crate::chunks::GENERATION`]).
 //!
 //! The desktop keeps ONE graph per file ([`GraphKey::LOCAL`]); the key
 //! columns are there because the shared conformance suite (and the
@@ -42,6 +71,7 @@
 //! Embeddings are kept beside the attributes, as the PostgreSQL store keeps
 //! them, so [`GraphStore::rank`] is a brute-force cosine scan over them.
 
+use crate::chunks::{ChunkKind, ChunkRow};
 use crate::fs;
 use elitea_content_source::Acl;
 use elitea_inventory_core::graph::Graph;
@@ -60,7 +90,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 4;
 /// The database's file name in its directory.
 pub const FILE_NAME: &str = "index.sqlite";
 
@@ -101,6 +131,29 @@ CREATE TABLE runs (
     project_id INTEGER NOT NULL, application_id INTEGER NOT NULL, toolkit_id TEXT NOT NULL,
     started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL,
     counts TEXT, error TEXT, tokens INTEGER NOT NULL DEFAULT 0);
+";
+
+/// The search chunks (schema 3).
+const CHUNK_SCHEMA: &str = "
+CREATE TABLE chunks (
+    id INTEGER PRIMARY KEY, path TEXT NOT NULL, version TEXT NOT NULL,
+    line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, kind TEXT NOT NULL,
+    text TEXT NOT NULL, text_hash TEXT NOT NULL);
+CREATE INDEX chunks_by_path ON chunks (path, line_start);
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+    text, idents, content='', contentless_delete=1,
+    tokenize='porter unicode61 remove_diacritics 2');
+";
+
+/// The chunk vectors (schema 4).
+const VECTOR_SCHEMA: &str = "
+CREATE TABLE vector_sets (
+    stamp TEXT PRIMARY KEY, origin TEXT NOT NULL, model TEXT NOT NULL,
+    dim INTEGER NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE chunk_vectors (
+    stamp TEXT NOT NULL, text_hash TEXT NOT NULL, vector BLOB NOT NULL,
+    PRIMARY KEY (stamp, text_hash)) WITHOUT ROWID;
+CREATE INDEX chunks_by_hash ON chunks (text_hash);
 ";
 
 /// ISO 8601 in UTC with milliseconds, as SQLite writes it.
@@ -164,6 +217,12 @@ pub struct Peek {
     pub last_run: Option<String>,
     /// The policy fingerprint the last build was committed under.
     pub policy: Option<String>,
+    /// Search chunks, and their distinct texts (what embedding them makes
+    /// one vector each for).
+    pub chunks: u64,
+    pub chunk_texts: u64,
+    /// Stored chunk vectors by set stamp.
+    pub vectors: HashMap<String, u64>,
 }
 
 /// One row of the `runs` table: its status and when it finished.
@@ -172,6 +231,66 @@ pub struct RunRow {
     pub status: String,
     pub finished_at: Option<String>,
     pub error: Option<String>,
+}
+
+/// The chunks a refresh staged for one document: the version they were
+/// cut from (the bytes it parsed) and the rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Staged {
+    pub version: String,
+    pub rows: Vec<ChunkRow>,
+}
+
+/// The chunks a commit writes: what the refresh staged
+/// ([`SqliteGraphStore::stage_chunks`]), and the chunker generation that
+/// made them.
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkUpdate<'a> {
+    pub generation: &'a str,
+    /// The refresh read every file again (a full rebuild, a new chunker):
+    /// every document's chunks are replaced by what was staged, even at an
+    /// unchanged version (and dropped when nothing was). Also implied when
+    /// the stored chunks are of another generation.
+    pub replace: bool,
+}
+
+/// The staging table of a build's chunks (the writer connection's own).
+const STAGING: &str = "
+CREATE TEMP TABLE IF NOT EXISTS chunk_staging (
+    path TEXT NOT NULL, version TEXT NOT NULL, line_start INTEGER NOT NULL,
+    line_end INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL,
+    text_hash TEXT NOT NULL, idents TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS temp.chunk_staging_by_path ON chunk_staging (path);
+";
+
+/// What a set of chunk vectors was made with: `origin` (`local` or
+/// `remote`), the model, and the stored width. Vectors of one set are only
+/// ever compared with queries embedded the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorSet {
+    pub origin: String,
+    pub model: String,
+    pub dim: usize,
+}
+
+impl VectorSet {
+    /// `origin:model:dim`.
+    #[must_use]
+    pub fn stamp(&self) -> String {
+        format!("{}:{}:{}", self.origin, self.model, self.dim)
+    }
+}
+
+/// One stored chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredChunk {
+    pub id: i64,
+    pub path: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub kind: ChunkKind,
+    pub text: String,
+    pub text_hash: String,
 }
 
 /// The right to ingest into one graph, held until dropped.
@@ -195,10 +314,22 @@ impl Drop for Lease {
 pub struct SqliteGraphStore {
     path: PathBuf,
     conn: Mutex<Option<Connection>>,
+    /// A read-only connection for searches, opened on first use: WAL lets
+    /// it read while a refresh writes. Closed with the store.
+    reader: Mutex<Option<Connection>>,
+    closed: std::sync::atomic::AtomicBool,
     leases: Arc<Mutex<HashSet<GraphKey>>>,
     last_commit_rows: AtomicU64,
     /// How many times a graph was loaded from the database.
     loads: AtomicU64,
+    /// Bumped by every write that changes which chunks have vectors (a
+    /// build, new vectors, a prune): what a cached vector matrix is
+    /// checked against.
+    vectors_version: AtomicU64,
+    /// Bumped by every write that changes the chunks or drops vectors (a
+    /// build, a prune): a cached matrix of another chunks version holds
+    /// chunk ids that may be gone or reused, and is never served.
+    chunks_version: AtomicU64,
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
@@ -207,6 +338,9 @@ fn open_connection(path: &Path) -> Result<Connection> {
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // A full build is one large transaction; the WAL it grew is cut back
+    // to this size once checkpointed, instead of staying on disk.
+    conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
     Ok(conn)
 }
 
@@ -215,18 +349,25 @@ fn migrate(conn: &Connection) -> Result<()> {
     match version {
         0 => {
             conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA}
+                "BEGIN; {SCHEMA} {CHUNK_SCHEMA} {VECTOR_SCHEMA}
                  INSERT INTO meta (key, value) VALUES ('schema_version', '{SCHEMA_VERSION}');
                  INSERT INTO meta (key, value) VALUES ('revision_seq', '0');
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?;
             Ok(())
         }
-        1 => {
-            // Version 2 records the hash of each vector's text.
+        1..=3 => {
+            // Version 2 records the hash of each vector's text; version 3
+            // adds the search chunks (made by the next refresh); version 4
+            // the chunk vectors (made by the background embedder).
+            let embedding_hash = if version == 1 {
+                "ALTER TABLE entities ADD COLUMN embedding_hash TEXT;"
+            } else {
+                ""
+            };
+            let chunks = if version < 3 { CHUNK_SCHEMA } else { "" };
             conn.execute_batch(&format!(
-                "BEGIN;
-                 ALTER TABLE entities ADD COLUMN embedding_hash TEXT;
+                "BEGIN; {embedding_hash} {chunks} {VECTOR_SCHEMA}
                  UPDATE meta SET value = '{SCHEMA_VERSION}' WHERE key = 'schema_version';
                  PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?;
@@ -275,9 +416,13 @@ impl SqliteGraphStore {
         Ok(Self {
             path,
             conn: Mutex::new(Some(conn)),
+            reader: Mutex::new(None),
+            closed: std::sync::atomic::AtomicBool::new(false),
             leases: Arc::default(),
             last_commit_rows: AtomicU64::new(0),
             loads: AtomicU64::new(0),
+            vectors_version: AtomicU64::new(0),
+            chunks_version: AtomicU64::new(0),
         })
     }
 
@@ -336,6 +481,31 @@ impl SqliteGraphStore {
                 documents: count_of("documents")?,
                 last_run: last_completed_run(conn, key)?,
                 policy: policy_of(conn)?,
+                chunks: u64::try_from(conn.query_row(
+                    "SELECT count(*) FROM chunks",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+                .unwrap_or(0),
+                chunk_texts: u64::try_from(conn.query_row(
+                    "SELECT count(DISTINCT text_hash) FROM chunks",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+                .unwrap_or(0),
+                vectors: {
+                    let mut statement =
+                        conn.prepare("SELECT stamp, count(*) FROM chunk_vectors GROUP BY stamp")?;
+                    let rows = statement.query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                    })?;
+                    let mut vectors = HashMap::new();
+                    for row in rows {
+                        let (stamp, n) = row?;
+                        vectors.insert(stamp, u64::try_from(n).unwrap_or(0));
+                    }
+                    vectors
+                },
             })
         });
         store.close();
@@ -362,6 +532,13 @@ impl SqliteGraphStore {
     /// answers [`StoreError::Closed`]. What a removal does before it
     /// deletes the directory.
     pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        drop(
+            self.reader
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
         let conn = self
             .conn
             .lock()
@@ -496,10 +673,400 @@ impl SqliteGraphStore {
         self.last_commit_rows.load(Ordering::SeqCst)
     }
 
+    /// Forget the chunks staged so far (a build starts; an earlier one may
+    /// have failed after staging).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn clear_staged_chunks(&self) -> Result<()> {
+        self.with(|conn| {
+            conn.execute_batch(STAGING)?;
+            conn.execute("DELETE FROM temp.chunk_staging", [])?;
+            Ok(())
+        })
+    }
+
+    /// Stage the chunks of some documents for the next commit with chunks
+    /// (one short transaction; a document staged twice keeps the last).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn stage_chunks(&self, staged: &HashMap<String, Staged>) -> Result<()> {
+        if staged.is_empty() {
+            return Ok(());
+        }
+        self.with(|conn| {
+            conn.execute_batch(STAGING)?;
+            let transaction = conn.transaction()?;
+            {
+                let mut forget =
+                    transaction.prepare_cached("DELETE FROM temp.chunk_staging WHERE path = ?1")?;
+                let mut insert = transaction.prepare_cached(
+                    "INSERT INTO temp.chunk_staging
+                         (path, version, line_start, line_end, kind, text, text_hash, idents)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                )?;
+                for (path, document) in staged {
+                    forget.execute([path])?;
+                    for row in &document.rows {
+                        insert.execute(params![
+                            path,
+                            document.version,
+                            row.line_start,
+                            row.line_end,
+                            row.kind.as_str(),
+                            row.text,
+                            row.text_hash,
+                            row.idents
+                        ])?;
+                    }
+                }
+            }
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
     fn with<T>(&self, work: impl FnOnce(&mut Connection) -> Result<T>) -> Result<T> {
         let mut guard = self.conn.lock().unwrap_or_else(PoisonError::into_inner);
         let conn = guard.as_mut().ok_or(StoreError::Closed)?;
         work(conn)
+    }
+
+    /// Run `work` on the read-only search connection (opened on first use).
+    fn read<T>(&self, work: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        let mut guard = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(StoreError::Closed);
+        }
+        if guard.is_none() {
+            let conn = Connection::open_with_flags(
+                &self.path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                    | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )?;
+            conn.busy_timeout(Duration::from_secs(5))?;
+            *guard = Some(conn);
+        }
+        let conn = guard.as_ref().ok_or(StoreError::Closed)?;
+        work(conn)
+    }
+
+    /// The generation of the chunker that made the stored chunks (`None`
+    /// before the first build with chunks).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_generation(&self) -> Result<Option<String>> {
+        self.with(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'chunks_generation'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
+    }
+
+    /// How many chunks are stored.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_count(&self) -> Result<u64> {
+        self.read(|conn| {
+            let n: i64 = conn.query_row("SELECT count(*) FROM chunks", [], |row| row.get(0))?;
+            Ok(u64::try_from(n).unwrap_or(0))
+        })
+    }
+
+    /// The chunks matching an FTS5 `MATCH` expression, best first (BM25,
+    /// the identifier column weighted 0.75 of the text): `(id, score)`,
+    /// higher is better. An expression FTS5 refuses (a syntax error) finds
+    /// nothing; every other failure (busy, I/O, a damaged index) is an error.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn search_fts(&self, expression: &str, limit: usize) -> Result<Vec<(i64, f64)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare_cached(
+                "SELECT rowid, bm25(chunks_fts, 1.0, 0.75) FROM chunks_fts
+                  WHERE chunks_fts MATCH ?1 ORDER BY bm25(chunks_fts, 1.0, 0.75) LIMIT ?2",
+            )?;
+            let rows = statement.query_map(
+                params![expression, i64::try_from(limit).unwrap_or(i64::MAX)],
+                |row| Ok((row.get::<_, i64>(0)?, -row.get::<_, f64>(1)?)),
+            );
+            match rows.and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>()) {
+                Ok(found) => Ok(found),
+                Err(error) if is_fts_syntax_error(&error) => Ok(Vec::new()),
+                Err(error) => Err(error.into()),
+            }
+        })
+    }
+
+    /// The chunks of these ids (any order; missing ones left out).
+    ///
+    /// # Errors
+    ///
+    /// The store failed or a row is damaged.
+    pub fn chunks_by_id(&self, ids: &[i64]) -> Result<Vec<StoredChunk>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare_cached(
+                "SELECT id, path, line_start, line_end, kind, text, text_hash FROM chunks WHERE id = ?1",
+            )?;
+            let mut out = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(chunk) = statement.query_row([id], stored_chunk).optional()? {
+                    out.push(chunk?);
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// The chunk of `path` that best covers lines `start..=end` (the most
+    /// lines in common, then the tightest); with no lines (`start <= 0`),
+    /// the file's first chunk.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_covering(&self, path: &str, start: i64, end: i64) -> Result<Option<i64>> {
+        self.read(|conn| {
+            if start <= 0 {
+                let mut statement = conn.prepare_cached(
+                    "SELECT id FROM chunks WHERE path = ?1 ORDER BY line_start, id LIMIT 1",
+                )?;
+                return Ok(statement.query_row([path], |row| row.get(0)).optional()?);
+            }
+            let end = end.max(start);
+            let mut statement = conn.prepare_cached(
+                "SELECT id FROM chunks
+                  WHERE path = ?1 AND line_start <= ?3 AND line_end >= ?2
+                  ORDER BY min(line_end, ?3) - max(line_start, ?2) DESC,
+                           line_end - line_start, id
+                  LIMIT 1",
+            )?;
+            Ok(statement
+                .query_row(params![path, start, end], |row| row.get(0))
+                .optional()?)
+        })
+    }
+
+    /// Every chunk of one document, in line order.
+    ///
+    /// # Errors
+    ///
+    /// The store failed or a row is damaged.
+    pub fn chunks_of(&self, path: &str) -> Result<Vec<StoredChunk>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare_cached(
+                "SELECT id, path, line_start, line_end, kind, text, text_hash FROM chunks
+                  WHERE path = ?1 ORDER BY line_start, id",
+            )?;
+            let rows = statement.query_map([path], stored_chunk)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            Ok(out)
+        })
+    }
+
+    /// The version of the vectors (see the field): equal versions, same
+    /// vectors.
+    #[must_use]
+    pub fn vectors_version(&self) -> u64 {
+        self.vectors_version.load(Ordering::SeqCst)
+    }
+
+    /// The version of the chunks (see the field).
+    #[must_use]
+    pub fn chunks_version(&self) -> u64 {
+        self.chunks_version.load(Ordering::SeqCst)
+    }
+
+    /// Record the vector set `set` (idempotent).
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn ensure_vector_set(&self, set: &VectorSet) -> Result<()> {
+        self.with(|conn| {
+            conn.execute(
+                &format!(
+                    "INSERT INTO vector_sets (stamp, origin, model, dim, created_at)
+                     VALUES (?1, ?2, ?3, ?4, {NOW}) ON CONFLICT (stamp) DO NOTHING"
+                ),
+                params![
+                    set.stamp(),
+                    set.origin,
+                    set.model,
+                    i64::try_from(set.dim).unwrap_or(i64::MAX)
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// The vector sets stored, with how many vectors each holds.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn vector_sets(&self) -> Result<Vec<(VectorSet, u64)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT s.origin, s.model, s.dim,
+                        (SELECT count(*) FROM chunk_vectors v WHERE v.stamp = s.stamp)
+                   FROM vector_sets s ORDER BY s.stamp",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    VectorSet {
+                        origin: row.get(0)?,
+                        model: row.get(1)?,
+                        dim: usize::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                    },
+                    u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+                ))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// The chunks with no vector in `stamp`: `(id, text_hash)`, one per
+    /// distinct text, in id order.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunks_missing_vectors(&self, stamp: &str) -> Result<Vec<(i64, String)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT min(c.id), c.text_hash FROM chunks c
+                  WHERE NOT EXISTS (SELECT 1 FROM chunk_vectors v
+                                     WHERE v.stamp = ?1 AND v.text_hash = c.text_hash)
+                  GROUP BY c.text_hash ORDER BY min(c.id)",
+            )?;
+            let rows = statement.query_map([stamp], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// The text hashes of the chunks of `paths`, each with the rank of its
+    /// path in `paths` (the first a hash is found at): what the embedder
+    /// takes first.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_hashes_of(&self, paths: &[String]) -> Result<HashMap<String, usize>> {
+        self.read(|conn| {
+            let mut statement =
+                conn.prepare_cached("SELECT text_hash FROM chunks WHERE path = ?1")?;
+            let mut ranks = HashMap::new();
+            for (rank, path) in paths.iter().enumerate() {
+                let rows = statement.query_map([path], |row| row.get::<_, String>(0))?;
+                for hash in rows {
+                    ranks.entry(hash?).or_insert(rank);
+                }
+            }
+            Ok(ranks)
+        })
+    }
+
+    /// Store vectors of `stamp` by text hash, in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn put_vectors(&self, stamp: &str, vectors: &[(String, Vec<u8>)]) -> Result<()> {
+        self.with(|conn| {
+            let tx = conn.transaction()?;
+            {
+                let mut insert = tx.prepare_cached(
+                    "INSERT INTO chunk_vectors (stamp, text_hash, vector) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (stamp, text_hash) DO UPDATE SET vector = excluded.vector",
+                )?;
+                for (hash, blob) in vectors {
+                    insert.execute(params![stamp, hash, blob])?;
+                }
+            }
+            tx.commit()?;
+            self.vectors_version.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    /// How many chunks have a vector in `stamp`, of how many chunks.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn vector_coverage(&self, stamp: &str) -> Result<(u64, u64)> {
+        self.read(|conn| {
+            let (with, all): (i64, i64) = conn.query_row(
+                "SELECT count(v.text_hash), count(*) FROM chunks c
+                   LEFT JOIN chunk_vectors v ON v.stamp = ?1 AND v.text_hash = c.text_hash",
+                [stamp],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((
+                u64::try_from(with).unwrap_or(0),
+                u64::try_from(all).unwrap_or(0),
+            ))
+        })
+    }
+
+    /// Every chunk's vector in `stamp`: `(chunk id, blob)`.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn chunk_vectors(&self, stamp: &str) -> Result<Vec<(i64, Vec<u8>)>> {
+        self.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT c.id, v.vector FROM chunks c
+                   JOIN chunk_vectors v ON v.stamp = ?1 AND v.text_hash = c.text_hash",
+            )?;
+            let rows = statement.query_map([stamp], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+    }
+
+    /// Drop every vector set but `keep` (`None`: all of them), and the
+    /// vectors of `keep` whose text no chunk has any more. Returns the
+    /// vectors deleted.
+    ///
+    /// # Errors
+    ///
+    /// The store failed.
+    pub fn prune_vectors(&self, keep: Option<&str>) -> Result<u64> {
+        self.with(|conn| {
+            let keep = keep.unwrap_or("");
+            let tx = conn.transaction()?;
+            let mut deleted = tx.execute("DELETE FROM chunk_vectors WHERE stamp <> ?1", [keep])?;
+            tx.execute("DELETE FROM vector_sets WHERE stamp <> ?1", [keep])?;
+            deleted += tx.execute(
+                "DELETE FROM chunk_vectors WHERE stamp = ?1 AND NOT EXISTS
+                   (SELECT 1 FROM chunks c WHERE c.text_hash = chunk_vectors.text_hash)",
+                [keep],
+            )?;
+            tx.commit()?;
+            if deleted > 0 {
+                self.vectors_version.fetch_add(1, Ordering::SeqCst);
+                self.chunks_version.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(deleted as u64)
+        })
     }
 
     /// A stored setting.
@@ -508,7 +1075,7 @@ impl SqliteGraphStore {
     ///
     /// The store failed.
     pub fn setting(&self, name: &str) -> Result<Option<String>> {
-        self.with(|conn| {
+        self.read(|conn| {
             Ok(conn
                 .query_row(
                     "SELECT value FROM meta WHERE key = ?1",
@@ -645,16 +1212,35 @@ impl SqliteGraphStore {
         stats: &Stats,
         policy: Option<&str>,
     ) -> Result<i64> {
-        let entities = entity_rows(graph)?;
-        let relations = relation_rows(graph)?;
+        self.complete_with_chunks(key, graph, completion, stats, policy, None)
+    }
+
+    /// [`Self::complete_with_stats`] that also writes the staged chunks in
+    /// the same transaction (see the module's "Chunks are committed with
+    /// the build").
+    ///
+    /// # Errors
+    ///
+    /// As [`GraphStore::complete`].
+    pub fn complete_with_chunks(
+        &self,
+        key: GraphKey,
+        graph: &Graph,
+        completion: &Completion<'_>,
+        stats: &Stats,
+        policy: Option<&str>,
+        chunks: Option<ChunkUpdate<'_>>,
+    ) -> Result<i64> {
+        check_rows(graph)?;
         let written = Written {
-            entities: &entities,
-            relations: &relations,
             stats,
             policy,
+            chunks,
         };
         let (revision, rows) = self.with(|conn| commit(conn, key, graph, completion, &written))?;
         self.last_commit_rows.store(rows, Ordering::SeqCst);
+        self.vectors_version.fetch_add(1, Ordering::SeqCst);
+        self.chunks_version.fetch_add(1, Ordering::SeqCst);
         Ok(revision)
     }
 }
@@ -713,61 +1299,78 @@ fn decode(bytes: &[u8]) -> Vec<f64> {
         .collect()
 }
 
-/// Each node's row, the embedding split off its attributes. Refuses a
-/// graph with an embedding that is not a list of numbers, before anything
-/// is written.
-fn entity_rows(graph: &Graph) -> Result<Vec<EntityRow>> {
-    let mut rows = Vec::with_capacity(graph.node_count());
+/// One node's row, the embedding split off its attributes (made as it is
+/// written: a commit never holds every serialised row).
+fn entity_row(graph: &Graph, id: &str, node: &Map<String, Value>) -> Result<EntityRow> {
+    let mut attributes = node.clone();
+    let embedding = match attributes.remove("embedding") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(values)) => Some(encode(
+            &values
+                .iter()
+                .map(Value::as_f64)
+                .collect::<Option<Vec<f64>>>()
+                .ok_or_else(|| {
+                    StoreError::Unstorable(format!(
+                        "entity {id}: the embedding is not a list of numbers"
+                    ))
+                })?,
+        )),
+        Some(_) => {
+            return Err(StoreError::Unstorable(format!(
+                "entity {id}: the embedding is not a list"
+            )));
+        }
+    };
+    let attributes = to_text(&Value::Object(attributes))?;
+    // A hash describes a vector; without one it has nothing to say.
+    let embedding_hash = embedding
+        .as_ref()
+        .and_then(|_| graph.embedding_hash(id))
+        .map(str::to_owned);
+    Ok(EntityRow {
+        hash: hash(&attributes, embedding.as_deref(), embedding_hash.as_deref()),
+        id: id.to_owned(),
+        attributes,
+        embedding,
+        embedding_hash,
+    })
+}
+
+/// Refuse a graph with an embedding that is not a list of numbers, before
+/// anything is written.
+fn check_rows(graph: &Graph) -> Result<()> {
     for (id, node) in graph.nodes() {
-        let mut attributes = node.clone();
-        let embedding = match attributes.remove("embedding") {
-            None | Some(Value::Null) => None,
-            Some(Value::Array(values)) => Some(encode(
-                &values
-                    .iter()
-                    .map(Value::as_f64)
-                    .collect::<Option<Vec<f64>>>()
-                    .ok_or_else(|| {
-                        StoreError::Unstorable(format!(
-                            "entity {id}: the embedding is not a list of numbers"
-                        ))
-                    })?,
-            )),
+        match node.get("embedding") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(values)) if values.iter().all(Value::is_number) => {}
+            Some(Value::Array(_)) => {
+                return Err(StoreError::Unstorable(format!(
+                    "entity {id}: the embedding is not a list of numbers"
+                )));
+            }
             Some(_) => {
                 return Err(StoreError::Unstorable(format!(
                     "entity {id}: the embedding is not a list"
                 )));
             }
-        };
-        let attributes = to_text(&Value::Object(attributes))?;
-        // A hash describes a vector; without one it has nothing to say.
-        let embedding_hash = embedding
-            .as_ref()
-            .and_then(|_| graph.embedding_hash(id))
-            .map(str::to_owned);
-        rows.push(EntityRow {
-            hash: hash(&attributes, embedding.as_deref(), embedding_hash.as_deref()),
-            id: id.to_owned(),
-            attributes,
-            embedding,
-            embedding_hash,
-        });
+        }
     }
-    Ok(rows)
+    Ok(())
 }
 
-fn relation_rows(graph: &Graph) -> Result<Vec<RelationRow>> {
-    let mut rows = Vec::with_capacity(graph.edge_count());
-    for (source, target, attributes) in graph.edges() {
-        let attributes = to_text(&Value::Object(attributes.clone()))?;
-        rows.push(RelationRow {
-            hash: hash(&attributes, None, None),
-            source: source.to_owned(),
-            target: target.to_owned(),
-            attributes,
-        });
-    }
-    Ok(rows)
+fn relation_row(
+    source: &str,
+    target: &str,
+    attributes: &Map<String, Value>,
+) -> Result<RelationRow> {
+    let attributes = to_text(&Value::Object(attributes.clone()))?;
+    Ok(RelationRow {
+        hash: hash(&attributes, None, None),
+        source: source.to_owned(),
+        target: target.to_owned(),
+        attributes,
+    })
 }
 
 fn count(changed: usize) -> u64 {
@@ -792,7 +1395,7 @@ fn next_revision(conn: &Connection) -> Result<i64> {
 }
 
 /// Write the entities that changed; returns the rows written.
-fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> Result<u64> {
+fn write_entities(conn: &Connection, key: GraphKey, graph: &Graph) -> Result<u64> {
     let mut old: HashMap<String, (i64, Vec<u8>)> = HashMap::new();
     {
         let mut statement = conn.prepare(
@@ -808,7 +1411,7 @@ fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> R
         }
     }
     let mut written = 0;
-    let keep: HashSet<&str> = entities.iter().map(|row| row.id.as_str()).collect();
+    let keep: HashSet<&str> = graph.nodes().map(|(id, _)| id).collect();
     {
         let mut delete = conn.prepare(
             "DELETE FROM entities WHERE project_id = ?1 AND application_id = ?2 AND entity_id = ?3",
@@ -836,7 +1439,8 @@ fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> R
              embedding = excluded.embedding, attr_hash = excluded.attr_hash,
              embedding_hash = excluded.embedding_hash",
     )?;
-    for row in entities {
+    for (id, node) in graph.nodes() {
+        let row = entity_row(graph, id, node)?;
         match old.get(&row.id) {
             // Still in order: keeps its ordinal; written only if it changed.
             Some((ordinal, stored)) if *ordinal > last => {
@@ -876,7 +1480,7 @@ fn write_entities(conn: &Connection, key: GraphKey, entities: &[EntityRow]) -> R
 
 /// Write the relations that changed, ordered within their source; returns
 /// the rows written.
-fn write_relations(conn: &Connection, key: GraphKey, relations: &[RelationRow]) -> Result<u64> {
+fn write_relations(conn: &Connection, key: GraphKey, graph: &Graph) -> Result<u64> {
     let mut old: HashMap<(String, String), (i64, Vec<u8>)> = HashMap::new();
     {
         let mut statement = conn.prepare(
@@ -897,9 +1501,9 @@ fn write_relations(conn: &Connection, key: GraphKey, relations: &[RelationRow]) 
         }
     }
     let mut written = 0;
-    let keep: HashSet<(&str, &str)> = relations
-        .iter()
-        .map(|row| (row.source.as_str(), row.target.as_str()))
+    let keep: HashSet<(&str, &str)> = graph
+        .edges()
+        .map(|(source, target, _)| (source, target))
         .collect();
     {
         let mut delete = conn.prepare(
@@ -938,11 +1542,12 @@ fn write_relations(conn: &Connection, key: GraphKey, relations: &[RelationRow]) 
     // order); only the order within a source is the graph's.
     let mut current: Option<&str> = None;
     let mut last = i64::MIN;
-    for row in relations {
-        if current != Some(row.source.as_str()) {
-            current = Some(row.source.as_str());
+    for (source, target, attributes) in graph.edges() {
+        if current != Some(source) {
+            current = Some(source);
             last = i64::MIN;
         }
+        let row = relation_row(source, target, attributes)?;
         match old.get(&(row.source.clone(), row.target.clone())) {
             Some((ordinal, stored)) if *ordinal > last => {
                 last = *ordinal;
@@ -1070,10 +1675,165 @@ fn write_documents(
 
 /// The rows a commit writes beside the graph's head.
 struct Written<'a> {
-    entities: &'a [EntityRow],
-    relations: &'a [RelationRow],
     stats: &'a Stats,
     policy: Option<&'a str>,
+    chunks: Option<ChunkUpdate<'a>>,
+}
+
+#[allow(clippy::unnecessary_wraps)] // a row mapper: the outer error is SQLite's
+fn stored_chunk(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<StoredChunk>> {
+    let kind: String = row.get(4)?;
+    let Some(kind) = ChunkKind::parse(&kind) else {
+        return Ok(Err(StoreError::Damaged(format!("a chunk of kind {kind}"))));
+    };
+    Ok(Ok(StoredChunk {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        line_start: row.get(2)?,
+        line_end: row.get(3)?,
+        kind,
+        text: row.get(5)?,
+        text_hash: row.get(6)?,
+    }))
+}
+
+/// Delete one document's chunks and their FTS rows.
+fn delete_chunks_of(conn: &Connection, path: &str) -> Result<u64> {
+    let ids: Vec<i64> = {
+        let mut statement = conn.prepare_cached("SELECT id FROM chunks WHERE path = ?1")?;
+        let rows = statement.query_map([path], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut fts = conn.prepare_cached("DELETE FROM chunks_fts WHERE rowid = ?1")?;
+    for id in &ids {
+        fts.execute([id])?;
+    }
+    Ok(count(
+        conn.execute("DELETE FROM chunks WHERE path = ?1", [path])?,
+    ))
+}
+
+/// Every chunk gone (a removal of the graph or its documents).
+fn clear_chunks(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "DELETE FROM chunks; INSERT INTO chunks_fts (chunks_fts) VALUES ('delete-all');
+         DELETE FROM meta WHERE key = 'chunks_generation';",
+    )?;
+    Ok(())
+}
+
+/// The chunks of a commit: those of documents no longer listed dropped,
+/// and each staged document's replaced, when it is the version committed
+/// (a file that changed again after it was parsed keeps none: the next
+/// refresh reads it) and not already stored at that version.
+fn write_chunks(
+    conn: &Connection,
+    completion: &Completion<'_>,
+    update: ChunkUpdate<'_>,
+) -> Result<u64> {
+    conn.execute_batch(STAGING)?;
+    let generation: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'chunks_generation'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let replace = update.replace || generation.as_deref() != Some(update.generation);
+    let stored: HashMap<String, String> = {
+        let mut statement = conn.prepare("SELECT DISTINCT path, version FROM chunks")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut written = 0;
+    for path in stored.keys() {
+        if !completion.documents.contains_key(path) {
+            written += delete_chunks_of(conn, path)?;
+        }
+    }
+    let mut insert = conn.prepare_cached(
+        "INSERT INTO chunks (path, version, line_start, line_end, kind, text, text_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    let mut fts =
+        conn.prepare_cached("INSERT INTO chunks_fts (rowid, text, idents) VALUES (?1, ?2, ?3)")?;
+    // Row by row, in staging order (a document's rows are together): the
+    // commit holds one chunk at a time.
+    let mut staged = conn.prepare(
+        "SELECT path, version, line_start, line_end, kind, text, text_hash, idents
+           FROM temp.chunk_staging ORDER BY rowid",
+    )?;
+    let mut rows = staged.query([])?;
+    let mut current: Option<(String, bool)> = None;
+    // The documents whose staged rows were taken.
+    let mut taken: HashSet<String> = HashSet::new();
+    while let Some(row) = rows.next()? {
+        let path: String = row.get(0)?;
+        let version: String = row.get(1)?;
+        if current.as_ref().is_none_or(|(at, _)| *at != path) {
+            let committed = completion.documents.get(&path).map(|state| &state.version);
+            let again = taken.contains(&path);
+            let take = again
+                || (committed == Some(&version)
+                    && (replace || stored.get(&path) != Some(&version)));
+            if take && !again {
+                if stored.contains_key(&path) {
+                    written += delete_chunks_of(conn, &path)?;
+                }
+                taken.insert(path.clone());
+            }
+            current = Some((path.clone(), take));
+        }
+        if !current.as_ref().is_some_and(|(_, take)| *take) {
+            continue;
+        }
+        let text: String = row.get(5)?;
+        insert.execute(params![
+            path,
+            version,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+            text,
+            row.get::<_, String>(6)?
+        ])?;
+        let id = conn.last_insert_rowid();
+        fts.execute(params![id, text, row.get::<_, String>(7)?])?;
+        written += 1;
+    }
+    drop(rows);
+    drop(staged);
+    // A document kept at a new version (or read again) with nothing staged
+    // (over the size cap, not decodable, no text): its old chunks describe
+    // what it no longer is, and go (their vectors with the next prune).
+    for (path, version) in &stored {
+        let Some(state) = completion.documents.get(path) else {
+            continue;
+        };
+        if !taken.contains(path) && (replace || state.version != *version) {
+            written += delete_chunks_of(conn, path)?;
+        }
+    }
+    conn.execute("DELETE FROM temp.chunk_staging", [])?;
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('chunks_generation', ?1)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [update.generation],
+    )?;
+    Ok(written)
+}
+
+/// Whether FTS5 refused the `MATCH` expression itself (`fts5: syntax error
+/// near …`, an unknown column, an unterminated string): the query finds
+/// nothing. Anything else is the store failing.
+fn is_fts_syntax_error(error: &rusqlite::Error) -> bool {
+    match error {
+        rusqlite::Error::SqliteFailure(failure, Some(message)) => {
+            failure.code == rusqlite::ErrorCode::Unknown
+                && (message.starts_with("fts5:") || message.contains("unterminated string"))
+        }
+        _ => false,
+    }
 }
 
 fn policy_of(conn: &Connection) -> Result<Option<String>> {
@@ -1100,12 +1860,10 @@ fn write_graph(
     transaction: &rusqlite::Transaction<'_>,
     key: GraphKey,
     graph: &Graph,
-    entities: &[EntityRow],
-    relations: &[RelationRow],
     policy: Option<&str>,
 ) -> Result<(i64, u64)> {
-    let mut written = write_entities(transaction, key, entities)?;
-    written += write_relations(transaction, key, relations)?;
+    let mut written = write_entities(transaction, key, graph)?;
+    written += write_relations(transaction, key, graph)?;
     if let Some(policy) = policy {
         written += count(transaction.execute(
             "INSERT INTO meta (key, value) VALUES ('policy', ?1)
@@ -1141,15 +1899,11 @@ fn commit(
     rows: &Written<'_>,
 ) -> Result<(i64, u64)> {
     let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let (revision, mut written) = write_graph(
-        &transaction,
-        key,
-        graph,
-        rows.entities,
-        rows.relations,
-        rows.policy,
-    )?;
+    let (revision, mut written) = write_graph(&transaction, key, graph, rows.policy)?;
     written += write_documents(&transaction, key, completion, rows.stats)?;
+    if let Some(update) = rows.chunks {
+        written += write_chunks(&transaction, completion, update)?;
+    }
     written += count(transaction.execute(
         &format!(
             "UPDATE sources
@@ -1539,17 +2293,17 @@ impl GraphStore for SqliteGraphStore {
                     existed = removed > 0;
                 }
             }
+            clear_chunks(&transaction)?;
             transaction.commit()?;
             Ok(existed)
         })
     }
 
     async fn save(&self, key: GraphKey, graph: &Graph) -> Result<i64> {
-        let entities = entity_rows(graph)?;
-        let relations = relation_rows(graph)?;
+        check_rows(graph)?;
         self.with(|conn| {
             let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
+            let (revision, _) = write_graph(&transaction, key, graph, None)?;
             transaction.commit()?;
             Ok(revision)
         })
@@ -1562,11 +2316,10 @@ impl GraphStore for SqliteGraphStore {
         toolkit_id: &str,
         source_name: &str,
     ) -> Result<i64> {
-        let entities = entity_rows(graph)?;
-        let relations = relation_rows(graph)?;
+        check_rows(graph)?;
         self.with(|conn| {
             let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
+            let (revision, _) = write_graph(&transaction, key, graph, None)?;
             transaction.execute(
                 "DELETE FROM documents
                   WHERE project_id = ?1 AND application_id = ?2 AND source_name = ?3",
@@ -1577,14 +2330,15 @@ impl GraphStore for SqliteGraphStore {
                   WHERE project_id = ?1 AND application_id = ?2 AND toolkit_id = ?3",
                 params![key.project_id, key.application_id, toolkit_id],
             )?;
+            // The desktop's one source: its documents' chunks go with them.
+            clear_chunks(&transaction)?;
             transaction.commit()?;
             Ok(revision)
         })
     }
 
     async fn import(&self, key: GraphKey, graph: &Graph, replace_state: bool) -> Result<Imported> {
-        let entities = entity_rows(graph)?;
-        let relations = relation_rows(graph)?;
+        check_rows(graph)?;
         self.with(|conn| {
             let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let mut counts = [0_i64; 2];
@@ -1618,10 +2372,53 @@ impl GraphStore for SqliteGraphStore {
                     "DELETE FROM runs WHERE project_id = ?1 AND application_id = ?2",
                     params![key.project_id, key.application_id],
                 )?;
+                clear_chunks(&transaction)?;
             }
-            let (revision, _) = write_graph(&transaction, key, graph, &entities, &relations, None)?;
+            let (revision, _) = write_graph(&transaction, key, graph, None)?;
             transaction.commit()?;
             Ok(Imported::Saved { revision })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failure(code: std::ffi::c_int, message: &str) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), Some(message.to_owned()))
+    }
+
+    #[test]
+    fn only_a_refused_expression_finds_nothing() {
+        assert!(is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_ERROR,
+            "fts5: syntax error near \"(\""
+        )));
+        assert!(is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_ERROR,
+            "unterminated string"
+        )));
+        assert!(!is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_BUSY,
+            "database is locked"
+        )));
+        assert!(!is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_CORRUPT,
+            "database disk image is malformed"
+        )));
+        assert!(!is_fts_syntax_error(&failure(
+            rusqlite::ffi::SQLITE_ERROR,
+            "no such table: chunks_fts"
+        )));
+    }
+
+    #[test]
+    fn a_bad_expression_finds_nothing_and_a_good_one_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
+        assert!(store.search_fts("\"unterminated", 10).unwrap().is_empty());
+        assert!(store.search_fts("AND OR (", 10).unwrap().is_empty());
+        assert!(store.search_fts("\"word\"", 10).unwrap().is_empty());
     }
 }

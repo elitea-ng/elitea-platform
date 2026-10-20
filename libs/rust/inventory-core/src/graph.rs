@@ -412,6 +412,26 @@ impl Graph {
         })
     }
 
+    /// The node ids from insertion position `start` on.
+    pub fn ids_from(&self, start: usize) -> impl Iterator<Item = &str> {
+        self.nodes.keys().skip(start).map(String::as_str)
+    }
+
+    /// Reorder the nodes: those `rank` names move after the others (whose
+    /// order is kept), sorted by their rank, a stable sort. A build that
+    /// adds files in batches puts its nodes back in the order a single
+    /// pass over the files would have added them (name resolution is
+    /// order-sensitive: the last node of a name wins).
+    pub fn sort_ranked_last(&mut self, rank: &std::collections::HashMap<String, usize>) {
+        if rank.is_empty() {
+            return;
+        }
+        self.nodes.sort_by(|a, _, b, _| {
+            let key = |id: &String| rank.get(id).map_or((0, 0), |rank| (1, *rank));
+            key(a).cmp(&key(b))
+        });
+    }
+
     /// Insert a node as loaded (no merging, no filtering), or replace one.
     pub fn insert_node(&mut self, id: String, attributes: Map<String, Value>) {
         self.nodes.insert(id, attributes);
