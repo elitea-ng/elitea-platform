@@ -48,7 +48,7 @@ ENV CARGO_NET_RETRY=10 \
 # source change does not rebuild the tool.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    cargo install cargo-auditable --locked --version 0.7.5
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo install cargo-auditable --locked --version 0.7.5
 
 WORKDIR /src/services/elitea-vector
 # The repository layout is kept under /src: build.rs reads ../../libs/proto,
@@ -62,6 +62,13 @@ COPY services/elitea-vector ./
 # would ship that build's binary. Touching /src under the lock recompiles the
 # local crates from this context while registry crates stay cached (see the
 # worker's Containerfile).
+# The registry/git mounts are SHARED between images (sharing=locked on the
+# target only). cargo's own package lock lives in $CARGO_HOME/.package-cache,
+# OUTSIDE those mounts, so two images building at once used to unpack the same
+# crate into the shared registry together ("failed to unpack package ...
+# .cargo-ok", run 39433053742 on PR #1328). `flock` on a file INSIDE the mount
+# serialises the download/unpack only; the compile then runs --frozen (no
+# network, no registry writes) in parallel with the other images.
 # `id=` gives this image's target directory a cache of its own. With the
 # default id (the path) every Rust image's `sharing=locked` /cargo-target was ONE
 # lock, so five images' cargo builds ran one after another inside a single bake.
@@ -70,7 +77,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,id=elitea-vector-cargo-target,target=/cargo-target,sharing=locked \
     find /src -type f -exec touch {} + && \
-    CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
+    flock /usr/local/cargo/registry/.elitea-fetch.lock cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')" && \
+    CARGO_TARGET_DIR=/cargo-target cargo auditable build --frozen --release && \
     cp /cargo-target/release/elitea-vector /usr/local/bin/elitea-vector
 
 # Resolve every library the binary needs against the runtime image, without
