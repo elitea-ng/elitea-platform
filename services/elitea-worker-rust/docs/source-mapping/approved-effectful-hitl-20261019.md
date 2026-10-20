@@ -313,7 +313,21 @@ The full nested result is kept rather than a digest: when the `completed` record
 Real Chrome (Claude in Chrome), stack `scoped`, signed in through the stack's mock OIDC as `admin@centry.user`.
 The models are real: `gpt-5.4-mini` through the gateway to the shared model endpoint.
 
-### Final head (`2cd231cc4`, 2026-10-20)
+### Final code (`0db1d3fcc`, after review rounds 4–8, 2026-10-20)
+
+Worker `ghcr.io/elitea-ng/elitea-worker-rust:fu226-0db1d3fcc` (`sha256:ed2a3bfb0a95…`; contains `agent.dispatch_unrecorded`
+and its detail text) and Main `ghcr.io/elitea-ng/elitea-main:fu226-0db1d3fcc` (`sha256:8bc151b42358…`; contains
+`THEN o.payload_bytes END`), binary-checked per §3b. `stack.sh verify-profile --name scoped`: **50 passed, 0 failed**.
+Same method as below (MCP mock `tools/call` count, baseline 6; reload after each case; no `llm_provider_refusal`; no
+Worker error).
+
+| Case | Chat | Executions (job / settlement) | Tool calls | Result |
+|---|---|---|---|---|
+| Root Agent 157, Approve | 915 | `5b85fd429faf…`, `f326534c3d56…` (SUCCEEDED / SUCCEEDED) | 6 → 7 | "reverse returned ESREVER-1C." |
+| Pipeline 158, Approve | 916 | `bfaa597bae7b…`, `b7c55f6de2a1…` (SUCCEEDED) | 7 → 8 | "reverse returned ESREVER-1C." |
+| Pipeline 158, Reject | 917 | `4e91d2241c79…`, `e04c59f48ecc…` (SUCCEEDED) | 8 → 8 | "The call was declined." |
+
+### Head `2cd231cc4` (2026-10-20)
 
 Images built from `2cd231cc4` (contains #1160), binary-checked per §3b (`stack.sh binary-check`, `docker create` +
 `docker cp` + `strings`):
