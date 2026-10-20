@@ -2811,10 +2811,8 @@ async fn parallel_nested_ask_user_resume_proof(with_variables: bool, reverse: bo
     else {
         panic!("a consumed child decision cannot be replaced");
     };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::InvalidConfiguration
-    );
+    // A decision a finished continuation already consumed is stale.
+    assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
     assert_eq!(captured.lock().expect("captured model requests").len(), 4);
 
     let mut resume = ordinary_request(AgentExecutionKind::Application);
@@ -6005,6 +6003,7 @@ async fn a_nested_approved_call_that_may_have_started_ends_the_root_run_with_its
 /// next model request, after the tool returned; the replacement (the same
 /// execution's next claim) continues with the recorded result.
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One ordered pause, stop and replacement proof.
 async fn a_nested_approved_call_with_a_recorded_outcome_is_served_after_the_worker_stops() {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     attach_nested_agent(&mut request);
@@ -6078,7 +6077,11 @@ async fn a_nested_approved_call_with_a_recorded_outcome_is_served_after_the_work
             } => panic!("the approving Worker finished instead of stopping: {event:?}"),
         }
     }
-    assert_eq!(tool_calls.load(Ordering::Acquire), 1, "the approved call ran");
+    assert_eq!(
+        tool_calls.load(Ordering::Acquire),
+        1,
+        "the approved call ran"
+    );
     // The replacement continues the same decision and serves the recorded result.
     let invocation = assembler
         .assemble(AuthorizedNativeAssembly::new(
@@ -6099,7 +6102,8 @@ async fn a_nested_approved_call_with_a_recorded_outcome_is_served_after_the_work
     assert!(
         browser
             .iter()
-            .any(|event| serde_json::to_string(event).is_ok_and(|raw| raw.contains("parent finished"))),
+            .any(|event| serde_json::to_string(event)
+                .is_ok_and(|raw| raw.contains("parent finished"))),
         "the root run finishes: {browser:?}"
     );
     assert_eq!(tool_calls.load(Ordering::Acquire), 1, "never repeated");

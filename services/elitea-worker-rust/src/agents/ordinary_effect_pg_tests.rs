@@ -773,7 +773,7 @@ async fn postgres_root_effect_child() {
                 .assemble(turn(
                     &decision(&card(), "approve", "", 51),
                     "execution-approve-second",
-                    1,
+                    4,
                 ))
                 .await
                 .unwrap_or_else(|error| panic!("approve_second: assemble refused: {error}"));
@@ -830,7 +830,11 @@ async fn postgres_root_effect_child() {
                 card()["interrupt_id"].as_str().expect("interrupt id"),
             );
             let invocation = assembler
-                .assemble(turn(&approve, APPROVAL_EXECUTION, if recover { 3 } else { 2 }))
+                .assemble(turn(
+                    &approve,
+                    APPROVAL_EXECUTION,
+                    if recover { 3 } else { 2 },
+                ))
                 .await
                 .unwrap_or_else(|error| {
                     panic!(
@@ -841,10 +845,17 @@ async fn postgres_root_effect_child() {
                     )
                 });
             let (browser, failure) = run_turn(invocation).await;
-            assert!(recover, "nested_crash: the Worker did not die at the child's model request");
+            assert!(
+                recover,
+                "nested_crash: the Worker did not die at the child's model request"
+            );
             assert!(failure.is_none(), "nested_recover: {failure:?}");
             assert!(said(&browser, DONE), "nested_recover: {browser:?}");
-            assert_eq!(calls.load(Ordering::Acquire), 0, "nested_recover: never re-run");
+            assert_eq!(
+                calls.load(Ordering::Acquire),
+                0,
+                "nested_recover: never re-run"
+            );
             let captured = captured.lock().expect("captured");
             let child = String::from_utf8_lossy(&captured[0].body);
             assert!(

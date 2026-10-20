@@ -515,11 +515,13 @@ async fn postgres_effect_child() {
                 ))],
                 ToolMode::Normal,
             );
+            // Claims are monotonic per session: after `late`, the replacement's is 4.
+            let attempt = if scenario == "late_duplicate" { 4 } else { 3 };
             let invocation = assembler
                 .assemble(authorized_turn(
                     &decision(&card(), "approve", "", 44),
                     APPROVAL_EXECUTION,
-                    3,
+                    attempt,
                 ))
                 .await
                 .unwrap_or_else(|error| {
@@ -567,7 +569,7 @@ async fn postgres_effect_child() {
                 .assemble(authorized_turn(
                     &decision(&card(), "approve", "", 44),
                     "execution-late",
-                    1,
+                    3,
                 ))
                 .await
             {

@@ -625,9 +625,11 @@ mod tests {
             let tools: Vec<Arc<dyn Tool>> = ["lookup", "search"]
                 .into_iter()
                 .map(|name| {
-                    Arc::new(FunctionTool::new(name, "fixture", |_context, _arguments| async {
-                        Ok(json!({}))
-                    })) as Arc<dyn Tool>
+                    Arc::new(FunctionTool::new(
+                        name,
+                        "fixture",
+                        |_context, _arguments| async { Ok(json!({})) },
+                    )) as Arc<dyn Tool>
                 })
                 .collect();
             toolsets.push(Arc::new(BasicToolset::new(toolkit_name, tools)) as Arc<dyn Toolset>);
@@ -642,7 +644,10 @@ mod tests {
             .with_workspace_command()
             .expect("workspace command");
         for aliased in ["release_intelligence__lookup", "audit_intelligence__lookup"] {
-            assert!(catalog.policy_for(aliased).is_some(), "{aliased} stays sensitive");
+            assert!(
+                catalog.policy_for(aliased).is_some(),
+                "{aliased} stays sensitive"
+            );
             assert_eq!(catalog.reruns_after_dispatch(aliased), Some(false));
         }
         for aliased in ["release_intelligence__search", "audit_intelligence__search"] {

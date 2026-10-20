@@ -438,11 +438,7 @@ impl Tool for JournalTool {
         if let Err(error) = self
             .scope
             .journal
-            .append(
-                &self
-                    .scope
-                    .record(Phase::Completed, call_id, Some(recorded)),
-            )
+            .append(&self.scope.record(Phase::Completed, call_id, Some(recorded)))
             .await
         {
             // The effect happened; the model must still see its result. Only a
@@ -565,7 +561,10 @@ mod tests {
         };
         let mut later = Event::new("root-2");
         later.llm_response.content = Some(adk_rust::Content::new("model").with_text("advanced"));
-        assert_eq!(answerable(&[pause.clone()], &owner()), Some(pause.id.clone()));
+        assert_eq!(
+            answerable(&[pause.clone()], &owner()),
+            Some(pause.id.clone())
+        );
         // An ordinary advance makes the pause stale.
         assert!(answerable(&[pause.clone(), later.clone()], &owner()).is_none());
         // This execution's continuation that dispatched an approved call keeps it
@@ -597,7 +596,14 @@ mod tests {
         assert!(answerable(&mixed, &owner()).is_none());
         let foreign_interrupt = [
             pause.clone(),
-            owned_record("child-1", "call-1", Phase::Dispatched, None, owner(), "hitl-9"),
+            owned_record(
+                "child-1",
+                "call-1",
+                Phase::Dispatched,
+                None,
+                owner(),
+                "hitl-9",
+            ),
         ];
         assert!(answerable(&foreign_interrupt, &owner()).is_none());
         // A pause whose interrupts cannot be read is never answerable behind a suffix.

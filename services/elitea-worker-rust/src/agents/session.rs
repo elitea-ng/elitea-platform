@@ -2907,15 +2907,14 @@ where
         })
         .await
         .map_err(|_| dependency_unavailable())?;
-    let prepared =
-        prepare_direct_resume(
-            model.provider_model(),
-            stored.as_ref(),
-            runtime,
-            start,
-            &journal,
-        )
-        .await?;
+    let prepared = prepare_direct_resume(
+        model.provider_model(),
+        stored.as_ref(),
+        runtime,
+        start,
+        &journal,
+    )
+    .await?;
     let (agent, projector) = build_runtime_agent(
         prepared.model,
         generation_config,
