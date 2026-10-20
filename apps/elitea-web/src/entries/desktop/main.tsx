@@ -4,20 +4,22 @@
  * webview only ever runs this build, and talks to the deployment through the
  * host's network layer.
  *
- * The connect / sign-in screen is rendered before the app exists, with a bare
- * MUI theme: there is no brand pack to fetch until a deployment is chosen.
+ * The connect / sign-in screen is rendered before the app exists, under the
+ * compiled default brand and the desktop component layer: there is no
+ * deployment pack to fetch until one is chosen.
  * Its copy is English-only for that reason; strings added since go through
  * `t()`, which resolves against the bundled `en` catalogue.
  */
-import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { BrandThemeProvider } from '@/app/providers/BrandThemeProvider';
 import { tauriAppIpc } from '@/shared/desktop/appEvents';
 import { installContextMenuGuard } from '@/shared/desktop/contextMenu';
 import { createHostLogger, hostLog, installDiagnostics } from '@/shared/desktop/diagnostics';
 import { createDoctorIpc } from '@/shared/desktop/doctorIpc';
 import { createHostBridge, tauriInvoke } from '@/shared/desktop/hostBridge';
+import { DesktopThemeLayer } from '@/widgets/desktop-shell';
 
 import { DesktopShell } from './DesktopShell';
 import { registerDesktopCatalogue } from './i18n/registerDesktopCatalogue';
@@ -45,10 +47,11 @@ if (invoke !== undefined) {
 function renderShell(root: HTMLElement): void {
   createRoot(root).render(
     <StrictMode>
-      <ThemeProvider theme={createTheme()}>
-        <CssBaseline />
-        <DesktopShell bridge={bridge} doctor={doctor} appIpc={appIpc} />
-      </ThemeProvider>
+      <BrandThemeProvider>
+        <DesktopThemeLayer>
+          <DesktopShell bridge={bridge} doctor={doctor} appIpc={appIpc} />
+        </DesktopThemeLayer>
+      </BrandThemeProvider>
     </StrictMode>,
   );
 }

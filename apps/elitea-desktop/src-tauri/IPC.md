@@ -752,6 +752,8 @@ for one send and restores it.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
+| `context_menu_show` | `{request_id: string, items: Item[]}`; `Item` is `{id, label, enabled?}`, `{separator: true}` or a submenu `{label, enabled?, children: {id, label, enabled?}[]}` (one level) | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The outcome arrives on `app://context-menu` as `{request_id, id}`: `id` is the id the page gave the item, or `null` when the menu was dismissed (sent by the host ~150 ms after the menu closed with no choice). The page ignores events whose `request_id` is not its own. `request_id`: ≤ 64 chars of `[A-Za-z0-9_-]`. At most 60 choosable items across the menu and its submenu; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
+| `activity_cloud_run` | `{conversation_uuid: string, running: boolean, waiting?: boolean, workspace_id?: string, workspace_name?: string}` | `null` — the page tells the host a cloud turn of this window is streaming (`running`) and/or waits on the person (`waiting`: an approval or continue prompt); both `false` ends it (completion and errors both send that). The menu-bar item shows it like a local turn (`◐ m:ss`, a "Running in cloud" entry); a waiting thread counts in `⚠ n`, adds an "Approve in cloud" entry and is counted on the Dock badge with the local approvals. A click sends `focus_turn`. The chat stream to a cloud thread runs in the page (the web chat transport), so the host cannot see it itself. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
 | `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
@@ -848,12 +850,52 @@ type AppCommand = { id: string; args?: object };
 | `toggle_changes` | — | View ▸ Toggle Changes Panel (⌘⌥\\) |
 | `back` | — | View ▸ Back (⌘[) |
 | `forward` | — | View ▸ Forward (⌘]) |
+| `send_to_cloud` | — | Thread ▸ Send to Cloud… (⇧⌘U): open the Send to cloud sheet of the thread on screen. |
+| `open_in_chat` | — | Thread ▸ Open in Chat: open the thread on screen in the web chat. |
+| `toggle_plan` | — | Thread ▸ Plan Mode (⇧⌘P): switch the composer between Act and Plan. |
+| `choose_agent` | — | Thread ▸ Choose Agent… (⌘L): open the composer's agent picker. |
+| `index_settings` | — | Folder ▸ Index Settings…: open the folder's index settings (inspector, Index). |
+| `handoff_settings` | — | Folder ▸ Handoff Settings…: open the folder's cloud handoff settings. |
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
 | `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
 | `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
 | `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
-| `focus_turn` | `{workspace_id: string, turn_id: string}` | Reserved: show this turn. Not sent yet — the notification plugin has no click callback on desktop, so clicking a notification only activates the app. |
+| `focus_turn` | `{workspace_id: string, turn_id: string}` | A running or waiting turn was chosen in the menu-bar item's menu (see below): show its folder. (A notification click still only activates the app: the notification plugin has no click callback on desktop.) |
+
+**Activity contract.** Two places fold the agent, index and handoff streams
+into "what is running now": the host (`src/activity.rs`: the menu-bar item and
+the Dock) and the web feed (`widgets/desktop-shell/model/activityFeed.store.ts`:
+the activity island). They follow ONE set of rules, so they cannot drift; change
+both together:
+
+- A turn is running from its first `status` with phase `resolving`, `starting`,
+  `running` or `committing`, and from an `approval_request`.
+- A turn ends at `done`, at an `error` event, or at a `status` with phase `done`,
+  `cancelled` or `error` — a turn refused at the start sends `error` and
+  `status` `error` and never `done`. (The web feed keeps a turn listed after
+  that only while its commit is pending or failed.)
+- An approval waits from `approval_request` until `approval_respond` answers it
+  or its turn ends. No other event closes it: a `tool_result` or a `text_delta`
+  says nothing about which approval it was.
+- Index progress: `Parsing <m> files` in an `index://event` message sets the
+  total and resets the count; `Processed <n> files` sets the count; leaving the
+  `building` state clears it. (Web: `foldProgress`, `features/workspace-index/
+  model/progress.ts`; host: `ActivityState::observe_index`.)
+- A cloud turn streaming into the window runs from `activity_cloud_run(running: true)` until both `running` and `waiting` are false (completion and errors both end it); it waits on the person while `waiting` is true, which counts like an approval; web: `cloudRuns` in the feed.
+- A send to the cloud runs until its `handoff://event` phase is `complete`,
+  `cancelled` or `error`; its bar is `done` of `total` (indeterminate when
+  `total` is 0).
+
+**Menu-bar item and Dock** (`src/activity.rs`, host-side; the page does nothing for
+them). The host folds the same `agent://event`, `index://event` and
+`handoff://event` streams the window gets: the menu-bar item's title is
+`⚠ n` while n approvals wait, else `◐ m:ss` (the longest-running turn), else
+only the icon; its menu lists the waiting approvals (tool and folder, never a
+command or a path) and the running turns, then Show / Quit, and choosing a
+turn shows the window and sends `focus_turn`. The Dock's progress bar follows a
+send to the cloud (`done`/`total`), else the index builds (files read of files
+to read; indeterminate until that is known), and is removed when they end.
 
 **Open Folder… is host-side**: the menu item runs the native folder picker
 in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)
@@ -881,9 +923,9 @@ for them.
 
 ## Events
 
-Four event names, all emitted to the `main` window only: `app://command`
-(above), `agent://event`, `index://event` and `handoff://event` (Cloud
-handoff, above). The webview may listen
+Five event names, all emitted to the `main` window only: `app://command`
+(above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
+`agent://event`, `index://event` and `handoff://event` (Cloud handoff, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:
@@ -919,13 +961,14 @@ order. Kinds and payloads:
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
+| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
 | `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`)* →
+`running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`, `usage`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

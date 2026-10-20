@@ -6,3 +6,7 @@
  */
 export { WorkspaceIndexControl } from './ui/WorkspaceIndexControl';
 export { IndexIpcProvider } from './model/ipcContext';
+export { IndexPanelHost, useHasIndexHost } from './ui/IndexPanelHost';
+export { useIndexIpc } from './model/ipcContext';
+export { IndexIdleLine } from './ui/IndexIdleLine';
+export { foldProgress } from './model/progress';

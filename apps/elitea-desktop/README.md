@@ -70,7 +70,16 @@ macOS first; Linux and Windows build and degrade as noted.
   builds only, Actual Size ⌘0, Zoom In ⌘=, Zoom Out ⌘-, Full Screen), Window,
   Help (Elitea Help opens `<deployment>/docs/` when connected). On Linux and
   Windows Settings and Quit are in File and About in Help; shortcuts use
-  Ctrl. UI actions arrive as `app://command` (IPC.md).
+  Ctrl. UI actions arrive as `app://command` (IPC.md). The Thread menu
+  (Send to Cloud… ⇧⌘U, Open in Chat, Plan Mode ⇧⌘P, Choose Agent… ⌘L) and
+  the Folder menu (Index Settings…, Handoff Settings…) act on the thread on
+  screen.
+- **Menu-bar item and Dock progress** (`src/activity.rs`): a template icon
+  whose title says `◐ 0:42` while a turn runs and `⚠ 1` while an approval
+  waits; its menu lists them (click: show the folder). The Dock bar follows
+  a send to the cloud, else an index build. **Context menus**
+  (`src/context_menu.rs`): the page asks `context_menu_show` and the OS
+  draws the menu.
 - **Opening folders**: Open Folder… runs the native picker host-side;
   a folder dropped on the window, or on the dock icon / opened with Elitea
   from Finder (`Info.plist` declares folders as an *Alternate* document

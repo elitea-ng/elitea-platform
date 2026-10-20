@@ -189,6 +189,9 @@ impl EventEmitter for MainWindowEvents {
         if let Some(attention) = self.0.try_state::<Arc<Attention>>() {
             attention.observe(&event);
         }
+        if let Some(activity) = self.0.try_state::<Arc<crate::activity::Activity>>() {
+            activity.agent(&event);
+        }
     }
 }
 
@@ -632,6 +635,9 @@ pub fn approval_respond(
     if state.agents.respond(&request_id, decision) {
         if let Some(attention) = app.try_state::<Arc<Attention>>() {
             attention.answered(&request_id);
+        }
+        if let Some(activity) = app.try_state::<Arc<crate::activity::Activity>>() {
+            activity.answered(&request_id);
         }
         Ok(())
     } else {

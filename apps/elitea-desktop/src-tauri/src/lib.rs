@@ -5,10 +5,12 @@
 //! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
 
+mod activity;
 mod app_events;
 mod attention;
 mod auth;
 mod commands;
+mod context_menu;
 mod credentials_file;
 mod d0;
 mod discovery;
@@ -104,6 +106,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(menu::Zoom::default())
+        .manage(context_menu::Pending::default())
         .manage(app_events::PendingOpens::default())
         .manage(app_events::CommandQueue::default())
         // A (re)loading page is not listening to app://command yet: hold
@@ -322,6 +325,11 @@ pub fn run() {
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
+            app.manage(Arc::new(activity::Activity::new(app.handle().clone())));
+            // The menu-bar item: a compact state and the turns that run or wait.
+            if let Err(error) = activity::create_tray(app.handle()) {
+                log::warn!("no menu-bar item: {error}");
+            }
             #[cfg(target_os = "macos")]
             window::quiet_input_source_indicator();
             window::create_main_window(app.handle())?;
@@ -366,6 +374,8 @@ pub fn run() {
             index::index_cancel,
             index::index_remove,
             platform::app_platform,
+            context_menu::context_menu_show,
+            activity::activity_cloud_run,
             net::http_fetch,
             net::http_read_body,
             net::http_cancel,

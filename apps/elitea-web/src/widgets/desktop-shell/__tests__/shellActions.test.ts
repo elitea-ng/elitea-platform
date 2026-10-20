@@ -56,3 +56,11 @@ describe('filterEntries', () => {
     expect(filterEntries(entries, 'nothing')).toEqual([]);
   });
 });
+
+describe('the Thread and Folder menu commands', () => {
+  it('are plain shell actions the session on screen answers', () => {
+    for (const id of ['send_to_cloud', 'open_in_chat', 'toggle_plan', 'choose_agent', 'index_settings', 'handoff_settings'] as const) {
+      expect(actionForAppCommand({ id })).toEqual({ type: id });
+    }
+  });
+});

@@ -18,7 +18,7 @@ export interface SessionCommands {
   closeNotice: () => void;
   /** Bumped by `/undo`: the changed-files card asks for confirmation. */
   undoRequest: number;
-  /** The box holding the agent select, focused by `/agent`. */
+  /** The box holding the agent picker; `/agent` opens it. */
   agentRef: RefObject<HTMLDivElement | null>;
   run: (command: WorkspaceCommandId) => void;
 }
@@ -39,7 +39,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
       if (canUndo) setUndoRequest((value) => value + 1);
       else setNotice('nothingToUndo');
     },
-    agent: () => agentRef.current?.querySelector<HTMLElement>('[role="combobox"]')?.focus(),
+    agent: () => agentRef.current?.querySelector<HTMLElement>('button')?.click(),
     clear: () => turn.clear(),
     help: () => setNotice('help'),
   };

@@ -191,44 +191,58 @@ function Footer({ actions, index, confirming, onConfirming, onClose }: FooterPro
   );
 }
 
+interface BodyProps {
+  index: WorkspaceIndex;
+  confirming: boolean;
+}
+
+/** Everything the settings say, without a frame: the dialog puts it in its content, the inspector in its pane. */
+function Body({ index, confirming }: BodyProps): React.JSX.Element {
+  const { view, loadError, progress, actionError } = index;
+  const status = view?.kind === 'status' ? view.status : undefined;
+  return (
+    <>
+      {view?.kind === 'disabled' && (
+        <Alert severity="info" data-testid="index-policy-off">
+          {t('workspace.index.policyOff', 'The local code index is turned off by your organisation’s policy.')}
+        </Alert>
+      )}
+      {view === undefined && loadError !== null && <Alert severity="error">{describeIndexError(loadError)}</Alert>}
+      {status !== undefined && (
+        <>
+          <Typography variant="bodySmall" sx={mutedSx}>
+            {t(
+              'workspace.index.intro',
+              'Agents can search this folder’s code structure (files, symbols and how they relate). It is parsed on this computer, kept in the app’s data, and costs nothing.',
+            )}
+          </Typography>
+          <Details status={status} progress={progress} />
+          <Embeddings />
+        </>
+      )}
+      {confirming && (
+        <Alert severity="warning" data-testid="index-remove-confirm">
+          {t('workspace.index.removeConfirm', 'Remove this folder’s index? What was built is deleted; you can build it again.')}
+        </Alert>
+      )}
+      {actionError !== null && <Alert severity="error">{describeIndexError(actionError)}</Alert>}
+    </>
+  );
+}
+
 export function IndexSettingsDialog({ open, onClose, name, index }: IndexSettingsDialogProps): React.JSX.Element {
   const [confirming, setConfirming] = useState(false);
-  const { view, loadError, progress, actionError } = index;
   const close = (): void => {
     setConfirming(false);
     onClose();
   };
-  const status = view?.kind === 'status' ? view.status : undefined;
   const actions = footerActions(index, () => setConfirming(true));
 
   return (
     <Dialog open={open} onClose={close} aria-labelledby="workspace-index-title" fullWidth maxWidth="sm">
       <DialogTitle id="workspace-index-title">{t('workspace.index.title', 'Code index · {{name}}', { name })}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {view?.kind === 'disabled' && (
-          <Alert severity="info" data-testid="index-policy-off">
-            {t('workspace.index.policyOff', 'The local code index is turned off by your organisation’s policy.')}
-          </Alert>
-        )}
-        {view === undefined && loadError !== null && <Alert severity="error">{describeIndexError(loadError)}</Alert>}
-        {status !== undefined && (
-          <>
-            <Typography variant="bodySmall" sx={mutedSx}>
-              {t(
-                'workspace.index.intro',
-                'Agents can search this folder’s code structure (files, symbols and how they relate). It is parsed on this computer, kept in the app’s data, and costs nothing.',
-              )}
-            </Typography>
-            <Details status={status} progress={progress} />
-            <Embeddings />
-          </>
-        )}
-        {confirming && (
-          <Alert severity="warning" data-testid="index-remove-confirm">
-            {t('workspace.index.removeConfirm', 'Remove this folder’s index? What was built is deleted; you can build it again.')}
-          </Alert>
-        )}
-        {actionError !== null && <Alert severity="error">{describeIndexError(actionError)}</Alert>}
+        <Body index={index} confirming={confirming} />
       </DialogContent>
       <DialogActions>
         {actions === null ? (
@@ -238,5 +252,21 @@ export function IndexSettingsDialog({ open, onClose, name, index }: IndexSetting
         )}
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** The same settings as a pane (the inspector's Index segment): the actions sit under the text, no Close. */
+export function IndexSettingsPanel({ index }: { index: WorkspaceIndex }): React.JSX.Element {
+  const [confirming, setConfirming] = useState(false);
+  const actions = footerActions(index, () => setConfirming(true));
+  return (
+    <Box data-testid="index-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Body index={index} confirming={confirming} />
+      {actions !== null && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+          {confirming ? <Footer actions={actions} index={index} confirming onConfirming={setConfirming} onClose={() => setConfirming(false)} /> : actions}
+        </Box>
+      )}
+    </Box>
   );
 }

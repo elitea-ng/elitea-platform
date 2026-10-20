@@ -2170,9 +2170,20 @@ pub struct MainWindowHandoffEvents(pub tauri::AppHandle);
 
 impl HandoffEvents for MainWindowHandoffEvents {
     fn emit(&self, event: HandoffEvent) {
-        use tauri::Emitter as _;
+        use tauri::{Emitter as _, Manager as _};
         if let Err(error) = self.0.emit_to("main", EVENT_NAME, &event) {
             log::warn!("could not deliver a handoff event: {error}");
+        }
+        if let Some(activity) = self
+            .0
+            .try_state::<std::sync::Arc<crate::activity::Activity>>()
+        {
+            activity.send(
+                &event.conversation_uuid,
+                event.phase,
+                event.done,
+                event.total,
+            );
         }
     }
 }
