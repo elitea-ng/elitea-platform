@@ -307,16 +307,25 @@ pub(crate) const DISPATCH_UNRECORDED_DETAIL: &str =
 /// guarded model step refuses, and the root agent's stream ends with the error
 /// even when no further model step happens (a child at its step limit).
 #[derive(Clone, Default)]
-pub(crate) struct DispatchAbort(Arc<std::sync::OnceLock<()>>);
+pub(crate) struct DispatchAbort(Arc<AbortState>);
+
+#[derive(Default)]
+struct AbortState {
+    failed: std::sync::OnceLock<()>,
+    /// Orders the stop check and the `dispatched` append of every approved call
+    /// of the invocation (concurrent siblings and parallel children alike):
+    /// once one append failed, no other approved effect starts.
+    dispatch: tokio::sync::Mutex<()>,
+}
 
 impl DispatchAbort {
     fn record(&self) {
-        let _ = self.0.set(());
+        let _ = self.0.failed.set(());
     }
 
     /// The stop, once a dispatch record failed.
     pub(crate) fn error(&self) -> Option<adk_rust::AdkError> {
-        self.0.get().map(|()| {
+        self.0.failed.get().map(|()| {
             adk_rust::AdkError::new(
                 adk_rust::ErrorComponent::Session,
                 // Not retryable: the run stops.
@@ -509,7 +518,6 @@ impl DispatchJournal {
             interrupt_id: decision.interrupt_id.to_owned(),
             call_ids,
             outcomes,
-            dispatch: tokio::sync::Mutex::new(()),
         });
         toolsets
             .into_iter()
@@ -587,9 +595,6 @@ struct JournalScope {
     interrupt_id: String,
     call_ids: BTreeSet<String>,
     outcomes: JournalOutcomes,
-    /// Orders the stop check and the `dispatched` append of concurrently run
-    /// calls of one message: once one append failed, no sibling starts.
-    dispatch: tokio::sync::Mutex<()>,
 }
 
 impl JournalScope {
@@ -687,9 +692,10 @@ impl Tool for JournalTool {
             return self.inner.execute(context, arguments).await;
         }
         {
-            // One at a time per message, so a sibling never starts after this
-            // call's dispatch record failed (concurrent tool execution).
-            let _dispatch = self.scope.dispatch.lock().await;
+            // One at a time per invocation, so no other approved call (a
+            // concurrent sibling or a parallel child's) starts after this call's
+            // dispatch record failed.
+            let _dispatch = self.scope.journal.abort.0.dispatch.lock().await;
             // An earlier call's dispatch record failed: the invocation is
             // stopping, and no further approved effect starts.
             if let Some(error) = self.scope.journal.abort.error() {

@@ -1256,6 +1256,9 @@ pub(crate) struct DirectHitlReplay {
     decision_invocation_id: String,
     /// The card this replay answers.
     interrupt_id: String,
+    /// Whether its executed calls are journaled: an approved sensitive-tool
+    /// replay (`into_direct_replay`) only.
+    journals: bool,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1477,6 +1480,7 @@ impl ResolvedDirectHitlDecision {
         let replay = DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
+            journals: true,
             calls: self.replay_calls,
             call_id: self.call_id,
             tool_name: self.tool_name,
@@ -1518,6 +1522,7 @@ impl ResolvedDirectHitlDecision {
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
+            journals: false,
             approvals: vec![(self.call_id.clone(), self.fingerprint.clone())],
             blocked: vec![BlockedToolReplay {
                 call_id: self.call_id.clone(),
@@ -1572,6 +1577,7 @@ impl ResolvedDirectHitlDecision {
         Ok(DirectHitlReplay {
             decision_invocation_id: self.invocation_id.clone(),
             interrupt_id: self.interrupt_id.clone(),
+            journals: false,
             approvals: blocked_result
                 .as_ref()
                 .map(|_| (self.call_id.clone(), self.fingerprint.clone()))
@@ -1613,36 +1619,30 @@ fn authorization_scope(
 }
 
 impl DirectHitlReplay {
-    /// The calls this replay will really execute: every call of the message
-    /// that is not served from a local or recorded result.
-    pub(crate) fn executed_call_ids(&self) -> BTreeSet<String> {
-        self.calls
-            .iter()
-            .map(|call| &call.call_id)
-            .filter(|call_id| {
-                !self
-                    .blocked
-                    .iter()
-                    .any(|blocked| &blocked.call_id == *call_id)
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// The executed calls the dispatch journal must own: those that may not
-    /// simply run again after a crash. A read-only call (and the workspace
-    /// command, which its own ledger serves) re-runs instead (class I), so it
-    /// costs no journal writes.
-    pub(crate) fn journaled_call_ids(&self, catalog: &SensitiveToolCatalog) -> BTreeSet<String> {
-        let executed = self.executed_call_ids();
+    /// `(call id, tool name)` of the calls an approved sensitive-tool replay
+    /// really executes: every call of the message not served a local or
+    /// recorded result. Clarifying-question and authorization continuations run
+    /// only the one non-sensitive call they name and are not journaled.
+    fn executed_calls(&self) -> Vec<(String, String)> {
+        if !self.journals {
+            return Vec::new();
+        }
         self.calls
             .iter()
             .filter(|call| {
-                executed.contains(&call.call_id)
-                    && catalog.reruns_after_dispatch(&call.tool_name) != Some(true)
+                !self
+                    .blocked
+                    .iter()
+                    .any(|blocked| blocked.call_id == call.call_id)
             })
-            .map(|call| call.call_id.clone())
+            .map(|call| (call.call_id.clone(), call.tool_name.clone()))
             .collect()
+    }
+
+    /// The executed calls the dispatch journal must own (see [`journal_set`]).
+    #[cfg(test)]
+    pub(crate) fn journaled_call_ids(&self, catalog: &SensitiveToolCatalog) -> BTreeSet<String> {
+        journal_set(&self.executed_calls(), catalog)
     }
 
     pub(super) fn emits_pending_call(&self) -> bool {
@@ -1688,6 +1688,7 @@ impl DirectHitlReplay {
 
     /// Bind the one-shot replay model and exact ADK confirmation decision.
     pub(crate) fn bind(self, delegate: Arc<dyn Llm>) -> PreparedDirectHitlReplay {
+        let executed = self.executed_calls();
         let hidden = self
             .blocked
             .iter()
@@ -1716,18 +1717,6 @@ impl DirectHitlReplay {
             }
             ReplayResumeMode::ContinueAfterResult => REPLAY_EMITTED,
         };
-        // Every call the replay really runs: those not served a local result.
-        let executed = self
-            .calls
-            .iter()
-            .filter(|call| {
-                !self
-                    .blocked
-                    .iter()
-                    .any(|blocked| blocked.call_id == call.call_id)
-            })
-            .map(|call| (call.call_id.clone(), call.tool_name.clone()))
-            .collect();
         let model: Arc<dyn Llm> = Arc::new(DirectHitlReplayModel {
             delegate,
             state: AtomicU8::new(state),
@@ -1748,6 +1737,18 @@ impl DirectHitlReplay {
             interrupt_id: self.interrupt_id,
         }
     }
+}
+
+/// The executed calls the dispatch journal must own: those that may not simply
+/// run again after a crash. A read-only call (and the workspace command, which
+/// its own ledger serves) re-runs instead (class I), so it costs no journal
+/// writes.
+fn journal_set(executed: &[(String, String)], catalog: &SensitiveToolCatalog) -> BTreeSet<String> {
+    executed
+        .iter()
+        .filter(|(_, tool_name)| catalog.reruns_after_dispatch(tool_name) != Some(true))
+        .map(|(call_id, _)| call_id.clone())
+        .collect()
 }
 
 /// The replay model, its run input and the journaled, blocked toolsets.
@@ -1792,10 +1793,9 @@ impl PreparedDirectHitlReplay {
         ids
     }
 
-    /// The replay model, run input and toolsets. Every executed call of any
-    /// replay kind (sensitive, clarifying, authorization) that may not simply run
-    /// again (`catalog`) is journaled before its effect; this cannot be skipped
-    /// by a caller. The model is returned unguarded: the invocation guards every
+    /// The replay model, run input and toolsets. Every call an approved
+    /// sensitive-tool replay executes that may not simply run again (`catalog`)
+    /// is journaled before its effect; this cannot be skipped by a caller. The model is returned unguarded: the invocation guards every
     /// model it runs with its `DispatchAbort` (the root Runner and each child's
     /// `build_agent`).
     ///
@@ -1809,12 +1809,7 @@ impl PreparedDirectHitlReplay {
         outcomes: super::dispatch_journal::JournalOutcomes,
         catalog: &SensitiveToolCatalog,
     ) -> Result<DirectHitlReplayParts, DirectHitlError> {
-        let journaled = self
-            .executed
-            .iter()
-            .filter(|(_, tool_name)| catalog.reruns_after_dispatch(tool_name) != Some(true))
-            .map(|(call_id, _)| call_id.clone())
-            .collect::<BTreeSet<_>>();
+        let journaled = journal_set(&self.executed, catalog);
         let mut toolsets = match journal {
             Some(journal) => journal.wrap(
                 toolsets,
