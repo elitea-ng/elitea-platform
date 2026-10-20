@@ -133,6 +133,21 @@ jobs:
         with:
           cache-dependency-path: services/elitea-subapp-host/go.sum
 
+      # The module download on its own step, with a bounded retry: on run
+      # 39461870673 proxy.golang.org reset one stream ("stream error ...
+      # INTERNAL_ERROR; received from peer") and `go test` failed in setup,
+      # before any test ran. A transient proxy fault now costs a retry, and
+      # a real one still fails here, under a name that says it was the fetch.
+      - name: Download the Go host's modules (bounded retry)
+        working-directory: services/elitea-subapp-host
+        run: |
+          for attempt in 1 2 3 4; do
+            go mod download && exit 0
+            echo "::warning::go mod download failed (attempt ${attempt}/4); retrying"
+            sleep $(( attempt * 10 ))
+          done
+          exit 1
+
       - name: Run the Go host's sidecar tests against the binary
         working-directory: services/elitea-subapp-host
         env:

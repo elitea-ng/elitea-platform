@@ -1,0 +1,59 @@
+name: CI Image Cleanup
+
+# Prunes the CI-only `ci-*` container packages ci-web-e2e.yml pushes: one
+# `ci-<image>:<sha>` version per image per commit, and the untagged manifests
+# each main push strands in `ci-cache-<image>`. The policy, and the rule that
+# no other package is ever touched, live in scripts/ci/prune_ci_images.py.
+#
+# WHEN. Daily, and on dispatch — from main only. Never on a pull request: a
+# change to the policy is held by scripts/ci/test_prune_ci_images.py in the
+# static gates (no-binaries.yml), and a dispatch with dry_run shows what it
+# would delete before anything is.
+
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Delete CI image versions older than this many days.
+        type: number
+        default: 7
+      dry_run:
+        description: List what would be deleted, delete nothing.
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  prune:
+    name: Prune CI-only images older than the window
+    # A dispatch from another branch would run another branch's policy.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Deletes versions of the ci-* packages, which this repository's
+      # workflow created and therefore administers.
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: The policy still refuses what it must
+        run: python3 -m unittest discover -s scripts/ci -p 'test_prune_ci_images.py' -v
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DAYS: ${{ inputs.days || 7 }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          flags=(--org "$ORG" --days "$DAYS")
+          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
+          python3 scripts/ci/prune_ci_images.py "${flags[@]}"

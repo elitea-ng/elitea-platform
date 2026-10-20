@@ -273,6 +273,44 @@ class CacheWriteChecks(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("matrix job", out)
 
+    def _legs(self, entries, axis=""):
+        lines = [
+            "jobs:",
+            "  a:",
+            "    runs-on: ubuntu-latest",
+            "    strategy:",
+            "      matrix:",
+            *([f"        {axis}"] if axis else []),
+            "        include:",
+            *(f'          - {{image: i{n}, mount-suffix: {suffix}, mount-writer: "{writer}"}}' for n, (suffix, writer) in enumerate(entries)),
+            "    steps:",
+            "      - uses: ./.github/actions/build-stack-images",
+            "        with:",
+            "          mount-cache-suffix: ${{ matrix.mount-suffix }}",
+            "          mount-cache-writer: ${{ matrix.mount-writer }}",
+        ]
+        return PR_AND_PUSH + "\n".join(lines) + "\n"
+
+    def test_stack_images_one_writer_leg_per_suffix_passes(self):
+        code, out = self.check_raw(self._legs([("rust", "true"), ("rust", "false"), ("go", "true")]))
+        self.assertEqual(code, 0, out)
+
+    def test_stack_images_two_writer_legs_for_one_suffix_are_refused(self):
+        code, out = self.check_raw(self._legs([("rust", "true"), ("rust", "true")]))
+        self.assertEqual(code, 1, out)
+        self.assertIn("exactly one job in the repository", out)
+
+    def test_stack_images_writer_leg_must_be_a_literal(self):
+        code, out = self.check_raw(self._legs([("rust", "${{ github.ref == 'refs/heads/main' }}")]))
+        self.assertEqual(code, 1, out)
+        self.assertIn("include entry must give the literal", out)
+
+    def test_stack_images_matrix_writer_with_another_axis_is_refused(self):
+        # With an axis, one include entry can become several legs.
+        code, out = self.check_raw(self._legs([("rust", "true")], axis="shard: [1, 2]"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("include-only matrix", out)
+
     def test_stack_images_mount_writer_expression_is_refused(self):
         self.assertWrites("- uses: ./.github/actions/build-stack-images\n  with: {mount-cache-writer: '${{ strategy.job-index == 0 }}'}\n", "literal")
 

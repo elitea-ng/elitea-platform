@@ -13,6 +13,14 @@ RUN that runs `cargo build` with a cache mount other than cargo's own registry
 and git caches (however the target directory is named: CARGO_TARGET_DIR inline
 or in ENV, --target-dir, or the default ./target) and fails if either half is
 missing.
+
+The images CI builds for the E2E stack moved their dependency build out of
+the shared mount and into a layer (libs/rust/scripts/cargo-dependency-skeleton.py):
+a stage copies a manifests-only skeleton, builds every registry crate from it,
+then copies the real sources over it and builds again. The same mtime hazard
+applies one step down — a context older than the placeholder build would
+look fresh and the image would ship the placeholder — so the SECOND build in
+such a stage must touch /src first. `REQUIRED_SKELETON` holds those images.
 """
 
 from __future__ import annotations
@@ -26,10 +34,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Every image known to compile Rust into a cache-mounted target dir. A rename
 # FAILS here rather than making the scan below vacuous.
 REQUIRED = {
-    "services/elitea-worker-rust/Containerfile": 2,  # worker + supervisor stages
-    "services/elitea-deepwiki-engine/Containerfile": 1,
+    "services/elitea-worker-rust/Containerfile": 1,  # the supervisor stage
     "services/elitea-code-runner/Containerfile": 1,
 }
+
+# Every image whose builder compiles over a dependency skeleton, with the
+# number of real (post-skeleton) builds. A rename or a regression to the old
+# shape FAILS here.
+REQUIRED_SKELETON = {
+    "services/elitea-worker-rust/Containerfile": 1,
+    "services/elitea-deepwiki-engine/Containerfile": 1,
+    "services/elitea-inventory-engine/Containerfile": 1,
+    "services/elitea-vector/Containerfile": 1,
+    "services/elitea-doc-extractor/Containerfile": 1,
+}
+SKELETON_COPY = re.compile(r"^COPY\s+--from=\S+\s+/skeleton/?\s")
 
 TOUCH = "find /src -type f -exec touch {} +"
 # Cargo's download caches hold immutable, checksummed sources; sharing them is safe.
@@ -57,6 +76,59 @@ def _run_instructions(text: str) -> list[str]:
             runs.append(" ".join(current))
             current = None
     return runs
+
+
+def _instructions(text: str) -> list[str]:
+    """Every instruction, continuations joined, comments dropped."""
+    out: list[str] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or (current is None and not stripped):
+            continue
+        if current is None:
+            current = []
+        current.append(stripped.removesuffix("\\").strip())
+        if not stripped.endswith("\\"):
+            out.append(" ".join(current))
+            current = None
+    return out
+
+
+def skeleton_violations(text: str) -> tuple[int, list[str]]:
+    """Count post-skeleton cargo builds in `text` and describe each unsafe one.
+
+    Within a stage that copies a /skeleton, the first cargo build is the
+    dependency build; every later one compiles the real sources and must
+    touch /src before it builds.
+    """
+    real_builds = 0
+    problems: list[str] = []
+    in_skeleton_stage = False
+    builds_after_skeleton = 0
+    for instruction in _instructions(text):
+        keyword = instruction.split(None, 1)[0].upper()
+        if keyword == "FROM":
+            in_skeleton_stage = False
+            builds_after_skeleton = 0
+            continue
+        if keyword == "COPY" and SKELETON_COPY.match(instruction):
+            in_skeleton_stage = True
+            builds_after_skeleton = 0
+            continue
+        if keyword != "RUN" or not in_skeleton_stage:
+            continue
+        build = _CARGO_BUILD.search(instruction)
+        if build is None:
+            continue
+        builds_after_skeleton += 1
+        if builds_after_skeleton == 1:
+            continue
+        real_builds += 1
+        touch_at = instruction.find(TOUCH)
+        if touch_at == -1 or touch_at > build.start():
+            problems.append("a build over the dependency skeleton does not touch local sources before cargo build")
+    return real_builds, problems
 
 
 def _destination(mount: str) -> str | None:
@@ -107,6 +179,37 @@ def test_required_containerfiles_rebuild_local_sources() -> None:
         builds, problems = violations(path.read_text())
         assert builds == expected, f"{relative}: found {builds} cache-mounted cargo builds, expected {expected}"
         assert problems == [], f"{relative}: {problems}"
+
+
+def test_skeleton_builds_rebuild_local_sources() -> None:
+    for relative, expected in REQUIRED_SKELETON.items():
+        path = REPO_ROOT / relative
+        assert path.is_file(), f"{relative} is missing; update REQUIRED_SKELETON"
+        builds, problems = skeleton_violations(path.read_text())
+        assert builds == expected, f"{relative}: found {builds} builds over a dependency skeleton, expected {expected}"
+        assert problems == [], f"{relative}: {problems}"
+    for path in _containerfiles():
+        _, problems = skeleton_violations(path.read_text(errors="replace"))
+        assert problems == [], f"{path.relative_to(REPO_ROOT)}: {problems}"
+
+
+def test_skeleton_checker_rejects_an_untouched_build() -> None:
+    unsafe = """
+FROM toolchain AS builder
+COPY --from=planner /skeleton/ /src/
+RUN CARGO_TARGET_DIR=/t cargo auditable build --locked --release
+COPY services/x ./
+RUN CARGO_TARGET_DIR=/t cargo auditable build --locked --release
+"""
+    assert skeleton_violations(unsafe) == (
+        1,
+        ["a build over the dependency skeleton does not touch local sources before cargo build"],
+    )
+    head, last = unsafe.rsplit("RUN ", 1)
+    safe = f"{head}RUN {TOUCH} && {last}"
+    assert skeleton_violations(safe) == (1, [])
+    # The dependency build itself needs no touch, and a new stage resets.
+    assert skeleton_violations(unsafe.split("COPY services")[0]) == (0, [])
 
 
 def test_no_other_containerfile_builds_rust_into_a_shared_cache_unsafely() -> None:
