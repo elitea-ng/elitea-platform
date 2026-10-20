@@ -2,10 +2,12 @@
 #
 # The published image list has ONE source, and every copy of it agrees.
 #
-# WHAT THIS CLOSES. The published images are written out in four places: two
-# matrices in publish.yml (`build`, `publish-image`), the IMAGES bash array in
-# publish.yml's cleanup step, and the scan matrix in ci-image-scan.yml. Nothing
-# compared them.
+# WHAT THIS CLOSES. The published images are written out in four places, all
+# in publish.yml: the `build`, `scan` and `publish-image` matrices and the
+# IMAGES bash array in its cleanup step. Nothing compared them. (A fifth copy,
+# the PR-time scan matrix in ci-image-scan.yml, went away when the scan moved
+# to .github/workflows/nightly-image-scan.yml, which READS publish.yml's `scan`
+# matrix instead of carrying its own.)
 #
 # It used to be six places: publish.yml carried FOUR matrices, because scan,
 # manifest and sign were three jobs of ten. They are one `publish-image` job
@@ -41,7 +43,6 @@ cd "$(dirname "$0")/../.."
 
 BAKE=docker-bake.hcl
 PUBLISH=.github/workflows/publish.yml
-SCAN=.github/workflows/ci-image-scan.yml
 EXEMPT=.github/image-scan-exempt.txt
 
 # Bake targets that are built but NOT published. Each needs a reason. None
@@ -149,19 +150,37 @@ done
 images_array="$(grep -oE '^ +IMAGES=\(.*\)' "$PUBLISH" | sed -E 's/^ +IMAGES=\(//; s/\)$//; s/"//g' || true)"
 compare "publish.yml IMAGES array" "$images_array"
 
-# ── ci-image-scan.yml ───────────────────────────────────────────────────────
-scan_names="$(python3 - "$SCAN" <<'PY'
+# ── the exemption register agrees with the release scan ─────────────────────
+#
+# `blocking: false` in publish.yml's `scan` matrix stops a finding failing the
+# release (and the nightly scan, which reads the same matrix);
+# .github/image-scan-exempt.txt is the register of images allowed to carry it.
+# TWO FILES must agree, so one edit cannot quietly exempt a second image. Every
+# entry must STATE `blocking` and `expect_type`: a missing field is not "true".
+register_check="$(python3 - "$PUBLISH" "$EXEMPT" <<'PY'
 import sys
 import yaml
 doc = yaml.safe_load(open(sys.argv[1]))
-out = []
-for spec in doc["jobs"].values():
-    matrix = ((spec.get("strategy") or {}).get("matrix") or {})
-    out += [i["name"] for i in matrix.get("image", []) if isinstance(i, dict) and i.get("name")]
-print(" ".join(out))
+entries = ((doc["jobs"]["scan"].get("strategy") or {}).get("matrix") or {}).get("image") or []
+if not entries:
+    print("ERROR read no entry from publish.yml's scan matrix")
+    sys.exit(0)
+for e in entries:
+    if not isinstance(e.get("blocking"), bool) or not e.get("expect_type"):
+        print(f"ERROR scan matrix entry {e.get('name')!r} must state expect_type and a boolean blocking")
+exempt = sorted(e["name"] for e in entries if e.get("blocking") is False)
+registered = sorted(
+    line.strip() for line in open(sys.argv[2]) if line.strip() and not line.lstrip().startswith("#")
+)
+if exempt != registered:
+    print(f"ERROR blocking: false in publish.yml's scan matrix = {exempt}, {sys.argv[2]} registers {registered}; an image stops blocking only when BOTH say so")
+print("EXEMPT " + " ".join(exempt))
 PY
 )"
-compare "ci-image-scan.yml scan matrix" "$scan_names"
+if printf '%s\n' "$register_check" | grep -q '^ERROR '; then
+  printf '%s\n' "$register_check" | sed -n 's/^ERROR /::error::/p' >&2
+  status=1
+fi
 
 # ── the exemption file names a real image ───────────────────────────────────
 #
@@ -180,5 +199,5 @@ done < <(grep -vE '^\s*(#|$)' "$EXEMPT" | tr -d ' \t')
 if [ "$status" -ne 0 ]; then
   exit 1
 fi
-printf 'OK: %d published images, and all 4 copies of the list agree.\n' \
+printf 'OK: %d published images, all 4 copies of the list agree, and the exemption register matches the release scan.\n' \
   "$(printf '%s' "$expected" | wc -w | tr -d ' ')"

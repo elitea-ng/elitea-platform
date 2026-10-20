@@ -83,6 +83,15 @@ EXEMPT_WORKFLOWS = {
         "cancel, and it must never touch the runs a merge starts on a trunk "
         "branch."
     ),
+    "nightly-image-scan.yml": (
+        "No push arm and no pull_request arm, deliberately (owner request "
+        "2026-10-20): it scans the PUBLISHED `latest` images every night and "
+        "keeps one issue per vulnerable image. A commit-time rebuild-and-scan "
+        "was what it replaced. The per-change gate is publish.yml's release "
+        "scan, which stops a vulnerable image advancing `latest`; the "
+        "PR-time checks of the image list, the exemption register and the "
+        "gate rule are in image-matrix.yml."
+    ),
     "ci-web-mutation.yml": (
         "It has no push arm at all. It is a weekly cadence job plus manual "
         "dispatch, not a per-merge gate."

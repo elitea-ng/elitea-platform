@@ -17,7 +17,7 @@ COPY adapters/rust ./adapters/rust
 # mtime; touching /src under the lock compiles this context, not another
 # checkout's (see services/elitea-worker-rust/Containerfile).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/target,sharing=locked \
+    --mount=type=cache,id=elitea-code-runner-target,target=/target,sharing=locked \
     find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/target cargo auditable build --locked --release -j 2 && \
     cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner && \

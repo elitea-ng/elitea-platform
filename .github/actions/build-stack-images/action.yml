@@ -58,6 +58,18 @@ inputs:
       passes anything else.
     required: false
     default: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
+  mount-cache-writer:
+    description: >-
+      "true" on the ONE job per mount-cache-suffix that saves the cargo/Go/pip
+      mounts on a push to main; every other caller leaves it unset. Measured
+      2026-10-20: six main jobs baked the same rust mounts, all six tried to
+      save the same run-scoped key, five failed with "Unable to reserve" after
+      ~5.7 min each extracting ~3.5 GB out of the builder. A non-writer skips
+      that extraction entirely. It never widens `cache-write`: a pull request
+      still writes nothing (scripts/ci/check_workflow_cache_writes.py also
+      holds "at most one writer per suffix in a workflow").
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -163,6 +175,7 @@ runs:
       shell: bash
       env:
         WRITE: ${{ inputs.cache-write }}
+        MOUNT_WRITER: ${{ inputs.mount-cache-writer }}
         # The mount-cache key, computed ONCE: a writer and a reader that
         # spelled it separately could drift apart and never hit each other.
         #
@@ -197,8 +210,18 @@ runs:
         # become permanent again. `-v2-` is only what abandons the poisoned
         # `buildkit-mounts-Linux-rust-…` entry that is already out there; it
         # will be evicted by LRU on its own.
-        MOUNT_BASE: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum', 'services/elitea-worker-python/pyproject.toml', 'services/elitea-deepwiki-engine/Cargo.lock') }}
-        MOUNT_PREFIX: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
+        #
+        # `-v3-` (2026-10-20): the cargo target mounts are per image now
+        # (`.buildkit-mounts/cargo-target-<image>`, below). A v2 entry restored
+        # through the suffix-only prefix would carry the old shared
+        # `cargo-target` directory, which nothing maps any more, and a writer
+        # would re-save it for ever. The hash is EVERY Cargo.lock and go.sum in
+        # the tree, by glob: a hand list named only the worker's and DeepWiki's
+        # lockfiles and three of five go.sum files, so a dependency bump in an
+        # unlisted one hit the old key. A lockfile no image builds from only
+        # costs a new key, which restores from the prefix like any other.
+        MOUNT_BASE: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('**/Cargo.lock', '**/go.sum', '!**/node_modules/**') }}
+        MOUNT_PREFIX: buildkit-mounts-v3-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
         RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |
         echo "mount-base=$MOUNT_BASE" >> "$GITHUB_OUTPUT"
@@ -207,7 +230,14 @@ runs:
         # happens; readers never name it and fall through to the prefix.
         echo "mount-write-key=$MOUNT_BASE-$RUN_ID" >> "$GITHUB_OUTPUT"
         if [ "$WRITE" = "true" ]; then
-          echo "write-mounts=true" >> "$GITHUB_OUTPUT"; echo "layer-mode=max" >> "$GITHUB_OUTPUT"
+          echo "layer-mode=max" >> "$GITHUB_OUTPUT"
+          # One mount writer per suffix (the input's description says why).
+          if [ "$MOUNT_WRITER" = "true" ]; then
+            echo "write-mounts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "write-mounts=false" >> "$GITHUB_OUTPUT"
+            echo "mount cache: read-only here; the job passing mount-cache-writer: true saves it"
+          fi
         else
           # `none`: the overlay below then carries no cache-to at all.
           echo "write-mounts=false" >> "$GITHUB_OUTPUT"; echo "layer-mode=none" >> "$GITHUB_OUTPUT"
@@ -267,10 +297,29 @@ runs:
           ${{ steps.policy.outputs.mount-base }}-
           ${{ steps.policy.outputs.mount-prefix }}
 
+    # ── The size cap (writers only) ───────────────────────────────────────
+    #
+    # The cap applies to what is SAVED, so it runs between the dance's post
+    # extraction and actions/cache's post save. Registered HERE — after the
+    # writer's actions/cache, before the dance — its post step runs in exactly
+    # that slot (post steps run in reverse). cap-saved-mounts/cap.sh holds the
+    # policy: above 4 GB, drop the largest cargo-target-<image> directory from
+    # the saved entry, so that image builds cold ONCE and is saved fresh. A
+    # restore-time cap (the first version of this) left the saved entry
+    # uncapped and made the trimmed image cold on every main run.
+    - name: Cap the saved cache mounts (writers, post step)
+      if: steps.policy.outputs.write-mounts == 'true'
+      uses: ./.github/actions/build-stack-images/cap-saved-mounts
+      with:
+        path: .buildkit-mounts
+        cap-mb: "4096"
+
     # Injects the restored directories into the builder's cache mounts before
     # the build and, only when this run will save them, extracts them back
-    # after it (a post step). Mount ids default to their target path, which is
-    # how every Containerfile in this repository declares them.
+    # after it (a post step). Mount ids default to their target path, except
+    # the per-image cargo target mounts: each Rust Containerfile names
+    # `id=<image>-cargo-target`, so the five builds no longer queue on one
+    # `sharing=locked` lock, and each id is mapped to its own directory here.
     - name: Inject cache mounts into the builder
       uses: reproducible-containers/buildkit-cache-dance@v3
       with:
@@ -286,7 +335,11 @@ runs:
           {
             ".buildkit-mounts/cargo-registry": "/usr/local/cargo/registry",
             ".buildkit-mounts/cargo-git": "/usr/local/cargo/git",
-            ".buildkit-mounts/cargo-target": "/cargo-target",
+            ".buildkit-mounts/cargo-target-worker-rust": {"target": "/cargo-target", "id": "elitea-worker-rust-cargo-target"},
+            ".buildkit-mounts/cargo-target-deepwiki-engine": {"target": "/cargo-target", "id": "elitea-deepwiki-engine-cargo-target"},
+            ".buildkit-mounts/cargo-target-inventory-engine": {"target": "/cargo-target", "id": "elitea-inventory-engine-cargo-target"},
+            ".buildkit-mounts/cargo-target-vector": {"target": "/cargo-target", "id": "elitea-vector-cargo-target"},
+            ".buildkit-mounts/cargo-target-doc-extractor": {"target": "/cargo-target", "id": "elitea-doc-extractor-cargo-target"},
             ".buildkit-mounts/go-mod": "/go/pkg/mod",
             ".buildkit-mounts/go-build": "/root/.cache/go-build",
             ".buildkit-mounts/pip": "/root/.cache/pip"

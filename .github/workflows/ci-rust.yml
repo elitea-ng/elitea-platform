@@ -174,9 +174,11 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # The two jobs get separate cache entries (rust-cache keys on the job),
-      # which is correct: `quality` builds --release and docs, `test` builds
-      # test targets, and one shared entry would thrash between them.
+      # `quality` keeps its own entry (rust-cache keys on the job id when no
+      # shared-key is set): it builds --release and docs, `test` builds test
+      # targets, and one shared entry would thrash between them. `test`
+      # shares its entry with `workspace-run-docker` (shared-key
+      # worker-rust-test), which builds the same test profile.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -245,12 +247,20 @@ jobs:
       # dependency artefacts in target/, none of which are incremental state —
       # and it deliberately does not cache the workspace crates themselves.
       #
-      # The two jobs get separate cache entries (rust-cache keys on the job),
-      # which is correct: `quality` builds --release and docs, `test` builds
-      # test targets, and one shared entry would thrash between them.
+      # `quality` keeps its own entry (rust-cache keys on the job id when no
+      # shared-key is set): it builds --release and docs, `test` builds test
+      # targets, and one shared entry would thrash between them. `test`
+      # shares its entry with `workspace-run-docker` (shared-key
+      # worker-rust-test), which builds the same test profile.
+      #
+      # `test` and `workspace-run-docker` build the same `--all-features` test
+      # profile: measured 2026-10-20 each saved an entry of exactly
+      # 1292.66 MB, two copies of one directory. They share one key now,
+      # and only `test` saves it.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: worker-rust-test
           # Read everywhere, write on main only: a pull request's target directory
           # is ~1 GB of the repository's 10 GB Actions cache, duplicated per branch.
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -576,10 +586,16 @@ jobs:
           rustc --version
           cargo --version
 
+      # The `test` job's entry (same `--all-features` test profile), restored
+      # and never saved here: two jobs saving one key would race to reserve it.
       - name: Cache cargo registry and build artefacts
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: worker-rust-test
+          # Never saves: `test` is the one writer of this key. `false`, not a
+          # main-ref expression: scripts/ci/check_workflow_cache_writes.py
+          # accepts a literal false as the strongest form.
+          save-if: false
           workspaces: services/elitea-worker-rust
 
       - name: Build and push the workspace runner image

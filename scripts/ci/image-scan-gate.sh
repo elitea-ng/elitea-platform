@@ -3,8 +3,10 @@
 #
 # TWO WORKFLOWS CALL THIS, AND THAT IS THE POINT.
 #
-#   * .github/workflows/ci-image-scan.yml builds each image and scans it, on
-#     every pull request, every push to main, and daily at 05:17 UTC.
+#   * .github/workflows/nightly-image-scan.yml scans what each published
+#     image's `latest` resolves to, nightly, and opens one issue per image.
+#     (It replaced ci-image-scan.yml, which rebuilt and scanned each image
+#     on every pull request, every push to main and daily, on 2026-10-20.)
 #   * .github/workflows/publish.yml scans the image the RELEASE PUSHED, before
 #     the manifest job creates the `latest` tag (#501).
 #
@@ -34,7 +36,7 @@
 # `blocking=false` reports the finding count and does not fail. Two files must
 # agree before an image carries it: the `blocking` field in the scan matrix and
 # `.github/image-scan-exempt.txt`, which records the cause and the issue that
-# ends it. The coverage job in ci-image-scan.yml fails when they differ.
+# ends it. scripts/ci/image-matrix.sh fails when they differ.
 #
 # An exempt image that reports ZERO findings FAILS. The cause of the exemption
 # is then gone, and a waiver that outlives its reason is the next gate nobody
@@ -123,7 +125,7 @@ fi
 
 # ── The exempt arm ───────────────────────────────────────────────────────────
 if [ "$count" -eq 0 ]; then
-  echo "::error::${IMAGE_NAME} reports 0 findings, so its exemption is no longer needed — delete the entry in .github/image-scan-exempt.txt or set blocking: true in .github/workflows/ci-image-scan.yml"
+  echo "::error::${IMAGE_NAME} reports 0 findings, so its exemption is no longer needed — delete the entry in .github/image-scan-exempt.txt or set blocking: true in publish.yml's scan matrix (nightly-image-scan.yml reads it)"
   exit 1
 fi
 

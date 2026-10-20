@@ -1,0 +1,23 @@
+name: Cap the saved BuildKit cache mounts
+description: >-
+  Does nothing in its main step. Its POST step trims .buildkit-mounts to a
+  size cap after buildkit-cache-dance has extracted the mounts and before
+  actions/cache saves them, so the cap applies to the entry that is SAVED.
+#
+# WHY A JS ACTION. A composite action cannot declare a post step, and the
+# only moment the saved content exists is between two post steps: the dance's
+# extraction and actions/cache's save. Post steps run in reverse order of
+# registration, so build-stack-images registers this step AFTER actions/cache
+# and BEFORE the dance; its post then runs after the extraction and before
+# the save. The trimming itself is cap.sh.
+inputs:
+  path:
+    description: The directory actions/cache will save.
+    required: true
+  cap-mb:
+    description: Size cap in MB for the saved entry.
+    required: true
+runs:
+  using: node24
+  main: main.js
+  post: post.js

@@ -52,7 +52,7 @@ name: CI — DeepWiki real engine
 on:
   schedule:
     # Sundays, 04:23 UTC. Deliberately far from ci-web-mutation.yml's Wednesday
-    # 08:47 and from ci-image-scan.yml's daily 05:17, so the three heavy cadence
+    # 08:47 and from nightly-image-scan.yml's daily 05:17, so the three heavy cadence
     # jobs never contend for the same runner window.
     - cron: "23 4 * * 0"
   workflow_dispatch:

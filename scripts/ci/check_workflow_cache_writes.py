@@ -22,7 +22,8 @@ WHAT IT CHECKS, in every .github/workflows/*.yml and .github/actions/*/action.ym
   actions/cache/save      the step's `if:` holds BOTH
                           `github.ref == 'refs/heads/main'` and
                           `github.event_name == 'push'`
-  Swatinem/rust-cache     `save-if:` names `github.ref == 'refs/heads/main'`
+  Swatinem/rust-cache     `save-if:` names `github.ref == 'refs/heads/main'`,
+                          or is a literal false (restore only)
   golangci-lint-action    `skip-cache: true`, or `skip-save-cache:` gated on
                           a push to main
   trivy-action            `cache: "false"` (its DB cache is a full actions/cache)
@@ -34,7 +35,12 @@ WHAT IT CHECKS, in every .github/workflows/*.yml and .github/actions/*/action.ym
                           builds (not `--print`) must clear `*.cache-to=`,
                           because docker-bake.hcl declares mode=max exports.
   build-stack-images      its `cache-write` default is a push to main, and no
-                          caller passes anything but "false"
+                          caller passes anything but "false"; `mount-cache-writer`
+                          is "true" or "false", "true" on at most ONE job per
+                          mount-cache-suffix across ALL workflows (the key is
+                          repository-wide), and never on a
+                          matrix job (one job, not N legs, saves the mounts:
+                          N writers raced for one key, measured 2026-10-20)
   deploy/ci/*.hcl         declares no cache-to (it is merged into every bake)
 
 A workflow whose ONLY trigger is a push to main/next (publish.yml, the release)
@@ -142,6 +148,8 @@ class Report:
     def __init__(self):
         self.errors: list[str] = []
         self.cache_steps = 0
+        # mount-cache-suffix -> ["<file> [<job>]", ...], across every workflow.
+        self.mount_writers: dict[str, list[str]] = {}
 
     def fail(self, where, message):
         self.errors.append(f"{where}: {message}")
@@ -180,7 +188,8 @@ def check_document(name: str, doc: dict, report: Report) -> None:
             report.cache_steps += 1
         elif action == "Swatinem/rust-cache":
             report.cache_steps += 1
-            if MAIN_REF not in _norm(with_.get("save-if")):
+            # A literal `false` (restore only) is the strongest form.
+            if not _is_false(with_.get("save-if")) and MAIN_REF not in _norm(with_.get("save-if")):
                 report.fail(where, f"Swatinem/rust-cache needs `save-if: ${{{{ {MAIN_REF} }}}}`; without it every pull request saves its target directory")
         elif action == "golangci/golangci-lint-action":
             report.cache_steps += 1
@@ -195,6 +204,15 @@ def check_document(name: str, doc: dict, report: Report) -> None:
             report.cache_steps += 1
             if "cache-write" in with_ and not _is_false(with_["cache-write"]):
                 report.fail(where, "build-stack-images `cache-write` may only be omitted (a push to main writes) or \"false\"")
+            writer = str(with_.get("mount-cache-writer", "false")).strip().lower()
+            if writer not in ("true", "false"):
+                report.fail(where, f"build-stack-images `mount-cache-writer` must be the literal \"true\" or \"false\", got {with_.get('mount-cache-writer')!r}; an expression can make every leg a writer")
+            elif writer == "true":
+                job = (doc.get("jobs") or {}).get(job_id) or {}
+                if (job.get("strategy") or {}).get("matrix"):
+                    report.fail(where, "build-stack-images `mount-cache-writer: \"true\"` on a matrix job makes every leg a writer racing for one cache key; designate one non-matrix job")
+                suffix = str(with_.get("mount-cache-suffix", ""))
+                report.mount_writers.setdefault(suffix, []).append(f"{name} [{job_id}]")
 
         # BuildKit layer exports.
         if not release_only:
@@ -245,6 +263,12 @@ def run(root: pathlib.Path) -> Report:
         rel = str(path.relative_to(root))
         doc = yaml.safe_load(path.read_text()) or {}
         check_document(rel, doc, report)
+    # The mount-cache key is buildkit-mounts-v3-<os>-<suffix>-…: one key space
+    # per suffix for the whole REPOSITORY, so two writers in two different
+    # workflows race exactly as two in one workflow did.
+    for suffix, jobs in sorted(report.mount_writers.items()):
+        if len(jobs) > 1:
+            report.fail("build-stack-images", f"{len(jobs)} jobs ({', '.join(jobs)}) pass mount-cache-writer: \"true\" for mount-cache-suffix {suffix!r}; exactly one job in the repository may save those mounts")
     for path in sorted((root / "deploy" / "ci").glob("*.hcl")):
         check_hcl(str(path.relative_to(root)), path.read_text(), report)
     report.workflows = len(workflows)

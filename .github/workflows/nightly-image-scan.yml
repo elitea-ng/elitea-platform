@@ -1,0 +1,185 @@
+name: Nightly — Image scan (latest)
+
+# Every image the release publishes, scanned every night AS PUBLISHED: what
+# `ghcr.io/elitea-ng/<image>:latest` resolves to, by digest. For each image with
+# a HIGH or CRITICAL finding there is ONE issue, opened, kept current and closed
+# by scripts/ci/image_scan_issue.py.
+#
+# WHY NIGHTLY, AND WHY `latest` (owner request, 2026-10-20)
+#
+# The scan used to be ci-image-scan.yml: a REBUILD of every image on every pull
+# request and every push to main that touched an image input, plus a daily run.
+# Most CVEs are published against code that did not change, so a commit-time
+# scan mostly re-measured the day the commit landed, and it cost 14 image
+# builds per triggering change. What a consumer runs is `latest`; that is the
+# subject now, re-measured every night against a fresh vulnerability DB.
+#
+# WHAT STILL GATES
+#
+# The release. publish.yml's `scan` job runs the SAME rule
+# (scripts/ci/image-scan-gate.sh) on the images a release pushed, before any
+# `latest` or `<major>.<minor>` tag exists, so a vulnerable image cannot advance
+# `latest`. This workflow reports what changed AFTER a release: a CVE published
+# against an image already out.
+#
+# WHAT KEEPS IT HONEST
+#
+#   1. The image list is NOT written here. The `images` job reads publish.yml's
+#      release-scan matrix (name, expect_type, blocking) and fails unless its
+#      names equal `scripts/ci/image-matrix.sh names` (docker-bake.hcl, the
+#      source the release builds from). A new image is scanned the night after
+#      it is published, with nothing to edit.
+#   2. Same scanner, same policy as the release: trivy-action v0.36.0, vuln
+#      scanner, HIGH,CRITICAL, no ignore file, no --ignore-unfixed, the same
+#      expect_type per image (the dormancy guard), and the same exemption
+#      register (.github/image-scan-exempt.txt).
+#   3. A report that does not prove the scan ran never closes an issue
+#      (image_scan_issue.py exits 2), and the gate step fails the job for it.
+#
+# The PR-time checks that cost seconds — every published image has a scan, the
+# exemption register agrees with the release matrix, the gate goes red, the
+# issue script's scenarios — run in image-matrix.yml.
+
+on:
+  # 05:17 UTC, the slot the old daily scan used; dependency-scanning.yml
+  # (06:41) and deepwiki-real-engine.yml keep clear of it.
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: The published image list
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the release-scan matrix and hold it to docker-bake.hcl
+        id: list
+        run: |
+          set -euo pipefail
+          entries="$(yq -o=json -I=0 '[.jobs.scan.strategy.matrix.image[] | {"name": .name, "expect_type": .expect_type, "blocking": .blocking}]' .github/workflows/publish.yml)"
+          names="$(printf '%s' "$entries" | jq -r '.[].name' | sort -u)"
+          baked="$(bash scripts/ci/image-matrix.sh names | sort -u)"
+          if [ -z "$names" ] || [ -z "$baked" ]; then
+            echo "::error::read no image name (publish.yml: '${names}', docker-bake.hcl: '${baked}') — a scan of nothing must not read as a clean night"
+            exit 1
+          fi
+          if [ "$names" != "$baked" ]; then
+            echo "::error::publish.yml's release-scan matrix and docker-bake.hcl disagree:"
+            diff <(echo "$names") <(echo "$baked") || true
+            exit 1
+          fi
+          if printf '%s' "$entries" | jq -e 'any(.[]; (.expect_type // "") == "" or (.blocking | type) != "boolean")' >/dev/null; then
+            echo "::error::an entry in publish.yml's scan matrix has no expect_type or a non-boolean blocking"
+            exit 1
+          fi
+          echo "matrix={\"image\":${entries}}" >> "$GITHUB_OUTPUT"
+          echo "scanning $(printf '%s' "$entries" | jq length) published images:"; while IFS= read -r n; do echo "  $n"; done <<< "$names"
+      # Created once here, not by 14 parallel jobs racing to create them.
+      # `--force` updates an existing label instead of failing on it.
+      - name: Make sure the issue labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create security --repo "$REPO" --color B60205 --description "Security finding" --force
+          gh label create image-scan --repo "$REPO" --color D93F0B --description "Nightly scan of the published latest images" --force
+
+  scan:
+    name: Scan ${{ matrix.image.name }}:latest
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      issues: write
+    strategy:
+      # One red image must not hide the state of the others.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.images.outputs.matrix) }}
+    env:
+      IMAGE_REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image.name }}:latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The digest is what the issue names: `latest` moves, a digest does not.
+      # A pull that fails FAILS the job — "the image was not there" must never
+      # reach the issue script as a clean report.
+      - name: Resolve latest to its digest
+        id: pull
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$IMAGE_REF"
+          digest="$(docker image inspect "$IMAGE_REF" --format '{{index .RepoDigests 0}}')"
+          version="$(docker image inspect "$IMAGE_REF" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+          case "$digest" in
+            *@sha256:*) ;;
+            *) echo "::error::pulled ${IMAGE_REF} and read no repository digest from it"; exit 1 ;;
+          esac
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "- \`${IMAGE_REF}\` → \`${digest}\` (version \`${version:-unknown}\`)" >> "$GITHUB_STEP_SUMMARY"
+
+      # exit-code 0: this step collects the report; the two steps below act on it.
+      # The same inputs as publish.yml's release scan, plus `cache: "false"`
+      # (scripts/ci/check_workflow_cache_writes.py: trivy-action's own DB
+      # cache is a full actions/cache, saved from whatever ref runs it).
+      - name: Scan the image latest resolves to
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          cache: "false"
+          image-ref: ${{ env.IMAGE_REF }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: trivy-report.json
+          exit-code: "0"
+
+      - name: Open, update or close this image's issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/ci/image_scan_issue.py \
+            --report trivy-report.json \
+            --image "${{ matrix.image.name }}" \
+            --expect-type "${{ matrix.image.expect_type }}" \
+            --blocking "${{ matrix.image.blocking }}" \
+            --digest "${{ steps.pull.outputs.digest }}" \
+            --version "${{ steps.pull.outputs.version }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --repo "${{ github.repository }}"
+
+      # The release gate's rule, so a red square here means what it means
+      # there. Runs even when the issue step failed: the job must still say
+      # whether the image is vulnerable.
+      - name: Gate on HIGH and CRITICAL findings (same rule as the release)
+        if: ${{ !cancelled() && steps.pull.outcome == 'success' }}
+        run: |
+          bash scripts/ci/image-scan-gate.sh \
+            trivy-report.json \
+            "${{ matrix.image.name }}" \
+            "${{ matrix.image.expect_type }}" \
+            "${{ matrix.image.blocking }}"

@@ -156,30 +156,30 @@ jobs:
   #
   #   The images below are scanned TWICE, by two gates with different subjects.
   #
-  #   1. .github/workflows/ci-image-scan.yml scans a REBUILD of every image on
-  #      every pull request, on every push to main that touches an image input,
-  #      and daily at 05:17 UTC. That gate guards the merge.
+  #   1. .github/workflows/nightly-image-scan.yml scans what each image's
+  #      `latest` tag resolves to, by digest, every night at 05:17 UTC, and
+  #      keeps one issue per vulnerable image. It reports a CVE published
+  #      against an image that is already out. (Until 2026-10-20 this was
+  #      ci-image-scan.yml, a rebuild-and-scan on every pull request.)
   #
   #   2. The `publish-image` job below scans the image THIS RELEASE PUSHED,
   #      before the manifest step in that same job creates the `latest` tag.
   #      That gate guards the release.
   #
-  #   WHY BOTH. A release is cut from main, so gate 1 measured the release code
-  #   at most 24 hours earlier. A CVE published inside that window used to ship,
-  #   and the daily run reported it after the fact — the release did not stop.
-  #   Issue #501 held that gap; gate 2 closes it.
+  #   WHY BOTH. Gate 2 is the only one that STOPS anything: a release whose
+  #   image fails it never gets `latest`. Gate 1 watches what already shipped,
+  #   against tomorrow's vulnerability DB. Issue #501 held the gap gate 2 closes.
   #
   #   WHICH IMAGE GATE 2 READS. It pulls the tag this workflow pushed, so it
   #   reads the artefact the release publishes and not a rebuild of it. The
   #   alternative — build every image a second time to scan it — costs a second
   #   build of every image and still scans a different artefact.
   #
-  #   The image list below is not free-form. ci-image-scan.yml reads it and
-  #   fails when it ships an image that no scan covers, so a new entry
-  #   cannot arrive unscanned in silence. It also compares its own scan matrix
-  #   with the `publish-image` matrix below, entry by entry, so the release
-  #   gate cannot quietly exempt an image or expect a target type the merge gate
-  #   does not.
+  #   The image list below is not free-form. scripts/ci/image-matrix.sh
+  #   (image-matrix.yml, on every pull request that touches it) holds every
+  #   matrix here to docker-bake.hcl, so a new entry cannot arrive unscanned in
+  #   silence, and nightly-image-scan.yml READS the `scan` matrix rather than
+  #   carrying a copy of its own.
   #
   # Meanwhile compose declares this service mandatory for agent execution —
   # "without this service an admitted run streams nothing and ends in a
@@ -393,22 +393,22 @@ jobs:
   #
   # ONE PLATFORM. The report reads Go build metadata and OS package databases,
   # and neither depends on the architecture; the two platform tags come from one
-  # source tree. ci-image-scan.yml states the same rule for the same reason.
+  # source tree. nightly-image-scan.yml scans linux/amd64 for the same reason.
   #
   # THE RULE LIVES IN ONE SCRIPT. scripts/ci/image-scan-gate.sh decides which
-  # report blocks, and ci-image-scan.yml runs that same file. It has three
+  # report blocks, and nightly-image-scan.yml runs that same file. It has three
   # failures: no report, a report that never reached the application content,
   # and any HIGH or CRITICAL finding. The first two block for EVERY image, the
   # exempt ones included — a dead scan must not look like a clean scan.
   # scripts/ci/image-scan-gate-test.sh drives every one of those arms with
   # synthetic reports, so this gate is proved red rather than asserted.
   #
-  # THE MATRIX IS NOT FREE-FORM. ci-image-scan.yml compares it with its own,
-  # entry by entry, and fails when they differ. So the release gate cannot
-  # exempt an image the merge gate blocks, and cannot expect a target type the
-  # merge gate does not. scripts/ci/image-matrix.sh --verify holds the NAMES in
-  # this matrix, the build matrix, the IMAGES cleanup array, ci-image-scan.yml's
-  # matrix and docker-bake.hcl together.
+  # THE MATRIX IS NOT FREE-FORM, AND IT IS THE ONLY COPY. nightly-image-scan.yml
+  # reads its name, expect_type and blocking fields, so the nightly scan cannot
+  # disagree with the release about an image. scripts/ci/image-matrix.sh --verify
+  # holds the NAMES in this matrix, the build matrix, the IMAGES cleanup array
+  # and docker-bake.hcl together, and holds `blocking: false` here to
+  # .github/image-scan-exempt.txt.
 
   scan:
     name: Scan ${{ matrix.image.name }} (${{ matrix.image.blocking && 'blocking' || 'exempt, reports only' }})
@@ -433,7 +433,7 @@ jobs:
           # `expect_type` is the trivy Result.Type the report MUST hold. Each
           # value names the APPLICATION content, so a scan that reads the base
           # layers and stops short fails instead of reading as clean. The values
-          # are MEASURED, and ci-image-scan.yml carries the same ones.
+          # are MEASURED, and nightly-image-scan.yml reads them from here.
           #
           # `blocking: false` reports the finding count and does not stop the
           # release. It never relaxes the threshold and never relaxes the
@@ -606,7 +606,7 @@ jobs:
           # `expect_type` is the trivy Result.Type the report MUST hold. Each
           # value names the APPLICATION content, so a scan that reads the base
           # layers and stops short fails instead of reading as clean. The values
-          # are MEASURED, and ci-image-scan.yml carries the same ones.
+          # are MEASURED, and nightly-image-scan.yml reads them from here.
           #
           # `blocking: false` reports the finding count and does not stop the
           # release. It never relaxes the threshold and never relaxes the

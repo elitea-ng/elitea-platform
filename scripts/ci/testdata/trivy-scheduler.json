@@ -1,0 +1,24 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "ghcr.io/elitea-ng/elitea-scheduler:latest",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "RepoDigests": [
+      "ghcr.io/elitea-ng/elitea-scheduler@sha256:494bfbff1b6068e676149941f9d9138e5240bb40fcd2b72dbe93fe7a9101979a"
+    ]
+  },
+  "Results": [
+    {
+      "Target": "ghcr.io/elitea-ng/elitea-scheduler:latest (debian 13.7)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": []
+    },
+    {
+      "Target": "elitea-scheduler",
+      "Class": "lang-pkgs",
+      "Type": "gobinary",
+      "Vulnerabilities": []
+    }
+  ]
+}
