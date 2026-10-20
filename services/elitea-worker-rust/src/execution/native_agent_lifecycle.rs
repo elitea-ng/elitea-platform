@@ -515,6 +515,14 @@ where
                 .await;
         }
         NativeStreamOutcome::Paused => {
+            // A static tool pause ends the turn as a completed result; Main refuses
+            // one mixed with a pause card, so the turn never publishes either alone.
+            if projector.has_static_tool_pause() {
+                return Box::pin(
+                    run.close_no_ack(AgentPauseAggregationError::InvalidState.code(), false),
+                )
+                .await;
+            }
             let pause = match pauses.finish() {
                 Ok(pause) => pause,
                 Err(error) => {
@@ -593,8 +601,10 @@ where
 
     if failure.is_none() && matches!(successful_terminal, FreshAgentTerminalSelection::Completed) {
         tracing::info!(event = "agent_completion_selection_started");
-        let (next_run, completion_result) =
-            Box::pin(run.select_native_completion(completion_selector)).await;
+        let (next_run, completion_result) = Box::pin(
+            run.select_native_completion(completion_selector, projector.has_static_tool_pause()),
+        )
+        .await;
         run = next_run;
         let completion = match completion_result {
             Ok(Ok(completion)) => completion,

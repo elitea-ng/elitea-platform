@@ -19,17 +19,23 @@
 //!   blocked result. A Worker that dies after dispatching the approved call leaves a durable
 //!   resume marker, so the next Worker refuses with the "may have started" reason and never
 //!   calls the tool again.
+//! * `static_tool`: an ordinary Agent calls a saved pipeline that stops at a static pause. Phase
+//!   `static_start` completes with the pause inventory on its terminal message (the result Main
+//!   stores and continues from). Phase `static_continue` (a replacement Worker) continues the
+//!   pipeline once after its tick; phase `static_repeat` sends the same continuation again and
+//!   runs nothing.
 
 use super::restart_pg_tests::{
     CHECKPOINT_MIGRATION, PHASE_DEADLINE, authorized_turn, connect, model_requests, pending_card,
     run_phase,
 };
 use super::scoped_tests::{
-    Saved, answer, asking_agent, child_pipeline_yaml, reference, root_request, root_yaml,
-    saved_runtime, saved_version,
+    STATIC_GRAPH, Saved, answer, asking_agent, child_pipeline_yaml, ordinary_agent_request,
+    reference, root_request, root_yaml, run_ordinary_authorized, saved_runtime, saved_version,
 };
 use super::*;
 use crate::agents::application_tools::ApplicationContinuation;
+use crate::agents::ordinary::OrdinaryNativeAgentAssembler;
 use crate::state::postgres_session_tests::{IsolatedPostgres, install_schema};
 use crate::state::{CheckpointLimits, SessionLimits};
 use std::collections::BTreeMap;
@@ -87,6 +93,12 @@ fn is_sensitive_mcp(scenario: &str) -> bool {
 }
 
 fn versions(scenario: &str) -> BTreeMap<Saved, Value> {
+    if scenario == "static_tool" {
+        return BTreeMap::from([(
+            (7, 8),
+            saved_version("pipeline", STATIC_GRAPH, &json!({}), Vec::new()),
+        )]);
+    }
     if is_sensitive_mcp(scenario) {
         return BTreeMap::from([((3, 4), sensitive_agent())]);
     }
@@ -179,6 +191,140 @@ async fn run_scenario(url: &str, scenario: &str, phases: &[&str]) -> IsolatedPos
         }
     }
     db
+}
+
+/// The production ordinary assembler on the `PostgreSQL` session store.
+fn ordinary_assembler(
+    pool: &sqlx::PgPool,
+    outcomes: Vec<TestModelGatewayOutcome>,
+) -> (OrdinaryNativeAgentAssembler, CapturedModelRequests) {
+    let (platform, model_facade, captured, _) = saved_runtime(&versions("static_tool"), outcomes);
+    (
+        OrdinaryNativeAgentAssembler::new(
+            platform,
+            model_facade,
+            Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("empty tool policy")),
+        )
+        .with_postgres_sessions(pool.clone(), SessionLimits::default()),
+        captured,
+    )
+}
+
+fn static_tool_continuation(pending: &str) -> super::super::request::AgentExecutionRequest {
+    let pause: Value = serde_json::from_str(pending).expect("pending static pause");
+    let mut request = ordinary_agent_request(vec![reference((7, 8), "pipeline", "inner")]);
+    request.binding.request_content_digest = [23; 32];
+    request.payload.should_continue = true;
+    request.payload.meta.insert(
+        "pipeline_static_tool_resume_v1".to_owned(),
+        json!({"revision":1,"decisions":[{
+            "pause_id":pause["proof"]["pause_id"],
+            "child_thread_id":pause["child_thread_id"],
+            "tool_call_id":pause["tool_call_id"],
+            "action":"continue","value":"finish once"}]}),
+    );
+    request
+}
+
+async fn static_tool_phase(pool: &sqlx::PgPool, phase: &str, pending: &str) {
+    match phase {
+        "static_start" => {
+            let (assembler, captured) = ordinary_assembler(
+                pool,
+                vec![TestModelGatewayOutcome::Response(
+                    super::scoped_tests::tool_call_response(
+                        "inner-call",
+                        "elitea_agent_7_v_8",
+                        &json!({"task":"inner work"}),
+                    ),
+                )],
+            );
+            let request = ordinary_agent_request(vec![reference((7, 8), "pipeline", "inner")]);
+            let (browser, paused) = run_ordinary_authorized(
+                &assembler,
+                authorized_turn(&request, "execution-static-start", 1),
+            )
+            .await;
+            assert!(!paused, "static_start: the static pause completes the turn");
+            let terminal = browser.last().expect("static_start: a completed result");
+            assert_eq!(terminal["type"], "full_message", "{browser:?}");
+            let pauses = terminal["response_metadata"]["pipeline_static_tools_v1"]["pauses"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| panic!("static_start: inventory missing: {terminal:?}"));
+            assert_eq!(pauses.len(), 1);
+            assert_eq!(model_requests(&captured), 1, "static_start: one Agent call");
+            println!("{PENDING_MARKER}{}", pauses[0]);
+        }
+        "static_continue" | "static_repeat" => {
+            let (assembler, captured) = ordinary_assembler(
+                pool,
+                vec![super::scoped_tests::text("agent continued after tick")],
+            );
+            let request = static_tool_continuation(pending);
+            let execution = if phase == "static_continue" {
+                "execution-static-continue"
+            } else {
+                "execution-static-repeat"
+            };
+            if phase == "static_repeat" {
+                // The pause was continued: a second continuation of it is refused
+                // before any model call, and the pipeline does not tick again.
+                let refused = assembler
+                    .assemble(authorized_turn(&request, execution, 1))
+                    .await;
+                let Err(error) = refused else {
+                    panic!("static_repeat: the consumed pause is refused");
+                };
+                // Fail closed (Main resolves a continuation only from a pending pause,
+                // so it never sends this one); a typed stale code is a follow-up.
+                assert_eq!(
+                    error.code(),
+                    NativeAgentAssemblyErrorCode::InvalidConfiguration
+                );
+                assert_eq!(model_requests(&captured), 0, "static_repeat: no model call");
+                return;
+            }
+            let (browser, paused) =
+                run_ordinary_authorized(&assembler, authorized_turn(&request, execution, 1)).await;
+            assert!(!paused, "{browser:?}");
+            assert!(
+                browser
+                    .iter()
+                    .any(|event| event["content"] == "agent continued after tick"),
+                "{browser:?}"
+            );
+            let requests = captured.lock().expect("captured model requests");
+            assert_eq!(requests.len(), 1, "static_continue: one Agent call");
+            let body = String::from_utf8_lossy(&requests[0].body).into_owned();
+            assert!(
+                body.contains("COUNT 1"),
+                "the pipeline resumes after its tick: {body}"
+            );
+            assert!(
+                !body.contains("COUNT 2"),
+                "the tick is not replayed: {body}"
+            );
+        }
+        other => panic!("unknown static_tool phase {other}"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_ordinary_agent_static_saved_pipeline_pause_completes_and_continues_once() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the scoped continuation PostgreSQL proof"
+        );
+        return;
+    };
+    let db = run_scenario(
+        &url,
+        "static_tool",
+        &["static_start", "static_continue", "static_repeat"],
+    )
+    .await;
+    db.pool.close().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -442,6 +588,11 @@ async fn postgres_scoped_child() {
     let phase = std::env::var(PHASE_ENV).expect("phase");
     let pending = std::env::var(PENDING_ENV).unwrap_or_default();
     let pool = connect(&database).await;
+    if scenario == "static_tool" {
+        static_tool_phase(&pool, &phase, &pending).await;
+        pool.close().await;
+        return;
+    }
     match phase.as_str() {
         "start" => {
             let (assembler, captured, _) = assembler(

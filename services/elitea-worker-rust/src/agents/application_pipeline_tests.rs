@@ -30,8 +30,8 @@ use super::assembly_tests::ordinary_request;
 use super::direct_hitl::DirectHitlDecisionSet;
 use super::events::{
     AgentEventProjectionContext, AgentEventProjector, ApplicationToolGuardCatalogs,
-    ApplicationToolPresentationCatalog, DESCENDANT_CHECKPOINT_THREAD_KEY,
-    PIPELINE_TOOL_PENDING_METADATA_KEY,
+    ApplicationToolPresentationCatalog, CompletedAgentBrowserOutput,
+    DESCENDANT_CHECKPOINT_THREAD_KEY, PIPELINE_TOOL_PENDING_METADATA_KEY,
 };
 use super::graph::compiler::{PipelineDefinition, PipelineNodeRuntimes};
 use super::graph::pipeline_node_event_channel;
@@ -1466,19 +1466,33 @@ async fn static_saved_pipeline_produces_authorized_inventory_and_resumes_after_o
     .unwrap();
     projector.start(chrono::Utc::now()).unwrap();
     projector.project(&original).unwrap();
-    let batch = projector
+    let mut batch = projector
         .project(event)
         .unwrap()
         .into_iter()
         .collect::<Vec<_>>();
+    // No result rides the stream: the turn ends at EOS as a completed result
+    // with the inventory, never as a pause the lifecycle has no card for.
+    assert!(batch.iter().all(|event| event.r#type != "full_message"));
+    assert!(projector.has_static_tool_pause() && !projector.is_paused());
+    batch.extend(
+        projector
+            .finish_after_eos(
+                CompletedAgentBrowserOutput::ordinary(String::new(), "thread".to_owned()).unwrap(),
+                chrono::Utc::now(),
+            )
+            .unwrap(),
+    );
     // The publisher admits exactly one result-bearing event per execution: the
     // root's inventory message, never a second one from the paused child.
+    let results = batch
+        .iter()
+        .filter(|event| event.r#type == "full_message")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1);
     assert_eq!(
-        batch
-            .iter()
-            .filter(|event| event.r#type == "full_message")
-            .count(),
-        1
+        String::from_utf8(results[0].content.clone()).unwrap(),
+        serde_json::to_string(super::graph::static_pause::STATIC_PAUSE_MESSAGE).unwrap()
     );
     let rendered = batch
         .into_iter()

@@ -1131,6 +1131,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
     pub(crate) async fn select_native_completion<S: NativeAgentCompletionSelector>(
         self,
         selector: S,
+        static_pause: bool,
     ) -> (
         Self,
         Result<
@@ -1153,7 +1154,15 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             checkpoint,
             sandbox_stop,
         } = self;
-        let selection_result = lease.run_cancellation_safe_phase(selector.select()).await;
+        let selection_result = lease
+            .run_cancellation_safe_phase(async move {
+                if static_pause {
+                    selector.select_static_pause().await
+                } else {
+                    selector.select().await
+                }
+            })
+            .await;
         (
             Self {
                 delivery,

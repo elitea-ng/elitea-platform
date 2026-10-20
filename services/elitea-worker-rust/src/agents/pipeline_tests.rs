@@ -58,7 +58,7 @@ pub(super) mod restart_pg_tests;
 #[path = "pipeline_scoped_pg_tests.rs"]
 mod scoped_pg_tests;
 #[path = "pipeline_scoped_tests.rs"]
-mod scoped_tests;
+pub(crate) mod scoped_tests;
 
 const PIPELINE: &str = r"
 state:

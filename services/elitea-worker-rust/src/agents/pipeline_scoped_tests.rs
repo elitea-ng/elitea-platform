@@ -15,7 +15,7 @@ use crate::agents::pipeline::scoped_applications::MAX_ORDINARY_GRAPH_SCOPES;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-pub(super) type Saved = (u64, u64);
+pub(crate) type Saved = (u64, u64);
 
 pub(super) struct SavedVersions {
     versions: BTreeMap<Saved, Value>,
@@ -54,14 +54,14 @@ impl RuntimeContextRpc for SavedVersions {
     }
 }
 
-pub(super) type SavedRuntime = (
+pub(crate) type SavedRuntime = (
     Arc<PlatformClient>,
     Arc<ModelFacade>,
     CapturedModelRequests,
     Arc<Mutex<Vec<Saved>>>,
 );
 
-pub(super) fn saved_runtime(
+pub(crate) fn saved_runtime(
     versions: &BTreeMap<Saved, Value>,
     outcomes: Vec<TestModelGatewayOutcome>,
 ) -> SavedRuntime {
@@ -91,14 +91,14 @@ pub(super) fn saved_runtime(
     )
 }
 
-pub(super) fn reference(identity: Saved, kind: &str, alias: &str) -> Value {
+pub(crate) fn reference(identity: Saved, kind: &str, alias: &str) -> Value {
     json!({"id":identity.0,"type":"application","name":alias,"toolkit_name":alias,
         "description":"A saved application.","agent_type":kind,"author_id":11,
         "settings":{"application_id":identity.0,"application_version_id":identity.1},
         "meta":{},"variables":[],"is_pinned":false,"created_at":"2026-08-21T10:00:00Z"})
 }
 
-pub(super) fn saved_version(
+pub(crate) fn saved_version(
     kind: &str,
     instructions: &str,
     meta: &Value,
@@ -138,7 +138,7 @@ pub(super) fn child_pipeline_yaml(alias: &str) -> String {
 }
 
 const PLAIN_GRAPH: &str = "state: {input: str, messages: list, answer: str}\nentry_point: report\nnodes:\n  - id: report\n    type: state_modifier\n    template: 'DONE {{ input }}'\n    input: [input]\n    output: [answer]\n    transition: END\n";
-const STATIC_GRAPH: &str = "interrupt_after: [tick]\nstate: {input: str, messages: list, count: {type: int, value: 0}, answer: str}\nentry_point: tick\nnodes:\n  - id: tick\n    type: state_modifier\n    template: '{{ count + 1 }}'\n    input: [count]\n    output: [count]\n    transition: report\n  - id: report\n    type: state_modifier\n    template: 'COUNT {{ count }}'\n    input: [count]\n    output: [answer]\n    transition: END\n";
+pub(crate) const STATIC_GRAPH: &str = "interrupt_after: [tick]\nstate: {input: str, messages: list, count: {type: int, value: 0}, answer: str}\nentry_point: tick\nnodes:\n  - id: tick\n    type: state_modifier\n    template: '{{ count + 1 }}'\n    input: [count]\n    output: [count]\n    transition: report\n  - id: report\n    type: state_modifier\n    template: 'COUNT {{ count }}'\n    input: [count]\n    output: [answer]\n    transition: END\n";
 
 pub(super) fn root_request(
     yaml: &str,
@@ -156,7 +156,7 @@ pub(super) fn root_request(
     request
 }
 
-pub(super) fn tool_call_response(call_id: &str, name: &str, arguments: &Value) -> Response<Body> {
+pub(crate) fn tool_call_response(call_id: &str, name: &str, arguments: &Value) -> Response<Body> {
     let chunk = json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":call_id,"type":"function",
         "function":{"name":name,"arguments":arguments.to_string()}}]},"finish_reason":null}]});
     let raw = format!(
@@ -231,7 +231,7 @@ fn process(
     )
 }
 
-fn text(value: &str) -> TestModelGatewayOutcome {
+pub(super) fn text(value: &str) -> TestModelGatewayOutcome {
     TestModelGatewayOutcome::Response(pipeline_text_response(value))
 }
 
@@ -431,7 +431,9 @@ async fn a_nested_agent_offers_its_saved_pipeline_child_as_a_tool_and_runs_it() 
     );
 }
 
-fn ordinary_agent_request(tools: Vec<Value>) -> super::super::request::AgentExecutionRequest {
+pub(crate) fn ordinary_agent_request(
+    tools: Vec<Value>,
+) -> super::super::request::AgentExecutionRequest {
     let mut request = ordinary_request(AgentExecutionKind::Application);
     request.payload.application["version_details"]["tools"] = Value::Array(tools);
     request
@@ -442,8 +444,18 @@ async fn run_ordinary(
     assembler: &OrdinaryNativeAgentAssembler,
     request: &super::super::request::AgentExecutionRequest,
 ) -> (Vec<Value>, bool) {
+    run_ordinary_authorized(assembler, authorized(request)).await
+}
+
+/// One ordinary-root turn under the given authority, ending as the lifecycle
+/// does: a pause stops it; otherwise the completion is selected (a static tool
+/// pause completes with its inventory) and projected.
+pub(super) async fn run_ordinary_authorized(
+    assembler: &OrdinaryNativeAgentAssembler,
+    authority: AuthorizedNativeAssembly<'_>,
+) -> (Vec<Value>, bool) {
     let mut invocation = assembler
-        .assemble(authorized(request))
+        .assemble(authority)
         .await
         .expect("ordinary Agent assembles");
     invocation
@@ -464,7 +476,12 @@ async fn run_ordinary(
     if paused {
         return (browser, true);
     }
-    let selected = completion.select().await.expect("ordinary completion");
+    let selected = if projector.has_static_tool_pause() {
+        completion.select_static_pause().await
+    } else {
+        completion.select().await
+    }
+    .expect("ordinary completion");
     browser.extend(
         projector
             .finish_after_eos(selected, timestamp(1))
@@ -511,20 +528,40 @@ async fn an_ordinary_agent_offers_a_static_saved_pipeline_and_continues_it_once(
     );
     let request = ordinary_agent_request(tools.clone());
     let (browser, paused) = run_ordinary(&assembler, &request).await;
-    assert!(paused, "the static pause suspends the Agent: {browser:?}");
+    // The static pause ends the turn as a completed result that carries the
+    // inventory, the terminal Main stores and continues from: never a pause
+    // the lifecycle has no card for.
+    assert!(!paused, "the static pause completes the turn: {browser:?}");
     assert!(
         offered_tools(&captured, 0).contains(&"elitea_agent_7_v_8".to_owned()),
         "a static saved pipeline must be offered as a tool: {:?}",
         offered_tools(&captured, 0)
     );
-    let inventory = browser
+    let carriers = browser
         .iter()
-        .find_map(|event| {
-            event["response_metadata"]["pipeline_static_tools_v1"]["pauses"]
-                .as_array()
-                .cloned()
-        })
-        .unwrap_or_else(|| panic!("static pause inventory missing: {browser:?}"));
+        .filter(|event| !event["response_metadata"]["pipeline_static_tools_v1"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        carriers.len(),
+        1,
+        "one result carries the inventory: {browser:?}"
+    );
+    let terminal = browser.last().expect("a completed result");
+    assert_eq!(terminal["type"], "full_message", "{browser:?}");
+    assert_eq!(
+        carriers[0], terminal,
+        "the inventory rides the terminal message"
+    );
+    assert!(
+        terminal["response_metadata"]
+            .get("hitl_interrupts")
+            .is_none(),
+        "{terminal:?}"
+    );
+    let inventory = terminal["response_metadata"]["pipeline_static_tools_v1"]["pauses"]
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| panic!("static pause inventory missing: {terminal:?}"));
     assert_eq!(inventory.len(), 1);
 
     // A replacement Worker continues the pause once.

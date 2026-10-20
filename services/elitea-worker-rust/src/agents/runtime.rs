@@ -140,6 +140,18 @@ impl From<RuntimeContextError> for NativeAgentAssemblyError {
 pub(crate) trait NativeAgentCompletionSelector: Send {
     async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>;
 
+    /// The run stopped at a static pause of a tool-invoked saved pipeline. It
+    /// completes with that pause (the projector supplies the content and the
+    /// inventory), not with a final model text the turn never wrote.
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError>
+    where
+        Self: Sized,
+    {
+        self.select().await
+    }
+
     /// The run paused for input (a HITL interrupt) and `select` will not be
     /// called. A cloud-executor turn publishes its work so far here
     /// (ADR-0034 decision 7); every other turn has nothing to do.
@@ -188,6 +200,25 @@ pub(crate) struct AuthorizedNativeAssembly<'a> {
 }
 
 impl<'a> AuthorizedNativeAssembly<'a> {
+    /// Test-only: the same authority over another request (a lifecycle test
+    /// whose fixed input fixture needs saved tools attached).
+    #[cfg(test)]
+    pub(crate) fn with_request<'b>(
+        self,
+        request: &'b AgentExecutionRequest,
+    ) -> AuthorizedNativeAssembly<'b> {
+        AuthorizedNativeAssembly {
+            sandbox: self.sandbox,
+            request,
+            runtime_context: self.runtime_context,
+            session: self.session,
+            state_writer_lease: self.state_writer_lease,
+            command: self.command,
+            attachments: self.attachments,
+            attachment_library: self.attachment_library,
+        }
+    }
+
     pub(crate) fn sandbox_authority(
         &self,
     ) -> Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>> {

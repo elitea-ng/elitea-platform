@@ -1784,6 +1784,16 @@ where
             .map_err(|error| completed_output_error(&error))
     }
 
+    async fn select_static_pause(
+        mut self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        // The turn waits for the static pause to be continued: its work so far
+        // is published as at any pause.
+        self.paused().await?;
+        CompletedAgentBrowserOutput::ordinary(String::new(), self.thread_id)
+            .map_err(|error| completed_output_error(&error))
+    }
+
     async fn paused(&mut self) -> Result<(), NativeAgentAssemblyError> {
         if let Some(workspace) = &self.workspace {
             workspace
