@@ -96,7 +96,7 @@ export interface RemoteModel {
 }
 
 /** `paused`: a turn runs, or `held` says why (`turn`, `on_battery`, `low_power`). */
-export type EmbedState = 'waiting' | 'running' | 'paused' | 'done' | 'error';
+type EmbedState = 'waiting' | 'running' | 'paused' | 'done' | 'error';
 
 export interface EmbedStatus {
   choice: EmbeddingsChoice;

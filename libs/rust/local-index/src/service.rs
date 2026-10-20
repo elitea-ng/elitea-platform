@@ -256,6 +256,9 @@ struct Inner {
     /// text, empty after extraction), at the stat version they had: they
     /// are no change for [`IndexService::unchanged`].
     skipped: std::collections::HashMap<String, String>,
+    /// The running refresh found nothing changed and wrote nothing (no run
+    /// recorded): a cancel that reaches it before it ends wins.
+    shortcut: bool,
 }
 
 /// One workspace's index.
@@ -407,6 +410,7 @@ impl IndexService {
                 closed: false,
                 names: None,
                 skipped: std::collections::HashMap::new(),
+                shortcut: false,
             }),
             query_embedder: Mutex::new(None),
             matrix: Mutex::new(None),
@@ -751,7 +755,8 @@ impl IndexService {
                 () = stop.stopped() => None,
             }
         };
-        let outcome = if permit.is_some() {
+        self.inner().shortcut = false;
+        let mut outcome = if permit.is_some() {
             self.emit("listing", None);
             let this = Arc::clone(self);
             let worker_stop = stop.clone();
@@ -778,6 +783,12 @@ impl IndexService {
         let phase = {
             let mut inner = self.inner();
             inner.running = None;
+            // A run that wrote nothing honours a cancel that came while it
+            // ran (under this lock, as `cancel` takes it): a cancel either
+            // found the run and wins, or found none and answers `false`.
+            if std::mem::take(&mut inner.shortcut) && stop.is_requested() && outcome.is_ok() {
+                outcome = Err(IndexError::new("index_cancelled", "cancelled"));
+            }
             if inner.closed {
                 // Removed, turned off or reopened meanwhile: nothing it
                 // built is kept or served, and nothing is reported.
@@ -977,6 +988,7 @@ impl IndexService {
             {
                 // Nothing to read and nothing gone: the build served now is
                 // the folder's (no run, and no copy of its graph).
+                self.inner().shortcut = true;
                 return Ok(unchanged);
             }
             let mut graph = if full {

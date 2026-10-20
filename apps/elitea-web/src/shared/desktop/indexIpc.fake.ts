@@ -11,7 +11,7 @@ import { WorkspaceIpcError } from './workspaceIpc';
 type FailableCommand = 'status' | 'open' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove' | 'downloadModel' | 'importModel' | 'removeModel' | 'remoteModels' | 'setEmbeddings' | 'rebuildEmbeddings';
 
 /** The host's catalogue (sizes as `catalog.rs` pins them, rounded). */
-export const FAKE_MODELS: ModelInfo[] = [
+const FAKE_MODELS: ModelInfo[] = [
   { id: 'qwen3-embedding-0.6b', display_name: 'Qwen3 Embedding 0.6B', summary: 'Better on code.', license: 'Apache-2.0', download_bytes: 1_200_000_000, ram_mb: 2600, dimension: 512, downloading: false, state: 'missing' },
   { id: 'multilingual-e5-small', display_name: 'multilingual-e5-small', summary: 'Small and fast.', license: 'MIT', download_bytes: 470_000_000, ram_mb: 1400, dimension: 384, downloading: false, state: 'missing' },
 ];

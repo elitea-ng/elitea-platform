@@ -36,7 +36,7 @@ const mutedSx = (theme: Theme) => ({
 const REMOTE_OPTION = 'remote';
 
 /** `470 MB`, `1.2 GB`. */
-export function formatSize(bytes: number): string {
+function formatSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
   return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
 }
@@ -48,7 +48,7 @@ function modelLine(model: ModelInfo): string {
 }
 
 /** `under a minute`, `12 min`, `2 h 5 min`. */
-export function formatDuration(seconds: number): string {
+function formatDuration(seconds: number): string {
   if (seconds < 60) return t('workspace.index.embeddings.underMinute', 'under a minute');
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return t('workspace.index.embeddings.minutes', '{{minutes}} min', { minutes: String(minutes) });

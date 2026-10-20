@@ -16,9 +16,9 @@ export const LOCAL_PREFIX = 'local:';
 export const REMOTE_PREFIX = 'remote:';
 
 /** Above this many chunks the smaller model is recommended (a first pass of the larger one takes hours on a laptop). */
-export const LARGE_INDEX_CHUNKS = 50_000;
-export const SMALL_MODEL = 'multilingual-e5-small';
-export const CODE_MODEL = 'qwen3-embedding-0.6b';
+const LARGE_INDEX_CHUNKS = 50_000;
+const SMALL_MODEL = 'multilingual-e5-small';
+const CODE_MODEL = 'qwen3-embedding-0.6b';
 
 /** The model the settings recommend for an index of `chunks` chunks (the person still picks). */
 export function recommendedModel(chunks: number): string {
@@ -26,9 +26,9 @@ export function recommendedModel(chunks: number): string {
 }
 
 /** A download's bytes so far, by model id (from `index://event`). */
-export type DownloadProgress = Record<string, { done: number; total: number }>;
+type DownloadProgress = Record<string, { done: number; total: number }>;
 
-export type EmbeddingsAction =
+type EmbeddingsAction =
   | { kind: 'choose'; choice: EmbeddingsChoice }
   | { kind: 'download'; modelId: string }
   | { kind: 'cancelDownload'; modelId: string }
