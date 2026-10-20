@@ -551,6 +551,41 @@ always describe the documents it holds; an index built before chunks
 existed reads every file once on its next refresh to cut them (nothing is
 parsed again).
 
+### Index embeddings (`src/embeddings.rs`, `libs/rust/local-embed`)
+
+A local index needs no embedding model: the text index and the code graph
+answer on their own. Vectors are an option per workspace, **off by
+default**, in one of two ways the policy may allow (both also need
+`allowed && local_index`):
+
+* `local:<model id>` — `local_work.index_local_embeddings` (server default
+  true; absent = false). A model of the pinned catalogue run on this
+  computer by candle (Metal on Apple silicon); nothing leaves the device.
+* `remote:<dim>:<model>` — `local_work.index_remote_embeddings` (default
+  false). The deployment's `/llm/v1/embeddings` with the native token and
+  `X-Project-Id` = the folder's bound project. Background embedding sends
+  no `X-Elitea-Execution-Id`; a `search_workspace` call inside a turn
+  sends that turn's id for its query.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `index_embeddings_get` | `{workspace_id}` | `string` — the setting (`off` when unset or the index is not open) |
+| `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now). `off` is always accepted. |
+
+One background thread embeds every open, turned-on index whose setting
+names an embedder: after each build, in batches of 32 distinct chunk texts,
+at the lowest thread priority (CPU work on half the cores), pausing between
+batches while any turn runs, and only on mains power outside Low Power
+Mode. One model is in memory at a time, dropped after two idle minutes.
+Vectors (int8, `[scale][dim]`, keyed by the chunk text's hash: unchanged
+chunks keep theirs across refreshes) are stamped `origin:model:dim`; only
+queries embedded the same way are compared with them. With vectors,
+`search_workspace` adds a `semantic` list to the fusion (text 0.3, vectors
+0.7; `mode: semantic` uses the vectors alone). **The policy is read on
+every pass**: a way it no longer allows makes no vectors, its vectors are
+deleted, and searches lose their dense side, as a `path_deny` change drops
+what it covers. Turning embeddings `off` deletes them too.
+
 ## Cloud handoff (`src/handoff.rs`, ADR-0034)
 
 Send a Local work thread to the cloud executor and take it back. The

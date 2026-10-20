@@ -184,6 +184,8 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             // The runner is the cloud destination, not a device that may hand
             // work off to the cloud (ADR-0034 decision 11).
             cloud_handoff: false,
+            index_local_embeddings: false,
+            index_remote_embeddings: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

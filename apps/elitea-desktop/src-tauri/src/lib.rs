@@ -257,7 +257,20 @@ pub fn run() {
             )
             .with_deny_list(host_deny);
             let index = match Embedding::start(
-                Arc::new(embeddings::LocalModels::new(&data_dir)),
+                Arc::new(embeddings::Embedders {
+                    local: embeddings::LocalModels::new(&data_dir),
+                    remote: match tauri::async_runtime::handle() {
+                        tauri::async_runtime::RuntimeHandle::Tokio(runtime) => {
+                            Some(embeddings::RemoteDeps {
+                                http: http.clone(),
+                                credentials: Arc::new(AuthCredentials(auth.clone())),
+                                workspaces: workspaces.clone(),
+                                runtime,
+                            })
+                        }
+                    },
+                    policy: policy.clone(),
+                }),
                 Arc::new(embeddings::Power::default()),
                 EmbedConfig::default(),
                 Arc::new(|_: &str, _: &EmbedStatus| {}),
@@ -387,6 +400,8 @@ pub fn run() {
             index::index_disable,
             index::index_refresh,
             index::index_cancel,
+            index::index_embeddings_get,
+            index::index_embeddings_set,
             index::index_remove,
             platform::app_platform,
             context_menu::context_menu_show,

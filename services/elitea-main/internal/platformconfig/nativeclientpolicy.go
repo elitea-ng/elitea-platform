@@ -56,6 +56,15 @@ const (
 	// cloud handoff (ADR-0034 decision 11). It is not local_work_cloud_sync,
 	// which ADR-0029 decision 7 ties to DeepWiki and Inventory.
 	KeyNativeLocalWorkCloudHandoff = "local_work_cloud_handoff"
+	// KeyNativeLocalWorkIndexLocalEmbeddings and
+	// KeyNativeLocalWorkIndexRemoteEmbeddings gate the vectors of the local
+	// index (client contract 1.9). Embeddings stay off per workspace until
+	// the user turns them on and picks how; these say which ways the user may
+	// pick. Local embeddings run a model on the device (nothing leaves it);
+	// remote embeddings send the workspace's text to this deployment's
+	// /llm/v1/embeddings route and spend the user's budget.
+	KeyNativeLocalWorkIndexLocalEmbeddings  = "local_work_index_local_embeddings"
+	KeyNativeLocalWorkIndexRemoteEmbeddings = "local_work_index_remote_embeddings"
 )
 
 // The values of KeyNativeLocalWorkMaxSandboxMode, from the most to the least
@@ -140,6 +149,13 @@ type LocalWorkPolicy struct {
 	// (ADR-0034). The server also refuses a send while it is false; the
 	// platform and project settings can narrow it further.
 	CloudHandoff bool `json:"cloud_handoff"`
+	// IndexLocalEmbeddings: the user may embed a local index with a model
+	// that runs on the device.
+	IndexLocalEmbeddings bool `json:"index_local_embeddings"`
+	// IndexRemoteEmbeddings: the user may embed a local index through this
+	// deployment's embeddings route, which receives the workspace's text.
+	// Turning it off makes the desktop drop the vectors made that way.
+	IndexRemoteEmbeddings bool `json:"index_remote_embeddings"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -160,6 +176,10 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		CloudSync:      false,
 		MemoryWrite:    true,
 		CloudHandoff:   false,
+		// On-device embeddings send nothing anywhere; remote ones send the
+		// folder's text to the deployment, so they wait for an administrator.
+		IndexLocalEmbeddings:  true,
+		IndexRemoteEmbeddings: false,
 	}
 }
 
@@ -179,6 +199,8 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.CloudSync = values.Bool(KeyNativeLocalWorkCloudSync, policy.CloudSync)
 	policy.MemoryWrite = values.Bool(KeyNativeLocalWorkMemoryWrite, policy.MemoryWrite)
 	policy.CloudHandoff = values.Bool(KeyNativeLocalWorkCloudHandoff, policy.CloudHandoff)
+	policy.IndexLocalEmbeddings = values.Bool(KeyNativeLocalWorkIndexLocalEmbeddings, policy.IndexLocalEmbeddings)
+	policy.IndexRemoteEmbeddings = values.Bool(KeyNativeLocalWorkIndexRemoteEmbeddings, policy.IndexRemoteEmbeddings)
 	return policy
 }
 

@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.8",
+  "client_contract": "1.9",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -10774,6 +10774,8 @@
                         "cloud_sync",
                         "command_allow",
                         "command_deny",
+                        "index_local_embeddings",
+                        "index_remote_embeddings",
                         "local_index",
                         "local_mcp",
                         "max_sandbox_mode",
@@ -10803,6 +10805,12 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "index_local_embeddings": {
+                          "type": "boolean"
+                        },
+                        "index_remote_embeddings": {
+                          "type": "boolean"
                         },
                         "local_index": {
                           "type": "boolean"

@@ -39,6 +39,8 @@
     "allow-index-disable",
     "allow-index-refresh",
     "allow-index-cancel",
+    "allow-index-embeddings-get",
+    "allow-index-embeddings-set",
     "allow-index-remove",
     "allow-app-platform",
     "allow-context-menu-show",

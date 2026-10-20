@@ -39,6 +39,8 @@ fn main() {
             "index_disable",
             "index_refresh",
             "index_cancel",
+            "index_embeddings_get",
+            "index_embeddings_set",
             "index_remove",
             "app_platform",
             "context_menu_show",

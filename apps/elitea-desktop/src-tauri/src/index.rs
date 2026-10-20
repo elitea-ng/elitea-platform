@@ -52,7 +52,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
-use elitea_local_index::embedding::{Embedding, TurnGuard};
+use elitea_local_index::embedding::{Embedding, OFF, SETTING, TurnGuard, choice_of};
+
+use crate::embeddings::{Allowed, Choice};
 use elitea_local_index::service::{
     IndexError, IndexEvent, IndexEvents, IndexService, IndexState, IndexStatus,
     limit_parser_threads, policy_fingerprint,
@@ -690,6 +692,77 @@ impl IndexRegistry {
         Ok(service.status())
     }
 
+    /// Set the workspace's embeddings (`off`, `local:<model>`,
+    /// `remote:<dim>:<model>`): what the background embedder makes and the
+    /// dense side of searches use. Off by default; a choice the policy does
+    /// not allow now is refused (`embeddings_not_allowed`), an unknown one
+    /// too (`embeddings_unknown`). Returns the value stored.
+    ///
+    /// # Errors
+    ///
+    /// `local_index_disabled`, `index_off`, `workspace_unknown`, the two
+    /// above, or the index could not be written.
+    pub async fn set_embeddings(
+        &self,
+        workspace_id: &str,
+        value: &str,
+    ) -> Result<String, TurnError> {
+        let (policy, _) = self.policy_now().gate()?;
+        let choice = Choice::parse(value);
+        match &choice {
+            Choice::Unknown => {
+                return Err(TurnError::new(
+                    "embeddings_unknown",
+                    "That is not an embedder this app knows.",
+                ));
+            }
+            Choice::Off => {}
+            other if !Allowed::of(self.policy.as_ref()).allows(other) => {
+                return Err(TurnError::new(
+                    "embeddings_not_allowed",
+                    "Your organization's policy does not allow these embeddings.",
+                ));
+            }
+            _ => {}
+        }
+        let workspace = self.workspace(workspace_id).await?;
+        let (entry, mut slot) = self.lock(workspace_id).await;
+        if !self.enabled(workspace_id, &mut slot).await? {
+            return Err(TurnError::new(
+                "index_off",
+                "Turn the index on for this workspace first.",
+            ));
+        }
+        let service = self
+            .open_in(&workspace, &policy, &entry, &mut slot, false)
+            .await?;
+        drop(slot);
+        let stored = choice.value();
+        let (writer, saved) = (service.clone(), stored.clone());
+        blocking(move || writer.store().set_setting(SETTING, &saved))
+            .await?
+            .map_err(IndexError::from)?;
+        if let Some(embedding) = &self.embedding {
+            embedding.add(&service);
+            embedding.wake();
+        }
+        Ok(stored)
+    }
+
+    /// The workspace's embeddings setting (`off` when the index is not
+    /// open or never set).
+    pub async fn embeddings(&self, workspace_id: &str) -> String {
+        match self
+            .existing(workspace_id)
+            .and_then(|entry| entry.current())
+        {
+            Some(service) => blocking(move || choice_of(&service))
+                .await
+                .unwrap_or_else(|_| OFF.to_owned()),
+            None => OFF.to_owned(),
+        }
+    }
+
     /// `index_cancel`: `true` when a refresh was running. Never waits for
     /// the workspace's slot (an open in progress has nothing to cancel).
     #[must_use]
@@ -971,6 +1044,29 @@ pub async fn index_disable(
     workspace_id: String,
 ) -> Result<IndexStatus, IpcError> {
     Ok(state.index.disable(&workspace_id).await?)
+}
+
+/// The workspace's embeddings setting (IPC.md, "Index embeddings").
+#[tauri::command(rename_all = "snake_case")]
+pub async fn index_embeddings_get(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+) -> Result<String, IpcError> {
+    Ok(state.index.embeddings(&workspace_id).await)
+}
+
+/// Set the workspace's embeddings: `off`, `local:<model id>` or
+/// `remote:<dim>:<model>` (IPC.md, "Index embeddings").
+#[tauri::command(rename_all = "snake_case")]
+pub async fn index_embeddings_set(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    embeddings: String,
+) -> Result<String, IpcError> {
+    Ok(state
+        .index
+        .set_embeddings(&workspace_id, &embeddings)
+        .await?)
 }
 
 /// Refresh the index (`full`: rebuild it from nothing).
@@ -1516,6 +1612,49 @@ mod tests {
         }
         let (with, all) = service.store().vector_coverage("local:fake:2").unwrap();
         assert!(all > 0 && with == all, "{with}/{all}");
+    }
+
+    /// Embeddings are off until set, and only to a way the policy allows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn embeddings_are_set_only_as_the_policy_allows() {
+        let f = registry(json!({"allowed": true, "local_index": true,
+            "index_local_embeddings": true}));
+        let refused = f.registry.set_embeddings(&f.id, "off").await.unwrap_err();
+        assert_eq!(refused.code, "index_off");
+        f.registry.enable(&f.id).await.unwrap();
+        until_built(&f.registry, &f.id).await;
+        assert_eq!(f.registry.embeddings(&f.id).await, "off");
+        let unknown = f
+            .registry
+            .set_embeddings(&f.id, "local:nope")
+            .await
+            .unwrap_err();
+        assert_eq!(unknown.code, "embeddings_unknown");
+        let remote = f
+            .registry
+            .set_embeddings(&f.id, "remote:8:text-embedding-3-small")
+            .await
+            .unwrap_err();
+        assert_eq!(remote.code, "embeddings_not_allowed");
+        let stored = f
+            .registry
+            .set_embeddings(&f.id, "local:multilingual-e5-small")
+            .await
+            .unwrap();
+        assert_eq!(stored, "local:multilingual-e5-small");
+        assert_eq!(f.registry.embeddings(&f.id).await, stored);
+        // Local embeddings turned off by the policy: refused, off still is not.
+        *f.policy.0.lock().unwrap() = Some(on());
+        let local = f
+            .registry
+            .set_embeddings(&f.id, "local:multilingual-e5-small")
+            .await
+            .unwrap_err();
+        assert_eq!(local.code, "embeddings_not_allowed");
+        assert_eq!(
+            f.registry.set_embeddings(&f.id, "off").await.unwrap(),
+            "off"
+        );
     }
 
     /// `workspace_remove`'s path (`with_closed`) drops the workspace's

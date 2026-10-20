@@ -71,6 +71,14 @@ pub struct LocalWorkPolicy {
     /// `local_work_cloud_handoff` (ADR-0034 decision 11): this device may
     /// send a Local work thread to the cloud executor. Off when absent.
     pub cloud_handoff: bool,
+    /// `local_work_index_local_embeddings` (client contract 1.9): a local
+    /// index may be embedded by a model run on this device. The server
+    /// sends `true` by default; off when absent.
+    pub index_local_embeddings: bool,
+    /// `local_work_index_remote_embeddings` (client contract 1.9): a local
+    /// index may be embedded through the deployment's embeddings route.
+    /// Off by default and when absent; turned off, those vectors go.
+    pub index_remote_embeddings: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -85,6 +93,8 @@ impl Default for LocalWorkPolicy {
             path_deny: Vec::new(),
             local_index: false,
             cloud_handoff: false,
+            index_local_embeddings: false,
+            index_remote_embeddings: false,
         }
     }
 }
@@ -121,6 +131,12 @@ mod tests {
             serde_json::from_value(serde_json::json!({"allowed": true, "cloud_handoff": true}))
                 .expect("parse");
         assert!(handoff.cloud_handoff);
+        assert!(!handoff.index_local_embeddings && !handoff.index_remote_embeddings);
+        let embeddings: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
+            "allowed": true, "index_local_embeddings": true, "index_remote_embeddings": true
+        }))
+        .expect("parse");
+        assert!(embeddings.index_local_embeddings && embeddings.index_remote_embeddings);
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
     }
