@@ -1,11 +1,23 @@
 // Tests for scripts/contract.mjs. Run with `npm run test:scripts` (node:test).
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { ContractError, SPEC, buildContract, generateTypes, prune } from './contract.mjs';
+import { CLIENT_OPERATIONS, ContractError, SPEC, buildContract, generateTypes, prune } from './contract.mjs';
 
 describe('the spec source', () => {
+  it('hashes the operation list, not the file: a $comment edit or a reorder does not stale the client', () => {
+    const declared = JSON.parse(readFileSync(CLIENT_OPERATIONS, 'utf8'));
+    const dir = mkdtempSync(join(tmpdir(), 'ops-'));
+    const other = join(dir, 'client-operations.json');
+    writeFileSync(other, JSON.stringify({ $comment: 'edited', operations: [...declared.operations].reverse() }));
+    assert.equal(buildContract({ operationsPath: other }).inputs.operations, buildContract().inputs.operations);
+    writeFileSync(other, JSON.stringify({ operations: declared.operations.slice(1) }));
+    assert.notEqual(buildContract({ operationsPath: other }).inputs.operations, buildContract().inputs.operations);
+  });
+
   it('is the server document in this repository, not a pinned copy', () => {
     assert.match(SPEC.replaceAll('\\', '/'), /services\/elitea-main\/api\/openapi\/v2\.yaml$/);
     assert.ok(readFileSync(SPEC, 'utf8').startsWith('openapi:'));

@@ -166,13 +166,16 @@ export function buildContract({ specPath = SPEC, operationsPath = CLIENT_OPERATI
     throw new ContractError(`${specPath} is missing (the app must sit at apps/elitea-mobile in the monorepo)`);
   }
   const spec = parseYaml(specText, relative(REPO_ROOT, specPath));
-  const pruned = prune(spec, readClientOperations(operationsPath));
+  const operations = readClientOperations(operationsPath);
+  const pruned = prune(spec, operations);
   pruned.info = {
     title: spec.info?.title,
     version: 'monorepo',
     'x-elitea-client-contract': spec.info?.['x-elitea-client-contract'],
   };
-  return { doc: pruned, inputs: { operations: sha256Hex(readFileSync(operationsPath)) } };
+  // The hash covers the sorted operation list, not the file bytes: editing the $comment must not
+  // make the generated file stale.
+  return { doc: pruned, inputs: { operations: sha256Hex(JSON.stringify([...operations].sort())) } };
 }
 
 function writePruned(doc) {

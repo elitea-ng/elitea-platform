@@ -5,7 +5,7 @@
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
  * client contract:    1.9
- * operations sha256:  3565355ea2be2b8a03d2e07d7da128a5b5d10560e645af834eef981f2ebd87b2
+ * operations sha256:  5f445416957ab134d0467128cf1145c6b6e0cbde4945380f5baa586e53d58510
  */
 export interface paths {
     "/.well-known/elitea-client": {
