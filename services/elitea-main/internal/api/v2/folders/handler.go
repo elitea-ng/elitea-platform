@@ -226,6 +226,11 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 	//
 	// Project pins are shared. The row records the last pinner, not its reader.
 	// Chat authority still restricts the conversations returned by this listing.
+	//
+	// The project's archive (client contract 1.10, tenant/0151) takes a
+	// conversation out of this sidebar listing for every member, its pinned
+	// section included. Archived conversations are listed through
+	// listConversations with `archived=only`.
 	q := fmt.Sprintf(`
 		SELECT c.id, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id,
 		       EXISTS (SELECT 1 FROM centry.social_pins p
@@ -234,9 +239,10 @@ func (h *Handler) loadConversations(ctx context.Context, r *http.Request, projec
 		                         AND p.entity_id = c.id) AS is_pinned,
 		       c.is_private, COALESCE(c.source, ''),
 		       c.created_at, c.updated_at
-		FROM %s.chat_conversations c
-		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %s AND %s
-		ORDER BY %s %s, c.id %s`, schema, visible, sourceFilter, orderCol, orderDir, orderDir)
+		FROM %[1]s.chat_conversations c
+		WHERE (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false') AND %[2]s AND %[3]s
+		  AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_conversation_archives ca WHERE ca.conversation_id = c.id)
+		ORDER BY %[4]s %[5]s, c.id %[5]s`, schema, visible, sourceFilter, orderCol, orderDir)
 	args = append(args, projectID)
 
 	rows, err := h.pool.Query(ctx, q, args...)
