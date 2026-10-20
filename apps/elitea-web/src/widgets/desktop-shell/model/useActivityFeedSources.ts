@@ -17,6 +17,7 @@ import type { IndexEvent } from '@/shared/desktop/indexIpc';
 import type { AgentEvent, Workspace } from '@/shared/desktop/workspaceIpc';
 
 import { useActivityFeed } from './activityFeed.store';
+import { useAppIpc } from './appIpcContext';
 import { WORKSPACE_LIST_KEY } from './useShellActions';
 
 const COMMIT_POLL_MS = 3_000;
@@ -50,6 +51,7 @@ export function useActivityFeedSources(): void {
   const indexIpc = useIndexIpc();
   const handoffIpc = useHandoffIpc();
   const queryClient = useQueryClient();
+  const appIpc = useAppIpc();
 
   useEffect(() => {
     if (workspaceIpc === undefined) return undefined;
@@ -68,6 +70,23 @@ export function useActivityFeedSources(): void {
     if (handoffIpc === undefined) return undefined;
     return subscribe<HandoffEvent>((h) => handoffIpc.onEvent(h), (event) => useActivityFeed.getState().applyHandoffEvent(event));
   }, [handoffIpc]);
+
+  // A cloud turn streams into this window (the page's chat transport): the host's menu-bar item shows it too.
+  useEffect(() => {
+    if (appIpc === undefined) return undefined;
+    let known = new Map<string, true>();
+    return useActivityFeed.subscribe((state) => {
+      const now = new Map<string, true>(Object.keys(state.cloudRuns).map((uuid) => [uuid, true]));
+      for (const uuid of now.keys()) {
+        const run = state.cloudRuns[uuid];
+        if (!known.has(uuid) && run !== undefined) void appIpc.cloudRun({ conversationUuid: uuid, running: true, ...(run.workspaceId === null ? {} : { workspaceId: run.workspaceId }), workspaceName: run.title }).catch(() => undefined);
+      }
+      for (const uuid of known.keys()) {
+        if (!now.has(uuid)) void appIpc.cloudRun({ conversationUuid: uuid, running: false }).catch(() => undefined);
+      }
+      known = now;
+    });
+  }, [appIpc]);
 
   // What a missed event left behind.
   useEffect(() => {

@@ -6,7 +6,7 @@
  * sidebar's thread row. Real hooks over MSW, the host over in-memory fakes.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider } from '@/features/workspace';
 import { HandoffIpcProvider, readThreadUuids, useTakeBackRequests } from '@/features/workspace-handoff';
+import { useActivityFeed } from '@/widgets/desktop-shell';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { createFakeHandoffIpc, type FakeHandoffIpc } from '@/shared/desktop/handoffIpc.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
@@ -60,7 +62,7 @@ function serve(messages: { id: string; role: 'user' | 'assistant'; content: stri
     ),
     http.get(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ rows: [], total: 0 })),
     http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 3, name: 'Me' })),
-    http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/77`, () => HttpResponse.json({ id: 77, uuid: UUID, name: 'fix the build', source: 'local_work' })),
+    http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/77`, () => HttpResponse.json({ id: 77, uuid: UUID, name: 'fix the build', source: 'local_work', participants: [{ id: 3, entity_name: 'application', name: 'Coder', meta: {} }] })),
     http.get(`${BASE}/elitea_core/messages/prompt_lib/42/77`, () =>
       HttpResponse.json({ items: [...messages].reverse().map((m) => ({ ...m, uid: m.id, conversation_id: '77' })), total: messages.length, page: 1, page_size: 100, total_pages: 1 }),
     ),
@@ -68,6 +70,8 @@ function serve(messages: { id: string; role: 'user' | 'assistant'; content: stri
 }
 
 beforeEach(() => {
+  // The chat's message list scrolls its end into view; jsdom has no layout.
+  Element.prototype.scrollIntoView = () => undefined;
   resetConfigForTests();
   globals['elitea_ui_config'] = { vite_server_url: 'https://elitea.example', vite_base_uri: '/', vite_public_project_id: '1' };
   configureGeneratedClient({ baseUrl: BASE });
@@ -171,10 +175,12 @@ describe('a thread running in the cloud', () => {
     // The transcript is the server's, and it is the only one shown.
     // Looked up again on every try: the session may re-render while the first reads settle.
     await waitFor(() => expect(within(screen.getByTestId('cloud-transcript')).getByText('Done in the cloud.')).toBeInTheDocument());
-    // Composer off: no typing, no sending.
+    // The composer stays on, for the cloud copy: no plan mode, the agent picker disabled.
     const composer = screen.getByTestId('workspace-composer');
-    expect(within(composer).getByRole('textbox')).toBeDisabled();
-    expect(screen.getByTestId('workspace-send-button')).toBeDisabled();
+    expect(within(composer).getByRole('textbox')).toBeEnabled();
+    expect(within(composer).getByRole('textbox')).toHaveAttribute('placeholder', 'Message the cloud copy…');
+    expect(screen.queryByTestId('mode-segmented')).toBeNull();
+    expect(screen.getByTestId('agent-chip')).toBeDisabled();
     expect(screen.queryByRole('menuitem', { name: 'Send to cloud…' })).toBeNull();
   });
 
@@ -188,7 +194,13 @@ describe('a thread running in the cloud', () => {
     serve();
     mount(createFakeHandoffIpc({ status: { ...away, state: 'RECLAIMING', executor: 'returning' } }));
     const banner = await screen.findByTestId('cloud-thread-banner');
-    expect(within(banner).getByTestId('executor-badge')).toHaveTextContent('Returning');
+    expect(banner).toHaveAttribute('data-executor', 'returning');
+    expect(within(banner).getByTestId('banner-returning')).toBeInTheDocument();
+    expect(screen.getAllByTestId('executor-badge')[0]).toHaveTextContent('Returning');
+    // Read-only: nothing can be typed or sent to a thread on its way back.
+    const composer = screen.getByTestId('workspace-composer');
+    expect(within(composer).getByRole('textbox')).toBeDisabled();
+    expect(screen.getByTestId('workspace-send-button')).toBeDisabled();
   });
 
   it('takes the thread back: the banner goes, the composer comes back', async () => {
@@ -251,5 +263,99 @@ describe('the thread list', () => {
     serve();
     mount(createFakeHandoffIpc());
     await waitFor(() => expect(readThreadUuids('w1')).toEqual({ '77': UUID }));
+  });
+});
+
+describe('chatting with the cloud copy', () => {
+  const cloud = { state: 'CLOUD_IDLE', executor: 'cloud', read_only: true, sent_from_here: true, epoch: 2 } as const;
+  const EVENTS_URL = '/api/v2/executions/42/exec-1/events';
+  const RESPONSE_ID = 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44';
+  let registry: TestEventSourceRegistry;
+  let started: { query: string | null; body: Record<string, unknown> }[];
+
+  beforeEach(() => {
+    registry = installTestEventSource();
+    started = [];
+    useActivityFeed.getState().reset();
+  });
+  afterEach(() => registry.restore());
+
+  function acceptStart(): void {
+    server.use(
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/42/${UUID}`, async ({ request }) => {
+        started.push({ query: new URL(request.url).searchParams.get('execution_contract'), body: (await request.json()) as Record<string, unknown> });
+        return HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL, response_message_id: RESPONSE_ID });
+      }),
+    );
+  }
+
+  const frame = (payload: Record<string, unknown>): string => JSON.stringify({ message_id: RESPONSE_ID, question_id: null, ...payload });
+
+  async function typeAndSend(user: ReturnType<typeof userEvent.setup>, text: string): Promise<void> {
+    const composer = await screen.findByTestId('workspace-composer');
+    await waitFor(() => expect(within(composer).getByTestId('workspace-send-button')).toBeDefined());
+    await user.type(within(composer).getByRole('textbox'), text);
+    await waitFor(() => expect(screen.getByTestId('workspace-send-button')).toBeEnabled());
+    await user.click(screen.getByTestId('workspace-send-button'));
+  }
+
+  it('sends the message to the SERVER conversation (the agent participant), not the local agent loop', async () => {
+    serve();
+    acceptStart();
+    const user = userEvent.setup();
+    mount(createFakeHandoffIpc({ status: cloud }));
+    await typeAndSend(user, 'run the tests in the cloud');
+    await waitFor(() => expect(started).toHaveLength(1));
+    expect(started[0]?.query).toBe('agent.execute.application.v1');
+    expect(started[0]?.body).toMatchObject({ conversation_uuid: UUID, participant_id: 3, payload: { user_input: 'run the tests in the cloud' } });
+    expect(typeof started[0]?.body['question_id']).toBe('string');
+  });
+
+  it('streams the reply into the transcript, shows the cloud turn in the activity feed, and clears it when the turn ends', async () => {
+    serve([{ id: 'm1', role: 'user', content: 'Fix the build' }]);
+    acceptStart();
+    const user = userEvent.setup();
+    mount(createFakeHandoffIpc({ status: cloud }));
+    await typeAndSend(user, 'and run the linter');
+    await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+    await waitFor(() => expect(Object.keys(useActivityFeed.getState().cloudRuns)).toEqual([UUID]));
+
+    act(() => {
+      registry.emit('execution.node_event', frame({ type: 'agent_start' }));
+      registry.emit('execution.node_event', frame({ type: 'agent_llm_start' }));
+      registry.emit('execution.node_event', frame({ type: 'agent_llm_chunk', content: 'Linter is clean.' }));
+    });
+    expect(await within(screen.getByTestId('cloud-transcript')).findByText(/Linter is clean/)).toBeInTheDocument();
+    // The composer offers Stop while the cloud turn streams.
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeInTheDocument();
+
+    act(() => {
+      registry.emit('execution.node_event', frame({ type: 'pipeline_finish' }));
+    });
+    await waitFor(() => expect(useActivityFeed.getState().cloudRuns).toEqual({}));
+  });
+
+  it('shows the server\'s refusal as an error, and the turn never shows as running', async () => {
+    serve();
+    server.use(
+      http.post(`${BASE}/elitea_core/messages/prompt_lib/42/${UUID}`, () => HttpResponse.json({ message: 'The cloud executor is not available.' }, { status: 422 })),
+    );
+    const user = userEvent.setup();
+    mount(createFakeHandoffIpc({ status: cloud }));
+    await typeAndSend(user, 'hello');
+    expect(await screen.findByText('The cloud executor is not available.')).toBeInTheDocument();
+    expect(useActivityFeed.getState().cloudRuns).toEqual({});
+    // What was typed is kept.
+    expect(within(screen.getByTestId('workspace-composer')).getByRole('textbox')).toHaveValue('hello');
+  });
+
+  it('offers Take back, Erase cloud copy and Open in Chat from the run-location menu', async () => {
+    serve();
+    const user = userEvent.setup();
+    mount(createFakeHandoffIpc({ status: cloud }));
+    await user.click(await screen.findByTestId('executor-badge'));
+    expect(await screen.findByRole('menuitem', { name: 'Take back…' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Erase cloud copy…' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Open in chat' })).toBeInTheDocument();
   });
 });

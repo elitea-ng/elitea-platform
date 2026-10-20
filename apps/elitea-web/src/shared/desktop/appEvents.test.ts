@@ -77,6 +77,17 @@ describe('createAppIpc', () => {
     expect(off).toHaveBeenCalledTimes(3);
   });
 
+  it('tells the host a cloud turn started and ended', async () => {
+    const invoke = vi.fn().mockResolvedValue(null);
+    const ipc = createAppIpc(invoke, () => Promise.resolve(() => undefined));
+    await ipc.cloudRun({ conversationUuid: 'u1', running: true, workspaceId: 'w1', workspaceName: 'app' });
+    await ipc.cloudRun({ conversationUuid: 'u1', running: false });
+    expect(invoke.mock.calls).toEqual([
+      ['activity_cloud_run', { conversation_uuid: 'u1', running: true, workspace_id: 'w1', workspace_name: 'app' }],
+      ['activity_cloud_run', { conversation_uuid: 'u1', running: false }],
+    ]);
+  });
+
   it('is undefined outside the Tauri webview', () => {
     expect(tauriAppIpc()).toBeUndefined();
   });

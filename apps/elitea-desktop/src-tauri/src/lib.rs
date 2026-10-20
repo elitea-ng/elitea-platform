@@ -375,6 +375,7 @@ pub fn run() {
             index::index_remove,
             platform::app_platform,
             context_menu::context_menu_show,
+            activity::activity_cloud_run,
             net::http_fetch,
             net::http_read_body,
             net::http_cancel,

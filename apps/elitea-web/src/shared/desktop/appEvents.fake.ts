@@ -16,6 +16,7 @@ export interface FakeAppIpc extends AppIpc {
     opened: { workspaceId: string; path: string }[];
     themes: NativeWindowTheme[];
     contextMenus: (readonly ContextMenuItem[])[];
+    cloudRuns: { conversationUuid: string; running: boolean }[];
   };
   /** What the next context menu answers (the item the person "chooses"); `null`: dismissed. */
   chooseFromContextMenu(id: string | null): void;
@@ -29,7 +30,7 @@ export const MACOS_PLATFORM: AppPlatform = { os: 'macos', titlebar_overlay: true
 export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): FakeAppIpc {
   const handlers = new Set<AppCommandHandler>();
   const queued: AppCommand[] = [];
-  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [], contextMenus: [] };
+  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [], contextMenus: [], cloudRuns: [] };
   let nextChoice: string | null = null;
   const failures = new Map<'revealPath' | 'openPath', WorkspaceIpcError>();
   const settle = (command: 'revealPath' | 'openPath'): Promise<void> => {
@@ -48,6 +49,10 @@ export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): Fake
     openPath(workspaceId, path) {
       calls.opened.push({ workspaceId, path });
       return settle('openPath');
+    },
+    cloudRun(run) {
+      calls.cloudRuns.push({ conversationUuid: run.conversationUuid, running: run.running });
+      return Promise.resolve();
     },
     contextMenu(items) {
       calls.contextMenus.push(items);

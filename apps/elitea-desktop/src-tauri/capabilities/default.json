@@ -42,6 +42,7 @@
     "allow-index-remove",
     "allow-app-platform",
     "allow-context-menu-show",
+    "allow-activity-cloud-run",
     "allow-http-fetch",
     "allow-http-read-body",
     "allow-http-cancel",

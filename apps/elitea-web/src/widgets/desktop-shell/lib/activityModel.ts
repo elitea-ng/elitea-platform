@@ -9,7 +9,7 @@
  */
 import { t } from '@/shared/i18n';
 
-import type { ActivityFeedState, TrackedCloud, TrackedIndex, TrackedSend, TrackedTurn } from '../model/activityFeed.store';
+import type { ActivityFeedState, TrackedCloud, TrackedCloudRun, TrackedIndex, TrackedSend, TrackedTurn } from '../model/activityFeed.store';
 
 type ActivityKind = 'approval' | 'turn' | 'commit' | 'handoff' | 'cloud' | 'index';
 
@@ -93,7 +93,7 @@ function turnActivities(turn: TrackedTurn): Activity[] {
   return out;
 }
 
-type FeedFacts = Pick<ActivityFeedState, 'turns' | 'indexes' | 'sends' | 'cloud'>;
+type FeedFacts = Pick<ActivityFeedState, 'turns' | 'indexes' | 'sends' | 'cloud'> & Partial<Pick<ActivityFeedState, 'cloudRuns'>>;
 
 const NO_TARGET = { workspaceId: null, conversationId: null, turnId: null, stats: '' } as const;
 
@@ -132,6 +132,23 @@ function cloudActivity(cloud: TrackedCloud): Activity {
   };
 }
 
+/** A cloud turn streaming into this window: "Running in cloud" with its timer. */
+function cloudRunActivity(run: TrackedCloudRun): Activity {
+  return {
+    ...NO_TARGET,
+    id: `cloudrun:${run.conversationUuid}`,
+    kind: 'cloud',
+    label: t('desktop.island.cloudRunning', 'Running in cloud'),
+    detail: run.title,
+    progress: null,
+    since: run.startedAt,
+    tone: 'active',
+    workspaceId: run.workspaceId,
+    conversationId: run.conversationId,
+    cancelKey: null,
+  };
+}
+
 function indexActivity(index: TrackedIndex): Activity {
   const total = index.total ?? 0;
   const known = total > 0;
@@ -154,7 +171,9 @@ export function buildActivities(state: FeedFacts): Activity[] {
   const list: Activity[] = [
     ...Object.values(state.turns).flatMap(turnActivities),
     ...Object.values(state.sends).map(sendActivity),
-    ...Object.values(state.cloud).map(cloudActivity),
+    // A thread whose turn streams here shows that (with its timer) instead of the plain "in cloud" line.
+    ...Object.values(state.cloudRuns ?? {}).map(cloudRunActivity),
+    ...Object.values(state.cloud).filter((cloud) => state.cloudRuns?.[cloud.conversationUuid] === undefined).map(cloudActivity),
     ...Object.values(state.indexes).filter((index) => index.state === 'building').map(indexActivity),
   ];
   return list.sort((a, b) => RANK[a.kind] - RANK[b.kind] || (a.since ?? 0) - (b.since ?? 0));

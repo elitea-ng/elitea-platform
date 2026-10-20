@@ -1,41 +1,35 @@
 /**
  * The thread's transcript while the cloud runs it: the conversation's own
- * messages on the server, read again every few seconds (the cloud's turns
- * are not on this computer). It is the server fallback the earlier-turns
- * view already uses, kept live. Tool rows of the thread's earlier local turns
- * come back with the take back.
+ * messages on the server, rendered by the chat's own message list (so tool
+ * steps, errors with their support details and the streamed reply look as in
+ * the chat), with a live cloud turn folded in as it streams (`useCloudChat`).
+ * The earlier local turns' tool rows come back with the take back.
  */
-import { useQuery } from '@tanstack/react-query';
-
 import Typography from '@mui/material/Typography';
 
+import { ChatMessageList } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
-import { ServerTurn } from './sessionParts';
-import { serverMessages } from './useThreadHistory';
+import type { CloudChat } from './useCloudChat';
 
-const CLOUD_TRANSCRIPT_POLL_MS = 3000;
-
-export function CloudTranscript({ projectId, conversationId }: { projectId: number; conversationId: string }): React.JSX.Element {
-  const messages = useQuery({
-    queryKey: ['workspace', 'cloud-transcript', projectId, conversationId],
-    queryFn: () => serverMessages(projectId, conversationId),
-    refetchInterval: CLOUD_TRANSCRIPT_POLL_MS,
-    refetchIntervalInBackground: false,
-    retry: false,
-  });
-  if (messages.data === undefined) {
+export function CloudTranscript({ chat }: { chat: CloudChat }): React.JSX.Element {
+  if (chat.loading && chat.history.length === 0) {
     return (
       <Typography variant="bodySmall" component="output" sx={{ alignSelf: 'center' }}>
-        {messages.isError ? t('workspace.handoff.transcriptFailed', 'The cloud’s messages could not be read. Trying again…') : t('workspace.history.loading', 'Loading earlier messages')}
+        {t('workspace.history.loading', 'Loading earlier messages')}
       </Typography>
     );
   }
   return (
     <div data-testid="cloud-transcript" style={{ display: 'contents' }}>
-      {messages.data.map((message) => (
-        <ServerTurn key={message.id} message={message} />
-      ))}
+      <ChatMessageList
+        chatHistory={chat.history}
+        isStreaming={chat.streaming}
+        {...(chat.userId !== undefined ? { userId: chat.userId } : {})}
+        projectId={chat.projectId}
+        // A cloud turn's approvals and "continue" prompts are answered on the web for now.
+        continuation={{ hideContinueButton: true, hideHitlActions: true }}
+      />
     </div>
   );
 }

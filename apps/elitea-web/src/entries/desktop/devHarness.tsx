@@ -26,6 +26,7 @@ import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import WorkspacesPage from '@/pages/workspace/WorkspacesPage';
 import { configureGeneratedClient } from '@/shared/api/generated/mutator';
 import { BROWSER_PLATFORM } from '@/shared/desktop/appEvents';
+import { installTestEventSource } from '@/shared/api/sse/testing';
 import { createFakeAppIpc, MACOS_PLATFORM } from '@/shared/desktop/appEvents.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
@@ -48,7 +49,10 @@ const API: [string, RegExp, unknown][] = [
     { id: '5', name: 'Coder', description: '', versions: [{ id: '9', name: 'base', status: 'published', agent_type: 'openai' }] },
   ],
   ['POST', /\/elitea_core\/conversations\/prompt_lib\/42$/, { id: 77, name: 'quick overview' }],
-  ['GET', /\/elitea_core\/conversation\/prompt_lib\/42\/\d+$/, { id: 72, uuid: 'c0ffee00-0000-4000-8000-000000000072', name: 'quick overview' }],
+  ['GET', /\/elitea_core\/conversation\/prompt_lib\/42\/\d+$/, { id: 72, uuid: 'c0ffee00-0000-4000-8000-000000000072', name: 'quick overview', participants: [{ id: 3, entity_name: 'application', name: 'Coder', meta: {} }] }],
+  // The cloud copy's messages (`&cloud`), and the start route a message to it goes through.
+  ['GET', /\/elitea_core\/messages\/prompt_lib\/42\/72$/, { items: [{ id: 'm1', uid: 'm1', role: 'user', content: 'Give me a quick overview of the repo', conversation_id: '72', created_at: '2026-10-20T08:00:00Z' }, { id: 'm2', uid: 'm2', role: 'assistant', content: 'The repository is a **Go monorepo** with the desktop app in `apps/elitea-desktop`.', conversation_id: '72', created_at: '2026-10-20T08:00:05Z' }], total: 2, page: 1, page_size: 100, total_pages: 1 }],
+  ['POST', /\/elitea_core\/messages\/prompt_lib\/42\/c0ffee00-0000-4000-8000-000000000072$/, { task_id: 'exec-1', events_url: '/api/v2/executions/42/exec-1/events', response_message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44' }],
   ['GET', /\/elitea_core\/conversations\/prompt_lib\/42/, { rows: [], total: 0 }],
   ['POST', /\/elitea_core\/participants\//, []],
   ['GET', /\/social\/author/, { id: 3, name: 'Me' }],
@@ -115,6 +119,8 @@ export function mountDesktopHarness(container: HTMLElement): void {
     allowed: !params.has('handoffOff'),
     ...(params.has('cloud') ? { status: { state: 'CLOUD_IDLE', executor: 'cloud' as const, read_only: true, sent_from_here: true, epoch: 2 } } : {}),
   });
+  // The cloud copy's reply streams over SSE: a scripted one, played by `__harness.playCloudReply()`.
+  const streams = installTestEventSource();
   const vibrancy = params.has('vibrancy');
   if (vibrancy) {
     // A busy stand-in wallpaper behind the transparent page (NativeLook clears html/body).
@@ -194,6 +200,16 @@ export function mountDesktopHarness(container: HTMLElement): void {
     indexIpc,
     handoffIpc,
     feed: useActivityFeed,
+    /** A reply streaming from the cloud copy of a thread (`&cloud`): `stage` 'running' stops mid-answer, 'done' finishes it. */
+    playCloudReply(stage: 'running' | 'done' = 'done') {
+      const frame = (payload: Record<string, unknown>): string => JSON.stringify({ message_id: 'e3f5b0f2-8a3c-4d9a-9a1e-0c2b7f5d1a44', question_id: null, ...payload });
+      streams.emit('execution.node_event', frame({ type: 'agent_start' }));
+      streams.emit('execution.node_event', frame({ type: 'agent_llm_start' }));
+      streams.emit('execution.node_event', frame({ type: 'agent_llm_chunk', content: 'Running the linter in the cloud copy… ' }));
+      if (stage === 'running') return;
+      streams.emit('execution.node_event', frame({ type: 'agent_llm_chunk', content: 'It is clean: **0 warnings**.' }));
+      streams.emit('execution.node_event', frame({ type: 'pipeline_finish' }));
+    },
     /** A shell notice (the banner under the toolbar). */
     notice: (message: string) => useDesktopLayout.getState().setNotice(message),
     router,

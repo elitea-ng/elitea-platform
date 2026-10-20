@@ -59,6 +59,10 @@ export interface WorkspaceComposerProps {
   planMode: boolean;
   /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
   agentPicker?: ReactNode;
+  /** A thread in the cloud: the placeholder says who the message goes to. */
+  placeholder?: string | undefined;
+  /** Act | Plan: off for a cloud thread, whose turns have no plan mode. */
+  showMode?: boolean;
   runLocation?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
   /** The selected agent's skills, offered after the commands in the "/" menu. */
@@ -96,6 +100,36 @@ function placeholderFor(readOnly: boolean): string {
 }
 
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
+
+interface FooterControlsProps {
+  planMode: boolean;
+  onPlanModeChange: (planMode: boolean) => void;
+  showMode: boolean;
+  agentPicker: ReactNode;
+  runLocation: ReactNode;
+}
+
+/** The footer's left side: Act | Plan, the agent·version picker, where the thread runs. */
+function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, runLocation }: FooterControlsProps): React.JSX.Element {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+      {showMode && (
+        <Segmented
+          ariaLabel={t('workspace.mode', 'Mode')}
+          value={planMode ? 'plan' : 'act'}
+          onChange={(next) => onPlanModeChange(next === 'plan')}
+          testId="mode-segmented"
+          options={[
+            { value: 'act', label: t('workspace.mode.act', 'Act') },
+            { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
+          ]}
+        />
+      )}
+      {agentPicker}
+      {runLocation}
+    </Box>
+  );
+}
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
   const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, onSend, onStop, onCommand } = props;
@@ -232,7 +266,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         ref={inputRef}
         state={{ isStreaming: busy, disabledSend: !canSend, disabledInput: locked }}
         content={{
-          placeholder: placeholderFor(locked),
+          placeholder: props.placeholder ?? placeholderFor(locked),
           clearInputAfterSubmit: false,
           tooltipOfSendButton: t('workspace.send', 'Send'),
         }}
@@ -240,22 +274,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           modelSelector: null,
-          attachmentButton: (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-              <Segmented
-                ariaLabel={t('workspace.mode', 'Mode')}
-                value={planMode ? 'plan' : 'act'}
-                onChange={(next) => onPlanModeChange(next === 'plan')}
-                testId="mode-segmented"
-                options={[
-                  { value: 'act', label: t('workspace.mode.act', 'Act') },
-                  { value: 'plan', label: t('workspace.mode.plan', 'Plan'), ariaLabel: t('workspace.planMode', 'Plan mode (no changes)') },
-                ]}
-              />
-              {props.agentPicker}
-              {props.runLocation}
-            </Box>
-          ),
+          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} runLocation={props.runLocation} />,
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton
               data-testid="workspace-send-button"

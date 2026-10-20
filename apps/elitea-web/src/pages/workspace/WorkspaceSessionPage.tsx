@@ -31,19 +31,19 @@ import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
-import { AgentChip, RunLocationChip } from './ComposerControls';
-import { HandoffBanner, HandoffDialogs } from './HandoffControls';
-import { COLUMN, EarlierTurns, Exchanges, firstError, SessionNotices, ThreadIntro } from './sessionParts';
+import { HandoffDialogs } from './HandoffControls';
+import { COLUMN, EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
+import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
+import { useCloudChat } from './useCloudChat';
 import { useAgentSkills } from './useAgentSkills';
 import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
 import { useSessionMenuActions } from './useSessionMenuActions';
 import { useThreadHandoff } from './useThreadHandoff';
 import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
-import { WorkspaceComposer } from './WorkspaceComposer';
 
 const LIST_KEY = ['workspace', 'list'] as const;
 
@@ -71,6 +71,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
   const handoff = useThreadHandoff(workspace.id, projectId, conversationId);
   const codingAgent = useLocalCodingAgent(projectId, raw.empty);
+  // A thread away from this computer is chatted with on the server (the cloud copy); `cloud` is idle otherwise.
+  const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
 
   useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index') });
 
@@ -94,7 +96,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {handoff.offLaptop ? (
-              <CloudTranscript projectId={projectId} conversationId={conversationId} />
+              <CloudTranscript chat={cloud} />
             ) : (
               <>
               {raw.empty && (
@@ -116,24 +118,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <HandoffBanner handoff={handoff} />
-          <SessionNotices error={firstError(turn.startError, session.sendError, session.rebind.error)} commands={commands} />
-          <WorkspaceComposer
-            ipc={ipc}
-            workspaceId={workspace.id}
-            canSend={session.canSend && !handoff.offLaptop}
-            readOnly={handoff.offLaptop}
-            busy={turn.busy}
-            planMode={commands.planMode}
-            agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} />}
-            runLocation={<RunLocationChip handoff={handoff} />}
-            onPlanModeChange={commands.setPlanMode}
-            skills={skills}
-            onSend={(prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked)}
-            onStop={() => void turn.cancel()}
-            onCommand={session.run}
-            onFocus={session.prewarm}
-          />
+          <ThreadComposer ipc={ipc} workspaceId={workspace.id} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
         </Box>
       </Box>
       {changesOpen && (

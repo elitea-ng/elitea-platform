@@ -65,6 +65,12 @@ export interface AppIpc {
    * item chosen, or `null` when the menu was dismissed.
    */
   contextMenu(items: readonly ContextMenuItem[]): Promise<string | null>;
+  /**
+   * Tell the host a cloud turn of this window started (`running`) or ended
+   * (completion and errors both end it): the menu-bar item shows it like a
+   * local turn. The stream runs in the page, so the host cannot see it.
+   */
+  cloudRun(run: { conversationUuid: string; running: boolean; workspaceId?: string; workspaceName?: string }): Promise<void>;
 }
 
 /** One entry of a native context menu (`context_menu_show`). A separator carries no id or label; a submenu holds one level of entries. */
@@ -104,6 +110,13 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     onCommand: (handler) => listen(APP_COMMAND_CHANNEL, (payload) => handler(payload as AppCommand)),
     ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
+    cloudRun: ({ conversationUuid, running, workspaceId, workspaceName }) =>
+      invoke<void>('activity_cloud_run', {
+        conversation_uuid: conversationUuid,
+        running,
+        ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }),
+        ...(workspaceName === undefined ? {} : { workspace_name: workspaceName }),
+      }),
     contextMenu: async (items) => {
       const requestId = nextContextMenuRequestId();
       let settle: (id: string | null) => void = () => undefined;

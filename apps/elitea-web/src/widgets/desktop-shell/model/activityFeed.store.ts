@@ -77,6 +77,16 @@ export interface TrackedCloud {
   conversationId: string | null;
 }
 
+/** A turn streaming from the cloud copy of a thread (the desktop chats with it). */
+export interface TrackedCloudRun {
+  conversationUuid: string;
+  /** Epoch ms the stream began. */
+  startedAt: number;
+  title: string;
+  workspaceId: string | null;
+  conversationId: string | null;
+}
+
 const SEND_OVER: ReadonlySet<HandoffEvent['phase']> = new Set(['complete', 'cancelled', 'error']);
 
 export interface ActivityFeedState {
@@ -84,6 +94,8 @@ export interface ActivityFeedState {
   readonly indexes: Readonly<Record<string, TrackedIndex>>;
   readonly sends: Readonly<Record<string, TrackedSend>>;
   readonly cloud: Readonly<Record<string, TrackedCloud>>;
+  /** Cloud turns streaming now, by conversation UUID. */
+  readonly cloudRuns: Readonly<Record<string, TrackedCloudRun>>;
   /** A turn the open thread started: where it belongs. */
   readonly registerTurn: (turnId: string, owner: { workspaceId: string; workspaceName: string; conversationId: string }) => void;
   readonly applyAgentEvent: (event: AgentEvent, now?: number) => void;
@@ -93,6 +105,7 @@ export interface ActivityFeedState {
   readonly reconcileTurn: (turnId: string, status: { state: 'running' | 'committing' | 'done'; done: TurnDonePayload | null } | null) => void;
   readonly applyIndexEvent: (event: IndexEvent, workspaceName?: string | null) => void;
   readonly applyHandoffEvent: (event: HandoffEvent) => void;
+  readonly setCloudRun: (conversationUuid: string, run: TrackedCloudRun | null) => void;
   readonly setCloud: (conversationUuid: string, cloud: TrackedCloud | null) => void;
   readonly reset: () => void;
 }
@@ -191,6 +204,7 @@ export function createActivityFeedStore(): FeedStore {
     indexes: {},
     sends: {},
     cloud: {},
+    cloudRuns: {},
     registerTurn: (turnId, owner) =>
       set((state) => {
         const turn = state.turns[turnId] ?? blankTurn(turnId, Date.now());
@@ -235,6 +249,13 @@ export function createActivityFeedStore(): FeedStore {
         else sends[event.conversation_uuid] = { conversationUuid: event.conversation_uuid, phase: event.phase, done: event.done, total: event.total };
         return { sends };
       }),
+    setCloudRun: (uuid, run) =>
+      set((state) => {
+        const next = { ...state.cloudRuns };
+        if (run === null) delete next[uuid];
+        else next[uuid] = run;
+        return { cloudRuns: next };
+      }),
     setCloud: (uuid, cloud) =>
       set((state) => {
         const next = { ...state.cloud };
@@ -242,7 +263,7 @@ export function createActivityFeedStore(): FeedStore {
         else next[uuid] = cloud;
         return { cloud: next };
       }),
-    reset: () => set({ turns: {}, indexes: {}, sends: {}, cloud: {} }),
+    reset: () => set({ turns: {}, indexes: {}, sends: {}, cloud: {}, cloudRuns: {} }),
   }));
 }
 

@@ -435,5 +435,8 @@
   "desktop.island.tokens": "{{context}} context · {{out}} out",
   "desktop.menu.moreProjects": "More projects…",
   "desktop.menu.refused": "The menu could not be shown: {{message}}",
-  "workspace.changes.summaryOne": "1 file, +{{added}} -{{removed}}"
+  "workspace.changes.summaryOne": "1 file, +{{added}} -{{removed}}",
+  "workspace.cloud.agentHint": "The cloud copy answers with this thread’s own agent.",
+  "workspace.cloud.noTransport": "The cloud copy could not be reached.",
+  "workspace.cloud.placeholder": "Message the cloud copy…"
 }

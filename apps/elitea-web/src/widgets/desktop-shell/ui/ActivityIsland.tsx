@@ -50,7 +50,8 @@ function useActivities(): Activity[] {
   const indexes = useActivityFeed((s) => s.indexes);
   const sends = useActivityFeed((s) => s.sends);
   const cloud = useActivityFeed((s) => s.cloud);
-  return useMemo(() => buildActivities({ turns, indexes, sends, cloud }), [turns, indexes, sends, cloud]);
+  const cloudRuns = useActivityFeed((s) => s.cloudRuns);
+  return useMemo(() => buildActivities({ turns, indexes, sends, cloud, cloudRuns }), [turns, indexes, sends, cloud, cloudRuns]);
 }
 
 const tonePulse = { '@keyframes elitea-island-pulse': { '0%, 100%': { opacity: 1 }, '50%': { opacity: 0.35 } } } as const;

@@ -184,7 +184,7 @@ function RecordedTurn({ stored }: { stored: StoredTurn }): React.JSX.Element {
   );
 }
 
-export function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
+function ServerTurn({ message }: { message: ServerMessage }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   if (message.role === 'user') return <YourPrompt text={message.content} />;
   return (

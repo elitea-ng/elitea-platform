@@ -28,6 +28,7 @@ use crate::local_commands::LocalState;
 const TRAY_ID: &str = "elitea";
 /// Menu ids: a turn's item carries its id after the prefix.
 const TURN_PREFIX: &str = "tray_turn:";
+const CLOUD_PREFIX: &str = "tray_cloud:";
 const SHOW: &str = "tray_show";
 const QUIT: &str = "tray_quit";
 /// A menu shows at most this many turns; the title says the rest.
@@ -62,6 +63,11 @@ pub enum Dock {
 pub enum Entry {
     /// A line that does nothing ("Nothing running").
     Note(String),
+    /// A cloud turn streaming into this window: choosing it shows its folder.
+    Cloud {
+        uuid: String,
+        label: String,
+    },
     /// A turn: choosing it shows the window on its folder.
     Turn {
         turn_id: String,
@@ -72,8 +78,18 @@ pub enum Entry {
     Quit,
 }
 
+/// A cloud turn the window is streaming (the web chat transport runs in the
+/// page; the page tells the host through `activity_cloud_run`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CloudRun {
+    since: Instant,
+    workspace_id: Option<String>,
+    workspace_name: Option<String>,
+}
+
 #[derive(Default)]
 pub struct ActivityState {
+    cloud: BTreeMap<String, CloudRun>,
     /// Running turns and when they were first heard of.
     turns: BTreeMap<String, Instant>,
     approvals: BTreeMap<String, Approval>,
@@ -199,10 +215,38 @@ impl ActivityState {
         }
     }
 
+    /// The page's cloud turn started or ended (completion and errors both end it).
+    pub fn observe_cloud(
+        &mut self,
+        uuid: &str,
+        running: bool,
+        workspace_id: Option<String>,
+        workspace_name: Option<String>,
+        now: Instant,
+    ) {
+        if !running {
+            self.cloud.remove(uuid);
+            return;
+        }
+        self.cloud.entry(uuid.to_owned()).or_insert(CloudRun {
+            since: now,
+            workspace_id,
+            workspace_name,
+        });
+    }
+
+    /// The folder a cloud run belongs to.
+    #[must_use]
+    pub fn cloud_workspace(&self, uuid: &str) -> Option<String> {
+        self.cloud
+            .get(uuid)
+            .and_then(|run| run.workspace_id.clone())
+    }
+
     /// Whether a timer is on screen (so something must re-render each second).
     #[must_use]
     pub fn has_timer(&self) -> bool {
-        !self.turns.is_empty()
+        !self.turns.is_empty() || !self.cloud.is_empty()
     }
 
     /// The menu-bar title: `⚠ n` for approvals waiting, else `◐ m:ss` for the
@@ -212,7 +256,12 @@ impl ActivityState {
         if !self.approvals.is_empty() {
             return format!("⚠ {}", self.approvals.len());
         }
-        match self.turns.values().min() {
+        let oldest = self
+            .turns
+            .values()
+            .chain(self.cloud.values().map(|run| &run.since))
+            .min();
+        match oldest {
             Some(start) => format!("◐ {}", clock(now.saturating_duration_since(*start))),
             None => String::new(),
         }
@@ -267,6 +316,16 @@ impl ActivityState {
             };
             list.push(Entry::Turn {
                 turn_id: turn.clone(),
+                label,
+            });
+        }
+        for (uuid, run) in &self.cloud {
+            let label = match run.workspace_name.as_deref() {
+                Some(name) => format!("Running in cloud — {}", shown(name, 40)),
+                None => "Running in cloud".to_owned(),
+            };
+            list.push(Entry::Cloud {
+                uuid: uuid.clone(),
                 label,
             });
         }
@@ -359,6 +418,18 @@ impl Activity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|turn, _| state.knows(turn));
+    }
+
+    pub fn cloud(
+        &self,
+        uuid: &str,
+        running: bool,
+        workspace_id: Option<String>,
+        workspace_name: Option<String>,
+    ) {
+        self.state()
+            .observe_cloud(uuid, running, workspace_id, workspace_name, Instant::now());
+        self.changed();
     }
 
     pub fn answered(&self, request_id: &str) {
@@ -490,6 +561,13 @@ fn build_menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<Wry>> {
     for entry in entries {
         match entry {
             Entry::Note(text) => menu.append(&MenuItem::new(app, text, false, None::<&str>)?)?,
+            Entry::Cloud { uuid, label } => menu.append(&MenuItem::with_id(
+                app,
+                format!("{CLOUD_PREFIX}{uuid}"),
+                label,
+                true,
+                None::<&str>,
+            )?)?,
             Entry::Turn { turn_id, label } => menu.append(&MenuItem::with_id(
                 app,
                 format!("{TURN_PREFIX}{turn_id}"),
@@ -540,9 +618,51 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 app.exit(0);
             } else if let Some(turn) = turn_of(id) {
                 focus_turn(app, turn);
+            } else if let Some(uuid) = id.strip_prefix(CLOUD_PREFIX) {
+                focus_cloud(app, uuid);
             }
         })
         .build(app)?;
+    Ok(())
+}
+
+/// Bring the window forward on the folder a cloud run belongs to.
+fn focus_cloud(app: &AppHandle, uuid: &str) {
+    app_events::show_main(app);
+    let workspace = app
+        .try_state::<std::sync::Arc<Activity>>()
+        .and_then(|activity| activity.state().cloud_workspace(uuid));
+    if let Some(workspace_id) = workspace {
+        app_events::emit(
+            app,
+            "focus_turn",
+            Some(serde_json::json!({ "workspace_id": workspace_id, "turn_id": uuid })),
+        );
+    }
+}
+
+/// The page tells the host a cloud turn of this window started or ended: the
+/// menu-bar item shows it like a local turn. (`workspace_id` / `workspace_name`
+/// are display and focus hints; the host reads no file for them.)
+#[tauri::command(rename_all = "snake_case")]
+#[allow(clippy::needless_pass_by_value)] // tauri's extractors and owned args
+pub fn activity_cloud_run(
+    activity: tauri::State<'_, std::sync::Arc<Activity>>,
+    conversation_uuid: String,
+    running: bool,
+    workspace_id: Option<String>,
+    workspace_name: Option<String>,
+) -> Result<(), String> {
+    if conversation_uuid.is_empty() || conversation_uuid.chars().count() > 80 {
+        return Err("a cloud run needs the conversation's uuid".to_owned());
+    }
+    let hint = |text: Option<String>| text.map(|t| shown(&t, 80));
+    activity.cloud(
+        &conversation_uuid,
+        running,
+        hint(workspace_id),
+        hint(workspace_name),
+    );
     Ok(())
 }
 
@@ -700,6 +820,34 @@ mod tests {
         assert!(!text.contains("curl") && !text.contains("secret"));
         assert_eq!(turn_of("tray_turn:t2"), Some("t2"));
         assert_eq!(turn_of("tray_show"), None);
+    }
+
+    #[test]
+    fn a_cloud_turn_streaming_here_counts_like_a_local_one_and_clears_when_it_ends() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        state.observe_cloud(
+            "u1",
+            true,
+            Some("w1".into()),
+            Some("elitea-platform".into()),
+            t0,
+        );
+        assert!(state.has_timer());
+        assert_eq!(state.title(t0 + Duration::from_secs(7)), "◐ 0:07");
+        let entries = state.entries(&names);
+        assert_eq!(
+            entries[0],
+            Entry::Cloud {
+                uuid: "u1".into(),
+                label: "Running in cloud — elitea-platform".into()
+            }
+        );
+        assert_eq!(state.cloud_workspace("u1").as_deref(), Some("w1"));
+        // Completion or an error both end it.
+        state.observe_cloud("u1", false, None, None, t0);
+        assert!(!state.has_timer());
+        assert_eq!(state.title(t0), "");
     }
 
     #[test]

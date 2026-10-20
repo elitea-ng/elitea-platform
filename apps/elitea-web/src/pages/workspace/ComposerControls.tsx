@@ -17,6 +17,7 @@ import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
 
 import type { HandoffExecutor } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
@@ -35,11 +36,12 @@ const chipSx = (theme: Theme) => ({
   maxWidth: 240,
   '&:hover, &[aria-expanded="true"]': { background: `color-mix(in srgb, ${theme.vars.palette.text.primary} 8%, transparent)` },
   '& svg': { fontSize: 14 },
+  '&.Mui-disabled': { opacity: 0.5 },
 });
 
 const ellipsis = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
-export function AgentChip({ selection, agentRef }: { selection: AgentSelection; agentRef?: Ref<HTMLDivElement> | undefined }): React.JSX.Element | null {
+export function AgentChip({ selection, agentRef, disabledHint }: { selection: AgentSelection; agentRef?: Ref<HTMLDivElement> | undefined; disabledHint?: string | undefined }): React.JSX.Element | null {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [versionAnchor, setVersionAnchor] = useState<HTMLElement | null>(null);
   if (selection.empty) return null;
@@ -52,8 +54,11 @@ export function AgentChip({ selection, agentRef }: { selection: AgentSelection; 
   const label = agent === undefined ? t('workspace.agent', 'Agent') : version === undefined ? agent.name : `${agent.name} · ${version.name}`;
   return (
     <Box ref={agentRef} sx={{ display: 'inline-flex', minWidth: 0 }}>
+      <Tooltip title={disabledHint ?? ''}>
+        <span>
       <ButtonBase
         data-testid="agent-chip"
+        disabled={disabledHint !== undefined}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
         aria-label={t('workspace.agent.choose', 'Agent: {{label}}', { label })}
@@ -65,6 +70,8 @@ export function AgentChip({ selection, agentRef }: { selection: AgentSelection; 
         </Box>
         <ExpandMoreIcon />
       </ButtonBase>
+        </span>
+      </Tooltip>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={close} anchorOrigin={{ vertical: 'top', horizontal: 'left' }} transformOrigin={{ vertical: 'bottom', horizontal: 'left' }} slotProps={{ list: { dense: true } }}>
         <ListSubheader sx={{ lineHeight: '22px', background: 'transparent' }}>{t('workspace.agent', 'Agent')}</ListSubheader>
         {selection.agents.map((a) => (
@@ -132,7 +139,7 @@ function locationLabel(executor: HandoffExecutor): string {
   }
 }
 
-function LocationMenu({ handoff, anchor, onClose }: { handoff: ThreadHandoff; anchor: HTMLElement | null; onClose: () => void }): React.JSX.Element {
+function LocationMenu({ handoff, anchor, onClose, onOpenInChat }: { handoff: ThreadHandoff; anchor: HTMLElement | null; onClose: () => void; onOpenInChat: (() => void) | undefined }): React.JSX.Element {
   const run = (action: () => void) => (): void => {
     onClose();
     action();
@@ -142,6 +149,7 @@ function LocationMenu({ handoff, anchor, onClose }: { handoff: ThreadHandoff; an
       {handoff.canSend && <MenuItem onClick={run(() => handoff.open('send'))}>{t('workspace.handoff.sendMenu', 'Send to cloud…')}</MenuItem>}
       {handoff.offLaptop && <MenuItem onClick={run(() => handoff.open('takeBack'))}>{t('workspace.handoff.takeBackMenu', 'Take back…')}</MenuItem>}
       {handoff.offLaptop && <MenuItem onClick={run(() => handoff.open('erase'))}>{t('workspace.handoff.eraseMenu', 'Erase cloud copy…')}</MenuItem>}
+      {handoff.offLaptop && onOpenInChat !== undefined && <MenuItem onClick={run(onOpenInChat)}>{t('workspace.openInChat', 'Open in chat')}</MenuItem>}
       {handoff.canSend && <Divider />}
       {handoff.canSend && <MenuItem onClick={run(() => handoff.open('settings'))}>{t('workspace.handoff.settingsMenu', 'Handoff settings…')}</MenuItem>}
     </Menu>
@@ -149,7 +157,7 @@ function LocationMenu({ handoff, anchor, onClose }: { handoff: ThreadHandoff; an
 }
 
 /** "⌂ Local ⌄": where the thread runs; the menu moves it. */
-export function RunLocationChip({ handoff }: { handoff: ThreadHandoff }): React.JSX.Element | null {
+export function RunLocationChip({ handoff, onOpenInChat }: { handoff: ThreadHandoff; onOpenInChat?: (() => void) | undefined }): React.JSX.Element | null {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   if (handoff.ipc === undefined || (handoff.status === undefined && !handoff.canSend)) return null;
   const executor: HandoffExecutor = handoff.status?.executor ?? 'local';
@@ -170,7 +178,7 @@ export function RunLocationChip({ handoff }: { handoff: ThreadHandoff }): React.
         <Box component="span">{label}</Box>
         <ExpandMoreIcon />
       </ButtonBase>
-      <LocationMenu handoff={handoff} anchor={anchor} onClose={() => setAnchor(null)} />
+      <LocationMenu handoff={handoff} anchor={anchor} onClose={() => setAnchor(null)} onOpenInChat={onOpenInChat} />
     </>
   );
 }
