@@ -81,7 +81,7 @@ fresh; git -C "$WORK/tree" rm -qf services/elitea-vector/rust-toolchain.toml ser
 expect "(a)(d) toolchain files below the floor" fail "rust-toolchain file(s), expected at least"
 
 # (b) images
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:1\.97\.1-trixie@sha256:[0-9a-f]+ AS builder/FROM rust:1.97.1-trixie AS builder/'
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:1\.97\.1-trixie@sha256:[0-9a-f]+ AS toolchain/FROM rust:1.97.1-trixie AS toolchain/'
 expect "(b) an image without the digest" fail "services/elitea-vector/Containerfile:36: rust:1.97.1-trixie, expected"
 fresh; edit services/elitea-worker-rust/Containerfile 's/^FROM rust:1\.97\.1-trixie@/FROM rust:1.96.0-trixie@/'
 expect "(b) an image on another version" fail "rust:1.96.0-trixie@"
@@ -89,17 +89,17 @@ fresh; edit services/elitea-doc-extractor/Containerfile 's/@sha256:b1b3c9c0[0-9a
 expect "(b) a runtime-libraries stage with another digest" fail "services/elitea-doc-extractor/Containerfile:24"
 fresh; edit services/elitea-code-runner/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM rust:1.97.1-bookworm AS builder/'
 expect "(b) another Debian variant" fail "rust:1.97.1-bookworm"
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM docker.io\/library\/rust:1.96-trixie AS builder/'
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS toolchain/FROM docker.io\/library\/rust:1.96-trixie AS toolchain/'
 expect "(b) a docker.io/library/ prefixed image" fail "docker.io/library/rust:1.96-trixie, expected exactly"
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM index.docker.io\/library\/rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder/'
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS toolchain/FROM index.docker.io\/library\/rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS toolchain/'
 expect "(b) an index.docker.io/ prefix, even with the right tag and digest" fail "index.docker.io/library/rust:1.97.1-trixie@"
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM library\/rust:1.97.1-trixie AS builder/'
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS toolchain/FROM library\/rust:1.97.1-trixie AS toolchain/'
 expect "(b) a library/ namespace without a registry" fail "library/rust:1.97.1-trixie, expected exactly"
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM rust AS builder/'
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS toolchain/FROM rust AS toolchain/'
 expect "(b) an untagged image" fail "services/elitea-vector/Containerfile:36: rust, expected exactly"
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS builder/FROM rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder/'
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS toolchain/FROM rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS toolchain/'
 expect "(b) a digest-only image" fail "services/elitea-vector/Containerfile:36: rust@sha256:b1b3c9c0"
-fresh; edit services/elitea-vector/Containerfile 's#^FROM rust:[^ ]+ AS builder#FROM --platform=linux/amd64 rust:1.96-trixie AS builder#'
+fresh; edit services/elitea-vector/Containerfile 's#^FROM rust:[^ ]+ AS toolchain#FROM --platform=linux/amd64 rust:1.96-trixie AS toolchain#'
 expect "(b) FROM --platform= before the image" fail "rust:1.96-trixie, expected exactly"
 fresh; edit services/elitea-code-runner/Containerfile 's#^COPY adapters/rust ./adapters/rust#COPY --from=rust:1.96-trixie /usr/local/cargo/bin/cargo /tmp/cargo\nCOPY adapters/rust ./adapters/rust#'
 expect "(b) a COPY --from= image" fail "rust:1.96-trixie, expected exactly"
@@ -137,7 +137,7 @@ fresh; put services/new-service/Containerfile 'FROM rust:1.97.1-trixie@sha256:b1
 expect "(b) a NEW file with a correct rust image must be listed" fail "services/new-service/Containerfile: references the rust image (1x) but is not in RUST_IMAGE_FILES"
 fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:[^ ]+ AS runtime-libraries/FROM debian:trixie AS runtime-libraries/'
 expect "(b) a listed file that lost a rust reference" fail "services/elitea-vector/Containerfile: found 1 rust image reference(s), expected at least 2"
-fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:([^ ]+) AS builder$/FROM rust:\1 AS rust/'; printf 'COPY --from=rust /x /y\nFROM rust AS again\n' >> "$WORK/tree/services/elitea-vector/Containerfile"; git -C "$WORK/tree" add -A
+fresh; edit services/elitea-vector/Containerfile 's/^FROM rust:([^ ]+) AS toolchain$/FROM rust:\1 AS rust/; s/^FROM toolchain AS/FROM rust AS/'; printf 'COPY --from=rust /x /y\nFROM rust AS again\n' >> "$WORK/tree/services/elitea-vector/Containerfile"; git -C "$WORK/tree" add -A
 expect "(b) a stage named rust is a stage, not an image" pass ""
 fresh; put deploy/docker-compose.extra.yml 'services:\n  a:\n    image: docker.io/rustfs/rustfs:1.0.0\n  b:\n    image: ghcr.io/elitea-ng/elitea-rustfs:1\n  c:\n    image: trust:1\n  d:\n    image: ghcr.io/elitea-ng/elitea-worker-rust:standalone\n'
 expect "(b) rustfs, elitea-rustfs, trust and elitea-worker-rust are not rust" pass ""

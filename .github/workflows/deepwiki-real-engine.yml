@@ -170,12 +170,12 @@ jobs:
           timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble \
             || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will retry it"
 
-      - name: Build the engine image (bake, GHA layer cache)
+      - name: Build the engine image (bake, registry layer cache)
         # `docker buildx bake <target>` rather than a bare `docker build`: the
         # bake target `elitea-deepwiki-engine-native` (the Rust binary on
         # distroless) is the ONE definition of the engine build, and it
-        # already declares its `type=gha` cache scope, which is the cache the
-        # publish matrix uses for every other image. A second copy of the build
+        # already declares its registry cache refs (the release's and the E2E
+        # stacks', both read only). A second copy of the build
         # line here would be free to drift from what a release would produce.
         #
         # TAG=local makes bake write
@@ -195,9 +195,10 @@ jobs:
         if: ${{ !inputs.engine_image }}
         env:
           TAG: local
-        # `*.cache-to=` (empty) clears docker-bake.hcl's mode=max export:
-        # this workflow never runs on a push to main, so it reads the shared
-        # scope and writes nothing (scripts/ci/check_workflow_cache_writes.py).
+        # `*.cache-to=` (empty) keeps this a reader even if docker-bake.hcl
+        # ever declares an export again (it declares none today): this
+        # workflow never runs on a push to main, so it reads the shared
+        # cache and writes nothing (scripts/ci/check_workflow_cache_writes.py).
         run: docker buildx bake --set '*.platform=linux/amd64' --set '*.cache-to=' --load elitea-deepwiki-engine-native
 
       - name: Pull the supplied engine image

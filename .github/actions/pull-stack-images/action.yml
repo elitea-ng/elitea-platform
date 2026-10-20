@@ -1,0 +1,129 @@
+name: Pull stack images
+description: >-
+  Pulls, by digest, the stack images ci-web-e2e.yml's build-once jobs pushed
+  for this commit, retags each to the local name the compose files expect, and
+  asserts every image compose would build is in the local store AND is the
+  pulled digest — so compose can neither build nor pull anything itself.
+#
+# ── Why this exists (measured 2026-10-20) ───────────────────────────────────
+#
+# Every journey lane used to bake the whole stack itself through
+# .github/actions/build-stack-images: the Rust images ~7.6 times and
+# elitea-main / subapp-host / web ~16 times per pull-request commit, 35-48 min
+# a bake, on a 20-job Free-plan runner pool where Web E2E was 51% of every
+# commit's 518 runner-minutes. Now each image is built once per commit, in
+# parallel, by the `web-images` / `stack-images` jobs, and every lane pulls.
+#
+# ── Issue #154, answered ────────────────────────────────────────────────────
+#
+# The original "no cache, build in the job" rule was written against buildx
+# leaving its result in the builder, compose then PULLING the tag and getting
+# `denied` — i.e. a lane silently running something other than what it
+# built. Pulling does not reopen that, for two reasons this action enforces:
+#
+#   1. Content addressing. The lane pulls `<ci image>@sha256:<digest>`, the
+#      digest the build job recorded for THIS run's commit; a tag that moved
+#      cannot be picked up. The map also records each image's build spec
+#      (context, Containerfile, target, args) and a lane whose compose names a
+#      different variant fails (scripts/ci/stack_images.py `resolve`).
+#   2. The presence assertion is kept and made stronger: every image a compose
+#      file would build must exist locally under its compose name, and its
+#      RepoDigests must contain the pulled digest. Compose `up` (no --build)
+#      then finds every image present and never reaches a registry for them.
+#
+# A fork pull request cannot write packages, so it never gets here: its lanes
+# fall back to build-stack-images in load mode (see ci-web-e2e.yml).
+inputs:
+  compose-files:
+    description: Newline-separated compose files RELATIVE TO deploy/, in the order the lane's stack script takes them.
+    required: true
+  digests-pattern:
+    description: The artifact-name pattern the build-once jobs uploaded their digest maps under.
+    required: false
+    default: stack-image-digests-*
+runs:
+  using: composite
+  steps:
+    # The same up-front, retried third-party pull build-stack-images does
+    # (Docker Hub resets killed three chat-stream runs before it existed).
+    - name: Pull third-party images with retry
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=("$f")
+        done <<< "$COMPOSE_FILES"
+        bash "${GITHUB_WORKSPACE}/scripts/ci/pull-third-party-images.sh" "${args[@]}"
+
+    - name: Download the digest maps for this commit
+      uses: actions/download-artifact@v8
+      with:
+        pattern: ${{ inputs.digests-pattern }}
+        merge-multiple: true
+        path: ${{ runner.temp }}/stack-image-digests
+
+    # The ci-* packages are public (the org's default on first push; GHCR
+    # has no API to change it, and build-stack-images asserts it for the
+    # layer cache it writes). Logging in anyway keeps the pull off the
+    # anonymous rate limit, and keeps it working if one ever goes private:
+    # the pushing workflow is this repository's, so the job token reads it.
+    - name: Log in to the registry (read)
+      shell: bash
+      env:
+        TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: printf '%s' "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
+    - name: Pull each image by digest and give it its compose name
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      env:
+        COMPOSE_FILES: ${{ inputs.compose-files }}
+      run: |
+        set -euo pipefail
+        args=()
+        while IFS= read -r f; do
+          [ -n "$f" ] && args+=(-f "$f")
+        done <<< "$COMPOSE_FILES"
+        docker compose "${args[@]}" config --format json > "${RUNNER_TEMP}/lane-config.json"
+        python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" resolve \
+          "${RUNNER_TEMP}/lane-config.json" "$GITHUB_WORKSPACE" "${RUNNER_TEMP}/stack-image-digests" \
+          > "${RUNNER_TEMP}/stack-pulls.tsv"
+        # Distinct remotes once each, with a bounded retry: ghcr is a network.
+        cut -f2 "${RUNNER_TEMP}/stack-pulls.tsv" | sort -u | while IFS= read -r remote; do
+          for attempt in 1 2 3 4; do
+            if docker pull -q "$remote"; then break; fi
+            [ "$attempt" -lt 4 ] || { echo "::error::could not pull $remote"; exit 1; }
+            echo "pull of $remote failed (attempt $attempt), retrying"
+            sleep $((attempt * 10))
+          done
+        done
+        while IFS=$'\t' read -r local remote; do
+          docker tag "$remote" "$local"
+        done < "${RUNNER_TEMP}/stack-pulls.tsv"
+
+    # The guard, as build-stack-images keeps it, plus the digest: the image
+    # under each compose name must BE the one this commit's build pushed.
+    - name: Every image compose would build is in the local store, at the pulled digest
+      shell: bash
+      working-directory: ${{ github.workspace }}/deploy
+      run: |
+        set -euo pipefail
+        missing=0
+        while IFS=$'\t' read -r local remote; do
+          digest="${remote##*@}"
+          if ! digests="$(docker image inspect --format '{{join .RepoDigests " "}}' "$local" 2>/dev/null)"; then
+            echo "::error::$local is not in the local image store; compose would now try to PULL it (issue #154)"
+            missing=1
+          elif [[ " $digests " != *"@${digest} "* ]]; then
+            echo "::error::$local is in the local store but is not $remote (has: $digests)"
+            missing=1
+          else
+            echo "  ✓ $local = $remote"
+          fi
+        done < "${RUNNER_TEMP}/stack-pulls.tsv"
+        exit "$missing"

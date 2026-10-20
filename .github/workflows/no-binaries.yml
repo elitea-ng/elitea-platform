@@ -464,6 +464,29 @@ jobs:
           echo "cache-write checker: ${ran} of ${expected} scenarios ran"
       - name: No workflow cache step writes from a pull request
         run: python scripts/ci/check_workflow_cache_writes.py
+      # ci-web-e2e.yml builds each stack image once and the lanes pull it by
+      # digest: scripts/ci/stack_images.py is the contract between the two
+      # halves (it refuses an image nobody built, or one built from another
+      # variant), and the CI-only `ci-*` images must stay out of everything
+      # that ships. Counted like the suite above: unittest exits 0 on nothing.
+      - name: The build-once contract and the CI-image prune policy hold
+        run: |
+          set -euo pipefail
+          for suite in test_stack_images.py test_prune_ci_images.py; do
+            expected="$(grep -c '^    def test_' "scripts/ci/${suite}")"
+            [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
+            output="$(python -m unittest discover -s scripts/ci -p "${suite}" -v 2>&1)"
+            printf '%s\n' "${output}"
+            ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+            if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+              echo "::error::${suite} holds ${expected} scenario(s) and unittest ran ${ran:-none}"
+              exit 1
+            fi
+          done
+      - name: CI-only images are referenced only by CI
+        run: python scripts/ci/check_ci_image_references.py
+      - name: The E2E workflow starts on every input of its stack
+        run: python scripts/ci/check_e2e_paths.py
       - name: actionlint over every workflow
         env:
           ACTIONLINT_VERSION: 1.7.12

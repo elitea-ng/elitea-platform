@@ -345,8 +345,19 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.release.outputs.new_release_version }}
           platforms: ${{ matrix.platform.arch }}
-          cache-from: type=gha,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}-${{ matrix.platform.suffix }},ignore-error=true
+          # The registry layer cache (the public ghcr.io/elitea-ng/ci-cache-<image>
+          # package), not `type=gha`: the Actions cache is capped at 10 GB and
+          # a mode=max export of twenty platform builds is what kept it at the
+          # cap. `release-<platform>` is this job's own ref, written by a push
+          # to main only (`next` reads it; mode=max because the builder stages
+          # are most of each build). The second read is ci-web-e2e.yml's
+          # build-once cache of the same Containerfile (amd64), so a release
+          # starts from main's latest CI layers. The cache is a cache: nothing
+          # a release ships is a ci-* image (scripts/ci/check_ci_image_references.py).
+          cache-from: |
+            type=registry,ref=ghcr.io/elitea-ng/ci-cache-${{ matrix.image.name }}:release-${{ matrix.platform.suffix }}
+            type=registry,ref=ghcr.io/elitea-ng/ci-cache-${{ matrix.image.name }}:${{ matrix.platform.suffix }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=registry,ref=ghcr.io/elitea-ng/ci-cache-{0}:release-{1},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true', matrix.image.name, matrix.platform.suffix) || '' }}
 
   # ── Job 3: Scan, manifest and sign each image this release pushed ────────────
   #

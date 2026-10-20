@@ -38,6 +38,10 @@ concurrency:
 
 permissions:
   contents: read
+  # The build reads the registry layer cache main writes. Those packages are
+  # public, so this is not what makes the read work; it lets the build's
+  # login read one that went private instead of building cold.
+  packages: read
 
 defaults:
   run:

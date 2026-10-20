@@ -137,12 +137,12 @@ echo "→ Bringing up ${PROJECT} on :${PORT} (worker=rust, profiles=${COMPOSE_PR
 # down". Measured: chunk frames 33ms apart with the delay set to 600.
 #
 # STANDALONE_SKIP_BUILD=1 is set by the continuous-integration jobs, which
-# have already built and loaded every image through
-# .github/actions/build-stack-images (buildx bake, one shared layer cache per
-# image, the cache mounts carried across runs) and asserted each one is in the
-# local store. Running `compose build` again here would rebuild them from
-# scratch on the daemon's own builder, cache-less — the 5-to-10-minute cost
-# that action exists to remove. Locally the variable is unset and the build
+# have already put every image in the local store and asserted each one is
+# there: pulled by digest from ci-web-e2e.yml's build-once jobs
+# (.github/actions/pull-stack-images), or — on a fork pull request — built in
+# the job (.github/actions/build-stack-images). Running `compose build` again
+# here would rebuild them from scratch on the daemon's own builder,
+# cache-less — the cost those actions exist to remove. Locally the variable is unset and the build
 # runs, for the reason above.
 if [ "${STANDALONE_SKIP_BUILD:-0}" = "1" ]; then
   echo "→ STANDALONE_SKIP_BUILD=1: images were built and asserted by the caller; not rebuilding"

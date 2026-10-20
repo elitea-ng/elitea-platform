@@ -79,15 +79,15 @@ jobs:
     # the whole job in under 15 min with the three images warm from the
     # shared cache, seven side-loads (three built, four third-party).
     timeout-minutes: 40
-    # The cache-write policy: a push to main exports every layer; everything
-    # else (pull requests, the weekly schedule — which also carries the main
-    # ref — and a dispatch) exports NOTHING. An empty `<target>.cache-to=`
-    # clears the target's cache-to in bake (docker-bake.hcl's own mode=max
-    # line included). The condition is spelled on each `cache-to=` line below,
-    # not through an env indirection, so scripts/ci/check_workflow_cache_writes.py
-    # can read it. Same rule as .github/actions/build-stack-images'
-    # `cache-write` input: pull-request mode=min exports were evicted before
-    # the next push could read them, and evicted main's on the way.
+    # The cache policy: READ ONLY, on every event. Each image reads the
+    # registry layer cache ci-web-e2e.yml's build-once jobs write for the
+    # same Containerfile and stage (ghcr.io/elitea-ng/ci-cache-<image>:
+    # linux-amd64, public, written by a push to main only), and an empty
+    # `<target>.cache-to=` clears any export. That ref has ONE writer: a
+    # second writer of a mode=max cache replaces the first's manifest, so the
+    # smoke writing it too would cost the E2E stacks their layers on every
+    # weekly run. (Until 2026-10-20 this wrote `type=gha,mode=max` from main,
+    # into the 10 GB Actions cache that kept evicting it.)
     steps:
       - uses: actions/checkout@v7
 
@@ -108,10 +108,10 @@ jobs:
         # Under the tags kind-stack.sh looks for (KIND_IMAGE_TAG default
         # `kind`), so its own build step finds them present and skips; the
         # tags and the `e2e` target restate deploy/kind/kind-stack.sh's
-        # defaults and must move with them. The same scopes the E2E stacks,
-        # the image scan and the release share; the write mode is LAYER_MODE
-        # above. The native engine compiles ~420 crates cold, so its own
-        # scope is what keeps a pull request's run warm.
+        # defaults and must move with them. The layer cache the E2E stacks
+        # write (read only here; the policy is on the job above). The native
+        # engine compiles ~420 crates cold, so that cache is what keeps a
+        # pull request's run warm.
         uses: docker/bake-action@v7
         with:
           source: .
@@ -127,14 +127,14 @@ jobs:
             *.platform=linux/amd64
             elitea-main.target=e2e
             elitea-main.tags=ghcr.io/elitea-ng/elitea-main:kind
-            elitea-main.cache-from=type=gha,scope=elitea-main-linux-amd64
-            elitea-main.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-main-linux-amd64,ignore-error=true' || '' }}
+            elitea-main.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-main:linux-amd64
+            elitea-main.cache-to=
             elitea-subapp-host.tags=ghcr.io/elitea-ng/elitea-subapp-host:kind
-            elitea-subapp-host.cache-from=type=gha,scope=elitea-subapp-host-linux-amd64
-            elitea-subapp-host.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-subapp-host-linux-amd64,ignore-error=true' || '' }}
+            elitea-subapp-host.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-subapp-host:linux-amd64
+            elitea-subapp-host.cache-to=
             elitea-deepwiki-engine-native.tags=ghcr.io/elitea-ng/elitea-deepwiki-engine-native:kind
-            elitea-deepwiki-engine-native.cache-from=type=gha,scope=elitea-deepwiki-engine-native-linux-amd64
-            elitea-deepwiki-engine-native.cache-to=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-deepwiki-engine-native-linux-amd64,ignore-error=true' || '' }}
+            elitea-deepwiki-engine-native.cache-from=type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-deepwiki-engine-native:linux-amd64
+            elitea-deepwiki-engine-native.cache-to=
 
       - name: Pin Helm to the version helm-lint renders with
         # Same pin as helm-lint.yml, so the chart is INSTALLED by the Helm
