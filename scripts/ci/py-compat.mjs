@@ -92,3 +92,12 @@ export function fnmatchcase(name, pattern) {
   }
   return new RegExp(`^(?:${out})$`).test(name);
 }
+
+/** Python's truthiness: None, False, 0, "", [] and {} are false. */
+export function pyTruthy(value) {
+  if (value === null || value === undefined || value === false || value === 0 || value === "") return false;
+  if (Number.isNaN(value)) return true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object" && !(value instanceof Date)) return Object.keys(value).length > 0;
+  return true;
+}

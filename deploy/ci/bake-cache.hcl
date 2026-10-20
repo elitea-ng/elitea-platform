@@ -32,7 +32,7 @@
 // write depends on where it runs: a push to main exports every layer
 // (mode=max), every other run (pull requests included) exports nothing. Keep
 // cache-to OUT of this file: a cache-to here would write from every run, and
-// scripts/ci/check_workflow_cache_writes.py fails it.
+// scripts/ci/check-workflow-cache-writes.mjs fails it.
 //
 // The `ci-cache-` and `ci-` packages are CI-only. Nothing that ships (the
 // chart, publish.yml, docker-bake.hcl) may name them:

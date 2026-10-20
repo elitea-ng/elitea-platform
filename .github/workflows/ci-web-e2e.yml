@@ -139,7 +139,7 @@ on:
       - "scripts/ci/py-compat.mjs"
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check-ci-image-references.mjs"
-      - "scripts/ci/check_workflow_cache_writes.py"
+      - "scripts/ci/check-workflow-cache-writes.mjs"
       - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
   push:
@@ -192,7 +192,7 @@ on:
       - "scripts/ci/py-compat.mjs"
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check-ci-image-references.mjs"
-      - "scripts/ci/check_workflow_cache_writes.py"
+      - "scripts/ci/check-workflow-cache-writes.mjs"
       - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
     # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.

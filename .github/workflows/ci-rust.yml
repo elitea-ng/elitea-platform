@@ -593,7 +593,7 @@ jobs:
         with:
           shared-key: worker-rust-test
           # Never saves: `test` is the one writer of this key. `false`, not a
-          # main-ref expression: scripts/ci/check_workflow_cache_writes.py
+          # main-ref expression: scripts/ci/check-workflow-cache-writes.mjs
           # accepts a literal false as the strongest form.
           save-if: false
           workspaces: services/elitea-worker-rust

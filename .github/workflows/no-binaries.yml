@@ -427,7 +427,7 @@ jobs:
   # main-branch entry each pull request should have been reading. The rule
   # since then is "pull requests read, a push to main writes"; this job holds
   # it, for every workflow and composite action, with the negative cases in
-  # scripts/ci/test_check_workflow_cache_writes.py.
+  # scripts/ci/check-workflow-cache-writes.test.mjs.
   #
   # actionlint over EVERY workflow runs here too: no other job lints the
   # whole directory, and a cache condition that does not parse is a cache
@@ -440,37 +440,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install the checker's one dependency
-        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
-      # scripts/ci's node checks read YAML with the `yaml` package
-      # (scripts/ci/package-lock.json); the runner's node runs them.
-      - name: Install the node checks' one dependency
+      # The checks read YAML with the `yaml` package (scripts/ci/package-lock.json);
+      # the runner's node runs them.
+      - name: Install the checkers' one dependency
         uses: ./.github/actions/ci-scripts-deps
       - name: The PyYAML-compatible YAML read the node checks share
         run: node --test scripts/ci/ci-compat.test.mjs
-      # Read the COUNT of scenarios, not the exit status alone: `unittest`
-      # exits 0 when it collects nothing (#534).
+      # Read the COUNT of scenarios, not the exit status alone: a suite that
+      # collects nothing exits 0 (#534).
       - name: The checker still refuses every pull-request writer it exists for
         run: |
           set -euo pipefail
-          expected="$(grep -c '^    def test_' scripts/ci/test_check_workflow_cache_writes.py)"
+          expected="$(grep -c '^test(' scripts/ci/check-workflow-cache-writes.test.mjs)"
           if [ "${expected}" -lt 30 ]; then
             echo "::error::found ${expected} scenario(s) in the suite, expected at least 30 — the pattern stopped matching, so this step checked nothing"
             exit 1
           fi
-          output="$(python -m unittest discover -s scripts/ci -p 'test_check_workflow_cache_writes.py' -v 2>&1)"
+          output="$(node --test --test-reporter=tap scripts/ci/check-workflow-cache-writes.test.mjs 2>&1)"
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::the suite file holds ${expected} scenario(s) and unittest ran ${ran:-none}"
+            echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran:-none}"
             exit 1
           fi
-          echo "cache-write checker: ${ran} of ${expected} scenarios ran"
+          echo "cache-write checker: ${ran} of ${expected} scenarios passed"
       - name: No workflow cache step writes from a pull request
-        run: python scripts/ci/check_workflow_cache_writes.py
+        run: node scripts/ci/check-workflow-cache-writes.mjs
       # ci-web-e2e.yml builds each stack image once and the lanes pull it by
       # digest: scripts/ci/stack-images.mjs is the contract between the two
       # halves (it refuses an image nobody built, or one built from another

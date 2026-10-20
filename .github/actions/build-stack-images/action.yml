@@ -93,7 +93,7 @@ inputs:
       the cargo/Go/pip mounts. Defaults to "a push to main"; every other run
       (a pull request, a schedule or a dispatch on the main ref) reads main's
       caches and writes none. A caller may pass "false" to state that intent
-      itself; scripts/ci/check_workflow_cache_writes.py fails a caller that
+      itself; scripts/ci/check-workflow-cache-writes.mjs fails a caller that
       passes anything else.
     required: false
     default: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
@@ -105,7 +105,7 @@ inputs:
       save the same run-scoped key, five failed with "Unable to reserve" after
       ~5.7 min each extracting ~3.5 GB out of the builder. A non-writer skips
       that extraction entirely. It never widens `cache-write`: a pull request
-      still writes nothing (scripts/ci/check_workflow_cache_writes.py also
+      still writes nothing (scripts/ci/check-workflow-cache-writes.mjs also
       holds "at most one writer per suffix in a workflow").
     required: false
     default: "false"
@@ -304,7 +304,7 @@ runs:
     - name: Restore and later save BuildKit cache mounts (writers)
       # The ref/event half restates the cache-write default literally, so a
       # caller that passed `cache-write: true` from a pull request still
-      # cannot save (scripts/ci/check_workflow_cache_writes.py reads it).
+      # cannot save (scripts/ci/check-workflow-cache-writes.mjs reads it).
       if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: mounts-rw
       uses: actions/cache@v4

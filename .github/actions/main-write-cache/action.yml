@@ -26,7 +26,7 @@ description: >-
 #
 # The write condition is spelled literally on the writer step, not passed in:
 # an input would let a caller turn writing on from a pull request, and
-# scripts/ci/check_workflow_cache_writes.py reads this literal.
+# scripts/ci/check-workflow-cache-writes.mjs reads this literal.
 #
 # An exact-key hit makes the writer's save a no-op (actions/cache never
 # overwrites a key). That is the same behaviour actions/setup-go and
