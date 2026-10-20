@@ -444,6 +444,12 @@ jobs:
           python-version: "3.12"
       - name: Install the checker's one dependency
         run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
+      # scripts/ci's node checks read YAML with the `yaml` package
+      # (scripts/ci/package-lock.json); the runner's node runs them.
+      - name: Install the node checks' one dependency
+        uses: ./.github/actions/ci-scripts-deps
+      - name: The PyYAML-compatible YAML read the node checks share
+        run: node --test scripts/ci/ci-compat.test.mjs
       # Read the COUNT of scenarios, not the exit status alone: `unittest`
       # exits 0 when it collects nothing (#534).
       - name: The checker still refuses every pull-request writer it exists for
@@ -490,7 +496,10 @@ jobs:
           node --test scripts/ci/check-ci-image-references.test.mjs
           node scripts/ci/check-ci-image-references.mjs
       - name: The E2E workflow starts on every input of its stack
-        run: python scripts/ci/check_e2e_paths.py
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-e2e-paths.test.mjs
+          node scripts/ci/check-e2e-paths.mjs
       - name: actionlint over every workflow
         env:
           ACTIONLINT_VERSION: 1.7.12

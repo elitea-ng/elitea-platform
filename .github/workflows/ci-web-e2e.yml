@@ -127,7 +127,7 @@ on:
       - "scripts/ci/e2e-lane-filter.sh"
       - "scripts/ci/e2e-lane-filter-test.sh"
       # The rest of what the stack images COPY and what this workflow runs:
-      # scripts/ci/check_e2e_paths.py derives that set from the compose
+      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
       # files' Containerfiles and this workflow's `scripts/` calls, and fails
       # when this list stops covering it (the scheduler, the inventory engine,
       # the shared Go libraries and the protos were missing until it ran).
@@ -140,7 +140,7 @@ on:
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check-ci-image-references.mjs"
       - "scripts/ci/check_workflow_cache_writes.py"
-      - "scripts/ci/check_e2e_paths.py"
+      - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
   push:
     branches:
@@ -180,7 +180,7 @@ on:
       - "scripts/ci/e2e-lane-filter.sh"
       - "scripts/ci/e2e-lane-filter-test.sh"
       # The rest of what the stack images COPY and what this workflow runs:
-      # scripts/ci/check_e2e_paths.py derives that set from the compose
+      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
       # files' Containerfiles and this workflow's `scripts/` calls, and fails
       # when this list stops covering it (the scheduler, the inventory engine,
       # the shared Go libraries and the protos were missing until it ran).
@@ -193,7 +193,7 @@ on:
       - "scripts/ci/pull-third-party-images.sh"
       - "scripts/ci/check-ci-image-references.mjs"
       - "scripts/ci/check_workflow_cache_writes.py"
-      - "scripts/ci/check_e2e_paths.py"
+      - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
     # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.
     # A GITHUB_TOKEN-created tag starts no workflow run, so this arm has never
