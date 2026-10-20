@@ -174,7 +174,7 @@ func TestTheCredentialScreenWorksForASeededMemberAndForNoOtherProject(t *testing
 		"/api/v2/events/prompt_lib/1/", nil); status != http.StatusOK {
 		t.Fatalf("the project event stream answered %d for a seeded member", status)
 	}
-	assertSubscribedToOwnProject(t, source, 1)
+	assertSubscribedToOwnProject(t, source, 1, true)
 
 	// ── the refused direction: the same sequence, another project ──────────
 	//

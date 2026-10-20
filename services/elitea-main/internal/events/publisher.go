@@ -240,6 +240,21 @@ func NewWorkspacePublisher(bus Bus) *Publisher {
 	return &Publisher{bus: bus, channel: WorkspaceChannel}
 }
 
+// ConversationsChannel is the logical channel of one project's conversation
+// activity frames (client contract 1.12): NATS subject
+// elitea.events.project.<id>.conversations, in elitea-main's own NATS
+// account, published by elitea-main alone. Every frame names its audience;
+// the SSE stream relays it only to them and strips the audience.
+func ConversationsChannel(projectID string) string {
+	return fmt.Sprintf("project:%s:conversations", projectID)
+}
+
+// NewConversationsPublisher builds the Publisher conversation activity frames
+// go through: onto ConversationsChannel, and to no sink.
+func NewConversationsPublisher(bus Bus) *Publisher {
+	return &Publisher{bus: bus, channel: ConversationsChannel}
+}
+
 type DomainEvent struct {
 	ProjectID  string `json:"project_id"`
 	EntityID   string `json:"entity_id"`

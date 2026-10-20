@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.11"
+  x-elitea-client-contract: "1.12"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2204,6 +2204,26 @@ components:
             in the new conversation; empty when nothing was copied. A client
             that recorded message ids of the source (the desktop's turn
             history) rewrites them with it. No other read carries it.
+        activity:
+          $ref: '#/components/schemas/ConversationActivity'
+        last_activity_at:
+          type: string
+          format: date-time
+          description: >
+            Client contract 1.12. The last write of any message of the
+            conversation (a message, the start of a turn, or a change of its
+            state), in UTC. The creation time when the conversation has no
+            message.
+        unread:
+          type: boolean
+          description: >
+            Client contract 1.12. For the CALLER: an answer of the
+            conversation (a message that no user participant wrote, that does
+            not stream, including a pause for the user) changed after the
+            caller's read marker (markConversationRead). A message of a user
+            never makes the conversation unread. The value is personal: two
+            members can see different values on the same row. A server before
+            1.12 omits the field, which means read.
         meta:
           type: object
           additionalProperties: true
@@ -2237,6 +2257,70 @@ components:
           description: The user id.
         name:
           type: string
+
+    ConversationActivity:
+      type: object
+      description: >
+        Client contract 1.12. The activity status of a conversation. A turn
+        transition (a start, a pause, a finish, a failure or a cancel)
+        re-delivers the list row in the `changes_since` delta; a streamed
+        token does not. The project event stream (`conversation_activity`
+        events) also sends each transition to the members who can see the
+        conversation.
+      required: [state, since]
+      properties:
+        state:
+          type: string
+          description: >
+            `running` (a turn of the conversation is in flight), `needs_you`
+            (the newest message waits for the user: a tool approval, an
+            answer to a question, an authorization or other input) or `idle`
+            (anything else). A client shows an unknown value as `idle`.
+        since:
+          type: string
+          format: date-time
+          description: When the conversation entered `state`, in UTC.
+
+    MarkConversationReadRequest:
+      type: object
+      description: >
+        Client contract 1.12. The body of markConversationRead. An absent
+        body, or an absent `message_id`, reads the conversation up to now.
+      properties:
+        message_id:
+          type: string
+          description: >
+            The numeric id or the UUID of a message group of the
+            conversation: the caller read the conversation up to and
+            including that message. A number is also accepted.
+
+    ConversationReadState:
+      type: object
+      description: >
+        Client contract 1.12. The caller's read marker of a conversation
+        after markConversationRead.
+      required: [conversation_id, read_at, unread]
+      properties:
+        conversation_id:
+          type: integer
+          description: The conversation's numeric id.
+        read_at:
+          type: string
+          format: date-time
+          description: >
+            The read marker, in UTC. It never moves back: a read of an older
+            message keeps the newer marker.
+        last_read_message_id:
+          type: integer
+          description: >
+            The numeric id of the message group the marker points to. Absent
+            when the conversation has no message.
+        unread:
+          type: boolean
+          description: >
+            The row's `unread` for the caller after the read. It is true when
+            the caller read up to a message that is older than the newest
+            answer.
 
     ConversationForkedFrom:
       type: object
@@ -17115,6 +17199,77 @@ paths:
                 $ref: "#/components/schemas/OkResponse"
         "400":
           $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/conversation_read/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    put:
+      operationId: markConversationRead
+      summary: Mark a conversation read for the caller
+      description: |
+        Client contract 1.12. Moves the CALLER's read marker of the
+        conversation: up to `message_id`, or up to now without it. The list
+        rows' `unread` (listConversations and its `changes_since` delta)
+        compares the newest answer with this marker. A client calls it when
+        the user opens the conversation, and again when new messages arrive
+        while the conversation is on screen.
+
+        The marker is personal state, so read access is enough: the chat
+        authority's detail rule (the rule of getConversation) and
+        `models.chat.conversation.details`. A conversation the caller cannot
+        see answers 404 and writes nothing. A `message_id` that is not a
+        message of the conversation answers 404.
+
+        The request is idempotent, and the marker never moves back. The read
+        does not re-deliver the row in the `changes_since` delta of any
+        member and does not change `updated_at`. The project event stream
+        sends a `conversation_activity` event with `unread_hint: false` to the
+        caller's other devices only. A delete of the conversation deletes its
+        markers. A fork starts read for the member who forked it.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkConversationReadRequest"
+      responses:
+        "200":
+          description: The caller's read marker.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationReadState"
+        "400":
+          description: >
+            A body that is not a JSON object, a `message_id` that is not a
+            string or a number, or a native client version that does not
+            parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
         "401":
           $ref: "#/components/responses/401"
         "403":

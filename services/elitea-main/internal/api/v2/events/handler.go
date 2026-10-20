@@ -94,36 +94,63 @@ const StreamPermission = "models.project_context.view"
 //     only to a caller in that list, and strips the list. The payload is the
 //     conversation, its state, epoch and reclaim_pending; never stats or
 //     paths.
+//   - conversation activity (client contract 1.12):
+//     events.ConversationsChannel → elitea.events.project.<id>.conversations,
+//     MAIN, published by elitea-main alone. AUDIENCE-SCOPED, and only for a
+//     caller who may list conversations (ConversationListPermission, checked
+//     once when the stream opens). A frame names its user ids (a private
+//     conversation, a read marker) or `audience_project: true` (a public
+//     conversation, which every member who may list conversations sees).
+//     The payload is the conversation's id, uuid and source, its activity
+//     state and times, an unread hint and a read time; never a name or a
+//     message.
 var streamFamilies = []struct {
 	channel   func(projectID string) string
 	eventType string
 	// audience: relay only to a caller named in the frame's `audience`.
 	audience bool
+	// projectAudience: a frame may name `audience_project: true` instead
+	// of user ids.
+	projectAudience bool
+	// permission: the caller must also hold this permission (default
+	// mode) for the family to be relayed at all.
+	permission string
 }{
-	{events.ProjectChannel, events.EventBudgetSoftAlert, false},
-	{events.PresenceChannel, canvaspresence.EventType, false},
-	{events.WorkspaceChannel, WorkspaceHandoffEventType, true},
+	{events.ProjectChannel, events.EventBudgetSoftAlert, false, false, ""},
+	{events.PresenceChannel, canvaspresence.EventType, false, false, ""},
+	{events.WorkspaceChannel, WorkspaceHandoffEventType, true, false, ""},
+	{events.ConversationsChannel, ConversationActivityEventType, true, true, ConversationListPermission},
 }
 
 // WorkspaceHandoffEventType is workspacehandoff.EventType, named here so the
 // relay table does not depend on the handoff application package.
 const WorkspaceHandoffEventType = "workspace.handoff"
 
+// ConversationActivityEventType is conversationactivity.EventType, named here
+// for the same reason.
+const ConversationActivityEventType = "conversation_activity"
+
+// ConversationListPermission is the list route's own permission
+// (listConversations and the folder sidebar): a caller who cannot list
+// conversations is told nothing about their activity.
+const ConversationListPermission = "models.chat.conversations.list"
+
 // audienceScoped reports whether the family of channel relays only to each
-// frame's audience.
-func audienceScoped(projectID, channel string) bool {
+// frame's audience, and whether a frame may name the whole project.
+func audienceScoped(projectID, channel string) (scoped, project bool) {
 	for _, f := range streamFamilies {
 		if f.channel(projectID) == channel {
-			return f.audience
+			return f.audience, f.projectAudience
 		}
 	}
-	return false
+	return false, false
 }
 
 // audienceFrame strips the audience from an audience-scoped payload and
 // answers whether userID is in it. A malformed frame, an empty audience or a
-// caller without an owning user id is never relayed.
-func audienceFrame(payload []byte, userID int64, known bool) ([]byte, bool) {
+// caller without an owning user id is never relayed. With allowProject, a
+// frame that names `audience_project: true` is relayed to every caller.
+func audienceFrame(payload []byte, userID int64, known bool, allowProject ...bool) ([]byte, bool) {
 	if !known || userID <= 0 {
 		return nil, false
 	}
@@ -131,14 +158,23 @@ func audienceFrame(payload []byte, userID int64, known bool) ([]byte, bool) {
 	if json.Unmarshal(payload, &fields) != nil {
 		return nil, false
 	}
-	var audience []int64
-	if raw, ok := fields["audience"]; !ok || json.Unmarshal(raw, &audience) != nil {
-		return nil, false
+	projectWide := false
+	if len(allowProject) > 0 && allowProject[0] {
+		if raw, ok := fields["audience_project"]; ok {
+			_ = json.Unmarshal(raw, &projectWide)
+		}
 	}
-	if !slices.Contains(audience, userID) {
-		return nil, false
+	if !projectWide {
+		var audience []int64
+		if raw, ok := fields["audience"]; !ok || json.Unmarshal(raw, &audience) != nil {
+			return nil, false
+		}
+		if !slices.Contains(audience, userID) {
+			return nil, false
+		}
 	}
 	delete(fields, "audience")
+	delete(fields, "audience_project")
 	out, err := json.Marshal(fields)
 	if err != nil {
 		return nil, false
@@ -228,6 +264,13 @@ func (h *Handler) require(permission string) func(http.Handler) http.Handler {
 	)
 }
 
+// holds answers whether the caller holds permission in the route's project.
+// A resolution failure reads as no: the family is then not relayed.
+func (h *Handler) holds(r *http.Request, permission string) bool {
+	held, err := apimw.HoldsResolvedPermission(h.permissionResolver, auth.PermissionModeDefault, permission)(r)
+	return err == nil && held
+}
+
 func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
@@ -247,6 +290,11 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 	merged := make(chan frame)
 	ended := make(chan struct{}, len(streamFamilies))
 	for _, f := range streamFamilies {
+		if f.permission != "" && !h.holds(r, f.permission) {
+			// Not subscribed at all: nothing of this family reaches the
+			// caller, whatever its frames say.
+			continue
+		}
 		channel := f.channel(projectID)
 		evCh, cancel, err := h.source.Raw(ctx, channel)
 		if err != nil {
@@ -303,8 +351,8 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			payload := []byte(f.event.Payload)
-			if audienceScoped(projectID, f.channel) {
-				relayed, ok := audienceFrame(payload, callerID, callerKnown)
+			if scoped, project := audienceScoped(projectID, f.channel); scoped {
+				relayed, ok := audienceFrame(payload, callerID, callerKnown, project)
 				if !ok {
 					continue
 				}

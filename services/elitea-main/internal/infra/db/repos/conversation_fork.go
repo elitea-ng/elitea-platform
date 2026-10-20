@@ -252,6 +252,12 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET updated_at = updated_at WHERE id = $1`, s), newID); err != nil {
 		return conversations.ForkResult{}, fmt.Errorf("conversations: fork: stamp: %w", err)
 	}
+	// The fork starts read for the forker (client contract 1.12): the copied
+	// answers are not new to the person who copied them. Probed like the
+	// payload tables, for fixtures that build part of the tenant chain.
+	if err := markForkRead(ctx, tx, s, newID, access.ActorID); err != nil {
+		return conversations.ForkResult{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return conversations.ForkResult{}, fmt.Errorf("conversations: fork commit: %w", err)
 	}
@@ -292,6 +298,27 @@ func readForkPlan(ctx context.Context, q forkQuerier, s, identity string, access
 		}
 	}
 	return plan, nil
+}
+
+// markForkRead writes the forker's read marker of the new conversation, up to
+// its newest copied message group.
+func markForkRead(ctx context.Context, tx pgx.Tx, s string, newID, actorID int64) error {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, s+".chat_conversation_reads").Scan(&exists); err != nil {
+		return fmt.Errorf("conversations: fork: probe reads: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %[1]s.chat_conversation_reads
+		(conversation_id, user_id, read_at, last_read_message_id)
+		VALUES ($1, $2, clock_timestamp() AT TIME ZONE 'UTC',
+		        (SELECT g.id FROM %[1]s.chat_message_group g WHERE g.conversation_id = $1
+		          ORDER BY g.created_at DESC, g.id DESC LIMIT 1))
+		ON CONFLICT (conversation_id, user_id) DO NOTHING`, s), newID, actorID); err != nil {
+		return fmt.Errorf("conversations: fork: mark read: %w", err)
+	}
+	return nil
 }
 
 // resolveForkPoint reads the fork point: the named group of the source, or

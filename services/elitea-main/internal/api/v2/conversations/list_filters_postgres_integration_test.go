@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
@@ -103,6 +104,10 @@ CREATE TABLE p_1.chat_message_group (
     conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id)
 );`); err != nil {
 		t.Fatalf("create the listing fixture schema: %v", err)
+	}
+	// Client contract 1.12: the list rows read the activity columns.
+	if _, err := pool.Exec(ctx, chatactivitytest.Schema("p_1")); err != nil {
+		t.Fatalf("apply the activity fixture: %v", err)
 	}
 	// The list row's `is_pinned` (client contract 1.4) reads the project
 	// pins, declared in the shared schema by shared/0064.

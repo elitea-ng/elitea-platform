@@ -322,6 +322,7 @@ type Handler struct {
 	userDefaults    UserContextDefaults
 	events          EventEmitter
 	candidates      ParticipantCandidateStore
+	readEvents      ReadEvents
 }
 
 // EventEmitter is the seam to internal/events.Publisher — declared locally,
@@ -360,7 +361,13 @@ func eventEmitterPresent(emitter EventEmitter) bool {
 	if emitter == nil {
 		return false
 	}
-	v := reflect.ValueOf(emitter)
+	return presentValue(emitter)
+}
+
+// presentValue is false for an interface boxing a nil pointer, map, slice,
+// channel or func (the #86 trap).
+func presentValue(value any) bool {
+	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
 		return !v.IsNil()
@@ -560,6 +567,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			archivedStated: r.URL.Query().Has("archived"),
 			args:           args,
 			admin:          access.Admin,
+			actorID:        access.ActorID,
 			raw:            raw,
 		})
 		return
@@ -604,6 +612,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	rows.Close()
 	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
 	annotateArchivers(ctx, pool, result)
+	if err := annotateActivity(ctx, pool, s, access.ActorID, result); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 

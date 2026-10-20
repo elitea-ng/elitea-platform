@@ -308,6 +308,10 @@ func conversationRow(ctx context.Context, pool *pgxpool.Pool, s, projectID strin
 	}
 	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
 	annotateArchivers(ctx, pool, result)
+	reader, _ := chatauthority.Actor(ctx)
+	if err := annotateActivity(ctx, pool, s, reader, result); err != nil {
+		return nil, err
+	}
 	return result[0], nil
 }
 

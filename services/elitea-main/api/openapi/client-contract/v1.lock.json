@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.11",
+  "client_contract": "1.12",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -4938,6 +4938,22 @@
                       "updated_at"
                     ],
                     "properties": {
+                      "activity": {
+                        "type": "object",
+                        "required": [
+                          "since",
+                          "state"
+                        ],
+                        "properties": {
+                          "since": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "state": {
+                            "type": "string"
+                          }
+                        }
+                      },
                       "archived_at": {
                         "type": "string",
                         "format": "date-time"
@@ -5002,6 +5018,10 @@
                       "is_pinned": {
                         "type": "boolean"
                       },
+                      "last_activity_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
                       "message_groups_count": {
                         "type": "integer"
                       },
@@ -5015,6 +5035,9 @@
                       },
                       "source": {
                         "type": "string"
+                      },
+                      "unread": {
+                        "type": "boolean"
                       },
                       "updated_at": {
                         "type": "string"
@@ -12342,6 +12365,22 @@
                 "updated_at"
               ],
               "properties": {
+                "activity": {
+                  "type": "object",
+                  "required": [
+                    "since",
+                    "state"
+                  ],
+                  "properties": {
+                    "since": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  }
+                },
                 "archived_at": {
                   "type": "string",
                   "format": "date-time"
@@ -12406,6 +12445,10 @@
                 "is_pinned": {
                   "type": "boolean"
                 },
+                "last_activity_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
                 "message_groups_count": {
                   "type": "integer"
                 },
@@ -12419,6 +12462,9 @@
                 },
                 "source": {
                   "type": "string"
+                },
+                "unread": {
+                  "type": "boolean"
                 },
                 "updated_at": {
                   "type": "string"
@@ -20242,6 +20288,190 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PUT /elitea_core/conversation_read/prompt_lib/{project_id}/{conversation_id}": {
+      "operation_id": "markConversationRead",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "content": {
+          "application/json": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "conversation_id",
+                "read_at",
+                "unread"
+              ],
+              "properties": {
+                "conversation_id": {
+                  "type": "integer"
+                },
+                "last_read_message_id": {
+                  "type": "integer"
+                },
+                "read_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "unread": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
             }
           }
         },
