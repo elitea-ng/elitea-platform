@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { getListApplicationSkillsQueryKey, listApplicationSkills } from '@/shared/api/generated/skills/skills';
 
 import {
   attachSkill,
   detachSkill,
-  fetchAttachedSkills,
   fetchProjectSkills,
   MAX_SKILLS_PER_AGENT,
+  selectAttachedSkills,
   type AgentSkill,
 } from '../api/agentSkillsApi';
 
@@ -25,8 +26,9 @@ import {
  */
 
 export const agentSkillKeys = {
-  attached: (projectId: string, appVersionId: number) =>
-    [`/elitea_core/application_skills/prompt_lib/${projectId}/${String(appVersionId)}`] as const,
+  // The generated hook's key, on purpose: the cache holds the raw envelope
+  // for both readers and each applies its own `select`.
+  attached: (projectId: string, appVersionId: number) => getListApplicationSkillsQueryKey(projectId, appVersionId),
   picker: (projectId: string, query: string) => ['agent-skills-picker', projectId, query] as const,
 };
 
@@ -58,7 +60,8 @@ export function useAgentSkills(projectId: string | undefined, appVersionId: numb
 
   const attachedQuery = useQuery({
     queryKey: agentSkillKeys.attached(projectId ?? '', appVersionId ?? 0),
-    queryFn: () => fetchAttachedSkills(projectId ?? '', appVersionId ?? 0),
+    queryFn: ({ signal }) => listApplicationSkills(projectId ?? '', appVersionId ?? 0, { signal }),
+    select: selectAttachedSkills,
     enabled,
     // No `retry` override: the app-wide policy (`QUERY_DEFAULT_OPTIONS.retry`)
     // already treats a 404 as final, so a missing route is asked once.
