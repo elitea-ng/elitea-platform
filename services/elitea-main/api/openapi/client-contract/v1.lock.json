@@ -2479,6 +2479,252 @@
         }
       }
     },
+    "GET /configurations/models/{project_id}": {
+      "operation_id": "listConfigurationModels",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:include_shared": {
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        "query:section": {
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "items",
+                "total"
+              ],
+              "properties": {
+                "default_model_configured": {
+                  "type": "boolean"
+                },
+                "default_model_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "default_model_project_id": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "high_tier_default_model_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "high_tier_default_model_project_id": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "name",
+                      "project_id"
+                    ],
+                    "properties": {
+                      "config_id": {
+                        "type": "integer"
+                      },
+                      "config_name": {
+                        "type": "string"
+                      },
+                      "context_window": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "data": {
+                        "type": "object",
+                        "open": true
+                      },
+                      "default": {
+                        "type": "boolean"
+                      },
+                      "description": {
+                        "type": "string",
+                        "nullable": true,
+                        "max_length": 40
+                      },
+                      "display_name": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "high_tier": {
+                        "type": "boolean",
+                        "nullable": true
+                      },
+                      "id": {
+                        "type": "integer"
+                      },
+                      "is_default": {
+                        "type": "boolean"
+                      },
+                      "low_tier": {
+                        "type": "boolean",
+                        "nullable": true
+                      },
+                      "max_input_tokens": {
+                        "type": "integer",
+                        "nullable": true,
+                        "minimum": 1
+                      },
+                      "max_output_tokens": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "openai_compatible": {
+                        "type": "boolean",
+                        "nullable": true
+                      },
+                      "project_id": {
+                        "type": "integer"
+                      },
+                      "section": {
+                        "type": "string"
+                      },
+                      "shared": {
+                        "type": "boolean"
+                      },
+                      "supports_reasoning": {
+                        "type": "boolean",
+                        "nullable": true
+                      },
+                      "supports_vision": {
+                        "type": "boolean",
+                        "nullable": true
+                      },
+                      "type": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "low_tier_default_model_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "low_tier_default_model_project_id": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "GET /elitea_core/application/prompt_lib/{project_id}/{application_id}": {
       "operation_id": "getApplication",
       "parameters": {
@@ -10775,6 +11021,7 @@
                         "command_allow",
                         "command_deny",
                         "index_local_embeddings",
+                        "index_model_mirror_url",
                         "index_remote_embeddings",
                         "local_index",
                         "local_mcp",
@@ -10808,6 +11055,9 @@
                         },
                         "index_local_embeddings": {
                           "type": "boolean"
+                        },
+                        "index_model_mirror_url": {
+                          "type": "string"
                         },
                         "index_remote_embeddings": {
                           "type": "boolean"

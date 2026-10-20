@@ -10,15 +10,31 @@ import { useEffect, useState } from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { EMBEDDINGS_OFF, type EmbeddingsChoice, type EmbedStatus, type IndexIpc, type IndexModels } from '@/shared/desktop/indexIpc';
+import { EMBEDDINGS_OFF, type EmbeddingsChoice, type EmbedStatus, type IndexIpc, type IndexModels, type RemoteModel } from '@/shared/desktop/indexIpc';
 
 export const LOCAL_PREFIX = 'local:';
 export const REMOTE_PREFIX = 'remote:';
 
+/** Above this many chunks the smaller model is recommended (a first pass of the larger one takes hours on a laptop). */
+export const LARGE_INDEX_CHUNKS = 50_000;
+export const SMALL_MODEL = 'multilingual-e5-small';
+export const CODE_MODEL = 'qwen3-embedding-0.6b';
+
+/** The model the settings recommend for an index of `chunks` chunks (the person still picks). */
+export function recommendedModel(chunks: number): string {
+  return chunks > LARGE_INDEX_CHUNKS ? SMALL_MODEL : CODE_MODEL;
+}
+
 /** A download's bytes so far, by model id (from `index://event`). */
 export type DownloadProgress = Record<string, { done: number; total: number }>;
 
-export type EmbeddingsAction = { kind: 'choose'; choice: EmbeddingsChoice } | { kind: 'download'; modelId: string } | { kind: 'cancelDownload'; modelId: string } | { kind: 'rebuild'; full: boolean };
+export type EmbeddingsAction =
+  | { kind: 'choose'; choice: EmbeddingsChoice }
+  | { kind: 'download'; modelId: string }
+  | { kind: 'cancelDownload'; modelId: string }
+  | { kind: 'import'; modelId: string }
+  | { kind: 'remove'; modelId: string }
+  | { kind: 'rebuild'; full: boolean };
 
 export interface WorkspaceEmbeddings {
   models: IndexModels | undefined;
@@ -29,6 +45,8 @@ export interface WorkspaceEmbeddings {
   awaiting: string | null;
   /** The last download that failed, and why. */
   downloadError: { modelId: string; error: string } | null;
+  /** The project's embedding models on the deployment (`undefined`: not listed — the person types a name). */
+  remoteModels: RemoteModel[] | undefined;
   run: (action: EmbeddingsAction) => void;
   pending: boolean;
   actionError: unknown;
@@ -37,6 +55,7 @@ export interface WorkspaceEmbeddings {
 const modelsKey = ['workspace', 'index', 'models'] as const;
 const choiceKey = (workspaceId: string) => ['workspace', 'index', workspaceId, 'embeddings'] as const;
 const statusKey = (workspaceId: string) => ['workspace', 'index', workspaceId, 'embeddings-status'] as const;
+const remoteModelsKey = (workspaceId: string) => ['workspace', 'index', workspaceId, 'remote-models'] as const;
 
 /** The local model a choice names, if it is one. */
 export function localModelOf(choice: EmbeddingsChoice | undefined): string | null {
@@ -68,6 +87,12 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
     queryKey: statusKey(workspaceId),
     queryFn: () => ipc.embeddingsStatus(workspaceId),
     enabled,
+  });
+  const remoteModels = useQuery({
+    queryKey: remoteModelsKey(workspaceId),
+    queryFn: () => ipc.remoteModels(workspaceId),
+    enabled: enabled && models.data?.remote_allowed === true,
+    retry: false,
   });
   const [downloads, setDownloads] = useState<DownloadProgress>({});
   const [awaiting, setAwaiting] = useState<string | null>(null);
@@ -125,6 +150,17 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
     applyChoice(`${LOCAL_PREFIX}${awaiting}`);
   }, [awaitedReady, awaiting, applyChoice]);
 
+  /** Import a model's files (the host opens the folder picker; `null`: the person cancelled) or remove them. */
+  const manageFiles = async (next: { kind: 'import' | 'remove'; modelId: string }): Promise<void> => {
+    if (next.kind === 'import') {
+      if ((await ipc.importModel(next.modelId)) === null) return;
+    } else {
+      if (awaiting === next.modelId) setAwaiting(null);
+      await ipc.removeModel(next.modelId);
+    }
+    await queryClient.invalidateQueries({ queryKey: modelsKey });
+  };
+
   const action = useMutation({
     mutationFn: async (next: EmbeddingsAction): Promise<void> => {
       switch (next.kind) {
@@ -151,6 +187,10 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
           setAwaiting(null);
           await queryClient.invalidateQueries({ queryKey: modelsKey });
           return;
+        case 'import':
+        case 'remove':
+          await manageFiles(next);
+          return;
         case 'rebuild':
           await ipc.rebuildEmbeddings(workspaceId, next.full);
           await queryClient.invalidateQueries({
@@ -168,6 +208,7 @@ export function useEmbeddings(ipc: IndexIpc, workspaceId: string, enabled: boole
     downloads,
     awaiting,
     downloadError,
+    remoteModels: remoteModels.data !== undefined && remoteModels.data.length > 0 ? remoteModels.data : undefined,
     run: action.mutate,
     pending: action.isPending || apply.isPending,
     actionError: action.error ?? apply.error,

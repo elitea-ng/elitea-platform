@@ -79,6 +79,10 @@ pub struct LocalWorkPolicy {
     /// index may be embedded through the deployment's embeddings route.
     /// Off by default and when absent; turned off, those vectors go.
     pub index_remote_embeddings: bool,
+    /// `local_work_index_model_mirror_url` (client contract 1.9): where the
+    /// on-device embedding models are downloaded from instead of Hugging
+    /// Face (an https base laid out as its CDN). Empty: Hugging Face.
+    pub index_model_mirror_url: String,
 }
 
 impl Default for LocalWorkPolicy {
@@ -95,6 +99,7 @@ impl Default for LocalWorkPolicy {
             cloud_handoff: false,
             index_local_embeddings: false,
             index_remote_embeddings: false,
+            index_model_mirror_url: String::new(),
         }
     }
 }
@@ -137,6 +142,15 @@ mod tests {
         }))
         .expect("parse");
         assert!(embeddings.index_local_embeddings && embeddings.index_remote_embeddings);
+        assert!(embeddings.index_model_mirror_url.is_empty());
+        let mirror: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
+            "index_model_mirror_url": "https://mirror.example.com/hf"
+        }))
+        .expect("parse");
+        assert_eq!(
+            mirror.index_model_mirror_url,
+            "https://mirror.example.com/hf"
+        );
         assert!(SandboxMode::ReadOnly < SandboxMode::WorkspaceWrite);
         assert!(SandboxMode::WorkspaceWrite < SandboxMode::FullAccess);
     }

@@ -53,6 +53,9 @@ pub struct Models {
     pub remote_allowed: bool,
     /// Bytes the model cache holds.
     pub cache_bytes: u64,
+    /// The host models download from when the policy names a mirror
+    /// (`None`: Hugging Face).
+    pub mirror: Option<String>,
 }
 
 /// The model cache and its downloads.
@@ -129,6 +132,13 @@ impl ModelHost {
             local_allowed: allowed.local,
             remote_allowed: allowed.remote && self.remote.is_some(),
             cache_bytes: self.store.disk_bytes(),
+            mirror: crate::embeddings::model_base(self.policy.as_ref()).map(|base| {
+                base.trim_start_matches("https://")
+                    .split('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            }),
         }
     }
 
@@ -183,6 +193,8 @@ impl ModelHost {
             }
             running.insert(spec.id, Arc::clone(&cancel));
         }
+        let base = crate::embeddings::model_base(self.policy.as_ref())
+            .unwrap_or_else(|| HUGGING_FACE.to_owned());
         let this = Arc::clone(self);
         remote.runtime.spawn(async move {
             this.report(spec, "downloading", 0, None);
@@ -190,7 +202,7 @@ impl ModelHost {
             let progress = |p: Progress| this.report(spec, "downloading", p.done, None);
             let outcome = this
                 .store
-                .download(spec, client, HUGGING_FACE, &progress, &cancel)
+                .download(spec, client, &base, &progress, &cancel)
                 .await;
             this.running().remove(spec.id);
             match outcome {
@@ -254,6 +266,32 @@ impl ModelHost {
             .remove(spec)
             .map_err(|failure| error("storage", failure.to_string()))?;
         Ok(self.info(spec))
+    }
+
+    /// The embedding models `project_id` can use through the deployment.
+    ///
+    /// # Errors
+    ///
+    /// `embeddings_not_allowed`, `workspace_unbound`, `models_unavailable`.
+    pub async fn remote_models(
+        &self,
+        project_id: Option<i64>,
+    ) -> Result<Vec<crate::embeddings::RemoteModel>, IpcError> {
+        let (true, Some(remote)) = (self.allowed().remote, self.remote.as_ref()) else {
+            return Err(error(
+                "embeddings_not_allowed",
+                "Your organization's policy does not allow embeddings through the deployment.",
+            ));
+        };
+        let project_id = project_id.ok_or_else(|| {
+            error(
+                "workspace_unbound",
+                "Bind the folder to a project first: its budget pays for the embeddings.",
+            )
+        })?;
+        crate::embeddings::remote_models(remote, project_id)
+            .await
+            .map_err(|failure| error("models_unavailable", failure.to_string()))
     }
 
     /// A `remote:<model>` choice completed with its width, probed with one
@@ -329,17 +367,29 @@ pub fn index_model_cancel(host: State<'_, Arc<ModelHost>>, model_id: String) -> 
     host.cancel(&model_id)
 }
 
-/// Import a model's files from a folder the person picked.
+/// Import a model's files from a folder: `folder`, or (without one) the
+/// folder the person picks in the native dialog — `null` when they
+/// cancelled.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn index_model_import(
+    app: tauri::AppHandle,
     host: State<'_, Arc<ModelHost>>,
     model_id: String,
-    folder: String,
-) -> Result<ModelInfo, IpcError> {
+    folder: Option<String>,
+) -> Result<Option<ModelInfo>, IpcError> {
+    spec_of(&model_id)?;
+    let folder = match folder {
+        Some(folder) => folder,
+        None => match crate::local_commands::pick_folder(&app).await {
+            Some(picked) => picked.display().to_string(),
+            None => return Ok(None),
+        },
+    };
     let host = Arc::clone(&host);
     tokio::task::spawn_blocking(move || host.import(&model_id, &folder))
         .await
         .map_err(|_| error("internal", "the import stopped"))?
+        .map(Some)
 }
 
 /// Delete a model's files.
@@ -352,6 +402,28 @@ pub async fn index_model_remove(
     tokio::task::spawn_blocking(move || host.remove(&model_id))
         .await
         .map_err(|_| error("internal", "the removal stopped"))?
+}
+
+/// The embedding models the workspace's project can use through the
+/// deployment (for the picker; the person may still type a name).
+///
+/// # Errors
+///
+/// `embeddings_not_allowed`, `workspace_unbound`, `models_unavailable`
+/// (signed out, unreachable or refused: the UI falls back to a typed name).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn index_remote_models(
+    state: State<'_, LocalState>,
+    host: State<'_, Arc<ModelHost>>,
+    workspace_id: String,
+) -> Result<Vec<crate::embeddings::RemoteModel>, IpcError> {
+    let project_id = state
+        .workspaces
+        .get(&workspace_id)
+        .ok()
+        .flatten()
+        .and_then(|workspace| workspace.project_id);
+    host.remote_models(project_id).await
 }
 
 /// Set the workspace's embeddings; `remote:<model>` is probed for its
@@ -444,6 +516,20 @@ mod tests {
             .import("multilingual-e5-small", &dir.path().display().to_string())
             .unwrap_err();
         assert_eq!(import.code, "model_import_failed");
+    }
+
+    #[test]
+    fn downloads_name_the_organisation_mirror_when_the_policy_sets_one() {
+        let (_dir, plain) = host(json!({"allowed": true, "local_index": true,
+            "index_local_embeddings": true}));
+        assert_eq!(plain.models().mirror, None, "Hugging Face");
+        let (_dir, mirrored) = host(json!({"allowed": true, "local_index": true,
+            "index_local_embeddings": true,
+            "index_model_mirror_url": "https://models.example.com/hf/"}));
+        assert_eq!(
+            mirrored.models().mirror.as_deref(),
+            Some("models.example.com")
+        );
     }
 
     #[test]

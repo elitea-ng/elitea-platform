@@ -12179,6 +12179,7 @@ components:
         - cloud_handoff
         - index_local_embeddings
         - index_remote_embeddings
+        - index_model_mirror_url
       properties:
         allowed:
           type: boolean
@@ -12245,6 +12246,14 @@ components:
             deployment's /llm/v1/embeddings route, which receives the
             workspace's text. Default false. While it is false the app drops the
             vectors made that way.
+        index_model_mirror_url:
+          type: string
+          description: >-
+            Client contract 1.9. Where the app downloads the on-device embedding
+            models from instead of Hugging Face: an https base URL laid out as
+            the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>).
+            Empty (the default) is Hugging Face. Every file is checked against
+            the SHA-256 the app pins.
     InvalidQueryParameterError:
       type: object
       description: >-
@@ -24895,7 +24904,14 @@ paths:
         The app calls this through a hand-written client today, and four
         separate slices re-derived that client independently. It is described
         here so one generated client replaces all four.
-      tags: [configurations]
+
+        Client contract 1.9: the desktop app reads
+        `?section=embedding&include_shared=true` to offer the project's
+        embedding models for its workspace index (each item's `name` is the
+        model a `/llm/v1/embeddings` request names).
+      tags: [configurations, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         '200':
           description: The model catalogue for this project
@@ -24903,8 +24919,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigurationModelListResponse'
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================

@@ -107,6 +107,11 @@ export const LocalWorkPolicy = zod
       .describe(
         "Client contract 1.9. The user may embed a local index through this deployment's /llm/v1/embeddings route, which receives the workspace's text. Default false. While it is false the app drops the vectors made that way.",
       ),
+    index_model_mirror_url: zod
+      .string()
+      .describe(
+        "Client contract 1.9. Where the app downloads the on-device embedding models from instead of Hugging Face: an https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Empty (the default) is Hugging Face. Every file is checked against the SHA-256 the app pins.",
+      ),
   })
   .describe(
     "Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).",

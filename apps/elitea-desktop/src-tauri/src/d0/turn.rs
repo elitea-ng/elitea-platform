@@ -1333,6 +1333,10 @@ impl AgentHost {
         let folder = mentions::open(Path::new(&bound.path), &policy.path_deny)?;
         let checked = mentions::check(&folder, &request.mentions)?;
         let project = project_instructions::load(&folder, &checked);
+        // The files the thread references are embedded first.
+        if let Some(index) = &self.deps.index {
+            index.prioritise(&request.workspace_id, checked.iter().cloned());
+        }
         drop(folder);
         let request = &TurnRequest {
             prompt: mentions::with_mentions(&request.prompt, &checked),
@@ -1680,7 +1684,7 @@ impl AgentHost {
                 .await;
             drop(claim);
             let changes = recorder.changes(session.workspace());
-            self.index_changed(&request.workspace_id, changes.len());
+            self.index_changed(&request.workspace_id, &changes);
             tap.changes(&changes);
             events.tools_done();
             events.log_timings();
@@ -1757,7 +1761,7 @@ impl AgentHost {
         // saved (or its commit failed), and the next turn waits for it.
         let claim = claim.into_commit();
         let changes = recorder.changes(session.workspace());
-        self.index_changed(&request.workspace_id, changes.len());
+        self.index_changed(&request.workspace_id, &changes);
         tap.changes(&changes);
         if failure.is_some() {
             events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
@@ -2296,12 +2300,17 @@ impl AgentHost {
             .clear();
     }
 
-    /// A turn changed `files` files of the workspace: its index (if open)
-    /// says it may be out of date, and refreshes a few seconds later. A
-    /// signal only: the turn's end never waits on the index.
-    fn index_changed(&self, workspace_id: &str, files: usize) {
+    /// A turn changed `changes` in the workspace: its index (if open)
+    /// says it may be out of date, and refreshes a few seconds later; the
+    /// changed files' chunks are embedded first. A signal only: the turn's
+    /// end never waits on the index.
+    fn index_changed(&self, workspace_id: &str, changes: &[FileChange]) {
         if let Some(index) = &self.deps.index {
-            index.mark_changed(workspace_id, files);
+            index.mark_changed(workspace_id, changes.len());
+            index.prioritise(
+                workspace_id,
+                changes.iter().map(|change| change.path.clone()),
+            );
         }
     }
 

@@ -474,5 +474,14 @@
   "workspace.index.embeddings.localOff": "Your organisation’s policy does not allow embedding models on this computer.",
   "workspace.index.embeddings.downloadFailed": "The download failed: {{error}}",
   "workspace.index.embeddings.now": "Embed now",
-  "workspace.index.embeddings.reembed": "Embed again"
+  "workspace.index.embeddings.reembed": "Embed again",
+  "workspace.index.embeddings.underMinute": "under a minute",
+  "workspace.index.embeddings.minutes": "{{minutes}} min",
+  "workspace.index.embeddings.hours": "{{hours}} h {{minutes}} min",
+  "workspace.index.embeddings.runningEta": "Embedding: {{done}} of {{total}} chunks, about {{left}} left.",
+  "workspace.index.embeddings.consentMirror": "Download {{name}} ({{size}}) from your organisation’s mirror ({{host}})? It is checked against a pinned checksum, kept in the app’s data and shared by every folder. Nothing from your code is sent.",
+  "workspace.index.embeddings.recommended": "recommended for this folder",
+  "workspace.index.embeddings.files": "Model files are shared by every folder. Offline? Import them from a folder instead of downloading.",
+  "workspace.index.embeddings.removeModel": "Remove model",
+  "workspace.index.embeddings.import": "Import model files…"
 }

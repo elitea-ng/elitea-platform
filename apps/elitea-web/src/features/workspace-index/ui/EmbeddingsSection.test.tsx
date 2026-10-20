@@ -24,8 +24,8 @@ const READY: Partial<IndexStatus> = {
   last_run: '2026-10-10T08:00:00Z',
 };
 
-function setup(options: Omit<FakeIndexOptions, 'statuses'> = {}): FakeIndexIpc {
-  const ipc = createFakeIndexIpc({ statuses: { w1: READY }, ...options });
+function setup(options: Omit<FakeIndexOptions, 'statuses'> = {}, status: Partial<IndexStatus> = READY): FakeIndexIpc {
+  const ipc = createFakeIndexIpc({ statuses: { w1: status }, ...options });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -126,6 +126,7 @@ describe('EmbeddingsSection', () => {
       total: 40,
       error: null,
       forced: false,
+      eta_seconds: null,
     };
     act(() =>
       ipc.emitEmbeddings({
@@ -169,5 +170,88 @@ describe('EmbeddingsSection', () => {
     const embeddings = await section(user);
     expect(within(embeddings).getByRole('radio', { name: /multilingual-e5-small/ })).toBeDisabled();
     expect(embeddings).toHaveTextContent('does not allow embedding models on this computer');
+  });
+
+  it('recommends the code model for a small index and the small one above 50k chunks', async () => {
+    const user = userEvent.setup();
+    setup({}, { ...READY, chunks: 4_000 });
+    const embeddings = await section(user);
+    expect(within(embeddings).getByRole('radio', { name: /Qwen3 Embedding 0\.6B · recommended/ })).toBeInTheDocument();
+    expect(within(embeddings).getByRole('radio', { name: /multilingual-e5-small/ })).not.toHaveAccessibleName(/recommended/);
+  });
+
+  it('recommends multilingual-e5-small for a large index, and the person still picks', async () => {
+    const user = userEvent.setup();
+    setup({}, { ...READY, chunks: 256_000 });
+    const embeddings = await section(user);
+    expect(within(embeddings).getByRole('radio', { name: /multilingual-e5-small · recommended/ })).toBeInTheDocument();
+    expect(within(embeddings).getByRole('radio', { name: 'Off' })).toBeChecked();
+  });
+
+  it('shows the time left while it embeds', async () => {
+    const user = userEvent.setup();
+    const ipc = setup({ embeddings: { w1: 'local:multilingual-e5-small' } });
+    const embeddings = await section(user);
+    act(() =>
+      ipc.emitEmbeddings({
+        kind: 'embeddings',
+        workspace_id: 'w1',
+        status: { choice: 'local:multilingual-e5-small', state: 'running', done: 1_000, total: 9_000, held: null, error: null, forced: false, eta_seconds: 7_500 },
+      }),
+    );
+    expect(await within(embeddings).findByTestId('index-embeddings-status')).toHaveTextContent('Embedding: 1000 of 9000 chunks, about 2 h 5 min left.');
+  });
+
+  it('imports a model from a picked folder (a cancelled pick changes nothing) and removes it', async () => {
+    const user = userEvent.setup();
+    const ipc = setup();
+    const embeddings = await section(user);
+    const files = within(embeddings).getByTestId('index-model-files');
+    ipc.cancelNextPick();
+    await user.click(within(files).getAllByRole('button', { name: 'Import model files…' })[1]!);
+    expect(ipc.embeddingCalls.imported).toEqual([]);
+    await user.click(within(files).getAllByRole('button', { name: 'Import model files…' })[1]!);
+    await waitFor(() => expect(ipc.embeddingCalls.imported).toEqual(['multilingual-e5-small']));
+    const remove = await within(files).findByRole('button', { name: 'Remove model' });
+    expect(embeddings).toHaveTextContent('Downloaded · about 1.4 GB of memory while embedding');
+    await user.click(remove);
+    await waitFor(() => expect(ipc.embeddingCalls.removed).toEqual(['multilingual-e5-small']));
+    await waitFor(() => expect(within(files).queryByRole('button', { name: 'Remove model' })).not.toBeInTheDocument());
+    expect(ipc.embeddingCalls.downloads).toEqual([]);
+  });
+
+  it('names the organisation’s mirror in the download consent', async () => {
+    const user = userEvent.setup();
+    setup({ mirror: 'models.example.com' });
+    const embeddings = await section(user);
+    await user.click(within(embeddings).getByRole('radio', { name: /multilingual-e5-small/ }));
+    expect(await within(embeddings).findByTestId('index-model-consent')).toHaveTextContent('from your organisation’s mirror (models.example.com)');
+  });
+
+  it('picks the deployment model from the project’s list when there is one', async () => {
+    const user = userEvent.setup();
+    const ipc = setup({
+      embeddingsAllowed: { remote: true },
+      remoteModels: [
+        { name: 'text-embedding-3-small', display_name: 'OpenAI small' },
+        { name: 'nomic-embed', display_name: null },
+      ],
+    });
+    const embeddings = await section(user);
+    await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));
+    expect(within(embeddings).queryByRole('textbox', { name: 'Embeddings model' })).not.toBeInTheDocument();
+    await user.click(await within(embeddings).findByRole('combobox', { name: 'Embeddings model' }));
+    await user.click(await screen.findByRole('option', { name: 'nomic-embed' }));
+    await user.click(within(embeddings).getByRole('button', { name: 'Use' }));
+    await waitFor(() => expect(ipc.embeddingCalls.set).toEqual([{ workspaceId: 'w1', choice: 'remote:nomic-embed' }]));
+  });
+
+  it('falls back to a typed name when the project’s models cannot be listed', async () => {
+    const user = userEvent.setup();
+    const ipc = setup({ embeddingsAllowed: { remote: true } });
+    ipc.failNext('remoteModels', 'models_unavailable', 'unreachable');
+    const embeddings = await section(user);
+    await user.click(within(embeddings).getByRole('radio', { name: 'Through your deployment' }));
+    expect(within(embeddings).getByRole('textbox', { name: 'Embeddings model' })).toBeInTheDocument();
   });
 });

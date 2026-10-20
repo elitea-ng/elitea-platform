@@ -125,10 +125,13 @@ async fn a_build_then_an_incremental_refresh_reads_only_what_changed() {
     assert_eq!(phases.last(), Some(&"ready"));
     assert!(phases.contains(&"saving"), "{phases:?}");
 
-    // Nothing changed: nothing read, nothing hashed.
+    // Nothing changed: nothing read, nothing hashed, and no run recorded
+    // (the build in memory answers as it is).
+    let runs = service.store().runs(GraphKey::LOCAL).unwrap().len();
     service.refresh(false).await.unwrap();
     let report = service.last_report().unwrap();
     assert_eq!((report.read, report.unchanged, report.hashed), (0, 4, 0));
+    assert_eq!(service.store().runs(GraphKey::LOCAL).unwrap().len(), runs);
 
     // One edited, one deleted, one added.
     let root = opened.folder.path();

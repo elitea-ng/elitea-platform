@@ -318,6 +318,17 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"default":      defaults.IndexRemoteEmbeddings,
 			"visible_when": visible,
 		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkIndexModelMirrorURL,
+			"type":  "string",
+			"title": "Embedding Model Mirror URL",
+			"description": "Where the app downloads on-device embedding models from instead of Hugging Face: an " +
+				"https base URL laid out as the Hugging Face CDN (<base>/<repo>/resolve/<revision>/<file>). Leave " +
+				"empty for Hugging Face. Every file is checked against the checksum built into the app.",
+			"section":      section,
+			"default":      defaults.IndexModelMirrorURL,
+			"visible_when": visible,
+		},
 	}
 }
 
@@ -381,6 +392,13 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 				return fmt.Sprintf("%q[%d] must be a non-blank pattern of at most %d bytes without control "+
 					"characters", key, index, platformconfig.MaxLocalWorkPatternBytes)
 			}
+		}
+	}
+	if raw, present := values[platformconfig.KeyNativeLocalWorkIndexModelMirrorURL]; present {
+		mirror, ok := raw.(string)
+		if !ok || !platformconfig.ValidModelMirrorURL(mirror) {
+			return fmt.Sprintf("%q must be empty or an https URL without credentials, query or fragment",
+				platformconfig.KeyNativeLocalWorkIndexModelMirrorURL)
 		}
 	}
 	if raw, present := values[platformconfig.KeyNativeMinClientVersion]; present {

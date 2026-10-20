@@ -190,7 +190,7 @@ function Built({ status, progress, embeddings }: { status: IndexStatus; progress
         )}
       </Typography>
       <Details status={status} progress={progress} />
-      {embeddings !== undefined && status.state !== 'off' && <EmbeddingsSection embeddings={embeddings} />}
+      {embeddings !== undefined && status.state !== 'off' && <EmbeddingsSection embeddings={embeddings} chunks={status.chunks} />}
     </>
   );
 }

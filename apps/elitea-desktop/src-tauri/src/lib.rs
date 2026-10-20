@@ -305,6 +305,18 @@ pub fn run() {
                 }
             }
             .shared();
+            // An embedding pass the app quit in the middle of resumes once
+            // start-up settles (only the chunks still missing a vector).
+            {
+                let index = index.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(index::RESUME_EMBEDDINGS_AFTER).await;
+                    let resumed = index.resume_embeddings().await;
+                    if resumed > 0 {
+                        log::info!("resumed embedding {resumed} workspace index(es)");
+                    }
+                });
+            }
             let agents = Arc::new(
                 AgentHost::new(HostDeps {
                     http: http.clone(),
@@ -432,6 +444,7 @@ pub fn run() {
             models::index_model_cancel,
             models::index_model_import,
             models::index_model_remove,
+            models::index_remote_models,
             index::index_remove,
             platform::app_platform,
             context_menu::context_menu_show,

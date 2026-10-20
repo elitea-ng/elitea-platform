@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-index-remote-models"
+description = "Enables the index_remote_models command without any pre-configured scope."
+commands.allow = ["index_remote_models"]
+
+[[permission]]
+identifier = "deny-index-remote-models"
+description = "Denies the index_remote_models command without any pre-configured scope."
+commands.deny = ["index_remote_models"]

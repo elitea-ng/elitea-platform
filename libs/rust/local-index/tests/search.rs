@@ -284,3 +284,36 @@ async fn an_index_from_before_chunks_gains_them_without_a_reparse() {
     service.refresh(false).await.unwrap();
     assert_eq!(service.last_report().unwrap().hashed, 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_chunks_stay_invisible_until_a_build_commits() {
+    use elitea_local_index::chunks::{ChunkKind, ChunkRow};
+    use elitea_local_index::sqlite_store::Staged;
+    let opened = built().await;
+    let store = opened.service.store();
+    let before = store.chunk_count().unwrap();
+    let staged = std::collections::HashMap::from([(
+        "src/ghost.py".to_owned(),
+        Staged {
+            version: "v-ghost".into(),
+            rows: vec![ChunkRow {
+                line_start: 1,
+                line_end: 1,
+                kind: ChunkKind::Code,
+                text: "def zebraphantom(): pass".into(),
+                idents: "zebraphantom".into(),
+                text_hash: "h-ghost".into(),
+            }],
+        },
+    )]);
+    // A build in flight stages chunks: searches never see them.
+    store.stage_chunks(&staged).unwrap();
+    assert_eq!(store.chunk_count().unwrap(), before);
+    assert!(store.search_fts("zebraphantom", 10).unwrap().is_empty());
+    assert!(paths(&opened.service, &request("zebraphantom")).is_empty());
+    // The next build starts by clearing them, and its commit only moves
+    // chunks of files the run itself read.
+    opened.service.refresh(false).await.unwrap();
+    assert_eq!(store.chunk_count().unwrap(), before);
+    assert!(store.chunks_of("src/ghost.py").unwrap().is_empty());
+}

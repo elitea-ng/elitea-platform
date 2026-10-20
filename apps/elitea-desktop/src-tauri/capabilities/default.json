@@ -48,6 +48,7 @@
     "allow-index-model-cancel",
     "allow-index-model-import",
     "allow-index-model-remove",
+    "allow-index-remote-models",
     "allow-index-remove",
     "allow-app-platform",
     "allow-context-menu-show",

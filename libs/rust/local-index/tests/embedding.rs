@@ -21,6 +21,8 @@ const DIM: usize = 8;
 struct Fake {
     embedded: AtomicUsize,
     loads: AtomicUsize,
+    /// Every text embedded, in order.
+    texts: Mutex<Vec<String>>,
 }
 
 impl Embedder for Fake {
@@ -34,6 +36,10 @@ impl Embedder for Fake {
 
     fn embed_documents(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
         self.embedded.fetch_add(texts.len(), Ordering::SeqCst);
+        self.texts
+            .lock()
+            .unwrap()
+            .extend(texts.iter().map(|text| (*text).to_owned()));
         Ok(texts
             .iter()
             .map(|text| {
@@ -352,4 +358,77 @@ async fn vectors_join_the_search_once_they_exist() {
     // Turned off: no dense side any more.
     s.service.store().set_setting(SETTING, "off").unwrap();
     assert!(s.service.dense().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_files_a_turn_worked_on_are_embedded_first() {
+    let s = setup().await;
+    s.service
+        .store()
+        .set_setting(SETTING, "local:fake")
+        .unwrap();
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    // Asked before the pass is planned: m11 then m7 go first, in that order.
+    embedding.prioritise("ws", ["src/m11.py".to_owned(), "src/m7.py".to_owned()]);
+    embedding.add(&s.service);
+    wait(&embedding, |st| st.state == EmbedState::Done);
+    let texts = s.fake.texts.lock().unwrap().clone();
+    let of = |n: &str| texts.iter().filter(|text| text.contains(n)).count();
+    assert_eq!((of("Model11"), of("Model7")), (1, 1), "{texts:?}");
+    let at = |n: &str| texts.iter().position(|text| text.contains(n)).unwrap();
+    let rest = texts
+        .iter()
+        .position(|text| !text.contains("11") && !text.contains('7'))
+        .unwrap();
+    assert!(
+        at("Model11") < at("Model7") && at("Model7") < rest,
+        "{texts:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_pass_embeds_only_what_is_missing_and_reports_an_eta() {
+    let s = setup().await;
+    s.service
+        .store()
+        .set_setting(SETTING, "local:fake")
+        .unwrap();
+    {
+        let embedding = start(&s, Arc::new(AlwaysRun), fast());
+        embedding.add(&s.service);
+        wait(&embedding, |st| st.state == EmbedState::Done);
+    }
+    let statuses = s.statuses.lock().unwrap().clone();
+    assert!(
+        statuses
+            .iter()
+            .any(|st| st.state == EmbedState::Running && st.done > 0 && st.eta_seconds.is_some()),
+        "{statuses:?}"
+    );
+    assert!(
+        statuses
+            .iter()
+            .all(|st| st.state != EmbedState::Done || st.eta_seconds.is_none())
+    );
+    let first = s.fake.embedded.load(Ordering::SeqCst);
+    // Between runs (the app was closed) one file changed: the next start
+    // embeds that file's new texts and nothing else.
+    write(
+        s.folder.path(),
+        "src/m3.py",
+        "class Changed3:\n    def run_changed(self):\n        return 33\n",
+    );
+    s.service.refresh(false).await.unwrap();
+    let embedding = start(&s, Arc::new(AlwaysRun), fast());
+    embedding.add(&s.service);
+    wait(&embedding, |st| st.state == EmbedState::Done);
+    let texts = s.fake.texts.lock().unwrap().clone();
+    let again = &texts[first..];
+    assert!(
+        !again.is_empty()
+            && again
+                .iter()
+                .all(|text| text.contains("hanged") || text.contains("33")),
+        "{again:?}"
+    );
 }

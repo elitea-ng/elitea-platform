@@ -4,7 +4,10 @@
  * (the person picks one; it is downloaded only after they agree to its
  * size), or the deployment's embeddings model when the policy allows it
  * (the folder's code leaves the computer). Shows the embedding's progress
- * and why it waits (a turn, battery, Low Power Mode), with "Embed now".
+ * and why it waits (a turn, battery, Low Power Mode), with "Embed now", and
+ * the time left at the pace so far. The smaller model is recommended for a
+ * large index. A model's files can be imported from a folder (no download)
+ * or removed; the deployment's models are offered from the project's list.
  */
 import { useState } from 'react';
 
@@ -13,6 +16,7 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import LinearProgress from '@mui/material/LinearProgress';
+import MenuItem from '@mui/material/MenuItem';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import type { Theme } from '@mui/material/styles';
@@ -23,7 +27,7 @@ import { EMBEDDINGS_OFF, type EmbedStatus, type ModelInfo } from '@/shared/deskt
 import { t } from '@/shared/i18n';
 
 import { describeIndexError } from '../model/describeIndexError';
-import { LOCAL_PREFIX, localModelOf, REMOTE_PREFIX, remoteModelOf, type WorkspaceEmbeddings } from '../model/useEmbeddings';
+import { LOCAL_PREFIX, localModelOf, recommendedModel, REMOTE_PREFIX, remoteModelOf, type WorkspaceEmbeddings } from '../model/useEmbeddings';
 
 const mutedSx = (theme: Theme) => ({
   color: theme.vars.palette.text.secondary,
@@ -43,11 +47,24 @@ function modelLine(model: ModelInfo): string {
   return t('workspace.index.embeddings.toDownload', '{{size}} download · {{memory}}', { size: formatSize(model.download_bytes), memory });
 }
 
+/** `under a minute`, `12 min`, `2 h 5 min`. */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return t('workspace.index.embeddings.underMinute', 'under a minute');
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return t('workspace.index.embeddings.minutes', '{{minutes}} min', { minutes: String(minutes) });
+  return t('workspace.index.embeddings.hours', '{{hours}} h {{minutes}} min', { hours: String(Math.floor(minutes / 60)), minutes: String(minutes % 60) });
+}
+
+function runningLine(status: EmbedStatus, counts: { done: string; total: string }): string {
+  if (status.eta_seconds === null || status.eta_seconds === undefined) return t('workspace.index.embeddings.running', 'Embedding: {{done}} of {{total}} chunks.', counts);
+  return t('workspace.index.embeddings.runningEta', 'Embedding: {{done}} of {{total}} chunks, about {{left}} left.', { ...counts, left: formatDuration(status.eta_seconds) });
+}
+
 function statusLine(status: EmbedStatus): string {
   const counts = { done: String(status.done), total: String(status.total) };
   switch (status.state) {
     case 'running':
-      return t('workspace.index.embeddings.running', 'Embedding: {{done}} of {{total}} chunks.', counts);
+      return runningLine(status, counts);
     case 'waiting':
       return t('workspace.index.embeddings.waiting', 'Waiting to embed ({{done}} of {{total}} chunks).', counts);
     case 'done':
@@ -68,6 +85,7 @@ function statusLine(status: EmbedStatus): string {
 }
 
 function Consent({ model, embeddings }: { model: ModelInfo; embeddings: WorkspaceEmbeddings }): React.JSX.Element {
+  const mirror = embeddings.models?.mirror ?? null;
   const progress = embeddings.downloads[model.id];
   if (model.downloading || progress !== undefined) {
     const value = progress === undefined || progress.total === 0 ? undefined : (progress.done / progress.total) * 100;
@@ -101,22 +119,50 @@ function Consent({ model, embeddings }: { model: ModelInfo; embeddings: Workspac
         </Button>
       }
     >
-      {t(
-        'workspace.index.embeddings.consent',
-        'Download {{name}} ({{size}}) from Hugging Face? It is checked against a pinned checksum, kept in the app’s data and shared by every folder. Nothing from your code is sent.',
-        { name: model.display_name, size: formatSize(model.download_bytes) },
-      )}
+      {mirror === null
+        ? t(
+            'workspace.index.embeddings.consent',
+            'Download {{name}} ({{size}}) from Hugging Face? It is checked against a pinned checksum, kept in the app’s data and shared by every folder. Nothing from your code is sent.',
+            { name: model.display_name, size: formatSize(model.download_bytes) },
+          )
+        : t(
+            'workspace.index.embeddings.consentMirror',
+            'Download {{name}} ({{size}}) from your organisation’s mirror ({{host}})? It is checked against a pinned checksum, kept in the app’s data and shared by every folder. Nothing from your code is sent.',
+            { name: model.display_name, size: formatSize(model.download_bytes), host: mirror },
+          )}
     </Alert>
   );
 }
 
 function Remote({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.Element {
-  const [model, setModel] = useState(remoteModelOf(embeddings.choice) ?? '');
+  const listed = embeddings.remoteModels;
+  const stored = remoteModelOf(embeddings.choice);
+  const [model, setModel] = useState(stored ?? listed?.[0]?.name ?? '');
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 4 }}>
       <Alert severity="warning">{t('workspace.index.embeddings.remoteWarning', 'This folder’s code is sent to your deployment’s embeddings model, paid from the bound project’s budget.')}</Alert>
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-        <TextField size="small" label={t('workspace.index.embeddings.remoteModel', 'Embeddings model')} value={model} onChange={(event) => setModel(event.target.value)} />
+        {listed === undefined ? (
+          <TextField size="small" label={t('workspace.index.embeddings.remoteModel', 'Embeddings model')} value={model} onChange={(event) => setModel(event.target.value)} />
+        ) : (
+          <TextField
+            select
+            size="small"
+            sx={{ minWidth: 240 }}
+            label={t('workspace.index.embeddings.remoteModel', 'Embeddings model')}
+            value={model}
+            onChange={(event) => setModel(event.target.value)}
+            slotProps={{ htmlInput: { 'data-testid': 'index-remote-model' } }}
+          >
+            {/* A stored model the project no longer lists stays selectable. */}
+            {stored !== null && !listed.some((item) => item.name === stored) && <MenuItem value={stored}>{stored}</MenuItem>}
+            {listed.map((item) => (
+              <MenuItem key={item.name} value={item.name}>
+                {item.display_name ?? item.name}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
         <Button
           variant="contained"
           disabled={embeddings.pending || model.trim() === ''}
@@ -134,10 +180,11 @@ function Remote({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.
   );
 }
 
-function Options({ embeddings, selected, onPick }: { embeddings: WorkspaceEmbeddings; selected: string; onPick: (value: string) => void }): React.JSX.Element | null {
+function Options({ embeddings, selected, chunks, onPick }: { embeddings: WorkspaceEmbeddings; selected: string; chunks: number; onPick: (value: string) => void }): React.JSX.Element | null {
   const { models } = embeddings;
   if (models === undefined) return null;
   const chosenLocal = localModelOf(embeddings.choice);
+  const recommended = recommendedModel(chunks);
   return (
     <>
       <RadioGroup aria-label={t('workspace.index.embeddings.title', 'Semantic search')} value={selected} onChange={(event) => onPick(event.target.value)}>
@@ -153,6 +200,7 @@ function Options({ embeddings, selected, onPick }: { embeddings: WorkspaceEmbedd
                 <Typography variant="bodySmall">
                   {model.display_name}
                   {chosenLocal === model.id ? ` · ${t('workspace.index.embeddings.inUse', 'in use')}` : ''}
+                  {models.local_allowed && model.id === recommended ? ` · ${t('workspace.index.embeddings.recommended', 'recommended for this folder')}` : ''}
                 </Typography>
                 <Typography variant="bodySmall" sx={mutedSx}>
                   {model.summary} {modelLine(model)}
@@ -171,6 +219,35 @@ function Options({ embeddings, selected, onPick }: { embeddings: WorkspaceEmbedd
         </Typography>
       )}
     </>
+  );
+}
+
+/** The models on this computer: import one's files from a folder, or remove them (shared by every folder). */
+function ModelFiles({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.Element | null {
+  const { models } = embeddings;
+  if (models === undefined || !models.local_allowed) return null;
+  return (
+    <Box data-testid="index-model-files" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+      <Typography variant="bodySmall" sx={mutedSx}>
+        {t('workspace.index.embeddings.files', 'Model files are shared by every folder. Offline? Import them from a folder instead of downloading.')}
+      </Typography>
+      {models.models.map((model) => (
+        <Box key={model.id} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="bodySmall" sx={{ flex: 1 }}>
+            {model.display_name}
+          </Typography>
+          {model.state === 'ready' ? (
+            <Button size="small" color="error" disabled={embeddings.pending} onClick={() => embeddings.run({ kind: 'remove', modelId: model.id })}>
+              {t('workspace.index.embeddings.removeModel', 'Remove model')}
+            </Button>
+          ) : (
+            <Button size="small" disabled={embeddings.pending || model.downloading} onClick={() => embeddings.run({ kind: 'import', modelId: model.id })}>
+              {t('workspace.index.embeddings.import', 'Import model files…')}
+            </Button>
+          )}
+        </Box>
+      ))}
+    </Box>
   );
 }
 
@@ -201,7 +278,8 @@ function selectedOption(embeddings: WorkspaceEmbeddings, remoteOpen: boolean): s
   return embeddings.choice ?? EMBEDDINGS_OFF;
 }
 
-export function EmbeddingsSection({ embeddings }: { embeddings: WorkspaceEmbeddings }): React.JSX.Element {
+/** `chunks`: the index's search chunks (what the recommendation weighs). */
+export function EmbeddingsSection({ embeddings, chunks = 0 }: { embeddings: WorkspaceEmbeddings; chunks?: number }): React.JSX.Element {
   const { models, choice, status } = embeddings;
   const [remoteOpen, setRemoteOpen] = useState(false);
   const selected = selectedOption(embeddings, remoteOpen);
@@ -219,13 +297,14 @@ export function EmbeddingsSection({ embeddings }: { embeddings: WorkspaceEmbeddi
       <Typography variant="bodySmall" sx={mutedSx}>
         {t('workspace.index.embeddings.body', 'Search always matches the code’s words and structure. To also match by meaning, choose a model: it runs on this computer and nothing is sent anywhere.')}
       </Typography>
-      <Options embeddings={embeddings} selected={selected} onPick={pick} />
+      <Options embeddings={embeddings} selected={selected} chunks={chunks} onPick={pick} />
       {selected === REMOTE_OPTION && models?.remote_allowed === true && <Remote embeddings={embeddings} />}
       {awaited !== undefined && <Consent model={awaited} embeddings={embeddings} />}
       {embeddings.downloadError !== null && (
         <Alert severity="error">{t('workspace.index.embeddings.downloadFailed', 'The download failed: {{error}}', { error: embeddings.downloadError.error })}</Alert>
       )}
       {status !== null && choice !== EMBEDDINGS_OFF && <Progress embeddings={embeddings} status={status} />}
+      <ModelFiles embeddings={embeddings} />
       {embeddings.actionError !== null && <Alert severity="error">{describeIndexError(embeddings.actionError)}</Alert>}
     </Box>
   );

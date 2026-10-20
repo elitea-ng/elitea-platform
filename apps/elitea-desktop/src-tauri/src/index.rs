@@ -104,6 +104,9 @@ async fn blocking<T: Send + 'static>(
 /// How long after a turn's last change its index refreshes.
 pub const DEFAULT_REFRESH_DELAY: Duration = Duration::from_secs(3);
 
+/// How long after start-up an unfinished embedding pass resumes.
+pub const RESUME_EMBEDDINGS_AFTER: Duration = Duration::from_secs(20);
+
 /// How long a refresh that found another one running waits to try again.
 const BUSY_RETRY: Duration = Duration::from_secs(1);
 
@@ -198,8 +201,21 @@ fn peeked_status(peek: Option<&Peek>, policy: &str) -> IndexStatus {
         status.files = peek.documents;
         status.entities = peek.entities;
         status.relations = peek.relations;
+        status.chunks = peek.chunks;
     }
     status
+}
+
+/// Whether the index's embedding pass was left unfinished (the app quit
+/// mid-pass): turned on, a model chosen, fewer vectors than distinct chunk
+/// texts. Its next pass embeds only what is missing.
+fn embedding_unfinished(peek: &Peek) -> bool {
+    let chosen = peek
+        .settings
+        .get(SETTING)
+        .is_some_and(|choice| !choice.is_empty() && choice != OFF);
+    let kept = peek.vectors.values().copied().max().unwrap_or(0);
+    is_enabled(Some(peek)) && peek.built && chosen && kept < peek.chunk_texts
 }
 
 /// The policy as it is now, read and parsed once: whether it allows the
@@ -804,18 +820,74 @@ impl IndexRegistry {
         Ok(())
     }
 
-    /// The workspace's embeddings setting (`off` when the index is not
-    /// open or never set).
+    /// The workspace's embeddings setting (`off` when never set), from the
+    /// open service or a small read of the index file.
     pub async fn embeddings(&self, workspace_id: &str) -> String {
-        match self
+        if let Some(service) = self
             .existing(workspace_id)
             .and_then(|entry| entry.current())
         {
-            Some(service) => blocking(move || choice_of(&service))
+            return blocking(move || choice_of(&service))
                 .await
-                .unwrap_or_else(|_| OFF.to_owned()),
-            None => OFF.to_owned(),
+                .unwrap_or_else(|_| OFF.to_owned());
         }
+        let (_, mut slot) = self.lock(workspace_id).await;
+        match self.peek(workspace_id, &mut slot).await {
+            Ok(Some(peek)) => peek
+                .settings
+                .get(SETTING)
+                .filter(|choice| !choice.is_empty())
+                .cloned()
+                .unwrap_or_else(|| OFF.to_owned()),
+            _ => OFF.to_owned(),
+        }
+    }
+
+    /// Embed `paths` of the workspace first (most recent first): the files a
+    /// turn changed, the files a thread references. A hint only.
+    pub fn prioritise(&self, workspace_id: &str, paths: impl IntoIterator<Item = String>) {
+        if let Some(embedding) = &self.embedding {
+            embedding.prioritise(workspace_id, paths);
+        }
+    }
+
+    /// At start-up: reopen every index whose embedding pass the app quit in
+    /// the middle of, so the pass resumes (embedding only the chunks still
+    /// missing a vector). Nothing when the policy turns indexes off.
+    /// Answers how many resumed.
+    pub async fn resume_embeddings(&self) -> usize {
+        if self.embedding.is_none() {
+            return 0;
+        }
+        let Ok((policy, _)) = self.policy_now().gate() else {
+            return 0;
+        };
+        let workspaces = self.workspaces.clone();
+        let Ok(Ok(listed)) = blocking(move || workspaces.list()).await else {
+            return 0;
+        };
+        let mut resumed = 0;
+        for workspace in listed {
+            let (entry, mut slot) = self.lock(&workspace.id).await;
+            if slot.open.is_some() {
+                continue;
+            }
+            let unfinished = match self.peek(&workspace.id, &mut slot).await {
+                Ok(peek) => peek.as_ref().is_some_and(embedding_unfinished),
+                Err(_) => false,
+            };
+            if !unfinished {
+                continue;
+            }
+            match self
+                .open_in(&workspace, &policy, &entry, &mut slot, true)
+                .await
+            {
+                Ok(_) => resumed += 1,
+                Err(error) => log::warn!("an index could not resume embedding: {}", error.code),
+            }
+        }
+        resumed
     }
 
     /// `index_cancel`: `true` when a refresh was running. Never waits for
@@ -1653,6 +1725,54 @@ mod tests {
         }
         let (with, all) = service.store().vector_coverage("local:fake:2").unwrap();
         assert!(all > 0 && with == all, "{with}/{all}");
+        assert_eq!(registry.embeddings(&id).await, "local:fake");
+
+        // The app quits with the pass unfinished (here: no vectors left).
+        service.store().prune_vectors(None).unwrap();
+        service.close();
+        drop((service, registry, embedding));
+        let start = || {
+            Arc::new(
+                Embedding::start(
+                    Arc::new(Source),
+                    Arc::new(AlwaysRun),
+                    EmbedConfig {
+                        poll: Duration::from_millis(100),
+                        ..EmbedConfig::default()
+                    },
+                    Arc::new(|_: &str, _: &elitea_local_index::embedding::EmbedStatus| {}),
+                )
+                .unwrap(),
+            )
+        };
+        let embedding = start();
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let registry = IndexRegistry::new(workspaces, policy, Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(None)
+            .with_embedding(embedding.clone())
+            .shared();
+        // Not open yet: the setting is read from the file.
+        assert_eq!(registry.embeddings(&id).await, "local:fake");
+        assert_eq!(
+            registry.resume_embeddings().await,
+            1,
+            "the next start resumes it"
+        );
+        assert_eq!(registry.resume_embeddings().await, 0, "already open");
+        for _ in 0..500 {
+            if embedding
+                .status(&id)
+                .is_some_and(|s| s.state == EmbedState::Done)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let service = registry.for_turn(&id).await.unwrap();
+        let (with, all) = service.store().vector_coverage("local:fake:2").unwrap();
+        assert!(all > 0 && with == all, "resumed: {with}/{all}");
     }
 
     /// Embeddings are off until set, and only to a way the policy allows.

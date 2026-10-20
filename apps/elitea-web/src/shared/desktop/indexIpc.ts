@@ -24,6 +24,8 @@ export interface IndexStatus {
   relations: number;
   /** 0 until embeddings exist. */
   vectors: number;
+  /** Search chunks of the last build (what embedding them covers). */
+  chunks: number;
   /** When the last build was committed (UTC, ISO 8601). */
   last_run: string | null;
   /** Files turns changed since the last build. */
@@ -82,6 +84,15 @@ export interface IndexModels {
   remote_allowed: boolean;
   /** Bytes the model cache holds. */
   cache_bytes: number;
+  /** The host downloads come from when the organisation's policy names a mirror; `null`: Hugging Face. */
+  mirror: string | null;
+}
+
+/** An embedding model the workspace's project can use through the deployment. */
+export interface RemoteModel {
+  /** What a `remote:<model>` choice names. */
+  name: string;
+  display_name: string | null;
 }
 
 /** `paused`: a turn runs, or `held` says why (`turn`, `on_battery`, `low_power`). */
@@ -97,6 +108,8 @@ export interface EmbedStatus {
   error: string | null;
   /** Asked for whatever the power conditions. */
   forced: boolean;
+  /** Seconds left at the pace so far, while it runs; `null` before the first batch. */
+  eta_seconds: number | null;
 }
 
 /** A model download's progress (`index://event`, `kind: model`). */
@@ -139,10 +152,12 @@ export interface IndexIpc {
   downloadModel(modelId: string): Promise<ModelInfo>;
   /** Stop a running download (what was fetched is kept); `false` when none runs. */
   cancelModel(modelId: string): Promise<boolean>;
-  /** Copy a model's files from a folder (no download). */
-  importModel(modelId: string, folder: string): Promise<ModelInfo>;
+  /** Copy a model's files from `folder`, or from one the person picks in the native dialog (no download); `null` when they cancelled. */
+  importModel(modelId: string, folder?: string): Promise<ModelInfo | null>;
   /** Delete a downloaded model. */
   removeModel(modelId: string): Promise<ModelInfo>;
+  /** The embedding models the workspace's project can use through the deployment (rejects when they cannot be listed). */
+  remoteModels(workspaceId: string): Promise<RemoteModel[]>;
   embeddings(workspaceId: string): Promise<EmbeddingsChoice>;
   /** Answers the stored value (`remote:<model>` comes back as `remote:<dim>:<model>`). */
   setEmbeddings(workspaceId: string, choice: EmbeddingsChoice): Promise<EmbeddingsChoice>;
@@ -163,6 +178,7 @@ export const OFF_STATUS: IndexStatus = Object.freeze({
   entities: 0,
   relations: 0,
   vectors: 0,
+  chunks: 0,
   last_run: null,
   changed_files: 0,
   error: null,
@@ -196,8 +212,10 @@ export function createIndexIpc(hostInvoke: HostInvoke, listen: ListenFn): IndexI
     models: () => invoke<IndexModels>('index_models', {}),
     downloadModel: (modelId) => invoke<ModelInfo>('index_model_download', { model_id: modelId, confirm: true }),
     cancelModel: (modelId) => invoke<boolean>('index_model_cancel', { model_id: modelId }),
-    importModel: (modelId, folder) => invoke<ModelInfo>('index_model_import', { model_id: modelId, folder }),
+    importModel: (modelId, folder) =>
+      invoke<ModelInfo | null>('index_model_import', folder === undefined ? { model_id: modelId } : { model_id: modelId, folder }),
     removeModel: (modelId) => invoke<ModelInfo>('index_model_remove', { model_id: modelId }),
+    remoteModels: (workspaceId) => invoke<RemoteModel[]>('index_remote_models', { workspace_id: workspaceId }),
     embeddings: (workspaceId) => invoke<EmbeddingsChoice>('index_embeddings_get', { workspace_id: workspaceId }),
     setEmbeddings: (workspaceId, choice) => invoke<EmbeddingsChoice>('index_embeddings_set', { workspace_id: workspaceId, embeddings: choice }),
     embeddingsStatus: (workspaceId) => invoke<EmbedStatus | null>('index_embeddings_status', { workspace_id: workspaceId }),

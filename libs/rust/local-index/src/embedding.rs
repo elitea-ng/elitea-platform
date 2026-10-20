@@ -16,6 +16,16 @@
 //! * **one model in memory** — loaded on first use, dropped after
 //!   [`EmbedConfig::idle_unload`] (two minutes) without use.
 //!
+//! **Resumable.** Vectors are stored batch by batch, so a pass stopped
+//! (the app quit, a turn, the power) loses at most one batch: the next pass
+//! — after a restart too — embeds only the chunks that still have none, and
+//! a refresh that changed some files only theirs.
+//!
+//! **What the agent works on first.** The files a turn touched or
+//! `@`-mentioned ([`Embedding::prioritise`]) are embedded before the rest;
+//! a pass under way takes them up at its next batch. Each status carries an
+//! ETA from the pass's own throughput.
+//!
 //! Vectors are keyed by the chunk text's hash within a [`VectorSet`]
 //! stamp (`origin:model:dim`): a refresh that keeps a chunk keeps its
 //! vector, a chunk that changed gets a new one on the next pass, and the
@@ -131,7 +141,12 @@ pub struct EmbedStatus {
     pub error: Option<String>,
     /// The person asked for it whatever the power conditions.
     pub forced: bool,
+    /// Seconds left at this pass's throughput (while it runs).
+    pub eta_seconds: Option<u64>,
 }
+
+/// The most recent paths kept per workspace for [`Embedding::prioritise`].
+pub const MAX_PRIORITY_PATHS: usize = 200;
 
 /// Where status changes go (`index://event` on the desktop).
 pub type OnStatus = Arc<dyn Fn(&str, &EmbedStatus) + Send + Sync>;
@@ -149,6 +164,10 @@ struct State {
     statuses: HashMap<String, EmbedStatus>,
     /// Not retried before this (after an error).
     retry_at: HashMap<String, Instant>,
+    /// The paths to embed first, most recent first, per workspace.
+    priorities: HashMap<String, Vec<String>>,
+    /// Workspaces whose priorities changed since their pass was planned.
+    reprioritised: HashSet<String>,
     woken: bool,
 }
 
@@ -356,11 +375,37 @@ impl Embedding {
         state.forced.remove(workspace_id);
         state.statuses.remove(workspace_id);
         state.retry_at.remove(workspace_id);
+        state.priorities.remove(workspace_id);
+        state.reprioritised.remove(workspace_id);
     }
 
     /// Look again now (a build committed, a setting changed).
     pub fn wake(&self) {
         self.shared.state().retry_at.clear();
+        self.shared.notify();
+    }
+
+    /// Embed the chunks of `paths` (a turn touched or `@`-mentioned them)
+    /// before the workspace's others; the most recent go first, and a pass
+    /// under way takes them up at its next batch.
+    pub fn prioritise<I>(&self, workspace_id: &str, paths: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let fresh: Vec<String> = paths.into_iter().collect();
+        if fresh.is_empty() {
+            return;
+        }
+        {
+            let mut state = self.shared.state();
+            let list = state.priorities.entry(workspace_id.to_owned()).or_default();
+            list.retain(|path| !fresh.contains(path));
+            let mut merged = fresh;
+            merged.append(list);
+            merged.truncate(MAX_PRIORITY_PATHS);
+            *list = merged;
+            state.reprioritised.insert(workspace_id.to_owned());
+        }
         self.shared.notify();
     }
 
@@ -515,7 +560,7 @@ fn pick(shared: &Shared) -> Option<Job> {
                     .map_or(0, |(_, count)| count);
                 Ok((missing, done))
             });
-        let (missing, done) = match prepared {
+        let (mut missing, done) = match prepared {
             Ok(found) => found,
             Err(error) => {
                 fail(
@@ -530,6 +575,7 @@ fn pick(shared: &Shared) -> Option<Job> {
                 continue;
             }
         };
+        put_first(shared, &service, &workspace_id, &mut missing);
         if missing.is_empty() {
             shared.state().forced.remove(&workspace_id);
             shared.set_status(
@@ -542,6 +588,7 @@ fn pick(shared: &Shared) -> Option<Job> {
                     held: None,
                     error: None,
                     forced: false,
+                    eta_seconds: None,
                 },
             );
             continue;
@@ -584,15 +631,61 @@ fn fail(
             held: None,
             error: Some(error.to_owned()),
             forced,
+            eta_seconds: None,
         },
     );
+}
+
+/// Put the chunks of the workspace's priority paths first (in their
+/// order; the rest keep theirs), and mark its priorities as applied.
+fn put_first(
+    shared: &Shared,
+    service: &IndexService,
+    workspace_id: &str,
+    missing: &mut [(i64, String)],
+) {
+    let priorities = {
+        let mut state = shared.state();
+        state.reprioritised.remove(workspace_id);
+        state
+            .priorities
+            .get(workspace_id)
+            .cloned()
+            .unwrap_or_default()
+    };
+    if priorities.is_empty() || missing.is_empty() {
+        return;
+    }
+    match service.store().chunk_hashes_of(&priorities) {
+        Ok(ranks) => {
+            missing.sort_by_key(|(_, hash)| ranks.get(hash).copied().unwrap_or(usize::MAX));
+        }
+        Err(error) => log::warn!("the index's priorities could not be read: {error}"),
+    }
+}
+
+/// Seconds left for `left` texts at `embedded` texts per `busy`.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn seconds_left(left: u64, embedded: u64, busy: Duration) -> Option<u64> {
+    let seconds = busy.as_secs_f64();
+    (embedded > 0 && seconds > 0.0).then(|| (left as f64 * seconds / embedded as f64).ceil() as u64)
 }
 
 /// Embed a job's chunks batch by batch, holding for turns and power.
 fn work(shared: &Shared, job: &Job) {
     let total = job.done + job.missing.len() as u64;
     let mut done = job.done;
-    let status = |state, held, done| EmbedStatus {
+    // Throughput of this pass, over the time spent embedding (holds and
+    // waits are not counted).
+    let (mut embedded, mut busy) = (0_u64, Duration::ZERO);
+    let eta = |embedded: u64, busy: Duration, done: u64| {
+        seconds_left(total.saturating_sub(done), embedded, busy)
+    };
+    let status = |state, held, done, eta_seconds| EmbedStatus {
         choice: job.choice.clone(),
         state,
         done,
@@ -600,6 +693,7 @@ fn work(shared: &Shared, job: &Job) {
         held,
         error: None,
         forced: job.forced,
+        eta_seconds,
     };
     for batch in job.missing.chunks(shared.config.batch.max(1)) {
         // Between batches: stop, a turn, a build, the setting, power.
@@ -612,7 +706,7 @@ fn work(shared: &Shared, job: &Job) {
             }
             shared.set_status(
                 &job.workspace_id,
-                &status(EmbedState::Paused, Some("turn"), done),
+                &status(EmbedState::Paused, Some("turn"), done, None),
             );
             shared.sleep(Duration::from_millis(500));
         }
@@ -620,21 +714,37 @@ fn work(shared: &Shared, job: &Job) {
             || job.service.is_building()
             || choice_of(&job.service) != job.choice
         {
-            shared.set_status(&job.workspace_id, &status(EmbedState::Waiting, None, done));
+            shared.set_status(
+                &job.workspace_id,
+                &status(EmbedState::Waiting, None, done, None),
+            );
+            return;
+        }
+        if shared.state().reprioritised.contains(&job.workspace_id) {
+            // Planned again with the new priorities first (at once).
+            shared.notify();
             return;
         }
         let forced = job.forced || shared.state().forced.contains(&job.workspace_id);
         if !forced && let Some(reason) = shared.conditions.hold() {
             shared.set_status(
                 &job.workspace_id,
-                &status(EmbedState::Paused, Some(reason), done),
+                &status(EmbedState::Paused, Some(reason), done, None),
             );
             shared.sleep(shared.config.poll);
             return;
         }
-        shared.set_status(&job.workspace_id, &status(EmbedState::Running, None, done));
+        shared.set_status(
+            &job.workspace_id,
+            &status(EmbedState::Running, None, done, eta(embedded, busy, done)),
+        );
+        let started = Instant::now();
         match embed_batch(shared, job, batch) {
-            Ok(n) => done += n,
+            Ok(n) => {
+                done += n;
+                embedded += n;
+                busy += started.elapsed();
+            }
             Err(error) => {
                 fail(
                     shared,

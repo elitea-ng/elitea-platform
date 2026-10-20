@@ -29,9 +29,14 @@ Search by meaning needs an embedding model. **Nothing is downloaded and nothing 
 1. In the index settings, under **Semantic search**, choose a model:
    - **multilingual-e5-small**: about 490 MB to download, about 1.4 GB of memory while embedding. Small and fast; good for prose in many languages.
    - **Qwen3-Embedding-0.6B**: about 1.2 GB to download, about 2.6 GB of memory while embedding. Better on code and questions; slower.
-2. Confirm the download. The model is fetched once from Hugging Face, checked against a checksum built into the app, and shared by every folder.
-3. The folder is embedded in the background.
+   The settings mark one as **recommended for this folder**: Qwen3-Embedding-0.6B, or multilingual-e5-small when the folder's index holds more than 50,000 chunks (its first pass is several times faster). You still choose.
+2. Confirm the download. The model is fetched once from Hugging Face (or your organisation's mirror, when the policy names one), checked against a checksum built into the app, and shared by every folder.
+3. The folder is embedded in the background. The progress shows about how long is left.
 </Steps>
+
+Offline, or downloads blocked? Select **Import model files…** next to the model and pick a folder that holds its files (the same files the download fetches). Each one is checked against its checksum. **Remove model** deletes a model's files; folders that use it stop embedding until it is back.
+
+A long first pass does not start over: if you quit the app, it carries on shortly after the next start, embedding only what is still missing. The files the agent just changed and the files you @-mention are embedded first.
 
 <Note>
 Embedding runs at low priority and pauses while an agent works, on battery, and in Low Power Mode. Select **Embed now** to embed anyway. The model is unloaded after two idle minutes.
@@ -39,15 +44,16 @@ Embedding runs at low priority and pauses while an agent works, on battery, and 
 
 ### Through your deployment
 
-If your administrator allows it, **Through your deployment** embeds the folder with one of your deployment's embedding models instead of a local one. The folder's code is then sent to the deployment and paid from the bound project's budget, so the folder must be bound to a project. This option is off unless the policy turns it on.
+If your administrator allows it, **Through your deployment** embeds the folder with one of your deployment's embedding models instead of a local one: pick it from the bound project's embedding models (or type its name when the list cannot be read). The folder's code is then sent to the deployment and paid from the bound project's budget, so the folder must be bound to a project. This option is off unless the policy turns it on.
 
 ## For administrators
 
-Two settings in the native client policy control embeddings:
+Three settings in the native client policy control embeddings:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
 | **Allow On-Device Index Embeddings** | On | People may download a model and embed folders on their computer. Nothing leaves the device. |
 | **Allow Index Embeddings Through This Deployment** | Off | People may embed folders through the deployment's embeddings endpoint. Code is sent to the deployment. |
+| **Embedding Model Mirror URL** | Empty | An `https` URL that serves the models laid out as Hugging Face does (`<mirror>/<repo>/resolve/<revision>/<file>`). Empty: Hugging Face. Downloads are still checked against the checksums built into the app. |
 
 Both need **Local work** and the **local index** to be allowed. When a setting is turned off, the desktop app stops using that kind of embedding at once and deletes the vectors it made.

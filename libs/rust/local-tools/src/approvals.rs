@@ -965,6 +965,7 @@ mod tests {
             cloud_handoff: false,
             index_local_embeddings: false,
             index_remote_embeddings: false,
+            index_model_mirror_url: String::new(),
         }
     }
 

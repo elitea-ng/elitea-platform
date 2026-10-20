@@ -52,6 +52,7 @@ pub mod chunks;
 pub mod dense;
 pub mod embedding;
 pub mod fs;
+pub mod ingest;
 pub mod search;
 pub mod service;
 pub mod source;

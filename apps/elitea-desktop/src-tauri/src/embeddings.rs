@@ -127,6 +127,22 @@ pub fn valid_model(model: &str) -> bool {
             .all(|c| c.is_ascii_graphic() && c != '"' && c != '\\')
 }
 
+/// Where the on-device models download from: the policy's mirror when it
+/// is an `https` URL (the server accepts nothing else), else Hugging Face.
+/// Whatever serves them, every file is checked against its pinned SHA-256.
+#[must_use]
+pub fn model_base(policy: &dyn PolicySource) -> Option<String> {
+    let policy: LocalWorkPolicy = policy
+        .local_work()
+        .and_then(|section| serde_json::from_value(section).ok())
+        .unwrap_or_default();
+    let mirror = policy.index_model_mirror_url.trim_end_matches('/');
+    mirror
+        .strip_prefix("https://")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains(['?', '#', '@']))
+        .then(|| mirror.to_owned())
+}
+
 /// Which embedders the policy allows now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Allowed {
@@ -351,6 +367,97 @@ pub async fn embed_remote(
     Err(remote("the deployment refused the sign-in".into()))
 }
 
+/// The deployment's catalogue route; `?section=embedding` keeps its
+/// embedding models (client contract 1.9).
+pub const MODELS_ROUTE: &str = "/api/v2/configurations/models/";
+
+/// One embedding model the workspace's project can use through the
+/// deployment.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RemoteModel {
+    /// What a `remote:<model>` choice names.
+    pub name: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ModelList {
+    items: Vec<ModelListItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct ModelListItem {
+    name: String,
+    #[serde(default)]
+    display_name: Option<String>,
+}
+
+/// The embedding models `project_id` can use (its own and the shared
+/// ones), by name, deduplicated, valid names only.
+///
+/// # Errors
+///
+/// Signed out, unreachable, refused, or an answer that does not fit (the
+/// caller falls back to a typed name).
+pub async fn remote_models(
+    deps: &RemoteDeps,
+    project_id: i64,
+) -> Result<Vec<RemoteModel>, EmbedError> {
+    let remote = |message: String| EmbedError::Remote(message);
+    let client = deps.http.client().await;
+    let mut bearer = deps
+        .credentials
+        .bearer()
+        .await
+        .map_err(|error| remote(error.message))?;
+    for attempt in 0..2 {
+        let response = client
+            .get(format!("{}{MODELS_ROUTE}{project_id}", bearer.origin))
+            .query(&[("section", "embedding"), ("include_shared", "true")])
+            .timeout(REMOTE_TIMEOUT)
+            .bearer_auth(&bearer.token)
+            .header(
+                crate::tokens::CLIENT_VERSION_HEADER,
+                env!("CARGO_PKG_VERSION"),
+            )
+            .send()
+            .await
+            .map_err(|_| remote("could not reach the deployment".into()))?;
+        let status = response.status().as_u16();
+        if status == 401 && attempt == 0 {
+            bearer = deps
+                .credentials
+                .refreshed()
+                .await
+                .map_err(|error| remote(error.message))?;
+            continue;
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| remote("the answer was cut off".into()))?;
+        if !(200..300).contains(&status) {
+            return Err(remote(format!(
+                "{} (HTTP {status})",
+                refusal_code(status, &bytes)
+            )));
+        }
+        let list: ModelList = serde_json::from_slice(&bytes)
+            .map_err(|_| EmbedError::Shape("not a model list".into()))?;
+        let mut seen = std::collections::HashSet::new();
+        return Ok(list
+            .items
+            .into_iter()
+            .filter(|item| valid_model(&item.name) && seen.insert(item.name.clone()))
+            .map(|item| RemoteModel {
+                name: item.name,
+                display_name: item.display_name.filter(|name| !name.trim().is_empty()),
+            })
+            .collect());
+    }
+    Err(remote("the deployment refused the sign-in".into()))
+}
+
 impl RemoteEmbedder {
     fn call(
         &self,
@@ -513,6 +620,31 @@ mod tests {
     }
 
     struct Signed(String);
+
+    #[test]
+    fn a_mirror_is_used_only_when_it_is_a_plain_https_url() {
+        struct Mirror(&'static str);
+        impl PolicySource for Mirror {
+            fn local_work(&self) -> Option<serde_json::Value> {
+                Some(serde_json::json!({"allowed": true, "local_index": true,
+                    "index_model_mirror_url": self.0}))
+            }
+        }
+        assert_eq!(
+            model_base(&Mirror("https://models.example.com/hf/")).as_deref(),
+            Some("https://models.example.com/hf")
+        );
+        for refused in [
+            "",
+            "http://models.example.com",
+            "https://",
+            "https://user:secret@models.example.com",
+            "https://models.example.com/?token=1",
+            "https://models.example.com/#x",
+        ] {
+            assert_eq!(model_base(&Mirror(refused)), None, "{refused}");
+        }
+    }
 
     #[async_trait::async_trait]
     impl Credentials for Signed {
@@ -679,6 +811,56 @@ mod tests {
         *policy.0.lock().unwrap() = Some(json!({"allowed": true, "local_index": true}));
         assert!(embedders.vector_set(choice).is_none());
         assert!(embedders.load(choice, &id).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_project_embedding_models_are_listed_for_the_picker() {
+        let server = serve(|req| {
+            if req.path.ends_with("/7?section=embedding&include_shared=true") {
+                Res::json(
+                    200,
+                    &json!({"total": 4, "items": [
+                        {"name": "text-embedding-3-small", "project_id": 7, "display_name": "Small"},
+                        {"name": "text-embedding-3-small", "project_id": 1},
+                        {"name": "bad model", "project_id": 7},
+                        {"name": "nomic-embed", "project_id": 1, "display_name": " "}
+                    ]}),
+                )
+            } else {
+                Res::json(403, &json!({"error": "forbidden"}))
+            }
+        })
+        .await;
+        let app = tempfile::tempdir().unwrap();
+        let deps = RemoteDeps {
+            http: SharedHttp::new("test"),
+            credentials: Arc::new(Signed(server.origin.clone())),
+            workspaces: Arc::new(WorkspaceStore::new(app.path().to_owned())),
+            runtime: tokio::runtime::Handle::current(),
+        };
+        let models = remote_models(&deps, 7).await.unwrap();
+        assert_eq!(
+            models,
+            [
+                RemoteModel {
+                    name: "text-embedding-3-small".into(),
+                    display_name: Some("Small".into())
+                },
+                RemoteModel {
+                    name: "nomic-embed".into(),
+                    display_name: None
+                },
+            ]
+        );
+        let seen = server.seen();
+        assert!(seen[0].path.starts_with(MODELS_ROUTE));
+        assert_eq!(
+            seen[0].headers.get("authorization").map(String::as_str),
+            Some("Bearer elnat_test")
+        );
+        assert!(seen[0].headers.contains_key("x-client-version"));
+        let refused = remote_models(&deps, 8).await.unwrap_err();
+        assert!(refused.to_string().contains("403"), "{refused}");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

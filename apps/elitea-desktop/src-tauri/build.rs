@@ -48,6 +48,7 @@ fn main() {
             "index_model_cancel",
             "index_model_import",
             "index_model_remove",
+            "index_remote_models",
             "index_remove",
             "app_platform",
             "context_menu_show",

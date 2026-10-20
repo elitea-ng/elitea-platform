@@ -37,8 +37,8 @@ use crate::sqlite_store::{ChunkUpdate, SqliteGraphStore, StoreError};
 use elitea_content_source::content_version;
 use elitea_engine_core::stream::{Context, Line, StopSignal};
 use elitea_inventory_core::graph::Graph;
+use elitea_inventory_core::ingest::SourceSelection;
 use elitea_inventory_core::ingest::files::Selection;
-use elitea_inventory_core::ingest::{SourceSelection, ingest_documents};
 use elitea_inventory_core::retrieval::view::GraphView;
 use elitea_inventory_core::store::{
     Completion, GraphKey, GraphStore as _, RunCounts, SourceStatus,
@@ -112,6 +112,8 @@ pub struct IndexStatus {
     pub relations: u64,
     /// Embedded entities (none until embeddings are turned on).
     pub vectors: u64,
+    /// Search chunks of the last build (what embedding a folder costs).
+    pub chunks: u64,
     /// When the last build was committed (UTC, ISO 8601).
     pub last_run: Option<String>,
     /// Files known to have changed since the last build.
@@ -135,6 +137,7 @@ impl IndexStatus {
             entities: 0,
             relations: 0,
             vectors: 0,
+            chunks: 0,
             last_run: None,
             changed_files: 0,
             error: None,
@@ -231,6 +234,7 @@ struct Inner {
     error: Option<String>,
     changed_files: u64,
     files: u64,
+    chunks: u64,
     last_run: Option<String>,
     report: Option<RunReport>,
     /// The running refresh's stop flag.
@@ -248,6 +252,10 @@ struct Inner {
     closed: bool,
     /// The graph's names for `search_workspace`, of the view's revision.
     names: Option<Arc<NameIndex>>,
+    /// The files the last build listed but kept out (unreadable, not
+    /// text, empty after extraction), at the stat version they had: they
+    /// are no change for [`IndexService::unchanged`].
+    skipped: std::collections::HashMap<String, String>,
 }
 
 /// One workspace's index.
@@ -357,6 +365,11 @@ impl IndexService {
         let built = store.revision_now(KEY)?.is_some();
         let policy_mismatch = built && store.policy()?.as_deref() != Some(policy.as_str());
         let last_run = store.last_completed_run(KEY)?;
+        let chunks = if policy_mismatch {
+            0
+        } else {
+            store.chunk_count()?
+        };
         let (state, view, files) = if policy_mismatch {
             (IndexState::StalePolicy, None, 0)
         } else {
@@ -379,6 +392,7 @@ impl IndexService {
                 error: None,
                 changed_files: 0,
                 files,
+                chunks,
                 last_run,
                 report: None,
                 running: None,
@@ -388,6 +402,7 @@ impl IndexService {
                 policy_mismatch,
                 closed: false,
                 names: None,
+                skipped: std::collections::HashMap::new(),
             }),
             query_embedder: Mutex::new(None),
             matrix: Mutex::new(None),
@@ -435,6 +450,7 @@ impl IndexService {
             entities,
             relations,
             vectors: 0,
+            chunks: inner.chunks,
             last_run: inner.last_run.clone(),
             changed_files: inner.changed_files,
             error: inner.error.clone(),
@@ -744,10 +760,13 @@ impl IndexService {
             Err(IndexError::new("index_cancelled", "cancelled while queued"))
         };
         drop(permit);
-        let last_run = if outcome.is_ok() {
-            self.store.last_completed_run(KEY).ok().flatten()
+        let (last_run, chunks) = if outcome.is_ok() {
+            (
+                self.store.last_completed_run(KEY).ok().flatten(),
+                self.store.chunk_count().ok(),
+            )
         } else {
-            None
+            (None, None)
         };
         let phase = {
             let mut inner = self.inner();
@@ -762,6 +781,9 @@ impl IndexService {
                     inner.view = Some(Arc::clone(view));
                     inner.files = *files;
                     inner.report = Some(*report);
+                    if let Some(chunks) = chunks {
+                        inner.chunks = chunks;
+                    }
                     inner.policy_mismatch = false;
                     // Changes reported while it ran may not be in what it
                     // read: they keep it stale (their refresh follows).
@@ -870,31 +892,71 @@ impl IndexService {
         }
     }
 
+    /// The build served now, when the folder has not changed since it: it
+    /// is the stored revision, and a listing finds every file at its
+    /// recorded `(size, mtime)` and none gone. Lists the folder (one `stat`
+    /// per file); reads nothing.
+    fn unchanged(
+        &self,
+        previous: &BTreeMap<String, String>,
+        stats: &std::collections::HashMap<String, crate::sqlite_store::DocumentStat>,
+    ) -> Result<Option<Built>, IndexError> {
+        let Some(view) = self.inner().view.clone() else {
+            return Ok(None);
+        };
+        if Some(view.revision) != self.store.revision_now(KEY)? {
+            return Ok(None);
+        }
+        let source = LocalFolderSource::new(Arc::clone(&self.workspace))
+            .with_previous(stats.clone())
+            .selecting(Selection::default());
+        let listed = source
+            .list_now()
+            .map_err(|error| IndexError::new("index_failed", error.to_string()))?;
+        // An empty file is never a document: it stays out of `previous`.
+        let documents: Vec<_> = listed
+            .iter()
+            .filter(|reference| reference.size > 0 && !reference.version.is_empty())
+            .collect();
+        let skipped = self.inner().skipped.clone();
+        let mut kept = 0;
+        let mut same = true;
+        for reference in &documents {
+            if previous.get(&reference.key) == Some(&reference.version) {
+                kept += 1;
+            } else if skipped.get(&reference.key) != Some(&reference.version) {
+                same = false;
+                break;
+            }
+        }
+        let same = same && kept == previous.len();
+        if !same {
+            return Ok(None);
+        }
+        let files = count(previous.len());
+        let report = RunReport {
+            read: 0,
+            unchanged: files,
+            removed: 0,
+            hashed: 0,
+        };
+        Ok(Some((view, files, report)))
+    }
+
     /// The run, and whether it got as far as recording its start.
     fn build_with(&self, full: bool, context: &Context) -> (Result<Built, IndexError>, bool) {
         let mut started = false;
         let result = block_on(async {
-            let source_status = SourceStatus {
-                toolkit_id: SOURCE_NAME.to_owned(),
-                toolkit_name: "Workspace folder".to_owned(),
-                toolkit_type: "local_folder".to_owned(),
-                branch: None,
-            };
             // A build from another policy is never the start of this one.
             let full = full || self.inner().policy_mismatch;
             // Chunks made by another chunker (or none yet, an index built
             // before chunks): every file is read once more to cut them;
             // the unchanged ones are not parsed again.
             let rechunk = self.store.chunk_generation()?.as_deref() != Some(chunks::GENERATION);
-            let (mut graph, previous, mut stat_cache) = if full {
-                (
-                    Graph::new(),
-                    BTreeMap::new(),
-                    std::collections::HashMap::new(),
-                )
+            let (previous, mut stat_cache) = if full {
+                (BTreeMap::new(), std::collections::HashMap::new())
             } else {
                 (
-                    self.starting_graph()?,
                     self.store.document_versions(KEY, SOURCE_NAME).await?,
                     self.store.document_stats(KEY, SOURCE_NAME)?,
                 )
@@ -902,25 +964,52 @@ impl IndexService {
             if rechunk {
                 stat_cache.clear();
             }
-            self.store.start(KEY, &source_status).await?;
+            if !full
+                && !rechunk
+                && let Some(unchanged) = self.unchanged(&previous, &stat_cache)?
+            {
+                // Nothing to read and nothing gone: the build served now is
+                // the folder's (no run, and no copy of its graph).
+                return Ok(unchanged);
+            }
+            let mut graph = if full {
+                Graph::new()
+            } else {
+                self.starting_graph()?
+            };
+            self.store.start(KEY, &source_status()).await?;
             started = true;
+            self.store.clear_staged_chunks()?;
             let source = LocalFolderSource::new(Arc::clone(&self.workspace))
                 .with_previous(stat_cache)
                 .selecting(Selection::default())
                 .chunking();
-            let outcome = ingest_documents(
+            // Chunking is CPU work as heavy as parsing: half the cores.
+            let threads =
+                std::thread::available_parallelism().map_or(2, std::num::NonZero::get) / 2;
+            // Each batch's chunks go to the store's staging table as soon
+            // as the batch is read; the commit moves them in.
+            let stage = || {
+                self.store
+                    .stage_chunks(&source.take_staged(threads))
+                    .map_err(engine_error)
+            };
+            let outcome = crate::ingest::ingest(
                 &mut graph,
                 &SourceSelection::all(SOURCE_NAME),
                 &source,
                 self.workspace.root(),
                 &previous,
                 context,
+                stage,
             )
             .await
             .map_err(|error| IndexError::new("index_failed", error.message))?;
             context
                 .checkpoint()
                 .map_err(|error| IndexError::new("index_failed", error.message))?;
+            let stats = source.stats();
+            self.inner().skipped = skipped(&stats, &outcome.documents);
             self.emit("saving", None);
             let completion = Completion {
                 toolkit_id: SOURCE_NAME,
@@ -933,17 +1022,13 @@ impl IndexService {
                 },
                 commit_sha: None,
             };
-            let threads =
-                std::thread::available_parallelism().map_or(2, std::num::NonZero::get) / 2;
-            let staged = source.take_staged(threads);
             let revision = self.store.complete_with_chunks(
                 KEY,
                 &graph,
                 &completion,
-                &source.stats(),
+                &stats,
                 Some(&self.policy),
                 Some(ChunkUpdate {
-                    staged: &staged,
                     generation: chunks::GENERATION,
                 }),
             )?;
@@ -961,4 +1046,35 @@ impl IndexService {
         });
         (result.and_then(|built| built), started)
     }
+}
+
+/// The folder's source row.
+fn source_status() -> SourceStatus {
+    SourceStatus {
+        toolkit_id: SOURCE_NAME.to_owned(),
+        toolkit_name: "Workspace folder".to_owned(),
+        toolkit_type: "local_folder".to_owned(),
+        branch: None,
+    }
+}
+
+fn engine_error(error: impl std::fmt::Display) -> elitea_engine_core::errors::EngineError {
+    elitea_engine_core::errors::EngineError::new(
+        elitea_engine_core::errors::ErrorType::Runtime,
+        error.to_string(),
+    )
+}
+
+/// The files a build listed but holds no document for (empty, unreadable,
+/// not text), by stat version: a later refresh that finds them unchanged
+/// does not read them again.
+fn skipped<V>(
+    stats: &crate::sqlite_store::Stats,
+    documents: &BTreeMap<String, V>,
+) -> std::collections::HashMap<String, String> {
+    stats
+        .iter()
+        .filter(|(key, _)| !documents.contains_key(*key))
+        .map(|(key, (size, mtime))| (key.clone(), crate::source::stat_version(*size, *mtime)))
+        .collect()
 }

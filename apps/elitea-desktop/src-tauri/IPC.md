@@ -445,6 +445,7 @@ type IndexStatus = {
   entities: number;
   relations: number;
   vectors: number;        // 0 until embeddings exist
+  chunks: number;         // search chunks of the last build
   last_run: string | null; // when the last build was committed (UTC, ISO 8601)
   changed_files: number;  // files turns changed since the last build
   error: string | null;   // why the last refresh failed
@@ -547,7 +548,10 @@ reciprocal rank (k = 60) with the code graph's name matches and their
 one-hop neighbours (`matched_by`: `lexical`, `graph`, `neighbour`).
 `entity_ref` is the entity a hit holds, as `get_entity_details` takes it.
 The chunks are committed in the same transaction as the build, so they
-always describe the documents it holds; an index built before chunks
+always describe the documents it holds (a build reads, chunks and parses
+the folder in bounded batches — each parsed language together, other files
+512 at a time — staging the chunks in a temporary table on the writer's
+connection that no reader sees, and moves them in at commit); an index built before chunks
 existed reads every file once on its next refresh to cut them (nothing is
 parsed again).
 
@@ -569,18 +573,21 @@ default**, in one of two ways the policy may allow (both also need
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `index_embeddings_get` | `{workspace_id}` | `string` — the setting (`off` when unset or the index is not open) |
+| `index_embeddings_get` | `{workspace_id}` | `string` — the setting (`off` when unset), from the open index or a small read of its file |
 | `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. `remote:<model>` is probed with one short embedding in the bound project and stored as `remote:<dim>:<model>`. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now), `workspace_unbound`, `embeddings_probe_failed`. `off` is always accepted. |
 | `index_embeddings_status` | `{workspace_id}` | `EmbedStatus \| null` — `null` when the folder does not embed or its index is not open |
 | `index_embeddings_rebuild` | `{workspace_id, full?}` | `null` — embed now whatever the power state (until done); `full` deletes the folder's vectors first. Rejects `embeddings_off`, `index_off` |
-| `index_models` | `{}` | `{models: ModelInfo[], local_allowed, remote_allowed, cache_bytes}` |
+| `index_models` | `{}` | `{models: ModelInfo[], local_allowed, remote_allowed, cache_bytes, mirror: string \| null}` — `mirror`: the host downloads come from when the policy names one |
+| `index_remote_models` | `{workspace_id}` | `{name, display_name: string \| null}[]` — the bound project's embedding models (its own and shared: `GET /api/v2/configurations/models/{project_id}?section=embedding&include_shared=true`, client contract 1.9), for the picker. Rejects `embeddings_not_allowed`, `workspace_unbound`, `models_unavailable` (the UI then takes a typed name) |
 | `index_model_download` | `{model_id, confirm: true}` | `ModelInfo` — starts (or resumes) the download in the background; progress on `index://event`. Rejects `confirmation_required` (no `confirm`: the person must have seen the size), `model_unknown`, `embeddings_not_allowed`, `model_busy` |
 | `index_model_cancel` | `{model_id}` | `boolean` — whether a download ran; what was fetched is kept for a resume |
-| `index_model_import` | `{model_id, folder}` | `ModelInfo` — copies the model's files from a folder (no network); each is checked against its pinned SHA-256 |
+| `index_model_import` | `{model_id, folder?}` | `ModelInfo \| null` — copies the model's files from `folder`, or (without it) from the folder the person picks in the native dialog (`null`: cancelled); no network; each file is checked against its pinned SHA-256 |
 | `index_model_remove` | `{model_id}` | `ModelInfo` — deletes the model's files; `model_busy` while it downloads |
 
 Models are downloaded only when the person asks (`confirm`), from Hugging
-Face's CDN at a pinned revision, each file resumable (`.part` + `Range`)
+Face's CDN at a pinned revision (or, when `local_work.index_model_mirror_url`
+names one, from that `https` mirror laid out the same way:
+`<mirror>/<repo>/resolve/<revision>/<file>`), each file resumable (`.part` + `Range`)
 and verified against the SHA-256 compiled into the app before it is ever
 loaded. They live once per computer under `<app data>/models/<sha256>/`
 (owner-only), shared by every workspace.
@@ -597,8 +604,16 @@ type EmbedStatus = {
   done: number; total: number;               // distinct chunk texts
   held: "turn" | "on_battery" | "low_power" | null;
   error: string | null; forced: boolean;
+  eta_seconds: number | null;                // left at the pace so far, while running
 };
 ```
+
+A pass is resumable: vectors are stored batch by batch, keyed by chunk
+text, so a pass the app quit in the middle of embeds only what is still
+missing. About 20 s after start-up the app reopens every turned-on index
+whose chosen model has fewer vectors than distinct chunk texts, and the
+pass resumes. The files a turn changed and the files a message
+`@`-references are embedded first (the latest 200 per workspace).
 
 `index://event` carries two more payloads beside a build's (which has no
 `kind`):

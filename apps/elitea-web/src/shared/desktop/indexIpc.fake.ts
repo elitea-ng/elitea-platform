@@ -4,11 +4,11 @@
  * map of statuses. `emit` plays the host's side of `index://event`; `set`
  * puts an index in a given state without one.
  */
-import type { EmbeddingsEvent, EmbedStatus, IndexEvent, IndexEventHandler, IndexIpc, IndexModels, IndexStatus, ModelEvent, ModelInfo } from './indexIpc';
+import type { EmbeddingsEvent, EmbedStatus, IndexEvent, IndexEventHandler, IndexIpc, IndexModels, IndexStatus, ModelEvent, ModelInfo, RemoteModel } from './indexIpc';
 import { EMBEDDINGS_OFF, OFF_STATUS } from './indexIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'status' | 'open' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove' | 'downloadModel' | 'setEmbeddings' | 'rebuildEmbeddings';
+type FailableCommand = 'status' | 'open' | 'enable' | 'disable' | 'refresh' | 'cancel' | 'remove' | 'downloadModel' | 'importModel' | 'removeModel' | 'remoteModels' | 'setEmbeddings' | 'rebuildEmbeddings';
 
 /** The host's catalogue (sizes as `catalog.rs` pins them, rounded). */
 export const FAKE_MODELS: ModelInfo[] = [
@@ -32,7 +32,16 @@ export interface FakeIndexIpc extends IndexIpc {
   emitEmbeddings(event: EmbeddingsEvent): void;
   /** What `index_models` answers for one model from now on. */
   setModel(modelId: string, info: Partial<ModelInfo>): void;
-  readonly embeddingCalls: { downloads: string[]; cancelled: string[]; set: { workspaceId: string; choice: string }[]; rebuilds: { workspaceId: string; full: boolean }[] };
+  /** The next folder picker answers `null` (the person cancelled). */
+  cancelNextPick(): void;
+  readonly embeddingCalls: {
+    downloads: string[];
+    cancelled: string[];
+    imported: string[];
+    removed: string[];
+    set: { workspaceId: string; choice: string }[];
+    rebuilds: { workspaceId: string; full: boolean }[];
+  };
   readonly calls: { opened: string[]; enabled: string[]; disabled: string[]; refreshes: { workspaceId: string; full: boolean }[]; cancelled: string[]; removed: string[] };
 }
 
@@ -44,6 +53,10 @@ export interface FakeIndexOptions {
   embeddings?: Record<string, string>;
   /** Default: local yes, remote no (the policy defaults). */
   embeddingsAllowed?: { local?: boolean; remote?: boolean };
+  /** What `index_remote_models` answers (default none). */
+  remoteModels?: RemoteModel[];
+  /** The policy's download mirror host (default none). */
+  mirror?: string;
 }
 
 export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc {
@@ -60,7 +73,8 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
   const allowed = { local: options.embeddingsAllowed?.local ?? true, remote: options.embeddingsAllowed?.remote ?? false };
   const modelHandlers = new Set<(event: ModelEvent) => void>();
   const embeddingHandlers = new Set<(event: EmbeddingsEvent) => void>();
-  const embeddingCalls: FakeIndexIpc['embeddingCalls'] = { downloads: [], cancelled: [], set: [], rebuilds: [] };
+  const embeddingCalls: FakeIndexIpc['embeddingCalls'] = { downloads: [], cancelled: [], imported: [], removed: [], set: [], rebuilds: [] };
+  let cancelPick = false;
   const subscribe = <T>(set: Set<(event: T) => void>, handler: (event: T) => void): Promise<() => void> => {
     set.add(handler);
     return Promise.resolve(() => {
@@ -166,7 +180,13 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
     subscriberCount: () => handlers.size,
     models() {
       const list = Array.from(models.values(), (info) => ({ ...info }));
-      const answer: IndexModels = { models: list, local_allowed: allowed.local, remote_allowed: allowed.remote, cache_bytes: list.reduce((sum, info) => sum + cached(info), 0) };
+      const answer: IndexModels = {
+        models: list,
+        local_allowed: allowed.local,
+        remote_allowed: allowed.remote,
+        cache_bytes: list.reduce((sum, info) => sum + cached(info), 0),
+        mirror: options.mirror ?? null,
+      };
       return Promise.resolve(answer);
     },
     downloadModel(modelId) {
@@ -186,12 +206,31 @@ export function createFakeIndexIpc(options: FakeIndexOptions = {}): FakeIndexIpc
       return Promise.resolve(true);
     },
     importModel(modelId) {
+      const failed = failure('importModel');
+      if (failed !== undefined) return failed;
       if (model(modelId) === undefined) return reject('model_unknown', 'No such model.');
+      if (cancelPick) {
+        cancelPick = false;
+        return Promise.resolve(null);
+      }
+      embeddingCalls.imported.push(modelId);
       return Promise.resolve(setModel(modelId, { state: 'ready', downloading: false }));
     },
     removeModel(modelId) {
+      const failed = failure('removeModel');
+      if (failed !== undefined) return failed;
       if (model(modelId) === undefined) return reject('model_unknown', 'No such model.');
+      embeddingCalls.removed.push(modelId);
       return Promise.resolve(setModel(modelId, { state: 'missing', downloading: false }));
+    },
+    remoteModels() {
+      const failed = failure('remoteModels');
+      if (failed !== undefined) return failed;
+      if (!allowed.remote) return reject('embeddings_not_allowed', 'Your organization’s policy does not allow embeddings through the deployment.');
+      return Promise.resolve((options.remoteModels ?? []).map((item) => ({ ...item })));
+    },
+    cancelNextPick() {
+      cancelPick = true;
     },
     embeddings: (workspaceId) => Promise.resolve(choices.get(workspaceId) ?? EMBEDDINGS_OFF),
     setEmbeddings(workspaceId, choice) {

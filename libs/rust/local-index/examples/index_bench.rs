@@ -10,7 +10,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout)]
 
 use elitea_local_index::search::{Mode, Request};
-use elitea_local_index::service::{IndexService, NoEvents, limit_parser_threads};
+use elitea_local_index::service::{
+    IndexEvent, IndexEvents, IndexService, NoEvents, limit_parser_threads,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,6 +30,39 @@ const QUERIES: &[&str] = &[
     "reciprocal rank fusion",
 ];
 
+/// The resident set now, in MB (`ps`; a bench only).
+fn rss_mb() -> u64 {
+    std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .map_or(0, |kb| kb / 1024)
+}
+
+/// `BENCH_TRACE=1`: each phase change with the time and the RSS.
+struct Trace(Instant, std::sync::Mutex<&'static str>);
+
+impl IndexEvents for Trace {
+    fn emit(&self, event: IndexEvent) {
+        let mut last = self.1.lock().unwrap();
+        if *last != event.phase {
+            *last = event.phase;
+            println!(
+                "  [{:6.1}s] {:<9} rss={} MB",
+                self.0.elapsed().as_secs_f64(),
+                event.phase,
+                rss_mb()
+            );
+        }
+    }
+}
+
 fn dir_bytes(dir: &Path) -> u64 {
     std::fs::read_dir(dir).map_or(0, |entries| {
         entries
@@ -44,7 +79,12 @@ async fn main() {
     let folder = Path::new(&args[1]);
     let index = Path::new(&args[2]);
     limit_parser_threads();
-    let service = IndexService::open("bench", folder, &[], index, Arc::new(NoEvents)).unwrap();
+    let events: Arc<dyn IndexEvents> = if std::env::var_os("BENCH_TRACE").is_some() {
+        Arc::new(Trace(Instant::now(), std::sync::Mutex::new("")))
+    } else {
+        Arc::new(NoEvents)
+    };
+    let service = IndexService::open("bench", folder, &[], index, events).unwrap();
     let started = Instant::now();
     let status = if std::env::var_os("BENCH_SKIP_BUILD").is_some() {
         service.refresh(false).await.unwrap()
@@ -52,6 +92,7 @@ async fn main() {
         service.refresh(true).await.unwrap()
     };
     let build = started.elapsed();
+    println!("rss after build: {} MB", rss_mb());
     let chunks = service.store().chunk_count().unwrap();
     println!(
         "build: files={} entities={} relations={} chunks={} seconds={:.1} db_bytes={}",

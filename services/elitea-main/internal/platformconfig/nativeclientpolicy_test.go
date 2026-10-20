@@ -70,7 +70,7 @@ func TestNativeClientPolicyJSONKeyOrder(t *testing.T) {
 		`"local_work":{"allowed":false,"shell":true,"max_sandbox_mode":"workspace-write","network":false,` +
 		`"command_allow":[],"command_deny":[],"path_deny":[],"local_mcp":false,"local_index":true,` +
 		`"cloud_sync":false,"memory_write":true,"cloud_handoff":false,` +
-		`"index_local_embeddings":true,"index_remote_embeddings":false}}`
+		`"index_local_embeddings":true,"index_remote_embeddings":false,"index_model_mirror_url":""}}`
 	if string(body) != want {
 		t.Fatalf("client_policy JSON = %s\nwant %s", body, want)
 	}
