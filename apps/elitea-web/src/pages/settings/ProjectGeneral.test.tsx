@@ -63,6 +63,13 @@ beforeEach(() => {
     http.get(`${BASE}/elitea_core/project_info/prompt_lib/:projectId/project-info`, () =>
       HttpResponse.json({ name: 'Demo', icon_meta: null, teammates_count: 3 }),
     ),
+    // The Send to cloud section's read (ProjectGeneral.cloudExecutor.test.tsx covers it).
+    http.get(`${BASE}/elitea_core/project_cloud_executor/prompt_lib/:projectId`, () =>
+      HttpResponse.json({
+        project_id: 7, platform_enabled: false, project_default_enabled: false,
+        explicit: null, source: 'default', enabled: false,
+      }),
+    ),
   );
 });
 

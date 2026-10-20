@@ -963,6 +963,9 @@ mod tests {
             path_deny: vec!["*.pem".to_owned()],
             local_index: false,
             cloud_handoff: false,
+            index_local_embeddings: false,
+            index_remote_embeddings: false,
+            index_model_mirror_url: String::new(),
         }
     }
 

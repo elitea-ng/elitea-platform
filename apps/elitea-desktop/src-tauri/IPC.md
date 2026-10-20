@@ -445,6 +445,7 @@ type IndexStatus = {
   entities: number;
   relations: number;
   vectors: number;        // 0 until embeddings exist
+  chunks: number;         // search chunks of the last build
   last_run: string | null; // when the last build was committed (UTC, ISO 8601)
   changed_files: number;  // files turns changed since the last build
   error: string | null;   // why the last refresh failed
@@ -485,6 +486,17 @@ and checks the folder for what changed while it was closed, on
 `index_enable` / `index_refresh`. Refreshes run one at a time across every
 folder; a waiting one reports `queued`.
 
+**Watched.** While an index is open and turned on, its folder is watched
+for changes made outside the app (an editor, `git pull`, a build): once the
+folder has been quiet for 3 s, and at most every 30 s, an incremental
+refresh runs under the policy then, as after a turn (no event is sent for
+the watch itself; the refresh reports as any other). A change only counts
+where a build would look: not under `.git`, not denied (`path_deny`, the
+host's deny list), not ignored by a `.gitignore` (or `.git/info/exclude`);
+a changed `.gitignore` always counts. Turning the index off, closing it,
+or a policy change stops (or restarts) the watch. The watch never reads a
+file.
+
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `index_status` | `{workspace_id}` | `IndexStatus` — never opens an index that is not open (above); `policy_off` instead of rejecting. |
@@ -515,13 +527,116 @@ structure of the person's own folder and no account data. `index_remove`
 or `workspace_remove` deletes it.
 
 A turn in a workspace whose index is on and built is offered its tools
-(toolset `workspace_index`, reported `remote: false`): `search_knowledge_graph`,
+(toolset `workspace_index`, reported `remote: false`): `search_workspace`
+(local only, below), then `search_knowledge_graph`,
 `get_entity_details`, `get_related_entities`, `query_graph`,
 `list_entity_types`, `impact_analysis` and `get_entity_content`, with the
 cloud Inventory tools' names and arguments. They only read, so they run
 without approval and in plan mode too. An answer from a build that may be
 out of date starts with a one-line `Note:`. A toolkit tool never takes one
 of these names (it gets a `_2` suffix), whether or not the index is on.
+
+`search_workspace {query, top_k = 10 (≤ 50), path_glob?, kind = code | docs
+| any, mode = auto | lexical | semantic}` answers a JSON list of
+`{path, line_start, line_end, snippet, score, matched_by[], entity_ref?}`:
+the build's search chunks (every line of every text file, cut by the
+cloud index's chunkers, with the lines those leave out as chunks of their
+own; lock files, minified bundles and data files over 256 KB are not
+chunked) ranked by BM25 over their text and an identifier column
+(`camelCase` / `snake_case` split, path parts), fused by weighted
+reciprocal rank (k = 60) with the code graph's name matches and their
+one-hop neighbours (`matched_by`: `lexical`, `graph`, `neighbour`).
+`entity_ref` is the entity a hit holds, as `get_entity_details` takes it.
+The chunks are committed in the same transaction as the build, so they
+always describe the documents it holds (a build reads, chunks and parses
+the folder in bounded batches — each parsed language together, other files
+512 at a time — staging the chunks in a temporary table on the writer's
+connection that no reader sees, and moves them in at commit); an index built before chunks
+existed reads every file once on its next refresh to cut them (nothing is
+parsed again).
+
+### Index embeddings (`src/embeddings.rs`, `libs/rust/local-embed`)
+
+A local index needs no embedding model: the text index and the code graph
+answer on their own. Vectors are an option per workspace, **off by
+default**, in one of two ways the policy may allow (both also need
+`allowed && local_index`):
+
+* `local:<model id>` — `local_work.index_local_embeddings` (server default
+  true; absent = false). A model of the pinned catalogue run on this
+  computer by candle (Metal on Apple silicon); nothing leaves the device.
+* `remote:<dim>:<model>` — `local_work.index_remote_embeddings` (default
+  false). The deployment's `/llm/v1/embeddings` with the native token and
+  `X-Project-Id` = the folder's bound project. Background embedding sends
+  no `X-Elitea-Execution-Id`; a `search_workspace` call inside a turn
+  sends that turn's id for its query.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `index_embeddings_get` | `{workspace_id}` | `string` — the setting (`off` when unset), from the open index or a small read of its file |
+| `index_embeddings_set` | `{workspace_id, embeddings}` | `string` — the stored value. `remote:<model>` is probed with one short embedding in the bound project and stored as `remote:<dim>:<model>`. Rejects `index_off`, `local_index_disabled`, `embeddings_unknown`, `embeddings_not_allowed` (the policy does not allow that way now), `workspace_unbound`, `embeddings_probe_failed`. `off` is always accepted. |
+| `index_embeddings_status` | `{workspace_id}` | `EmbedStatus \| null` — `null` when the folder does not embed or its index is not open |
+| `index_embeddings_rebuild` | `{workspace_id, full?}` | `null` — embed now whatever the power state (until done); `full` deletes the folder's vectors first. Rejects `embeddings_off`, `index_off` |
+| `index_models` | `{}` | `{models: ModelInfo[], local_allowed, remote_allowed, cache_bytes, mirror: string \| null}` — `mirror`: the host downloads come from when the policy names one |
+| `index_remote_models` | `{workspace_id}` | `{name, display_name: string \| null}[]` — the bound project's embedding models (its own and shared: `GET /api/v2/configurations/models/{project_id}?section=embedding&include_shared=true`, client contract 1.9), for the picker. Rejects `embeddings_not_allowed`, `workspace_unbound`, `models_unavailable` (the UI then takes a typed name) |
+| `index_model_download` | `{model_id, confirm: true}` | `ModelInfo` — starts (or resumes) the download in the background; progress on `index://event`. Rejects `confirmation_required` (no `confirm`: the person must have seen the size), `model_unknown`, `embeddings_not_allowed`, `model_busy` |
+| `index_model_cancel` | `{model_id}` | `boolean` — whether a download ran; what was fetched is kept for a resume |
+| `index_model_import` | `{model_id, folder?}` | `ModelInfo \| null` — copies the model's files from `folder`, or (without it) from the folder the person picks in the native dialog (`null`: cancelled); no network; each file is checked against its pinned SHA-256 |
+| `index_model_remove` | `{model_id}` | `ModelInfo` — deletes the model's files; `model_busy` while it downloads |
+
+Models are downloaded only when the person asks (`confirm`), from Hugging
+Face's CDN at a pinned revision (or, when `local_work.index_model_mirror_url`
+names one, from that `https` mirror laid out the same way:
+`<mirror>/<repo>/resolve/<revision>/<file>`), each file resumable (`.part` + `Range`)
+and verified against the SHA-256 compiled into the app before it is ever
+loaded. They live once per computer under `<app data>/models/<sha256>/`
+(owner-only), shared by every workspace.
+
+```ts
+type ModelInfo = {
+  id: string; display_name: string; summary: string; license: string;
+  download_bytes: number; ram_mb: number; dimension: number;
+  downloading: boolean;
+} & ({ state: "missing" } | { state: "partial"; have: number; total: number } | { state: "ready" });
+
+type EmbedStatus = {
+  choice: string; state: "waiting" | "running" | "paused" | "done" | "error";
+  done: number; total: number;               // distinct chunk texts
+  held: "turn" | "on_battery" | "low_power" | null;
+  error: string | null; forced: boolean;
+  eta_seconds: number | null;                // left at the pace so far, while running
+};
+```
+
+A pass is resumable: vectors are stored batch by batch, keyed by chunk
+text, so a pass the app quit in the middle of embeds only what is still
+missing. About 20 s after start-up the app reopens every turned-on index
+whose chosen model has fewer vectors than distinct chunk texts, and the
+pass resumes. The files a turn changed and the files a message
+`@`-references are embedded first (the latest 200 per workspace).
+
+`index://event` carries two more payloads beside a build's (which has no
+`kind`):
+
+```ts
+{ kind: "model"; model: string; phase: "downloading" | "ready" | "cancelled" | "failed";
+  done: number; total: number; error: string | null }
+{ kind: "embeddings"; workspace_id: string; status: EmbedStatus }
+```
+
+One background thread embeds every open, turned-on index whose setting
+names an embedder: after each build, in batches of 32 distinct chunk texts,
+at the lowest thread priority (CPU work on half the cores), pausing between
+batches while any turn runs, and only on mains power outside Low Power
+Mode. One model is in memory at a time, dropped after two idle minutes.
+Vectors (int8, `[scale][dim]`, keyed by the chunk text's hash: unchanged
+chunks keep theirs across refreshes) are stamped `origin:model:dim`; only
+queries embedded the same way are compared with them. With vectors,
+`search_workspace` adds a `semantic` list to the fusion (text 0.3, vectors
+0.7; `mode: semantic` uses the vectors alone). **The policy is read on
+every pass**: a way it no longer allows makes no vectors, its vectors are
+deleted, and searches lose their dense side, as a `path_deny` change drops
+what it covers. Turning embeddings `off` deletes them too.
 
 ## Cloud handoff (`src/handoff.rs`, ADR-0034)
 
@@ -752,6 +867,8 @@ for one send and restores it.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
+| `context_menu_show` | `{request_id: string, items: Item[]}`; `Item` is `{id, label, enabled?}`, `{separator: true}` or a submenu `{label, enabled?, children: {id, label, enabled?}[]}` (one level) | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The outcome arrives on `app://context-menu` as `{request_id, id}`: `id` is the id the page gave the item, or `null` when the menu was dismissed (sent by the host ~150 ms after the menu closed with no choice). The page ignores events whose `request_id` is not its own. `request_id`: ≤ 64 chars of `[A-Za-z0-9_-]`. At most 60 choosable items across the menu and its submenu; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
+| `activity_cloud_run` | `{conversation_uuid: string, running: boolean, waiting?: boolean, workspace_id?: string, workspace_name?: string}` | `null` — the page tells the host a cloud turn of this window is streaming (`running`) and/or waits on the person (`waiting`: an approval or continue prompt); both `false` ends it (completion and errors both send that). The menu-bar item shows it like a local turn (`◐ m:ss`, a "Running in cloud" entry); a waiting thread counts in `⚠ n`, adds an "Approve in cloud" entry and is counted on the Dock badge with the local approvals. A click sends `focus_turn`. The chat stream to a cloud thread runs in the page (the web chat transport), so the host cannot see it itself. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
 | `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
@@ -848,12 +965,52 @@ type AppCommand = { id: string; args?: object };
 | `toggle_changes` | — | View ▸ Toggle Changes Panel (⌘⌥\\) |
 | `back` | — | View ▸ Back (⌘[) |
 | `forward` | — | View ▸ Forward (⌘]) |
+| `send_to_cloud` | — | Thread ▸ Send to Cloud… (⇧⌘U): open the Send to cloud sheet of the thread on screen. |
+| `open_in_chat` | — | Thread ▸ Open in Chat: open the thread on screen in the web chat. |
+| `toggle_plan` | — | Thread ▸ Plan Mode (⇧⌘P): switch the composer between Act and Plan. |
+| `choose_agent` | — | Thread ▸ Choose Agent… (⌘L): open the composer's agent picker. |
+| `index_settings` | — | Folder ▸ Index Settings…: open the folder's index settings (inspector, Index). |
+| `handoff_settings` | — | Folder ▸ Handoff Settings…: open the folder's cloud handoff settings. |
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
 | `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
 | `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
 | `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
-| `focus_turn` | `{workspace_id: string, turn_id: string}` | Reserved: show this turn. Not sent yet — the notification plugin has no click callback on desktop, so clicking a notification only activates the app. |
+| `focus_turn` | `{workspace_id: string, turn_id: string}` | A running or waiting turn was chosen in the menu-bar item's menu (see below): show its folder. (A notification click still only activates the app: the notification plugin has no click callback on desktop.) |
+
+**Activity contract.** Two places fold the agent, index and handoff streams
+into "what is running now": the host (`src/activity.rs`: the menu-bar item and
+the Dock) and the web feed (`widgets/desktop-shell/model/activityFeed.store.ts`:
+the activity island). They follow ONE set of rules, so they cannot drift; change
+both together:
+
+- A turn is running from its first `status` with phase `resolving`, `starting`,
+  `running` or `committing`, and from an `approval_request`.
+- A turn ends at `done`, at an `error` event, or at a `status` with phase `done`,
+  `cancelled` or `error` — a turn refused at the start sends `error` and
+  `status` `error` and never `done`. (The web feed keeps a turn listed after
+  that only while its commit is pending or failed.)
+- An approval waits from `approval_request` until `approval_respond` answers it
+  or its turn ends. No other event closes it: a `tool_result` or a `text_delta`
+  says nothing about which approval it was.
+- Index progress: `Parsing <m> files` in an `index://event` message sets the
+  total and resets the count; `Processed <n> files` sets the count; leaving the
+  `building` state clears it. (Web: `foldProgress`, `features/workspace-index/
+  model/progress.ts`; host: `ActivityState::observe_index`.)
+- A cloud turn streaming into the window runs from `activity_cloud_run(running: true)` until both `running` and `waiting` are false (completion and errors both end it); it waits on the person while `waiting` is true, which counts like an approval; web: `cloudRuns` in the feed.
+- A send to the cloud runs until its `handoff://event` phase is `complete`,
+  `cancelled` or `error`; its bar is `done` of `total` (indeterminate when
+  `total` is 0).
+
+**Menu-bar item and Dock** (`src/activity.rs`, host-side; the page does nothing for
+them). The host folds the same `agent://event`, `index://event` and
+`handoff://event` streams the window gets: the menu-bar item's title is
+`⚠ n` while n approvals wait, else `◐ m:ss` (the longest-running turn), else
+only the icon; its menu lists the waiting approvals (tool and folder, never a
+command or a path) and the running turns, then Show / Quit, and choosing a
+turn shows the window and sends `focus_turn`. The Dock's progress bar follows a
+send to the cloud (`done`/`total`), else the index builds (files read of files
+to read; indeterminate until that is known), and is removed when they end.
 
 **Open Folder… is host-side**: the menu item runs the native folder picker
 in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)
@@ -881,9 +1038,9 @@ for them.
 
 ## Events
 
-Four event names, all emitted to the `main` window only: `app://command`
-(above), `agent://event`, `index://event` and `handoff://event` (Cloud
-handoff, above). The webview may listen
+Five event names, all emitted to the `main` window only: `app://command`
+(above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
+`agent://event`, `index://event` and `handoff://event` (Cloud handoff, above). The webview may listen
 (`core:event:allow-listen` / `allow-unlisten`), never emit.
 
 `index://event`:
@@ -919,13 +1076,14 @@ order. Kinds and payloads:
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
+| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
 | `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`)* →
+`running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`, `usage`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

@@ -150,6 +150,8 @@ export type AgentEvent =
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
+  /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced. Absent when the gateway reports no usage. */
+  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number } })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })

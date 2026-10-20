@@ -248,6 +248,16 @@ spec:
               mountPath: {{ .Values.worker.runtime.spoolRoot }}
             - name: tmp
               mountPath: /tmp
+            {{- with (.Values.worker.runtime.workspaceRuns | default dict).scratch_root }}
+            # ADR-0034: the cloud executor's scratch (segments and checkouts
+            # of handed-off threads), its own sized disk, not /tmp.
+            {{- $root := toString . }}
+            {{- if or (not (hasPrefix "/" $root)) (has (trimSuffix "/" $root) (list "" "/tmp" "/run" "/run/elitea" "/run/elitea-runtime" (trimSuffix "/" $.Values.worker.runtime.spoolRoot))) (hasPrefix "/tmp/" $root) (hasPrefix "/run/" $root) (hasPrefix (printf "%s/" (trimSuffix "/" $.Values.worker.runtime.spoolRoot)) $root) }}
+            {{- fail "worker.runtime.workspaceRuns.scratch_root must be its own absolute directory, outside /tmp, /run and the output spool" }}
+            {{- end }}
+            - name: workspace-scratch
+              mountPath: {{ $root }}
+            {{- end }}
             {{- if (.Values.worker.extractor | default dict).enabled }}
             # The document extractor's socket directory (runtime.json
             # `extractor_socket`), shared with the sidecar below.
@@ -359,6 +369,11 @@ spec:
             sizeLimit: {{ .Values.worker.runtime.spoolSizeLimit }}
         - name: tmp
           emptyDir: {}
+        {{- if (.Values.worker.runtime.workspaceRuns | default dict).scratch_root }}
+        - name: workspace-scratch
+          emptyDir:
+            sizeLimit: {{ .Values.worker.runtime.workspaceScratchSizeLimit | default "20Gi" }}
+        {{- end }}
         {{- if (.Values.worker.extractor | default dict).enabled }}
         # The extractor's socket: memory-backed and tiny, like the engine
         # sidecars' (templates/deepwiki). Shared by exactly two containers.

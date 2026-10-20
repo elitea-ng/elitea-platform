@@ -11,7 +11,7 @@ import (
 
 func amendedCeiling() platformconfig.CloudExecutorSettings {
 	ceiling := platformconfig.DefaultCloudExecutorSettings()
-	ceiling.Enabled = true
+	ceiling.Enabled, ceiling.ProjectDefaultEnabled = true, true
 	return ceiling
 }
 

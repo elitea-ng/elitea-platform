@@ -25,7 +25,8 @@
 //! Every document is readable by anyone who can open the index
 //! ([`Acl::Project`]): it is the person's own folder.
 
-use crate::sqlite_store::{DocumentStat, Stats};
+use crate::chunks;
+use crate::sqlite_store::{DocumentStat, Staged, Stats};
 use elitea_content_source::{
     Acl, ContentSource, Document, DocumentRef, SourceError, content_version, mime_of,
 };
@@ -51,6 +52,9 @@ pub struct LocalFolderSource {
     seen: Mutex<Stats>,
     hashed: AtomicUsize,
     reads: AtomicUsize,
+    /// The text of every file fetched, when chunking is on: `(version,
+    /// text)` by key, cut into chunks by [`Self::take_staged`].
+    staged: Option<Mutex<HashMap<String, (String, String)>>>,
 }
 
 /// The version a listing gives a file it did not read: its size and mtime,
@@ -82,7 +86,55 @@ impl LocalFolderSource {
             seen: Mutex::default(),
             hashed: AtomicUsize::new(0),
             reads: AtomicUsize::new(0),
+            staged: None,
         }
+    }
+
+    /// Cut every file it fetches into search chunks, from the very bytes
+    /// handed to ingestion ([`Self::take_staged`]).
+    #[must_use]
+    pub fn chunking(mut self) -> Self {
+        self.staged = Some(Mutex::default());
+        self
+    }
+
+    /// The chunks of every file fetched so far, by document key (the texts
+    /// are emptied). Cut on `threads` threads: chunking is CPU work as
+    /// heavy as parsing.
+    #[must_use]
+    pub fn take_staged(&self, threads: usize) -> HashMap<String, Staged> {
+        let texts: Vec<(String, (String, String))> = self
+            .staged
+            .as_ref()
+            .map(|staged| {
+                std::mem::take(&mut *staged.lock().unwrap_or_else(PoisonError::into_inner))
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let next = AtomicUsize::new(0);
+        let done = Mutex::new(HashMap::with_capacity(texts.len()));
+        std::thread::scope(|scope| {
+            for _ in 0..threads.clamp(1, 16) {
+                scope.spawn(|| {
+                    loop {
+                        let at = next.fetch_add(1, Ordering::SeqCst);
+                        let Some((key, (version, text))) = texts.get(at) else {
+                            break;
+                        };
+                        let rows = chunks::chunk_document(key, text);
+                        done.lock().unwrap_or_else(PoisonError::into_inner).insert(
+                            key.clone(),
+                            Staged {
+                                version: version.clone(),
+                                rows,
+                            },
+                        );
+                    }
+                });
+            }
+        });
+        done.into_inner().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Reuse the version of a file whose `(size, mtime)` is the one
@@ -213,10 +265,20 @@ impl LocalFolderSource {
             .read(&path, MAX_FILE_BYTES)
             .map_err(|error| unavailable(error.message()))?;
         self.reads.fetch_add(1, Ordering::SeqCst);
+        let version = content_version(&read.bytes);
+        if let Some(staged) = &self.staged
+            && chunks::is_chunked(key, read.bytes.len())
+            && let Ok(text) = elitea_doc_extract::decode_text(&read.bytes)
+        {
+            staged
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(key.to_owned(), (version.clone(), text));
+        }
         Ok(Document {
             reference: DocumentRef {
                 key: key.to_owned(),
-                version: content_version(&read.bytes),
+                version,
                 mime: mime_of(key).to_owned(),
                 size: read.stamp.len,
                 acl: Acl::Project,

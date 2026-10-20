@@ -4,7 +4,7 @@
  * and a section caption. Selection and hover use the same drawer-menu tokens
  * as the web sidebar, so a brand pack re-themes both alike.
  */
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
@@ -36,6 +36,8 @@ export interface ShellRowProps {
   title?: string;
   testId?: string;
   ariaExpanded?: boolean;
+  /** Right-click: the row's native context menu. */
+  onContextMenu?: (event: MouseEvent) => void;
 }
 
 const ONE_LINE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
@@ -45,24 +47,13 @@ function labelColor(theme: Theme, selected: boolean, muted: boolean): string {
   return muted && !selected ? theme.vars.palette.text.metrics : theme.vars.palette.text.secondary;
 }
 
-export function ShellRow({
-  label,
-  icon,
-  selected = false,
-  indent = 0,
-  onClick,
-  trailing,
-  trailingOnHover = false,
-  meta,
-  muted = false,
-  title,
-  testId,
-  ariaExpanded,
-}: ShellRowProps): React.JSX.Element {
+export function ShellRow(props: ShellRowProps): React.JSX.Element {
+  const { label, icon, selected = false, indent = 0, onClick, trailing, trailingOnHover = false, meta, muted = false, title, testId, ariaExpanded, onContextMenu } = props;
   const swaps = trailing !== undefined && trailingOnHover;
   return (
     <Box
       data-testid={testId}
+      onContextMenu={onContextMenu}
       sx={(theme: Theme) => ({
         position: 'relative',
         display: 'flex',

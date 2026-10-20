@@ -64,6 +64,13 @@ const (
 // a backend that reports "no default rule" is refused whatever it says.
 const workspaceEncryptionAttestedEnv = "ELITEA_CLOUD_EXECUTOR_STORAGE_ENCRYPTION_ATTESTED"
 
+// workspaceExecutorConfiguredEnv states whether this deployment runs a cloud
+// executor (a workspace-run supervisor the worker reaches). The chart derives
+// it from sandboxKubernetes.workspaceRuns and the supervisor. "false" turns
+// Send to cloud off with the reason no_executor; unset or empty means Main
+// does not know, and it claims nothing.
+const workspaceExecutorConfiguredEnv = "ELITEA_CLOUD_EXECUTOR_CONFIGURED"
+
 // workspaceHandoffInputs are the deployment values of the handoff.
 type workspaceHandoffInputs struct {
 	// DedicatedStore is the optional dedicated physical bucket of the
@@ -75,6 +82,8 @@ type workspaceHandoffInputs struct {
 	Resources           platformconfig.CloudExecutorResources
 	// EncryptionAttested is workspaceEncryptionAttestedEnv.
 	EncryptionAttested bool
+	// ExecutorConfigured is workspaceExecutorConfiguredEnv, nil when unset.
+	ExecutorConfigured *bool
 }
 
 // composeWorkspaceHandoff builds the desktop ⇄ cloud handoff (ADR-0034). It
@@ -131,7 +140,15 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
-	policy, err := workspacehandoff.NewPolicyService(settings, settings, device, encrypted, inputs.Resources)
+	policyOptions := []workspacehandoff.PolicyOption{}
+	if inputs.ExecutorConfigured != nil {
+		if !*inputs.ExecutorConfigured {
+			logger.Warn("cloud executor: this deployment runs no workspace-run supervisor; Send to cloud stays off "+
+				"(no_executor)", "env", workspaceExecutorConfiguredEnv)
+		}
+		policyOptions = append(policyOptions, workspacehandoff.WithExecutorConfigured(*inputs.ExecutorConfigured))
+	}
+	policy, err := workspacehandoff.NewPolicyService(settings, settings, device, encrypted, inputs.Resources, policyOptions...)
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
@@ -306,6 +323,13 @@ func workspaceStorageFromEnv(ctx context.Context, cfg storage.Config, lookup fun
 			return inputs, fmt.Errorf("%s must be true or false", workspaceEncryptionAttestedEnv)
 		}
 		inputs.EncryptionAttested = attested
+	}
+	if raw, ok := lookup(workspaceExecutorConfiguredEnv); ok && raw != "" {
+		configured, err := strconv.ParseBool(raw)
+		if err != nil {
+			return inputs, fmt.Errorf("%s must be true or false", workspaceExecutorConfiguredEnv)
+		}
+		inputs.ExecutorConfigured = &configured
 	}
 	dedicated, _ := lookup("STORAGE_WORKSPACE_BUCKET")
 	if dedicated == "" || dedicated == cfg.Container {

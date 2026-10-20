@@ -20,6 +20,19 @@ PROMTOOL="${PROMTOOL:-promtool}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# A values-file number is a float64 to Helm; a bare toString printed one of a
+# million or more as "1e+06" and the positive-integer check refused a valid
+# setting. Needs no promtool, so it runs before the skip below. (--set would
+# hand the chart an int64 and hide the bug, hence the file.)
+printf 'scheduler:\n  metrics:\n    prometheusRule:\n      maxAckPending: 1000000\n' > "$TMP/big.yaml"
+if ! "$HELM" template elitea "$DIR/helm/elitea" -n elitea --api-versions monitoring.coreos.com/v1 \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true \
+  -f "$TMP/big.yaml" --show-only templates/scheduler/monitoring.yaml | grep -qF '/ 1000000 > 0.8'; then
+  echo "render-scheduler-alerts: maxAckPending 1000000 from a values file did not render as an integer" >&2
+  exit 1
+fi
+
 if ! command -v "$PROMTOOL" >/dev/null 2>&1; then
   if [ "${SCHEDULER_ALERTS_REQUIRE_PROMTOOL:-0}" = "1" ]; then
     echo "render-scheduler-alerts: SCHEDULER_ALERTS_REQUIRE_PROMTOOL=1 and $PROMTOOL is not available" >&2

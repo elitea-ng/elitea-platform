@@ -125,6 +125,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   return (
     <Box
       component="aside"
+      data-chrome
       data-testid="desktop-sidebar"
       sx={(theme: Theme) => ({
         width: '16rem',

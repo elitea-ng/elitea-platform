@@ -11,8 +11,15 @@
 //! * [`fs`] — the owner-only directories and files it lives in;
 //! * [`service`] — one workspace's index kept current: refresh on the
 //!   blocking pool, progress, cancel, status;
+//! * [`chunks`] — a file as search chunks (doc-chunk's router, plus the
+//!   lines it leaves out), with an identifier column;
+//! * [`search`] — `search_workspace`: BM25 over the chunks, the graph's
+//!   matches and their neighbours, fused by weighted reciprocal rank;
 //! * [`tools`] — the read-only `workspace_index` toolset, named and shaped
-//!   as the cloud Inventory tools.
+//!   as the cloud Inventory tools, plus `search_workspace`.
+//!
+//! * [`watch`] — the folder watch that refreshes it after changes made
+//!   outside the app.
 //!
 //! Nothing here talks to the network: the index is code structure parsed
 //! locally.
@@ -41,8 +48,14 @@
 #[cfg(not(unix))]
 compile_error!("elitea-local-index supports macOS and Linux; Windows is ADR-0029 phase D3");
 
+pub mod chunks;
+pub mod dense;
+pub mod embedding;
 pub mod fs;
+pub mod ingest;
+pub mod search;
 pub mod service;
 pub mod source;
 pub mod sqlite_store;
 pub mod tools;
+pub mod watch;

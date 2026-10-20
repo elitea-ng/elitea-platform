@@ -14,7 +14,6 @@ COPY libs/go/egresslib ./libs/go/egresslib
 COPY libs/proto/gen/go ./libs/proto/gen/go
 COPY services/elitea-egress-proxy/go.mod services/elitea-egress-proxy/go.sum ./services/elitea-egress-proxy/
 WORKDIR /src/services/elitea-egress-proxy
-RUN --mount=type=cache,target=/go/pkg/mod GOWORK=off go mod download
 COPY services/elitea-egress-proxy/ ./
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -22,6 +21,12 @@ ARG TARGETARCH=amd64
 # the source tree, so it is NOT injected via -X.
 ARG VERSION=dev
 RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
+    for attempt in 1 2 3 4 5; do \
+        GOWORK=off go mod download && break; \
+        [ "$attempt" = 5 ] && { echo "go mod download failed after 5 attempts" >&2; exit 1; }; \
+        echo "go mod download failed (attempt ${attempt}/5)" >&2; \
+        sleep $((attempt * 5)); \
+    done; \
     CGO_ENABLED=0 GOWORK=off GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-egress-proxy ./cmd/elitea-egress-proxy
 

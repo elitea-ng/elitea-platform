@@ -10,10 +10,13 @@
  * configuration summary onto AI Providers' "OpenAI Template" — and the third
  * (Agent & Pipeline Builder) was absent from the app entirely.
  *
- * Three accordions, all expanded, all left-chevron, in this order:
+ * Four accordions, all expanded, all left-chevron, in this order:
  *   GENERAL                   — avatar, name, teammate count
  *   AI CONFIGURATIONS         — the OpenAI base URL / server URL / project id
  *   AGENT & PIPELINE BUILDER  — one switch
+ *   SEND TO CLOUD             — the project's cloud executor on/off (ADR-0034
+ *                               decision 11); not in the reference, which had
+ *                               no cloud executor
  *
  * The measured column on a live deployment is 750px wide inside a 24px
  * gutter with 24px between panels, which is `body`'s `46.875rem` /
@@ -26,6 +29,7 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { isPersonalProjectName, useUpdateProjectInfoMutation } from '@/entities/project';
+import { ProjectCloudExecutorSection } from '@/features/cloud-executor-switch';
 import { projectContextFeature, projectGeneralFeature, type SelectedProjectIcon } from '@/features/settings';
 import { AccordionConstants } from '@/shared/lib/constants';
 import { PERMISSIONS } from '@/shared/lib/permissions';
@@ -62,6 +66,12 @@ export const ProjectGeneral = memo(function ProjectGeneral({
    * it keeps the reference's `projectContext.edit` gate.
    */
   const canEditBuilder = permissionSet.has(PERMISSIONS.projectContext.edit);
+  /*
+   * Send to cloud is the project ADMIN's, with no personal-project
+   * exception: the server gates its write on `models.project_settings.edit`
+   * alone, the same rule the `cloud_executor` configuration rows follow.
+   */
+  const canEditCloudExecutor = permissionSet.has(PERMISSIONS.projectSettings.edit);
 
   const updateProjectInfo = useUpdateProjectInfoMutation(projectId);
 
@@ -137,6 +147,18 @@ export const ProjectGeneral = memo(function ProjectGeneral({
                 'Agent & Pipeline Builder',
               ),
               content: <AgentPipelineBuilder canEdit={canEditBuilder} />,
+            },
+          ]}
+        />
+        <BasicAccordion
+          data-testid="cloud-executor-section"
+          showMode={AccordionConstants.AccordionShowMode.LeftMode}
+          defaultExpanded
+          slotSx={{ details: detailsSx }}
+          items={[
+            {
+              title: t('features.cloudExecutorSwitch.project.section', 'Send to cloud (cloud executor)'),
+              content: <ProjectCloudExecutorSection projectId={projectId} canEdit={canEditCloudExecutor} />,
             },
           ]}
         />

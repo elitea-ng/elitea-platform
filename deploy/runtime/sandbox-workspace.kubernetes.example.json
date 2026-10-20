@@ -1,0 +1,33 @@
+{
+  "audience": "dns:elitea-sandbox-workspace",
+  "backend": {
+    "kind": "kubernetes",
+    "namespace": "code-execution",
+    "node_selector": {
+      "elitea.ai/sandbox": "true"
+    },
+    "runtime_class": "gvisor",
+    "tolerations": [
+      {
+        "effect": "NoSchedule",
+        "key": "elitea.ai/sandbox",
+        "operator": "Equal",
+        "value": "true"
+      }
+    ]
+  },
+  "ca_path": "/run/elitea-sandbox/workspace-client-ca.pem",
+  "certificate_path": "/run/elitea-sandbox/workspace-server.crt",
+  "concurrency": 16,
+  "image": "registry/runner@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "listen_address": "0.0.0.0:9470",
+  "max_cpu_millis": 4000,
+  "max_memory_bytes": 8589934592,
+  "max_wall_seconds": 3600,
+  "max_workspace_bytes": 10737418240,
+  "owner": "workspace-runs",
+  "private_key_path": "/run/elitea-sandbox/workspace-server.key",
+  "purpose": "workspace",
+  "revision": 1,
+  "verification_keyring_path": "/run/elitea-sandbox/workspace-grant-keyring.json"
+}

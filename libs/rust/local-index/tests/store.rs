@@ -276,10 +276,10 @@ fn an_index_from_a_newer_app_is_refused() {
     SqliteGraphStore::open(&index).unwrap().close();
     rusqlite::Connection::open(index.join(FILE_NAME))
         .unwrap()
-        .execute_batch("PRAGMA user_version = 3;")
+        .execute_batch("PRAGMA user_version = 99;")
         .unwrap();
     match SqliteGraphStore::open(&index) {
-        Err(StoreError::NewerSchema(3)) => {}
+        Err(StoreError::NewerSchema(99)) => {}
         other => panic!("a newer schema is refused, got {other:?}"),
     }
 }
@@ -349,6 +349,8 @@ fn a_version_1_index_gains_the_embedding_hash_column() {
     let raw = rusqlite::Connection::open(index.join(FILE_NAME)).unwrap();
     raw.execute_batch(
         "ALTER TABLE entities DROP COLUMN embedding_hash;
+         DROP TABLE chunk_vectors; DROP TABLE vector_sets;
+         DROP TABLE chunks; DROP TABLE chunks_fts;
          UPDATE meta SET value = '1' WHERE key = 'schema_version';
          PRAGMA user_version = 1;",
     )
@@ -371,4 +373,105 @@ fn a_version_1_index_gains_the_embedding_hash_column() {
     assert!(store.last_commit_rows() > 0);
     let (loaded, _) = store.load_now(GraphKey::LOCAL).unwrap().unwrap();
     assert_eq!(loaded.embedding_hash("a"), Some("hash-a2"));
+}
+
+/// Commit one document `src/a.py` at `version` with what is staged.
+async fn commit_chunks(
+    store: &SqliteGraphStore,
+    version: &str,
+    staged: Option<(&str, &str)>,
+    replace: bool,
+) {
+    use elitea_local_index::chunks::{ChunkKind, ChunkRow};
+    use elitea_local_index::sqlite_store::{ChunkUpdate, Staged};
+    let key = GraphKey::LOCAL;
+    store
+        .start(
+            key,
+            &SourceStatus {
+                toolkit_id: "workspace".into(),
+                toolkit_name: "workspace".into(),
+                toolkit_type: "local_folder".into(),
+                branch: None,
+            },
+        )
+        .await
+        .unwrap();
+    store.clear_staged_chunks().unwrap();
+    if let Some((staged_version, text)) = staged {
+        store
+            .stage_chunks(&std::collections::HashMap::from([(
+                "src/a.py".to_owned(),
+                Staged {
+                    version: staged_version.into(),
+                    rows: vec![ChunkRow {
+                        line_start: 1,
+                        line_end: 1,
+                        kind: ChunkKind::Code,
+                        text: text.into(),
+                        idents: text.into(),
+                        text_hash: format!("h-{text}"),
+                    }],
+                },
+            )]))
+            .unwrap();
+    }
+    let documents = BTreeMap::from([(
+        "src/a.py".to_owned(),
+        DocumentState {
+            version: version.into(),
+            mime: "text/plain".into(),
+            acl: Acl::Project,
+        },
+    )]);
+    store
+        .complete_with_chunks(
+            key,
+            &Graph::new(),
+            &Completion {
+                toolkit_id: "workspace",
+                source_name: "workspace",
+                documents: &documents,
+                counts: RunCounts::default(),
+                commit_sha: None,
+            },
+            &Stats::new(),
+            None,
+            Some(ChunkUpdate {
+                generation: "g1",
+                replace,
+            }),
+        )
+        .unwrap();
+}
+
+fn texts(store: &SqliteGraphStore) -> Vec<String> {
+    store
+        .chunks_of("src/a.py")
+        .unwrap()
+        .into_iter()
+        .map(|chunk| chunk.text)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_rebuild_replaces_unchanged_chunks_and_an_unstaged_new_version_drops_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
+    commit_chunks(&store, "v1", Some(("v1", "first")), false).await;
+    assert_eq!(texts(&store), ["first"]);
+    // Read again at the same version by an incremental refresh: kept.
+    commit_chunks(&store, "v1", Some(("v1", "second")), false).await;
+    assert_eq!(texts(&store), ["first"]);
+    // A full rebuild or a new chunker: replaced although unchanged.
+    commit_chunks(&store, "v1", Some(("v1", "rechunked")), true).await;
+    assert_eq!(texts(&store), ["rechunked"]);
+    // Committed at a new version with nothing staged (too large, not
+    // decodable): the old chunks go.
+    commit_chunks(&store, "v2", None, false).await;
+    assert!(texts(&store).is_empty());
+    // A rebuild that stages nothing for a document drops its chunks too.
+    commit_chunks(&store, "v3", Some(("v3", "third")), false).await;
+    commit_chunks(&store, "v3", None, true).await;
+    assert!(texts(&store).is_empty());
 }

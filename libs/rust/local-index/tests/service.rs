@@ -4,7 +4,7 @@
 
 use elitea_inventory_core::store::{GraphKey, GraphStore as _};
 use elitea_local_index::service::{IndexEvent, IndexEvents, IndexService, IndexState, NoEvents};
-use elitea_local_index::tools::{IndexToolset, NAMES, TOOLS, TOOLSET_NAME};
+use elitea_local_index::tools::{IndexToolset, LOCAL_TOOLS, NAMES, TOOLS, TOOLSET_NAME};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -125,10 +125,13 @@ async fn a_build_then_an_incremental_refresh_reads_only_what_changed() {
     assert_eq!(phases.last(), Some(&"ready"));
     assert!(phases.contains(&"saving"), "{phases:?}");
 
-    // Nothing changed: nothing read, nothing hashed.
+    // Nothing changed: nothing read, nothing hashed, and no run recorded
+    // (the build in memory answers as it is).
+    let runs = service.store().runs(GraphKey::LOCAL).unwrap().len();
     service.refresh(false).await.unwrap();
     let report = service.last_report().unwrap();
     assert_eq!((report.read, report.unchanged, report.hashed), (0, 4, 0));
+    assert_eq!(service.store().runs(GraphKey::LOCAL).unwrap().len(), runs);
 
     // One edited, one deleted, one added.
     let root = opened.folder.path();
@@ -664,7 +667,7 @@ async fn the_toolset_is_read_only_and_named_as_the_cloud_tools() {
         .map(|tool| adk_core::Tool::name(tool.as_ref()))
         .collect();
     assert_eq!(names, NAMES);
-    assert_eq!(TOOLS.len(), NAMES.len());
+    assert_eq!(TOOLS.len() + LOCAL_TOOLS.len(), NAMES.len());
     for tool in &tools {
         assert!(adk_core::Tool::is_read_only(tool.as_ref()));
         assert!(adk_core::Tool::is_concurrency_safe(tool.as_ref()));

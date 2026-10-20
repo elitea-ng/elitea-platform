@@ -63,6 +63,7 @@ import type {
   NativeClientWriteResult,
   OkResponse,
   PlatformSettings,
+  ProjectCloudExecutorSwitch,
   PublishedAgentsListing,
   Role,
   SendBrandingTestEmail200,
@@ -143,6 +144,30 @@ export const getDeleteNativeClientResponseMock = (
 ): NativeClientWriteResult => ({
   client_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
   revoked_devices: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAdminProjectCloudExecutorResponseMock = (
+  overrideResponse: Partial<Extract<ProjectCloudExecutorSwitch, object>> = {},
+): ProjectCloudExecutorSwitch => ({
+  project_id: faker.number.int(),
+  platform_enabled: faker.datatype.boolean(),
+  project_default_enabled: faker.datatype.boolean(),
+  explicit: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  enabled: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getSetAdminProjectCloudExecutorResponseMock = (
+  overrideResponse: Partial<Extract<ProjectCloudExecutorSwitch, object>> = {},
+): ProjectCloudExecutorSwitch => ({
+  project_id: faker.number.int(),
+  platform_enabled: faker.datatype.boolean(),
+  project_default_enabled: faker.datatype.boolean(),
+  explicit: faker.helpers.arrayElement([faker.datatype.boolean(), null]),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  enabled: faker.datatype.boolean(),
   ...overrideResponse,
 });
 
@@ -1168,6 +1193,58 @@ export const getDeleteNativeClientMockHandler = (
   );
 };
 
+export const getGetAdminProjectCloudExecutorMockHandler = (
+  overrideResponse?:
+    | ProjectCloudExecutorSwitch
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ProjectCloudExecutorSwitch> | ProjectCloudExecutorSwitch),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/project_cloud_executor/administration/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminProjectCloudExecutorResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetAdminProjectCloudExecutorMockHandler = (
+  overrideResponse?:
+    | ProjectCloudExecutorSwitch
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ProjectCloudExecutorSwitch> | ProjectCloudExecutorSwitch),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/admin/project_cloud_executor/administration/:projectId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetAdminProjectCloudExecutorResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getUserListMockHandler = (
   overrideResponse?:
     | UserListResponse
@@ -1963,6 +2040,8 @@ export const getAdminMock = () => [
   getListNativeClientsMockHandler(),
   getSaveNativeClientMockHandler(),
   getDeleteNativeClientMockHandler(),
+  getGetAdminProjectCloudExecutorMockHandler(),
+  getSetAdminProjectCloudExecutorMockHandler(),
   getUserListMockHandler(),
   getUserCreateMockHandler(),
   getUserUpdateMockHandler(),

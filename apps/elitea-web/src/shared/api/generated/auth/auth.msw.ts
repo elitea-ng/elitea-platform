@@ -104,6 +104,11 @@ export const getExchangeNativeTokenResponseMock = (
           cloud_sync: faker.datatype.boolean(),
           memory_write: faker.datatype.boolean(),
           cloud_handoff: faker.datatype.boolean(),
+          index_local_embeddings: faker.datatype.boolean(),
+          index_remote_embeddings: faker.datatype.boolean(),
+          index_model_mirror_url: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
         },
       },
     },

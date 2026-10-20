@@ -53,3 +53,53 @@ func TestCloudExecutorSectionShowsTheEncryptionAnswer(t *testing.T) {
 		}
 	}
 }
+
+// "Default for Projects" sits right after the platform switch, is a boolean
+// that is off by default, and is a key the section's save accepts.
+func TestCloudExecutorSectionOffersTheProjectDefault(t *testing.T) {
+	section, ok := findConfigSection(platformconfig.SectionCloudExecutor)
+	if !ok || len(section.fields) < 2 {
+		t.Fatal("no cloud_executor section")
+	}
+	first, second := section.fields[0], section.fields[1]
+	if first["key"] != platformconfig.KeyCloudExecutorEnabled ||
+		second["key"] != platformconfig.KeyCloudExecutorProjectDefaultEnabled ||
+		second["type"] != "boolean" || second["default"] != false || second["title"] != "Default for Projects" {
+		t.Fatalf("first fields = %v, %v", first, second)
+	}
+	if reason := validateSectionValues(section, map[string]any{
+		platformconfig.KeyCloudExecutorEnabled: true, platformconfig.KeyCloudExecutorProjectDefaultEnabled: true,
+	}); reason != "" {
+		t.Fatalf("saving the project default was refused: %s", reason)
+	}
+	if reason := validateSectionValues(section, map[string]any{
+		platformconfig.KeyCloudExecutorProjectDefaultEnabled: "yes",
+	}); reason == "" {
+		t.Fatal("a non-boolean project default was accepted")
+	}
+}
+
+// The form shows the effective project default: on an upgraded deployment
+// that saved only `enabled: true`, it is on (so saving the untouched form
+// keeps every project on); a saved value is shown as saved.
+func TestCloudExecutorFormShowsTheEffectiveProjectDefault(t *testing.T) {
+	section, ok := findConfigSection(platformconfig.SectionCloudExecutor)
+	if !ok {
+		t.Fatal("no cloud_executor section")
+	}
+	key := platformconfig.KeyCloudExecutorProjectDefaultEnabled
+	for _, tc := range []struct {
+		name   string
+		stored map[string]any
+		want   bool
+	}{
+		{"never saved", map[string]any{}, false},
+		{"upgrade: enabled saved, default absent", map[string]any{platformconfig.KeyCloudExecutorEnabled: true}, true},
+		{"enabled off, default absent", map[string]any{platformconfig.KeyCloudExecutorEnabled: false}, false},
+		{"saved default wins", map[string]any{platformconfig.KeyCloudExecutorEnabled: true, key: false}, false},
+	} {
+		if got := mergeSectionValues(section, tc.stored)[key]; got != tc.want {
+			t.Errorf("%s: %s = %v, want %v", tc.name, key, got, tc.want)
+		}
+	}
+}

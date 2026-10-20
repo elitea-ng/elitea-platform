@@ -249,6 +249,14 @@ jobs:
           - name: elitea-worker-rust
             context: .
             dockerfile: ./services/elitea-worker-rust/Containerfile
+          # The cloud executor's sandbox supervisor (ADR-0034): the
+          # `supervisor` stage of the worker Containerfile, built with
+          # `--features sandbox-supervisor`. The chart pins it by digest
+          # (sandboxKubernetes.supervisor.image), so it must be pullable.
+          - name: elitea-sandbox-supervisor
+            context: .
+            dockerfile: ./services/elitea-worker-rust/Containerfile
+            target: supervisor
           # The Rust-native Inventory engine (ADR-0027): the only Inventory
           # engine sidecar. It replaced the Python elitea-inventory image,
           # which is no longer published. Repo ROOT context: the
@@ -464,6 +472,12 @@ jobs:
           - name: elitea-worker-rust
             expect_type: rustbinary
             blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
+            expect_type: rustbinary
+            blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
@@ -631,6 +645,12 @@ jobs:
           - name: elitea-worker-rust
             expect_type: rustbinary
             blocking: true
+          # The sandbox supervisor: the worker Containerfile's `supervisor`
+          # stage, the same distroless base and cargo-auditable build, so
+          # `rustbinary` and blocking for the worker's reasons.
+          - name: elitea-sandbox-supervisor
+            expect_type: rustbinary
+            blocking: true
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
@@ -771,6 +791,12 @@ jobs:
           - chart: nats
             image: ""
           - chart: nats-bootstrap
+            image: ""
+          # The optional sandbox runtime installer (ADR-0034): a node-level
+          # chart kept apart from `elitea`, which never touches nodes. Its
+          # image is a pinned third-party Debian 13 digest, so nothing is
+          # stamped.
+          - chart: elitea-sandbox-runtime
             image: ""
 
     steps:
@@ -1030,7 +1056,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 
@@ -1073,7 +1099,7 @@ jobs:
           # `elitea` chart, so a rollback warned about six charts that no longer
           # exist and left the one chart this release actually published in
           # place — pointing at images the step above had just deleted.
-          CHARTS=("elitea" "nats" "nats-bootstrap")
+          CHARTS=("elitea" "nats" "nats-bootstrap" "elitea-sandbox-runtime")
           ORG="${{ github.repository_owner }}"
 
           # Report what could not be deleted. Every call here used to end in

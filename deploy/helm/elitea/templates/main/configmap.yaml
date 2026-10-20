@@ -29,6 +29,17 @@
 */ -}}
 {{- $deepwikiCallback := include "elitea-deepwiki.callbackBaseUrl" . }}
 {{- if and $deepwikiCallback (not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" $deepwikiCallback) }}{{- end }}
+{{- /*
+  ELITEA_CLOUD_EXECUTOR_CONFIGURED (ADR-0034) is DERIVED when empty: true
+  exactly when this chart runs the workspace-run supervisor
+  (sandboxKubernetes.workspaceRuns + supervisor; workspace-profile.yaml has
+  refused every half-enabled shape). A stated value wins (an external
+  supervisor).
+*/ -}}
+{{- if not (get $env "ELITEA_CLOUD_EXECUTOR_CONFIGURED") }}
+{{- $sk := .Values.sandboxKubernetes }}
+{{- $env = set (deepCopy $env) "ELITEA_CLOUD_EXECUTOR_CONFIGURED" (ternary "true" "false" (and $sk.enabled $sk.workspaceRuns.enabled $sk.supervisor.enabled)) }}
+{{- end }}
 {{- $aiProjectId := include "elitea.aiProjectId" . }}
 {{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
 {{- /*

@@ -1,0 +1,35 @@
+# ADR-0034: a complete cloud executor (workspace runs) on Kubernetes, for the
+# render tests: the worker side, the supervisor and its workspace profile.
+# Tests that enable sandboxKubernetes.workspaceRuns start from this file, since
+# the chart refuses every half-enabled shape (sandbox/workspace-profile.yaml).
+main:
+  runtime:
+    sandboxAudiences: ["dns:elitea-sandbox-workspace"]
+worker:
+  runtime:
+    workspaceRuns:
+      target: elitea-sandbox-workspace:9470
+      audience: dns:elitea-sandbox-workspace
+      scratch_root: /var/lib/elitea-worker/workspace-scratch
+      cpu_millis: 2000
+      memory_bytes: 4294967296
+      max_disk_bytes: 10737418240
+      turn_wall_seconds: 3600
+    workspaceScratchSizeLimit: 30Gi
+sandboxKubernetes:
+  enabled: true
+  executionNamespace: code-execution
+  runtimeClass:
+    name: gvisor
+  workspaceRuns:
+    enabled: true
+    nodeSelector: {elitea.ai/sandbox: "true"}
+    tolerations:
+      - {key: elitea.ai/sandbox, operator: Equal, value: "true", effect: NoSchedule}
+    profile:
+      image: registry/runner@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  supervisor:
+    enabled: true
+    image: registry/supervisor@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    materialSecret: sandbox-material
+    profiles: []

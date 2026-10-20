@@ -13,7 +13,7 @@ import { BrandLogoFull } from '@/shared/ui/brand-logo';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 
 /** The macOS title bar's height (the drag region the traffic lights sit in). */
-const TITLE_BAR_REM = 2.375;
+const TITLE_BAR_REM = 3.25;
 const REM_PX = 16;
 
 export interface TitleBarSpacerProps {

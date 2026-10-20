@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# The recall harness (`examples/search_eval.rs`): runs a catalogue model
+# through candle.
+eval = ["elitea-local-embed/candle"]
+
 [dependencies]
 # Tilde, like agent-runtime and local-tools: adk breaks its API between
 # minors. The index tools are adk `Tool`s in one `Toolset`.
@@ -15,6 +20,8 @@ elitea-agent-runtime = { path = "../agent-runtime" }
 # The parsers' thread cap (`set_parser_threads`).
 elitea-code-parsers = { path = "../code-parsers" }
 elitea-content-source = { path = "../content-source" }
+# The chunkers the cloud index cuts documents with (the extension router).
+elitea-doc-chunk = { path = "../doc-chunk" }
 # `decode_text`: files are read back the way ingestion decoded them.
 elitea-doc-extract = { path = "../doc-extract" }
 # The progress context and stop flag ingestion reports through, and
@@ -24,6 +31,19 @@ elitea-inventory-core = { path = "../inventory-core" }
 # The confined workspace (openat / O_NOFOLLOW reads, `path_deny`) and the
 # walk every local tool lists a folder with.
 elitea-local-tools = { path = "../local-tools" }
+# The Embedder trait and the int8 vector blobs (no backend: the desktop
+# links candle and the model cache).
+elitea-local-embed = { path = "../local-embed" }
+# `path_glob` (the line local-tools already links): linear matching.
+globset = "0.4.20"
+# The `.gitignore` rules a folder watch filters its events with (the line
+# local-tools' walk already links).
+ignore = "0.4.33"
+log = "0.4.29"
+# The background embedder lowers its thread's priority.
+thread-priority = "3.1.1"
+# The folder watch (FSEvents on macOS, inotify on Linux).
+notify = "8.2.0"
 # The same line as the desktop host (`bundled`: the SQLite the app ships
 # with) and as sqlx here: one libsqlite3-sys in every lockfile.
 rusqlite = { version = "0.32.1", features = ["bundled"] }
@@ -47,6 +67,10 @@ encoding_rs = "0.8.42"
 elitea-inventory-core = { path = "../inventory-core", features = ["test-support"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+
+[[example]]
+name = "search_eval"
+required-features = ["eval"]
 
 [lints]
 workspace = true

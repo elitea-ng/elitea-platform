@@ -168,6 +168,9 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
       return onToolResult(view, event);
     case 'approval_request':
       return onApprovalRequest(view, event, resolved);
+    case 'usage':
+      // Not part of the transcript: the activity island shows a turn's tokens.
+      return view;
     case 'error':
       return { ...view, error: event.payload, approvals: [] };
     case 'done':

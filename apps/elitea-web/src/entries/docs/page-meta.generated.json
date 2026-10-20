@@ -65,6 +65,11 @@
     "description": "The app-of-apps root, sync-wave order, per-environment value overrides, image promotion, and rollback."
   },
   {
+    "slug": "deployment/cloud-executor-kubernetes",
+    "title": "Cloud executor on Kubernetes",
+    "description": "Run desktop threads sent to the cloud in gVisor or Kata sandboxes: the sandbox nodes on GKE, AKS, EKS and k3s, the encrypted bucket, the keys and certificates, the values, the admin switches and how to verify each one."
+  },
+  {
     "slug": "deployment/configuration",
     "title": "Post-install configuration",
     "description": "Console and operator settings: identity, e-mail, egress, budgets, workers, observability and maintenance."
@@ -278,6 +283,11 @@
     "slug": "how-tos/entity-management/organizing-entities",
     "title": "Organize agents, pipelines and toolkits",
     "description": "Find, pin, tag, and group your agents, pipelines, toolkits, credentials, and MCPs as your project grows."
+  },
+  {
+    "slug": "how-tos/indexing/desktop-local-index",
+    "title": "Search a local folder (desktop)",
+    "description": "How the Elitea desktop app indexes a folder on your computer for agents, and how to add search by meaning with a model that runs locally or, if your organisation allows it, through your deployment."
   },
   {
     "slug": "how-tos/indexing/index-sources",

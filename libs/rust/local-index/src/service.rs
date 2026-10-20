@@ -29,13 +29,16 @@
 //!
 //! The tools never touch SQLite: they read the view held here.
 
+use crate::chunks;
+use crate::dense::{DenseSearch, QueryEmbedder, VectorMatrix};
+use crate::search::{Answer, Dense, NameIndex, Request};
 use crate::source::{LocalFolderSource, SOURCE_NAME};
-use crate::sqlite_store::{SqliteGraphStore, StoreError};
+use crate::sqlite_store::{ChunkUpdate, SqliteGraphStore, StoreError};
 use elitea_content_source::content_version;
 use elitea_engine_core::stream::{Context, Line, StopSignal};
 use elitea_inventory_core::graph::Graph;
+use elitea_inventory_core::ingest::SourceSelection;
 use elitea_inventory_core::ingest::files::Selection;
-use elitea_inventory_core::ingest::{SourceSelection, ingest_documents};
 use elitea_inventory_core::retrieval::view::GraphView;
 use elitea_inventory_core::store::{
     Completion, GraphKey, GraphStore as _, RunCounts, SourceStatus,
@@ -46,7 +49,8 @@ use elitea_local_tools::workspace::Workspace;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 const KEY: GraphKey = GraphKey::LOCAL;
@@ -108,6 +112,8 @@ pub struct IndexStatus {
     pub relations: u64,
     /// Embedded entities (none until embeddings are turned on).
     pub vectors: u64,
+    /// Search chunks of the last build (what embedding a folder costs).
+    pub chunks: u64,
     /// When the last build was committed (UTC, ISO 8601).
     pub last_run: Option<String>,
     /// Files known to have changed since the last build.
@@ -131,6 +137,7 @@ impl IndexStatus {
             entities: 0,
             relations: 0,
             vectors: 0,
+            chunks: 0,
             last_run: None,
             changed_files: 0,
             error: None,
@@ -227,6 +234,7 @@ struct Inner {
     error: Option<String>,
     changed_files: u64,
     files: u64,
+    chunks: u64,
     last_run: Option<String>,
     report: Option<RunReport>,
     /// The running refresh's stop flag.
@@ -242,6 +250,15 @@ struct Inner {
     /// from nothing, and nothing is served until it commits.
     policy_mismatch: bool,
     closed: bool,
+    /// The graph's names for `search_workspace`, of the view's revision.
+    names: Option<Arc<NameIndex>>,
+    /// The files the last build listed but kept out (unreadable, not
+    /// text, empty after extraction), at the stat version they had: they
+    /// are no change for [`IndexService::unchanged`].
+    skipped: std::collections::HashMap<String, String>,
+    /// The running refresh found nothing changed and wrote nothing (no run
+    /// recorded): a cancel that reaches it before it ends wins.
+    shortcut: bool,
 }
 
 /// One workspace's index.
@@ -253,7 +270,27 @@ pub struct IndexService {
     /// [`policy_fingerprint`] of the policy it was opened under.
     policy: String,
     inner: Mutex<Inner>,
+    /// What embeds a search's query (the background embedder, once it
+    /// knows this index).
+    query_embedder: Mutex<Option<Weak<dyn QueryEmbedder>>>,
+    /// The vectors of the dense side, cached.
+    matrix: Mutex<Option<CachedMatrix>>,
 }
+
+/// A loaded vector matrix and what it was loaded at.
+struct CachedMatrix {
+    version: u64,
+    /// The store's chunks version it was loaded at: another one, and its
+    /// chunk ids are stale (never reused, whatever its age).
+    chunks: u64,
+    at: Instant,
+    matrix: Arc<VectorMatrix>,
+}
+
+/// A matrix older than the vectors is reused for this long while only new
+/// vectors were added (the background embedder writes a batch every second
+/// or so); a build or a prune reloads it at once.
+const MATRIX_RELOAD: Duration = Duration::from_secs(30);
 
 impl std::fmt::Debug for IndexService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -335,6 +372,11 @@ impl IndexService {
         let built = store.revision_now(KEY)?.is_some();
         let policy_mismatch = built && store.policy()?.as_deref() != Some(policy.as_str());
         let last_run = store.last_completed_run(KEY)?;
+        let chunks = if policy_mismatch {
+            0
+        } else {
+            store.chunk_count()?
+        };
         let (state, view, files) = if policy_mismatch {
             (IndexState::StalePolicy, None, 0)
         } else {
@@ -357,6 +399,7 @@ impl IndexService {
                 error: None,
                 changed_files: 0,
                 files,
+                chunks,
                 last_run,
                 report: None,
                 running: None,
@@ -365,7 +408,12 @@ impl IndexService {
                 changed_at_start: 0,
                 policy_mismatch,
                 closed: false,
+                names: None,
+                skipped: std::collections::HashMap::new(),
+                shortcut: false,
             }),
+            query_embedder: Mutex::new(None),
+            matrix: Mutex::new(None),
         }))
     }
 
@@ -410,6 +458,7 @@ impl IndexService {
             entities,
             relations,
             vectors: 0,
+            chunks: inner.chunks,
             last_run: inner.last_run.clone(),
             changed_files: inner.changed_files,
             error: inner.error.clone(),
@@ -484,6 +533,110 @@ impl IndexService {
         Some((view, notice))
     }
 
+    /// The name index of `view` (built on first use after a build).
+    fn names_of(&self, view: &GraphView) -> Arc<NameIndex> {
+        if let Some(names) = self.inner().names.clone()
+            && names.revision == view.revision
+        {
+            return names;
+        }
+        let names = Arc::new(NameIndex::build(view));
+        let mut inner = self.inner();
+        if inner
+            .view
+            .as_ref()
+            .is_some_and(|current| current.revision == view.revision)
+        {
+            inner.names = Some(Arc::clone(&names));
+        }
+        names
+    }
+
+    /// Embed this index's search queries with `embedder` (the background
+    /// embedder calls this when it is given the index).
+    pub fn attach_query_embedder(&self, embedder: Weak<dyn QueryEmbedder>) {
+        *self
+            .query_embedder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(embedder);
+    }
+
+    /// The dense side of a search, when this index's setting names an
+    /// embedder that is allowed now and vectors of it exist. Loads the
+    /// vectors (blocking) when they changed, at most every 30 s while
+    /// they are being written.
+    #[must_use]
+    pub fn dense(&self) -> Option<Arc<dyn Dense>> {
+        let provider = self
+            .query_embedder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()?
+            .upgrade()?;
+        let choice = crate::embedding::choice_of(self);
+        if choice == crate::embedding::OFF || self.is_closed() {
+            return None;
+        }
+        let set = provider.vector_set(&choice)?;
+        let stamp = set.stamp();
+        let version = self.store.vectors_version();
+        let chunks = self.store.chunks_version();
+        let mut cached = self.matrix.lock().unwrap_or_else(PoisonError::into_inner);
+        let fresh = cached.as_ref().is_some_and(|known| {
+            known.matrix.stamp() == stamp
+                && known.chunks == chunks
+                && (known.version == version
+                    || (!known.matrix.is_empty() && known.at.elapsed() < MATRIX_RELOAD))
+        });
+        if !fresh {
+            let matrix = VectorMatrix::load(&self.store, &set).ok()?;
+            *cached = Some(CachedMatrix {
+                version,
+                chunks,
+                at: Instant::now(),
+                matrix: Arc::new(matrix),
+            });
+        }
+        let matrix = Arc::clone(&cached.as_ref()?.matrix);
+        drop(cached);
+        if matrix.is_empty() {
+            return None;
+        }
+        Some(Arc::new(DenseSearch {
+            matrix,
+            embedder: provider,
+            choice,
+            workspace_id: self.workspace_id.clone(),
+        }))
+    }
+
+    /// `search_workspace` over the build the tools answer from (and the
+    /// chunks committed with it), with the notice an answer starts with.
+    /// Blocking (SQLite).
+    ///
+    /// # Errors
+    ///
+    /// `index_closed`, `index_not_ready` (no build under the current
+    /// policy yet), or the store failed.
+    pub fn search(
+        &self,
+        request: &Request,
+        dense: Option<&dyn Dense>,
+    ) -> Result<(Answer, Option<String>), IndexError> {
+        if self.is_closed() {
+            return Err(closed_error());
+        }
+        let (view, notice) = self.view().ok_or_else(|| {
+            IndexError::new(
+                "index_not_ready",
+                "The workspace index has not been built yet.",
+            )
+        })?;
+        let names = self.names_of(&view);
+        let answer = crate::search::search_workspace(&self.store, &view, &names, request, dense)?;
+        Ok((answer, notice))
+    }
+
     /// Note that `files` files changed (a turn wrote them): a ready index
     /// becomes stale until the next refresh (which the host schedules).
     /// Never blocks on a refresh.
@@ -534,6 +687,7 @@ impl IndexService {
             inner.view = None;
             inner.state = IndexState::Off;
         }
+        *self.matrix.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.store.close();
     }
 
@@ -601,7 +755,8 @@ impl IndexService {
                 () = stop.stopped() => None,
             }
         };
-        let outcome = if permit.is_some() {
+        self.inner().shortcut = false;
+        let mut outcome = if permit.is_some() {
             self.emit("listing", None);
             let this = Arc::clone(self);
             let worker_stop = stop.clone();
@@ -617,14 +772,23 @@ impl IndexService {
             Err(IndexError::new("index_cancelled", "cancelled while queued"))
         };
         drop(permit);
-        let last_run = if outcome.is_ok() {
-            self.store.last_completed_run(KEY).ok().flatten()
+        let (last_run, chunks) = if outcome.is_ok() {
+            (
+                self.store.last_completed_run(KEY).ok().flatten(),
+                self.store.chunk_count().ok(),
+            )
         } else {
-            None
+            (None, None)
         };
         let phase = {
             let mut inner = self.inner();
             inner.running = None;
+            // A run that wrote nothing honours a cancel that came while it
+            // ran (under this lock, as `cancel` takes it): a cancel either
+            // found the run and wins, or found none and answers `false`.
+            if std::mem::take(&mut inner.shortcut) && stop.is_requested() && outcome.is_ok() {
+                outcome = Err(IndexError::new("index_cancelled", "cancelled"));
+            }
             if inner.closed {
                 // Removed, turned off or reopened meanwhile: nothing it
                 // built is kept or served, and nothing is reported.
@@ -635,6 +799,9 @@ impl IndexService {
                     inner.view = Some(Arc::clone(view));
                     inner.files = *files;
                     inner.report = Some(*report);
+                    if let Some(chunks) = chunks {
+                        inner.chunks = chunks;
+                    }
                     inner.policy_mismatch = false;
                     // Changes reported while it ran may not be in what it
                     // read: they keep it stale (their refresh follows).
@@ -743,49 +910,125 @@ impl IndexService {
         }
     }
 
+    /// The build served now, when the folder has not changed since it: it
+    /// is the stored revision, and a listing finds every file at its
+    /// recorded `(size, mtime)` and none gone. Lists the folder (one `stat`
+    /// per file); reads nothing.
+    fn unchanged(
+        &self,
+        previous: &BTreeMap<String, String>,
+        stats: &std::collections::HashMap<String, crate::sqlite_store::DocumentStat>,
+    ) -> Result<Option<Built>, IndexError> {
+        let Some(view) = self.inner().view.clone() else {
+            return Ok(None);
+        };
+        if Some(view.revision) != self.store.revision_now(KEY)? {
+            return Ok(None);
+        }
+        let source = LocalFolderSource::new(Arc::clone(&self.workspace))
+            .with_previous(stats.clone())
+            .selecting(Selection::default());
+        let listed = source
+            .list_now()
+            .map_err(|error| IndexError::new("index_failed", error.to_string()))?;
+        // An empty file is never a document: it stays out of `previous`.
+        let documents: Vec<_> = listed
+            .iter()
+            .filter(|reference| reference.size > 0 && !reference.version.is_empty())
+            .collect();
+        let skipped = self.inner().skipped.clone();
+        let mut kept = 0;
+        let mut same = true;
+        for reference in &documents {
+            if previous.get(&reference.key) == Some(&reference.version) {
+                kept += 1;
+            } else if skipped.get(&reference.key) != Some(&reference.version) {
+                same = false;
+                break;
+            }
+        }
+        let same = same && kept == previous.len();
+        if !same {
+            return Ok(None);
+        }
+        let files = count(previous.len());
+        let report = RunReport {
+            read: 0,
+            unchanged: files,
+            removed: 0,
+            hashed: 0,
+        };
+        Ok(Some((view, files, report)))
+    }
+
     /// The run, and whether it got as far as recording its start.
     fn build_with(&self, full: bool, context: &Context) -> (Result<Built, IndexError>, bool) {
         let mut started = false;
         let result = block_on(async {
-            let source_status = SourceStatus {
-                toolkit_id: SOURCE_NAME.to_owned(),
-                toolkit_name: "Workspace folder".to_owned(),
-                toolkit_type: "local_folder".to_owned(),
-                branch: None,
-            };
             // A build from another policy is never the start of this one.
             let full = full || self.inner().policy_mismatch;
-            let (mut graph, previous, stat_cache) = if full {
-                (
-                    Graph::new(),
-                    BTreeMap::new(),
-                    std::collections::HashMap::new(),
-                )
+            // Chunks made by another chunker (or none yet, an index built
+            // before chunks): every file is read once more to cut them;
+            // the unchanged ones are not parsed again.
+            let rechunk = self.store.chunk_generation()?.as_deref() != Some(chunks::GENERATION);
+            let (previous, mut stat_cache) = if full {
+                (BTreeMap::new(), std::collections::HashMap::new())
             } else {
                 (
-                    self.starting_graph()?,
                     self.store.document_versions(KEY, SOURCE_NAME).await?,
                     self.store.document_stats(KEY, SOURCE_NAME)?,
                 )
             };
-            self.store.start(KEY, &source_status).await?;
+            if rechunk {
+                stat_cache.clear();
+            }
+            if !full
+                && !rechunk
+                && let Some(unchanged) = self.unchanged(&previous, &stat_cache)?
+            {
+                // Nothing to read and nothing gone: the build served now is
+                // the folder's (no run, and no copy of its graph).
+                self.inner().shortcut = true;
+                return Ok(unchanged);
+            }
+            let mut graph = if full {
+                Graph::new()
+            } else {
+                self.starting_graph()?
+            };
+            self.store.start(KEY, &source_status()).await?;
             started = true;
+            self.store.clear_staged_chunks()?;
             let source = LocalFolderSource::new(Arc::clone(&self.workspace))
                 .with_previous(stat_cache)
-                .selecting(Selection::default());
-            let outcome = ingest_documents(
+                .selecting(Selection::default())
+                .chunking();
+            // Chunking is CPU work as heavy as parsing: half the cores.
+            let threads =
+                std::thread::available_parallelism().map_or(2, std::num::NonZero::get) / 2;
+            // Each batch's chunks go to the store's staging table as soon
+            // as the batch is read; the commit moves them in.
+            let stage = || {
+                self.store
+                    .stage_chunks(&source.take_staged(threads))
+                    .map_err(engine_error)
+            };
+            let outcome = crate::ingest::ingest(
                 &mut graph,
                 &SourceSelection::all(SOURCE_NAME),
                 &source,
                 self.workspace.root(),
                 &previous,
                 context,
+                stage,
             )
             .await
             .map_err(|error| IndexError::new("index_failed", error.message))?;
             context
                 .checkpoint()
                 .map_err(|error| IndexError::new("index_failed", error.message))?;
+            let stats = source.stats();
+            self.inner().skipped = skipped(&stats, &outcome.documents);
             self.emit("saving", None);
             let completion = Completion {
                 toolkit_id: SOURCE_NAME,
@@ -798,12 +1041,17 @@ impl IndexService {
                 },
                 commit_sha: None,
             };
-            let revision = self.store.complete_with_stats(
+            let revision = self.store.complete_with_chunks(
                 KEY,
                 &graph,
                 &completion,
-                &source.stats(),
+                &stats,
                 Some(&self.policy),
+                Some(ChunkUpdate {
+                    generation: chunks::GENERATION,
+                    // Every file was read again: none keeps old chunks.
+                    replace: full || rechunk,
+                }),
             )?;
             let report = RunReport {
                 read: count(outcome.documents_processed),
@@ -819,4 +1067,35 @@ impl IndexService {
         });
         (result.and_then(|built| built), started)
     }
+}
+
+/// The folder's source row.
+fn source_status() -> SourceStatus {
+    SourceStatus {
+        toolkit_id: SOURCE_NAME.to_owned(),
+        toolkit_name: "Workspace folder".to_owned(),
+        toolkit_type: "local_folder".to_owned(),
+        branch: None,
+    }
+}
+
+fn engine_error(error: impl std::fmt::Display) -> elitea_engine_core::errors::EngineError {
+    elitea_engine_core::errors::EngineError::new(
+        elitea_engine_core::errors::ErrorType::Runtime,
+        error.to_string(),
+    )
+}
+
+/// The files a build listed but holds no document for (empty, unreadable,
+/// not text), by stat version: a later refresh that finds them unchanged
+/// does not read them again.
+fn skipped<V>(
+    stats: &crate::sqlite_store::Stats,
+    documents: &BTreeMap<String, V>,
+) -> std::collections::HashMap<String, String> {
+    stats
+        .iter()
+        .filter(|(key, _)| !documents.contains_key(*key))
+        .map(|(key, (size, mtime))| (key.clone(), crate::source::stat_version(*size, *mtime)))
+        .collect()
 }

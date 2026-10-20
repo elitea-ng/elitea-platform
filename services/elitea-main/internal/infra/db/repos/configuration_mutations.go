@@ -88,6 +88,29 @@ func (r *CurrentConfigurationMutationRepository) WithinCurrentConfigurationMutat
 	projectID int32,
 	fn func(configurationapp.CurrentConfigurationMutationStore) error,
 ) error {
+	return r.withinCurrentConfigurationMutation(ctx, projectID, false, fn)
+}
+
+// WithinSecretFreeConfigurationMutation is WithinCurrentConfigurationMutation
+// for a configuration type whose schema holds no secret: the same row lock,
+// revision and lifecycle outbox event in one transaction, but a project that
+// has no vault yet (a fresh install provisions none) is written too. Its
+// store refuses every hidden secret, so PutHiddenSecrets takes only an empty
+// list.
+func (r *CurrentConfigurationMutationRepository) WithinSecretFreeConfigurationMutation(
+	ctx context.Context,
+	projectID int32,
+	fn func(configurationapp.CurrentConfigurationMutationStore) error,
+) error {
+	return r.withinCurrentConfigurationMutation(ctx, projectID, true, fn)
+}
+
+func (r *CurrentConfigurationMutationRepository) withinCurrentConfigurationMutation(
+	ctx context.Context,
+	projectID int32,
+	secretFree bool,
+	fn func(configurationapp.CurrentConfigurationMutationStore) error,
+) error {
 	if r == nil || r.projects == nil || r.queries == nil {
 		return ErrCurrentConfigurationMutationUnavailable
 	}
@@ -107,19 +130,26 @@ func (r *CurrentConfigurationMutationRepository) WithinCurrentConfigurationMutat
 		if err != nil {
 			return ErrCurrentConfigurationMutationUnavailable
 		}
-		vault, err := lockCurrentSecretVault(ctx, tx, "project-"+strconv.FormatInt(int64(projectID), 10))
+		vaultID := "project-" + strconv.FormatInt(int64(projectID), 10)
+		vault, err := lockCurrentSecretVault(ctx, tx, vaultID)
+		if secretFree && errors.Is(err, errCurrentVaultAbsent) {
+			// No vault to lock and nothing to write to one: the store
+			// refuses every hidden secret.
+			vault, err = &lockedCurrentSecretVault{id: vaultID}, nil
+		}
 		if err != nil {
 			return err
 		}
 		store := &currentConfigurationMutationStore{
-			ctx:       ctx,
-			projectID: projectID,
-			tx:        tx,
-			queries:   queries,
-			vault:     vault,
-			masterKey: r.masterKey,
-			active:    true,
-			locked:    make(map[int32]configurationapp.CurrentConfiguration),
+			ctx:        ctx,
+			projectID:  projectID,
+			tx:         tx,
+			queries:    queries,
+			vault:      vault,
+			masterKey:  r.masterKey,
+			active:     true,
+			locked:     make(map[int32]configurationapp.CurrentConfiguration),
+			secretFree: secretFree,
 		}
 		defer store.destroy()
 
@@ -171,6 +201,8 @@ type currentConfigurationMutationStore struct {
 	vault     *lockedCurrentSecretVault
 	masterKey []byte
 	active    bool
+	// secretFree refuses every hidden secret (WithinSecretFreeConfigurationMutation).
+	secretFree bool
 
 	locked            map[int32]configurationapp.CurrentConfiguration
 	rowOperation      configurationapp.CurrentConfigurationLifecycleOperation
@@ -318,7 +350,7 @@ func (s *currentConfigurationMutationStore) PutHiddenSecrets(
 	if err := s.validate(ctx); err != nil {
 		return err
 	}
-	if s.putSecretsCalls != 0 || len(mutations) > maxCurrentVaultMutations {
+	if s.putSecretsCalls != 0 || len(mutations) > maxCurrentVaultMutations || (s.secretFree && len(mutations) != 0) {
 		return ErrInvalidCurrentConfigurationTransaction
 	}
 	s.putSecretsCalls++

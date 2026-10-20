@@ -1505,8 +1505,12 @@ jobs:
           targets: e2e
           mount-cache-suffix: e2e
       - name: Bring up the E2E stack (host)
+        # E2E_PORT must match the 8080 the seed and capture steps target;
+        # without it the stack came up on the local default 8082 and the
+        # container's Playwright tried to start a second stack (no runtime).
         env:
           COMPOSE_BIN: docker compose
+          E2E_PORT: "8080"
         run: |
           # A single attempt here is purely an overlap optimisation, not the
           # last word on the image being present — the seed step below waits
