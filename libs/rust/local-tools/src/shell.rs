@@ -272,7 +272,12 @@ pub fn passthrough_environment(config: &ShellConfig) -> Vec<(String, String)> {
 }
 
 fn environment(config: &ShellConfig) -> Vec<(String, String)> {
-    let mut out = passthrough_environment(config);
+    environment_from(config, passthrough_environment(config))
+}
+
+/// [`environment`] over the given passed-through variables.
+fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut out = passed;
     // PATH without relative or empty entries: a bare name never runs a
     // program from the workspace (the approval rules resolve it the same
     // way).
@@ -299,8 +304,10 @@ fn environment(config: &ShellConfig) -> Vec<(String, String)> {
     // A container host's workspace root that git must trust although
     // another uid owns it (empty on the desktop).
     let trust = config.sandbox.git_trust_env();
-    out.retain(|(name, _)| !trust.iter().any(|(trusted, _)| trusted == name));
-    out.extend(trust);
+    if !trust.is_empty() {
+        out.retain(|(name, _)| !crate::sandbox::is_git_config_env(name));
+        out.extend(trust);
+    }
     out
 }
 
@@ -726,6 +733,46 @@ mod tests {
         );
         config.sandbox.git_safe_directory = None;
         assert!(git_env(&config).is_empty());
+    }
+
+    /// With the trust env on, every passed-through git config variable is
+    /// dropped (a stale `KEY_1` or `PARAMETERS` cannot ride along); off,
+    /// the passthrough is left as it was.
+    #[test]
+    fn the_trust_env_replaces_every_passed_through_git_config_variable() {
+        let (_dir, _workspace, mut config) = setup();
+        let passed: Vec<(String, String)> = [
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_1", "core.sshCommand"),
+            ("GIT_CONFIG_VALUE_1", "evil"),
+            ("GIT_CONFIG_PARAMETERS", "'core.pager'='less'"),
+            ("LANG", "C.UTF-8"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .to_vec();
+        let git_env = |config: &ShellConfig| -> Vec<(String, String)> {
+            super::environment_from(config, passed.clone())
+                .into_iter()
+                .filter(|(name, _)| name.starts_with("GIT_CONFIG_"))
+                .collect()
+        };
+        assert_eq!(git_env(&config).len(), 4, "off: unchanged");
+        config.sandbox.container = true;
+        config.sandbox.git_safe_directory = Some("/workspace".into());
+        assert_eq!(
+            git_env(&config),
+            [
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "safe.directory"),
+                ("GIT_CONFIG_VALUE_0", "/workspace"),
+            ]
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        );
+        assert!(
+            super::environment_from(&config, passed.clone())
+                .iter()
+                .any(|(name, _)| name == "LANG")
+        );
     }
 
     #[tokio::test]

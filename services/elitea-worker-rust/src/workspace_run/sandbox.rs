@@ -80,9 +80,17 @@ pub(crate) enum SandboxRunError {
     Timeout,
     /// The workspace grew past its cap (the runner refused to pack it).
     WorkspaceOverCap,
-    /// The runner ran and failed an operation with a code this worker has
-    /// no meaning for (`runner.git_baseline_failed`, or none at all); the
-    /// code itself is logged where it is read (`workspace_run_exec_failed`).
+    /// The runner was killed by a signal (exit 128+n with no code of its
+    /// own): the OOM killer, or the run's limits.
+    RunnerKilled,
+    /// The runner refused the workspace archive (`workspace_archive.*`).
+    ArchiveRefused,
+    /// The runner could not record the baseline commit
+    /// (`runner.git_baseline_failed`).
+    GitBaselineFailed,
+    /// The runner failed with any other code, or none. Every runner failure
+    /// is logged once, with its code, where it is read
+    /// (`workspace_run_exec_failed`).
     RunnerFailed,
 }
 
@@ -97,6 +105,9 @@ impl SandboxRunError {
             Self::Protocol => "workspace_run.sandbox_protocol",
             Self::Timeout => "workspace_run.timeout",
             Self::WorkspaceOverCap => "workspace_run.workspace_over_cap",
+            Self::RunnerKilled => "workspace_run.runner_killed",
+            Self::ArchiveRefused => "workspace_run.archive_refused",
+            Self::GitBaselineFailed => "workspace_run.git_baseline_failed",
             Self::RunnerFailed => "workspace_run.runner_failed",
         }
     }

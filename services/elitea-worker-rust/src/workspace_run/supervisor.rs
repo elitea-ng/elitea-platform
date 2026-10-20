@@ -145,6 +145,11 @@ fn exit_error(run: &str, code: i32, failure: &str) -> Result<(), SandboxRunError
         (0, _) => return Ok(()),
         (_, "runner.workspace_too_large") => SandboxRunError::WorkspaceOverCap,
         (_, code) if code.ends_with("too_large") => SandboxRunError::TooLarge,
+        (_, "runner.git_baseline_failed") => SandboxRunError::GitBaselineFailed,
+        (_, code) if code.starts_with("workspace_archive.") => SandboxRunError::ArchiveRefused,
+        // 128 + the signal (137: SIGKILL, the OOM killer's), and the runner
+        // said nothing: it did not exit on its own.
+        (129..=192, "") => SandboxRunError::RunnerKilled,
         _ => SandboxRunError::RunnerFailed,
     };
     tracing::warn!(
@@ -588,24 +593,70 @@ mod exit_tests {
     #[test]
     fn runner_failures_map_to_stable_causes() {
         assert_eq!(exit_error("r", 0, ""), Ok(()));
-        assert_eq!(
-            exit_error("r", 1, "runner.workspace_too_large"),
-            Err(SandboxRunError::WorkspaceOverCap)
-        );
-        assert_eq!(
-            exit_error("r", 1, "workspace_archive.too_large"),
-            Err(SandboxRunError::TooLarge)
-        );
-        for failure in [
-            "runner.git_baseline_failed",
-            "runner.workspace_unavailable",
-            "",
+        for (code, failure, error, stable) in [
+            (
+                1,
+                "runner.workspace_too_large",
+                SandboxRunError::WorkspaceOverCap,
+                "workspace_run.workspace_over_cap",
+            ),
+            (
+                1,
+                "workspace_archive.too_large",
+                SandboxRunError::TooLarge,
+                "workspace_run.workspace_too_large",
+            ),
+            (
+                1,
+                "workspace_archive.malformed",
+                SandboxRunError::ArchiveRefused,
+                "workspace_run.archive_refused",
+            ),
+            (
+                1,
+                "runner.git_baseline_failed",
+                SandboxRunError::GitBaselineFailed,
+                "workspace_run.git_baseline_failed",
+            ),
+            (
+                137,
+                "",
+                SandboxRunError::RunnerKilled,
+                "workspace_run.runner_killed",
+            ),
+            (
+                1,
+                "runner.workspace_unavailable",
+                SandboxRunError::RunnerFailed,
+                "workspace_run.runner_failed",
+            ),
+            (
+                1,
+                "",
+                SandboxRunError::RunnerFailed,
+                "workspace_run.runner_failed",
+            ),
+            (
+                -1,
+                "",
+                SandboxRunError::RunnerFailed,
+                "workspace_run.runner_failed",
+            ),
+            // A runner that said why is not "killed", whatever its status.
+            (
+                137,
+                "runner.git_baseline_failed",
+                SandboxRunError::GitBaselineFailed,
+                "workspace_run.git_baseline_failed",
+            ),
         ] {
-            let error = exit_error("r", 1, failure).expect_err(failure);
-            assert_eq!(error, SandboxRunError::RunnerFailed);
-            assert_eq!(error.code(), "workspace_run.runner_failed");
+            assert_eq!(
+                exit_error("r", code, failure),
+                Err(error),
+                "{code} {failure}"
+            );
+            assert_eq!(error.code(), stable);
         }
-        assert_eq!(exit_error("r", -1, ""), Err(SandboxRunError::RunnerFailed));
     }
 }
 

@@ -215,16 +215,47 @@ pub struct SandboxConfig {
     /// (requests with [`SandboxRequest::git_roots`], which `run_command`
     /// builds and host git does not). Empty everywhere else.
     pub container_env: ContainerEnv,
-    /// With [`Self::container`]: the one directory git may trust although
-    /// another user owns it (`safe.directory`), the workspace root. A
-    /// Kubernetes run Pod's workspace volume is an emptyDir whose top the
-    /// kubelet creates owned by root, so git refuses it as of "dubious
-    /// ownership". Host git gets `-c safe.directory=<root>`; workspace
-    /// commands get it through `GIT_CONFIG_COUNT`, so an agent's own `git
-    /// status` works. Ignored unless [`Self::container`] is set: the
-    /// desktop keeps git's ownership check (a repository someone else owns
-    /// is exactly what it must not trust). `None` everywhere else.
+    /// With [`Self::container`]: the one directory a workspace command's
+    /// git may trust although another user owns it (`safe.directory`), the
+    /// workspace root as [`git_trust_root`] resolves it. A Kubernetes run
+    /// Pod's workspace volume is an emptyDir whose top the kubelet creates
+    /// owned by root, so git refuses it as of "dubious ownership".
+    ///
+    /// Workspace commands (`run_command`, so an agent's own `git status`)
+    /// get it through `GIT_CONFIG_COUNT` ([`Self::git_trust_env`]), with
+    /// every other `GIT_CONFIG_*` dropped. The image sets
+    /// `GIT_CONFIG_NOSYSTEM=1` and has a read-only root filesystem, so a
+    /// system or global gitconfig cannot carry it. Host git does not need
+    /// it: it pins `GIT_DIR`, and git checks ownership only when it
+    /// discovers a repository.
+    ///
+    /// Ignored unless [`Self::container`] is set: the desktop keeps git's
+    /// ownership check (a repository someone else owns is exactly what it
+    /// must not trust). `None` everywhere else.
     pub git_safe_directory: Option<PathBuf>,
+}
+
+/// The workspace root as git must name it in `safe.directory`: canonical,
+/// since git compares the resolved path. Fails closed: a root that cannot
+/// be resolved is not trusted (no fallback to the spelling given).
+///
+/// # Errors
+///
+/// The root does not exist or cannot be resolved.
+pub fn git_trust_root(root: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(root)
+}
+
+/// Whether `name` is an environment variable that adds git config
+/// (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`,
+/// `GIT_CONFIG_PARAMETERS`): dropped wherever the trust env is set, so a
+/// stale `KEY_1` or a `COUNT` from elsewhere cannot ride along with it.
+#[must_use]
+pub fn is_git_config_env(name: &str) -> bool {
+    name == "GIT_CONFIG_COUNT"
+        || name == "GIT_CONFIG_PARAMETERS"
+        || name.starts_with("GIT_CONFIG_KEY_")
+        || name.starts_with("GIT_CONFIG_VALUE_")
 }
 
 impl SandboxConfig {
@@ -237,7 +268,8 @@ impl SandboxConfig {
     }
 
     /// The environment that makes a workspace command's git trust
-    /// [`Self::trusted_git_directory`] (empty when none applies).
+    /// [`Self::trusted_git_directory`] (empty when none applies). Callers
+    /// drop every other [`is_git_config_env`] variable first.
     #[must_use]
     pub fn git_trust_env(&self) -> Vec<(String, String)> {
         self.trusted_git_directory()
@@ -343,10 +375,15 @@ pub fn prepare(
         } else {
             // A workspace command gets the thread's env through env(1); the
             // runner's own process environment never holds it.
+            // With the workspace root trusted, the harvested env cannot add
+            // git config of its own: env(1) would set it after the command's
+            // trust env and could replace `safe.directory`.
+            let trusted = config.trusted_git_directory().is_some();
             let mut wrapped: Vec<String> = config
                 .container_env
                 .0
                 .iter()
+                .filter(|(name, _)| !(trusted && is_git_config_env(name)))
                 .map(|(name, value)| format!("{name}={value}"))
                 .collect();
             // env(1) reads every leading NAME=value word as an assignment
@@ -1878,6 +1915,33 @@ mod tests {
         let git = prepare(&host_git, &argv, &config).expect("git");
         assert_eq!(git.program, PathBuf::from("make"));
         assert_eq!(format!("{:?}", config.container_env), "[\"DATABASE_URL\"]");
+    }
+
+    /// With the workspace root trusted, the harvested env cannot add git
+    /// config (it would replace the command's `safe.directory`); without
+    /// it, the harvested env is passed whole.
+    #[test]
+    fn a_trusted_root_keeps_git_config_out_of_the_container_env() {
+        let env = super::ContainerEnv::new(vec![
+            ("GIT_CONFIG_KEY_0".to_owned(), "core.pager".to_owned()),
+            ("GIT_CONFIG_PARAMETERS".to_owned(), "x".to_owned()),
+            ("TOKEN".to_owned(), "t".to_owned()),
+        ]);
+        let mut config = SandboxConfig {
+            container: true,
+            container_env: env,
+            ..SandboxConfig::default()
+        };
+        let argv = vec!["git".to_owned(), "status".to_owned()];
+        let mut workspace = request(SandboxMode::WorkspaceWrite, false);
+        workspace.git_roots = vec![PathBuf::from("/workspace")];
+        let untrusted = prepare(&workspace, &argv, &config).expect("command");
+        assert_eq!(untrusted.args.len(), 5);
+        config.git_safe_directory = Some(PathBuf::from("/workspace"));
+        let trusted = prepare(&workspace, &argv, &config).expect("command");
+        assert_eq!(trusted.args, vec!["TOKEN=t", "git", "status"]);
+        assert!(super::is_git_config_env("GIT_CONFIG_VALUE_12"));
+        assert!(!super::is_git_config_env("GIT_CONFIG_GLOBAL"));
     }
 
     /// H3: Landlock alone is partial and is refused unless the host opts in.

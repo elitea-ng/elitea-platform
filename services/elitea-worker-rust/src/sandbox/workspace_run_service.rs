@@ -451,18 +451,6 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> WorkspaceRunService
                     return;
                 }
             };
-            if let Ok(exit) = &outcome
-                && exit.exit_code != 0
-            {
-                // The runner's code is a filtered `runner.*` word (see
-                // [`failure_code`]): no stderr text, no workspace content.
-                tracing::warn!(
-                    event = "workspace_run_exec_failed",
-                    run = name.as_str(),
-                    exit_code = exit.exit_code,
-                    failure_code = exit.failure_code.as_str(),
-                );
-            }
             let frame = match outcome {
                 Ok(exit) => Ok(WorkspaceRunExecOutputV1 {
                     frame: Some(Out::Exit(WorkspaceRunExecExitV1 {

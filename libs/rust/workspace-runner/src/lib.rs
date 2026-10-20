@@ -39,6 +39,7 @@ use elitea_agent_runtime::workspace_tools::WORKSPACE_TOOLS;
 use elitea_local_tools::approvals::{
     MemoryChoices, PAYLOAD_KEY, RulesEngine, ToolCall, ToolKind, Verdict, WorkspaceSettings,
 };
+use elitea_local_tools::git::HARDENING;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::session::{LocalSession, SessionConfig};
 use elitea_local_tools::shell::ShellConfig;
@@ -158,11 +159,15 @@ impl ApprovalChannel for CloudPrompt {
     }
 }
 
+/// The stable code of a workspace the serve session cannot open.
+pub const WORKSPACE_UNAVAILABLE: &str = "runner.workspace_unavailable";
+
 /// Open the local-tools session over the workspace, at the container level.
 ///
 /// # Errors
 ///
-/// The workspace cannot be opened.
+/// [`WORKSPACE_UNAVAILABLE`]: the workspace cannot be resolved or opened
+/// (the cause is not reported: it can name paths).
 pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> {
     let prompt = Arc::new(CloudPrompt::default());
     let mut shell = ShellConfig::new(config.data_dir.join("tmp"));
@@ -170,10 +175,12 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
     shell.sandbox.container_env =
         elitea_local_tools::sandbox::ContainerEnv::new(config.env.clone());
     // The workspace volume's top directory is not owned by the runner's uid
-    // in a Kubernetes Pod (see [`baseline_git_args`]): the tools' git and
-    // the agent's own git through `run_command` trust exactly this root.
-    shell.sandbox.git_safe_directory =
-        Some(std::fs::canonicalize(&config.root).unwrap_or_else(|_| config.root.clone()));
+    // in a Kubernetes Pod (see [`baseline_git_args`]): the agent's own git
+    // through `run_command` trusts exactly this root.
+    shell.sandbox.git_safe_directory = Some(
+        elitea_local_tools::sandbox::git_trust_root(&config.root)
+            .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?,
+    );
     let session = LocalSession::open(SessionConfig {
         root: config.root.clone(),
         session_id: "cloud".to_owned(),
@@ -198,7 +205,7 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
         deny_read: Vec::new(),
         app_id: None,
     })
-    .map_err(|error| error.to_string())?;
+    .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?;
     prompt.bind(Arc::clone(session.rules()));
     Ok(session)
 }
@@ -503,29 +510,28 @@ pub const GIT_BASELINE_FAILED: &str = "runner.git_baseline_failed";
 
 /// The argv (after `git`) of one baseline git call in `root` (canonical).
 ///
+/// The local tools' own [`HARDENING`] (no hooks, fsmonitor, pager, signing,
+/// credential helper, protocols), the cloud executor's identity, and
 /// `safe.directory=<root>`: in a Kubernetes run Pod the workspace volume's
 /// top directory is an emptyDir the kubelet creates owned by root (group
 /// 10001 through `fsGroup`), not by the runner's uid, so git refuses the
 /// repository as of "dubious ownership" without it. Exactly this root,
 /// never `*`; the command line is a protected scope git honours it from.
+/// (The image sets `GIT_CONFIG_NOSYSTEM=1` and the root filesystem is
+/// read-only, so no system or global gitconfig can carry it.)
 #[must_use]
 pub fn baseline_git_args(root: &Path, args: &[&str]) -> Vec<String> {
-    let mut words: Vec<String> = [
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "commit.gpgSign=false",
-        "-c",
-        "user.name=Elitea cloud executor",
-        "-c",
-        "user.email=cloud-executor@elitea.invalid",
-        "-c",
-    ]
-    .iter()
-    .map(|word| (*word).to_owned())
-    .collect();
+    let mut words: Vec<String> = HARDENING.iter().map(|word| (*word).to_owned()).collect();
+    words.extend(
+        [
+            "-c",
+            "user.name=Elitea cloud executor",
+            "-c",
+            "user.email=cloud-executor@elitea.invalid",
+            "-c",
+        ]
+        .map(str::to_owned),
+    );
     words.push(format!("safe.directory={}", root.display()));
     words.extend(args.iter().map(|arg| (*arg).to_owned()));
     words
@@ -534,11 +540,14 @@ pub fn baseline_git_args(root: &Path, args: &[&str]) -> Vec<String> {
 /// `git init` and one commit of the checkout, with no hook, no global or
 /// system config, and no signing. Inside the container only.
 fn git_baseline(root: &Path) -> Result<(), String> {
-    let root = std::fs::canonicalize(root).map_err(|_| GIT_BASELINE_FAILED.to_owned())?;
+    let root = elitea_local_tools::sandbox::git_trust_root(root)
+        .map_err(|_| GIT_BASELINE_FAILED.to_owned())?;
     let git = |args: &[&str]| -> Result<(), String> {
         let status = std::process::Command::new("git")
             .args(baseline_git_args(&root, args))
             .current_dir(&root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -568,7 +577,25 @@ fn git_baseline(root: &Path) -> Result<(), String> {
 mod tests {
     use std::path::Path;
 
-    use super::baseline_git_args;
+    use super::{
+        RunnerConfig, RunnerPolicy, WORKSPACE_UNAVAILABLE, baseline_git_args, open_session,
+    };
+
+    /// A workspace that cannot be opened is one stable code, never the
+    /// cause's text (which can name paths).
+    #[test]
+    fn an_unopenable_workspace_is_a_stable_code() {
+        let dir = tempfile::tempdir().expect("dir");
+        let error = open_session(&RunnerConfig {
+            root: dir.path().join("missing"),
+            data_dir: dir.path().join("data"),
+            policy: RunnerPolicy::default(),
+            env: Vec::new(),
+        })
+        .err()
+        .expect("refused");
+        assert_eq!(error, WORKSPACE_UNAVAILABLE);
+    }
 
     /// The baseline trusts exactly the workspace root, and the trust comes
     /// before the subcommand (a `-c` after it would be an argument).
@@ -583,5 +610,9 @@ mod tests {
         assert!(at < argv.iter().position(|word| word == "add").expect("add"));
         assert!(!argv.iter().any(|word| word == "safe.directory=*"));
         assert_eq!(&argv[argv.len() - 2..], ["add", "-A"]);
+        assert_eq!(
+            &argv[..elitea_local_tools::git::HARDENING.len()],
+            elitea_local_tools::git::HARDENING
+        );
     }
 }

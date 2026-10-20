@@ -1276,26 +1276,14 @@ impl<'a> Git<'a> {
         }
     }
 
-    /// The full argv of this call: the binary, [`HARDENING`], the
-    /// container's `safe.directory` trust when it applies
-    /// ([`SandboxConfig::trusted_git_directory`]), then `args`.
-    pub(crate) fn argv(&self, args: &[&str]) -> ToolResult<Vec<String>> {
+    fn spawn(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
+        let what = args.first().copied().unwrap_or_default();
         let mut words = vec![git_binary()?.display().to_string()];
         words.extend(HARDENING.iter().map(|arg| (*arg).to_owned()));
-        if let Some(root) = self.repo.sandbox.trusted_git_directory() {
-            words.push("-c".to_owned());
-            words.push(format!("safe.directory={}", root.display()));
-        }
         if self.literal {
             words.push("--literal-pathspecs".to_owned());
         }
         words.extend(args.iter().map(|arg| (*arg).to_owned()));
-        Ok(words)
-    }
-
-    fn spawn(&self, args: &[&str]) -> ToolResult<Vec<u8>> {
-        let what = args.first().copied().unwrap_or_default();
-        let words = self.argv(args)?;
         let request = self.sandbox_request();
         // The host's own git: run it under whatever confinement exists
         // (layers 1 and 2 already hold without one).
@@ -1651,62 +1639,6 @@ mod tests {
         .expect("safe")
         .expect("a repository");
         (dir, base, repo)
-    }
-
-    /// A container host's workspace root is trusted with exactly
-    /// `-c safe.directory=<root>` before the subcommand; the desktop (no
-    /// container) never gets it, even with a directory set.
-    #[test]
-    fn host_git_trusts_the_container_root_only_in_a_container() {
-        let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
-        let top = base.join("repo");
-        std::fs::create_dir(&top).expect("repo");
-        init(&top);
-        let trust = format!("safe.directory={}", top.display());
-        let argv = |sandbox: &SandboxConfig| {
-            Repo::discover(&top, sandbox, Arc::new(DenyList::default()))
-                .expect("safe")
-                .expect("a repository")
-                .git(&top)
-                .argv(&["status", "--porcelain"])
-                .expect("argv")
-        };
-        let container = SandboxConfig {
-            container: true,
-            git_safe_directory: Some(top.clone()),
-            ..SandboxConfig::default()
-        };
-        let words = argv(&container);
-        let at = words.iter().position(|word| *word == trust).expect("trust");
-        assert_eq!(words[at - 1], "-c");
-        assert!(
-            at < words
-                .iter()
-                .position(|word| word == "status")
-                .expect("status")
-        );
-        assert!(!words.iter().any(|word| word == "safe.directory=*"));
-        // And git accepts the call so shaped.
-        let repo = Repo::discover(&top, &container, Arc::new(DenyList::default()))
-            .expect("safe")
-            .expect("a repository");
-        repo.git(&top)
-            .text(&["status", "--porcelain"])
-            .expect("status");
-
-        let desktop = SandboxConfig {
-            git_safe_directory: Some(top.clone()),
-            ..SandboxConfig::default()
-        };
-        for sandbox in [desktop, SandboxConfig::default()] {
-            assert!(
-                !argv(&sandbox)
-                    .iter()
-                    .any(|word| word.starts_with("safe.directory")),
-                "{sandbox:?}"
-            );
-        }
     }
 
     /// Host git runs under the session's deny list (the host's own
