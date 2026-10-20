@@ -29,7 +29,7 @@ COPY libs/rust/ libs/rust/
 # checkout's build would ship that build's binary. Touching /src under the
 # lock recompiles the runner from this context while registry crates stay
 # cached (see the worker's Containerfile).
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,id=workspace-runner-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/libs/rust/target,sharing=locked \
     find /src -type f -exec touch {} + && \
     cd libs/rust && \
