@@ -1,0 +1,72 @@
+/**
+ * The desktop's look, as one layer any desktop screen can sit under — the
+ * signed-in app (via `NativeLook`) and the connect / sign-in screens (under
+ * the same brand theme): `withDesktopComponents` on the theme the screen
+ * already has, and the global rules a native app gets from its toolkit
+ * (default cursor, keyboard-only focus ring, thin overlay scrollbars, chrome
+ * that does not select on a stray drag).
+ */
+import type { ReactNode } from 'react';
+
+import GlobalStyles from '@mui/material/GlobalStyles';
+import { ThemeProvider, type Theme } from '@mui/material/styles';
+
+import { SYSTEM_FONT_STACK, withDesktopComponents } from '../lib/desktopTheme';
+
+/** Selectors whose text stays selectable: the content, not the chrome. */
+const SELECTABLE = [
+  'input',
+  'textarea',
+  '[contenteditable="true"]',
+  'pre',
+  'code',
+  '[data-selectable]',
+  '[data-testid="session-transcript"]',
+  '[data-testid="session-transcript"] *',
+].join(', ');
+
+export function DesktopThemeLayer({ children, transparentPage = false }: { children: ReactNode; transparentPage?: boolean }): React.JSX.Element {
+  return (
+    <ThemeProvider theme={withDesktopComponents}>
+      <GlobalStyles
+        styles={(theme: Theme) => ({
+          body: {
+            fontFamily: SYSTEM_FONT_STACK,
+            fontSize: '0.8125rem',
+            WebkitFontSmoothing: 'antialiased',
+            cursor: 'default',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            ...(transparentPage ? { background: 'transparent' } : {}),
+          },
+          ...(transparentPage ? { html: { background: 'transparent' } } : {}),
+          [SELECTABLE]: { userSelect: 'text', WebkitUserSelect: 'text' },
+          'input, textarea': { cursor: 'text' },
+          // Only real links are hands.
+          'a[href], a[href] *': { cursor: 'pointer' },
+          '[data-tauri-drag-region]': { cursor: 'default' },
+          // A pointer never draws a ring; the keyboard draws the system accent's.
+          '*:focus': { outline: 'none' },
+          '*:focus-visible': {
+            outline: `3px solid color-mix(in srgb, ${theme.vars.palette.primary.main} 45%, transparent)`,
+            outlineOffset: 0,
+            borderRadius: 4,
+          },
+          'input:focus-visible, textarea:focus-visible': { outline: 'none' },
+          '::selection': { background: `color-mix(in srgb, ${theme.vars.palette.primary.main} 35%, transparent)` },
+          // Thin overlay scrollbars, the thumb only as strong as the content under it.
+          '*': { scrollbarWidth: 'thin', scrollbarColor: `color-mix(in srgb, ${theme.vars.palette.text.primary} 30%, transparent) transparent` },
+          '*::-webkit-scrollbar': { width: 8, height: 8 },
+          '*::-webkit-scrollbar-track': { background: 'transparent' },
+          '*::-webkit-scrollbar-thumb': {
+            borderRadius: 4,
+            border: '2px solid transparent',
+            backgroundClip: 'content-box',
+            backgroundColor: `color-mix(in srgb, ${theme.vars.palette.text.primary} 30%, transparent)`,
+          },
+        })}
+      />
+      {children}
+    </ThemeProvider>
+  );
+}

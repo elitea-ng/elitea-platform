@@ -13,3 +13,4 @@ export { modKey } from './ui/shortcutLabel';
 export { AppIpcProvider, useAppIpc } from './model/appIpcContext';
 export { DoctorPanel } from './ui/DoctorPanel';
 export type { DoctorPanelProps } from './ui/DoctorPanel';
+export { DesktopThemeLayer } from './ui/DesktopThemeLayer';

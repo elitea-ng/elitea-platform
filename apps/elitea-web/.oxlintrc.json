@@ -475,6 +475,21 @@
       "rules": { "elitea/no-mui-internal-selector": "off" }
     },
     {
+      // The desktop shell is a native-proportioned layer ON TOP of the brand
+      // theme (13/11px type, 22-28px controls, 6px bezels, system-style focus):
+      // it deliberately leaves the web app's type/radius/spacing ladder, and
+      // it reads internal MUI classes to do it. Colours still come from
+      // theme.vars; `color-mix()` of those tokens is not a literal.
+      "files": ["src/widgets/desktop-shell/**", "src/entries/desktop/**"],
+      "rules": {
+        "elitea/no-raw-color": "off",
+        "elitea/no-mui-internal-selector": "off",
+        "elitea/raw-px-spacing": "off",
+        "elitea/ad-hoc-radius": "off",
+        "elitea/ad-hoc-font-size": "off"
+      }
+    },
+    {
       // R-M1 scope: vi.mock is legal only under __mocks__/.
       "files": ["src/**/__mocks__/**"],
       "rules": { "elitea/no-vi-mock": "off" }
