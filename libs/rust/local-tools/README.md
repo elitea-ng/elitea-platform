@@ -11,7 +11,7 @@ destructive.**
 
 | Call | Default |
 |---|---|
-| `read_file`, `list_tree`, `search_files`, `find_files`, `read_document`, git reads | allowed |
+| `read_file`, `list_tree`, `search_files`, `find_files`, `read_output`, `read_document`, git reads | allowed |
 | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
@@ -51,6 +51,32 @@ workspace sits).
   file through the workspace (`O_NOFOLLOW`). The desktop index's
   `search_workspace` is a ranked search over the index; these are exact
   name and text matches over the folder as it is now.
+
+## Output budgets and spill files
+
+Every result stays within a per-call budget of estimated tokens
+(`ceil(bytes / 4)`; `budget::Budgets`, which the host may set in
+`SessionConfig::budgets`):
+
+| Tool | Default | Over budget |
+|---|---|---|
+| `read_file`, `read_output` | 12k tokens | stops at the last whole line; `truncated`, `next_offset` (a single longer line is cut, so a page always advances) |
+| `run_command` | 6k tokens, stdout and stderr together | each stream keeps its head and tail; the whole output (up to 4 MiB per stream) is spilled: `output_id`, `stdout_bytes`, `stderr_bytes` |
+| `search_files`, `find_files` | 8k tokens | stops early; `truncated` |
+| `git_diff`, `git_log` | 8k tokens | the head; the whole output spilled: `output_id` |
+| `read_document` | 12k tokens | the head; the whole text spilled: `output_id` |
+
+Spill files live under the host's data directory,
+`<data_dir>/sessions/<session id>/out/<output_id>.txt`, never in the
+workspace (a data directory inside it gets none): each directory `0700`,
+each file created `0600` with `O_CREAT | O_EXCL | O_NOFOLLOW`; a directory
+or file that is a symlink, another user's, or open to group or others is
+refused. A session keeps at most 64 MiB (the oldest dropped first),
+empties the directory when it opens (a policy change reopens the session)
+and removes its files when it ends. `read_output` takes only an id
+(`out-` and 16 hex digits) this session gave: never a path, never another
+session's id. Spill content comes from tools that already honour
+`path_deny` and the deny list.
 
 ## What counts as destructive
 

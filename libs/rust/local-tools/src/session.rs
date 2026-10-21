@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use crate::approvals::{
     ChoiceStore, PAYLOAD_KEY, RuleApprovals, RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
 };
+use crate::budget::{self, Budgets, SpillStore};
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
 use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
@@ -61,6 +62,11 @@ pub struct SessionConfig {
     /// under the home are denied too ([`crate::deny::app_paths`]); sets
     /// [`ShellConfig::app_id`] when `shell` names none.
     pub app_id: Option<String>,
+    /// Each tool's output budget in estimated tokens
+    /// ([`Budgets::default`]: 12k for reads, 6k for commands, 8k for
+    /// searches and git). Output over a budget is cut; a command's, git's
+    /// and a document's whole output is spilled for `read_output`.
+    pub budgets: Budgets,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +85,10 @@ pub struct LocalSession {
     approvals: Arc<dyn ApprovalChannel>,
     checkpoints: Checkpoints,
     shell: ShellConfig,
+    budgets: Budgets,
+    /// The session's spilled outputs (under the data directory; emptied
+    /// when the session opens, removed when it ends).
+    spill: SpillStore,
     turn: Mutex<Turn>,
 }
 
@@ -187,6 +197,22 @@ pub const TOOLS: &[ToolSpec] = &[
                 "type": "object",
                 "properties": { "path": path_param("Path relative to the workspace root.") },
                 "required": ["path"]
+            })
+        },
+    },
+    ToolSpec {
+        name: "read_output",
+        kind: ToolKind::ReadOutput,
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this session's outputs; page with offset/limit.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "output_id": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 1, "description": "First line (1-based)." },
+                    "limit": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["output_id"]
             })
         },
     },
@@ -549,6 +575,10 @@ impl LocalSession {
             &shell.sandbox,
         )?
         .with_git_global_config(shell.git_global_config.clone());
+        // A session opens on a fresh output store: what an earlier session
+        // of this id spilled (before a policy change, or a crash) goes.
+        let spill = SpillStore::new(&config.data_dir, &config.session_id, workspace.root());
+        spill.clear();
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),
@@ -556,6 +586,8 @@ impl LocalSession {
             approvals,
             checkpoints,
             shell,
+            budgets: config.budgets,
+            spill,
             turn: Mutex::new(Turn::default()),
         }))
     }
@@ -563,6 +595,12 @@ impl LocalSession {
     #[must_use]
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// The session's spilled outputs.
+    #[must_use]
+    pub fn spill_store(&self) -> &SpillStore {
+        &self.spill
     }
 
     /// The session's deny list (built once at open).
@@ -788,6 +826,15 @@ impl LocalSession {
             | ToolKind::SearchFiles
             | ToolKind::FindFiles
             | ToolKind::ReadDocument => self.read_only(spec, call_id, args).await,
+            ToolKind::ReadOutput => {
+                // No path: the id names one of this session's outputs.
+                self.authorize(call_id, ToolCall::new(ToolKind::ReadOutput), spec.name)
+                    .await?;
+                self.blocking(move |this| {
+                    budget::read_output(&this.spill, args, budget::bytes(this.budgets.read_file))
+                })
+                .await
+            }
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::GitCommit => self.git_commit(call_id, args).await,
             ToolKind::WriteFile => {
@@ -879,12 +926,29 @@ impl LocalSession {
         call.paths = vec![resolved.display_string()];
         self.authorize(call_id, call, spec.name).await?;
         let kind = spec.kind;
-        self.blocking(move |this| match kind {
-            ToolKind::ReadFile => files::read(&this.workspace, &this.ledger, args),
-            ToolKind::ListTree => files::tree(&this.workspace, args),
-            ToolKind::SearchFiles => files::search(&this.workspace, args),
-            ToolKind::FindFiles => files::find_files(&this.workspace, args),
-            _ => files::document(&this.workspace, args),
+        self.blocking(move |this| {
+            let budgets = this.budgets;
+            match kind {
+                ToolKind::ReadFile => files::read(
+                    &this.workspace,
+                    &this.ledger,
+                    args,
+                    budget::bytes(budgets.read_file),
+                ),
+                ToolKind::ListTree => files::tree(&this.workspace, args),
+                ToolKind::SearchFiles => {
+                    files::search(&this.workspace, args, budget::bytes(budgets.search))
+                }
+                ToolKind::FindFiles => {
+                    files::find_files(&this.workspace, args, budget::bytes(budgets.search))
+                }
+                _ => files::document(
+                    &this.workspace,
+                    args,
+                    &this.spill,
+                    budget::bytes(budgets.document),
+                ),
+            }
         })
         .await
     }
@@ -1062,7 +1126,17 @@ impl LocalSession {
             self.blocking(Self::ensure_checkpoint).await?;
         }
         // Approved as confined and the sandbox changed since: refused.
-        let output = shell::run_checked(&self.workspace, &self.shell, &spec, unconfined).await?;
+        let mut output =
+            shell::run_checked(&self.workspace, &self.shell, &spec, unconfined).await?;
+        let max_bytes = budget::bytes(self.budgets.run_command);
+        if output.stdout.len() + output.stderr.len() > max_bytes {
+            output = self
+                .blocking(move |this| {
+                    budget::shape_command(&mut output, max_bytes, &this.spill);
+                    Ok(output)
+                })
+                .await?;
+        }
         serde_json::to_value(output)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the result"))
     }
@@ -1272,8 +1346,29 @@ impl LocalSession {
                 }
             })
             .await?;
-        let (text, truncated) = capped(&output);
-        Ok(json!({ "output": text, "truncated": truncated }))
+        let spills = matches!(tool, "git_diff" | "git_log");
+        self.blocking(move |this| Ok(this.git_answer(&output, spills)))
+            .await
+    }
+
+    /// A git read's result: capped; `git_diff` and `git_log` within their
+    /// token budget, the whole output spilled for `read_output`.
+    fn git_answer(&self, output: &[u8], spills: bool) -> Value {
+        let (text, capped_off) = capped(output);
+        if !spills {
+            return json!({ "output": text, "truncated": capped_off });
+        }
+        let max_bytes = budget::bytes(self.budgets.git);
+        let (shown, output_id, cut) = budget::spill_over(&self.spill, &text, max_bytes);
+        let mut answer = json!({
+            "output": shown,
+            "truncated": cut || capped_off,
+            "bytes": output.len(),
+        });
+        if let (Some(id), Value::Object(map)) = (output_id, &mut answer) {
+            map.insert("output_id".to_owned(), Value::String(id));
+        }
+        answer
     }
 }
 

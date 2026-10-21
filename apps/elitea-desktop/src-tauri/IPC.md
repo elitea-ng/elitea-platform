@@ -1214,14 +1214,26 @@ cannot change, such as `410` or `403`) the host sends `commit_failed`
 commit still running or failed is logged; that execution expires on the
 server, as before.
 The read-only, concurrency-safe calls of one model step (`read_file`,
-`list_tree`, `search_files`, `find_files`, `read_document`, git reads, the
-index tools)
+`list_tree`, `search_files`, `find_files`, `read_output`, `read_document`,
+git reads, the index tools)
 run together, at most 8 at once, before the step's other calls; writes,
 commands and remote toolkit calls then run one at a time in the model's
 order, so at most one tool `approval_request` is open at a time. Their
 `tool_call` and `tool_result` events interleave: match a result to its call
 by `call_id`, never by position. The commit lists the steps in the model's
 call order, whatever order they ran in.
+**Tool output budgets** (`elitea-local-tools` `budget`). Every local tool
+result the model reads stays within a token budget (estimated as
+`ceil(bytes / 4)`): `read_file` and `read_output` 12k (whole lines,
+`next_offset`), `run_command` 6k for stdout and stderr together (head and
+tail), `search_files` and `find_files` 8k (`truncated`), `git_diff` and
+`git_log` 8k, `read_document` 12k. When a command's, a diff's, a log's or
+a document's output is cut, the whole of it is kept in a session file under
+the workspace's data directory (`sessions/<workspace id>/out/`, `0700`,
+files `0600`, never in the workspace, at most 64 MiB, emptied when the
+session reopens after a policy change and removed with the session), and
+the result names it as `output_id`; the model pages it with `read_output`
+(by id only, no path). A `tool_result`'s `summary` is unchanged.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.

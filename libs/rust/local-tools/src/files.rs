@@ -10,6 +10,7 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContex
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::budget::{self, SpillStore};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
 use crate::patch;
@@ -17,7 +18,8 @@ use crate::workspace::{EntryKind, Intent, ReadFile, Workspace, WsPath, is_protec
 
 /// The largest file the text tools read or write.
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
-/// The most text one read returns.
+/// The most text one read returns, whatever its token budget
+/// ([`crate::budget::Budgets::read_file`]) says.
 pub const MAX_READ_OUTPUT: usize = 256 * 1024;
 /// Lines one read returns by default.
 pub const DEFAULT_READ_LINES: usize = 2000;
@@ -72,8 +74,14 @@ pub(crate) struct ReadArgs {
     pub limit: Option<usize>,
 }
 
-/// `read_file`.
-pub(crate) fn read(workspace: &Workspace, ledger: &ReadLedger, args: Value) -> ToolResult<Value> {
+/// `read_file`: at most `max_bytes` of numbered lines (the token budget,
+/// never more than [`MAX_READ_OUTPUT`]), stopping at the last whole line.
+pub(crate) fn read(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    args: Value,
+    max_bytes: usize,
+) -> ToolResult<Value> {
     let args: ReadArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_FILE_BYTES)?;
@@ -96,29 +104,16 @@ pub(crate) fn read(workspace: &Workspace, ledger: &ReadLedger, args: Value) -> T
         })?
     };
     ledger.record(&file.path, file.stamp.clone());
-    let lines: Vec<&str> = text.lines().collect();
-    let start = args.offset.unwrap_or(1).max(1);
-    let limit = args.limit.unwrap_or(DEFAULT_READ_LINES).max(1);
-    let mut content = String::new();
-    let mut end = start.saturating_sub(1);
-    for (index, line) in lines.iter().enumerate().skip(start - 1).take(limit) {
-        let numbered = format!("{:>6}\t{line}\n", index + 1);
-        if content.len() + numbered.len() > MAX_READ_OUTPUT {
-            break;
-        }
-        content.push_str(&numbered);
-        end = index + 1;
+    let mut page = budget::page(
+        &text,
+        args.offset,
+        Some(args.limit.unwrap_or(DEFAULT_READ_LINES)),
+        max_bytes.min(MAX_READ_OUTPUT),
+    );
+    if let Value::Object(map) = &mut page {
+        map.insert("path".to_owned(), Value::String(file.path.display_string()));
     }
-    let truncated = end < lines.len();
-    Ok(json!({
-        "path": file.path.display_string(),
-        "content": content,
-        "start_line": start,
-        "end_line": end,
-        "total_lines": lines.len(),
-        "truncated": truncated,
-        "next_offset": truncated.then_some(end + 1),
-    }))
+    Ok(page)
 }
 
 #[derive(Deserialize)]
@@ -828,13 +823,29 @@ fn collect_serial(
 }
 
 /// The answer, from what a walk collected: files in path order (the
-/// serial walker's order), then lines in file order, at most `max`.
-fn search_answer(mut collected: Collected, mode: OutputMode, max: usize) -> Value {
+/// serial walker's order), then lines in file order, at most `max`
+/// entries and about `max_bytes` of them (the token budget).
+fn search_answer(
+    mut collected: Collected,
+    mode: OutputMode,
+    max: usize,
+    max_bytes: usize,
+) -> Value {
     collected
         .files
         .sort_by(|a, b| a.path.components().cmp(b.path.components()));
     let mut truncated = collected.stopped;
     let files = collected.files;
+    let mut used = 0usize;
+    // Whether `entry` still fits the budget (counted when it does).
+    let mut fits = |entry: &Value| {
+        let size = entry.to_string().len() + 1;
+        if used + size > max_bytes {
+            return false;
+        }
+        used += size;
+        true
+    };
     let mut answer = match mode {
         OutputMode::Content => {
             let mut matches = Vec::new();
@@ -849,33 +860,44 @@ fn search_answer(mut collected: Collected, mode: OutputMode, max: usize) -> Valu
                         }
                         shown += 1;
                     }
-                    matches.push(json!({
+                    let entry = json!({
                         "path": path,
                         "line": hit.line,
                         "text": hit.text,
                         "kind": if hit.matched { "match" } else { "context" },
-                    }));
+                    });
+                    if !fits(&entry) {
+                        truncated = true;
+                        break 'files;
+                    }
+                    matches.push(entry);
                 }
             }
             json!({ "matches": matches })
         }
         OutputMode::Files => {
-            truncated |= files.len() > max;
-            let paths: Vec<String> = files
-                .iter()
-                .take(max)
-                .map(|file| file.path.display_string())
-                .collect();
+            let mut paths = Vec::new();
+            for file in &files {
+                let entry = Value::String(file.path.display_string());
+                if paths.len() == max || !fits(&entry) {
+                    truncated = true;
+                    break;
+                }
+                paths.push(entry);
+            }
             json!({ "files": paths })
         }
         OutputMode::Count => {
-            truncated |= files.len() > max;
             let total: u64 = files.iter().map(|file| file.matches).sum();
-            let counts: Vec<Value> = files
-                .iter()
-                .take(max)
-                .map(|file| json!({ "path": file.path.display_string(), "count": file.matches }))
-                .collect();
+            let mut counts = Vec::new();
+            for file in &files {
+                let entry = json!({ "path": file.path.display_string(), "count": file.matches });
+                if counts.len() == max || !fits(&entry) {
+                    truncated = true;
+                    break;
+                }
+                counts.push(entry);
+            }
             json!({ "counts": counts, "total": total })
         }
     };
@@ -890,7 +912,7 @@ fn search_answer(mut collected: Collected, mode: OutputMode, max: usize) -> Valu
 /// `.gitignore` honoured, denied paths pruned; matching lines with
 /// optional context, the matching files, or counts per file. The walk runs
 /// on several threads; the answer is sorted, so it does not depend on them.
-pub(crate) fn search(workspace: &Workspace, args: Value) -> ToolResult<Value> {
+pub(crate) fn search(workspace: &Workspace, args: Value, max_bytes: usize) -> ToolResult<Value> {
     let args: SearchArgs = parse(args)?;
     let max = args
         .max_results
@@ -899,7 +921,7 @@ pub(crate) fn search(workspace: &Workspace, args: Value) -> ToolResult<Value> {
     let plan = SearchPlan::new(&args, max)?;
     let base = base_dir(workspace, args.path.as_deref())?;
     let collected = collect_parallel(workspace, &base, args.glob.as_deref(), &plan)?;
-    Ok(search_answer(collected, plan.mode, max))
+    Ok(search_answer(collected, plan.mode, max, max_bytes))
 }
 
 #[derive(Deserialize)]
@@ -1002,7 +1024,11 @@ fn walked_files(
 /// fragment, best first. The same view as `list_tree` (`.gitignore`
 /// honoured, `.git`, `path_deny` and the session's deny list pruned,
 /// symlinks never followed); names only, nothing is opened.
-pub(crate) fn find_files(workspace: &Workspace, args: Value) -> ToolResult<Value> {
+pub(crate) fn find_files(
+    workspace: &Workspace,
+    args: Value,
+    max_bytes: usize,
+) -> ToolResult<Value> {
     let args: FindArgs = parse(args)?;
     let pattern = args.pattern.trim();
     if pattern.is_empty() {
@@ -1017,15 +1043,17 @@ pub(crate) fn find_files(workspace: &Workspace, args: Value) -> ToolResult<Value
         let (files, cut) = walked_files(workspace, &base, None, MAX_FIND_VISITED)?;
         let ranked = fuzzy_rank(pattern, files.into_iter().map(|(path, _)| path));
         let total = ranked.len();
-        let shown: Vec<Value> = ranked
-            .into_iter()
-            .take(max)
-            .map(|(path, score)| json!({ "path": path.display_string(), "score": score }))
-            .collect();
+        let shown = within_budget(
+            ranked
+                .into_iter()
+                .take(max)
+                .map(|(path, score)| json!({ "path": path.display_string(), "score": score })),
+            max_bytes,
+        );
         return Ok(json!({
+            "truncated": total > shown.len() || cut,
             "files": shown,
             "matched": total,
-            "truncated": total > max || cut,
         }));
     }
     let (mut files, cut) = walked_files(workspace, &base, Some(pattern), MAX_FIND_VISITED)?;
@@ -1035,16 +1063,29 @@ pub(crate) fn find_files(workspace: &Workspace, args: Value) -> ToolResult<Value
             .then_with(|| a.0.components().cmp(b.0.components()))
     });
     let total = files.len();
-    let shown: Vec<String> = files
-        .into_iter()
-        .take(max)
-        .map(|(path, _)| path.display_string())
-        .collect();
+    let shown = within_budget(
+        files
+            .into_iter()
+            .take(max)
+            .map(|(path, _)| Value::String(path.display_string())),
+        max_bytes,
+    );
     Ok(json!({
+        "truncated": total > shown.len() || cut,
         "files": shown,
         "matched": total,
-        "truncated": total > max || cut,
     }))
+}
+
+/// The leading `entries` whose JSON fits in `max_bytes`.
+fn within_budget(entries: impl Iterator<Item = Value>, max_bytes: usize) -> Vec<Value> {
+    let mut used = 0usize;
+    entries
+        .take_while(|entry| {
+            used += entry.to_string().len() + 1;
+            used <= max_bytes
+        })
+        .collect()
 }
 
 /// `paths` that fuzzily match `pattern` (nucleo's path scoring, smart
@@ -1084,8 +1125,14 @@ pub(crate) struct DocumentArgs {
 }
 
 /// `read_document`: text from PDF, Office, e-mail and HTML (with the
-/// `documents` feature), or text files.
-pub(crate) fn document(workspace: &Workspace, args: Value) -> ToolResult<Value> {
+/// `documents` feature), or text files; past `max_bytes` the head is shown
+/// and the whole text (up to [`MAX_DOCUMENT_OUTPUT`]) spilled.
+pub(crate) fn document(
+    workspace: &Workspace,
+    args: Value,
+    spill: &SpillStore,
+    max_bytes: usize,
+) -> ToolResult<Value> {
     let args: DocumentArgs = parse(args)?;
     let path = workspace.resolve(&args.path, Intent::Read)?;
     let file = workspace.read(&path, MAX_DOCUMENT_BYTES)?;
@@ -1093,18 +1140,20 @@ pub(crate) fn document(workspace: &Workspace, args: Value) -> ToolResult<Value> 
     let mime = elitea_content_source::mime_of(name);
     match elitea_doc_extract::extract(mime, &file.bytes) {
         elitea_doc_extract::Extracted::Text { text, extractor } => {
-            let truncated = text.len() > MAX_DOCUMENT_OUTPUT;
-            let mut end = text.len().min(MAX_DOCUMENT_OUTPUT);
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            Ok(json!({
+            let capped = budget::head(&text, MAX_DOCUMENT_OUTPUT);
+            let (shown, output_id, cut) = budget::spill_over(spill, capped, max_bytes);
+            let mut answer = json!({
                 "path": file.path.display_string(),
                 "mime_type": mime,
                 "extractor": extractor,
-                "text": &text[..end],
-                "truncated": truncated,
-            }))
+                "text": shown,
+                "truncated": cut || capped.len() < text.len(),
+                "bytes": text.len(),
+            });
+            if let (Some(id), Value::Object(map)) = (output_id, &mut answer) {
+                map.insert("output_id".to_owned(), Value::String(id));
+            }
+            Ok(answer)
         }
         elitea_doc_extract::Extracted::Unsupported => Err(ToolError::new(
             ErrorCode::Unsupported,
@@ -1121,13 +1170,44 @@ pub(crate) fn document(workspace: &Workspace, args: Value) -> ToolResult<Value> 
 mod tests {
     use serde_json::json;
 
-    use super::{
-        EditArgs, WriteArgs, apply_patch, document, edit, find_files, plan_patch, read, search,
-        tree, write,
-    };
+    use super::{EditArgs, WriteArgs, apply_patch, edit, plan_patch, tree, write};
+    use crate::budget::SpillStore;
     use crate::error::ErrorCode;
     use crate::ledger::ReadLedger;
     use crate::workspace::Workspace;
+
+    /// The tools with a budget no fixture reaches.
+    const ROOMY: usize = 1 << 20;
+
+    fn read(
+        ws: &Workspace,
+        ledger: &ReadLedger,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        super::read(ws, ledger, args, ROOMY)
+    }
+
+    fn search(
+        ws: &Workspace,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        super::search(ws, args, ROOMY)
+    }
+
+    fn find_files(
+        ws: &Workspace,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        super::find_files(ws, args, ROOMY)
+    }
+
+    fn document(
+        ws: &Workspace,
+        args: serde_json::Value,
+    ) -> crate::error::ToolResult<serde_json::Value> {
+        let spill = SpillStore::new(&ws.root().join("..").join("spill"), "t", ws.root());
+        super::document(ws, args, &spill, ROOMY)
+    }
 
     fn setup(deny: &[&str]) -> (tempfile::TempDir, Workspace, ReadLedger) {
         let dir = tempfile::tempdir().expect("dir");
@@ -1809,6 +1889,7 @@ mod tests {
                 super::collect_serial(&ws, &base, glob, &plan).expect("serial"),
                 plan.mode,
                 max,
+                ROOMY,
             );
             let serial_order: Vec<String> = serial
                 .get("matches")

@@ -207,6 +207,7 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
         shell: Some(shell),
         deny_read: Vec::new(),
         app_id: None,
+        budgets: elitea_local_tools::budget::Budgets::default(),
     })
     .map_err(|_| WORKSPACE_UNAVAILABLE.to_owned())?;
     prompt.bind(Arc::clone(session.rules()));

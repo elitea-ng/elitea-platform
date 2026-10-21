@@ -35,7 +35,7 @@
 //!
 //! | Call | Default |
 //! |------|---------|
-//! | `read_file`, `list_tree`, `search_files`, `find_files`, `read_document`, git reads | allowed |
+//! | `read_file`, `list_tree`, `search_files`, `find_files`, `read_output`, `read_document`, git reads | allowed |
 //! | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed (the turn's checkpoint undoes them; `path_deny`, `.git` and paths outside the workspace are refused before any rule) |
 //! | `git_commit` | allowed (denied paths are never committed: left out of the given paths; a commit of what is staged is refused while the index holds one) |
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
@@ -90,6 +90,8 @@ pub enum ToolKind {
     SearchFiles,
     /// `find_files`: names by glob or fuzzy match; nothing is opened.
     FindFiles,
+    /// `read_output`: a page of this session's spilled output, by id.
+    ReadOutput,
     ReadDocument,
     GitRead,
     WriteFile,
@@ -111,6 +113,7 @@ impl ToolKind {
                 | Self::ListTree
                 | Self::SearchFiles
                 | Self::FindFiles
+                | Self::ReadOutput
                 | Self::ReadDocument
                 | Self::GitRead
         )
@@ -1458,6 +1461,7 @@ mod tests {
             ToolKind::ListTree,
             ToolKind::SearchFiles,
             ToolKind::FindFiles,
+            ToolKind::ReadOutput,
             ToolKind::ReadDocument,
             ToolKind::GitRead,
             ToolKind::WriteFile,

@@ -63,6 +63,7 @@ fn fixture() -> (Fixture, PathBuf) {
         // home) and its identifier.
         deny_read: vec![home.join("xdg-config/elitea")],
         app_id: Some(APP_ID.to_owned()),
+        budgets: elitea_local_tools::budget::Budgets::default(),
     })
     .expect("session");
     (Fixture { _dir: dir, session }, home)

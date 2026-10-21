@@ -128,6 +128,22 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
         },
     },
     WorkspaceToolSpec {
+        name: "read_output",
+        read_only: true,
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this session's outputs; page with offset/limit.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "output_id": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 1, "description": "First line (1-based)." },
+                    "limit": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["output_id"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
         name: "write_file",
         read_only: false,
         description: "Create a file, or replace one you have read, with the given content.",
@@ -524,7 +540,7 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 13);
+        assert_eq!(names(true).len(), 14);
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

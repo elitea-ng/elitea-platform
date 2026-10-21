@@ -923,6 +923,7 @@ impl AgentHost {
             shell: None,
             deny_read: self.deps.sandbox_deny.clone(),
             app_id: self.deps.app_id.clone(),
+            budgets: elitea_local_tools::budget::Budgets::default(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
         // Layer 3: the workspace's rules, then the person's (a broken file
