@@ -6,7 +6,9 @@ import { isApiError, parseRetryAfter } from '@/api/errors';
  * - rename: `updateConversation` (PUT with `name` alone; client contract 1.4);
  * - pin / unpin: `pinEntity` / `unpinEntity` (a shared project pin on the conversation; the
  *   list row's `is_pinned` and its delta carry it from 1.4);
- * - delete: `deleteConversation` (204; the other devices get a `deleted` tombstone).
+ * - delete: `deleteConversation` (204; the other devices get a `deleted` tombstone);
+ * - archive / unarchive: `archiveConversation` / `unarchiveConversation` (client contract 1.10;
+ *   a shared project archive, like the pin: the row leaves every member's default list).
  *
  * Each answer is classified for the action queue (src/sync/conversationOps.ts):
  * `done`, `gone` (404: the conversation no longer exists for this caller, nothing left to
@@ -17,7 +19,11 @@ import { isApiError, parseRetryAfter } from '@/api/errors';
 /** The longest title the rename sheet accepts (the web client's limit). */
 export const CONVERSATION_NAME_MAX = 256;
 
-export type ConversationAction = { kind: 'rename'; name: string } | { kind: 'pin'; pinned: boolean } | { kind: 'delete' };
+export type ConversationAction =
+  | { kind: 'rename'; name: string }
+  | { kind: 'pin'; pinned: boolean }
+  | { kind: 'archive'; archived: boolean }
+  | { kind: 'delete' };
 
 export type ActionOutcome = { outcome: 'done' } | { outcome: 'gone' } | { outcome: 'retry'; retryAfterMs?: number } | { outcome: 'rejected'; status?: number };
 
@@ -87,6 +93,11 @@ export async function sendConversationAction(
           : await client.DELETE('/social/pin/prompt_lib/{project_id}/{entity_type}/{entity_id}', { params: { path: pinPath } }));
         break;
       }
+      case 'archive':
+        ({ response } = action.archived
+          ? await client.PUT('/elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}', { params: { path } })
+          : await client.DELETE('/elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}', { params: { path } }));
+        break;
       case 'delete':
         ({ response } = await client.DELETE('/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}', { params: { path } }));
         break;

@@ -1,4 +1,4 @@
-import type { ConversationSummary, ListKind } from '@/db/repo';
+import { notArchivedSql, type ConversationSummary, type ListKind } from '@/db/repo';
 import type { Db } from '@/db/sql';
 
 /**
@@ -99,7 +99,7 @@ export async function searchConversations(db: Db, projectId: number, input: stri
   const titles = await db.all<HitRow>(
     `SELECT c.id, c.name, c.updated_ms, c.row_json
        FROM conversation_search s JOIN conversations c ON c.rowid = s.rowid
-      WHERE conversation_search MATCH ? AND c.project_id = ? AND c.list_kind = ?
+      WHERE conversation_search MATCH ? AND c.project_id = ? AND c.list_kind = ? AND ${notArchivedSql('c')}
       ORDER BY COALESCE(c.updated_ms, 0) DESC, c.id DESC
       LIMIT ?`,
     [query, projectId, kind, limit],
@@ -121,7 +121,7 @@ export async function searchConversations(db: Db, projectId: number, input: stri
      )
      SELECT c.id, c.name, c.updated_ms, c.row_json, ranked.message_rowid
        FROM ranked JOIN conversations c ON c.project_id = ranked.project_id AND c.id = ranked.conversation_id
-      WHERE ranked.n = 1 AND c.list_kind = ?
+      WHERE ranked.n = 1 AND c.list_kind = ? AND ${notArchivedSql('c')}
       ORDER BY ranked.score
       LIMIT ?`,
     [query, projectId, kind, limit + hits.length],
@@ -152,7 +152,7 @@ export async function readPinnedConversationRows(db: Db, projectId: number): Pro
   const rows = await db.all<{ row_json: string }>(
     `SELECT row_json FROM conversations
       WHERE project_id = ? AND row_json IS NOT NULL AND json_valid(row_json)
-        AND list_kind = 'chat' AND json_extract(row_json, '$.is_pinned') = 1
+        AND list_kind = 'chat' AND json_extract(row_json, '$.is_pinned') = 1 AND ${notArchivedSql()}
       ORDER BY COALESCE(updated_ms, 0) DESC, id DESC`,
     [projectId],
   );

@@ -33,6 +33,17 @@ describe('delta requests', () => {
     expect(page.hasMore).toBe(false);
   });
 
+  it('sends the archived mode when asked (client contract 1.10: on every delta call), on both lists', async () => {
+    const server = fakeServer();
+    server.on('GET', '/elitea_core/conversations/prompt_lib/7', { status: 200, body: conversationDelta([conversationRow(1, { is_archived: true })]) });
+    server.on('GET', '/elitea_core/conversations/prompt_lib/7?source=local_work', { status: 200, body: conversationDelta([]) });
+    const page = await fetchConversationChanges(server.client, 7, 'abc', undefined, 'chat', { archived: 'include' });
+    await fetchConversationChanges(server.client, 7, 'abc', undefined, 'local_work', { archived: 'include' });
+    expect(Object.fromEntries(server.requests[0].url.searchParams)).toEqual({ mine: 'true', limit: '100', changes_since: 'abc', archived: 'include' });
+    expect(server.requests[1].url.searchParams.get('archived')).toBe('include');
+    expect(page.rows[0].is_archived).toBe(true);
+  });
+
   it('reads a transcript by the numeric conversation id', async () => {
     const server = fakeServer();
     server.on('GET', '/elitea_core/messages/prompt_lib/7/42', {

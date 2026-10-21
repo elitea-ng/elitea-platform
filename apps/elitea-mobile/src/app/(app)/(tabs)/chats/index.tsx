@@ -5,16 +5,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { speaksContract } from '@/api/discovery';
 import { flattenConversationPages, useConversations, useLocalWorkConversations } from '@/api/queries/conversations';
+import { FORK_BUSY_TEXT, forkStillInScope, runFork } from '@/api/queries/forkConversation';
+import { queryClient } from '@/api/queryClient';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useDesign } from '@/design/DesignProvider';
+import { ACTION_REFUSED_BODY, ACTION_RETRY_BODY, actionFailedTitle } from '@/features/chats/actionCopy';
 import { buildChatRows, buildSearchRows } from '@/features/chats/chatListModel';
 import { ThreadView } from '@/features/chat/ThreadView';
 import { ConversationList, type ChatListItem, type ChatRowActions } from '@/features/chats/ConversationList';
 import { UNTITLED } from '@/features/chats/ConversationRow';
 import { isOfflineError, OFFLINE_EMPTY } from '@/features/chats/offlineEmpty';
 import { UndoToast } from '@/features/chats/UndoToast';
-import { useConversationSearch, useListActionsAvailable, useSavedPinnedRows } from '@/features/chats/useChatListData';
+import {
+  useArchiveAvailable,
+  useArchivedListAvailable,
+  useConversationSearch,
+  useListActionsAvailable,
+  useSavedPinnedRows,
+} from '@/features/chats/useChatListData';
 import { usePendingDelete } from '@/features/chats/usePendingDelete';
 import { clearSelectedChat, selectChat, useSelectedChat } from '@/features/chats/selectedChat';
 import { isTwoPane, listPaneWidth, useScreenWidth } from '@/features/chats/twoPane';
@@ -25,7 +34,7 @@ import { log } from '@/lib/log';
 import { getSession, useSession } from '@/state/session';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { runConversationAction, subscribeActionFailures, useConversationOverlay } from '@/sync/appConversationOps';
-import { Button, EmptyState, haptic, searchBarOptions, SegmentedControl } from '@/ui';
+import { Button, EmptyState, haptic, ListRow, ListSection, searchBarOptions, SegmentedControl } from '@/ui';
 
 interface DeleteScope {
   workspaceId: string | null;
@@ -33,15 +42,9 @@ interface DeleteScope {
 }
 const sameDeleteScope = (a: DeleteScope, b: DeleteScope) => a.workspaceId === b.workspaceId && a.projectId === b.projectId;
 
-const FAILED_COPY = {
-  rename: "Couldn't rename the chat",
-  pin: "Couldn't change the pin",
-  delete: "Couldn't delete the chat",
-} as const;
-
 /**
  * The signed-in user's conversations in the selected project: Pinned on top, then by day;
- * rename, pin and delete (swipe, long press, accessibility actions; queued on the device and
+ * rename, pin, archive (client contract 1.10, with a link to Archived chats) and delete (swipe, long press, accessibility actions; queued on the device and
  * sent when the workspace can take them); and full-text search over the titles and messages
  * kept on the device, which works offline (src/db/search.ts).
  *
@@ -71,6 +74,12 @@ export default function ConversationsScreen() {
   const [query, setQuery] = useState('');
   const searching = query.trim() !== '';
   const actionsAvailable = useListActionsAvailable();
+  const archivedListAvailable = useArchivedListAvailable();
+  const archiveAvailable = useArchiveAvailable(projectId);
+  // Fork (client contract 1.11): the whole history into a new chat, opened at once.
+  const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
+  // The row being forked (busy until the new chat opens); one fork at a time.
+  const [forkingId, setForkingId] = useState<number | null>(null);
   const overlay = useConversationOverlay(projectId);
   const savedPinned = useSavedPinnedRows(projectId, actionsAvailable);
   const hits = useConversationSearch(projectId, query, localWorkOnly ? 'local_work' : 'chat');
@@ -104,7 +113,7 @@ export default function ConversationsScreen() {
     }
     // Returned, so the row stays hidden until the list shows the delete (queued) or it is sent.
     return runConversationAction(scope.projectId, row.id, { kind: 'delete' }).then((result) => {
-      if (result === 'failed') Alert.alert(FAILED_COPY.delete, 'Check your connection and try again.');
+      if (result === 'failed') Alert.alert(actionFailedTitle({ kind: 'delete' }), ACTION_RETRY_BODY);
     });
   }, sameDeleteScope);
   const hidden = useMemo(
@@ -119,11 +128,14 @@ export default function ConversationsScreen() {
     [searching, hits, all, query, overlay, hidden, savedPinned, actionsAvailable, localWorkOnly],
   );
 
-  // A queued action the workspace refused: the list goes back to what it says; say why.
+  // A queued action the workspace refused: the list goes back to what it says; say why. A screen
+  // pushed over this one (Archived chats) is asked first and may take it (src/sync/actionFailures.ts).
   useEffect(
     () =>
       subscribeActionFailures((op) => {
-        if (op.projectId === projectId) Alert.alert(FAILED_COPY[op.action.kind], 'The workspace did not accept the change.');
+        if (op.projectId !== projectId) return false;
+        Alert.alert(actionFailedTitle(op.action), ACTION_REFUSED_BODY);
+        return true;
       }),
     [projectId],
   );
@@ -201,18 +213,47 @@ export default function ConversationsScreen() {
       actionsAvailable && !localWorkOnly && projectId !== null
         ? (row) => {
             haptic('tabOrChipChange');
-            void runConversationAction(projectId, row.id, { kind: 'pin', pinned: row.pinned !== true }).then((result) => {
-              if (result === 'failed') Alert.alert(FAILED_COPY.pin, 'Check your connection and try again.');
+            const action = { kind: 'pin', pinned: row.pinned !== true } as const;
+            void runConversationAction(projectId, row.id, action).then((result) => {
+              if (result === 'failed') Alert.alert(actionFailedTitle(action), ACTION_RETRY_BODY);
             });
           }
         : null,
     onRename: actionsAvailable && !localWorkOnly ? (row) => router.push({ pathname: '/rename', params: { id: String(row.id), name: row.name ?? '' } }) : null,
+    // Archive (client contract 1.10): queued like pin, so it works offline; the row leaves at once.
+    onToggleArchive:
+      archiveAvailable && !localWorkOnly && projectId !== null
+        ? (row) => {
+            haptic('tabOrChipChange');
+            const action = { kind: 'archive', archived: true } as const;
+            void runConversationAction(projectId, row.id, action).then((result) => {
+              if (result === 'failed') Alert.alert(actionFailedTitle(action), ACTION_RETRY_BODY);
+            });
+          }
+        : null,
+    onFork:
+      forkAvailable && !localWorkOnly && projectId !== null
+        ? (row) => {
+            if (forkingId !== null) return;
+            setForkingId(row.id);
+            // The new chat opens only in the workspace and project the fork started in: ids are
+            // per project, so after a switch the same id is another chat.
+            const scope = deleteScope;
+            void runFork(queryClient, projectId, row.id)
+              .then((result) => {
+                if (!result.ok) Alert.alert("Couldn't fork the chat", result.message);
+                else if (forkStillInScope(scope)) open({ id: result.row.id });
+                else log.info('fork done after a scope switch; not opened', { conversationId: result.row.id });
+              })
+              .finally(() => setForkingId(null));
+          }
+        : null,
   };
 
-  const open = (row: ChatListItem) => {
+  function open(row: Pick<ChatListItem, 'id'>) {
     if (twoPane) selectChat(deleteScope, row.id);
     else router.push({ pathname: '/c/[id]', params: { id: String(row.id) } });
-  };
+  }
 
   const list = (
     <>
@@ -223,6 +264,8 @@ export default function ConversationsScreen() {
         selectedId={twoPane ? selectedId : null}
         opensInPlace={twoPane}
         onLayout={twoPane ? undefined : screen.onLayout}
+        busyId={forkingId}
+        busyText={FORK_BUSY_TEXT}
         // Offline too: the actions are queued on the device and sent on reconnect.
         actions={actions}
         refreshControl={
@@ -249,6 +292,11 @@ export default function ConversationsScreen() {
               </View>
             ) : null}
             <OfflineNotice visible={offline} />
+            {archivedListAvailable && !localWorkOnly && !searching ? (
+              <ListSection style={styles.archivedLink}>
+                <ListRow title="Archived chats" icon="archive" onPress={() => router.push('/archived')} testID="archived-chats-link" />
+              </ListSection>
+            ) : null}
           </>
         }
         onEndReached={() => {
@@ -322,6 +370,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   footer: { padding: 16 },
   filter: { paddingHorizontal: 16, paddingBottom: 8 },
+  archivedLink: { marginHorizontal: 16, marginBottom: 12 },
   flex: { flex: 1 },
   row: { flex: 1, flexDirection: 'row' },
   listPane: { borderEndWidth: StyleSheet.hairlineWidth },

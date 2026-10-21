@@ -206,8 +206,19 @@ G ──────────────────────────
   use the footnote role, uppercase on iOS and sentence case on Android.
 - **Avatar:** the agent icon if it has one, else the Elitea mark (with the single-use
   rule, design-system §4.6 and §5), else a monogram.
-- Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename and
-  Delete (the contract has no Archive). Pin and Rename need client contract 1.4.
+- Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename,
+  Fork, Archive and Delete. Pin and Rename need client contract 1.4. Fork (client contract
+  1.11) copies the whole chat into a new one and opens it; it needs a connection. Archive needs client contract
+  1.10 and the permission the web app checks (`models.chat.conversation.edit`); it is queued
+  like Pin (offline too), the row leaves at once and comes back if the workspace refuses it.
+- **Archived chats** (`/archived`, client contract 1.10): a row above the list opens the
+  project's archived chats (`archived=only`, as the web app's page: the archive is the
+  project's, like the pin), each with who archived it, and Unarchive (same permission as
+  Archive). Online only. From 1.10 the sync asks the delta with `archived=include`: a chat
+  archived elsewhere stays on the device with its transcript (out of the list, Pinned and
+  search) and comes back with it on unarchive.
+- Fork shows the row as busy ("Forking…", spinner) until the new chat opens; a fork that
+  lands after a workspace or project switch does not open it.
 - Search is over the titles and messages kept on the device (the encrypted store's FTS5
   index), the same online and offline: the workspace offers no conversation search. A message
   hit shows the matched passage under the title.
@@ -253,6 +264,11 @@ G ──────────────────────────
   glass circle (↓) appears when scrolled up and a new token arrives, with an
   accessibility announcement.
 - **Header "⋯" menu:** Participants, Rename, Share transcript (copy), Delete.
+- **Fork from here** (client contract 1.11): in a settled message's actions sheet (a question
+  or an answer; not while its answer streams or waits for the user). It opens the new chat at
+  once. A fork needs a connection: offline, or when the fork point is not settled yet (409
+  `fork_point_unsettled`), the thread says so above the composer. A fork shows "Forked from
+  <name>" above its transcript, which opens the source while the reader can still see it.
 - **Mentions:** `@` opens the mention picker above the composer, and `/` opens the slash
   picker (existing `SuggestionStrip`).
 - **States:** the thinking indicator (Elitea mark and dots), streaming (caret), error

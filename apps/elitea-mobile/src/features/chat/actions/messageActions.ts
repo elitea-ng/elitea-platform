@@ -12,9 +12,11 @@ import type { ChatMessage } from '@/features/chat/messageModel';
  * - Read aloud is on-device text to speech: no data leaves the device.
  * - Regenerate is offered on the newest answer only, when the screen can
  *   regenerate it.
+ * - Fork from here (client contract 1.11) is offered on a settled message, a
+ *   question or an answer: persisted, not streaming, not waiting for the user.
  */
 
-export type MessageActionKey = 'copy' | 'copy_code' | 'share' | 'read_aloud' | 'like' | 'dislike' | 'regenerate';
+export type MessageActionKey = 'copy' | 'copy_code' | 'share' | 'read_aloud' | 'like' | 'dislike' | 'regenerate' | 'fork';
 
 export interface CodeBlock {
   /** The fence's info string (`python`), or null. */
@@ -68,6 +70,8 @@ export interface ActionContext {
   canSpeak: boolean;
   /** The screen can regenerate this message (the newest answer, idle, 1.1+). */
   canRegenerate: boolean;
+  /** The screen can fork the conversation at this message (settled, 1.11+). */
+  canFork?: boolean;
 }
 
 export interface ActionPlan {
@@ -92,6 +96,7 @@ export function planActions(message: Pick<ChatMessage, 'role' | 'text' | 'uuid' 
   const rateable = message.role === 'assistant' && message.uuid !== null && !message.isStreaming && context.contract13 && context.online;
   if (rateable) actions.push('like', 'dislike');
   if (message.role === 'assistant' && context.canRegenerate) actions.push('regenerate');
+  if (context.canFork === true && message.uuid !== null && !message.isStreaming) actions.push('fork');
   return {
     actions,
     codeBlocks: context.shareOut ? blocks : [],

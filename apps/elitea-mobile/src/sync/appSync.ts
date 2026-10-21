@@ -28,6 +28,8 @@ export const syncManager = new SyncManager({
   getDb: () => offlineStore.get(),
   // The Local work list exists from client contract 1.8 (the same gate as the Chats filter).
   localWork: () => speaksContract(getWorkspaceInfo()?.discovery, HANDOFF_CONTRACT.major, HANDOFF_CONTRACT.minor),
+  // Client contract 1.10: the delta carries `archived` on every call (archived rows kept, marked).
+  archive: () => speaksContract(getWorkspaceInfo()?.discovery, 1, 10),
   onChanged: (projectId) => {
     for (const listener of [...changeListeners]) {
       try {

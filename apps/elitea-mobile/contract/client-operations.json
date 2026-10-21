@@ -53,6 +53,9 @@
     "getWorkspaceHandoff",
     "eraseWorkspaceHandoff",
     "requestWorkspaceHandoffReclaim",
-    "permissionList"
+    "permissionList",
+    "archiveConversation",
+    "unarchiveConversation",
+    "forkConversation"
   ]
 }

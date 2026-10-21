@@ -71,20 +71,38 @@ function parsePage<Row>(list: string, body: unknown, rowsKey: 'rows' | 'items', 
   return { rows, tombstones, nextCursor: envelope.data.next_cursor, hasMore: envelope.data.has_more };
 }
 
+/**
+ * The `archived` mode of the conversation delta (client contract 1.10, which requires a 1.10
+ * client to send it on every delta call). `include`: archived rows stay rows, with
+ * `is_archived: true` (the full sync too), so a chat archived elsewhere keeps its offline
+ * transcript and the store leaves it out of the list, Pinned and search; an unarchive
+ * re-delivers it with `is_archived: false`. Without it (a server before 1.10) an archive is
+ * an `access_lost` tombstone.
+ */
+export type ConversationDeltaArchived = 'include';
+
 export async function fetchConversationChanges(
   client: ApiClient,
   projectId: number,
   cursor: string,
   signal?: AbortSignal,
   kind: ListKind = 'chat',
+  options: { archived?: ConversationDeltaArchived } = {},
 ): Promise<DeltaPage<ConversationSummary>> {
   const body = await unwrap(
     client.GET('/elitea_core/conversations/prompt_lib/{project_id}', {
       params: {
         path: { project_id: String(projectId) },
         // The cursor is bound to the filter: always the same list, `mine=true` (and, for the
-        // Local work list, `source=local_work`, which the Chats list never carries).
-        query: { mine: true, limit: DELTA_LIMIT, changes_since: cursor, ...(kind === 'local_work' ? { source: LOCAL_WORK_SOURCE } : {}) },
+        // Local work list, `source=local_work`, which the Chats list never carries), and the
+        // `archived` mode (a cursor of another mode is refused, and the list resyncs).
+        query: {
+          mine: true,
+          limit: DELTA_LIMIT,
+          changes_since: cursor,
+          ...(kind === 'local_work' ? { source: LOCAL_WORK_SOURCE } : {}),
+          ...(options.archived !== undefined ? { archived: options.archived } : {}),
+        },
       },
       signal,
     }),

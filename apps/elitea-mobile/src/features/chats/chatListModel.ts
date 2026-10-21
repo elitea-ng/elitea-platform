@@ -11,8 +11,9 @@ import { applyOverlay, type ConversationOverlay } from '@/sync/conversationOps';
  * - the loaded pages (the workspace's answer, or the saved copy offline);
  * - the saved copy's pinned rows (the synced list is complete, the loaded pages are not:
  *   a chat pinned long ago may sit on page five, and Pinned is always on top);
- * - the queued actions (rename, pin, delete) not sent yet, applied over both.
- * Pinned rows come first, newest first; the rest keep the workspace's order.
+ * - the queued actions (rename, pin, archive, delete) not sent yet, applied over both.
+ * Pinned rows come first, newest first; the rest keep the workspace's order. Archived rows
+ * (client contract 1.10) are not on this list, also while their archive is still queued.
  */
 export function buildChatRows({
   loaded,
@@ -33,7 +34,7 @@ export function buildChatRows({
 }): ChatListItem[] {
   const byId = new Set(loaded.map((row) => row.id));
   const merged = [...loaded, ...savedPinned.filter((row) => !byId.has(row.id))];
-  const visible = applyOverlay(merged, overlay).filter((row) => !hidden?.has(row.id));
+  const visible = applyOverlay(merged, overlay).filter((row) => !hidden?.has(row.id) && row.is_archived !== true);
   const pinned = visible.filter((row) => row.is_pinned === true);
   pinned.sort((a, b) => (parseServerTime(b.updated_at) ?? 0) - (parseServerTime(a.updated_at) ?? 0) || b.id - a.id);
   const rest = visible.filter((row) => row.is_pinned !== true);
@@ -84,14 +85,44 @@ export function buildSearchRows({
     name: hit.name,
     updated_at: hit.updatedAt,
     is_pinned: hit.row?.is_pinned === true,
+    is_archived: hit.row?.is_archived === true,
     snippet: hit.snippet,
     workspace_executor: hit.row?.workspace_executor,
   }));
   const seen = new Set(fromIndex.map((hit) => hit.id));
-  const byTitle = filterConversations(applyOverlay(loaded, overlay), query)
+  const byTitle = filterConversations(applyOverlay(loaded, overlay).filter((row) => row.is_archived !== true), query)
     .filter((row) => !seen.has(row.id))
-    .map((row) => ({ id: row.id, name: row.name, updated_at: row.updated_at, is_pinned: row.is_pinned === true, snippet: null, workspace_executor: row.workspace_executor }));
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      updated_at: row.updated_at,
+      is_pinned: row.is_pinned === true,
+      is_archived: false,
+      snippet: null,
+      workspace_executor: row.workspace_executor,
+    }));
   return applyOverlay([...fromIndex, ...byTitle], overlay)
-    .filter((row) => !hidden?.has(row.id))
+    .filter((row) => !hidden?.has(row.id) && row.is_archived !== true)
     .map((row) => toItem(row, now, row.snippet, localWork));
+}
+
+/**
+ * The Archived chats list (client contract 1.10): the workspace's `archived=only` rows with the
+ * queued actions applied; a chat unarchived (or deleted) on this device leaves it at once. No
+ * Pinned section: an archived chat keeps its pin, but it is shown with the other archived ones.
+ * Each row names who archived it, when the row carries it (`archived_by`).
+ */
+export function buildArchivedRows({
+  loaded,
+  overlay,
+}: {
+  loaded: readonly ConversationSummary[];
+  overlay: ReadonlyMap<number, ConversationOverlay>;
+}): ChatListItem[] {
+  return applyOverlay(loaded, overlay)
+    .filter((row) => row.is_archived !== false)
+    .map((row) => {
+      const by = typeof row.archived_by?.name === 'string' ? row.archived_by.name.trim() : '';
+      return { ...toItem({ ...row, is_pinned: false }), archived: true, ...(by !== '' ? { archivedBy: by } : {}) };
+    });
 }

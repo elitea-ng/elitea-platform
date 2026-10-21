@@ -107,3 +107,22 @@ although the 1.4 type says it is required, so the app reads it as `row.is_pinned
 
 There is no server-side conversation search in 1.3 or the planned 1.4; the list's search is
 the on-device FTS5 index (`src/db/search.ts`).
+
+## Client contract 1.10
+
+| Area | What |
+|---|---|
+| Archive | `archiveConversation` / `unarchiveConversation`: `PUT` / `DELETE /elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}`, a shared project archive like the pin. Queued in the action queue (`src/sync/conversationOps.ts`, kind `archive`). Offered with `models.chat.conversation.edit` (`permissionList`), as on the web. |
+| Archived flag | `ConversationSummary.is_archived` (optional in `src/db/repo.ts`: a row saved from an older server has none). The Chats list and the offline store's reads leave archived rows out. |
+| Archived chats | `listConversations` with `archived=only` (and `mine=true`), online only. |
+
+The app's `changes_since` reads do not send `archived`, so the server answers them in the
+pre-1.10 shape: an archived conversation is an `access_lost` tombstone and leaves the offline
+store, and an unarchived one is a row again.
+
+## Client contract 1.11
+
+| Area | What |
+|---|---|
+| Fork | `forkConversation`: `POST /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}` with `{message_id?, name?}`; 201 answers the new list row. "Fork" on a Chats row (no body: the whole history) and "Fork from here" on a settled message (`message_id`: the group's UUID). Never queued: it needs a connection. 409 `fork_point_unsettled` and `fork_not_supported` are told apart (`src/api/queries/forkConversation.ts`). |
+| Forked from | `ConversationDetail.forked_from`: the thread shows "Forked from <name>" only when `name` is present (the reader can still see the source). |

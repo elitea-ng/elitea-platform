@@ -26,7 +26,8 @@ import { syncScope, tombstoneIds, type ScopeSpec, type SyncOutcome } from '@/syn
  * What is synced, and when it stops:
  *
  * 1. the project's conversation list (`mine=true`), then its Local work list
- *    (`mine=true&source=local_work`, the desktop's threads; its own cursor), then
+ *    (`mine=true&source=local_work`, the desktop's threads; its own cursor); from client
+ *    contract 1.10 both with `archived=include` (archived rows kept, marked), then
  * 2. the transcripts of conversations whose row was delivered since their last
  *    transcript sync (most recently updated first, `TRANSCRIPTS_PER_RUN` per
  *    run; the rest follow on the next run), then
@@ -56,15 +57,20 @@ export interface SyncManagerDeps {
   now?: () => number;
   /** Does the server have a Local work list (client contract 1.8)? Default: yes. No request otherwise. */
   localWork?: () => boolean;
+  /**
+   * Does the server speak client contract 1.10 (archive)? Then every conversation delta call
+   * carries `archived=include` (archived rows stay, marked; their transcripts are kept). Default: no.
+   */
+  archive?: () => boolean;
   /** Called after a run changed stored data (screens reading the store refresh). */
   onChanged?: (projectId: number) => void;
 }
 
-function conversationsSpec(_db: Db, client: ApiClient, projectId: number, kind: ListKind = 'chat'): ScopeSpec<ConversationSummary> {
+function conversationsSpec(_db: Db, client: ApiClient, projectId: number, kind: ListKind = 'chat', archived = false): ScopeSpec<ConversationSummary> {
   return {
     scope: kind === 'chat' ? conversationsScope(projectId) : localWorkScope(projectId),
     projectId,
-    fetch: (cursor) => fetchConversationChanges(client, projectId, cursor, undefined, kind),
+    fetch: (cursor) => fetchConversationChanges(client, projectId, cursor, undefined, kind, archived ? { archived: 'include' } : {}),
     apply: async (tx, page, gen) => {
       for (const id of tombstoneIds(page.tombstones)) await deleteConversation(tx, projectId, id);
       for (const row of page.rows) await upsertConversationRow(tx, projectId, row, gen, kind);
@@ -170,7 +176,8 @@ export class SyncManager {
     const result: ProjectSyncResult = { conversations: 'ok', transcripts: 0, notifications: 'skipped', dropped: false };
     let changed = false;
 
-    const conversations = await syncScope(db, conversationsSpec(db, client, projectId), { now: this.deps.now });
+    const archived = this.deps.archive?.() === true;
+    const conversations = await syncScope(db, conversationsSpec(db, client, projectId, 'chat', archived), { now: this.deps.now });
     result.conversations = conversations.status;
     if (conversations.status === 'forbidden') {
       await this.drop(db, projectId);
@@ -182,7 +189,7 @@ export class SyncManager {
       changed ||= conversations.rows + conversations.tombstones > 0 || conversations.resynced;
       // A server without Local work answers an empty list; any failure here leaves the Chats
       // list and the rest of the run as they are (403 is the project's, the first list saw it).
-      const localWork = this.deps.localWork?.() === false ? null : await syncScope(db, conversationsSpec(db, client, projectId, 'local_work'), { now: this.deps.now });
+      const localWork = this.deps.localWork?.() === false ? null : await syncScope(db, conversationsSpec(db, client, projectId, 'local_work', archived), { now: this.deps.now });
       if (localWork?.status === 'ok') changed ||= localWork.rows + localWork.tombstones > 0 || localWork.resynced;
       for (const conversationId of await dirtyConversations(db, projectId, TRANSCRIPTS_PER_RUN)) {
         const outcome = await this.syncTranscriptIn(db, client, projectId, conversationId);

@@ -1,9 +1,10 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { isConversationRef, useConversation } from '@/api/queries/conversation';
+import { forkStillInScope, runFork } from '@/api/queries/forkConversation';
 import { useModels } from '@/api/queries/models';
 import type { TurnModel } from '@/api/queries/sendMessage';
 import { OfflineNotice } from '@/components/OfflineNotice';
@@ -12,6 +13,10 @@ import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
 import { GlassSurface, headerActionOptions, Icon, IconButton, Text, type HeaderAction } from '@/ui';
 import { PaneHeader } from '@/features/chat/PaneHeader';
+import { ForkedFromLink, forkedFromOf } from '@/features/chat/ForkedFromLink';
+import { forkableKeys } from '@/features/chat/forkPoints';
+import { log } from '@/lib/log';
+import { selectChat } from '@/features/chats/selectedChat';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import { speaksContract } from '@/api/discovery';
@@ -125,15 +130,18 @@ export function ThreadView({
   });
   const ref = typeof id === 'string' ? id : '';
   const projectId = useSession((s) => s.projectId);
+  const workspaceId = useSession((s) => s.workspaceId);
   const conversation = useConversation(projectId, ref);
   const detail = conversation.data;
   // "Me" (the "who am I" read, made once per session by the app shell).
   const me = useSelfUserId();
   const messages = toChatMessages(detail, { selfUserId: me });
   const workspace = useWorkspaceInfo();
-  const contract11 = speaksContract(workspace?.discovery, 1, 1);
+  const contractAtLeast1_1 = speaksContract(workspace?.discovery, 1, 1);
   // Client contract 1.3: feedback, server stop, export, suggested agents.
   const contract13 = speaksContract(workspace?.discovery, 1, 3);
+  // Client contract 1.11: fork a conversation ("Fork from here", the "Forked from" link).
+  const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -228,11 +236,11 @@ export function ThreadView({
     projectId,
     Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null,
     answerGroups,
-    contract11 && !isOfflineCopy(detail),
+    contractAtLeast1_1 && !isOfflineCopy(detail),
   );
   // Before client contract 1.1 a model (adhoc) chat dropped mentions silently.
   const mentionHint =
-    people.length > 0 && target.ok && target.kind === 'model' && !contract11 ? 'Mentions notify only in agent chats.' : null;
+    people.length > 0 && target.ok && target.kind === 'model' && !contractAtLeast1_1 ? 'Mentions notify only in agent chats.' : null;
   const outbox = useOutboxItems(projectId, conversationUuid);
 
   // A note above the composer (a regeneration that could not start, or did not land).
@@ -274,7 +282,7 @@ export function ThreadView({
     newestAnswer !== null &&
     message.key === newestAnswer.key &&
     regenerateQuestion?.uuid != null &&
-    contract11 &&
+    contractAtLeast1_1 &&
     online &&
     !isOfflineCopy(detail) &&
     !turn.busy &&
@@ -296,12 +304,56 @@ export function ThreadView({
     });
     if (problem !== null) setThreadNote(problem);
   };
+  // Fork from here (1.11): a settled message only (src/features/chat/forkPoints.ts). The exchange
+  // still being written or waiting for the user is not settled (the server answers 409
+  // fork_point_unsettled for a fork point whose copy would hold such a reply). A fork needs a
+  // connection: offered offline too, it then says so instead of sending.
+  const [forking, setForking] = useState(false);
+  // Per message: one before the exchange in flight stays forkable while a turn streams.
+  const forkable = forkableKeys(messages, {
+    liveActive: !!live && !live.settled,
+    liveContinuation: !!live && !live.settled && live.continuation,
+    liveUserText: live && !live.settled ? live.userText : null,
+    regeneratingUuid: live && !live.settled ? (live.regeneration?.answerUuid ?? null) : null,
+    paused: pause !== null,
+  });
+  const canFork = (message: ChatMessage | null): boolean => {
+    if (message === null || !forkAvailable || projectId === null || !Number.isSafeInteger(numericId) || numericId <= 0) return false;
+    // A Local work thread's fork is the desktop's (it copies its local turn history itself).
+    if (localWork.thread !== null || message.uuid === null || message.isStreaming || forking) return false;
+    return forkable.has(message.key);
+  };
+  const openConversation = (id: number) => {
+    if (chrome === 'pane') selectChat({ workspaceId, projectId }, id);
+    else router.push({ pathname: '/c/[id]', params: { id: String(id) } });
+  };
+  const forkFrom = async (message: ChatMessage) => {
+    if (!canFork(message) || projectId === null || message.uuid === null) return;
+    setForking(true);
+    setThreadNote(null);
+    try {
+      const scope = { workspaceId, projectId };
+      const result = await runFork(queryClient, projectId, numericId, { messageId: message.uuid });
+      if (!result.ok) {
+        setThreadNote(result.message);
+        return;
+      }
+      // The new chat opens at once, but only in the workspace and project the fork started in:
+      // after a switch the same id is another project's chat.
+      if (forkStillInScope(scope)) openConversation(result.row.id);
+      else log.info('fork done after a scope switch; not opened', { conversationId: result.row.id });
+    } finally {
+      setForking(false);
+    }
+  };
+  const forkedFrom = forkAvailable ? forkedFromOf(detail) : null;
   const actionPlan = planActions(actionsFor?.message ?? { role: 'user', text: '', uuid: null, isStreaming: false }, {
     shareOut: policy.allow_share_out,
     contract13,
     online: online && !isOfflineCopy(detail),
     canSpeak: canReadAloud(),
     canRegenerate: canRegenerate(actionsFor?.message ?? null),
+    canFork: canFork(actionsFor?.message ?? null),
   });
 
   // Attachments (contract 1.1 limits, else the server defaults): picked and
@@ -328,7 +380,7 @@ export function ThreadView({
   const gateReason = attachmentGate(gateInput);
   // Files of sent messages: downloaded on demand (1.1 route), never kept.
   const opener = useAttachmentOpener(projectId, conversationUuid);
-  const canOpenFiles = contract11 && online && !isOfflineCopy(detail);
+  const canOpenFiles = contractAtLeast1_1 && online && !isOfflineCopy(detail);
 
   // "Scan document" (iOS): VisionKit, or the sample pages in a development build on the simulator.
   const documentScan = useDocumentScan(limits);
@@ -454,7 +506,7 @@ export function ThreadView({
 
   // "#": find an agent, add it (pinned to its version) and address it (1.1, online).
   const conversationNumericId = Number.isSafeInteger(numericId) && numericId > 0 ? String(numericId) : null;
-  const canManage = contract11 && online && conversationNumericId !== null && projectId !== null && !isOfflineCopy(detail);
+  const canManage = contractAtLeast1_1 && online && conversationNumericId !== null && projectId !== null && !isOfflineCopy(detail);
   const [trigger, setTrigger] = useState<ActiveTrigger | null>(null);
   // Not next to toolkits: the server refuses a turn that mixes them.
   const canAddAgent = canManage && agentsCanJoin(detail);
@@ -466,8 +518,8 @@ export function ThreadView({
     .map((p) => ({ toolkitId: Number(p.entity_meta?.id), name: participantName(p) ?? '' }))
     .filter((t) => Number.isSafeInteger(t.toolkitId) && t.toolkitId > 0 && t.name !== '');
   const skillVersion = target.ok && target.kind === 'agent' ? target.agent.versionId : null;
-  const offerSkills = contract11 && skillVersion !== null;
-  const offerTools = contract11 && target.ok && target.kind === 'model' && toolkits.length > 0;
+  const offerSkills = contractAtLeast1_1 && skillVersion !== null;
+  const offerTools = contractAtLeast1_1 && target.ok && target.kind === 'model' && toolkits.length > 0;
   const skills = useAgentSkills(projectId, skillVersion, trigger?.trigger === '~' && offerSkills);
   const slash = trigger?.trigger === '/' ? slashPhase(trigger.query, toolkits) : null;
   const tools = useToolkitTools(projectId, slash?.phase === 'tool' ? slash.toolkit.toolkitId : null, offerTools && slash?.phase === 'tool');
@@ -661,7 +713,7 @@ export function ThreadView({
     ...(canExport
       ? [{ id: 'export', icon: 'share' as const, label: 'Export conversation', disabled: exporting, busy: exporting, onPress: () => void exportTranscript() }]
       : []),
-    ...(contract11 && conversationNumericId !== null
+    ...(contractAtLeast1_1 && conversationNumericId !== null
       ? [{ id: 'people', icon: 'people' as const, label: 'Participants', onPress: () => setPeopleOpen(true) }]
       : []),
   ];
@@ -692,6 +744,7 @@ export function ThreadView({
         renderTranscript={(composerHeight) => (
           <>
             <OfflineNotice visible={isOfflineCopy(detail)} />
+            <ForkedFromLink forkedFrom={forkedFrom} onOpen={openConversation} />
             {empty ? (
               <ChatEmptyState
                 agentName={targetName ?? 'your agent'}
@@ -725,6 +778,7 @@ export function ThreadView({
                         online: online && !isOfflineCopy(detail),
                         canSpeak: canReadAloud(),
                         canRegenerate: canRegenerate(message),
+                        canFork: canFork(message),
                       });
                       return (
                         <PersistedMessage
@@ -875,6 +929,7 @@ export function ThreadView({
         projectId={projectId}
         onClose={() => setActionsFor(null)}
         onRegenerate={(message) => void regenerate(message)}
+        onFork={(message) => void forkFrom(message)}
         onReadAloud={(message) => readAloud(message.key, message.text)}
       />
     </>

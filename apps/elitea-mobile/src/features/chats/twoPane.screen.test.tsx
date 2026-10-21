@@ -62,6 +62,8 @@ jest.mock('@/api/queries/conversations', () => ({
 jest.mock('@/features/projects/useProjectSelection', () => ({ useProjectSelection: () => ({ projectId: 90501, noProject: false }) }));
 jest.mock('@/features/chats/useChatListData', () => ({
   useListActionsAvailable: () => true,
+  useArchivedListAvailable: () => false,
+  useArchiveAvailable: () => false,
   useSavedPinnedRows: () => [],
   useConversationSearch: () => null,
 }));
