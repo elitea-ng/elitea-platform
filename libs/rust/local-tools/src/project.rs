@@ -1269,7 +1269,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("dir");
         let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
         let empty = detect(&workspace, &[]);
-        assert!(empty.runners.is_empty());
+        assert_eq!(empty.runners, []);
         assert!(empty.preamble_line().is_none());
         assert!(empty.is_fresh(&workspace));
         std::fs::write(dir.path().join("go.mod"), "module x\n").expect("go.mod");
