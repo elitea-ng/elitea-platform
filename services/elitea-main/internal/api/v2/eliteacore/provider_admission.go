@@ -276,15 +276,23 @@ func decodeRegisterRequest(r *http.Request) (registerDescriptorRequest, error) {
 	if req.ProviderName == "" {
 		return req, errors.New("provider_name is required")
 	}
-	// The origin is checked by a database constraint too. Rejecting it here as
-	// well gives the caller a message about their input rather than a 500
-	// carrying a constraint name.
-	if !strings.HasPrefix(req.ServiceLocationURL, "http://") &&
-		!strings.HasPrefix(req.ServiceLocationURL, "https://") {
-		return req, errors.New("service_location_url must be an absolute http(s) origin")
+	// The origin is checked by a database constraint too (0107, widened by
+	// 0171). Rejecting it here as well gives the caller a message about their
+	// input rather than a 500 carrying a constraint name. grpcs:// is the
+	// provider's gRPC listener, the origin the facades' registrar records
+	// (#1359), so an operator re-registering what the listing shows is
+	// accepted.
+	rest, ok := "", false
+	for _, scheme := range []string{"http://", "https://", "grpcs://"} {
+		if after, found := strings.CutPrefix(req.ServiceLocationURL, scheme); found {
+			rest, ok = after, true
+			break
+		}
 	}
-	if strings.Contains(strings.TrimPrefix(strings.TrimPrefix(
-		req.ServiceLocationURL, "https://"), "http://"), "/") {
+	if !ok {
+		return req, errors.New("service_location_url must be an absolute http(s) or grpcs origin")
+	}
+	if rest == "" || strings.Contains(rest, "/") {
 		return req, errors.New("service_location_url must be an origin with no path")
 	}
 	if len(req.Descriptor) == 0 {
