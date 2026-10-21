@@ -191,6 +191,18 @@ func (stub *artifactTransferGrantQueriesStub) ClaimExpiredArtifactTransferGrants
 	return stub.claimRows, stub.claimErr
 }
 
+func (stub *artifactTransferGrantQueriesStub) ListExpiredArtifactGrantStaging(
+	_ context.Context, _ sqlcgen.ListExpiredArtifactGrantStagingParams,
+) ([]sqlcgen.ListExpiredArtifactGrantStagingRow, error) {
+	return nil, nil
+}
+
+func (stub *artifactTransferGrantQueriesStub) ClearArtifactGrantStaging(
+	_ context.Context, _ sqlcgen.ClearArtifactGrantStagingParams,
+) error {
+	return nil
+}
+
 // TestArtifactGrantRepositoryClaimsExpiredGrants covers the query that lets
 // the retention sweeper reclaim the bytes behind a grant nobody committed.
 // Before it existed, those bytes had no objects row, so neither the project

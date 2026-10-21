@@ -94,6 +94,25 @@ func (q *Queries) ClaimExpiredArtifactTransferGrants(ctx context.Context, arg Cl
 	return items, nil
 }
 
+const clearArtifactGrantStaging = `-- name: ClearArtifactGrantStaging :exec
+UPDATE elitea_storage.transfer_grants
+SET key = id::text
+WHERE id = $1::text::uuid AND key = $2::text
+`
+
+type ClearArtifactGrantStagingParams struct {
+	ID  string `db:"id" json:"id"`
+	Key string `db:"key" json:"key"`
+}
+
+// Run after the staging object is gone. The row is kept (a late commit still
+// answers 409), with key reset to the grant id, which drops it from
+// ListExpiredArtifactGrantStaging.
+func (q *Queries) ClearArtifactGrantStaging(ctx context.Context, arg ClearArtifactGrantStagingParams) error {
+	_, err := q.db.Exec(ctx, clearArtifactGrantStaging, arg.ID, arg.Key)
+	return err
+}
+
 const createArtifactTransferGrant = `-- name: CreateArtifactTransferGrant :one
 INSERT INTO elitea_storage.transfer_grants (
     id, project_id, bucket_id, key, method, content_type, max_bytes,
@@ -287,6 +306,68 @@ func (q *Queries) GetArtifactTransferGrantByID(ctx context.Context, id string) (
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listExpiredArtifactGrantStaging = `-- name: ListExpiredArtifactGrantStaging :many
+SELECT id::text AS id, project_id, bucket_id, key
+FROM elitea_storage.transfer_grants
+WHERE consumed_at IS NOT NULL
+  AND key = id::text || '.upload'
+  AND upload_id IS NULL
+  AND expires_at < $1::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                  WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace')
+ORDER BY expires_at
+LIMIT $2::int
+`
+
+type ListExpiredArtifactGrantStagingParams struct {
+	OlderThan pgtype.Timestamptz `db:"older_than" json:"older_than"`
+	RowLimit  int32              `db:"row_limit" json:"row_limit"`
+}
+
+type ListExpiredArtifactGrantStagingRow struct {
+	ID        string `db:"id" json:"id"`
+	ProjectID int64  `db:"project_id" json:"project_id"`
+	BucketID  int64  `db:"bucket_id" json:"bucket_id"`
+	Key       string `db:"key" json:"key"`
+}
+
+// The presigned single-shot grants whose staging object may still exist
+// after they stopped being usable (api/v2/artifacts grants.go,
+// grantStagingKey). Such a grant's URL addresses key = id || '.upload', not
+// the object a commit serves, and a commit deletes it — but the URL stays
+// valid until expires_at, so a PUT after the commit recreates it, with no
+// metadata row to count or expire it. Once the URL has expired nothing can
+// write there again, so the sweeper deletes the object and then clears the
+// marker (ClearArtifactGrantStaging).
+//
+// The key predicate is EXACT on purpose: other writers record consumed
+// grants whose key differs from their id (toolkit discovery inventory), and
+// those keys name live objects.
+func (q *Queries) ListExpiredArtifactGrantStaging(ctx context.Context, arg ListExpiredArtifactGrantStagingParams) ([]ListExpiredArtifactGrantStagingRow, error) {
+	rows, err := q.db.Query(ctx, listExpiredArtifactGrantStaging, arg.OlderThan, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListExpiredArtifactGrantStagingRow{}
+	for rows.Next() {
+		var i ListExpiredArtifactGrantStagingRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.BucketID,
+			&i.Key,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markArtifactTransferGrantConsumed = `-- name: MarkArtifactTransferGrantConsumed :execrows

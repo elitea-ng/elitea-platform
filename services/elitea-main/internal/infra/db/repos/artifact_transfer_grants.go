@@ -65,6 +65,27 @@ type artifactTransferGrantQueries interface {
 	GetArtifactTransferGrantByID(context.Context, string) (sqlcgen.GetArtifactTransferGrantByIDRow, error)
 	MarkArtifactTransferGrantConsumed(context.Context, string) (int64, error)
 	ClaimExpiredArtifactTransferGrants(context.Context, sqlcgen.ClaimExpiredArtifactTransferGrantsParams) ([]sqlcgen.ClaimExpiredArtifactTransferGrantsRow, error)
+	ListExpiredArtifactGrantStaging(context.Context, sqlcgen.ListExpiredArtifactGrantStagingParams) ([]sqlcgen.ListExpiredArtifactGrantStagingRow, error)
+	ClearArtifactGrantStaging(context.Context, sqlcgen.ClearArtifactGrantStagingParams) error
+}
+
+// GrantStagingSuffix makes a presigned single-shot grant's staging key:
+// the grant id plus this suffix (api/v2/artifacts grantStagingKey). The
+// ListExpiredArtifactGrantStaging query spells the same literal.
+const GrantStagingSuffix = ".upload"
+
+// IsGrantStagingKey reports whether key is the staging key of grant id.
+func IsGrantStagingKey(id, key string) bool {
+	return key == id+GrantStagingSuffix
+}
+
+// GrantStagingRow is one expired grant whose staging object the sweeper
+// reclaims (ListExpiredGrantStaging).
+type GrantStagingRow struct {
+	ID        string
+	ProjectID int64
+	BucketID  int64
+	Key       string
 }
 
 // ArtifactTransferGrantsRepository is the metadata store for
@@ -192,4 +213,31 @@ func (r *ArtifactTransferGrantsRepository) ClaimExpiredTransferGrants(ctx contex
 		})
 	}
 	return out, nil
+}
+
+// ListExpiredGrantStaging returns a bounded batch of expired grants whose
+// presigned staging object may still exist. See the wrapped sqlc query.
+// olderThan must include the same grace margin ClaimExpiredTransferGrants
+// gets, so no URL that could still write is reclaimed under.
+func (r *ArtifactTransferGrantsRepository) ListExpiredGrantStaging(ctx context.Context, olderThan time.Time, limit int32) ([]GrantStagingRow, error) {
+	rows, err := r.queries.ListExpiredArtifactGrantStaging(ctx, sqlcgen.ListExpiredArtifactGrantStagingParams{
+		OlderThan: toTimestamptz(&olderThan),
+		RowLimit:  limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list expired artifact grant staging: %w", err)
+	}
+	out := make([]GrantStagingRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, GrantStagingRow{ID: row.ID, ProjectID: row.ProjectID, BucketID: row.BucketID, Key: row.Key})
+	}
+	return out, nil
+}
+
+// ClearGrantStaging records that a grant's staging object is gone.
+func (r *ArtifactTransferGrantsRepository) ClearGrantStaging(ctx context.Context, id, key string) error {
+	if err := r.queries.ClearArtifactGrantStaging(ctx, sqlcgen.ClearArtifactGrantStagingParams{ID: id, Key: key}); err != nil {
+		return fmt.Errorf("clear artifact grant staging: %w", err)
+	}
+	return nil
 }

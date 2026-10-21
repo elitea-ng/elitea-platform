@@ -98,3 +98,35 @@ WHERE id IN (
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id::text AS id, project_id, bucket_id, key, method, upload_id, expires_at;
+
+-- name: ListExpiredArtifactGrantStaging :many
+-- The presigned single-shot grants whose staging object may still exist
+-- after they stopped being usable (api/v2/artifacts grants.go,
+-- grantStagingKey). Such a grant's URL addresses key = id || '.upload', not
+-- the object a commit serves, and a commit deletes it — but the URL stays
+-- valid until expires_at, so a PUT after the commit recreates it, with no
+-- metadata row to count or expire it. Once the URL has expired nothing can
+-- write there again, so the sweeper deletes the object and then clears the
+-- marker (ClearArtifactGrantStaging).
+--
+-- The key predicate is EXACT on purpose: other writers record consumed
+-- grants whose key differs from their id (toolkit discovery inventory), and
+-- those keys name live objects.
+SELECT id::text AS id, project_id, bucket_id, key
+FROM elitea_storage.transfer_grants
+WHERE consumed_at IS NOT NULL
+  AND key = id::text || '.upload'
+  AND upload_id IS NULL
+  AND expires_at < sqlc.arg('older_than')::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM elitea_storage.buckets b
+                  WHERE b.id = transfer_grants.bucket_id AND b.bucket_type = 'workspace')
+ORDER BY expires_at
+LIMIT sqlc.arg('row_limit')::int;
+
+-- name: ClearArtifactGrantStaging :exec
+-- Run after the staging object is gone. The row is kept (a late commit still
+-- answers 409), with key reset to the grant id, which drops it from
+-- ListExpiredArtifactGrantStaging.
+UPDATE elitea_storage.transfer_grants
+SET key = id::text
+WHERE id = sqlc.arg('id')::text::uuid AND key = sqlc.arg('key')::text;

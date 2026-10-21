@@ -217,6 +217,10 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 	// endpoint, same request shape, different response.
 	var url string
 	var uploadID *string
+	// grantKey is what the grant row records and the grant URL addresses.
+	// A presigned single-shot PUT addresses a STAGING key, never grantID
+	// itself: see grantStagingKey.
+	grantKey := grantID
 	if req.MaxBytes > multipartThreshold && h.store.Capabilities().NativeMultipart {
 		id, err := h.store.StartMultipart(r.Context(), ref, storage.PutOptions{ContentType: req.ContentType})
 		if err != nil {
@@ -226,7 +230,10 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 		idStr := string(id)
 		uploadID = &idStr
 	} else {
-		url, err = h.grantURL(r.Context(), ref, req.ContentType, projectIDStr, bucket)
+		if h.store.Capabilities().Presign {
+			grantKey = grantStagingKey(grantID)
+		}
+		url, err = h.grantURL(r.Context(), projectIDStr, bucket, grantKey, req.ContentType)
 		if err != nil {
 			h.writeStorageError(r.Context(), w, "presign transfer grant", err)
 			return
@@ -237,7 +244,7 @@ func (h *Handler) CreateTransferGrant(w http.ResponseWriter, r *http.Request) {
 		ID:          grantID,
 		ProjectID:   projectID,
 		BucketID:    bucketRow.ID,
-		Key:         grantID,
+		Key:         grantKey,
 		Method:      req.Method,
 		ContentType: req.ContentType,
 		MaxBytes:    req.MaxBytes,
@@ -329,11 +336,37 @@ func parseGrantDigest(w http.ResponseWriter, req transferGrantRequest) (alg *str
 //
 // There is no download branch. See methodPut for why a GET grant cannot
 // address an object.
-func (h *Handler) grantURL(ctx context.Context, ref storage.ObjectRef, contentType, projectIDStr, bucket string) (string, error) {
+func (h *Handler) grantURL(ctx context.Context, projectIDStr, bucket, key, contentType string) (string, error) {
 	if h.store.Capabilities().Presign {
+		ref, err := storage.NewObjectRef(projectIDStr, bucket, key)
+		if err != nil {
+			return "", err
+		}
 		return h.store.PresignPut(ctx, ref, defaultGrantTTL, storage.PutOptions{ContentType: contentType})
 	}
 	return fmt.Sprintf("/api/v2/artifacts/objects/%s/%s", projectIDStr, bucket), nil
+}
+
+// grantStagingKey is the key a presigned single-shot PUT grant addresses.
+//
+// DEFECT this closes (follow-up to #1290): the grant URL used to address
+// grantID, the key the committed object is served from. A presigned URL
+// cannot be revoked and stays valid for defaultGrantTTL after a commit, so
+// the caller could PUT other bytes over the committed object out of band —
+// past the digest, size and quota checks, and leaving byte_length stale.
+//
+// The URL now addresses grantID+".upload" only. Commit copies that staging
+// object to grantID inside the store and verifies the COPY, which no URL
+// can address, then deletes the staging object. A PUT after the commit only
+// recreates a staging object nothing serves; the retention sweep reclaims it
+// once the URL has expired (sweepCommittedGrantStaging).
+//
+// The grant row's key records which shape a grant has: a staged grant's key
+// differs from its id. The facade fallback (no presign) and native multipart
+// keep key == id: the facade upload is an authenticated, quota-checked write,
+// and a completed multipart upload id accepts no further parts.
+func grantStagingKey(grantID string) string {
+	return grantID + repos.GrantStagingSuffix
 }
 
 // rejectCommit deletes the uploaded object and writes the typed error
@@ -418,16 +451,67 @@ func (h *Handler) CommitTransferGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectIDStr := strconv.FormatInt(projectID, 10)
-	ref, err := storage.NewObjectRef(projectIDStr, bucketRow.Name, grant.Key)
+	if !repos.IsGrantStagingKey(grant.ID, grant.Key) {
+		// The facade fallback: the object already sits at its final key.
+		ref, err := storage.NewObjectRef(projectIDStr, bucketRow.Name, grant.Key)
+		if err != nil {
+			h.writeInternal(w, r, "build object ref", err)
+			return
+		}
+		if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
+			return
+		}
+		h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, ref, false)
+		return
+	}
+
+	// A staged grant (grantStagingKey): copy the staging object to the final
+	// key FIRST and verify the copy. Verifying the staging object and then
+	// copying it would leave a window in which the still-valid URL replaces
+	// the verified bytes before the copy reads them.
+	staging, err := storage.NewObjectRef(projectIDStr, bucketRow.Name, grant.Key)
 	if err != nil {
 		h.writeInternal(w, r, "build object ref", err)
 		return
 	}
-	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
+	final, err := storage.NewObjectRef(projectIDStr, bucketRow.Name, grant.ID)
+	if err != nil {
+		h.writeInternal(w, r, "build object ref", err)
 		return
 	}
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.ID}) {
+		return
+	}
+	if err := h.copyGrantUpload(r.Context(), staging, final); err != nil {
+		h.writeStorageError(r.Context(), w, "copy uploaded object", err)
+		return
+	}
+	if !h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, final, false) {
+		return
+	}
+	// Committed. A failed delete leaves bytes nothing serves; the retention
+	// sweep reclaims them after the grant expires.
+	if err := h.store.Delete(r.Context(), staging); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		h.logInternal(r.Context(), "delete committed grant staging object", err)
+	}
+}
 
-	h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, ref, false)
+// copyGrantUpload copies a staged grant's upload to its final key inside the
+// store (S3 CopyObject, GCS rewrite, Azure Copy Blob). Only a backend with no
+// server-side copy, or one that refuses this source, reads the bytes back
+// through Main; finalizeGrantCommit verifies the result either way.
+func (h *Handler) copyGrantUpload(ctx context.Context, staging, final storage.ObjectRef) error {
+	_, err := storage.CopyObject(ctx, h.store, staging, final)
+	if !errors.Is(err, storage.ErrNotSupported) {
+		return err
+	}
+	body, info, err := h.store.Get(ctx, staging, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = body.Close() }()
+	_, err = h.store.Put(ctx, final, body, storage.PutOptions{ContentType: info.ContentType, ContentLength: info.Size})
+	return err
 }
 
 // finalizeGrantCommit is the verification and metadata-recording shared by
@@ -444,11 +528,15 @@ func (h *Handler) CommitTransferGrant(w http.ResponseWriter, r *http.Request) {
 // skips its own MarkTransferGrantConsumed call at the end, since a second
 // call would only ever return ErrAlreadyExists and turn an otherwise
 // successful commit into a hollow 409.
-func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter, projectID int64, grant repos.TransferGrantRow, bucketRow repos.BucketRow, ref storage.ObjectRef, claimed bool) {
+//
+// ref is the object's FINAL key, which the metadata row and the response
+// name. It reports whether the commit succeeded; it has written the response
+// either way.
+func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter, projectID int64, grant repos.TransferGrantRow, bucketRow repos.BucketRow, ref storage.ObjectRef, claimed bool) bool {
 	body, info, err := h.store.Get(ctx, ref, nil)
 	if err != nil {
 		h.writeStorageError(ctx, w, "get uploaded object", err)
-		return
+		return false
 	}
 	defer func() { _ = body.Close() }()
 
@@ -459,19 +547,19 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 	// replacement for it.
 	if info.Size > grant.MaxBytes {
 		h.rejectCommit(ctx, w, ref, http.StatusRequestEntityTooLarge, "TooLarge", "uploaded object exceeds the grant's max_bytes")
-		return
+		return false
 	}
 
 	hasher := sha256.New()
 	n, err := io.Copy(hasher, body)
 	if err != nil {
 		h.writeInternalCtx(ctx, w, "read uploaded object", err)
-		return
+		return false
 	}
 
 	if n > grant.MaxBytes {
 		h.rejectCommit(ctx, w, ref, http.StatusRequestEntityTooLarge, "TooLarge", "uploaded object exceeds the grant's max_bytes")
-		return
+		return false
 	}
 	// No "info.ContentType != ''" exemption: the plan is explicit that this
 	// check is "mandatory, not defensive." An empty reported ContentType is
@@ -483,13 +571,13 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 	// case this check exists to catch, not exempt.
 	if info.ContentType != grant.ContentType {
 		h.rejectCommit(ctx, w, ref, http.StatusConflict, "MediaTypeMismatch", "uploaded object's media type does not match the grant")
-		return
+		return false
 	}
 	if grant.DigestAlg != nil {
 		actual := hasher.Sum(nil)
 		if !bytes.Equal(actual, grant.Digest) {
 			h.rejectCommit(ctx, w, ref, http.StatusConflict, "DigestMismatch", "uploaded object's digest does not match the grant")
-			return
+			return false
 		}
 	}
 
@@ -497,14 +585,14 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 	// not at the bucket's frozen expires_at. See computeExpiresAt.
 	row, err := h.repo.UpsertObject(ctx, repos.NewObjectInput{
 		BucketID:   grant.BucketID,
-		Key:        grant.Key,
+		Key:        ref.Key(),
 		ByteLength: n,
 		MediaType:  grant.ContentType,
 		ExpiresAt:  computeExpiresAt(bucketRow.RetentionDays),
 	})
 	if err != nil {
 		h.writeInternalCtx(ctx, w, "record object metadata", err)
-		return
+		return false
 	}
 
 	// S12's project-wide storage quota applies to every write path, not
@@ -517,18 +605,18 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 	policy, err := h.repo.GetProjectStoragePolicy(ctx, projectID)
 	if err != nil {
 		h.writeInternalCtx(ctx, w, "get project storage policy", err)
-		return
+		return false
 	}
 	if policy.MaxTotalBytes != nil {
 		total, err := h.repo.SumProjectBytes(ctx, projectID)
 		if err != nil {
 			h.writeInternalCtx(ctx, w, "sum project bytes", err)
-			return
+			return false
 		}
 		if total > *policy.MaxTotalBytes {
-			_ = h.repo.DeleteObjects(ctx, grant.BucketID, []string{grant.Key})
+			_ = h.repo.DeleteObjects(ctx, grant.BucketID, []string{ref.Key()})
 			h.rejectCommit(ctx, w, ref, http.StatusRequestEntityTooLarge, "TooLarge", "commit would exceed the project's storage quota")
-			return
+			return false
 		}
 	}
 
@@ -536,19 +624,20 @@ func (h *Handler) finalizeGrantCommit(ctx context.Context, w http.ResponseWriter
 		if err := h.repo.MarkTransferGrantConsumed(ctx, grant.ID); err != nil {
 			if errors.Is(err, storage.ErrAlreadyExists) {
 				writeError(w, http.StatusConflict, "AlreadyExists", "grant has already been committed")
-				return
+				return false
 			}
 			h.writeInternalCtx(ctx, w, "mark transfer grant consumed", err)
-			return
+			return false
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"key":        grant.Key,
+		"key":        ref.Key(),
 		"size_bytes": n,
 		"media_type": grant.ContentType,
 		"etag":       info.ETag,
 		"created_at": row.CreatedAt,
 		"updated_at": row.UpdatedAt,
 	})
+	return true
 }

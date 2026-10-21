@@ -143,6 +143,66 @@ func TestArtifactGrantRepositoryGetIsScopedToProjectIDAgainstRealPostgres(t *tes
 // proves the plan's "PUT grants are single-use" acceptance criterion at the
 // repository layer, against a real database — not just the in-memory fake
 // this same behavior is also unit-tested against (fake_repo_test.go).
+// The staging sweep lists exactly the consumed, expired presigned grants
+// whose key is id + ".upload". A consumed grant with any other key (the
+// toolkit discovery inventory records live objects that way), an unexpired
+// one and an unconsumed one are not its business. Clearing resets the key
+// and drops the row from the list, and the row itself stays.
+func TestArtifactGrantRepositoryListsAndClearsExpiredStagingAgainstRealPostgres(t *testing.T) {
+	buckets, grants := newArtifactTransferGrantsTestRepos(t)
+	ctx := context.Background()
+	const projectID = int64(9206)
+	bucket := mustCreateArtifactBucket(t, buckets, projectID, "reports")
+	past := time.Now().Add(-time.Hour)
+	create := func(id, key string, expiresAt time.Time, consume bool) {
+		t.Helper()
+		if _, err := grants.CreateTransferGrant(ctx, NewTransferGrantInput{
+			ID: id, ProjectID: projectID, BucketID: bucket.ID, Key: key, Method: "PUT",
+			ContentType: "text/plain", MaxBytes: 64, ExpiresAt: expiresAt,
+		}); err != nil {
+			t.Fatalf("CreateTransferGrant %s: %v", id, err)
+		}
+		if consume {
+			if err := grants.MarkTransferGrantConsumed(ctx, id); err != nil {
+				t.Fatalf("MarkTransferGrantConsumed %s: %v", id, err)
+			}
+		}
+	}
+	const (
+		staged     = "55555555-5555-4555-8555-555555555555"
+		inventory  = "66666666-6666-4666-8666-666666666666"
+		live       = "77777777-7777-4777-8777-777777777777"
+		unconsumed = "88888888-8888-4888-8888-888888888888"
+	)
+	create(staged, staged+GrantStagingSuffix, past, true)
+	create(inventory, "discovery/toolkit/1/"+inventory, past, true)
+	create(live, live+GrantStagingSuffix, time.Now().Add(time.Hour), true)
+	create(unconsumed, unconsumed+GrantStagingSuffix, past, false)
+
+	rows, err := grants.ListExpiredGrantStaging(ctx, time.Now(), 100)
+	if err != nil {
+		t.Fatalf("ListExpiredGrantStaging: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != staged || rows[0].Key != staged+GrantStagingSuffix ||
+		rows[0].ProjectID != projectID || rows[0].BucketID != bucket.ID {
+		t.Fatalf("rows = %+v, want only %s", rows, staged)
+	}
+
+	if err := grants.ClearGrantStaging(ctx, staged, staged+GrantStagingSuffix); err != nil {
+		t.Fatalf("ClearGrantStaging: %v", err)
+	}
+	if rows, err := grants.ListExpiredGrantStaging(ctx, time.Now(), 100); err != nil || len(rows) != 0 {
+		t.Fatalf("after clear: rows = %+v, err = %v", rows, err)
+	}
+	fetched, err := grants.GetTransferGrant(ctx, staged, projectID)
+	if err != nil {
+		t.Fatalf("GetTransferGrant after clear: %v", err)
+	}
+	if fetched.Key != staged || fetched.ConsumedAt == nil {
+		t.Fatalf("cleared row = %+v, want key %s and still consumed", fetched, staged)
+	}
+}
+
 func TestArtifactGrantRepositoryMarkConsumedEnforcesSingleUseAgainstRealPostgres(t *testing.T) {
 	buckets, grants := newArtifactTransferGrantsTestRepos(t)
 	ctx := context.Background()

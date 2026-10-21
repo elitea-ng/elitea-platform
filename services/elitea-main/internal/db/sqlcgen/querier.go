@@ -61,6 +61,10 @@ type Querier interface {
 	ClaimPendingIndexMetaInitializations(ctx context.Context, arg ClaimPendingIndexMetaInitializationsParams) ([]ClaimPendingIndexMetaInitializationsRow, error)
 	ClaimScheduledJobCursor(ctx context.Context, arg ClaimScheduledJobCursorParams) (int64, error)
 	ClaimScheduledOccurrence(ctx context.Context, arg ClaimScheduledOccurrenceParams) (int64, error)
+	// Run after the staging object is gone. The row is kept (a late commit still
+	// answers 409), with key reset to the grant id, which drops it from
+	// ListExpiredArtifactGrantStaging.
+	ClearArtifactGrantStaging(ctx context.Context, arg ClearArtifactGrantStagingParams) error
 	CompareAndSwapCurrentConfigurationRenameToolkit(ctx context.Context, arg CompareAndSwapCurrentConfigurationRenameToolkitParams) (int64, error)
 	CompleteScheduledOccurrence(ctx context.Context, arg CompleteScheduledOccurrenceParams) (int64, error)
 	// The tenant executor installs a transaction-local search_path. These queries
@@ -461,6 +465,19 @@ type Querier interface {
 	ListCurrentToolkitTypes(ctx context.Context, arg ListCurrentToolkitTypesParams) ([]string, error)
 	ListCurrentUserProjects(ctx context.Context, arg ListCurrentUserProjectsParams) ([]ListCurrentUserProjectsRow, error)
 	ListExpectedIndexIngestEntries(ctx context.Context, arg ListExpectedIndexIngestEntriesParams) ([]ListExpectedIndexIngestEntriesRow, error)
+	// The presigned single-shot grants whose staging object may still exist
+	// after they stopped being usable (api/v2/artifacts grants.go,
+	// grantStagingKey). Such a grant's URL addresses key = id || '.upload', not
+	// the object a commit serves, and a commit deletes it — but the URL stays
+	// valid until expires_at, so a PUT after the commit recreates it, with no
+	// metadata row to count or expire it. Once the URL has expired nothing can
+	// write there again, so the sweeper deletes the object and then clears the
+	// marker (ClearArtifactGrantStaging).
+	//
+	// The key predicate is EXACT on purpose: other writers record consumed
+	// grants whose key differs from their id (toolkit discovery inventory), and
+	// those keys name live objects.
+	ListExpiredArtifactGrantStaging(ctx context.Context, arg ListExpiredArtifactGrantStagingParams) ([]ListExpiredArtifactGrantStagingRow, error)
 	ListExpiredArtifactObjects(ctx context.Context, arg ListExpiredArtifactObjectsParams) ([]EliteaStorageObject, error)
 	// The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 	// see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
