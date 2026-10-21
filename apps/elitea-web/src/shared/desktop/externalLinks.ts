@@ -5,12 +5,15 @@
  * `target="_blank"` link or `window.open` must not open a second webview (which
  * would be a navigation to remote content). They go to the user's browser
  * through the opener plugin instead. Only http and https are ever handed over.
+ * The one window the page opens itself is an inspector tab's own window
+ * (`panelWindows.ts`): an empty document of the page's origin, no navigation.
  *
  * A relative `href` resolves against the DEPLOYMENT origin, not the page's own
  * location: the page is the bundled `tauri://` (or `http://tauri.localhost`)
  * document, and a relative link in deployment content means the deployment.
  */
 import type { HostBridge } from './hostBridge';
+import { isPanelWindowUrl } from './panelWindows';
 
 function isWebUrl(raw: string, base: string): URL | undefined {
   try {
@@ -38,7 +41,8 @@ export function installExternalLinks(
   doc.addEventListener('click', onClick);
 
   const originalOpen = win.open.bind(win);
-  win.open = (url?: string | URL) => {
+  win.open = (url?: string | URL, name?: string, features?: string) => {
+    if (url !== undefined && isPanelWindowUrl(String(url))) return originalOpen(String(url), name, features);
     const target = url === undefined ? undefined : isWebUrl(String(url), origin);
     if (target !== undefined) void bridge.openExternal(target.href).catch(() => undefined);
     return null;

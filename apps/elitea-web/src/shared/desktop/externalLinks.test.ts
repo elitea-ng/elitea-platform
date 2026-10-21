@@ -13,7 +13,7 @@ function setup() {
   const nativeOpen = vi.fn<typeof window.open>();
   window.open = nativeOpen;
   dispose = installExternalLinks({ openExternal: open }, 'https://elitea.example.com', document, window);
-  return { open };
+  return { open, nativeOpen };
 }
 
 function click(html: string): MouseEvent {
@@ -60,5 +60,15 @@ describe('installExternalLinks', () => {
     expect(open).toHaveBeenCalledWith('https://x.example/');
     window.open('data:text/html,hi');
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the page open an inspector tab in its own (blank, same-origin) window, and nothing else', () => {
+    const { open, nativeOpen } = setup();
+    window.open('about:blank#elitea-panel=changes', 'elitea-panel-changes', 'popup');
+    expect(nativeOpen).toHaveBeenCalledWith('about:blank#elitea-panel=changes', 'elitea-panel-changes', 'popup');
+    window.open('about:blank#elitea-panel=../x');
+    window.open('about:blank');
+    expect(nativeOpen).toHaveBeenCalledTimes(1);
+    expect(open).not.toHaveBeenCalled();
   });
 });

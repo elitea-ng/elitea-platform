@@ -128,10 +128,10 @@ export function FolderTitle({ workspace }: { workspace: Workspace }): React.JSX.
   );
 }
 
-/** Opens the changes panel when it is hidden; the dot says it has something to show. */
+/** Opens the inspector when it is hidden; the dot says the thread's tabs have something to show. */
 export function PanelToggle({ count }: { count: number }): React.JSX.Element {
   const open = useDesktopLayout((state) => state.changesOpen);
-  const label = open ? t('workspace.panel.hide', 'Hide panel') : t('workspace.panel.show', 'Show changes');
+  const label = open ? t('desktop.inspector.hide', 'Hide inspector') : t('desktop.inspector.show', 'Show inspector');
   return (
     <Tooltip title={`${label} (${modKey()}⌥\\)`}>
       <IconButton size="small" aria-label={label} aria-pressed={open} onClick={() => useDesktopLayout.getState().setChangesOpen(!open)}>

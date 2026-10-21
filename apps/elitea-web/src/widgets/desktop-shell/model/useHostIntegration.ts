@@ -44,7 +44,7 @@ export function useHostIntegration(run: (action: ShellAction) => void, appIpc: A
     const stored = readPersistedLayout();
     if (stored !== null) useDesktopLayout.setState(stored);
     return useDesktopLayout.subscribe((state) =>
-      writePersistedLayout({ sidebarOpen: state.sidebarOpen, changesOpen: state.changesOpen, changesWidth: state.changesWidth }),
+      writePersistedLayout({ sidebarOpen: state.sidebarOpen, changesOpen: state.changesOpen, inspector: state.inspector }),
     );
   }, []);
 

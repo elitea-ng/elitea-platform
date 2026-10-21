@@ -61,6 +61,12 @@ export interface AppIpc {
    */
   setWindowTheme(theme: NativeWindowTheme): Promise<void>;
   /**
+   * Bring one of the app's own windows to the front: an inspector tab's
+   * window (`panelWindows.ts`), by its label. Tauri's own
+   * `plugin:window|set_focus`, granted alone (`core:window:allow-set-focus`).
+   */
+  focusWindow(label: string): Promise<void>;
+  /**
    * Pop the OS's own context menu at the cursor. Resolves with the id of the
    * item chosen, or `null` when the menu was dismissed.
    */
@@ -111,6 +117,7 @@ export function createAppIpc(hostInvoke: HostInvoke, listen: ListenFn): AppIpc {
     onCommand: (handler) => listen(APP_COMMAND_CHANNEL, (payload) => handler(payload as AppCommand)),
     ready: () => invoke<AppCommand[]>('app_ready'),
     setWindowTheme: (theme) => invoke<void>('plugin:window|set_theme', { label: 'main', value: theme }),
+    focusWindow: (label) => invoke<void>('plugin:window|set_focus', { label }),
     cloudRun: ({ conversationUuid, running, waiting, workspaceId, workspaceName }) =>
       invoke<void>('activity_cloud_run', {
         conversation_uuid: conversationUuid,

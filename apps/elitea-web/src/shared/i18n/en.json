@@ -4940,5 +4940,6 @@
   "pages.chatArchived.showMore": "Show more",
   "pages.chatArchived.title": "Archived chats",
   "pages.chatArchived.unarchive": "Unarchive",
-  "pages.chatArchived.untitled": "Untitled conversation"
+  "pages.chatArchived.untitled": "Untitled conversation",
+  "desktop.inspector.chat": "Conversation"
 }
