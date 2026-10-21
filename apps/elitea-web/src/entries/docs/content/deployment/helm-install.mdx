@@ -125,12 +125,9 @@ A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no passw
 
 An entry is `oidc:<sub>`, `saml:<nameid>`, or `email:<verified address>` (matches only when the id_token asserts `email_verified: true`). The grant is one-shot: an account that already holds any administration role is left as is; one with none receives the grant on its next sign-in.
 
-```bash
-curl -s -H "Cookie: elitea_session=<your session>" \
-  https://elitea.example.com/api/v2/social/author | jq .provider_refs
-```
+For OIDC with a verified e-mail address, use `email:<your address>`. You know this value before the first sign-in, so you can set it at install time.
 
-`provider_refs` is the exact value the list accepts — read it after signing in once, instead of querying the database. See [Install Elitea](/getting-started/install#first-login-and-setup) for the browser-side walkthrough of this same step.
+For other cases, sign in once and open **Settings › Profile**. Each **Sign-in reference** row shows one exact value that the list accepts, for example `oidc:<sub>` or `saml:<nameid>`. Click a row to copy it. Add the value to the list, upgrade the release, and sign in again. You do not need to query the database. See [Install Elitea](/getting-started/install#first-login-and-setup) for the browser-side walkthrough of this same step.
 
 ## Capability flags this install serves
 

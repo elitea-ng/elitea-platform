@@ -31,6 +31,31 @@ Normally an AI provider credential belongs to one project. **Providers & models*
 A row imported from an older deployment can still hold its key as plain text rather than sealed in the vault. The panel flags this as `sealed: false` without ever displaying the value; re-saving the credential through this screen seals it.
 </Warning>
 
+### Keyless credentials (workload identity)
+
+On GKE, a platform provider of type **Vertex AI** or **EPAM DIAL** can hold no key. The gateway then signs in with the Google identity of its own pod (GKE Workload Identity).
+
+- **Vertex AI** gets an OAuth access token. Set `vertex_project` and `vertex_location`. Leave `vertex_credentials` empty.
+- **EPAM DIAL** gets a Google ID token, sent as a bearer token. Set `api_base`. Leave `api_key` empty. The token audience is the `api_base` origin; set `token_audience` to use a different one.
+
+To enable the mode:
+
+<Steps>
+  <Step title="Bind the gateway's service account">
+    Set `llmGateway.serviceAccount.annotations` to your GKE binding, for example `iam.gke.io/gcp-service-account: elitea-llm-gateway@PROJECT.iam.gserviceaccount.com`. Give that Google service account access to Vertex AI, or to your DIAL deployment.
+  </Step>
+  <Step title="Turn the mode on">
+    Set `llmGateway.workloadIdentity.enabled: true`. The chart then sets `GATEWAY_WORKLOAD_IDENTITY_ENABLED=true`. If `llmGateway.networkPolicy.enabled` is true, it also opens egress to the GKE metadata server, and only to it. The **Status** tab reports `workload_identity_enabled`.
+  </Step>
+  <Step title="Save the provider with auth mode workload identity">
+    Set `auth_mode` to `workload_identity` on this screen. A switch from a key removes the stored key from the row. Use **Test connection** after you save.
+  </Step>
+</Steps>
+
+<Warning>
+The pod's identity belongs to the platform, so only a platform provider can use it. A project credential with `auth_mode: workload_identity` is refused when it is saved. The gateway also refuses every row that is not a shared row of the public project (`WORKLOAD_IDENTITY_NOT_ALLOWED`). If the gateway cannot get a token, the request fails with `WORKLOAD_IDENTITY_TOKEN_UNAVAILABLE`. It never falls back to another credential.
+</Warning>
+
 ## Grant a platform model to specific projects
 
 Under **Models**, each platform model carries a share scope:

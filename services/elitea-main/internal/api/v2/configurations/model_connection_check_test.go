@@ -19,6 +19,8 @@ type gatewayStub struct {
 	*httptest.Server
 	hits     atomic.Int64
 	requests []checkConnectionRequestBody
+	// projects is the signed X-Elitea-Project-Id of each request.
+	projects []string
 	status   int
 	answer   string
 }
@@ -35,6 +37,7 @@ func newGatewayStub(t *testing.T, status int, answer string) *gatewayStub {
 		var body checkConnectionRequestBody
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		stub.requests = append(stub.requests, body)
+		stub.projects = append(stub.projects, r.Header.Get("X-Elitea-Project-Id"))
 		w.WriteHeader(stub.status)
 		_, _ = w.Write([]byte(stub.answer))
 	}))

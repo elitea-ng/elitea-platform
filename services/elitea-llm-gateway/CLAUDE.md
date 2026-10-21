@@ -151,6 +151,14 @@ because each was a real bug found across 3 review rounds.
   Strip client-supplied Cookie/Authorization/X-Api-Key/X-Auth-*/X-Elitea-* before
   proxying; the gateway sees only edge-signed identity.
 - Never log credentials/tokens/master keys or a URL containing userinfo (redact).
+- **The pod's Google identity is the platform's** (`auth_mode: workload_identity`,
+  `internal/account/workload_identity.go`). Admit it ONLY when
+  `GATEWAY_WORKLOAD_IDENTITY_ENABLED=true` AND the row is a shared row of the
+  public project — decide from the row's project and `shared`, never from the
+  `shared:` key prefix. Refuse every other case with a named reason; never fall
+  back to a key or to bifrost's `DefaultAzureCredential`. A DIAL ID token is
+  served with its key ALONE, because the context token reaches every key bifrost
+  picks. The probe routes admit it only for the signed public project.
 - **The hop marker is the loop detector; the loop breaker is not** (issue #164).
   The gateway sets `X-Elitea-Llm-Hop` on every outbound provider request
   (`internal/account`) and refuses an inbound request that carries this

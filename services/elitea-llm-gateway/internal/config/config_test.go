@@ -253,3 +253,18 @@ func TestPublicProjectID(t *testing.T) {
 		})
 	}
 }
+
+// TestWorkloadIdentityEnabledIsStrict: GATEWAY_WORKLOAD_IDENTITY_ENABLED lends
+// the pod's Google identity to platform credentials, so only the exact word
+// "true" arms it. Every loose spelling stays off.
+func TestWorkloadIdentityEnabledIsStrict(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"": false, "true": true, "false": false,
+		"TRUE": false, "True": false, "1": false, "yes": false, "t": false, " true": false,
+	} {
+		t.Setenv("GATEWAY_WORKLOAD_IDENTITY_ENABLED", raw)
+		if got := FromEnv().WorkloadIdentityEnabled; got != want {
+			t.Errorf("GATEWAY_WORKLOAD_IDENTITY_ENABLED=%q: got %v, want %v", raw, got, want)
+		}
+	}
+}

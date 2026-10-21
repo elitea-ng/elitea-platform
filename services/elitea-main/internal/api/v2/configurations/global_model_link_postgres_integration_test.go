@@ -457,3 +457,69 @@ func TestAnEditKeepsTheModelFieldsTheFormDoesNotShow(t *testing.T) {
 		t.Errorf("the rename changed the stored link to %#v", link)
 	}
 }
+
+// TestAPlatformModelsDialProtocolIsStoredAndReadBack.
+//
+// The admin model dialog writes `data.dial_protocol` through this surface. The
+// field is not one the listing interprets, so it has to survive the delegated
+// create, come back in the listing's `data` (the edit form's merge base), and
+// be refused by the same rule the project plane applies. The listing also
+// names each credential's type, which is what the dialog keys the select on.
+func TestAPlatformModelsDialProtocolIsStoredAndReadBack(t *testing.T) {
+	pool := newCreateEchoPool(t)
+	router := platformLinkRouter(pool)
+	provider := platformLinkProvider(t, router, "autotest_dial_protocol_provider")
+
+	const title = "autotest_dial_protocol_model"
+	created := platformLinkSend(t, router, http.MethodPost, "/gateway/platform_models",
+		map[string]any{
+			"elitea_title": title,
+			"type":         "llm_model",
+			"data": map[string]any{
+				"name":           "gpt-4o",
+				"ai_credentials": map[string]any{"elitea_title": provider},
+				"dial_protocol":  "openai",
+			},
+		})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("POST /gateway/platform_models = %d, want 201; body = %s",
+			created.Code, created.Body.String())
+	}
+	if stored := storedModelData(t, pool, title); stored["dial_protocol"] != "openai" {
+		t.Errorf("the stored data holds dial_protocol = %#v, want openai", stored["dial_protocol"])
+	}
+	listed := readPlatformModel(t, router, title)
+	if listed.Data["dial_protocol"] != "openai" {
+		t.Errorf("the listing's data carries dial_protocol = %#v, want openai", listed.Data["dial_protocol"])
+	}
+
+	refused := platformLinkSend(t, router, http.MethodPut,
+		fmt.Sprintf("/gateway/platform_models/%d", listed.ID), map[string]any{
+			"type": "llm_model",
+			"data": map[string]any{
+				"name":           "gpt-4o",
+				"ai_credentials": map[string]any{"elitea_title": provider},
+				"dial_protocol":  "bogus",
+			},
+		})
+	if refused.Code != http.StatusBadRequest {
+		t.Fatalf("PUT with dial_protocol bogus = %d, want 400; body = %s",
+			refused.Code, refused.Body.String())
+	}
+	if stored := storedModelData(t, pool, title); stored["dial_protocol"] != "openai" {
+		t.Errorf("a refused update changed dial_protocol to %#v", stored["dial_protocol"])
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/gateway/platform_models", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var body struct {
+		CredentialTypes map[string]string `json:"credential_types"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode the listing %q: %v", recorder.Body.String(), err)
+	}
+	if body.CredentialTypes[provider] != "open_ai" {
+		t.Errorf("credential_types = %v, want %s: open_ai", body.CredentialTypes, provider)
+	}
+}

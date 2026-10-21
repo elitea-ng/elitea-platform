@@ -38,6 +38,32 @@ export const NO_CREDENTIAL_CHOSEN = '';
 /** The one model type whose schema declares the tiers and the capabilities. */
 export const TIERED_MODEL_TYPE = 'llm_model';
 
+/** The credential type whose models carry `data.dial_protocol`. */
+const DIAL_CREDENTIAL_TYPE = 'ai_dial';
+
+/**
+ * The DIAL protocols, as `application/configurations/dial_protocol.go` accepts
+ * them. The empty value is the default (Azure-shaped) route: the server writes
+ * nothing for it, and a stored `azure` dispatches identically, so the form
+ * reads `azure` as the default too.
+ */
+export const DIAL_PROTOCOLS = ['', 'openai', 'anthropic'] as const;
+export type DialProtocol = (typeof DIAL_PROTOCOLS)[number];
+
+function storedDialProtocol(data: Readonly<Record<string, unknown>>): DialProtocol {
+  const value = data['dial_protocol'];
+  return value === 'openai' || value === 'anthropic' ? value : '';
+}
+
+/**
+ * Whether the DIAL protocol select applies: a chat model whose chosen
+ * credential is a DIAL credential. The gateway reads the field for that pair
+ * alone.
+ */
+export function showsDialProtocol(form: ModelForm, credentialType: string | undefined): boolean {
+  return form.type === TIERED_MODEL_TYPE && credentialType === DIAL_CREDENTIAL_TYPE;
+}
+
 /**
  * The Kind a NEW platform model opens on.
  *
@@ -85,6 +111,8 @@ export interface ModelForm {
   readonly openaiCompatible: boolean;
   readonly supportsReasoning: boolean;
   readonly supportsVision: boolean;
+  /** `data.dial_protocol`; empty is the default route. See `DIAL_PROTOCOLS`. */
+  readonly dialProtocol: DialProtocol;
   /**
    * Which projects the model is offered to. It is a field of every kind, not
    * of the chat kind alone: it says who the ROW is for, not what the model can
@@ -142,6 +170,7 @@ export function formOf(
       openaiCompatible: false,
       supportsReasoning: false,
       supportsVision: DEFAULT_SUPPORTS_VISION,
+      dialProtocol: '',
       // A NEW model is offered to everyone, which is what publishing one meant
       // before the grant existed. Opening on "no project" would make the
       // ordinary case the one that needs a second decision.
@@ -168,6 +197,7 @@ export function formOf(
     openaiCompatible: storedFlag(stored, 'openai_compatible', false),
     supportsReasoning: storedFlag(stored, 'supports_reasoning', false),
     supportsVision: storedFlag(stored, 'supports_vision', DEFAULT_SUPPORTS_VISION),
+    dialProtocol: storedDialProtocol(stored),
     // Read from the row's own reported fields, like the tiers: the server
     // interprets an absent scope as `all`, and a form that opened on a blank
     // would save "granted to nobody" over a model nobody had restricted.
@@ -229,21 +259,53 @@ function chatFields(form: ModelForm): Partial<PlatformModelData> {
  * `stored` is the row's own `data` as the listing reported it, and it is absent
  * on a create and on a listing from a server that predates the field. Both cases
  * merge over nothing, which is what this function used to do for every case.
+ *
+ * `credentialType` is the chosen credential's type, or `undefined` when the
+ * server did not report it; see `dialProtocolOver`.
  */
 export function modelDraftOf(
-  form: ModelForm, stored: Readonly<Record<string, unknown>> | undefined,
+  form: ModelForm,
+  stored: Readonly<Record<string, unknown>> | undefined,
+  credentialType?: string,
 ): PlatformModelDraft {
   return {
     elitea_title: form.name.trim(),
     type: form.type,
-    data: {
-      ...stored,
-      name: form.modelName.trim(),
-      ai_credentials: { elitea_title: form.credential },
-      ...grantFields(form),
-      ...chatFields(form),
-    },
+    data: dialProtocolOver(
+      {
+        ...stored,
+        name: form.modelName.trim(),
+        ai_credentials: { elitea_title: form.credential },
+        ...grantFields(form),
+        ...chatFields(form),
+      },
+      form,
+      credentialType,
+    ),
   };
+}
+
+/**
+ * Writes `dial_protocol` into the merged body, or REMOVES it.
+ *
+ * The key is removed, not sent empty, for the default and for a model whose
+ * credential is no longer a DIAL credential. The server refuses an empty or
+ * stale value (openai on a Claude name, say), so a leftover key from the merge
+ * base would fail a save the operator never meant to touch the protocol with.
+ * With the credential type unknown (an older server), the merge base is left
+ * as stored.
+ */
+function dialProtocolOver(
+  data: PlatformModelData,
+  form: ModelForm,
+  credentialType: string | undefined,
+): PlatformModelData {
+  if (credentialType === undefined || form.type !== TIERED_MODEL_TYPE) return data;
+  const { dial_protocol: _previous, ...rest } = data;
+  if (showsDialProtocol(form, credentialType) && form.dialProtocol !== '') {
+    return { ...rest, dial_protocol: form.dialProtocol };
+  }
+  return rest;
 }
 
 /**

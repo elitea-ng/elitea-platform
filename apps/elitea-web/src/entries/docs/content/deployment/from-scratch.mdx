@@ -5,7 +5,9 @@ description: "A complete Kubernetes install on an empty cluster: decisions to ma
 
 This page takes an empty Kubernetes cluster to a working Elitea deployment with single sign-on, chat, agents, indexing and shared models. Follow it top to bottom, once. It covers the same install as [Install with Helm](/deployment/helm-install), but in full: what to decide first, the secrets and certificate authorities the chart expects, and the edge in front of the platform. When you are done, [GitOps with ArgoCD](/deployment/argocd) shows how to keep the same install in git.
 
-It targets chart **4.53.0 or newer**. That release removed the Python worker and the runtime Redis: the Rust worker is the only worker, and NATS JetStream is the only bus. A values file or a guide that still mentions `runtimeRedis`, `worker.implementation: python` or Redis passwords is out of date, and the chart refuses to render it.
+It targets chart **4.58.1 or newer**. The Rust worker is the only worker since 4.53.0, and NATS JetStream has been the only bus since the runtime Redis was removed in 4.6. A values file or a guide that still mentions `runtimeRedis`, `worker.implementation: python` or Redis passwords is out of date, and the chart refuses to render it.
+
+Installing on Google Cloud? Read [Deploy on Google Cloud (GKE)](/deployment/gcp) alongside this page. It covers Cloud SQL, a GCS bucket without keys, the edge on GKE, and platform models authenticated by a service account.
 
 ## What you end up with
 
@@ -46,7 +48,7 @@ flowchart TB
 Every first-party image and chart is public on `ghcr.io/elitea-ng`, so no image pull secret is needed.
 
 <Note title="You do not need Traefik">
-The chart runs a small Traefik of its own as the worker's **private** platform edge: one Deployment, reachable only from the worker, configured entirely by the chart. You never touch it. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Older deployments used a Traefik `IngressRoute` only for the MCP path, because Traefik's Gateway API support has no regular-expression path match. An implementation that supports `RegularExpression` path matches does not need that. See [The edge](#step-7-the-edge).
+The chart runs a small Traefik of its own as the worker's **private** platform edge: one Deployment, reachable only from the worker, configured entirely by the chart. You never touch it. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
 </Note>
 
 ## Before you start: decide these
@@ -57,7 +59,7 @@ Write the answers down. Every one ends up in a value or a Secret, and several ar
 |---|---|---|---|
 | Public hostname | `elitea.example.com` | `DEPLOYMENT_URL`, OIDC redirect URI, gateway self-origins, HTTPRoute | edit values, re-register the redirect URI |
 | Namespace | `elitea` | everything; NATS, its bootstrap and the platform must share it | reinstall |
-| Chart version | `4.53.0` | `--version` on all three charts, kept equal | upgrade (read [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first) |
+| Chart version | `4.58.1` | `--version` on all three charts, kept equal | upgrade (read [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first) |
 | PostgreSQL server and its `max_connections` | `pg.internal:5432`, `200` | the database DSN Secrets, `postgresql.maxConnections` | edit values; the chart re-checks the connection budget |
 | Bucket and region | `elitea-artifacts`, `eu-west-1` | `STORAGE_*` / `S3_*` env | data does not move by itself |
 | Identity provider and client | issuer URL, client id, client secret | `OIDC_*` env and a Secret | edit values |
@@ -206,7 +208,7 @@ With CloudNativePG, a Cluster with `enableSuperuserAccess: true` publishes a Sec
 </Tab>
 </Tabs>
 
-**TLS.** Put `sslmode=require` (or `verify-full`, with the CA in the pod) in both DSNs. The DSN is a plain libpq URL. Generate the password URL-safe, as the Step 4 script does: a `/` or `+` in it breaks URL parsing, and the error then names a host or port instead of the password.
+**TLS.** Put `sslmode=require` in both DSNs. The chart has no mount for a server CA bundle, so `verify-full` is not available yet. The DSN is a plain libpq URL. Generate the password URL-safe, as the Step 4 script does: a `/` or `+` in it breaks URL parsing, and the error then names a host or port instead of the password.
 
 ### The connection budget
 
@@ -236,7 +238,7 @@ kubectl -n elitea create secret generic elitea-main-storage-secrets \
   --from-literal=s3-secret-key='<secret key>'
 ```
 
-On AWS with IRSA, or on any cloud with workload identity, skip the Secret, remove the two `S3_*` entries from `main.secrets` in Step 6, and annotate `main.serviceAccount`. For a self-hosted MinIO, RustFS or Ceph that you administer, `objectInit.enabled: true` creates the bucket from the same Secret. Azure Blob and GCS use `STORAGE_BACKEND: azure` or `gcs` with their own variables. Uploads up to 150 MiB are accepted by default (`ARTIFACT_MAX_OBJECT_BYTES`).
+On AWS with IRSA, or on any cloud with workload identity, skip the Secret, remove the two `S3_*` entries from `main.secrets` in Step 6, and annotate `main.serviceAccount`. For a self-hosted MinIO, RustFS or Ceph that you administer, `objectInit.enabled: true` creates the bucket from the same Secret. Azure Blob and GCS use `STORAGE_BACKEND: azure` or `gcs` with their own variables. For GCS with Workload Identity, which needs no Secret, see [Deploy on Google Cloud](/deployment/gcp#gcs-bucket-with-no-keys). Uploads up to 150 MiB are accepted by default (`ARTIFACT_MAX_OBJECT_BYTES`).
 
 ## Step 4: Mint the secrets
 
@@ -417,7 +419,7 @@ Scripts written before 4.7 also mint `redis-*` passwords, a Redis server keypair
 NATS is the platform's bus for live updates, presence, LLM budget counters and the runtime command bus. It runs mTLS-only, with one account per plane. Its bootstrap Job creates every stream, KV bucket and durable consumer. elitea-main refuses to start until they exist, so install these two first, **in the platform's namespace**:
 
 ```bash
-VERSION=4.53.0
+VERSION=4.58.1
 
 # The sizing profiles ship inside the chart. The base values alone do
 # not turn JetStream storage on, so always apply one of them.
@@ -683,8 +685,116 @@ Toolkit connection checks, MCP servers, MCP OAuth and webhooks have their own al
 <Accordion title="Indexing sources and the document extractor">
 The worker's index runs reach a default set of public SaaS hosts (GitHub, GitLab, Bitbucket, Azure DevOps, Figma, Zephyr and Xray cloud). Self-hosted sources need `worker.runtime.indexEgressAllowlist`. PDF and Office extraction needs `worker.extractor.enabled: true`, which adds a sidecar of about 2.5Gi to the worker pod. Without it, those files are skipped as unsupported.
 </Accordion>
-<Accordion title="Optional components left off">
-DeepWiki (`deepwiki`), Inventory (`inventory`), the egress proxy for per-project host allowlists (`egressProxy`) and the Kubernetes sandbox (`sandboxKubernetes`) are off by default. Each needs its own Secrets and, where it applies, its own database role. Turn them on one at a time after the base install works, following their blocks in the chart's `values.yaml`.
+</AccordionGroup>
+
+### Optional components
+
+The values above install the core platform. The components below are off by default. Turn each one on after the base install works, one at a time, and render after each change.
+
+| Component | What it adds | Turn it on when |
+|---|---|---|
+| Document extractor (`worker.extractor`) | PDF and Office text extraction, as a sidecar of about 2.5Gi in the worker pod | users index or attach PDF, Word, Excel or PowerPoint files. Without it, those files are skipped as unsupported |
+| DeepWiki (`deepwiki`) | generated, searchable wikis of git repositories | you want the DeepWiki feature |
+| Inventory (`inventory`) | the code and knowledge graph behind Inventory | you want the Inventory feature |
+| Cloud executor (`sandboxKubernetes`) | agent workspaces run in gVisor-isolated pods in a separate namespace | users choose **Send to cloud** |
+| Egress proxy (`egressProxy`) | per-project host allowlists for cloud-executor workspaces | you run the cloud executor and projects restrict its network to named hosts |
+| PgBouncer (`pgbouncer`) | a transaction-mode pooler in front of elitea-main | you need more elitea-main replicas than `max_connections` allows |
+
+<Warning title="Issuers of the optional components">
+DeepWiki, Inventory and the egress proxy's audit certificate default to a cert-manager **`ClusterIssuer`**. This guide creates namespaced `Issuer`s in Step 1, so set `kind: Issuer` in each component's `issuerRef`, as the snippets below do. Otherwise the certificates never issue, and the pods wait for their Secrets forever.
+</Warning>
+
+<AccordionGroup>
+<Accordion title="Document extractor">
+```yaml
+worker:
+  extractor:
+    enabled: true
+```
+It needs the indexing runtime, which the values above already turn on. No Secret is needed.
+</Accordion>
+<Accordion title="DeepWiki and Inventory">
+Each one is a separate Deployment that elitea-main calls over mTLS. It writes its own schema (`deepwiki_build`, `inventory_graph`) into the platform database. The database owner from Step 2 already has the rights it needs, and Inventory also uses the `vector` extension created there.
+
+Each one also needs a git host allowlist, because cloning is denied by default. Set the same list on the component and on elitea-main. Then create the shared identity Secrets:
+
+```bash
+for c in deepwiki inventory; do
+  k create secret generic "elitea-$c-secrets" \
+    --from-literal=identity-secret="$(openssl rand -base64 32 | tr -d '\n=')"
+done
+```
+
+```yaml
+deepwiki:
+  enabled: true
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
+  mtls:
+    issuerRef: {name: elitea-internal-ca, kind: Issuer}
+inventory:
+  enabled: true
+  env:
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
+  mtls:
+    issuerRef: {name: elitea-internal-ca, kind: Issuer}
+main:
+  env:
+    ELITEA_DEEPWIKI_ENABLED: "true"
+    ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki-svc:8443"
+    ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
+    ELITEA_DEEPWIKI_CLIENT_CERT_FILE: "/run/elitea-deepwiki/tls.crt"
+    ELITEA_DEEPWIKI_CLIENT_KEY_FILE: "/run/elitea-deepwiki/tls.key"
+    ELITEA_DEEPWIKI_CA_FILE: "/run/elitea-deepwiki/ca.crt"
+    ELITEA_INVENTORY_ENABLED: "true"
+    ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory-svc:8443"
+    ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
+    ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
+    ELITEA_INVENTORY_CLIENT_CERT_FILE: "/run/elitea-inventory/tls.crt"
+    ELITEA_INVENTORY_CLIENT_KEY_FILE: "/run/elitea-inventory/tls.key"
+    ELITEA_INVENTORY_CA_FILE: "/run/elitea-inventory/ca.crt"
+  fileConfig:
+    deepwikiClientMaterial:
+      enabled: true
+      secretName: elitea-main-deepwiki-client-tls    # issued by the chart
+    inventoryClientMaterial:
+      enabled: true
+      secretName: elitea-main-inventory-client-tls   # issued by the chart
+```
+
+Turn on both halves together. The chart renders `deepwiki.enabled: true` even when elitea-main's facade is off, and you then get a running service that nothing calls.
+</Accordion>
+<Accordion title="Cloud executor and egress proxy">
+Follow [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes). It mints the sandbox material, creates the run-token key pair for the egress proxy, and gives the full values.
+
+The egress proxy is needed only for cloud-executor workspaces whose project limits network access to named hosts. A NetworkPolicy cannot match host names, so those workspaces reach the internet only through the proxy, with a run token signed by elitea-main. If it is off, a turn in such a project is refused with `workspace_run.egress_proxy_unavailable`, and its network access is never widened instead. The proxy does **not** affect the LLM gateway, toolkits or the worker. Those have their own allowlists, described in the accordions above.
+
+The chart refuses `egressProxy.enabled` without both key Secrets, with the same Secret used for both, with fewer than 2 replicas, or without the execution namespace and your cluster's pod and service CIDRs.
+</Accordion>
+<Accordion title="PgBouncer">
+```bash
+k create secret generic elitea-pgbouncer-credentials \
+  --from-literal=user=elitea_v2 --from-file=password=db-password
+# elitea-main's own DSN, pointing at the pooler; same role and database.
+printf 'postgres://elitea_v2:%s@elitea-pgbouncer:6432/elitea_v2?sslmode=disable' \
+  "$(cat db-password)" > database-url-pooled
+k create secret generic elitea-main-db-pooled $(f database-url-pooled)
+```
+```yaml
+pgbouncer:
+  enabled: true
+  postgresHost: pg.internal
+  database: elitea_v2
+  credentialsSecretName: elitea-pgbouncer-credentials
+main:
+  secrets:
+    DATABASE_URL:            # wins over postgresql.existingSecret for main only
+      secretName: elitea-main-db-pooled
+      key: database-url-pooled
+      optional: false
+```
+Only elitea-main's pods go through the pooler. The migration Job, `dbInit`, the scheduler and the gateway keep the direct DSN in `elitea-main-db`. The database name in the pooled DSN must equal `pgbouncer.database`.
 </Accordion>
 </AccordionGroup>
 
@@ -819,7 +929,9 @@ kubectl get pods -A -l app.kubernetes.io/name=envoy --show-labels
 
 If the selector is wrong, the gateway gets connection timeouts from elitea-main while everything in the namespace looks healthy.
 
-### Traefik, ingress-nginx and plain Ingress
+### GKE, Traefik, ingress-nginx and plain Ingress
+
+On GKE, see [The edge on Google Cloud](/deployment/gcp#the-edge). It compares Envoy Gateway with the managed GKE Gateway, which has no regex match, a 30-second default backend timeout, and no gateway pods to select in a NetworkPolicy.
 
 You can keep an existing Traefik. It needs one Gateway API HTTPRoute for everything except MCP, plus one `IngressRoute` with `PathRegexp` and a header-stripping `Middleware` for the MCP path, because Traefik's Gateway API support has no regex match. Elsewhere you do not need Traefik at all. A plain `networking.k8s.io/v1` Ingress has no portable way to remove request headers. The chart therefore refuses `main.ingress` in Ingress mode unless you configure the controller to delete the identity headers and set `main.ingress.identityHeadersStrippedByController: true` to say so.
 
@@ -828,11 +940,11 @@ You can keep an existing Traefik. It needs one Gateway API HTTPRoute for everyth
 1. **Register the redirect URI** `https://elitea.example.com/auth/oidc/callback` with the identity provider. The provider must issue an `email` claim.
 2. **Sign in** at `https://elitea.example.com/` as the account named in `ELITEA_INITIAL_GLOBAL_ADMINS`. That account becomes an administrator during the sign-in, and nothing needs to be run by hand. Your personal project and an auto-issued personal access token are created in the same step. The worker needs that token to act for you in chat.
    - `email:<address>` matches only when the identity provider marks the address verified (`email_verified: true`).
-   - `oidc:<sub>` always matches. Read your exact reference after a first sign-in from `GET /api/v2/social/author` (field `provider_refs`), add it, and sign in again.
+   - `oidc:<sub>` always matches. After a first sign-in, open **Settings › Profile** and copy the **Sign-in reference** row. Add it, and sign in again.
    - The list never demotes anybody. Remove administrators in the admin console instead.
 3. **Check the public project.** The first migration seeds project `1`, "Default Project", which `platform.aiProjectId: "1"` names. Its shared models are what every other project can use. Keep it, or name another existing project. The chart refuses a values file in which the copies of this id disagree.
-4. **Add a model provider.** In the admin console (`/admin/app`), go to **Configuration › LLM Proxy › Providers & models**. Add a credential for OpenAI, Anthropic, Azure OpenAI or an OpenAI-compatible server, then publish the models you want shared ([LLM Proxy](/admin/llm-proxy) has the details). A provider whose host is not in `GATEWAY_EGRESS_ALLOWLIST` is refused at request time.
-5. **Optional: SAML and SCIM.** SAML providers are configured only in the admin console (**Configuration › Authentication**), so sign in through OIDC first. SCIM accepts only a SCIM client credential created on the same page. Personal access tokens are refused there.
+4. **Add a model provider.** In the admin console (`/admin/app`), go to **Configuration › LLM Proxy › Providers & models**. Add a credential for OpenAI, Anthropic, Azure OpenAI, Vertex AI, Amazon Bedrock, EPAM AI DIAL or an OpenAI-compatible server (vLLM, Ollama). Then publish the models you want shared, and choose the platform default model on the same tab. [LLM Proxy](/admin/llm-proxy) has the details. A provider whose host is not in `GATEWAY_EGRESS_ALLOWLIST` is refused at request time. On GKE, Vertex AI and AI DIAL can authenticate as the gateway's Google service account instead of with a key; see [Platform models with a service account](/deployment/gcp#platform-models-with-a-service-account).
+5. **Optional: SAML and SCIM.** SAML providers are configured only in the admin console (**Configuration › Authentication**), so sign in through OIDC first. Because OIDC is configured in the values file, the sign-in routes already exist, and a SAML provider added later needs no restart. Give the identity provider the metadata URL `https://elitea.example.com/auth/saml/metadata`. SCIM accepts only a SCIM client credential created on the same page; personal access tokens are refused there. Bind directory groups to a project and a role on the same page. [Authentication](/admin/authentication) describes every field.
 
 Then open a chat, pick a shared model and send a message. That one exchange exercises the edge, elitea-main, NATS, the command bus, the worker, the platform edge, the agent-state database, the LLM gateway and the provider.
 
@@ -899,7 +1011,7 @@ The test that matters. If it hangs or fails, use the table below.
 - **Upgrades.** Bump all three charts to the same version. Read the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between your version and the new one first. The chart refuses values that a release made obsolete, so render with `helm template` before you upgrade. Migrations run as a hook on every upgrade.
 - **Verify what you install.** Charts and images are signed with cosign:
   ```bash
-  cosign verify ghcr.io/elitea-ng/charts/elitea:4.53.0 \
+  cosign verify ghcr.io/elitea-ng/charts/elitea:4.58.1 \
     --certificate-identity-regexp \
       '^https://github.com/elitea-ng/elitea-platform/' \
     --certificate-oidc-issuer \
@@ -912,4 +1024,4 @@ The test that matters. If it hangs or fails, use the table below.
 
 Continue with [Post-install configuration](/deployment/configuration) and [Day-2 operations](/deployment/operations).
 
-{/* source: deploy/helm/elitea/values.yaml (postgresql, dbInit, objectInit, agentStateMigrations, networkPolicies, main.env, main.runtime, llmGateway, worker, vector); deploy/helm/elitea/templates/guards.yaml; deploy/helm/elitea/values-standalone.yaml; deploy/helm/elitea/values-auth-minimal.yaml (public_origin); deploy/gateway-api/httproute.yaml; deploy/traefik/dynamic.yml (mcp router); deploy/scripts/gen-runtime-certs.sh; deploy/helm/nats/README.md; docs/UPGRADING.md (runtime-redis removed, NATS mTLS, auth document v2, Form sign-in off); reference deployment argocd-lab elitea-platform/ (values, manifests, mint script). The values file on this page renders with `helm template` against the chart at 4.53.0. */}
+{/* source: deploy/helm/elitea/values.yaml (postgresql, dbInit, objectInit, agentStateMigrations, networkPolicies, main.env, main.runtime, llmGateway, worker, vector); deploy/helm/elitea/templates/guards.yaml; deploy/helm/elitea/values-standalone.yaml; deploy/helm/elitea/values-auth-minimal.yaml (public_origin); deploy/gateway-api/httproute.yaml; deploy/traefik/dynamic.yml (mcp router); deploy/scripts/gen-runtime-certs.sh; deploy/helm/nats/README.md; docs/UPGRADING.md (runtime-redis removed, NATS mTLS, auth document v2, Form sign-in off); reference deployment argocd-lab elitea-platform/ (values, manifests, mint script). The values file on this page renders with `helm template` against the chart at 4.58.1. */}

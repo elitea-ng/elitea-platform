@@ -215,6 +215,8 @@ func gatewayCredentialRequestBody(configType string, data map[string]any) checkC
 		VertexLocation:        strVal(data, "vertex_location"),
 		VertexCredentials:     data["vertex_credentials"],
 		UseAnthropicEndpoints: useAnthropic,
+		AuthMode:              strVal(data, "auth_mode"),
+		TokenAudience:         strVal(data, "token_audience"),
 	}
 }
 
@@ -373,7 +375,8 @@ func (h *Handler) checkLLMModelConnection(w http.ResponseWriter, r *http.Request
 	if hasCaller {
 		userID = strconv.FormatInt(int64(caller), 10)
 	}
-	result, err := checker.CheckModel(WithConnectionCheckProjectID(ctx, projectID), ModelConnectionCheck{
+	signedProject := h.modelProbeSigningProject(projectID, credentialProject, credential)
+	result, err := checker.CheckModel(WithConnectionCheckProjectID(ctx, signedProject), ModelConnectionCheck{
 		CredentialType: credentialType,
 		Credential:     credential,
 		Model:          input.model,
@@ -384,7 +387,7 @@ func (h *Handler) checkLLMModelConnection(w http.ResponseWriter, r *http.Request
 	slog.InfoContext(ctx, "check_connection: llm_model test",
 		"project_id", projectID, "user_id", userID, "configuration_id", input.configID,
 		"credential_project_id", credentialProject, "credential_type", credentialType,
-		"model", input.model, "success", err == nil && result.Success, "reason", result.Reason)
+		"signed_project_id", signedProject, "model", input.model, "success", err == nil && result.Success, "reason", result.Reason)
 	if err != nil {
 		slog.ErrorContext(ctx, "check_connection: llm_model gateway call failed",
 			"project_id", projectID, "type", credentialType, "err", err)
@@ -402,6 +405,30 @@ func (h *Handler) checkLLMModelConnection(w http.ResponseWriter, r *http.Request
 		extra["unsupported"] = true
 	}
 	writeModelCheckFailure(w, result.Message, extra)
+}
+
+// modelProbeSigningProject is the project the gateway probe is signed as.
+//
+// It is the path project, except for a KEYLESS platform credential: a shared
+// row of the public project with auth_mode=workload_identity. The gateway
+// admits a keyless probe only when the signed project is the public project
+// (checkconnection_workload_identity.go), while the runtime serves that same
+// shared row to every project. Without this a tenant could chat with a model
+// on the platform's keyless provider and never test it. Signing as the public
+// project is safe here because nothing of the probe is caller-chosen: the
+// credential was resolved on the server from the rebuilt reference (title and
+// private flag only), refusePlatformCredentialProbe already limited the model
+// to one the platform publishes with that credential, and the audit line above
+// still names the caller's project and user.
+func (h *Handler) modelProbeSigningProject(projectID string, credentialProject int64, credential map[string]any) string {
+	if h.publicProjectID <= 0 || credentialProject != int64(h.publicProjectID) {
+		return projectID
+	}
+	if mode, ok := configurationapp.CredentialAuthMode(credential); !ok ||
+		mode != configurationapp.CredentialAuthModeWorkloadIdentity {
+		return projectID
+	}
+	return strconv.Itoa(h.publicProjectID)
 }
 
 // acquireModelProbe takes one test from the project and user's bound.

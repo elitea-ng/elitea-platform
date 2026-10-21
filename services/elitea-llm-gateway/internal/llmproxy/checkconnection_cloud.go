@@ -255,6 +255,12 @@ type vertexServiceAccountDoc struct {
 // through the egress allowlist. Refusing to check them is honest; checking
 // them through an ungated fetch would not be.
 func vertexCheckCredential(req checkConnectionRequest) (vertexServiceAccountDoc, string, error) {
+	// An ADMITTED keyless payload carries no document: the token comes from
+	// the gateway's own identity (checkconnection_workload_identity.go). The
+	// project and the location are still required, as buildKey requires them.
+	if req.keyless {
+		return vertexCheckKeyless(req)
+	}
 	var missing []string
 	if strings.TrimSpace(req.VertexProject) == "" {
 		missing = append(missing, "vertex_project")
@@ -299,6 +305,32 @@ func vertexCheckCredential(req checkConnectionRequest) (vertexServiceAccountDoc,
 	return doc, location, nil
 }
 
+// vertexCheckKeyless validates the two fields an admitted keyless vertex_ai
+// payload carries. It returns an empty document: there is none to read.
+func vertexCheckKeyless(req checkConnectionRequest) (vertexServiceAccountDoc, string, error) {
+	var missing []string
+	if strings.TrimSpace(req.VertexProject) == "" {
+		missing = append(missing, "vertex_project")
+	}
+	location := strings.TrimSpace(req.VertexLocation)
+	if location == "" {
+		missing = append(missing, "vertex_location")
+	}
+	if len(missing) > 0 {
+		return vertexServiceAccountDoc{}, "", &checkConnectionFieldError{
+			reason: checkConnectionReasonMissingFields,
+			detail: "this credential is missing: " + strings.Join(missing, ", "),
+		}
+	}
+	if _, global := vertexGlobalLocations[location]; !global && !vertexLocationPattern.MatchString(location) {
+		return vertexServiceAccountDoc{}, "", &checkConnectionFieldError{
+			reason: checkConnectionReasonMissingFields,
+			detail: "vertex_location is not a valid Vertex AI location",
+		}
+	}
+	return vertexServiceAccountDoc{}, location, nil
+}
+
 // vertexCheckTokenURI returns the OAuth token endpoint the document names, or
 // Google's default. It refuses anything that is not an absolute https URL:
 // the token exchange sends a signed JWT assertion for the tenant's own service
@@ -338,6 +370,12 @@ func checkConnectionVertexTargets(req checkConnectionRequest) ([]string, error) 
 	doc, location, err := vertexCheckCredential(req)
 	if err != nil {
 		return nil, err
+	}
+	// A keyless payload exchanges nothing with a token endpoint named in a
+	// document: its token comes from the gateway's own identity, which is not
+	// a tenant-named destination. The Vertex API host is the one target.
+	if req.keyless {
+		return []string{"https://" + vertexCheckAPIHost(location)}, nil
 	}
 	tokenURI, err := vertexCheckTokenURI(doc)
 	if err != nil {
@@ -394,6 +432,18 @@ func probeVertexPublisherModels(ctx context.Context, client *http.Client, req ch
 //
 // The token itself is returned to the caller and never logged.
 func mintVertexAccessToken(ctx context.Context, client *http.Client, req checkConnectionRequest) (string, error) {
+	// A keyless payload was minted for by mintProbeToken, through ADC. It
+	// never falls through to the document exchange below, and an admitted
+	// keyless payload with no token is refused rather than retried here.
+	if req.keyless {
+		if req.bearer == "" {
+			return "", &checkConnectionFieldError{
+				reason: checkConnectionReasonWorkloadIdentityToken,
+				detail: "the gateway could not obtain a token from its workload identity",
+			}
+		}
+		return req.bearer, nil
+	}
 	doc, _, err := vertexCheckCredential(req)
 	if err != nil {
 		return "", err

@@ -77,13 +77,28 @@ import {
   type PlatformModelDraft,
 } from './api/adminLlmPlatformModelsApi';
 import {
+  DIAL_PROTOCOLS,
   formIsComplete,
   formOf,
   modelDraftOf,
   NO_CREDENTIAL_CHOSEN,
+  showsDialProtocol,
   TIERED_MODEL_TYPE,
+  type DialProtocol,
   type ModelForm,
 } from './platformModelForm';
+
+/** The DIAL protocol select's option labels. */
+function dialProtocolLabel(protocol: DialProtocol): string {
+  switch (protocol) {
+    case 'openai':
+      return t('pages.admin.platformModels.dialProtocol.openai', 'OpenAI Responses API');
+    case 'anthropic':
+      return t('pages.admin.platformModels.dialProtocol.anthropic', 'Anthropic Messages API');
+    case '':
+      return t('pages.admin.platformModels.dialProtocol.default', 'Default (Azure OpenAI route)');
+  }
+}
 
 /**
  * What the provider select says when nothing is chosen.
@@ -119,6 +134,8 @@ export interface PlatformModelDialogProps {
   readonly modelTypes: readonly string[];
   /** The platform credentials a model may name, from the server. */
   readonly credentialNames: readonly string[];
+  /** Each credential's type, by title. `undefined` from an older server. */
+  readonly credentialTypes?: Readonly<Record<string, string>> | undefined;
   readonly isSaving: boolean;
   readonly serverError: string | undefined;
   readonly onClose: () => void;
@@ -130,6 +147,7 @@ export function PlatformModelDialog({
   editing,
   modelTypes,
   credentialNames,
+  credentialTypes,
   isSaving,
   serverError,
   onClose,
@@ -154,6 +172,8 @@ export function PlatformModelDialog({
   const tiered = form.type === TIERED_MODEL_TYPE;
   const credentialMissing = form.credential === NO_CREDENTIAL_CHOSEN;
   const canSubmit = formIsComplete(form) && !isSaving;
+  const credentialType =
+    credentialTypes === undefined ? undefined : (credentialTypes[form.credential] ?? '');
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -245,6 +265,34 @@ export function PlatformModelDialog({
           ))}
         </TextField>
 
+        {/* DIAL serves three protocol families through one key, and the choice
+            belongs to the MODEL. The gateway reads it for an ai_dial credential
+            only, so the select is not offered for any other. */}
+        {showsDialProtocol(form, credentialType) ? (
+          <TextField
+            select
+            label={t('pages.admin.platformModels.field.dialProtocol', 'DIAL protocol')}
+            value={form.dialProtocol}
+            onChange={(event) => update('dialProtocol', event.target.value as DialProtocol)}
+            size="small"
+            slotProps={{
+              select: { displayEmpty: true },
+              inputLabel: { shrink: true },
+              htmlInput: { 'data-testid': 'platform-model-dial-protocol' },
+            }}
+            helperText={t(
+              'pages.admin.platformModels.field.dialProtocolHelp',
+              'Default uses the Azure-shaped chat completions route. OpenAI Responses API serves gpt models only. Anthropic Messages API serves Claude models only, and is the route that supports extended thinking.',
+            )}
+          >
+            {DIAL_PROTOCOLS.map((value) => (
+              <MenuItem key={value} value={value}>
+                {dialProtocolLabel(value)}
+              </MenuItem>
+            ))}
+          </TextField>
+        ) : null}
+
         {/* Offered for EVERY kind. The grant is a fact about who the row is
             for, not about what the model can do, so all five model types carry
             it — unlike the chat fields below. */}
@@ -262,7 +310,7 @@ export function PlatformModelDialog({
           data-testid="platform-model-save"
           onClick={() => {
             // The stored object is the merge base — see platformModelForm.ts.
-            onSubmit(modelDraftOf(form, editing?.data));
+            onSubmit(modelDraftOf(form, editing?.data, credentialType));
           }}
         >
           {isSaving

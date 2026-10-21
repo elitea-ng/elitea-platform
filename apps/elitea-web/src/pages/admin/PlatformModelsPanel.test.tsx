@@ -752,3 +752,58 @@ describe('PlatformModelsPanel — who the model is available to', () => {
     ]);
   });
 });
+
+describe('PlatformModelsPanel — the DIAL protocol', () => {
+  const CREDENTIAL_TYPES = { 'platform-openai': 'open_ai', 'platform-dial': 'ai_dial' };
+
+  it('offers the protocol for a DIAL credential only, and sends the choice', async () => {
+    useModels([], {
+      credential_names: ['platform-openai', 'platform-dial'],
+      credential_types: CREDENTIAL_TYPES,
+    });
+    const bodies: unknown[] = [];
+    captureCreates(bodies);
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByTestId('platform-models-add'));
+    await fillNewModel();
+    // platform-openai is not a DIAL credential: no select.
+    expect(screen.queryByRole('combobox', { name: /DIAL protocol/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole('combobox', { name: /Platform provider/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'platform-dial' }));
+    await userEvent.click(await screen.findByRole('combobox', { name: /DIAL protocol/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'OpenAI Responses API' }));
+    await userEvent.click(screen.getByTestId('platform-model-save'));
+
+    await waitFor(() => {
+      expect(bodies).toHaveLength(1);
+    });
+    expect((bodies[0] as { data: Record<string, unknown> }).data['dial_protocol']).toBe('openai');
+  });
+
+  it('sends no protocol for the default', async () => {
+    useModels([], {
+      credential_names: ['platform-dial'],
+      credential_types: CREDENTIAL_TYPES,
+    });
+    const bodies: unknown[] = [];
+    captureCreates(bodies);
+    renderAdminRoute(<PlatformModelsPanel />);
+
+    await userEvent.click(await screen.findByTestId('platform-models-add'));
+    await userEvent.type(await screen.findByTestId('platform-model-name'), 'my-model');
+    await userEvent.type(screen.getByTestId('platform-model-wire-name'), 'gpt-4o-mini');
+    await userEvent.click(screen.getByRole('combobox', { name: /Platform provider/ }));
+    await userEvent.click(await screen.findByRole('option', { name: 'platform-dial' }));
+    expect(await screen.findByRole('combobox', { name: /DIAL protocol/ })).toHaveTextContent(
+      'Default (Azure OpenAI route)',
+    );
+    await userEvent.click(screen.getByTestId('platform-model-save'));
+
+    await waitFor(() => {
+      expect(bodies).toHaveLength(1);
+    });
+    expect(Object.hasOwn((bodies[0] as { data: Record<string, unknown> }).data, 'dial_protocol')).toBe(false);
+  });
+});
