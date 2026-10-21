@@ -1198,6 +1198,161 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     let _ = std::fs::remove_dir_all(&scratch);
 }
 
+/// The callback hop to elitea-main's platform listener requires a client
+/// certificate. The configured identity is presented; without it the
+/// handshake fails and nothing is sent; an unreadable key names its setting.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One PKI, one server, three clients.
+async fn the_client_identity_is_presented_to_a_listener_that_requires_one() {
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa,
+        KeyPair, KeyUsagePurpose, date_time_ymd,
+    };
+    use tokio_rustls::rustls;
+    use tokio_rustls::rustls::pki_types::{
+        CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject,
+    };
+
+    let today = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() / 86_400),
+    )
+    .unwrap_or(0);
+    let (y0, m0, d0) = civil_from_days(today - 1);
+    let (y1, m1, d1) = civil_from_days(today + 30);
+    let validity = |params: &mut CertificateParams| {
+        params.not_before = date_time_ymd(y0, m0, d0);
+        params.not_after = date_time_ymd(y1, m1, d1);
+    };
+    let ca_key = KeyPair::generate().expect("ca key");
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    validity(&mut ca_params);
+    let ca = CertifiedIssuer::self_signed(ca_params, ca_key).expect("ca cert");
+    let leaf = |names: Vec<String>, purpose: ExtendedKeyUsagePurpose| {
+        let key = KeyPair::generate().expect("leaf key");
+        let mut params = CertificateParams::new(names).expect("leaf params");
+        params.extended_key_usages = vec![purpose];
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        validity(&mut params);
+        let certificate = params.signed_by(&key, &ca).expect("leaf cert");
+        (certificate.pem(), key)
+    };
+    let (server_pem, server_key) = leaf(
+        vec!["localhost".to_owned()],
+        ExtendedKeyUsagePurpose::ServerAuth,
+    );
+    let (client_pem, client_key) = leaf(
+        vec!["elitea-subapp-host".to_owned()],
+        ExtendedKeyUsagePurpose::ClientAuth,
+    );
+
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_slice(ca.pem().as_bytes()).expect("ca der"))
+        .expect("root");
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        Arc::clone(&provider),
+    )
+    .build()
+    .expect("client verifier");
+    let config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(
+            vec![CertificateDer::from_pem_slice(server_pem.as_bytes()).expect("server der")],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
+        )
+        .expect("server config");
+    let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = tcp.local_addr().expect("address");
+    let gateway_state = Gateway {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        script: Arc::new(|_, seen| embeddings_reply(seen, 3)),
+    };
+    let app = Router::new()
+        .fallback(handle)
+        .with_state(gateway_state.clone());
+    let listener = TlsListener {
+        tcp,
+        acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
+    };
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let base = format!("https://localhost:{}/llm/v1", address.port());
+
+    let scratch =
+        std::env::temp_dir().join(format!("elitea-model-client-mtls-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&scratch);
+    let ca_file = scratch.join("ca.pem");
+    let cert_file = scratch.join("client.crt");
+    let key_file = scratch.join("client.key");
+    std::fs::write(&ca_file, ca.pem()).expect("ca file");
+    std::fs::write(&cert_file, client_pem).expect("cert file");
+    std::fs::write(&key_file, client_key.serialize_pem()).expect("key file");
+    let identity = elitea_model_client::ClientIdentityFiles {
+        cert_file,
+        cert_file_setting: "TEST_CALLBACK_CERT_FILE",
+        key_file,
+        key_file_setting: "TEST_CALLBACK_KEY_FILE",
+    };
+
+    let with_identity = TransportSettings {
+        ca_file: Some(ca_file.clone()),
+        client_identity: Some(identity.clone()),
+        ..fast()
+    };
+    let client = EmbeddingClient::new(
+        transport(&with_identity),
+        settings(&base, json!({"max_retries": 0})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let vectors = ok(client
+        .embed_documents(&texts(2), &StopSignal::default())
+        .await);
+    assert_eq!(vectors.len(), 2);
+
+    let without_identity = EmbeddingClient::new(
+        transport(&TransportSettings {
+            ca_file: Some(ca_file.clone()),
+            ..fast()
+        }),
+        settings(&base, json!({"max_retries": 0})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let error = err(without_identity
+        .embed_documents(&texts(1), &StopSignal::default())
+        .await);
+    assert!(
+        error.message.contains("cannot reach the model gateway"),
+        "{error}"
+    );
+    assert_eq!(
+        gateway_state.requests().len(),
+        1,
+        "the call without a client certificate sent nothing"
+    );
+
+    let missing_key = TransportSettings {
+        client_identity: Some(elitea_model_client::ClientIdentityFiles {
+            key_file: scratch.join("absent.key"),
+            ..identity
+        }),
+        ..fast()
+    };
+    let error = err(Transport::new(&missing_key));
+    assert!(error.message.contains("TEST_CALLBACK_KEY_FILE"), "{error}");
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
 /// A real round trip against the LAN vLLM, when asked for.
 #[tokio::test]
 async fn live_lan_model_chat() {

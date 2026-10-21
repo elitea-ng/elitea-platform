@@ -123,6 +123,9 @@ zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012", "test-support"] }
+# A throwaway runtime CA and workload certificate for the platform MCP
+# identity tests (the version model-client's tests already lock).
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # The invocation suite captures the spans a toolkit call emits.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }

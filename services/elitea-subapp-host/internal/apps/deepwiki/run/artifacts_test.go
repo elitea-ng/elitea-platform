@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
 // The upload is the platform's artifact route, bearer-authenticated, the
@@ -46,7 +47,7 @@ func TestTheHTTPClientUploadsTheWayThePythonClientDid(t *testing.T) {
 	if settings.BaseURL != server.URL || settings.ProjectID != "90200" {
 		t.Fatalf("%+v", settings)
 	}
-	client, err := run.NewHTTPArtifactClient(settings, "")
+	client, err := run.NewHTTPArtifactClient(settings, artifacts.CallbackTLS{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestTheHTTPClientUploadsTheWayThePythonClientDid(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	for _, s := range []run.ArtifactSettings{{APIKey: "k"}, {BaseURL: "http://x"}} {
-		if _, err := run.NewHTTPArtifactClient(s, ""); err == nil {
+		if _, err := run.NewHTTPArtifactClient(s, artifacts.CallbackTLS{}); err == nil {
 			t.Fatalf("%+v was accepted", s)
 		}
 	}

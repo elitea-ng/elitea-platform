@@ -202,6 +202,11 @@ pub struct Settings {
 pub const CALLBACK_CA_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CA_FILE";
 /// The listener's CA, which the callback hop trusted before the split.
 pub const TLS_CA_SETTING: &str = "ELITEA_DEEPWIKI_TLS_CA_FILE";
+/// The client certificate the callback hop presents (see
+/// [`ModelEnvSettings::callback_identity`]).
+pub const CALLBACK_CERT_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE";
+/// Its private key.
+pub const CALLBACK_KEY_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE";
 
 /// What the environment decides about model calls; the invocation's
 /// `llm_settings` decide the rest (`llm::settings`).
@@ -210,14 +215,20 @@ pub struct ModelEnvSettings {
     /// A PEM bundle trusted in addition to the platform roots on the
     /// callback hop (the model gateway and the artifact API behind
     /// `llm_settings.api_base`): `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` — the
-    /// runtime CA when that hop is TLS through platform-edge (ADR-0027) —
-    /// else `ELITEA_DEEPWIKI_TLS_CA_FILE`, what it read before the two were
-    /// separated. The Go host reads the same pair in the same order
+    /// runtime CA when that hop is elitea-main's internal mTLS platform
+    /// listener — else `ELITEA_DEEPWIKI_TLS_CA_FILE`, what it read before the
+    /// two were separated. The Go host reads the same pair in the same order
     /// (`spi.Settings.CallbackCA`).
     pub tls_ca_file: Option<PathBuf>,
     /// Which of the two variables `tls_ca_file` came from, so an unreadable
     /// bundle names the setting to fix.
     pub tls_ca_setting: &'static str,
+    /// The runtime-CA client certificate the callback hop presents:
+    /// `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` and
+    /// `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE`, both or neither. elitea-main's
+    /// platform listener requires one; a cleartext or ordinary TLS callback
+    /// origin never asks for it.
+    pub callback_identity: Option<crate::llm::ClientIdentityFiles>,
     /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
     /// inputs per embedding request, default 64.
     pub embed_batch_size: usize,
@@ -260,6 +271,20 @@ fn model_settings(
                 "{ENV_PREFIX}EMBED_CTX_TOKENS must be a whole number of at least {MIN_SPLIT_TOKENS}, got '{ctx_tokens}'"
             ))
         })?;
+    let callback_identity = match (raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE")) {
+        (None, None) => None,
+        (Some(cert), Some(key)) => Some(crate::llm::ClientIdentityFiles {
+            cert_file: PathBuf::from(cert),
+            cert_file_setting: CALLBACK_CERT_SETTING,
+            key_file: PathBuf::from(key),
+            key_file_setting: CALLBACK_KEY_SETTING,
+        }),
+        _ => {
+            return Err(ConfigError(format!(
+                "{CALLBACK_CERT_SETTING} and {CALLBACK_KEY_SETTING} must be set together"
+            )));
+        }
+    };
     Ok(ModelEnvSettings {
         tls_ca_file: raw("CALLBACK_CA_FILE")
             .or_else(|| raw("TLS_CA_FILE"))
@@ -269,6 +294,7 @@ fn model_settings(
         } else {
             TLS_CA_SETTING
         },
+        callback_identity,
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
@@ -1165,6 +1191,7 @@ mod tests {
             Ok(ModelEnvSettings {
                 tls_ca_file: None,
                 tls_ca_setting: TLS_CA_SETTING,
+                callback_identity: None,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
                 embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
@@ -1184,6 +1211,7 @@ mod tests {
             Ok(ModelEnvSettings {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
                 tls_ca_setting: TLS_CA_SETTING,
+                callback_identity: None,
                 embed_batch_size: 16,
                 embed_concurrency: 2,
                 embed_ctx_tokens: 4096,
@@ -1201,6 +1229,33 @@ mod tests {
             split,
             Ok((Some(PathBuf::from("/runtime-ca.pem")), CALLBACK_CA_SETTING))
         );
+        // The callback client certificate: both halves or neither.
+        let identity = settings(&[
+            ("ELITEA_DEEPWIKI_CALLBACK_CERT_FILE", "/run/callback.crt"),
+            ("ELITEA_DEEPWIKI_CALLBACK_KEY_FILE", "/run/callback.key"),
+        ])
+        .map(|s| s.model.callback_identity);
+        assert_eq!(
+            identity,
+            Ok(Some(crate::llm::ClientIdentityFiles {
+                cert_file: PathBuf::from("/run/callback.crt"),
+                cert_file_setting: CALLBACK_CERT_SETTING,
+                key_file: PathBuf::from("/run/callback.key"),
+                key_file_setting: CALLBACK_KEY_SETTING,
+            }))
+        );
+        for half in [
+            "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE",
+            "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE",
+        ] {
+            let refused = settings(&[(half, "/run/half.pem")]);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("must be set together")),
+                "{half}: {refused:?}"
+            );
+        }
         assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
         for bad in ["0", "255", "-1", "8k"] {
             let refused = settings(&[("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", bad)]);
@@ -1227,6 +1282,7 @@ impl From<&ModelEnvSettings> for crate::llm::TransportSettings {
         Self {
             ca_file: settings.tls_ca_file.clone(),
             ca_file_setting: settings.tls_ca_setting,
+            client_identity: settings.callback_identity.clone(),
             user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
             timeouts: crate::llm::Timeouts {
                 stream_total: settings.stream_total,
@@ -1258,6 +1314,7 @@ mod model_env_tests {
         let settings = ModelEnvSettings {
             tls_ca_file: None,
             tls_ca_setting: TLS_CA_SETTING,
+            callback_identity: None,
             embed_batch_size: 16,
             embed_concurrency: 3,
             embed_ctx_tokens: 4096,

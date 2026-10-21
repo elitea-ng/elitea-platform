@@ -198,6 +198,12 @@ async fn harness(transport: Arc<Recorded>) -> Harness {
         ),
         removal: None,
         platform_origin: "https://platform.internal".to_owned(),
+        platform_transport: Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        ),
         allowlist: elitea_connectors::egress::HostAllowlist::parse(Some(
             "graph.microsoft.com login.microsoftonline.com contoso.sharepoint.com dev.azure.com",
         )),

@@ -110,12 +110,6 @@ func configSets() []configSet {
 			},
 			mountedBy: "deploy/docker-compose.e2e-standalone.yml and deploy/docker-compose.standalone-full.yml mount it alone",
 		},
-		{
-			name:         "runtime platform edge",
-			files:        []string{"deploy/runtime/platform-edge-dynamic.yml"},
-			composeFiles: []string{"deploy/docker-compose.standalone-full.yml"},
-			mountedBy:    "deploy/docker-compose.standalone-full.yml mounts it alone at /etc/traefik/dynamic.yml",
-		},
 	}
 }
 

@@ -941,7 +941,9 @@ async fn artifact_documents_keep_the_full_key_so_two_folders_do_not_collide() {
         ],
         requests: std::sync::Mutex::new(Vec::new()),
     });
-    harness.runtime.transport = transport.clone();
+    // The artifact store is the platform's object API: the platform
+    // transport (the one presenting the worker's client certificate).
+    harness.runtime.platform_transport = transport.clone();
     let configuration = json!({"id": 7, "type": "artifact", "toolkit_name": "files", "settings": {"bucket": "docs"}});
     let now = || 1_700_000_000_000_i64;
     let mut last = None;

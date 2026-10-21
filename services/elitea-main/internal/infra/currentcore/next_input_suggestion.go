@@ -145,7 +145,30 @@ func NewNextInputSuggestionResolver(
 	}, nil
 }
 
-func NewTLSClient(caFile string) (*http.Client, error) {
+// NewTLSClient builds the client for an https current-Main origin, trusting
+// the runtime CA in caFile. With certFile and keyFile it also presents that
+// client identity: the platform listener (ELITEA_RUNTIME_PLATFORM_ADDRESS)
+// requires a runtime-CA client certificate at the handshake. Both or neither.
+func NewTLSClient(caFile, certFile, keyFile string) (*http.Client, error) {
+	if (certFile == "") != (keyFile == "") {
+		return nil, errors.New("current Core client certificate and key must be set together")
+	}
+	var certificates []tls.Certificate
+	if certFile != "" {
+		certificatePEM, err := securefile.Read(certFile, maxRuntimeCABytes, securefile.PublicMaterial)
+		if err != nil {
+			return nil, fmt.Errorf("load current Core client certificate: %w", err)
+		}
+		keyPEM, err := securefile.Read(keyFile, maxRuntimeCABytes, securefile.PrivateMaterial)
+		if err != nil {
+			return nil, fmt.Errorf("load current Core client key: %w", err)
+		}
+		pair, err := tls.X509KeyPair(certificatePEM, keyPEM)
+		if err != nil {
+			return nil, fmt.Errorf("parse current Core client key pair: %w", err)
+		}
+		certificates = []tls.Certificate{pair}
+	}
 	contents, err := securefile.Read(caFile, maxRuntimeCABytes, securefile.PublicMaterial)
 	if err != nil {
 		return nil, fmt.Errorf("load current Core runtime CA: %w", err)
@@ -163,8 +186,9 @@ func NewTLSClient(caFile string) (*http.Client, error) {
 	transport.IdleConnTimeout = 30 * time.Second
 	transport.ResponseHeaderTimeout = defaultRequestTimeout
 	transport.TLSClientConfig = &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		RootCAs:    roots,
+		MinVersion:   tls.VersionTLS13,
+		RootCAs:      roots,
+		Certificates: certificates,
 	}
 	return &http.Client{Transport: transport}, nil
 }

@@ -30,7 +30,7 @@ func TestDownloadRefusesAMissingAndAnOversizedObject(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client, err := artifacts.NewHTTPClient(artifacts.Settings{BaseURL: server.URL, APIKey: "token", ProjectID: "7"}, "")
+	client, err := artifacts.NewHTTPClient(artifacts.Settings{BaseURL: server.URL, APIKey: "token", ProjectID: "7"}, artifacts.CallbackTLS{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2764,13 +2764,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// internal/api/v2/notifications/events.go, and by artifact upload/
 	// download deadlines) would stop reaching the real ResponseWriter.
 	srv := newHTTPServer(publicAddress, r)
+	// The same handler on the internal mTLS platform listener (#1359), when
+	// the runtime configuration opens one.
+	platformSrv, err := newPlatformServer(runtimeConfig, r)
+	if err != nil {
+		return fmt.Errorf("configure platform listener: %w", err)
+	}
 
 	slog.Info("starting server", "addr", srv.Addr, "runtime_enabled", runtimeRoot != nil)
+	if platformSrv != nil {
+		slog.Info("starting platform listener", "addr", platformSrv.Addr)
+	}
 	var runtimeLifecycleRoot runtimeLifecycle
 	if runtimeRoot != nil {
 		runtimeLifecycleRoot = runtimeRoot
 	}
-	if err := serveApplication(ctx, srv, runtimeLifecycleRoot, 15*time.Second); err != nil {
+	servers := applicationServers{public: srv, platform: platformSrv}
+	if err := serveApplication(ctx, servers, runtimeLifecycleRoot, 15*time.Second); err != nil {
 		return err
 	}
 	slog.Info("server stopped")

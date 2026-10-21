@@ -23,9 +23,9 @@ import (
 // `{platform_origin}/artifacts/s3/{bucket}` (elitea-sdk
 // runtime/clients/client.py:115, :1105) where platform_origin is validated
 // to be a bare origin carrying no path at all (elitea-worker-python
-// config.py:187-199), and the platform edge forwards the path verbatim with
-// no stripPrefix/addPrefix (deploy/runtime/platform-edge-dynamic.yml). So
-// the path that actually arrives at elitea-main is /artifacts/s3/{bucket},
+// config.py:187-199), and platform_origin is elitea-main's own platform
+// listener (cmd/elitea-main/platform_listener.go), which serves this same
+// router with no prefix. So the path that arrives is /artifacts/s3/{bucket},
 // and a route mounted under /api/v2 would 404 exactly as before.
 //
 // Despite the name, the response is JSON, not S3's XML: the SDK calls

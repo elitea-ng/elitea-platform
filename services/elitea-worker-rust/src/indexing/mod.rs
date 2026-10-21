@@ -90,7 +90,12 @@ pub(crate) struct IndexIngestRuntime {
     /// `https://host[:port]`: where the artifact connector finds the
     /// platform's object API (the worker's `platform_origin`).
     pub(crate) platform_origin: String,
+    /// The transport to `platform_origin`: elitea-main's mTLS platform
+    /// listener, so it presents the worker's runtime client certificate
+    /// (`transport::platform_http`).
+    pub(crate) platform_transport: Arc<dyn Transport>,
     pub(crate) allowlist: HostAllowlist,
+    /// The connectors' transport to third-party hosts: no client identity.
     pub(crate) transport: Arc<dyn Transport>,
     pub(crate) limits: IndexRunLimits,
     /// The document extraction sidecar (`elitea-doc-extractor`), when the
@@ -162,7 +167,9 @@ impl Default for IndexRunLimits {
 impl IndexIngestRuntime {
     /// A runtime over `vector_target` (`host:port`, mTLS with the worker's
     /// identity), the gateway `embeddings`, the connectors' hardened reqwest
-    /// transport and the deployment's egress allowlist.
+    /// transport, the deployment's egress allowlist, and a transport to
+    /// `platform_origin` that presents the same identity (elitea-main's
+    /// platform listener requires it).
     ///
     /// # Errors
     ///
@@ -177,6 +184,14 @@ impl IndexIngestRuntime {
         allowlist: HostAllowlist,
         limits: IndexRunLimits,
     ) -> Result<Self, IndexRuntimeBuildError> {
+        let platform_transport = crate::transport::platform_http::platform_transport(
+            &elitea_connectors::github::client::CLIENT_POLICY,
+            &crate::transport::platform_http::PlatformClientIdentity::new(
+                ca_pem.clone(),
+                identity_pem.clone(),
+            ),
+        )
+        .map_err(|_| IndexRuntimeBuildError)?;
         let mut config = ClientConfig::new(format!("https://{vector_target}"));
         config.ca_pem = Some(ca_pem);
         config.identity_pem = Some(identity_pem);
@@ -193,6 +208,7 @@ impl IndexIngestRuntime {
             embeddings,
             removal: None,
             platform_origin,
+            platform_transport: Arc::new(platform_transport),
             allowlist,
             transport: Arc::new(transport),
             limits,

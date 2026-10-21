@@ -160,6 +160,32 @@ type Config struct {
 	ControlTLS     runtimegrpc.ServerTLSFiles
 	OutputTLS      runtimegrpc.ServerTLSFiles
 	ContentTLS     runtimegrpc.ServerTLSFiles
+
+	// PlatformAddress is the internal mTLS listener that serves elitea-main's
+	// ordinary product API (the same handler as the public HTTP server) to
+	// in-cluster workloads: the worker's platform_origin, the internal MCP
+	// origin, the sub-application callback (ELITEA_RUNTIME_PLATFORM_ADDRESS).
+	// It replaced the Traefik `platform-edge` (#1359). Optional: empty opens
+	// no listener. When set, PlatformTLS is required and a client certificate
+	// that chains to PlatformTLS.ClientCAPath is required at the handshake.
+	PlatformAddress string
+	PlatformTLS     runtimegrpc.ServerTLSFiles
+	// PlatformClient is the client identity this process presents when it
+	// calls an https CurrentMainBaseURL — in practice its own platform
+	// listener (ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE / _KEY_FILE). Both or
+	// neither.
+	PlatformClient PlatformClientFiles
+}
+
+// PlatformClientFiles is a client certificate chain and its private key.
+type PlatformClientFiles struct {
+	CertificateChainPath string
+	PrivateKeyPath       string
+}
+
+// Configured reports whether a client identity was named.
+func (f PlatformClientFiles) Configured() bool {
+	return f.CertificateChainPath != "" || f.PrivateKeyPath != ""
 }
 
 func ConfigFromEnv(lookup LookupEnv) (Config, error) {
@@ -396,6 +422,55 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	if config.ContentTLS, err = loadTLSFiles("ELITEA_RUNTIME_CONTENT_TLS"); err != nil {
 		return Config{}, err
 	}
+	// The platform listener is optional; its TLS files are required only
+	// when it is opened.
+	if address, _ := lookup("ELITEA_RUNTIME_PLATFORM_ADDRESS"); address != "" {
+		config.PlatformAddress = address
+		if config.PlatformTLS, err = loadTLSFiles("ELITEA_RUNTIME_PLATFORM_TLS"); err != nil {
+			return Config{}, err
+		}
+	} else {
+		for _, name := range []string{
+			"ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE",
+			"ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE",
+			"ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE",
+		} {
+			if value, _ := lookup(name); value != "" {
+				return Config{}, fmt.Errorf("%s is set but ELITEA_RUNTIME_PLATFORM_ADDRESS is not: "+
+					"name the platform listener's address, or remove its TLS files", name)
+			}
+		}
+	}
+	if config.PlatformAddress != "" {
+		// The platform listener serves the public handler over TLS, so it
+		// cannot share the public listener's (cleartext) port.
+		publicPort, portErr := publicListenPort(lookup)
+		if portErr != nil {
+			return Config{}, portErr
+		}
+		if _, platformPort, splitErr := net.SplitHostPort(config.PlatformAddress); splitErr == nil && platformPort == publicPort {
+			return Config{}, errors.New("ELITEA_RUNTIME_PLATFORM_ADDRESS must not use the public HTTP listener's port")
+		}
+	}
+	// helm-render-optional: ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE
+	// helm-render-optional: ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE
+	// (Main's own client identity for an https CurrentMainBaseURL; the chart
+	// renders the pair only when it points that origin at the platform
+	// listener.)
+	config.PlatformClient.CertificateChainPath, _ = lookup("ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE")
+	config.PlatformClient.PrivateKeyPath, _ = lookup("ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE")
+	// A self call aimed at this process's own platform listener without a
+	// client identity fails every handshake; refuse it at boot instead of
+	// once per chat turn.
+	if config.PlatformAddress != "" && config.CurrentMainBaseURL != "" && !config.PlatformClient.Configured() {
+		if parsed, parseErr := url.Parse(config.CurrentMainBaseURL); parseErr == nil && parsed.Scheme == "https" {
+			if _, platformPort, splitErr := net.SplitHostPort(config.PlatformAddress); splitErr == nil && parsed.Port() == platformPort {
+				return Config{}, errors.New("ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL names the platform listener, which " +
+					"requires a client certificate: set ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE and " +
+					"ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE")
+			}
+		}
+	}
 	// The SSE stream limits are optional overrides of the built-in
 	// process-local profile. executionapi reads the three
 	// ELITEA_RUNTIME_SSE_* names itself, so they do not appear as literal
@@ -529,12 +604,35 @@ func (c Config) Validate() error {
 		return err
 	}
 	addresses := []string{c.ControlAddress, c.OutputAddress, c.ContentAddress}
-	if addresses[0] == addresses[1] || addresses[0] == addresses[2] || addresses[1] == addresses[2] {
-		return errors.New("runtime listeners require distinct addresses")
+	if c.PlatformAddress != "" {
+		addresses = append(addresses, c.PlatformAddress)
+		for _, path := range []string{
+			c.PlatformTLS.CertificateChainPath, c.PlatformTLS.PrivateKeyPath, c.PlatformTLS.ClientCAPath,
+		} {
+			if !validConfigPath(path) {
+				return errors.New("runtime platform listener TLS file path is invalid")
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(addresses))
+	for _, address := range addresses {
+		if _, repeated := seen[address]; repeated {
+			return errors.New("runtime listeners require distinct addresses")
+		}
+		seen[address] = struct{}{}
 	}
 	for _, address := range addresses {
 		if err := validateTCPAddress(address); err != nil {
 			return err
+		}
+	}
+	if c.PlatformClient.Configured() {
+		if c.PlatformClient.CertificateChainPath == "" || c.PlatformClient.PrivateKeyPath == "" {
+			return errors.New("ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE and " +
+				"ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE must be set together")
+		}
+		if !validConfigPath(c.PlatformClient.CertificateChainPath) || !validConfigPath(c.PlatformClient.PrivateKeyPath) {
+			return errors.New("runtime platform client certificate path is invalid")
 		}
 	}
 	return nil
@@ -546,9 +644,8 @@ func (c Config) Validate() error {
 // # Why this is DERIVED rather than required
 //
 // In the standalone topology the call is a SELF call: elitea-main asks itself
-// for the policy. This process never terminates TLS — `cmd/elitea-main` starts
-// one cleartext `http.Server` on ELITEA_HTTP_ADDRESS and nothing else — so an
-// https origin aimed at its own listener cannot work. The standalone stack set
+// for the policy. Its public listener on ELITEA_HTTP_ADDRESS is cleartext, so
+// an https origin aimed at THAT port cannot work. The standalone stack set
 // `https://elitea-main:8080`, and every chat turn produced
 //
 //	http: server gave HTTP response to HTTPS client
@@ -566,6 +663,13 @@ func (c Config) Validate() error {
 // the call at the edge (`https://elitea-gateway`), which routed the path to
 // legacy Centry. Any mixed deployment has the same shape, so an explicit
 // origin has to stay possible for that topology.
+//
+// The value is ALSO the internal MCP origin handed to the worker
+// (agent_prebuilt_mcp.go), which a loopback address cannot serve. The
+// standalone stack and the chart therefore name the platform listener
+// (ELITEA_RUNTIME_PLATFORM_ADDRESS, `https://elitea-main:9446`, #1359): this
+// process DOES terminate TLS there, and requires a runtime-CA client
+// certificate, so the self call presents ELITEA_RUNTIME_PLATFORM_CLIENT_*.
 func currentMainBaseURL(lookup LookupEnv) (string, error) {
 	listenPort, err := publicListenPort(lookup)
 	if err != nil {

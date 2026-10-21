@@ -165,6 +165,7 @@ impl NativeRunner {
         let transport = Transport::new(&TransportSettings {
             ca_file: settings.callback_ca_file.clone(),
             ca_file_setting: CA_SETTING,
+            client_identity: settings.callback_identity.clone(),
             user_agent: concat!("elitea-inventory-engine/", env!("CARGO_PKG_VERSION")),
             ..TransportSettings::default()
         })?;

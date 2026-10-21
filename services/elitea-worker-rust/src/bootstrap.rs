@@ -128,6 +128,10 @@ pub(crate) struct ProductionTransportBundle {
     /// The cloud executor's workspace runs (ADR-0034), when the deployment
     /// names the supervisor's `workspace` profile.
     pub(crate) workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    /// The runtime CA and the worker's client identity, for the reqwest
+    /// clients to `platform_origin` (elitea-main's mTLS platform listener):
+    /// the Office host and the internal MCP builders.
+    pub(crate) platform_identity: crate::transport::platform_http::PlatformClientIdentity,
 }
 
 impl ProductionTransportBundle {
@@ -382,7 +386,12 @@ impl ProductionTransportBundle {
             }
             None => None,
         };
+        let platform_identity = crate::transport::platform_http::PlatformClientIdentity::new(
+            trust.ca_pem(),
+            trust.identity_pem(),
+        );
         Ok(Self {
+            platform_identity,
             command_authenticator: trust.command_authenticator(),
             spool_master_key: trust.spool_master_key(),
             deployment,

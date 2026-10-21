@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -253,7 +254,7 @@ func TestWithoutATransportNothingIsUploadedAndTheResultIsUnchanged(t *testing.T)
 }
 
 func TestTheDefaultFactoryNeedsBothHalvesOfTheTransport(t *testing.T) {
-	factory := run.ArtifactClientFrom("")
+	factory := run.ArtifactClientFrom(artifacts.CallbackTLS{})
 	for _, settings := range []map[string]any{{}, {"api_base": "http://x/llm/v1"}, {"api_key": "k"}} {
 		if client, err := factory(settings); client != nil || err != nil {
 			t.Fatalf("%v: %v %v", settings, client, err)

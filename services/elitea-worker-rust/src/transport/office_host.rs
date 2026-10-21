@@ -66,14 +66,20 @@ pub(crate) struct OfficeRuntime {
 pub(crate) struct OfficeRuntimeError;
 
 impl OfficeRuntime {
-    /// A runtime that reaches `platform_origin` and nothing else.
-    pub(crate) fn new(platform_origin: &str) -> Result<Self, OfficeRuntimeError> {
+    /// A runtime that reaches `platform_origin` and nothing else, presenting
+    /// the worker's runtime client certificate (elitea-main's platform
+    /// listener requires one).
+    pub(crate) fn new(
+        platform_origin: &str,
+        identity: &crate::transport::platform_http::PlatformClientIdentity,
+    ) -> Result<Self, OfficeRuntimeError> {
         let host = Url::parse(platform_origin)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
             .ok_or(OfficeRuntimeError)?;
-        let transport = elitea_connectors::reqwest012::ReqwestTransport::hardened(&OFFICE_POLICY)
-            .map_err(|_| OfficeRuntimeError)?;
+        let transport =
+            crate::transport::platform_http::platform_transport(&OFFICE_POLICY, identity)
+                .map_err(|_| OfficeRuntimeError)?;
         let limits = SourceLimits {
             max_document_bytes: elitea_agent_runtime::toolkits::MAX_OFFICE_OBJECT_BYTES,
             ..SourceLimits::default()

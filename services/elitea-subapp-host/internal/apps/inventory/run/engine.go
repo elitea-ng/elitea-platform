@@ -83,7 +83,7 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 		// they are not in Tools.
 		DeleteGraph:         call(DeleteGraphTool),
 		DeleteProjectGraphs: call(DeleteProjectGraphsTool),
-		Artifacts:           ArtifactClientFrom(settings.CallbackCA()),
+		Artifacts:           ArtifactClientFrom(settings.CallbackTLS()),
 		// The native engine keys every graph by the project: only the
 		// verified identity may name it (see Runner.RequireVerifiedProject).
 		RequireVerifiedProject: true,

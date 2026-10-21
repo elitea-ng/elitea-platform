@@ -78,8 +78,13 @@ pub struct Settings {
     /// `DATABASE_URL`: the graph store (required by `native`).
     pub database_url: Option<elitea_engine_core::secret::Secret>,
     /// `CALLBACK_CA_FILE`: a PEM bundle the model transport trusts besides
-    /// the platform roots (the gateway reached over TLS through the edge).
+    /// the platform roots (the gateway reached over TLS: elitea-main's
+    /// internal platform listener signs with the runtime CA).
     pub callback_ca_file: Option<PathBuf>,
+    /// `CALLBACK_CERT_FILE` and `CALLBACK_KEY_FILE`, both or neither: the
+    /// client certificate the model transport presents. elitea-main's
+    /// platform listener requires a runtime-CA one.
+    pub callback_identity: Option<elitea_model_client::ClientIdentityFiles>,
     /// `MODEL_CONCURRENCY`: the ingestion model calls (extraction,
     /// relations, community labels) in flight at once across this engine
     /// process (default [`DEFAULT_MODEL_CONCURRENCY`]). Set it to the
@@ -89,6 +94,11 @@ pub struct Settings {
 
 /// `MODEL_CONCURRENCY` when unset: a small model server's slot count.
 pub const DEFAULT_MODEL_CONCURRENCY: usize = 8;
+
+/// The callback client certificate's setting, for its errors.
+pub const CALLBACK_CERT_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_CERT_FILE";
+/// Its private key's setting.
+pub const CALLBACK_KEY_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_KEY_FILE";
 
 impl Settings {
     /// Read the process environment.
@@ -171,11 +181,26 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine keeps every graph in PostgreSQL and has no other storage"
             )));
         }
+        let callback_identity = match (raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE")) {
+            (None, None) => None,
+            (Some(cert), Some(key)) => Some(elitea_model_client::ClientIdentityFiles {
+                cert_file: PathBuf::from(cert),
+                cert_file_setting: CALLBACK_CERT_SETTING,
+                key_file: PathBuf::from(key),
+                key_file_setting: CALLBACK_KEY_SETTING,
+            }),
+            _ => {
+                return Err(ConfigError(format!(
+                    "{CALLBACK_CERT_SETTING} and {CALLBACK_KEY_SETTING} must be set together"
+                )));
+            }
+        };
         Ok(Self {
             source_types,
             ingest,
             database_url,
             callback_ca_file: raw("CALLBACK_CA_FILE").map(PathBuf::from),
+            callback_identity,
             model_concurrency: usize::try_from(positive_count(
                 &raw,
                 "MODEL_CONCURRENCY",
@@ -270,6 +295,7 @@ mod tests {
         assert_eq!(defaults.fixtures, None);
         assert_eq!(defaults.source_types, ["github", "ado_repos"]);
         assert_eq!(defaults.model_concurrency, DEFAULT_MODEL_CONCURRENCY);
+        assert_eq!(defaults.callback_identity, None);
         assert_eq!(
             defaults.ingest.scratch_path,
             PathBuf::from("/var/scratch/inventory")
@@ -278,6 +304,33 @@ mod tests {
             defaults.ingest.git_allowlist.is_empty(),
             "fail-closed: no host until one is listed"
         );
+    }
+
+    #[test]
+    fn the_callback_client_certificate_is_both_halves_or_neither() {
+        let parsed = settings(&[
+            ("ELITEA_INVENTORY_CALLBACK_CERT_FILE", "/run/callback.crt"),
+            ("ELITEA_INVENTORY_CALLBACK_KEY_FILE", "/run/callback.key"),
+        ])
+        .map(|s| s.callback_identity);
+        assert_eq!(
+            parsed,
+            Ok(Some(elitea_model_client::ClientIdentityFiles {
+                cert_file: PathBuf::from("/run/callback.crt"),
+                cert_file_setting: CALLBACK_CERT_SETTING,
+                key_file: PathBuf::from("/run/callback.key"),
+                key_file_setting: CALLBACK_KEY_SETTING,
+            }))
+        );
+        for half in [CALLBACK_CERT_SETTING, CALLBACK_KEY_SETTING] {
+            let refused = settings(&[(half, "/run/half.pem")]);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("must be set together")),
+                "{half}"
+            );
+        }
     }
 
     #[test]

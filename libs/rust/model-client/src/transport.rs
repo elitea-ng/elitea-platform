@@ -123,10 +123,25 @@ pub struct TransportSettings {
     /// consuming engine's environment variable — so a CA-file error names
     /// the setting to fix.
     pub ca_file_setting: &'static str,
+    /// A client certificate the transport presents when the server asks for
+    /// one: the callback hop to elitea-main's internal platform listener,
+    /// which requires a runtime-CA client certificate (mutual TLS). `None`
+    /// presents nothing.
+    pub client_identity: Option<ClientIdentityFiles>,
     /// The `User-Agent` of every request: the consuming engine's name.
     pub user_agent: &'static str,
     pub timeouts: Timeouts,
     pub backoff: Backoff,
+}
+
+/// A client certificate chain and its private key, as PEM files, with the
+/// settings that name them so a read error says which one to fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdentityFiles {
+    pub cert_file: PathBuf,
+    pub cert_file_setting: &'static str,
+    pub key_file: PathBuf,
+    pub key_file_setting: &'static str,
 }
 
 impl Default for TransportSettings {
@@ -134,6 +149,7 @@ impl Default for TransportSettings {
         Self {
             ca_file: None,
             ca_file_setting: "The TLS CA file",
+            client_identity: None,
             user_agent: concat!("elitea-model-client/", env!("CARGO_PKG_VERSION")),
             timeouts: Timeouts::default(),
             backoff: Backoff::default(),
@@ -155,10 +171,11 @@ fn runtime(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Runtime, message)
 }
 
-fn read_ca_file(path: &Path, setting: &str) -> Result<Vec<reqwest::Certificate>, EngineError> {
-    // Worded without "not found": a missing CA file is a deployment error,
-    // not a missing wiki.
-    let pem = std::fs::read(path).map_err(|error| {
+/// Read one PEM file the operator named in `setting`.
+fn read_pem(path: &Path, setting: &str) -> Result<Vec<u8>, EngineError> {
+    // Worded without "not found": a missing CA or certificate file is a
+    // deployment error, not a missing wiki.
+    std::fs::read(path).map_err(|error| {
         // io's own text for a missing file is "entity not found", which
         // the classifier would file as a missing resource.
         let reason = match error.kind() {
@@ -169,7 +186,33 @@ fn read_ca_file(path: &Path, setting: &str) -> Result<Vec<reqwest::Certificate>,
             "{setting} {} cannot be read: {reason}",
             path.display(),
         ))
-    })?;
+    })
+}
+
+/// The client certificate chain and key as one `reqwest::Identity` (rustls
+/// takes both from a single PEM buffer).
+fn read_identity(files: &ClientIdentityFiles) -> Result<reqwest::Identity, EngineError> {
+    let mut pem = read_pem(&files.cert_file, files.cert_file_setting)?;
+    let mut key = read_pem(&files.key_file, files.key_file_setting)?;
+    pem.push(b'\n');
+    pem.extend_from_slice(&key);
+    key.fill(0);
+    let identity = reqwest::Identity::from_pem(&pem).map_err(|_| {
+        runtime(format!(
+            "{} {} and {} {} are not a PEM certificate chain and its private key",
+            files.cert_file_setting,
+            files.cert_file.display(),
+            files.key_file_setting,
+            files.key_file.display(),
+        ))
+    });
+    // The key copy does not outlive the client build.
+    pem.fill(0);
+    identity
+}
+
+fn read_ca_file(path: &Path, setting: &str) -> Result<Vec<reqwest::Certificate>, EngineError> {
+    let pem = read_pem(path, setting)?;
     let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|_| {
         runtime(format!(
             "{setting} {} is not a PEM certificate bundle",
@@ -203,6 +246,9 @@ impl Transport {
             .user_agent(settings.user_agent);
         if let Some(path) = &settings.ca_file {
             builder = builder.tls_certs_merge(read_ca_file(path, settings.ca_file_setting)?);
+        }
+        if let Some(files) = &settings.client_identity {
+            builder = builder.identity(read_identity(files)?);
         }
         let client = builder.build().map_err(|error| {
             runtime(format!(

@@ -208,6 +208,12 @@ async fn harness_failing(
         ),
         removal: None,
         platform_origin: "https://platform.internal".to_owned(),
+        platform_transport: Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        ),
         allowlist: elitea_connectors::egress::HostAllowlist::parse(Some("*")),
         transport: Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(

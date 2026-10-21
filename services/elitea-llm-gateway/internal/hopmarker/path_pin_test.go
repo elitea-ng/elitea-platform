@@ -86,10 +86,11 @@ func repoRoot(t *testing.T) string {
 // deploy/ and requires that none of them deletes the marker.
 //
 // It covers the whole directory, not a named list, because the edge is not one
-// file: deploy/traefik/dynamic.yml and dynamic.e2e.yml front the browser,
-// deploy/runtime/platform-edge-dynamic.yml fronts the runtime plane, and
-// deploy/helm/elitea/values.yaml carries the chart's own strip list. A gate
-// that named three of the four would go quiet the day a fourth appeared.
+// file: deploy/traefik/dynamic.yml and dynamic.e2e.yml front the browser, and
+// deploy/helm/elitea/values.yaml carries the chart's own strip list. (The
+// runtime plane's platform-edge Traefik is gone, #1359: elitea-main's own
+// platform listener strips in Go and keeps this marker.) A gate that named
+// some of the files would go quiet the day another appeared.
 func TestHopMarker_NoDeployConfigurationStripsIt(t *testing.T) {
 	root := repoRoot(t)
 	deployDir := filepath.Join(root, "deploy")

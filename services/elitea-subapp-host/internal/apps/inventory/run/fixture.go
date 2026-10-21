@@ -910,7 +910,7 @@ func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
 	return &Runner{
 		RunnerName: "fixture",
 		Tools:      FixtureTools(step),
-		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
+		Artifacts:  ArtifactClientFrom(settings.CallbackTLS()),
 	}
 }
 

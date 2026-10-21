@@ -61,9 +61,10 @@ func firstTruthy(values ...any) any {
 }
 
 // ArtifactClientFrom is the default factory: nil without BOTH halves of the
-// transport (a direct SPI call, a host test), else an HTTP client. caFile, when
-// set, is trusted for the callback hop.
-func ArtifactClientFrom(caFile string) ArtifactClientFactory {
+// transport (a direct SPI call, a host test), else an HTTP client over the
+// callback hop's TLS (its CA and, toward the platform listener, its client
+// certificate).
+func ArtifactClientFrom(callback artifacts.CallbackTLS) ArtifactClientFactory {
 	return func(llmSettings map[string]any) (ArtifactClient, error) {
 		if !Truthy(llmSettings["api_base"]) && !Truthy(llmSettings["openai_api_base"]) {
 			return nil, nil
@@ -71,6 +72,6 @@ func ArtifactClientFrom(caFile string) ArtifactClientFactory {
 		if !Truthy(llmSettings["api_key"]) && !Truthy(llmSettings["openai_api_key"]) {
 			return nil, nil
 		}
-		return artifacts.NewHTTPClient(ExtractArtifactSettings(llmSettings), caFile)
+		return artifacts.NewHTTPClient(ExtractArtifactSettings(llmSettings), callback)
 	}
 }

@@ -747,8 +747,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
 		}
 		// The runtime CA: the same bundle the private listeners verify
-		// worker client certificates against.
-		currentMainClient, targetErr := currentcore.NewTLSClient(config.ControlTLS.ClientCAPath)
+		// worker client certificates against. The client identity is what
+		// the platform listener requires when CurrentMainBaseURL names it.
+		currentMainClient, targetErr := currentcore.NewTLSClient(
+			config.ControlTLS.ClientCAPath,
+			config.PlatformClient.CertificateChainPath,
+			config.PlatformClient.PrivateKeyPath,
+		)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current Main policy client: %w", targetErr)
 		}

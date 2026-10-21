@@ -116,7 +116,7 @@ set, unless `OTEL_SDK_DISABLED=true`.
 
 | | Worker | Engine |
 | --- | --- | --- |
-| Transport | HTTP/2 only, through `platform-edge` over TLS | HTTP/1.1 or 2, to the callback base (`ELITEA_*_CALLBACK_BASE_URL`): cleartext in-cluster, or `platform-edge` over TLS when the chart's `callbackViaPlatformEdge` is on |
+| Transport | HTTP/2 only, to elitea-main's internal platform listener (`platform_origin`, mTLS with the worker's runtime client certificate) | HTTP/1.1 or 2, to the callback base (`ELITEA_*_CALLBACK_BASE_URL`): cleartext in-cluster, or the platform listener over mTLS, presenting `ELITEA_*_CALLBACK_CERT_FILE` / `_KEY_FILE` |
 | Retries | none in the facade (the ADK decides from `retryable`) | up to `llm_settings.max_retries` (default 2), backoff 0.5 s · 2ⁿ ≤ 8 s, honours `retry-after` ≤ 60 s |
 | Response headers / non-stream request | 120 s | 10 min |
 | Stream idle | 120 s | 5 min |
@@ -132,16 +132,17 @@ set, unless `OTEL_SDK_DISABLED=true`.
 - **Worker gaps found in the 2026-10-07 review:**
   - no HTTP retries of its own;
   - no total-stream timeout;
-  - a client certificate that is never rotated and that the edge does not
-    check;
+  - a client certificate that is never rotated (the platform listener now
+    verifies it: it must chain to the runtime CA);
   - no embeddings client.
 - **Engine transport:** by default an engine reaches elitea-main directly
   over plain HTTP inside the cluster.
-  - With `deepwiki.callbackViaPlatformEdge: true` (Helm; needs
-    `worker.platformEdge`), the callback origin becomes
-    `worker.runtime.platformOrigin`.
+  - When the chart puts the DeepWiki callback on elitea-main's internal
+    platform listener (the successor of `deepwiki.callbackViaPlatformEdge`;
+    the Traefik `platform-edge` is gone), the callback origin becomes
+    `worker.runtime.platformOrigin` (`https://elitea-main:9446`).
   - The host and the engine then trust the runtime CA through
-    `ELITEA_DEEPWIKI_CALLBACK_CA_FILE`, which only the `runtime-ca.crt` key
-    of the worker's material Secret reaches. This is the worker's posture.
-  - The edge itself forwards to elitea-main over plain HTTP and does not
-    verify client certificates, so the gain is TLS on the pod-to-edge hop.
+    `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` and present a runtime-CA client
+    certificate through `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` /
+    `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE`: the listener requires one, as it
+    does of the worker. This is the worker's posture, end to end.

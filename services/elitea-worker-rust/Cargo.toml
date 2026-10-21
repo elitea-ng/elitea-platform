@@ -148,6 +148,9 @@ elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["te
 # The in-process fake of elitea-vector the index handler's tests run against.
 elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }
 http-body = "=1.1.0"
+# A throwaway runtime CA and workload certificate for the platform_origin
+# client tests (src/transport/platform_http.rs).
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
 
 [lints.rust]

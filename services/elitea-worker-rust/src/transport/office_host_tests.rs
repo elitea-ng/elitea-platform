@@ -658,7 +658,11 @@ async fn the_office_host_reports_the_toolkit_cap_and_accepts_an_empty_reply() {
 
 #[test]
 fn the_only_reachable_host_is_the_platform_origin() {
-    let runtime = OfficeRuntime::new("https://platform.internal:9446").expect("runtime");
+    let runtime = OfficeRuntime::new(
+        "https://platform.internal:9446",
+        &crate::transport::platform_http::test_identity(),
+    )
+    .expect("runtime");
     assert!(runtime.permits("https://platform.internal:9446/api/v2/artifacts/objects/1/b/k"));
     assert!(runtime.permits("https://PLATFORM.internal/x"));
     for other in [
@@ -669,7 +673,13 @@ fn the_only_reachable_host_is_the_platform_origin() {
     ] {
         assert!(!runtime.permits(other), "{other}");
     }
-    assert!(OfficeRuntime::new("not a url").is_err());
+    assert!(
+        OfficeRuntime::new(
+            "not a url",
+            &crate::transport::platform_http::test_identity()
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -948,7 +958,13 @@ fn with_a_public_base_url_the_link_is_absolute_on_it_and_never_the_edge() {
 fn the_host_client_is_built_without_protocol_retries() {
     let retries_disabled = std::hint::black_box(super::office_host::OFFICE_POLICY.disable_retries);
     assert!(retries_disabled);
-    assert!(super::office_host::OfficeRuntime::new(ORIGIN).is_ok());
+    assert!(
+        super::office_host::OfficeRuntime::new(
+            ORIGIN,
+            &crate::transport::platform_http::test_identity()
+        )
+        .is_ok()
+    );
 }
 
 /// The document reader the `SharePoint` text tools ask: plain text and code are

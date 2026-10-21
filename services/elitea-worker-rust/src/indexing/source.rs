@@ -140,6 +140,10 @@ pub(crate) struct PlatformAccess<'a> {
     pub(crate) origin: &'a str,
     pub(crate) bearer: &'a str,
     pub(crate) project_id: &'a str,
+    /// The transport to `origin` (elitea-main's mTLS platform listener):
+    /// it presents the worker's runtime client certificate, which the
+    /// connectors' transport to third-party hosts never does.
+    pub(crate) transport: &'a Arc<dyn Transport>,
 }
 
 impl IndexSource {
@@ -219,8 +223,11 @@ impl IndexSource {
                 // The SDK's `folder`: list under that prefix only. Parsed
                 // once, with the filter.
                 let folder = filter.artifact_folder();
+                // The platform's own object API: the platform transport,
+                // never the connectors' one.
                 let source =
-                    ArtifactSource::new(api, bucket, folder, transport).map_err(|e| refused(&e))?;
+                    ArtifactSource::new(api, bucket, folder, Arc::clone(platform.transport))
+                        .map_err(|e| refused(&e))?;
                 Self::Artifact(source.with_limits(source_limits), folder.to_owned())
             }
             "confluence" => {
@@ -875,10 +882,17 @@ mod tests {
             blacklist: Vec::new(),
             arguments: serde_json::Map::new(),
         };
+        let transport: Arc<dyn Transport> = Arc::new(
+            elitea_connectors::reqwest012::ReqwestTransport::hardened(
+                &elitea_connectors::github::client::CLIENT_POLICY,
+            )
+            .expect("client"),
+        );
         let platform = PlatformAccess {
             origin: "https://platform",
             bearer: "pat",
             project_id: "1",
+            transport: &transport,
         };
         let error = IndexSource::build(
             &configuration,
@@ -886,12 +900,7 @@ mod tests {
             &PathFilter::for_run(&configuration.toolkit_type, &parameters).expect("a valid filter"),
             &platform,
             &HostAllowlist::parse(Some("*")),
-            Arc::new(
-                elitea_connectors::reqwest012::ReqwestTransport::hardened(
-                    &elitea_connectors::github::client::CLIENT_POLICY,
-                )
-                .expect("client"),
-            ),
+            Arc::clone(&transport),
             IndexRunLimits::default(),
         )
         .err()
@@ -907,17 +916,18 @@ mod tests {
     /// toolkit type and the connector's data-free reason.
     #[test]
     fn the_atlassian_families_are_built_or_refused_with_a_reason() {
-        let platform = PlatformAccess {
-            origin: "https://platform",
-            bearer: "pat",
-            project_id: "1",
-        };
         let transport: Arc<dyn Transport> = Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(
                 &elitea_connectors::github::client::CLIENT_POLICY,
             )
             .expect("client"),
         );
+        let platform = PlatformAccess {
+            origin: "https://platform",
+            bearer: "pat",
+            project_id: "1",
+            transport: &transport,
+        };
         let build = |kind: &str, settings: Value, arguments: Value| {
             let configuration = ToolkitConfiguration {
                 toolkit_type: kind.to_owned(),
@@ -1007,17 +1017,18 @@ mod tests {
     /// is not a string, or not a valid key, is refused.
     #[test]
     fn the_artifact_connector_is_scoped_to_the_folder_argument() {
-        let platform = PlatformAccess {
-            origin: "https://platform.internal",
-            bearer: "pat",
-            project_id: "1",
-        };
         let transport: Arc<dyn Transport> = Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(
                 &elitea_connectors::github::client::CLIENT_POLICY,
             )
             .expect("client"),
         );
+        let platform = PlatformAccess {
+            origin: "https://platform.internal",
+            bearer: "pat",
+            project_id: "1",
+            transport: &transport,
+        };
         let build = |arguments: Value| {
             let configuration = ToolkitConfiguration {
                 toolkit_type: "artifact".to_owned(),
@@ -1072,17 +1083,18 @@ mod tests {
     /// with the connector's data-free reason.
     #[test]
     fn figma_is_built_or_refused_with_a_reason() {
-        let platform = PlatformAccess {
-            origin: "https://platform",
-            bearer: "pat",
-            project_id: "1",
-        };
         let transport: Arc<dyn Transport> = Arc::new(
             elitea_connectors::reqwest012::ReqwestTransport::hardened(
                 &elitea_connectors::github::client::CLIENT_POLICY,
             )
             .expect("client"),
         );
+        let platform = PlatformAccess {
+            origin: "https://platform",
+            bearer: "pat",
+            project_id: "1",
+            transport: &transport,
+        };
         let build = |settings: Value, arguments: Value, allowlist: &str| {
             let configuration = ToolkitConfiguration {
                 toolkit_type: "figma".to_owned(),
@@ -1183,11 +1195,18 @@ mod tests {
             arguments: serde_json::Map::new(),
         };
         let filter = PathFilter::for_run("artifact", &parameters).expect("a valid filter");
-        let transport = Arc::new(Recording(Mutex::new(Vec::new())));
+        // Two transports: the platform's (it presents the worker's client
+        // certificate to elitea-main's platform listener) and the
+        // connectors' (third-party hosts). The artifact source must use the
+        // first and never the second.
+        let platform_transport = Arc::new(Recording(Mutex::new(Vec::new())));
+        let connectors_transport = Arc::new(Recording(Mutex::new(Vec::new())));
+        let platform_dyn: Arc<dyn Transport> = platform_transport.clone();
         let platform = PlatformAccess {
-            origin: "https://elitea-platform-edge",
+            origin: "https://elitea-main:9446",
             bearer: "pat",
             project_id: "7",
+            transport: &platform_dyn,
         };
         let source = IndexSource::build(
             &configuration,
@@ -1195,14 +1214,18 @@ mod tests {
             &filter,
             &platform,
             &default_allowlist,
-            transport.clone(),
+            connectors_transport.clone(),
             IndexRunLimits::default(),
         )
         .unwrap_or_else(|error| panic!("built: {error}"));
         source.list().await.expect("listed through the platform");
         assert_eq!(
-            transport.0.lock().expect("lock").as_slice(),
-            ["https://elitea-platform-edge/api/v2/artifacts/objects/7/docs"]
+            platform_transport.0.lock().expect("lock").as_slice(),
+            ["https://elitea-main:9446/api/v2/artifacts/objects/7/docs"]
+        );
+        assert!(
+            connectors_transport.0.lock().expect("lock").is_empty(),
+            "the connectors' transport carried a platform call"
         );
     }
 }

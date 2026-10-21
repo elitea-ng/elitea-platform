@@ -612,7 +612,10 @@ runner), `ask` and deep research use it.
   per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
   BOM is skipped.
 - `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` (else `ELITEA_DEEPWIKI_TLS_CA_FILE`) is trusted in addition to the platform
-  roots. Redirects are refused (the bearer key must not follow one).
+  roots. `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` / `_KEY_FILE`, when set, are
+  the client certificate presented on that hop (elitea-main's internal
+  platform listener requires a runtime-CA one). Redirects are refused (the
+  bearer key must not follow one).
 - Errors: timeouts → `timeout_error`; 429/503 after the retries →
   `service_busy`; 402 → `invalid_input`; 404 → `resource_not_found`;
   other refusals and malformed replies → `inference_failed`. The key is
@@ -1777,7 +1780,8 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
 | `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` | `8191` | at least 256; the embedding window in `cl100k_base` tokens. Set it below the embedding model's context when its tokenizer counts more tokens (a refused window is cut and retried, at extra requests) |
 | `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
-| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (model gateway, artifact API): the runtime CA when the hop is TLS through platform-edge (Helm `deepwiki.callbackViaPlatformEdge`, ADR-0027). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (model gateway, artifact API): the runtime CA when the hop is elitea-main's internal mTLS platform listener (`https://elitea-main:9446`). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` / `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE` | unset | the client certificate chain and key presented on the callback hop; both or neither. The platform listener requires a runtime-CA client certificate |
 | `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the callback hop when `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` is unset (its meaning before the split) |
 | `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
 | `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |

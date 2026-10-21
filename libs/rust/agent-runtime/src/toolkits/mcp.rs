@@ -477,13 +477,102 @@ fn configured_authorization(headers: &reqwest_mcp::header::HeaderMap) -> bool {
         .is_some_and(|value| !value.as_bytes().iter().all(u8::is_ascii_whitespace))
 }
 
+/// The worker's runtime client identity for ONE origin: elitea-main's
+/// internal platform listener, which serves the internal MCP builders
+/// (`<origin>/app/{project_id}/mcp/...`) and requires a runtime-CA client
+/// certificate. An MCP endpoint on that exact origin (scheme, host, port)
+/// presents the certificate and trusts the runtime CA; any other endpoint
+/// presents nothing, so a third-party MCP server never sees the worker's
+/// workload identity.
+///
+/// No `Debug`: it holds a private key.
+pub struct PlatformMcpIdentity {
+    origin: reqwest_mcp::Url,
+    roots: Vec<reqwest_mcp::Certificate>,
+    identity: reqwest_mcp::Identity,
+}
+
+/// The platform origin or the PEM material is not usable. Carries nothing
+/// from either.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlatformMcpIdentityError;
+
+impl fmt::Display for PlatformMcpIdentityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("the platform MCP client identity is invalid")
+    }
+}
+
+impl std::error::Error for PlatformMcpIdentityError {}
+
+impl PlatformMcpIdentity {
+    /// The identity for `platform_origin` (an `https://host[:port]`
+    /// origin): `ca_pem` is the runtime CA bundle, `identity_pem` the
+    /// workload certificate chain followed by its private key.
+    ///
+    /// # Errors
+    ///
+    /// The origin is not an HTTPS origin, or the PEM material does not
+    /// parse.
+    pub fn new(
+        platform_origin: &str,
+        ca_pem: &[u8],
+        identity_pem: &[u8],
+    ) -> Result<Self, PlatformMcpIdentityError> {
+        let origin =
+            reqwest_mcp::Url::parse(platform_origin).map_err(|_| PlatformMcpIdentityError)?;
+        if origin.scheme() != "https" || origin.host_str().is_none() {
+            return Err(PlatformMcpIdentityError);
+        }
+        let roots = reqwest_mcp::Certificate::from_pem_bundle(ca_pem)
+            .map_err(|_| PlatformMcpIdentityError)?;
+        if roots.is_empty() {
+            return Err(PlatformMcpIdentityError);
+        }
+        let identity =
+            reqwest_mcp::Identity::from_pem(identity_pem).map_err(|_| PlatformMcpIdentityError)?;
+        Ok(Self {
+            origin,
+            roots,
+            identity,
+        })
+    }
+
+    /// Whether `endpoint` is on the platform origin: same scheme, host and
+    /// effective port, and no user information.
+    #[must_use]
+    pub fn serves(&self, endpoint: &str) -> bool {
+        reqwest_mcp::Url::parse(endpoint).is_ok_and(|url| {
+            url.scheme() == self.origin.scheme()
+                && url
+                    .host_str()
+                    .zip(self.origin.host_str())
+                    .is_some_and(|(host, origin)| host.eq_ignore_ascii_case(origin))
+                && url.port_or_known_default() == self.origin.port_or_known_default()
+                && url.username().is_empty()
+                && url.password().is_none()
+        })
+    }
+}
+
 /// Secure Streamable HTTP connector for ADK's native [`McpToolset`].
-pub struct AdkHttpMcpConnector;
+#[derive(Default)]
+pub struct AdkHttpMcpConnector {
+    platform: Option<Arc<PlatformMcpIdentity>>,
+}
 
 impl AdkHttpMcpConnector {
     #[must_use]
     pub const fn new() -> Self {
-        Self
+        Self { platform: None }
+    }
+
+    /// Present `platform`'s client identity to MCP endpoints on its origin
+    /// (the internal MCP builders), and only to them.
+    #[must_use]
+    pub fn with_platform_identity(mut self, platform: Option<Arc<PlatformMcpIdentity>>) -> Self {
+        self.platform = platform;
+        self
     }
 }
 
@@ -502,7 +591,7 @@ impl McpConnector for AdkHttpMcpConnector {
         &self,
         config: &RemoteMcpConfig,
     ) -> Result<McpSession, McpMaterializationError> {
-        let client = session_client_builder(config)?
+        let client = session_client_builder(config, self.platform.as_deref())?
             .build()
             .map_err(|_| invalid_configuration())?;
         let transport_config = StreamableHttpClientTransportConfig::with_uri(config.endpoint())
@@ -530,10 +619,14 @@ impl McpConnector for AdkHttpMcpConnector {
 
 /// The HTTP client every MCP session uses: HTTPS only, the request headers
 /// (static headers and the bearer) as defaults, no automatic replay, and
-/// redirects limited to the frozen endpoint's origin. Factored out so tests
-/// exercise exactly what `connect_session` builds.
+/// redirects limited to the frozen endpoint's origin. An endpoint on the
+/// platform origin also presents the worker's runtime client certificate
+/// and trusts the runtime CA ([`PlatformMcpIdentity`]); the same-origin
+/// redirect policy keeps that certificate on that origin. Factored out so
+/// tests exercise exactly what `connect_session` builds.
 pub(crate) fn session_client_builder(
     config: &RemoteMcpConfig,
+    platform: Option<&PlatformMcpIdentity>,
 ) -> Result<reqwest_mcp::ClientBuilder, McpMaterializationError> {
     let origin = reqwest_mcp::Url::parse(config.endpoint()).map_err(|_| invalid_configuration())?;
     let mut client = reqwest_mcp::Client::builder()
@@ -542,11 +635,24 @@ pub(crate) fn session_client_builder(
         .retry(reqwest_mcp::retry::never())
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(config.timeout());
+    if let Some(platform) = platform_identity_for(config.endpoint(), platform) {
+        client = client
+            .tls_certs_merge(platform.roots.iter().cloned())
+            .identity(platform.identity.clone());
+    }
     let headers = config.request_headers()?;
     if !headers.is_empty() {
         client = client.default_headers(headers);
     }
     Ok(client)
+}
+
+/// The platform identity when `endpoint` is on its origin, else `None`.
+pub(crate) fn platform_identity_for<'a>(
+    endpoint: &str,
+    platform: Option<&'a PlatformMcpIdentity>,
+) -> Option<&'a PlatformMcpIdentity> {
+    platform.filter(|platform| platform.serves(endpoint))
 }
 
 /// Follow at most `MAX_REDIRECT_HOPS` redirects, and only while every hop

@@ -31,9 +31,9 @@ type HTTPArtifactClient = artifacts.HTTPClient
 // DefaultAPIPath is the platform API prefix the artifact routes live under.
 const DefaultAPIPath = artifacts.DefaultAPIPath
 
-// NewHTTPArtifactClient builds the upload transport, trusting caFile when given.
-func NewHTTPArtifactClient(settings ArtifactSettings, caFile string) (*HTTPArtifactClient, error) {
-	return artifacts.NewHTTPClient(settings, caFile)
+// NewHTTPArtifactClient builds the upload transport over the callback TLS.
+func NewHTTPArtifactClient(settings ArtifactSettings, callback artifacts.CallbackTLS) (*HTTPArtifactClient, error) {
+	return artifacts.NewHTTPClient(settings, callback)
 }
 
 var llmSuffix = regexp.MustCompile(`/llm(/api)?(/v\d+)?/?$`)
@@ -58,9 +58,10 @@ func ExtractArtifactSettings(llmSettings map[string]any) ArtifactSettings {
 
 // ArtifactClientFrom is the default factory: nil without BOTH halves of the
 // transport (a direct SPI call, the P0 fixtures), else an HTTP client.
-// caFile, when set, is trusted for the callback hop — the shell read the
-// same ELITEA_DEEPWIKI_TLS_CA_FILE for its `verify=`.
-func ArtifactClientFrom(caFile string) ArtifactClientFactory {
+// callback is the hop's TLS: its CA (the shell read the same
+// ELITEA_DEEPWIKI_TLS_CA_FILE for its `verify=`) and, toward the platform
+// listener, the client certificate it presents.
+func ArtifactClientFrom(callback artifacts.CallbackTLS) ArtifactClientFactory {
 	return func(llmSettings map[string]any) (ArtifactClient, error) {
 		if !Truthy(llmSettings["api_base"]) && !Truthy(llmSettings["openai_api_base"]) {
 			return nil, nil
@@ -68,6 +69,6 @@ func ArtifactClientFrom(caFile string) ArtifactClientFactory {
 		if !Truthy(llmSettings["api_key"]) && !Truthy(llmSettings["openai_api_key"]) {
 			return nil, nil
 		}
-		return NewHTTPArtifactClient(ExtractArtifactSettings(llmSettings), caFile)
+		return NewHTTPArtifactClient(ExtractArtifactSettings(llmSettings), callback)
 	}
 }

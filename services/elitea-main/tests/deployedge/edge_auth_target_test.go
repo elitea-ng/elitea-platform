@@ -166,6 +166,7 @@ func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
 	root := repoRoot(t)
 
 	checked := 0
+	routersSeen := 0
 	for _, set := range configSets() {
 		paths := set.resolve(t, root)
 
@@ -194,6 +195,7 @@ func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
 			routers = append(routers, router)
 		}
 		sort.Strings(routers)
+		routersSeen += len(routers)
 
 		for _, router := range routers {
 			for _, name := range expandMiddlewares(routerMiddlewares[router], definitions) {
@@ -207,13 +209,19 @@ func TestEveryLoadedEdgeAuthTargetIsRegistered(t *testing.T) {
 		}
 	}
 
-	if checked == 0 {
+	// No router names an edgeAuth middleware any more: the only one was the
+	// platform-edge Traefik, which elitea-main's mTLS platform listener
+	// replaced (#1359). The gate keeps guarding the rule for any edgeAuth a
+	// declared set reintroduces, so what must not be zero is the routers it
+	// read: a set that parses to no router at all means the edge changed shape
+	// and this gate silently stopped reading it.
+	if routersSeen == 0 {
 		t.Fatal(
-			"no router names an edgeAuth middleware in any configuration " +
-				"set, so this gate proved nothing. The edge changed shape, or " +
-				"a set stopped being declared.",
+			"no configuration set declares a router, so this gate proved " +
+				"nothing. The edge changed shape, or a set stopped being declared.",
 		)
 	}
+	t.Logf("%d routers read, %d edgeAuth references checked", routersSeen, checked)
 }
 
 // assertEdgeAuthTarget applies the one rule to one reference.

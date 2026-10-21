@@ -31,7 +31,6 @@
 #![expect(
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
-    clippy::new_without_default,
     clippy::result_unit_err,
     reason = "moved verbatim from the worker, where these items were crate-private; \
               each error type documents its codes, and per-function sections \
@@ -240,7 +239,8 @@ pub use materialize::{
 };
 pub use mcp::{
     AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
-    RETIRED_SSE_MESSAGE, materialize_mcp_toolsets_with_tokens_and_authorization,
+    PlatformMcpIdentity, PlatformMcpIdentityError, RETIRED_SSE_MESSAGE,
+    materialize_mcp_toolsets_with_tokens_and_authorization,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use mcp::{RemoteMcpConfig, mcp_authorization_required_fixture};

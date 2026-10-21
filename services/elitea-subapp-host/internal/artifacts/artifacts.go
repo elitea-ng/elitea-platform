@@ -59,9 +59,20 @@ type HTTPClient struct {
 	Client   *http.Client
 }
 
+// CallbackTLS is the TLS the callback hop uses: the bundle it trusts and,
+// when the hop is elitea-main's platform listener (#1359), the client
+// certificate it presents there — that listener requires one signed by the
+// runtime CA. All empty keeps the platform's default roots and no identity.
+type CallbackTLS struct {
+	CAFile   string
+	CertFile string
+	KeyFile  string
+}
+
 // NewHTTPClient validates the settings the way the Python client did and
-// builds the transport, trusting caFile when given.
-func NewHTTPClient(settings Settings, caFile string) (*HTTPClient, error) {
+// builds the transport, trusting callback.CAFile and presenting
+// callback.CertFile/KeyFile when given.
+func NewHTTPClient(settings Settings, callback CallbackTLS) (*HTTPClient, error) {
 	if settings.BaseURL == "" {
 		return nil, fmt.Errorf("artifact_settings.base_url is required")
 	}
@@ -71,17 +82,31 @@ func NewHTTPClient(settings Settings, caFile string) (*HTTPClient, error) {
 	if settings.APIPath == "" {
 		settings.APIPath = DefaultAPIPath
 	}
+	if (callback.CertFile == "") != (callback.KeyFile == "") {
+		return nil, fmt.Errorf("the callback client certificate and key must be set together")
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if caFile != "" {
-		pem, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read the callback CA: %w", err)
+	if callback.CAFile != "" || callback.CertFile != "" {
+		config := &tls.Config{MinVersion: tls.VersionTLS12}
+		if callback.CAFile != "" {
+			pem, err := os.ReadFile(callback.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("read the callback CA: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("%s holds no certificate", callback.CAFile)
+			}
+			config.RootCAs = pool
 		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("%s holds no certificate", caFile)
+		if callback.CertFile != "" {
+			pair, err := tls.LoadX509KeyPair(callback.CertFile, callback.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("load the callback client certificate: %w", err)
+			}
+			config.Certificates = []tls.Certificate{pair}
 		}
-		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		transport.TLSClientConfig = config
 	}
 	return &HTTPClient{Settings: settings, Client: &http.Client{Transport: transport, Timeout: 300 * time.Second}}, nil
 }

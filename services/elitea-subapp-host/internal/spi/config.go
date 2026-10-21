@@ -21,6 +21,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 )
 
 // ErrConfig is the class of every settings refusal.
@@ -48,12 +50,18 @@ type Settings struct {
 	TLSCAFile   string
 	// CallbackCAFile is the bundle trusted on the CALLBACK hop — the
 	// artifact uploads to `llm_settings.api_base` — when that hop is TLS
-	// through platform-edge (ADR-0027), whose certificate the runtime CA
-	// signs. It is separate from TLSCAFile, which is the client CA of this
+	// to elitea-main's platform listener (#1359; it replaced platform-edge,
+	// ADR-0027), whose certificate the runtime CA signs. It is separate from TLSCAFile, which is the client CA of this
 	// process's own mTLS listener. Empty keeps the old behaviour: the
 	// callback trusts TLSCAFile (see CallbackCA).
 	CallbackCAFile string
-	IdentitySecret string
+	// CallbackCertFile and CallbackKeyFile are the client certificate the
+	// callback hop presents (<PREFIX>CALLBACK_CERT_FILE / _KEY_FILE). The
+	// hop's TLS origin is elitea-main's platform listener (#1359), which
+	// requires a client certificate the runtime CA signed. Both or neither.
+	CallbackCertFile string
+	CallbackKeyFile  string
+	IdentitySecret   string
 	// PlatformClients are the certificate identities (common name or DNS
 	// SAN) allowed to call the platform gRPC service (platform.go), from
 	// <PREFIX>PLATFORM_CLIENTS. Empty keeps the service off: no listener is
@@ -143,6 +151,8 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		TLSKeyFile:         raw("TLS_KEYFILE", ""),
 		TLSCAFile:          raw("TLS_CA_FILE", ""),
 		CallbackCAFile:     raw("CALLBACK_CA_FILE", ""),
+		CallbackCertFile:   raw("CALLBACK_CERT_FILE", ""),
+		CallbackKeyFile:    raw("CALLBACK_KEY_FILE", ""),
 		IdentitySecret:     raw("IDENTITY_SECRET", ""),
 		PlatformClients:    PlatformClients(raw("PLATFORM_CLIENTS", "")),
 		PlatformGRPCAddr:   raw("PLATFORM_GRPC_ADDR", ""),
@@ -166,6 +176,9 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	}
 	if (s.TLSCertFile == "") != (s.TLSKeyFile == "") {
 		return Settings{}, fmt.Errorf("%w: %sTLS_CERTFILE and %sTLS_KEYFILE must be set together", ErrConfig, prefix, prefix)
+	}
+	if (s.CallbackCertFile == "") != (s.CallbackKeyFile == "") {
+		return Settings{}, fmt.Errorf("%w: %sCALLBACK_CERT_FILE and %sCALLBACK_KEY_FILE must be set together", ErrConfig, prefix, prefix)
 	}
 	if s.TLSCAFile != "" && s.TLSCertFile == "" {
 		return Settings{}, fmt.Errorf("%w: %sTLS_CA_FILE needs a server certificate to require client ones", ErrConfig, prefix)
@@ -192,4 +205,10 @@ func (s Settings) CallbackCA() string {
 		return s.CallbackCAFile
 	}
 	return s.TLSCAFile
+}
+
+// CallbackTLS is the callback hop's TLS: CallbackCA plus the client
+// certificate it presents to the platform listener.
+func (s Settings) CallbackTLS() artifacts.CallbackTLS {
+	return artifacts.CallbackTLS{CAFile: s.CallbackCA(), CertFile: s.CallbackCertFile, KeyFile: s.CallbackKeyFile}
 }

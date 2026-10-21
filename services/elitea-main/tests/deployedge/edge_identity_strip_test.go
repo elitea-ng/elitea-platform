@@ -64,11 +64,9 @@ const protectedService = "elitea-main"
 // browser and NEITHER runs an edgeAuth, so no identity header arriving at
 // them is ever legitimate client input.
 //
-// deploy/runtime/platform-edge-dynamic.yml is deliberately not in this list. It
-// has a different shape: it authenticates with edgeAuth and then PROJECTS
-// verified identity headers, so the same names are legitimate on the way out of
-// its middleware chain. Holding it to the rule below would assert something
-// that is not true of it.
+// The runtime plane's platform-edge Traefik is gone (#1359). Its replacement,
+// elitea-main's platform listener, strips the same floor in Go;
+// cmd/elitea-main/platform_listener_test.go holds it to that floor.
 var browserEdgeFiles = []string{
 	"deploy/traefik/dynamic.yml",
 	"deploy/traefik/dynamic.e2e.yml",
