@@ -66,7 +66,7 @@ macOS first; Linux and Windows build and degrade as noted.
   Services, Hide, Quit), File (New Thread ⌘N, Open Folder… ⌘O, Close Window
   ⌘W), Edit (the OS's own undo/redo/cut/copy/paste/select all, so they keep
   working in every text field), View (Command Palette ⌘K, Toggle Sidebar
-  ⌘\\, Toggle Changes Panel ⌘⌥\\, Back ⌘[, Forward ⌘], Reload ⌘R in debug
+  ⌘\\, Toggle Inspector ⌘⌥\\, Back ⌘[, Forward ⌘], Reload ⌘R in debug
   builds only, Actual Size ⌘0, Zoom In ⌘=, Zoom Out ⌘-, Full Screen), Window,
   Help (Elitea Help opens `<deployment>/docs/` when connected). On Linux and
   Windows Settings and Quit are in File and About in Help; shortcuts use

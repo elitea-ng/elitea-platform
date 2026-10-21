@@ -1,4 +1,5 @@
-//! The one window, and the rule that keeps it bundled.
+//! The main window, the inspector's panel windows, and the rule that keeps
+//! them bundled.
 //!
 //! The webview holds IPC capabilities (capabilities/default.json), so it must
 //! only ever show our own bundled assets. Tauri grants IPC by origin, and a
@@ -6,8 +7,16 @@
 //! credential-backed commands. `on_navigation` refuses every such navigation
 //! before it happens; the deployment is reached through the host's fetch
 //! (src/net.rs) from bundled code, never by navigating to it.
+//!
+//! The one other window is an inspector tab opened in a window of its own
+//! (`shared/desktop/panelWindows.ts`): the page calls
+//! `window.open("about:blank#elitea-panel=<tab>")` and fills the empty,
+//! same-origin document from its own React tree. It loads nothing and holds
+//! no capability (its label, `panel-<tab>`, is in no capability file); it
+//! may not navigate anywhere. Every other `window.open` is refused.
 
-use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::{NewWindowFeatures, NewWindowResponse};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use url::{Host, Url};
 
 /// True for the origins Tauri serves bundled assets from, per platform
@@ -25,6 +34,71 @@ pub fn is_bundled_origin(url: &Url, dev: bool) -> bool {
 
 /// The smallest window the layout is designed for.
 pub const MIN_SIZE: (f64, f64) = (900.0, 600.0);
+
+/// A panel window's first size (the window-state plugin remembers it after that) and its smallest.
+const PANEL_SIZE: (f64, f64) = (420.0, 640.0);
+const PANEL_MIN_SIZE: (f64, f64) = (300.0, 240.0);
+
+/// The label of the panel window `url` asks for (`about:blank#elitea-panel=<tab>`,
+/// `<tab>` lowercase letters and dashes), or `None` for any other URL.
+pub fn panel_window_label(url: &Url) -> Option<String> {
+    if url.scheme() != "about" || url.path() != "blank" || url.query().is_some() {
+        return None;
+    }
+    let tab = url.fragment()?.strip_prefix("elitea-panel=")?;
+    let valid =
+        (1..=32).contains(&tab.len()) && tab.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
+    valid.then(|| format!("panel-{tab}"))
+}
+
+/// The only document a panel window may show: the empty one it opened with.
+fn is_blank(url: &Url) -> bool {
+    url.scheme() == "about" && url.path() == "blank"
+}
+
+/// `window.open` from the main window: a panel window, or nothing. One window per tab: asking again
+/// raises the one that is open.
+fn on_new_window(
+    app: &AppHandle,
+    url: &Url,
+    features: NewWindowFeatures,
+) -> NewWindowResponse<tauri::Wry> {
+    let Some(label) = panel_window_label(url) else {
+        log::warn!(target: "window", "refused a new window for {}", url.scheme());
+        return NewWindowResponse::Deny;
+    };
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.set_focus();
+        return NewWindowResponse::Deny;
+    }
+    match build_panel_window(app, &label, url, features) {
+        Ok(window) => NewWindowResponse::Create { window },
+        Err(error) => {
+            log::warn!(target: "window", "panel window {label}: {error}");
+            NewWindowResponse::Deny
+        }
+    }
+}
+
+/// A panel window: normal decorations, titled after its document ("Changes — fix CI").
+fn build_panel_window(
+    app: &AppHandle,
+    label: &str,
+    url: &Url,
+    features: NewWindowFeatures,
+) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(app, label, WebviewUrl::External(url.clone()))
+        .title("Elitea")
+        .inner_size(PANEL_SIZE.0, PANEL_SIZE.1)
+        .min_inner_size(PANEL_MIN_SIZE.0, PANEL_MIN_SIZE.1)
+        // The opener's webview configuration (macOS) and the size it asked for.
+        .window_features(features)
+        .on_navigation(is_blank)
+        .on_document_title_changed(|window, title| {
+            let _ = window.set_title(&title);
+        })
+        .build()
+}
 
 /// The window state the window-state plugin keeps across launches: size,
 /// position, maximized and full screen; never visibility or decorations
@@ -63,6 +137,9 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
         .inner_size(1280.0, 820.0)
         .min_inner_size(MIN_SIZE.0, MIN_SIZE.1)
         .on_navigation(move |url| is_bundled_origin(url, dev));
+    let opener = app.clone();
+    let builder =
+        builder.on_new_window(move |url, features| on_new_window(&opener, &url, features));
     #[cfg(target_os = "macos")]
     let builder = {
         use crate::platform::TRAFFIC_LIGHT_POSITION;
@@ -141,6 +218,53 @@ mod tests {
         ] {
             assert!(!allowed(url, false), "{url} must be refused");
         }
+    }
+
+    fn panel(url: &str) -> Option<String> {
+        panel_window_label(&Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn a_panel_window_is_named_after_its_tab() {
+        assert_eq!(
+            panel("about:blank#elitea-panel=changes").as_deref(),
+            Some("panel-changes")
+        );
+        assert_eq!(
+            panel("about:blank#elitea-panel=conversation").as_deref(),
+            Some("panel-conversation")
+        );
+    }
+
+    #[test]
+    fn every_other_new_window_is_refused() {
+        for url in [
+            "about:blank",
+            "about:blank#elitea-panel=",
+            "about:blank#elitea-panel=../main",
+            "about:blank#elitea-panel=Changes",
+            "about:blank#elitea-panel=main%20x",
+            "about:blank?x=1#elitea-panel=changes",
+            "about:srcdoc#elitea-panel=changes",
+            "https://elitea.example.com/#elitea-panel=changes",
+            "tauri://localhost/index.html#elitea-panel=changes",
+            "about:blank#elitea-panel=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert_eq!(panel(url), None, "{url} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_panel_window_may_not_navigate() {
+        assert!(is_blank(
+            &Url::parse("about:blank#elitea-panel=changes").unwrap()
+        ));
+        assert!(!is_blank(
+            &Url::parse("tauri://localhost/index.html").unwrap()
+        ));
+        assert!(!is_blank(
+            &Url::parse("https://elitea.example.com/").unwrap()
+        ));
     }
 
     #[test]
