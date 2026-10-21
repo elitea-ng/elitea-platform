@@ -1,0 +1,10 @@
+# A tiny crate for run_tests: its own workspace root, so cargo never
+# climbs into the repository's workspace when it is copied somewhere.
+[package]
+name = "run-tests-fixture"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+publish = false
+
+[workspace]

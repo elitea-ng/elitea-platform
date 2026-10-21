@@ -2082,6 +2082,7 @@ dependencies = [
  "ignore",
  "landlock",
  "nucleo-matcher",
+ "quick-xml 0.42.0",
  "regex",
  "rustix",
  "serde",

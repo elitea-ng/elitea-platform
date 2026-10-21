@@ -46,6 +46,19 @@ fn every_edit_profile_offers_the_same_tools_locally_and_in_the_cloud() {
             cloud.iter().map(|spec| spec.name).collect::<Vec<_>>(),
             "{profile:?}: names and order"
         );
+        // The test tool goes wherever the shell tool does, under every
+        // profile, and no name is offered twice.
+        for names in [
+            local.iter().map(|spec| spec.name).collect::<Vec<_>>(),
+            cloud.iter().map(|spec| spec.name).collect::<Vec<_>>(),
+        ] {
+            assert!(names.contains(&"run_command"), "{profile:?}: {names:?}");
+            assert!(names.contains(&"run_tests"), "{profile:?}: {names:?}");
+            let mut unique = names.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            assert_eq!(unique.len(), names.len(), "{profile:?}: {names:?}");
+        }
         for (local, cloud) in local.iter().zip(&cloud) {
             assert_eq!(
                 local.description, cloud.description,

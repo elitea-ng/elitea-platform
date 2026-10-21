@@ -5752,3 +5752,44 @@ async fn a_transient_catalogue_answer_is_asked_again_next_turn() {
     }
     assert_eq!(asked.load(Ordering::SeqCst), 2);
 }
+
+/// `run_tests` (#1224) is a command tool: offered with the shell policy,
+/// gone with it (as `run_command` is), and the environment preamble names
+/// the detected test command and points the model at it only with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_tests_is_offered_only_with_shell() {
+    for shell in [true, false] {
+        let server = answering_platform().await;
+        let policy =
+            json!({"allowed": true, "shell": shell, "max_sandbox_mode": "workspace-write"});
+        let h = harness(server, Some(policy), UiDecision::AllowOnce).await;
+        std::fs::write(
+            h.folder.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let turn = h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done_of(&h, &turn.turn_id).await;
+        let tools = offered_tools(&h.server);
+        assert_eq!(tools.contains(&"run_tests".to_owned()), shell, "{tools:?}");
+        assert_eq!(
+            tools.contains(&"run_command".to_owned()),
+            shell,
+            "{tools:?}"
+        );
+        let llm = seen(&h.server, "/llm/v1/chat/completions");
+        let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+        let system = first["messages"][0]["content"].as_str().unwrap();
+        // Without the shell the commands cannot run: no line naming them.
+        assert_eq!(
+            system.contains("- Project: cargo crate; tests: cargo test; check: cargo check"),
+            shell,
+            "{system}"
+        );
+        assert_eq!(
+            system.contains("run the project's tests with run_tests"),
+            shell,
+            "{system}"
+        );
+    }
+}

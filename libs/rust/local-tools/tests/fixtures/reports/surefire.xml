@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="example.AddTest" time="0.04" tests="2" errors="1" skipped="0" failures="0">
+  <properties><property name="java.version" value="21"/></properties>
+  <testcase name="adds" classname="example.AddTest" time="0.01"/>
+  <testcase name="breaks" classname="example.AddTest" time="0.02">
+    <error message="Cannot invoke &quot;String.length()&quot; because &quot;s&quot; is null" type="java.lang.NullPointerException"><![CDATA[java.lang.NullPointerException: Cannot invoke "String.length()" because "s" is null
+	at example.Add.len(Add.java:7)
+	at example.AddTest.breaks(AddTest.java:15)
+]]></error>
+    <system-out><![CDATA[noise]]></system-out>
+  </testcase>
+</testsuite>

@@ -1,0 +1,6 @@
+{
+  "name": "vitest-fixture",
+  "private": true,
+  "scripts": { "test": "vitest", "typecheck": "tsc --noEmit" },
+  "devDependencies": { "vitest": "^3.0.0" }
+}

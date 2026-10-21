@@ -48,6 +48,9 @@ pub const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 pub struct ShellConfig {
     pub default_timeout: Duration,
     pub max_timeout: Duration,
+    /// The longest `run_tests` may run (a suite is slower than a
+    /// command); its default is [`Self::max_timeout`].
+    pub max_test_timeout: Duration,
     /// Bytes kept per stream (half from the start, half from the end):
     /// what a session spills when the output is over its token budget
     /// ([`crate::budget`]), which is what the model sees.
@@ -57,6 +60,12 @@ pub struct ShellConfig {
     /// The session's temporary directory (`TMPDIR`; writable in
     /// workspace-write).
     pub temp_dir: PathBuf,
+    /// The build tools' cache root, kept across sessions (`go`, `gradle`
+    /// and `m2` inside: Go's build cache, Gradle's home, Maven's local
+    /// repository; writable in workspace-write). `None`: `build-cache`
+    /// under [`Self::temp_dir`]. [`crate::session::LocalSession::open`]
+    /// sets `<data_dir>/build-cache` when the host left it `None`.
+    pub cache_dir: Option<PathBuf>,
     pub sandbox: SandboxConfig,
     /// More files or directories no tool may read: the host app's own
     /// config, data, log and cache directories as the host resolved them
@@ -90,15 +99,18 @@ pub struct ShellConfig {
 }
 
 impl ShellConfig {
-    /// Defaults: 2 minutes (at most 10), 4 MiB kept per stream.
+    /// Defaults: 2 minutes (at most 10; tests at most 30), 4 MiB kept per
+    /// stream.
     #[must_use]
     pub fn new(temp_dir: PathBuf) -> Self {
         Self {
             default_timeout: Duration::from_mins(2),
             max_timeout: Duration::from_mins(10),
+            max_test_timeout: Duration::from_mins(30),
             output_cap: DEFAULT_OUTPUT_CAP,
             env_passthrough: Vec::new(),
             temp_dir,
+            cache_dir: None,
             sandbox: SandboxConfig::default(),
             deny_read: Vec::new(),
             protect_credentials: true,
@@ -120,6 +132,15 @@ impl ShellConfig {
                 .filter(|home| !home.is_empty())
                 .map(PathBuf::from)
         })
+    }
+
+    /// The build tools' cache root: [`Self::cache_dir`], else `build-cache`
+    /// under the temporary directory.
+    #[must_use]
+    pub fn cache_root(&self) -> PathBuf {
+        self.cache_dir
+            .clone()
+            .unwrap_or_else(|| self.temp_dir.join("build-cache"))
     }
 
     /// The deny list these settings name: the one [`Self::freeze_deny_list`]
@@ -204,12 +225,70 @@ struct Capture {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     total: usize,
+    /// Kept bytes dropped from the middle (the head and tail are full).
+    omitted: usize,
+    /// Which whole lines are kept ([`KeepLine`]); `None`: every byte.
+    keep: Option<KeepLine>,
+    /// The line read so far, not yet judged.
+    line: Vec<u8>,
+    /// The rest of a line too long to hold is kept unjudged.
+    long_line: bool,
 }
 
+/// Whether a whole line of output (with its `\n`) is kept: `run_tests`
+/// leaves out what its parser never reads (cargo's artifact records) so
+/// that it cannot push what it does read out of the kept head and tail.
+pub type KeepLine = fn(&[u8]) -> bool;
+
+/// The longest line a [`KeepLine`] judges; the rest of a longer one is
+/// kept.
+const MAX_JUDGED_LINE: usize = 1024 * 1024;
+
 impl Capture {
+    fn filtered(keep: Option<KeepLine>) -> Self {
+        Self {
+            keep,
+            ..Self::default()
+        }
+    }
+
     fn push(&mut self, bytes: &[u8], cap: usize) {
-        let half = cap / 2;
         self.total += bytes.len();
+        let Some(keep) = self.keep else {
+            self.keep_bytes(bytes, cap);
+            return;
+        };
+        for chunk in bytes.split_inclusive(|byte| *byte == b'\n') {
+            let ends = chunk.ends_with(b"\n");
+            if self.long_line {
+                self.keep_bytes(chunk, cap);
+                self.long_line = !ends;
+                continue;
+            }
+            self.line.extend_from_slice(chunk);
+            if ends {
+                let line = std::mem::take(&mut self.line);
+                if keep(&line) {
+                    self.keep_bytes(&line, cap);
+                }
+            } else if self.line.len() > MAX_JUDGED_LINE {
+                let line = std::mem::take(&mut self.line);
+                self.keep_bytes(&line, cap);
+                self.long_line = true;
+            }
+        }
+    }
+
+    /// The last line, which had no `\n`, judged at the end of the stream.
+    fn finish(&mut self, cap: usize) {
+        let line = std::mem::take(&mut self.line);
+        if !line.is_empty() && self.keep.is_none_or(|keep| keep(&line)) {
+            self.keep_bytes(&line, cap);
+        }
+    }
+
+    fn keep_bytes(&mut self, bytes: &[u8], cap: usize) {
+        let half = cap / 2;
         for byte in bytes {
             if self.head.len() < half {
                 self.head.push(*byte);
@@ -217,14 +296,16 @@ impl Capture {
                 self.tail.push_back(*byte);
                 if self.tail.len() > cap - half {
                     self.tail.pop_front();
+                    self.omitted += 1;
                 }
             }
         }
     }
 
     /// The text so far; `cut_off` when the reader did not reach the end.
+    /// Lines a [`KeepLine`] left out are not counted as omitted.
     fn render(&self, cut_off: bool) -> Captured {
-        let omitted = self.total - self.head.len() - self.tail.len();
+        let omitted = self.omitted;
         let mut text = String::from_utf8_lossy(&self.head).into_owned();
         if omitted > 0 {
             let _ = write!(text, "\n… [{omitted} bytes omitted] …\n");
@@ -253,6 +334,9 @@ async fn capture<R: AsyncRead + Unpin>(mut reader: R, cap: usize, into: SharedCa
         if let Ok(mut captured) = into.lock() {
             captured.push(&buffer[..read], cap);
         }
+    }
+    if let Ok(mut captured) = into.lock() {
+        captured.finish(cap);
     }
 }
 
@@ -334,6 +418,33 @@ fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<
         ]
         .map(|(name, value)| (name.to_owned(), value)),
     );
+    // Go's build cache under the home is not writable in the sandbox, and
+    // go then misreports the standard library as missing; Gradle's and
+    // Maven's caches there are not writable either. One cache root kept
+    // across sessions holds them (a session does not start cold, and what
+    // an online run fetched serves later offline runs), unless the host
+    // passes its own (`GOCACHE`, `GRADLE_USER_HOME`, `-Dmaven.repo.local`
+    // in `MAVEN_OPTS`).
+    let cache = config.cache_root();
+    if !out.iter().any(|(name, _)| name == "GOCACHE") {
+        out.push(("GOCACHE".to_owned(), cache.join("go").display().to_string()));
+    }
+    if !out.iter().any(|(name, _)| name == "GRADLE_USER_HOME") {
+        out.push((
+            "GRADLE_USER_HOME".to_owned(),
+            cache.join("gradle").display().to_string(),
+        ));
+    }
+    let maven_repo = format!("-Dmaven.repo.local={}", cache.join("m2").display());
+    match out.iter_mut().find(|(name, _)| name == "MAVEN_OPTS") {
+        Some((_, opts)) if opts.contains("-Dmaven.repo.local=") => {}
+        Some((_, opts)) if opts.trim().is_empty() => *opts = maven_repo,
+        Some((_, opts)) => {
+            opts.push(' ');
+            opts.push_str(&maven_repo);
+        }
+        None => out.push(("MAVEN_OPTS".to_owned(), maven_repo)),
+    }
     // A container host's workspace root that git must trust although
     // another uid owns it (empty on the desktop).
     let trust = config.sandbox.git_trust_env();
@@ -348,7 +459,8 @@ fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<
 ///
 /// # Errors
 ///
-/// When the temporary directory cannot be created.
+/// When the temporary directory or the build tools' cache cannot be
+/// created.
 pub fn sandbox_request(
     workspace: &Workspace,
     config: &ShellConfig,
@@ -361,11 +473,23 @@ pub fn sandbox_request(
     let temp = std::fs::canonicalize(&config.temp_dir).map_err(|error| {
         ToolError::io("cannot resolve the session's temporary directory", &error)
     })?;
+    // The build tools' cache root, kept across sessions, is writable too
+    // (inside the denied data directory it is opened again, like the
+    // temporary directory).
+    let cache = config.cache_root();
+    std::fs::create_dir_all(&cache)
+        .map_err(|error| ToolError::io("cannot create the build tools' cache", &error))?;
+    let cache = std::fs::canonicalize(&cache)
+        .map_err(|error| ToolError::io("cannot resolve the build tools' cache", &error))?;
+    let mut writable_roots = vec![workspace.root().to_path_buf(), temp];
+    if !writable_roots.iter().any(|root| cache.starts_with(root)) {
+        writable_roots.push(cache);
+    }
     let deny_paths = config.deny_list().paths().to_vec();
     Ok(SandboxRequest {
         mode,
         network,
-        writable_roots: vec![workspace.root().to_path_buf(), temp],
+        writable_roots,
         protected: Vec::new(),
         git_roots: vec![workspace.root().to_path_buf()],
         deny_paths,
@@ -460,6 +584,35 @@ pub async fn run_checked(
     spec: &CommandSpec,
     unhidden_approved: bool,
 ) -> ToolResult<CommandOutput> {
+    run_checked_up_to(
+        workspace,
+        config,
+        spec,
+        unhidden_approved,
+        config.max_timeout,
+        None,
+    )
+    .await
+}
+
+/// [`run_checked`] with its timeout capped at `max_timeout` instead of
+/// [`ShellConfig::max_timeout`] (`run_tests`:
+/// [`ShellConfig::max_test_timeout`]), and only the stdout lines
+/// `keep_stdout_line` keeps captured (all when `None`): the result's
+/// `stdout_bytes` still counts every byte, and `stdout_truncated` says
+/// only whether kept lines were cut.
+///
+/// # Errors
+///
+/// As [`run_checked`].
+pub async fn run_checked_up_to(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    unhidden_approved: bool,
+    max_timeout: Duration,
+    keep_stdout_line: Option<KeepLine>,
+) -> ToolResult<CommandOutput> {
     if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
         return Err(ToolError::invalid(format!(
             "`{}` is not a directory in the workspace",
@@ -479,7 +632,7 @@ pub async fn run_checked(
     let timeout = spec
         .timeout
         .unwrap_or(config.default_timeout)
-        .min(config.max_timeout);
+        .min(max_timeout);
 
     let mut command = tokio::process::Command::new(&prepared.program);
     command
@@ -513,7 +666,8 @@ pub async fn run_checked(
         .take()
         .ok_or_else(|| ToolError::new(ErrorCode::Io, "no stderr"))?;
     let cap = config.output_cap;
-    let (out_capture, err_capture) = (SharedCapture::default(), SharedCapture::default());
+    let out_capture = Arc::new(Mutex::new(Capture::filtered(keep_stdout_line)));
+    let err_capture = SharedCapture::default();
     let mut out_reader = tokio::spawn(capture(stdout, cap, Arc::clone(&out_capture)));
     let mut err_reader = tokio::spawn(capture(stderr, cap, Arc::clone(&err_capture)));
 
@@ -800,6 +954,126 @@ mod tests {
                 .iter()
                 .any(|(name, _)| name == "LANG")
         );
+    }
+
+    /// A capture with a line filter keeps only the lines it keeps, judged
+    /// whole however the reads split them: thousands of artifact records
+    /// cannot push the test results out of a small cap, and what was left
+    /// out on purpose is not reported as truncated (#1224).
+    #[test]
+    fn a_line_filter_drops_lines_before_the_cap() {
+        let artifact = format!(
+            "{{\"reason\":\"compiler-artifact\",\"filenames\":[\"{}\"]}}\n",
+            "x".repeat(2000)
+        );
+        let mut stream = String::new();
+        for n in 0..5000 {
+            if n == 2500 {
+                stream.push_str("test result: ok. 3 passed; 0 failed; 0 ignored\n");
+            }
+            stream.push_str(&artifact);
+        }
+        stream.push_str("test tests::adds ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored");
+        let cap = 64 * 1024;
+        let mut capture = super::Capture::filtered(Some(crate::test_report::cargo_keeps_line));
+        for chunk in stream.as_bytes().chunks(777) {
+            capture.push(chunk, cap);
+        }
+        capture.finish(cap);
+        let captured = capture.render(false);
+        assert!(!captured.truncated, "{}", captured.text.len());
+        assert_eq!(captured.total, stream.len());
+        assert_eq!(
+            captured.text,
+            "test result: ok. 3 passed; 0 failed; 0 ignored\ntest tests::adds ... ok\ntest \
+             result: ok. 1 passed; 0 failed; 0 ignored"
+        );
+        // Unfiltered, the same stream is cut.
+        let mut plain = super::Capture::default();
+        plain.push(stream.as_bytes(), cap);
+        let plain = plain.render(false);
+        assert!(plain.truncated);
+        assert!(plain.text.contains("bytes omitted"));
+        assert!(!plain.text.contains("3 passed"), "lost in the middle");
+    }
+
+    /// Go's, Gradle's and Maven's caches go to one cache root kept across
+    /// sessions (the sandbox cannot write the home's), unless the host
+    /// passes its own; a host's other `MAVEN_OPTS` are kept.
+    #[test]
+    fn build_tool_caches_share_one_root_across_sessions() {
+        let (dir, workspace, mut config) = setup();
+        let value = |env: &[(String, String)], name: &str| {
+            env.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        // Without a host root, under the temporary directory (already
+        // writable: no extra root).
+        let fallback = config.temp_dir.join("build-cache");
+        assert_eq!(
+            value(&super::environment_from(&config, Vec::new()), "GOCACHE"),
+            Some(fallback.join("go").display().to_string())
+        );
+        let request =
+            super::sandbox_request(&workspace, &config, SandboxMode::WorkspaceWrite, false)
+                .expect("request");
+        assert_eq!(request.writable_roots.len(), 2);
+        // Two sessions over one data directory name the same root, and the
+        // sandbox may write it.
+        let cache = dir.path().join("data/build-cache");
+        config.cache_dir = Some(cache.clone());
+        let mut other = ShellConfig::new(dir.path().join("tmp-other"));
+        other.cache_dir = Some(cache.clone());
+        let env = super::environment_from(&config, Vec::new());
+        let other_env = super::environment_from(&other, Vec::new());
+        for name in ["GOCACHE", "GRADLE_USER_HOME", "MAVEN_OPTS"] {
+            assert_eq!(value(&env, name), value(&other_env, name), "{name}");
+        }
+        assert_eq!(
+            value(&env, "GOCACHE"),
+            Some(cache.join("go").display().to_string())
+        );
+        assert_eq!(
+            value(&env, "GRADLE_USER_HOME"),
+            Some(cache.join("gradle").display().to_string())
+        );
+        let repo = format!("-Dmaven.repo.local={}", cache.join("m2").display());
+        assert_eq!(value(&env, "MAVEN_OPTS"), Some(repo.clone()));
+        let request =
+            super::sandbox_request(&workspace, &config, SandboxMode::WorkspaceWrite, false)
+                .expect("request");
+        let canonical = std::fs::canonicalize(&cache).expect("created");
+        assert_eq!(request.writable_roots.last(), Some(&canonical));
+        let passed = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        let env = super::environment_from(
+            &config,
+            passed(&[
+                ("GRADLE_USER_HOME", "/host/gradle"),
+                ("MAVEN_OPTS", "-Xmx1g -Dmaven.repo.local=/host/m2"),
+            ]),
+        );
+        assert_eq!(
+            value(&env, "GRADLE_USER_HOME").as_deref(),
+            Some("/host/gradle")
+        );
+        assert_eq!(
+            value(&env, "MAVEN_OPTS").as_deref(),
+            Some("-Xmx1g -Dmaven.repo.local=/host/m2")
+        );
+        assert_eq!(
+            env.iter()
+                .filter(|(name, _)| name == "GRADLE_USER_HOME")
+                .count(),
+            1
+        );
+        let env = super::environment_from(&config, passed(&[("MAVEN_OPTS", "-Xmx1g")]));
+        assert_eq!(value(&env, "MAVEN_OPTS"), Some(format!("-Xmx1g {repo}")));
     }
 
     #[tokio::test]

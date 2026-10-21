@@ -37,7 +37,7 @@ use elitea_agent_runtime::host::{ApprovalChannel, ApprovalOutcome, ApprovalReque
 use elitea_agent_runtime::workspace_archive::{self, ArchiveError, ArchiveLimits, ArchiveStats};
 use elitea_agent_runtime::workspace_tools::WORKSPACE_TOOLS;
 use elitea_local_tools::approvals::{
-    MemoryChoices, PAYLOAD_KEY, RulesEngine, ToolCall, ToolKind, Verdict, WorkspaceSettings,
+    MemoryChoices, PAYLOAD_KEY, RulesEngine, ToolCall, Verdict, WorkspaceSettings,
 };
 use elitea_local_tools::git::HARDENING;
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
@@ -70,7 +70,7 @@ pub struct RunnerConfig {
     /// workspace.
     pub data_dir: PathBuf,
     pub policy: RunnerPolicy,
-    /// The thread's harvested env (contract 6.4), for `run_command` only.
+    /// The thread's harvested env (contract 6.4), for `run_command` and `run_tests` only.
     /// Read from the first stdin line, never from the process environment
     /// or the arguments.
     pub env: Vec<(String, String)>,
@@ -135,7 +135,7 @@ impl ApprovalChannel for CloudPrompt {
             .cloned()
             .and_then(|value| serde_json::from_value::<ToolCall>(value).ok());
         if let (Some(engine), Some(call)) = (self.engine.get(), call)
-            && call.tool == ToolKind::RunCommand
+            && call.tool.runs_commands()
         {
             let mut contained = call.clone();
             contained.network = false;
@@ -303,6 +303,7 @@ pub async fn handle_line(session: &Arc<LocalSession>, line: &str) -> Value {
 /// The tools that can grow the workspace.
 const MUTATING_TOOLS: &[&str] = &[
     "run_command",
+    "run_tests",
     "write_file",
     "edit_file",
     "multi_edit",

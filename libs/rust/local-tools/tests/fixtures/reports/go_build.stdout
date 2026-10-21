@@ -1,0 +1,6 @@
+{"ImportPath":"example.com/fixture [example.com/fixture.test]","Action":"build-output","Output":"# example.com/fixture [example.com/fixture.test]\n"}
+{"ImportPath":"example.com/fixture [example.com/fixture.test]","Action":"build-output","Output":"./add.go:3:37: undefined: c\n"}
+{"ImportPath":"example.com/fixture [example.com/fixture.test]","Action":"build-fail"}
+{"Time":"2026-10-21T13:47:40.664919-04:00","Action":"start","Package":"example.com/fixture"}
+{"Time":"2026-10-21T13:47:40.664962-04:00","Action":"output","Package":"example.com/fixture","Output":"FAIL\texample.com/fixture [build failed]\n"}
+{"Time":"2026-10-21T13:47:40.66497-04:00","Action":"fail","Package":"example.com/fixture","Elapsed":0,"FailedBuild":"example.com/fixture [example.com/fixture.test]"}

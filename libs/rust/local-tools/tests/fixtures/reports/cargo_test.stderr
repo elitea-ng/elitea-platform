@@ -1,0 +1,4 @@
+   Compiling run-tests-fixture v0.1.0 (/work/fixture)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (target/debug/deps/run_tests_fixture-ffb361fc9138df1f)
+error: test failed, to rerun pass `--lib`

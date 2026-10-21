@@ -55,6 +55,11 @@ libs/rust/llm-wire/Cargo.toml member of the libs/rust workspace: the /libs/rust 
 libs/rust/local-embed/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/local-index/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/local-tools/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/local-tools/tests/fixtures/projects/cargo/Cargo.toml run_tests detection fixture (#1224): a dependency-free crate the project detector and a real `cargo test` read; it ships in nothing
+libs/rust/local-tools/tests/fixtures/projects/go/go.mod run_tests detection fixture (#1224): a marker the project detector reads, no dependencies, ships in nothing
+libs/rust/local-tools/tests/fixtures/projects/jest/package.json run_tests detection fixture (#1224): a marker the project detector reads; never installed
+libs/rust/local-tools/tests/fixtures/projects/pytest/pyproject.toml run_tests detection fixture (#1224): a marker the project detector reads; never installed
+libs/rust/local-tools/tests/fixtures/projects/vitest/package.json run_tests detection fixture (#1224): a marker the project detector reads; never installed
 libs/rust/workspace-runner/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/workspace-store/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/model-client/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
