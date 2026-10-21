@@ -20,7 +20,7 @@ import { composer, describeWorkspaceError, replayView, TurnTranscript, type Work
 import type { StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
-import { copyText, modKey, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
+import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { ForkPoint, SessionFork } from './useForkThread';
 import type { SessionCommands } from './useSessionCommands';
@@ -130,11 +130,11 @@ export function FolderTitle({ workspace }: { workspace: Workspace }): React.JSX.
 
 /** Opens the inspector when it is hidden; the dot says the thread's tabs have something to show. */
 export function PanelToggle({ count }: { count: number }): React.JSX.Element {
-  const open = useDesktopLayout((state) => state.changesOpen);
+  const open = useDesktopLayout(selectInspectorShown);
   const label = open ? t('desktop.inspector.hide', 'Hide inspector') : t('desktop.inspector.show', 'Show inspector');
   return (
     <Tooltip title={`${label} (${modKey()}⌥\\)`}>
-      <IconButton size="small" aria-label={label} aria-pressed={open} onClick={() => useDesktopLayout.getState().setChangesOpen(!open)}>
+      <IconButton size="small" aria-label={label} aria-pressed={open} onClick={() => useDesktopLayout.getState().toggleInspector()}>
         <Badge color="primary" variant="dot" invisible={count === 0}>
           <VerticalSplitOutlinedIcon fontSize="inherit" />
         </Badge>

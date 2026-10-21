@@ -5,12 +5,12 @@
  * copied too) and the root element's attributes (the colour scheme MUI sets
  * on `<html>`) mirrored.
  *
- * `sync()` is cheap when nothing changed (it compares rule counts), so the
- * caller runs it on every frame of the target window: a rule a component
- * inserted while rendering into that window is there before the window
- * paints. Emotion only ever appends rules; a sheet that shrank is copied
- * again from scratch. A sheet whose rules cannot be read (a cross-origin
- * stylesheet) is copied as its `<link>`.
+ * `sync()` is cheap when nothing changed (it compares rule counts); the
+ * caller runs it when `watchStyles` says the source changed. Emotion only
+ * ever appends rules; a sheet that shrank is copied again from scratch. A
+ * sheet whose rules cannot be read (a cross-origin stylesheet) is copied as
+ * its `<link>`. The copies sit in the target's head in the source's sheet
+ * order, so the cascade between them is the source's.
  */
 
 interface Copy {
@@ -43,7 +43,17 @@ function mirrorAttributes(from: Element, to: Element): void {
 export function mirrorStyles(source: Document, target: Document): StyleMirror {
   const copies = new Map<CSSStyleSheet, Copy>();
 
-  const copyOf = (sheet: CSSStyleSheet, rules: CSSRuleList | null): Copy | undefined => {
+  /** The copy of the first sheet after `at` (in the source's order) that has one: where a new copy goes, before it. */
+  const nextCopy = (sheets: readonly CSSStyleSheet[], at: number): HTMLElement | null => {
+    for (let index = at + 1; index < sheets.length; index += 1) {
+      const copy = copies.get(sheets[index] as CSSStyleSheet);
+      if (copy !== undefined && copy.node.parentNode === target.head) return copy.node;
+    }
+    return null;
+  };
+
+  const copyOf = (sheets: readonly CSSStyleSheet[], at: number, rules: CSSRuleList | null): Copy | undefined => {
+    const sheet = sheets[at] as CSSStyleSheet;
     const existing = copies.get(sheet);
     if (existing !== undefined && (rules === null || rules.length >= existing.copied)) return existing;
     existing?.node.remove();
@@ -56,7 +66,7 @@ export function mirrorStyles(source: Document, target: Document): StyleMirror {
       if (sheet.media.mediaText !== '') node.setAttribute('media', sheet.media.mediaText);
     }
     node.dataset['mirror'] = '';
-    target.head.append(node);
+    target.head.insertBefore(node, nextCopy(sheets, at));
     const copy = { node, copied: 0 };
     copies.set(sheet, copy);
     return copy;
@@ -65,13 +75,14 @@ export function mirrorStyles(source: Document, target: Document): StyleMirror {
   const sync = (): void => {
     mirrorAttributes(source.documentElement, target.documentElement);
     const live = new Set<CSSStyleSheet>();
-    for (const sheet of Array.from(source.styleSheets)) {
+    const sheets = Array.from(source.styleSheets);
+    sheets.forEach((sheet, at) => {
       live.add(sheet);
       const rules = readRules(sheet);
-      const copy = copyOf(sheet, rules);
-      if (copy === undefined || rules === null || rules.length === copy.copied) continue;
+      const copy = copyOf(sheets, at, rules);
+      if (copy === undefined || rules === null || rules.length === copy.copied) return;
       const into = (copy.node as HTMLStyleElement).sheet;
-      if (into === null) continue;
+      if (into === null) return;
       for (let index = copy.copied; index < rules.length; index += 1) {
         const rule = rules[index];
         try {
@@ -81,7 +92,7 @@ export function mirrorStyles(source: Document, target: Document): StyleMirror {
         }
       }
       copy.copied = rules.length;
-    }
+    });
     for (const [sheet, copy] of copies) {
       if (live.has(sheet)) continue;
       copy.node.remove();
@@ -95,5 +106,45 @@ export function mirrorStyles(source: Document, target: Document): StyleMirror {
       copies.forEach((copy) => copy.node.remove());
       copies.clear();
     },
+  };
+}
+
+/**
+ * Calls `onChange` (at most once per microtask, so before the next paint)
+ * whenever `source`'s styles may have changed: a node in its head added,
+ * removed or edited, an attribute of its root element (the colour scheme)
+ * changed, or a rule inserted through the CSSOM — which no MutationObserver
+ * sees, and is how emotion adds rules in a production build. For the last,
+ * `insertRule` of the source window's `CSSStyleSheet` is wrapped while the
+ * watch lasts.
+ */
+export function watchStyles(source: Document, onChange: () => void): () => void {
+  const win = source.defaultView;
+  let queued = false;
+  const schedule = (): void => {
+    if (queued) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      onChange();
+    });
+  };
+  const observer = new MutationObserver(schedule);
+  observer.observe(source.head, { childList: true, subtree: true, characterData: true });
+  observer.observe(source.documentElement, { attributes: true });
+
+  const proto = win?.CSSStyleSheet.prototype;
+  const descriptor = proto === undefined ? undefined : Object.getOwnPropertyDescriptor(proto, 'insertRule');
+  const original = descriptor?.value as ((this: CSSStyleSheet, rule: string, index?: number) => number) | undefined;
+  if (proto !== undefined && original !== undefined) {
+    proto.insertRule = function insertRule(this: CSSStyleSheet, rule: string, index?: number): number {
+      const at = original.call(this, rule, index);
+      if (this.ownerNode?.ownerDocument === source) schedule();
+      return at;
+    };
+  }
+  return () => {
+    observer.disconnect();
+    if (proto !== undefined && descriptor !== undefined) Object.defineProperty(proto, 'insertRule', descriptor);
   };
 }

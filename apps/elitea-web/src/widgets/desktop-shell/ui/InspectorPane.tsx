@@ -38,10 +38,10 @@ import {
 } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
 
-import { viewOf, type InspectorGroupView } from '../lib/inspectorLayout';
+import { byTabOrder, viewOf, type InspectorGroupView } from '../lib/inspectorLayout';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useAppIpc } from '../model/appIpcContext';
-import { useDesktopLayout } from '../model/desktopLayout.store';
+import { selectInspectorShown, useDesktopLayout } from '../model/desktopLayout.store';
 import { usePanelWindows, type PanelWindows } from '../model/usePanelWindows';
 import { groupDropId, InspectorGroup } from './InspectorGroup';
 import { SPLIT_DROP_ID, SplitDropZone, SplitHandle, WidthHandle } from './InspectorHandles';
@@ -51,7 +51,7 @@ export interface InspectorHost {
   readonly slot: InspectorSlot;
   /** The kind of page whose tabs are offered now; `null` when the page on screen has none. */
   readonly page: InspectorPage | null;
-  /** The tabs that page offers, in the order it offered them. */
+  /** The tabs that page offers, in their fixed order (not the order the page registered them). */
   readonly tabs: readonly InspectorTabInfo[];
   readonly windows: PanelWindows;
   readonly setBody: (tab: InspectorTabId, node: HTMLElement | null) => void;
@@ -82,6 +82,7 @@ export function useInspectorHost(appIpc: AppIpc | undefined): InspectorHost {
   }, []);
 
   // The newest registration of each tab wins; the page is the newest tab's.
+  // Sorted, so a tab re-registering (its attention or subject changed) keeps its place in the ⋯ menu.
   const { page, tabs } = useMemo(() => {
     const newest = registrations.at(-1);
     if (newest === undefined) return { page: null, tabs: [] };
@@ -90,8 +91,12 @@ export function useInspectorHost(appIpc: AppIpc | undefined): InspectorHost {
     registrations.forEach(({ info }) => {
       if (INSPECTOR_TAB_PAGE[info.id] === kind) byId.set(info.id, info);
     });
-    return { page: kind, tabs: Array.from(byId.values()) };
+    return { page: kind, tabs: byTabOrder(Array.from(byId.values())) };
   }, [registrations]);
+
+  // The store hears what is offered: showing the panel can then reopen a page's tabs, and a maximized panel restores when they go.
+  useEffect(() => useDesktopLayout.getState().setInspectorOffer({ page, tabs: tabs.map((info) => info.id) }), [page, tabs]);
+  useEffect(() => () => useDesktopLayout.getState().setInspectorOffer({ page: null, tabs: [] }), []);
 
   const windows = usePanelWindows(tabs, appIpc);
   const setBody = useCallback((tab: InspectorTabId, node: HTMLElement | null) => setBodies((current) => withEntry(current, tab, node)), []);
@@ -123,10 +128,10 @@ export function useInspectorView(host: InspectorHost): readonly InspectorGroupVi
   return useMemo(() => (layout === null ? [] : viewOf(layout, host.tabs.map((info) => info.id))), [layout, host.tabs]);
 }
 
-/** The title bar's toggle: shown while the page has an inspector and it is hidden. */
+/** The title bar's toggle: shown while the page has an inspector and it is not on screen (hidden, or every tab closed). */
 export function InspectorToggle({ host }: { readonly host: InspectorHost }): React.JSX.Element | null {
-  const open = useDesktopLayout((state) => state.changesOpen);
-  if (host.page === null || open) return null;
+  const shown = useDesktopLayout(selectInspectorShown);
+  if (host.page === null || shown) return null;
   const label = t('desktop.inspector.show', 'Show inspector');
   const attention = host.tabs.reduce((sum, info) => sum + (info.attention ?? 0), 0);
   return (
@@ -200,14 +205,14 @@ export function InspectorPane({ host }: { readonly host: InspectorHost }): React
   if (!shown) return null;
   const page = host.page;
 
-  // A tab moves to the other group; a lone top group splits off a bottom one.
+  // A tab moves to the other group; the drop zone splits it off below the one group on screen.
   const otherOf = (index: number): 0 | 1 => (index === 0 ? 1 : 0);
   const onDragStart = (event: DragStartEvent): void => setDragged(event.active.id as InspectorTabId);
   const onDragEnd = (event: DragEndEvent): void => {
     setDragged(null);
     const tab = event.active.id as InspectorTabId;
     const over = event.over?.id;
-    if (over === SPLIT_DROP_ID) useDesktopLayout.getState().moveInspectorTab(tab, otherOf(groups[0]?.index ?? 0));
+    if (over === SPLIT_DROP_ID) useDesktopLayout.getState().splitInspectorTab(tab, groups[0]?.index ?? 0);
     else if (over === groupDropId(0)) useDesktopLayout.getState().moveInspectorTab(tab, 0);
     else if (over === groupDropId(1)) useDesktopLayout.getState().moveInspectorTab(tab, 1);
   };

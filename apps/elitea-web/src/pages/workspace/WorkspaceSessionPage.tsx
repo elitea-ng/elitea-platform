@@ -24,7 +24,7 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
+import { ApprovalDialog, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
 import { useHasIndexHost } from '@/features/workspace-index';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -52,14 +52,22 @@ const LIST_KEY = ['workspace', 'list'] as const;
 /** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
 const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
 
-/** What the thread's inspector tabs show: the thread's title, or its folder's name (a new thread). */
-const threadSubject = (workspace: Workspace, conversationId: string): string => readThreads(workspace.id).find((x) => x.id === conversationId)?.title ?? workspace.name;
+/**
+ * What the thread's inspector tabs show: the thread's title, or its folder's
+ * name (a new thread). Read through the sidebar's threads query (the same
+ * key, invalidated after `recordThread`), not from storage on every render.
+ */
+function useThreadSubject(workspace: Workspace, conversationId: string): string {
+  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
+  return threads.data?.find((x) => x.id === conversationId)?.title ?? workspace.name;
+}
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
+  const subject = useThreadSubject(workspace, conversationId);
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -132,7 +140,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         ipc={ipc}
         appIpc={appIpc}
         workspaceId={workspace.id}
-        subject={threadSubject(workspace, conversationId)}
+        subject={subject}
         hasIndex={hasIndex}
         changeSets={session.changeSets}
         undoTurnId={session.undoTurnId}

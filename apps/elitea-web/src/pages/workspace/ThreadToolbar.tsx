@@ -31,7 +31,7 @@ import { readThreads, type ProjectChoice } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexIdleLine } from '@/features/workspace-index';
-import { ActivityIsland, conversationLink, copyText as copy, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
+import { ActivityIsland, conversationLink, copyText as copy, selectInspectorShown, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { PanelToggle } from './sessionParts';
 
@@ -236,7 +236,8 @@ function Overflow({ conversationId, onIndexSettings, onFork, busy }: Pick<Thread
 }
 
 export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
-  const changesOpen = useDesktopLayout((state) => state.changesOpen);
+  // Shown whenever the inspector is not on screen: hidden, or every one of the thread's tabs closed.
+  const inspectorShown = useDesktopLayout(selectInspectorShown);
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   return (
     <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
@@ -245,7 +246,7 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
         logo={false}
         trailing={
           <>
-            {!changesOpen && <PanelToggle count={props.attention} />}
+            {!inspectorShown && <PanelToggle count={props.attention} />}
             <Overflow conversationId={props.conversationId} onIndexSettings={props.onIndexSettings} onFork={props.onFork} busy={props.busy} />
           </>
         }

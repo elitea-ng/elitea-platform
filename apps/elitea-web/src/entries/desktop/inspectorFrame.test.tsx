@@ -8,7 +8,8 @@
  * a tab moves to a second, stacked group and back, closes and reopens from
  * the ⋯ menu, that the layout is remembered per kind of page, and that a tab
  * opens in a window of its own — live, titled, its chip marked — and comes
- * back to the panel when that window closes.
+ * back to the panel when that window closes. A panel whose every tab was
+ * closed comes back, tabs and all, from the toggle or ⌘⌥\.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
 import { act, configure, fireEvent, getConfig, render, screen, waitFor, within } from '@testing-library/react';
@@ -24,6 +25,7 @@ import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { BROWSER_PLATFORM } from '@/shared/desktop/appEvents';
+import { installExternalLinks } from '@/shared/desktop/externalLinks';
 import { createFakeAppIpc, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
 import { createFakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
@@ -226,10 +228,11 @@ describe('the desktop inspector, composed', () => {
         this.closed = true;
       },
       focus: vi.fn(),
-      requestAnimationFrame: (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 16),
-      cancelAnimationFrame: (handle: number) => window.clearTimeout(handle),
     };
     const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    // The desktop's link handling, as `launchApp` installs it: the window's links go to the system browser too.
+    const openExternal = vi.fn<(url: string) => Promise<void>>().mockResolvedValue();
+    const uninstall = installExternalLinks({ openExternal }, 'https://elitea.example', document, window);
     const { appIpc } = mount('/workspaces/w1?conversation=77');
     await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
 
@@ -240,6 +243,12 @@ describe('the desktop inspector, composed', () => {
     expect(within(body).getByText(/No changes yet/)).toBeInTheDocument();
     expect(child.title).toBe('Changes — fix the build');
     expect(child.head.querySelector('style[data-mirror]')).not.toBeNull();
+    const link = child.createElement('a');
+    link.href = '/docs/changes';
+    link.target = '_blank';
+    body.append(link);
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(openExternal).toHaveBeenCalledWith('https://elitea.example/docs/changes');
     // In the panel: the chip says where the tab is; a click on it raises that window.
     expect(within(inspector()).getByRole('tab', { name: 'Changes, in its own window' })).toBeInTheDocument();
     expect(within(inspector()).getByTestId('inspector-in-window')).toBeInTheDocument();
@@ -249,11 +258,47 @@ describe('the desktop inspector, composed', () => {
     await user.click(within(inspector()).getByRole('tab', { name: 'Approvals' }));
     expect(await within(inspector()).findByText(/Nothing was asked of you/)).toBeInTheDocument();
 
+    // The window's document replaced under us (a reload): filled again, titled again.
+    const reloaded = document.createElement('iframe');
+    document.body.append(reloaded);
+    popup.document = reloaded.contentDocument as Document;
+    expect(await within(popup.document.body).findByTestId('inspector-window-changes')).toBeInTheDocument();
+    expect(popup.document.title).toBe('Changes — fix the build');
+
     // Closing the window returns the tab.
     popup.close();
     await waitFor(() => expect(within(inspector()).getByRole('tab', { name: 'Changes' })).toBeInTheDocument());
     expect(useDesktopLayout.getState().poppedTabs).toEqual([]);
     await user.click(within(inspector()).getByRole('tab', { name: 'Changes' }));
     expect(await within(inspector()).findByText(/No changes yet/)).toBeInTheDocument();
+    uninstall();
+  });
+
+  it('brings the panel back, tabs and all, after every tab was closed', async () => {
+    const user = userEvent.setup();
+    mount('/workspaces/w1?conversation=77');
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    const closeAll = async (): Promise<void> => {
+      for (const name of ['Changes', 'Approvals', 'Index']) await user.click(within(inspector()).getByRole('button', { name: `Close ${name}` }));
+      await waitFor(() => expect(screen.queryByTestId('desktop-inspector')).toBeNull());
+    };
+
+    // Maximized, then every tab closed: the main column comes back with the toggle on it.
+    await user.click(within(inspector()).getByRole('button', { name: 'Maximize' }));
+    await closeAll();
+    expect(useDesktopLayout.getState().inspectorMaximized).toBe(false);
+    expect(screen.getByRole('main')).toHaveStyle({ display: 'flex' });
+    await user.click(screen.getByRole('button', { name: 'Show inspector' }));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    expect(inspector()).not.toHaveAttribute('data-maximized');
+
+    // ⌘⌥\ (the shell's toggle) does the same, in one press.
+    await closeAll();
+    act(() => useDesktopLayout.getState().toggleInspector());
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index']));
+    // So does "Index settings…" (showInspector), which reopens the one tab asked for.
+    await closeAll();
+    act(() => useDesktopLayout.getState().showInspector('index'));
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Index']));
   });
 });

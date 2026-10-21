@@ -34,6 +34,11 @@ export const SPLIT_RANGE = { min: 0.2, max: 0.8 } as const;
 const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'index', 'conversation'];
 const TAB_IDS = new Set<string>(TAB_ORDER);
 
+/** The tabs in their one fixed order (Changes, Approvals, Index, Conversation), however the page registered them. */
+export function byTabOrder<T extends { readonly id: InspectorTabId }>(tabs: readonly T[]): T[] {
+  return [...tabs].sort((a, b) => TAB_ORDER.indexOf(a.id) - TAB_ORDER.indexOf(b.id));
+}
+
 export function defaultInspectorLayout(page: InspectorPage): InspectorLayout {
   const tabs = TAB_ORDER.filter((id) => INSPECTOR_TAB_PAGE[id] === page);
   // The chat's inspector keeps the participants rail's own width (276px, on the 8px grid); Local work its changes panel's.
@@ -93,6 +98,27 @@ export function moveTab(layout: InspectorLayout, id: InspectorTabId, to: 0 | 1):
   });
   const groups = target === without.length ? [...without, { tabs: [id], active: id }] : without.map((group, index) => (index === target ? { tabs: [...group.tabs, id], active: id } : group));
   return { ...layout, closed: layout.closed.filter((tab) => tab !== id), groups: compact(groups) };
+}
+
+/**
+ * Splits the tab off below the group `keep` (the one group on screen): every
+ * other tab gathers in the top group — `keep`'s, plus any a hidden group held —
+ * and the tab alone in a bottom group, active. Unlike `moveTab`, never lands
+ * the tab in a group above the one on screen.
+ */
+export function splitTab(layout: InspectorLayout, id: InspectorTabId, keep: number): InspectorLayout {
+  const kept = layout.groups[keep];
+  const order = [...(kept === undefined ? [] : [kept]), ...layout.groups.filter((_, index) => index !== keep)];
+  const tabs = order.flatMap((group) => group.tabs).filter((tab) => tab !== id);
+  const active = kept?.active !== undefined && kept.active !== null && kept.active !== id ? kept.active : (tabs[0] ?? null);
+  return { ...layout, closed: layout.closed.filter((tab) => tab !== id), groups: compact([{ tabs, active }, { tabs: [id], active: id }]) };
+}
+
+/** Reopens the page's closed tabs when every one it offers is closed (nothing left to show otherwise). */
+export function reopenIfAllClosed(layout: InspectorLayout, available: readonly InspectorTabId[]): InspectorLayout {
+  if (available.length === 0 || viewOf(layout, available).length > 0) return layout;
+  const offered = new Set(available);
+  return { ...layout, closed: layout.closed.filter((tab) => !offered.has(tab)) };
 }
 
 export interface InspectorGroupView {

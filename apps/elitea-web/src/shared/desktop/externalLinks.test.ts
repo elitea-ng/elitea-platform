@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { installExternalLinks } from './externalLinks';
+import { installExternalLinks, installExternalLinksIn } from './externalLinks';
 
 let dispose: (() => void) | undefined;
 afterEach(() => {
@@ -70,5 +70,31 @@ describe('installExternalLinks', () => {
     window.open('about:blank');
     expect(nativeOpen).toHaveBeenCalledTimes(1);
     expect(open).not.toHaveBeenCalled();
+  });
+});
+
+describe('installExternalLinksIn', () => {
+  it('handles a panel window\'s links like the main window\'s, until removed or uninstalled', () => {
+    const { open } = setup();
+    const frame = document.createElement('iframe');
+    document.body.append(frame);
+    const panel = frame.contentDocument as Document;
+    const clickIn = (): void => {
+      panel.body.innerHTML = '<a href="/docs" target="_blank">d</a>';
+      panel.querySelector('a')?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    };
+    const remove = installExternalLinksIn(panel);
+    clickIn();
+    expect(open).toHaveBeenCalledWith('https://elitea.example.com/docs');
+    remove();
+    clickIn();
+    expect(open).toHaveBeenCalledTimes(1);
+
+    // Without the desktop's handler there is nothing to install.
+    dispose?.();
+    dispose = undefined;
+    installExternalLinksIn(panel);
+    clickIn();
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });

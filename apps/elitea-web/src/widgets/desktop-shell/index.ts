@@ -6,7 +6,7 @@
  */
 export { DesktopFrame, ShowSidebarButton } from './ui/DesktopFrame';
 export { TitleBarSpacer } from './ui/TitleBarSpacer';
-export { useDesktopLayout } from './model/desktopLayout.store';
+export { selectInspectorShown, useDesktopLayout } from './model/desktopLayout.store';
 export { InspectorScope } from './ui/InspectorPane';
 export { modKey } from './ui/shortcutLabel';
 export { AppIpcProvider, useAppIpc } from './model/appIpcContext';
