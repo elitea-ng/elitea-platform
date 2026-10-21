@@ -2060,6 +2060,10 @@ main:
     # services follow in #1359 U3/U5) and no HTTP. It reuses the content
     # listener's keypair and requires a client certificate the runtime CA
     # signed. It replaced the platform-edge Traefik. Not 8080.
+    #
+    # contentAddress serves elitea.runtime.v1.RuntimeContentService, gRPC only
+    # (#1359): the worker's and the sandbox supervisor's input, bundle and
+    # snapshot transfers. It speaks no HTTP; probe it with grpc.health.v1.
     listeners:
       controlAddress: ":9443"
       outputAddress: ":9444"
@@ -4556,6 +4560,8 @@ worker:
     # must appear as SANs on control/output/content-server.crt.
     controlTarget: "elitea-main:9443"
     outputTarget: "elitea-main:9444"
+    # contentOrigin keeps the https:// form; the worker dials it as gRPC
+    # (RuntimeContentService, #1359), not HTTP.
     contentOrigin: "https://elitea-main:9445"
     # elitea-main's platform listener (main.runtime.listeners.platformAddress):
     # the product API over mutual TLS. The worker presents its runtime client

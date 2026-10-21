@@ -27,7 +27,7 @@ else.
    the `elitea-main-runtime` client certificate. There is no Redis (Form auth
    keeps its state in PostgreSQL).
 2. **Three mTLS listeners, not one.** Control gRPC `:9443`, output gRPC `:9444`,
-   content HTTPS `:9445`, each with its own `_TLS_CERT_FILE`, `_TLS_KEY_FILE`
+   content gRPC `:9445` (`elitea.runtime.v1.RuntimeContentService`, #1359), each with its own `_TLS_CERT_FILE`, `_TLS_KEY_FILE`
    and `_TLS_CLIENT_CA_FILE`. All three demand
    `RequireAndVerifyClientCert` — a listener that accepts an anonymous client is
    a misconfiguration, not a relaxed mode.
@@ -204,8 +204,10 @@ the callback identity with an invalid bearer must get `Unauthenticated` plus
 the `elitea-model-refusal-bin` trailer (the pipeline's 401), and an unlisted
 runtime-CA identity `PermissionDenied` without it.
 (`content_origin` is different: that one is elitea-main's
-own :9445 listener, reached over mTLS, and the worker requires **HTTP/2** on it
-specifically — `serve.py:721` sets `http1=False`.)
+own :9445 listener, reached over mTLS. It keeps the `https://host:port` form,
+but since #1359 it is gRPC only — `elitea.runtime.v1.RuntimeContentService`,
+with the execution claim and fence in call metadata — and, like :9446, it
+serves no HTTP route and answers `grpc.health.v1` to any verified workload.)
 
 **Its TLS trust is split.** The native worker hands the runtime CA to every
 internal client (control, output, content, the model gateway) in code. The
@@ -220,7 +222,7 @@ equivalent `trust-bundle.crt` in an init container.
 ## Execution actors need a PAT
 
 When the worker claims an execution it asks the content listener for a client
-token, which resolves through `ActorTokenIssuer` → `LocalIssuer.IssueToken`.
+token (`RuntimeContentService.GetEliteaClientToken`), which resolves through `ActorTokenIssuer` → `LocalIssuer.IssueToken`.
 That issuer "never creates, rotates, or stores a PAT" — it re-signs an
 **existing active one** (`GetActivePATForUser`). With no row the claim fails at
 stage `actor_pat_issuance`, before any model call, and nothing in the error says

@@ -46,7 +46,7 @@
 #       and durables created by `nats-bootstrap` (docs/runtime-command-bus.md).
 #       There is no Redis (Form auth is on PostgreSQL).
 #     * Four mTLS listeners, not one: control gRPC :9443, output gRPC :9444,
-#       content HTTPS :9445, and the platform listener :9446 (the product API
+#       content gRPC :9445, and the platform listener :9446 (the product API
 #       for the worker, #1359), each requiring a runtime-CA client certificate.
 #     * An Ed25519 command-signing keypair whose public half must appear in the
 #       verification keyring under ELITEA_RUNTIME_SIGNING_KEY_ID.

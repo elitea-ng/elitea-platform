@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/stretchr/testify/require"
 )
@@ -73,17 +72,16 @@ func (stub *artifactSourceStub) DeleteRuntimeArtifact(
 	return stub.err
 }
 
-// The four routes are ABSENT, not merely refusing, where the service is not
-// composed — a deployment with no Go object store keeps the honest old
+// The four RPCs are UNIMPLEMENTED, not merely refusing, where the service is
+// not composed — a deployment with no Go object store keeps the honest old
 // behaviour (the worker skips the family) instead of one that always fails.
 func TestArtifactRoutesAreAbsentWithoutTheService(t *testing.T) {
 	t.Parallel()
 
 	server := newBuilderTestServerWithoutBuilders(t)
 	for _, operation := range []string{"list", "read", "write", "delete"} {
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, `{}`))
-		require.Equal(t, http.StatusNotFound, response.Code, operation)
+		response := serve(server, builderRequest(t, "artifacts/"+operation, `{}`))
+		require.Equal(t, codes.Unimplemented, response.Code, operation)
 	}
 }
 
@@ -172,20 +170,19 @@ func TestArtifactRoutesMapTheSourceTaxonomy(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
 		err    error
-		status int
+		status codes.Code
 	}{
-		{"refused bucket", ErrContentUnauthorized, http.StatusForbidden},
-		{"missing object", ErrContentNotFound, http.StatusNotFound},
-		{"unreadable object", ErrContentRejected, http.StatusUnprocessableEntity},
-		{"broken dependency", errors.New("boom"), http.StatusServiceUnavailable},
+		{"refused bucket", ErrContentUnauthorized, codes.PermissionDenied},
+		{"missing object", ErrContentNotFound, codes.NotFound},
+		{"unreadable object", ErrContentRejected, codes.FailedPrecondition},
+		{"broken dependency", errors.New("boom"), codes.Unavailable},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			server := newArtifactTestServer(
 				t, builderAuthorizerForProject(7), &artifactSourceStub{err: testCase.err},
 			)
-			response := httptest.NewRecorder()
-			server.Routes().ServeHTTP(response, builderRequest(
+			response := serve(server, builderRequest(
 				t, "artifacts/read", `{"bucket":"agent-artifacts","name":"one.txt"}`,
 			))
 			require.Equal(t, testCase.status, response.Code)
@@ -204,15 +201,13 @@ func TestArtifactWriteRefusesOversizedAndUnknownBodies(t *testing.T) {
 
 	oversized := `{"bucket":"agent-artifacts","name":"big.txt","content":"` +
 		strings.Repeat("x", maxRuntimeArtifactWriteChars+16) + `"}`
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/write", oversized))
-	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+	response := serve(server, builderRequest(t, "artifacts/write", oversized))
+	require.Equal(t, codes.FailedPrecondition, response.Code)
 
-	response = httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(
+	response = serve(server, builderRequest(
 		t, "artifacts/write", `{"bucket":"b","name":"n","content":"c","project_id":9}`,
 	))
-	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Equal(t, codes.InvalidArgument, response.Code)
 
 	require.Zero(t, source.projectID, "a refused body must not reach the artifact plane")
 }
@@ -230,13 +225,10 @@ func newArtifactTestServer(
 
 func artifactCall[T any](t *testing.T, server *ContentServer, operation, body string) T {
 	t.Helper()
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-	raw, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
+	response := serve(server, builderRequest(t, "artifacts/"+operation, body))
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
 	var decoded T
-	require.NoError(t, json.Unmarshal(raw, &decoded))
+	require.NoError(t, json.Unmarshal(response.Body, &decoded))
 	return decoded
 }
 
@@ -334,9 +326,8 @@ func TestArtifactListWithoutABucketIsRefusedWhenTheSourceCannotResolveIt(t *test
 		{"list", `{"bucket":"","prefix":"conv/"}`},
 		{"read", `{"bucket":"","name":"conv/a.txt"}`},
 	} {
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+call.operation, call.body))
-		require.GreaterOrEqual(t, response.Code, 400, call.operation)
+		response := serve(server, builderRequest(t, "artifacts/"+call.operation, call.body))
+		require.NotEqual(t, codes.OK, response.Code, call.operation)
 	}
 }
 
@@ -438,9 +429,8 @@ func TestArtifactReadsAdmitAToolRunAndWritesStayAgentOnly(t *testing.T) {
 		"write":  `{"bucket":"agent-artifacts","name":"one.txt","content":"x"}`,
 		"delete": `{"bucket":"agent-artifacts","name":"one.txt"}`,
 	} {
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
-		require.Equal(t, http.StatusForbidden, response.Code, operation)
+		response := serve(server, builderRequest(t, "artifacts/"+operation, body))
+		require.Equal(t, codes.PermissionDenied, response.Code, operation)
 	}
 }
 
@@ -463,9 +453,8 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 		records: []RuntimeArtifactRecord{{Name: conversation + "/notes.txt", ByteLength: 4}},
 	}
 	agent := newArtifactTestServer(t, builderAuthorizerForProject(7), source)
-	status := func(server *ContentServer, operation, body string) int {
-		response := httptest.NewRecorder()
-		server.Routes().ServeHTTP(response, builderRequest(t, "artifacts/"+operation, body))
+	status := func(server *ContentServer, operation, body string) codes.Code {
+		response := serve(server, builderRequest(t, "artifacts/"+operation, body))
 		return response.Code
 	}
 
@@ -493,7 +482,7 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 		{"write", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/x.txt","content":"x"}`},
 		{"delete", `{"bucket":"` + DefaultAttachmentBucket + `","name":"` + conversation + `/notes.txt"}`},
 	} {
-		require.Equal(t, http.StatusForbidden, status(agent, refused.operation, refused.body), refused)
+		require.Equal(t, codes.PermissionDenied, status(agent, refused.operation, refused.body), refused)
 	}
 
 	// A test-tool claim carries no conversation: no system bucket at all.
@@ -509,14 +498,14 @@ func TestArtifactRoutesRefuseSystemBucketsByName(t *testing.T) {
 		{"list", `{"bucket":"` + DefaultAttachmentBucket + `"}`},
 		{"read", `{"bucket":"index-artifacts","name":"x.json"}`},
 	} {
-		require.Equal(t, http.StatusForbidden, status(tool, body.operation, body.body), body)
+		require.Equal(t, codes.PermissionDenied, status(tool, body.operation, body.body), body)
 	}
 
 	// Review round 3 (owner decision): a provisioned `reports` system bucket
 	// is the per-bucket access list's, for an agent turn and a tool run alike.
 	for _, server := range []*ContentServer{agent, tool} {
-		require.Equal(t, http.StatusOK, status(server, "read", `{"bucket":"reports","name":"`+conversation+`/notes.txt"}`))
-		require.Equal(t, http.StatusOK, status(server, "list", `{"bucket":"reports"}`))
+		require.Equal(t, codes.OK, status(server, "read", `{"bucket":"reports","name":"`+conversation+`/notes.txt"}`))
+		require.Equal(t, codes.OK, status(server, "list", `{"bucket":"reports"}`))
 	}
-	require.Equal(t, http.StatusOK, status(agent, "write", `{"bucket":"reports","name":"q3.txt","content":"x"}`))
+	require.Equal(t, codes.OK, status(agent, "write", `{"bucket":"reports","name":"q3.txt","content":"x"}`))
 }

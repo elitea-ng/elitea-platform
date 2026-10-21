@@ -1092,7 +1092,8 @@ SQL
     # Give every seeded user an active PAT.
     #
     # Not optional, and not obvious: when the worker claims an execution it POSTs
-    # to the content listener for a client token, which resolves through
+    # to the content listener (RuntimeContentService.GetEliteaClientToken) for a
+    # client token, which resolves through
     # ActorTokenIssuer → LocalIssuer.IssueToken. That issuer "never creates,
     # rotates, or stores a PAT" — it re-signs an EXISTING active one
     # (GetActivePATForUser). With no row the claim fails at stage
@@ -1894,6 +1895,18 @@ sys.stdout.write(reply)
     case "$platform" in
       SERVING) ok "platform listener :9446 serves gRPC health to the worker identity and verifies as elitea-main" ;;
       *) fail "platform listener :9446 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$platform" | tail -1)" ;;
+    esac
+    # The content listener (:9445) is gRPC too since #1359 U4
+    # (elitea.runtime.v1.RuntimeContentService). Its grpc.health.v1 answers
+    # any runtime-CA workload identity, exactly as the worker and the sandbox
+    # supervisor reach it.
+    content="$($ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+      --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone \
+      --addr elitea-main:9445 --ca /m/runtime-ca.crt --server-name elitea-main \
+      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key 2>&1 || true)"
+    case "$content" in
+      SERVING) ok "content listener :9445 serves gRPC health to the worker identity and verifies as elitea-main" ;;
+      *) fail "content listener :9445 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$content" | tail -1)" ;;
     esac
     # It used to serve the product HTTP API (the forged-identity probes below
     # ran against it). Now even the worker's own certificate gets no HTTP

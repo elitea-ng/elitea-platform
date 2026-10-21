@@ -3,18 +3,14 @@ package storage
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"math"
-	"net/http"
-	"strconv"
 	"time"
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/go-chi/chi/v5"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -100,60 +96,54 @@ func parseCodeWorkspaceReadRequest(body []byte) (*runtimev1.SignedSandboxJobGran
 	return &grant, prepared, intent, nil
 }
 
-func (s *ContentServer) PostCodeWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
-	s.postCodeWorkspaceContent(w, r, true)
-}
-func (s *ContentServer) PostCodeWorkspaceFile(w http.ResponseWriter, r *http.Request) {
-	s.postCodeWorkspaceContent(w, r, false)
-}
-func (s *ContentServer) postCodeWorkspaceContent(w http.ResponseWriter, r *http.Request, metadata bool) {
-	setPrivateNoCacheHeaders(w.Header())
-	if !s.acquire(w) {
-		return
+// ReadSandboxWorkspaceManifest serves a workspace manifest to the sandbox
+// supervisor holding a signed workspace-read proof for it.
+func (s *ContentServer) ReadSandboxWorkspaceManifest(ctx context.Context, request *runtimev1.ReadSandboxWorkspaceManifestRequestV1) (*runtimev1.ReadSandboxWorkspaceManifestResponseV1, error) {
+	payload, err := s.readCodeWorkspaceContent(ctx, request.GetManifestSha256(), "", request.GetRequestJson(), true)
+	if err != nil {
+		return nil, err
 	}
-	defer s.release()
-	if s.codeWorkspaceReads == nil || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 || r.Header.Get("Content-Type") != "application/json" || r.ContentLength <= 0 || r.ContentLength > 2<<20 || len(r.TransferEncoding) != 0 {
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
+	return &runtimev1.ReadSandboxWorkspaceManifestResponseV1{ManifestJson: payload}, nil
+}
+
+// ReadSandboxWorkspaceFile serves one file of that manifest.
+func (s *ContentServer) ReadSandboxWorkspaceFile(ctx context.Context, request *runtimev1.ReadSandboxWorkspaceFileRequestV1) (*runtimev1.ReadSandboxWorkspaceFileResponseV1, error) {
+	payload, err := s.readCodeWorkspaceContent(ctx, request.GetManifestSha256(), request.GetContentSha256(), request.GetRequestJson(), false)
+	if err != nil {
+		return nil, err
 	}
-	root, file := chi.URLParam(r, "manifestSHA256"), chi.URLParam(r, "contentSHA256")
+	return &runtimev1.ReadSandboxWorkspaceFileResponseV1{Content: payload}, nil
+}
+
+func (s *ContentServer) readCodeWorkspaceContent(ctx context.Context, root, file string, body []byte, metadata bool) ([]byte, error) {
+	if s.codeWorkspaceReads == nil {
+		return nil, contentStatus(codes.Unimplemented)
+	}
+	release, err := acquireContentSlot(s.requests)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	connection, ok := contentPeer(ctx)
+	if !ok || len(body) == 0 || len(body) > maxCodeWorkspaceRequestBytes {
+		return nil, contentStatus(codes.Unauthenticated)
+	}
 	if !workspaceHex(root, 64) || !metadata && !workspaceHex(file, 64) {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, (2<<20)+1))
-	if err != nil || int64(len(body)) != r.ContentLength {
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
+		return nil, contentStatus(codes.InvalidArgument)
 	}
 	grant, prepared, intent, err := parseCodeWorkspaceReadRequest(body)
 	if err != nil {
-		codeWorkspaceHTTPError(w, err)
-		return
+		return nil, codeWorkspaceStatus(err)
 	}
-	authority, err := s.codeWorkspaceReads.verifier.VerifyCodeWorkspaceRead(r.TLS, grant, intent, prepared, time.Now())
+	authority, err := s.codeWorkspaceReads.verifier.VerifyCodeWorkspaceRead(connection, grant, intent, prepared, time.Now())
 	if err != nil {
-		codeWorkspaceHTTPError(w, ErrContentUnauthorized)
-		return
+		return nil, codeWorkspaceStatus(ErrContentUnauthorized)
 	}
-	payload, err := s.codeWorkspaceReads.read(r.Context(), authority, prepared, root, file, metadata)
+	payload, err := s.codeWorkspaceReads.read(ctx, authority, prepared, root, file, metadata)
 	if err != nil {
-		codeWorkspaceHTTPError(w, err)
-		return
+		return nil, codeWorkspaceStatus(err)
 	}
-	media := "application/octet-stream"
-	if metadata {
-		media = "application/json"
-	}
-	w.Header().Set("Content-Type", media)
-	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-	w.Header().Set("Content-Digest", formatSHA256Digest(sha256.Sum256(payload)))
-	w.Header().Set("X-Elitea-Workspace-Root", root)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
-	if _, err = w.Write(payload); err != nil {
-		s.logger.WarnContext(r.Context(), "Code workspace content response write failed")
-	}
+	return payload, nil
 }
 func (s *CodeWorkspaceReadServer) read(ctx context.Context, authority CodeWorkspaceReadAuthority, prepared []byte, root, file string, metadata bool) ([]byte, error) {
 	var scope SandboxBundleScope

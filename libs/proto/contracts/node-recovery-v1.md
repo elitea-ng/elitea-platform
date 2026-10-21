@@ -112,8 +112,12 @@ An inspection claim cannot replay historical A ACK or result into pending B.
 
 POST `/executions/{executionID}/generations/{generation}/node-recovery/control`
 has an empty body. POST the same prefix plus `/ack` has the strict ACK object.
-Use the existing verified mTLS workload certificate, X-Elitea-Claim-Id and
-X-Elitea-Fence (32 bytes encoded base64.RawURLEncoding, no padding).
+Use the existing verified mTLS workload certificate, and the claim id and fence
+as `elitea-claim-id` / `elitea-claim-fence-bin` (raw 32 bytes) gRPC metadata.
+Since #1359 these are `RuntimeContentService.PollNodeRecovery`,
+`AcknowledgeNodeRecovery` and `ReadNodeRecoveryResult` (the JSON documents are
+unchanged); they replaced the HTTP routes and the X-Elitea-Claim-Id /
+X-Elitea-Fence headers.
 Main rechecks current live claim/session, immutable manifest, original actor
 permissions, deadline, no terminal result and exact stored visit under the job
 lock; it repeats authority lookup using the DB clock after obtaining that lock.

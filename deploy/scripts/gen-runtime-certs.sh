@@ -22,7 +22,7 @@
 #     runtime-ca.{crt,key}            trust root for everything below
 #     control-server.{crt,key}        elitea-main control gRPC   :9443
 #     output-server.{crt,key}         elitea-main output gRPC    :9444
-#     content-server.{crt,key}        elitea-main content HTTPS  :9445, and the
+#     content-server.{crt,key}        elitea-main content gRPC   :9445, and the
 #                                     platform listener :9446 (the worker's
 #                                     platform_origin, #1359)
 #     subapp-callback-client.{crt,key} a sub-application's (DeepWiki,

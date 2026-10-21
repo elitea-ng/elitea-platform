@@ -134,3 +134,25 @@ func TestSignedIdentity(t *testing.T) {
 		t.Error("verified without a secret")
 	}
 }
+
+func TestContentClaimRoundTrip(t *testing.T) {
+	fence := []byte(strings.Repeat("f", grpcauth.ClaimFenceBytes))
+	claimID, gotFence, err := grpcauth.ContentClaim(incoming(grpcauth.WithContentClaim(context.Background(), "claim-1", fence)))
+	if err != nil || claimID != "claim-1" || string(gotFence) != string(fence) {
+		t.Fatalf("ContentClaim = %q, %q, %v", claimID, gotFence, err)
+	}
+	for name, md := range map[string]metadata.MD{
+		"absent":        {},
+		"no fence":      metadata.Pairs(grpcauth.MetadataClaimID, "c"),
+		"short fence":   metadata.Pairs(grpcauth.MetadataClaimID, "c", grpcauth.MetadataClaimFence, "short"),
+		"no claim id":   metadata.Pairs(grpcauth.MetadataClaimFence, string(fence)),
+		"two claim ids": metadata.Pairs(grpcauth.MetadataClaimID, "a", grpcauth.MetadataClaimID, "b", grpcauth.MetadataClaimFence, string(fence)),
+		"two fences":    metadata.Pairs(grpcauth.MetadataClaimID, "a", grpcauth.MetadataClaimFence, string(fence), grpcauth.MetadataClaimFence, string(fence)),
+		"newline id":    metadata.Pairs(grpcauth.MetadataClaimID, "a\nb", grpcauth.MetadataClaimFence, string(fence)),
+		"over-long id":  metadata.Pairs(grpcauth.MetadataClaimID, strings.Repeat("a", 257), grpcauth.MetadataClaimFence, string(fence)),
+	} {
+		if _, _, err := grpcauth.ContentClaim(metadata.NewIncomingContext(context.Background(), md)); err == nil {
+			t.Errorf("%s: a claim was accepted", name)
+		}
+	}
+}

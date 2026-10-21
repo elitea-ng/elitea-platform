@@ -9,10 +9,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"google.golang.org/grpc/codes"
 
 	"github.com/stretchr/testify/require"
 
@@ -58,16 +58,9 @@ func workspaceTokenServer(t *testing.T, turns *fakeTurns, policies *fakePolicies
 	return newIndexRuntimeContextTestServer(t, service)
 }
 
-func redeem(t *testing.T, server *ContentServer, accept string) *httptest.ResponseRecorder {
+func redeem(t *testing.T, server *ContentServer, accept ...string) contentResult {
 	t.Helper()
-	request := validRuntimeContextRequest(t, nil)
-	request.ContentLength = 0
-	if accept != "" {
-		request.Header.Set(runtimeContextAcceptHeader, accept)
-	}
-	response := httptest.NewRecorder()
-	server.Routes().ServeHTTP(response, request)
-	return response
+	return serve(server, validRuntimeContextRequest(t, accept...))
 }
 
 func cloudTurn() *fakeTurns {
@@ -89,14 +82,14 @@ func TestRuntimeContextServesNoWorkspaceFieldWithoutTheAccept(t *testing.T) {
 	turns, policies := cloudTurn(), enabledPolicy()
 	server := workspaceTokenServer(t, turns, policies)
 
-	response := redeem(t, server, "")
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Len(t, responseKeys(t, response.Body.Bytes()), 3)
+	response := redeem(t, server)
+	require.Equal(t, codes.OK, response.Code)
+	require.Len(t, responseKeys(t, response.Body), 3)
 	// The cloud turn is never started for a worker that cannot read it.
 	require.Zero(t, turns.calls.Load())
 
 	response = redeem(t, server, runtimeContextFieldSecretsHeader)
-	keys := responseKeys(t, response.Body.Bytes())
+	keys := responseKeys(t, response.Body)
 	require.NotContains(t, keys, "workspace")
 	require.Zero(t, turns.calls.Load())
 }
@@ -109,7 +102,7 @@ func TestRuntimeContextRefusesAHandedOffTurnToAWorkerWithoutWorkspaceRuns(t *tes
 	turns.handedOff = true
 	server := workspaceTokenServer(t, turns, policies)
 	response := redeem(t, server, runtimeContextFieldSecretsHeader)
-	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Equal(t, codes.PermissionDenied, response.Code)
 	require.Zero(t, turns.calls.Load())
 	require.Equal(t, int32(1), turns.handedCalls.Load())
 }
@@ -122,7 +115,7 @@ func TestRuntimeContextRefusesATurnTheThreadIsNotTheCloudsFor(t *testing.T) {
 	turns.err = workspaceruntime.ErrNotCloudTurn
 	server := workspaceTokenServer(t, turns, policies)
 	response := redeem(t, server, "workspace")
-	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Equal(t, codes.PermissionDenied, response.Code)
 }
 
 func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
@@ -131,8 +124,8 @@ func TestRuntimeContextServesTheWorkspaceFieldToAWorkerThatAsks(t *testing.T) {
 	server := workspaceTokenServer(t, turns, policies)
 
 	response := redeem(t, server, "workspace")
-	require.Equal(t, http.StatusOK, response.Code)
-	keys := responseKeys(t, response.Body.Bytes())
+	require.Equal(t, codes.OK, response.Code)
+	keys := responseKeys(t, response.Body)
 	require.Contains(t, keys, "workspace")
 	// The secrets value was not accepted, so it is still absent.
 	require.NotContains(t, keys, "secrets_header_value")
@@ -158,9 +151,9 @@ func TestRuntimeContextServesNoWorkspaceFieldForAnOrdinaryTurn(t *testing.T) {
 	t.Parallel()
 	turns, policies := &fakeTurns{}, enabledPolicy()
 	server := workspaceTokenServer(t, turns, policies)
-	response := redeem(t, server, "workspace,secrets-header-value")
-	require.Equal(t, http.StatusOK, response.Code)
-	keys := responseKeys(t, response.Body.Bytes())
+	response := redeem(t, server, "workspace", "secrets-header-value")
+	require.Equal(t, codes.OK, response.Code)
+	keys := responseKeys(t, response.Body)
 	require.NotContains(t, keys, "workspace")
 	require.Contains(t, keys, "secrets_header_value")
 	require.Zero(t, policies.calls.Load())
@@ -173,12 +166,12 @@ func TestRuntimeContextRefusesACloudTurnTheRecomputedPolicyDisables(t *testing.T
 	policies.policy.Enabled = false
 	server := workspaceTokenServer(t, turns, policies)
 	response := redeem(t, server, "workspace")
-	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Equal(t, codes.PermissionDenied, response.Code)
 
 	policies.policy.Enabled = true
 	policies.err = errors.New("database down")
 	response = redeem(t, server, "workspace")
-	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	require.Equal(t, codes.Unavailable, response.Code)
 }
 
 func TestRuntimeContextNetworkOffServesNoAllowlist(t *testing.T) {
@@ -188,11 +181,11 @@ func TestRuntimeContextNetworkOffServesNoAllowlist(t *testing.T) {
 	server := workspaceTokenServer(t, turns, policies)
 	response := redeem(t, server, "workspace")
 	var decoded EliteaClientTokenContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &decoded))
+	require.NoError(t, json.Unmarshal(response.Body, &decoded))
 	require.NotNil(t, decoded.Workspace)
 	require.False(t, decoded.Workspace.Network)
 	require.Empty(t, decoded.Workspace.NetworkAllowlist)
-	require.Contains(t, response.Body.String(), `"network_allowlist":[]`)
+	require.Contains(t, string(response.Body), `"network_allowlist":[]`)
 	require.Equal(t, workspaceruntime.EgressModeNone, decoded.Workspace.Egress.Mode)
 	require.Empty(t, decoded.Workspace.Egress.Token)
 }
@@ -203,8 +196,8 @@ func TestRuntimeContextWithoutAComposedResolverIgnoresTheAccept(t *testing.T) {
 	service.WithWorkspaceContext(workspaceruntime.NewContextResolver(nil, nil))
 	server := newIndexRuntimeContextTestServer(t, service)
 	response := redeem(t, server, "workspace")
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Len(t, responseKeys(t, response.Body.Bytes()), 3)
+	require.Equal(t, codes.OK, response.Code)
+	require.Len(t, responseKeys(t, response.Body), 3)
 }
 
 // A regenerate of the newest cloud turn tells the worker to rewind the cloud
@@ -216,9 +209,9 @@ func TestRuntimeContextServesTheRegenerateRewind(t *testing.T) {
 	turns.turn.Rewind, turns.turn.RewindTo = true, &parent
 	server := workspaceTokenServer(t, turns, policies)
 	response := redeem(t, server, "workspace")
-	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, codes.OK, response.Code)
 	var decoded EliteaClientTokenContext
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &decoded))
+	require.NoError(t, json.Unmarshal(response.Body, &decoded))
 	require.NotNil(t, decoded.Workspace)
 	require.True(t, decoded.Workspace.Rewind)
 	require.Equal(t, *turns.turn.CloudSHA, *decoded.Workspace.ExpectedOldCloud)
@@ -227,17 +220,17 @@ func TestRuntimeContextServesTheRegenerateRewind(t *testing.T) {
 	// A rewind with no target, a target equal to the cloud commit, or a
 	// target without a rewind is refused.
 	turns.turn.RewindTo = nil
-	require.NotEqual(t, http.StatusOK, redeem(t, server, "workspace").Code)
+	require.NotEqual(t, codes.OK, redeem(t, server, "workspace").Code)
 	same := *turns.turn.CloudSHA
 	turns.turn.RewindTo = &same
-	require.NotEqual(t, http.StatusOK, redeem(t, server, "workspace").Code)
+	require.NotEqual(t, codes.OK, redeem(t, server, "workspace").Code)
 	turns.turn.Rewind, turns.turn.RewindTo = false, &parent
-	require.NotEqual(t, http.StatusOK, redeem(t, server, "workspace").Code)
+	require.NotEqual(t, codes.OK, redeem(t, server, "workspace").Code)
 
 	turns.turn.Rewind = true
 	turns.turn.CloudSHA = nil
 	response = redeem(t, server, "workspace")
-	require.NotEqual(t, http.StatusOK, response.Code)
+	require.NotEqual(t, codes.OK, response.Code)
 }
 
 func mapKeys(object map[string]json.RawMessage) []string {

@@ -92,40 +92,61 @@ func newPlatformServer(config PlatformServerConfig, listen func(string, string) 
 	if err := validateGRPCServerPolicy(config.Policy); err != nil {
 		return nil, fmt.Errorf("platform listener gRPC policy: %w", err)
 	}
+	server, healthServer, err := newAuthorizedGRPCServer(config.TLS, config.Policy, services)
+	if err != nil {
+		return nil, err
+	}
+	return &PlatformServer{
+		address:  config.Address,
+		server:   server,
+		health:   healthServer,
+		maxConns: config.Policy.MaxConnections,
+		listen:   listen,
+	}, nil
+}
+
+// newAuthorizedGRPCServer is the shared construction of elitea-main's
+// internal gRPC listeners that admit callers per service (the platform
+// listener, :9446, and the content listener, :9445): TLS credentials from
+// tlsConfig, PlatformMaxMessageBytes in both directions, the policy's
+// stream and keepalive limits, grpc.health.v1 open to any verified peer, and
+// a grpcauth.Policy built from services that refuses any registered service
+// without an allowlist. tlsConfig and policy must already be validated.
+func newAuthorizedGRPCServer(tlsConfig *tls.Config, policy GRPCServerPolicy, services []PlatformService) (*grpc.Server, *health.Server, error) {
 	healthServer := health.NewServer()
 	rules := map[string]grpcauth.Allowlist{
 		healthv1.Health_ServiceDesc.ServiceName: grpcauth.AnyVerifiedPeer(),
 	}
 	for _, service := range services {
 		if service.Name == "" || service.Register == nil {
-			return nil, errors.New("a platform service needs a name and a registration")
+			return nil, nil, errors.New("a gRPC service needs a name and a registration")
 		}
 		if _, duplicate := rules[service.Name]; duplicate {
-			return nil, fmt.Errorf("platform service %s is registered twice", service.Name)
+			return nil, nil, fmt.Errorf("gRPC service %s is registered twice", service.Name)
 		}
 		if !service.Clients.Configured() {
-			return nil, fmt.Errorf("platform service %s: %w", service.Name, grpcauth.ErrNoClients)
+			return nil, nil, fmt.Errorf("gRPC service %s: %w", service.Name, grpcauth.ErrNoClients)
 		}
 		rules[service.Name] = service.Clients
 	}
-	policy, err := grpcauth.NewPolicy(rules)
+	authorization, err := grpcauth.NewPolicy(rules)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	options := append([]grpc.ServerOption{
-		grpc.Creds(credentials.NewTLS(config.TLS.Clone())),
+		grpc.Creds(credentials.NewTLS(tlsConfig.Clone())),
 		grpc.MaxRecvMsgSize(PlatformMaxMessageBytes),
 		grpc.MaxSendMsgSize(PlatformMaxMessageBytes),
-		grpc.MaxConcurrentStreams(config.Policy.MaxConcurrentStreams),
+		grpc.MaxConcurrentStreams(policy.MaxConcurrentStreams),
 		grpc.KeepaliveEnforcementPolicy(RuntimeKeepaliveEnforcementPolicy()),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionIdle:     config.Policy.MaxConnectionIdle,
-			MaxConnectionAge:      config.Policy.MaxConnectionAge,
-			MaxConnectionAgeGrace: config.Policy.MaxConnectionAgeGrace,
-			Time:                  config.Policy.KeepaliveTime,
-			Timeout:               config.Policy.KeepaliveTimeout,
+			MaxConnectionIdle:     policy.MaxConnectionIdle,
+			MaxConnectionAge:      policy.MaxConnectionAge,
+			MaxConnectionAgeGrace: policy.MaxConnectionAgeGrace,
+			Time:                  policy.KeepaliveTime,
+			Timeout:               policy.KeepaliveTimeout,
 		}),
-	}, policy.ServerOptions()...)
+	}, authorization.ServerOptions()...)
 	server := grpc.NewServer(options...)
 	healthv1.RegisterHealthServer(server, healthServer)
 	for _, service := range services {
@@ -134,23 +155,17 @@ func newPlatformServer(config PlatformServerConfig, listen func(string, string) 
 		// leave a policy entry for nothing and the real service unreachable
 		// (fail closed, but silently). Refuse it at boot.
 		if _, ok := server.GetServiceInfo()[service.Name]; !ok {
-			return nil, fmt.Errorf("platform service %s was not registered by its registration", service.Name)
+			return nil, nil, fmt.Errorf("gRPC service %s was not registered by its registration", service.Name)
 		}
 		healthServer.SetServingStatus(service.Name, healthv1.HealthCheckResponse_SERVING)
 	}
 	for name := range server.GetServiceInfo() {
 		if _, ok := rules[name]; !ok {
-			return nil, fmt.Errorf("platform service %s was registered without an allowlist", name)
+			return nil, nil, fmt.Errorf("gRPC service %s was registered without an allowlist", name)
 		}
 	}
 	healthServer.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
-	return &PlatformServer{
-		address:  config.Address,
-		server:   server,
-		health:   healthServer,
-		maxConns: config.Policy.MaxConnections,
-		listen:   listen,
-	}, nil
+	return server, healthServer, nil
 }
 
 // Addr is the configured listen address.

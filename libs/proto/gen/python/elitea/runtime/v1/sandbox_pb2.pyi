@@ -145,6 +145,76 @@ class WorkspaceHydrationCursorV1(_message.Message):
     ready: bool
     def __init__(self, revision: _Optional[int] = ..., manifest_sha256: _Optional[bytes] = ..., next_file_index: _Optional[int] = ..., file_count: _Optional[int] = ..., ready: bool = ...) -> None: ...
 
+class CodeOwnerRecoveryReadRequestV1(_message.Message):
+    __slots__ = ("job_key", "request_json")
+    JOB_KEY_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    job_key: str
+    request_json: bytes
+    def __init__(self, job_key: _Optional[str] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class CodeOwnerRecoveryReadResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
+class CodeOwnerRecoverySealNoEffectRequestV1(_message.Message):
+    __slots__ = ("job_key", "request_json")
+    JOB_KEY_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    job_key: str
+    request_json: bytes
+    def __init__(self, job_key: _Optional[str] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class CodeOwnerRecoverySealNoEffectResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
+class CodePlatformOwnerReadRetainedRuntimeRequestV1(_message.Message):
+    __slots__ = ("job_key", "request_json")
+    JOB_KEY_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    job_key: str
+    request_json: bytes
+    def __init__(self, job_key: _Optional[str] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class CodePlatformOwnerReadRetainedRuntimeResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
+class CodePlatformOwnerReadPendingCallRequestV1(_message.Message):
+    __slots__ = ("job_key", "request_json")
+    JOB_KEY_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    job_key: str
+    request_json: bytes
+    def __init__(self, job_key: _Optional[str] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class CodePlatformOwnerReadPendingCallResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
+class CodePlatformOwnerPublishReplyRequestV1(_message.Message):
+    __slots__ = ("job_key", "request_json")
+    JOB_KEY_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    job_key: str
+    request_json: bytes
+    def __init__(self, job_key: _Optional[str] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class CodePlatformOwnerPublishReplyResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
 class SubmitSandboxJobRequestV1(_message.Message):
     __slots__ = ("grant", "code_execution_intent_json", "prepared_job_json", "dependency_content_grant", "dependency_bundle_json")
     GRANT_FIELD_NUMBER: _ClassVar[int]

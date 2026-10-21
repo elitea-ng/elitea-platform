@@ -138,6 +138,40 @@ func WithExecutionClaim(ctx context.Context, identity *runtimev1.ExecutionIdenti
 	), nil
 }
 
+// Claim metadata of the runtime content plane (elitea.runtime.v1.
+// RuntimeContentService, #1359 U4). They are the X-Elitea-Claim-Id and
+// X-Elitea-Fence headers of the HTTPS routes that service replaced: the
+// accepted claim's id and its raw 32-byte fence token. The execution and
+// generation travel in the request message.
+const (
+	MetadataClaimID    = "elitea-claim-id"
+	MetadataClaimFence = "elitea-claim-fence-bin"
+	// ClaimFenceBytes is the exact length of a content-plane fence token.
+	ClaimFenceBytes = 32
+	maxClaimIDBytes = 256
+)
+
+// ContentClaim reads the claim id and fence of a content-plane call. Each
+// must appear exactly once; the id must be a bounded single-line value and
+// the fence exactly ClaimFenceBytes. It authorizes nothing: the content
+// service binds both to the verified peer and the durable execution state.
+func ContentClaim(ctx context.Context) (string, []byte, error) {
+	claimID, ok := single(ctx, MetadataClaimID)
+	if !ok || claimID == "" || len(claimID) > maxClaimIDBytes || strings.ContainsAny(claimID, "\r\n\x00") {
+		return "", nil, ErrNoExecutionClaim
+	}
+	fence, ok := single(ctx, MetadataClaimFence)
+	if !ok || len(fence) != ClaimFenceBytes {
+		return "", nil, ErrNoExecutionClaim
+	}
+	return claimID, []byte(fence), nil
+}
+
+// WithContentClaim is the client half of ContentClaim.
+func WithContentClaim(ctx context.Context, claimID string, fence []byte) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, MetadataClaimID, claimID, MetadataClaimFence, string(fence))
+}
+
 // SignedIdentity is the X-Elitea-* identity tuple of a call: who the request
 // is for, as elitea-main resolved and signed it. Empty fields were not part of
 // the tuple.

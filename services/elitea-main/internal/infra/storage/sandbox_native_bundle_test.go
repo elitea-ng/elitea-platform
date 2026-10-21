@@ -6,19 +6,17 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
-	"github.com/stretchr/testify/require"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 )
 
 func nativeFixture(t *testing.T) ([]byte, *NativeSandboxBundle) {
@@ -95,7 +93,10 @@ func TestNativeBundlePublicationIsMetadataLastAndNamespaced(t *testing.T) {
 	require.Error(t, store.PutFile(ctx, scope, b, b.files[0].Name, strings.NewReader("wrong")))
 	require.NoError(t, store.FetchFile(ctx, scope, b, b.files[0].Name, io.Discard))
 }
-func nativeHTTPFixture(t *testing.T) (*sandboxHTTPFixture, *x509.Certificate, *NativeSandboxBundle) {
+
+const nativeBundle = runtimev1.SandboxBundleKindV1_SANDBOX_BUNDLE_KIND_V1_NATIVE
+
+func nativeRPCFixture(t *testing.T) (*sandboxRPCFixture, *ContentServer, context.Context, *NativeSandboxBundle) {
 	t.Helper()
 	store, backend, scope, _, _ := sandboxTestStore(t)
 	_, bundle := nativeFixture(t)
@@ -104,67 +105,64 @@ func nativeHTTPFixture(t *testing.T) (*sandboxHTTPFixture, *x509.Certificate, *N
 	now := time.Unix(1000, 0)
 	service, err := NewSandboxBundleContentService(store, sandboxBundleTestKeys(public), []string{"dns:sandbox.test"}, func() time.Time { return now })
 	require.NoError(t, err)
-	_, leaf := sandboxTestCertificate(t, "sandbox.test")
 	root, err := hex.DecodeString(bundle.Digest())
 	require.NoError(t, err)
 	request, err := hex.DecodeString(bundle.record.Preparation)
 	require.NoError(t, err)
-	return &sandboxHTTPFixture{store: store, backend: backend, scope: scope, signer: private, service: service, claims: &runtimev1.SandboxJobGrantClaimsV1{Revision: 3, TenantId: "tenant-a", ProjectId: 2, ExecutionId: "exec", ActivationId: "node", RequestDigest: request, SubmitterWorkloadIdentity: "dns:worker.test", Audience: "dns:sandbox.test", Generation: 1, IssuedAtUnixMillis: now.UnixMilli(), ExpiresAtUnixMillis: now.Add(30 * time.Second).UnixMilli(), DependencyBundleSha256: root}}, leaf, bundle
+	fixture := &sandboxRPCFixture{store: store, backend: backend, scope: scope, signer: private, service: service, claims: &runtimev1.SandboxJobGrantClaimsV1{Revision: 3, TenantId: "tenant-a", ProjectId: 2, ExecutionId: "exec", ActivationId: "node", RequestDigest: request, SubmitterWorkloadIdentity: "dns:worker.test", Audience: "dns:sandbox.test", Generation: 1, IssuedAtUnixMillis: now.UnixMilli(), ExpiresAtUnixMillis: now.Add(30 * time.Second).UnixMilli(), DependencyBundleSha256: root}}
+	return fixture, (&ContentServer{}).WithSandboxBundles(service), contentPeerContext(context.Background(), sandboxPeer(t, "sandbox.test")), bundle
 }
-func TestNativeWriteGrantAndReadRouteBindMTLSRootAndRequest(t *testing.T) {
-	f, leaf, b := nativeHTTPFixture(t)
-	call := func(method string, grant string, body []byte) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, "/"+b.Digest(), bytes.NewReader(body))
-		r.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}, PeerCertificates: []*x509.Certificate{leaf}}
-		r.Header.Set(SandboxBundleGrantHeader, grant)
-		if body != nil {
-			r.Header.Set("Content-Type", "application/json")
-		}
-		w := httptest.NewRecorder()
-		f.service.NativeRoutes().ServeHTTP(w, r)
-		return w
+
+func TestNativeWriteGrantAndReadBindMTLSRootAndRequest(t *testing.T) {
+	f, content, ctx, b := nativeRPCFixture(t)
+	publish := func(grant []byte) error {
+		_, err := content.PublishSandboxBundle(ctx, &runtimev1.PublishSandboxBundleRequestV1{Kind: nativeBundle, Root: b.Digest(), SignedGrant: grant, BundleJson: b.native})
+		return err
 	}
-	require.NotEqual(t, http.StatusNoContent, call("POST", f.grant(t, nil), b.native).Code)
+	get := func(grant []byte) ([]byte, error) {
+		response, err := content.GetSandboxBundle(ctx, &runtimev1.GetSandboxBundleRequestV1{Kind: nativeBundle, Root: b.Digest(), SignedGrant: grant})
+		return response.GetBundleJson(), err
+	}
+	require.Error(t, publish(f.grant(t, nil)))
 	for _, file := range b.files {
-		var content []byte
+		var data []byte
 		if file.Bytes != 0 {
-			content = []byte("{\"version\":\"5\"}\n")
+			data = []byte("{\"version\":\"5\"}\n")
 		}
-		require.NoError(t, f.store.PutFile(context.Background(), f.scope, b, file.Name, bytes.NewReader(content)))
+		require.NoError(t, f.store.PutFile(context.Background(), f.scope, b, file.Name, bytes.NewReader(data)))
 	}
-	require.Equal(t, http.StatusNoContent, call("POST", f.grant(t, nil), b.native).Code)
-	require.NotEqual(t, http.StatusNoContent, call("POST", f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.RequestDigest = bytes.Repeat([]byte{7}, 32) }), b.native).Code)
-	read := call("GET", f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.RequestDigest = bytes.Repeat([]byte{7}, 32) }), nil)
-	require.Equal(t, http.StatusOK, read.Code)
-	require.Equal(t, b.native, read.Body.Bytes())
-	require.Equal(t, http.StatusForbidden, call("GET", f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.ExpiresAtUnixMillis = 1 }), nil).Code)
-	require.Equal(t, http.StatusForbidden, call("GET", f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.DependencyBundleSha256 = bytes.Repeat([]byte{7}, 32) }), nil).Code)
+	require.NoError(t, publish(f.grant(t, nil)))
+	requireContentCode(t, publish(f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.RequestDigest = bytes.Repeat([]byte{7}, 32) })), codes.PermissionDenied)
+	read, err := get(f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.RequestDigest = bytes.Repeat([]byte{7}, 32) }))
+	require.NoError(t, err)
+	require.Equal(t, b.native, read)
+	_, err = get(f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.ExpiresAtUnixMillis = 1 }))
+	requireContentCode(t, err, codes.PermissionDenied)
+	_, err = get(f.grant(t, func(c *runtimev1.SandboxJobGrantClaimsV1) { c.DependencyBundleSha256 = bytes.Repeat([]byte{7}, 32) }))
+	requireContentCode(t, err, codes.PermissionDenied)
+	// The Python kind never reads a native root.
+	_, err = content.GetSandboxBundle(ctx, &runtimev1.GetSandboxBundleRequestV1{Kind: pythonBundle, Root: b.Digest(), SignedGrant: f.grant(t, nil)})
+	require.Error(t, err)
 }
 
 func TestNativeUploadRejectsWrongPreparationBeforeStorage(t *testing.T) {
-	f, leaf, bundle := nativeHTTPFixture(t)
+	f, content, ctx, bundle := nativeRPCFixture(t)
 	file := bundle.files[0]
 	require.Zero(t, file.Bytes)
-	mediaType, body := sandboxMultipart(t, bundle.native, file.Name, nil, false)
-	call := func(grant string) *httptest.ResponseRecorder {
-		request := httptest.NewRequest(http.MethodPut, "/"+bundle.Digest()+"/files/"+file.Name, bytes.NewReader(body))
-		request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}, PeerCertificates: []*x509.Certificate{leaf}}
-		request.Header.Set("Content-Type", mediaType)
-		request.Header.Set(SandboxBundleGrantHeader, grant)
-		response := httptest.NewRecorder()
-		f.service.NativeRoutes().ServeHTTP(response, request)
-		return response
+	call := func(grant []byte) error {
+		stream := newScriptedClientStream[runtimev1.UploadSandboxBundleFileRequestV1, runtimev1.UploadSandboxBundleFileResponseV1](ctx,
+			&runtimev1.UploadSandboxBundleFileRequestV1{Part: &runtimev1.UploadSandboxBundleFileRequestV1_Header{Header: &runtimev1.UploadSandboxBundleFileHeaderV1{Kind: nativeBundle, Root: bundle.Digest(), Name: file.Name, SignedGrant: grant, BundleJson: bundle.native}}})
+		return content.UploadSandboxBundleFile(stream)
 	}
 	denied := call(f.grant(t, func(claims *runtimev1.SandboxJobGrantClaimsV1) {
 		claims.RequestDigest = bytes.Repeat([]byte{7}, 32)
 	}))
-	require.Equal(t, http.StatusForbidden, denied.Code)
-	require.Contains(t, denied.Body.String(), "grant is invalid")
-	require.NotContains(t, denied.Body.String(), "Retry")
+	requireContentCode(t, denied, codes.PermissionDenied)
+	require.Contains(t, denied.Error(), "grant is invalid")
+	require.NotContains(t, denied.Error(), "Retry")
 	require.Empty(t, f.backend.objects)
 
-	accepted := call(f.grant(t, nil))
-	require.Equal(t, http.StatusNoContent, accepted.Code)
+	require.NoError(t, call(f.grant(t, nil)))
 	require.Len(t, f.backend.objects, 1)
 }
 
