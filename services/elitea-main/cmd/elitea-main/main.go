@@ -1134,9 +1134,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Assigned through the concrete value, never a typed nil: the handler's
 		// only fallback is a nil-interface check.
 		toolkitSettingsValidator = toolkitSettingsResolver
+		// The provenance twin (#1286): the same graph without the admin-vault
+		// fallback, so the OAuth proxy can tell a global secret from a
+		// project one before it binds an editor-written token endpoint.
+		projectOwnedToolkitSettings, err := currentConfigurationsRoot.NewProjectOwnedToolkitSettingsResolver(pool)
+		if err != nil {
+			return fmt.Errorf("compose project-owned toolkit settings: %w", err)
+		}
 		delegatedAuthToolkitSettings, err = runtimecomposition.NewCurrentDelegatedAuthToolkitSettings(
 			pool,
 			toolkitSettingsResolver,
+			projectOwnedToolkitSettings,
 		)
 		if err != nil {
 			return fmt.Errorf("compose delegated authorization toolkit settings: %w", err)

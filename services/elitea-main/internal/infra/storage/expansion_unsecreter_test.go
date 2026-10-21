@@ -97,6 +97,40 @@ func TestCurrentVaultUnsecreterLoadsAdminOnlyAfterProjectMiss(t *testing.T) {
 	require.Zero(t, loader.adminLoads)
 }
 
+// #1286: the provenance unsecreter redeems the project's own names exactly as
+// the ordinary one does and leaves an admin-only name as its placeholder,
+// without ever opening the admin vault.
+func TestCurrentProjectVaultUnsecreterNeverFallsBackToTheAdminVault(t *testing.T) {
+	t.Parallel()
+
+	loader := &fakeSecretVaultLoader{
+		projects: map[int64]SecretVault{
+			9: &fakeSecretVault{regular: map[string]string{"own": "project-value"}},
+		},
+		admin:        &fakeSecretVault{regular: map[string]string{"global": "admin-value"}},
+		projectLoads: map[int64]int{},
+	}
+	input := map[string]any{
+		"client_secret": "{{secret.global}}",
+		"nested":        map[string]any{"mixed": "{{secret.own}}:{{secret.global}}"},
+	}
+
+	ordinary, err := NewCurrentVaultUnsecreter(loader)
+	require.NoError(t, err)
+	full, err := ordinary.Unsecret(context.Background(), 9, input)
+	require.NoError(t, err)
+	require.Equal(t, "admin-value", full["client_secret"])
+	require.Equal(t, 1, loader.adminLoads)
+
+	projectOnly, err := NewCurrentProjectVaultUnsecreter(loader)
+	require.NoError(t, err)
+	owned, err := projectOnly.Unsecret(context.Background(), 9, input)
+	require.NoError(t, err)
+	require.Equal(t, "{{secret.global}}", owned["client_secret"])
+	require.Equal(t, "project-value:{{secret.global}}", owned["nested"].(map[string]any)["mixed"])
+	require.Equal(t, 1, loader.adminLoads, "the provenance unsecreter opened the admin vault")
+}
+
 func TestCurrentVaultUnsecreterCachesAdminFallbackAndUnresolvedNames(t *testing.T) {
 	t.Parallel()
 
