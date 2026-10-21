@@ -292,6 +292,7 @@ fn build_host(
             sandbox_deny,
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: Some(app.join("config")),
+            user_commands_dir: Some(app.join("config/commands")),
         })
         .unwrap(),
     );
@@ -376,6 +377,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         skills: Vec::new(),
         compact: false,
         model: None,
+        command: None,
     }
 }
 
@@ -1949,6 +1951,190 @@ async fn system_prompt_order_env_before_untrusted() {
             assert!(!system.contains(spelling.as_ref()), "{spelling}: {system}");
         }
     }
+}
+
+/// A command file of the workspace.
+fn write_command(h: &Harness, path: &str, text: &str) {
+    let path = h.folder.path().join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn command_pick(name: &str, arguments: &str) -> super::slash_commands::CommandPick {
+    super::slash_commands::CommandPick {
+        name: name.into(),
+        arguments: arguments.into(),
+    }
+}
+
+/// The person's message in the first `/llm` request.
+fn first_user_message(server: &MockServer) -> String {
+    let llm = seen(server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    first["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| message["content"].to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn commands_are_listed_with_their_source_workspace_shadowing_the_persons() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(
+        &h,
+        ".claude/commands/review.md",
+        "---\ndescription: Review the diff\nallowed-tools: Bash(*)\n---\nReview $ARGUMENTS.",
+    );
+    // The person's folder is created (0700) by the first listing.
+    assert_eq!(h.host.commands_list(&h.workspace_id).unwrap().len(), 1);
+    let user = h.app.path().join("config/commands");
+    assert!(user.is_dir());
+    std::fs::write(user.join("review.md"), "my review").unwrap();
+    std::fs::write(user.join("standup.md"), "my standup").unwrap();
+    let listed = h.host.commands_list(&h.workspace_id).unwrap();
+    let rows: Vec<(&str, &str, &str)> = listed
+        .iter()
+        .map(|c| (c.name.as_str(), c.source.as_str(), c.path.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("review", "workspace", ".claude/commands/review.md"),
+            ("standup", "user", "standup.md"),
+        ]
+    );
+    assert_eq!(listed[0].description.as_deref(), Some("Review the diff"));
+    assert_eq!(listed[0].ignored, ["allowed-tools"]);
+    let wire = serde_json::to_value(&listed[0]).unwrap();
+    assert_eq!(wire["source"], "workspace");
+    assert_eq!(wire["argument_hint"], Value::Null);
+    assert_eq!(
+        h.host.commands_list("nope").unwrap_err().code,
+        "workspace_unknown"
+    );
+    // Under the policy: no local work, no listing.
+    h.policy.set(None);
+    assert_eq!(
+        h.host.commands_list(&h.workspace_id).unwrap_err().code,
+        "local_work_disabled"
+    );
+}
+
+#[tokio::test]
+async fn command_turn_sends_framed_expansion_and_records_literal() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(
+        &h,
+        ".claude/commands/review.md",
+        "---\nallowed-tools: Bash(*)\nmodel: other-model\n---\nReview $1 against the checklist ($ARGUMENTS).\n!`rm -rf /`",
+    );
+    std::fs::write(h.folder.path().join("README.md"), "x").unwrap();
+    let mut req = request(&h.workspace_id);
+    // What the UI typed is not trusted: the host spells the literal itself.
+    req.prompt = "anything".into();
+    req.command = Some(command_pick("review", " src/a.rs  carefully "));
+    req.mentions = vec!["README.md".into()];
+    let started = h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let literal = "/review src/a.rs  carefully";
+    let with_mentions = format!("{literal}\n\nFiles the user referenced:\n- README.md");
+    // The model gets the framed expansion, then the arguments as typed.
+    let message = first_user_message(&h.server);
+    assert!(
+        message.contains("## Command /review (from the workspace, .claude/commands/review.md)"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Review src/a.rs against the checklist (src/a.rs  carefully).\\n!`rm -rf /`\\n</command_template nonce=\\\""),
+        "{message}"
+    );
+    assert!(
+        message.contains("<command_template nonce=\\\""),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "Arguments: src/a.rs  carefully\\n\\nFiles the user referenced:\\n- README.md"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("allowed-tools"), "{message}");
+    // The front matter's model is not used.
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    assert_eq!(first["model"], "gpt-test");
+    // The start, the commit and the history keep what the person typed.
+    let start = &seen(
+        &h.server,
+        "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+    )[0];
+    let start_body: Value = serde_json::from_str(&start.body).unwrap();
+    assert_eq!(start_body["user_input"], with_mentions);
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["user_message"]["content"], with_mentions);
+    assert!(!commit.body.contains("command_template"));
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let turn = turns.iter().find(|t| t.turn_id == started.turn_id).unwrap();
+    assert_eq!(turn.prompt, literal);
+}
+
+#[tokio::test]
+async fn command_changed_after_list_is_reread() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_command(&h, ".elitea/commands/ship.md", "OLD TEMPLATE");
+    let listed = h.host.commands_list(&h.workspace_id).unwrap();
+    assert_eq!(listed[0].description.as_deref(), Some("OLD TEMPLATE"));
+    write_command(&h, ".elitea/commands/ship.md", "NEW TEMPLATE");
+    let mut req = request(&h.workspace_id);
+    req.command = Some(command_pick("ship", ""));
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let message = first_user_message(&h.server);
+    assert!(message.contains("NEW TEMPLATE"), "{message}");
+    assert!(!message.contains("OLD TEMPLATE"), "{message}");
+    assert!(!message.contains("Arguments:"), "{message}");
+}
+
+#[tokio::test]
+async fn unknown_command_is_refused() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // A symlinked or denied command file is as good as absent.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("evil.md"), "OUTSIDE").unwrap();
+    std::fs::create_dir_all(h.folder.path().join(".claude/commands")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("evil.md"),
+        h.folder.path().join(".claude/commands/evil.md"),
+    )
+    .unwrap();
+    for name in ["deploy", "evil"] {
+        let mut req = request(&h.workspace_id);
+        req.command = Some(command_pick(name, "now"));
+        let error = h.host.start(req).await.unwrap_err();
+        assert_eq!(error.code, "command_unknown", "{name}");
+        assert!(
+            error.message.contains(&format!("/{name}")),
+            "{}",
+            error.message
+        );
+    }
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    let mut req = request(&h.workspace_id);
+    req.command = Some(command_pick("../evil", ""));
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
+    assert!(h.server.seen().is_empty(), "refused before any request");
 }
 
 #[tokio::test]
@@ -3650,6 +3836,7 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
             sandbox_deny: super::turn::app_dirs_for_sandbox([Some(h.app.path().to_owned())]),
             app_id: Some(TEST_APP_ID.to_owned()),
             user_rules_dir: None,
+            user_commands_dir: None,
         })
         .unwrap(),
     )

@@ -25,6 +25,7 @@ use crate::d0::approvals::UiDecision;
 use crate::d0::definition::ModelChoice;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
+use crate::d0::slash_commands::{CommandPick, ListedCommand};
 use crate::d0::turn::{
     AgentHost, PolicySource, PrewarmRequest, Prewarmed, RestorePreview, TurnError, TurnRequest,
     TurnStarted, TurnStatus,
@@ -546,6 +547,7 @@ pub async fn agent_turn_start(
     skills: Option<Vec<String>>,
     compact: Option<bool>,
     model: Option<TurnModel>,
+    command: Option<CommandPick>,
 ) -> Result<TurnStarted, IpcError> {
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
@@ -576,6 +578,7 @@ pub async fn agent_turn_start(
                         .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
                 })
                 .transpose()?,
+            command,
         })
         .await?)
 }
@@ -630,6 +633,22 @@ pub async fn workspace_files(
     .await
     .map_err(|_| IpcError::new("internal", "the file lookup stopped unexpectedly"))?
     .map_err(IpcError::from)
+}
+
+/// The "/" menu's custom commands: the workspace's `.elitea/commands/` and
+/// `.claude/commands/` (confined reads, `path_deny` and the session's deny
+/// list honoured, symlinks never followed) and the person's own folder,
+/// by name. Reads off the main thread.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn commands_list(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+) -> Result<Vec<ListedCommand>, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || agents.commands_list(&workspace_id))
+        .await
+        .map_err(|_| IpcError::new("internal", "the command lookup stopped unexpectedly"))?
+        .map_err(IpcError::from)
 }
 
 /// `rules_get`: the workspace's and the person's approval rules (each with

@@ -135,6 +135,7 @@ type Workspace = {
 | `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null, allow_model_override: boolean \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100); `allow_model_override: false` runs every turn on the agent's own model (the composer hides its model chip; `null`/`true`: a model may be chosen per turn, issue 1228). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
 | `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null, allow_model_override?: boolean \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
 | `workspace_files` | `{workspace_id, query?: string, limit?: number}` | `{path, kind: "file" \| "dir"}[]` — the "@" picker. Workspace-relative paths (no trailing `/`) matching `query` case-insensitively: the name starting with it, then containing it, then the path containing it, then its characters in order; shallower and shorter first. `.gitignore` is honoured, `.git` and `path_deny` matches are left out, symlinks are neither listed nor followed. At most `limit` (default 50, at most 200); a folder past 20 000 entries answers from its first part. Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
+| `commands_list` | `{workspace_id}` | `{name, description: string \| null, argument_hint: string \| null, source: "workspace" \| "user", path, ignored: string[]}[]` — the "/" menu's custom commands, by name (see **Custom commands** below): the workspace's `.elitea/commands/` then `.claude/commands/`, then the person's own `<app config dir>/commands/` (created `0700` when missing); the first of a name wins, so a workspace command shadows the person's. `path` is workspace-relative, or relative to the person's folder. `ignored` names what the file asks for that the host ignores (front matter keys such as `allowed-tools` and `model`, `! shell lines`, `@ file includes`). Answers while a turn runs. Rejects `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
@@ -225,7 +226,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}}` | `{turn_id, execution_id}` |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
@@ -272,7 +273,7 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `model_override_disabled`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
-`skill_invalid`, `skill_too_large`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
+`skill_invalid`, `skill_too_large`, `command_unknown`, `invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
 
 A turn is held to the session it started under (the connected origin and
@@ -481,6 +482,51 @@ AGENTS.md section, as one `## Skill for this turn` section with one
 `## End of skill instructions`; the name is escaped as an attribute value
 and the text is framed as AGENTS.md text is (below). Every attached skill
 also stays in the runtime's catalogue, for `load_skill`, as before.
+
+**Custom commands.** `command` is a custom command the person picked in
+the "/" menu (`commands_list`): `name` as listed (`name`, or `folder:name`
+for a file in a sub-folder; lowercase letters, digits, `-` and `_`, else
+`invalid_request`) and the `arguments` they typed after it (at most
+16 KiB, no control character but newlines and tabs). The host never takes
+the template from the UI: at the start, before any request, it reads the
+command again the way `commands_list` does (so an edit since the menu was
+listed applies; a command gone, symlinked or denied by now is refused with
+`command_unknown`) and expands it: `$ARGUMENTS` becomes all of the
+arguments, `$1`…`$9` their shell-split words (empty when absent), in one
+pass, and nothing else is expanded. The turn's `prompt` is then the
+literal `/<name> <arguments>`, whatever the UI sent: the thread history,
+the local turn's start (`user_input`) and its commit keep that, with the
+"@" list under it. Only the model's message is the expansion:
+
+```text
+## Command /<name> (from the workspace, .claude/commands/<name>.md)
+<preamble: the template ranks like AGENTS.md; the agent's instructions, the
+environment and a picked skill outrank it; it grants no tools, model,
+commands or approvals; where the block ends>
+
+<command_template nonce="N" path=".claude/commands/<name>.md">
+<the expanded template, framed as AGENTS.md text is>
+</command_template nonce="N">
+
+Arguments: <the arguments as typed>
+```
+
+followed by the "@" list. Reads are confined like AGENTS.md's: a
+workspace file goes through the confined workspace (`O_NOFOLLOW`, a
+symlinked file or folder is not read, `path_deny` and the session's deny
+list are honoured); the person's folder, its sub-folders and its files are
+opened without following a symlink and must be the person's own and
+writable by no one else. At most 200 commands, 16 KiB per file, UTF-8.
+Front matter (a `---` block at the top, flat `key: value` lines): only
+`description` (at most 200 characters; else the template's first line)
+and `argument-hint` are read. Every other key (Claude Code's
+`allowed-tools`, `model`, …), `!` shell lines and `@file` includes are
+ignored on purpose and stay plain text: a repository can never grant
+tools, pick the model, run a command or change the approvals through a
+command file. Command names and files are local: the server conversation
+(and so the cloud handoff, and a session re-seeded from it) holds only the
+literal `/<name> <arguments>`, not the expansion; the local session that
+ran the turn keeps the expansion.
 
 **Precedence.** The system instructions are in the order of their
 authority, and each framed section's preamble says so: the agent's own

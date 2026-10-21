@@ -78,6 +78,7 @@ use super::remote_tools::{
 };
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
+use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
@@ -178,6 +179,10 @@ pub struct TurnRequest {
     /// thread's model for its next turns. `None`: the thread's kept choice,
     /// else the agent's model.
     pub model: Option<ModelChoice>,
+    /// A custom command the person picked with "/": the host reads and
+    /// expands it itself, and the expansion is what the model gets; the
+    /// prompt becomes the literal `/<name> <arguments>`.
+    pub command: Option<CommandPick>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -245,6 +250,9 @@ pub struct HostDeps {
     /// for every workspace (`rules.json`, src/rules.rs); `None`: no user
     /// rules.
     pub user_rules_dir: Option<PathBuf>,
+    /// The person's own custom commands (`<app config dir>/commands`,
+    /// `slash_commands`); `None`: only the workspace's.
+    pub user_commands_dir: Option<PathBuf>,
 }
 
 /// The app's resolved directories as deny entries, as given (the deny list
@@ -1163,6 +1171,47 @@ impl AgentHost {
         mentions::files(&folder, query, limit)
     }
 
+    /// The workspace's folder as a command file is read from: `path_deny`
+    /// and the session's deny list both apply.
+    fn command_folder(
+        &self,
+        path: &str,
+        policy: &LocalWorkPolicy,
+    ) -> Result<elitea_local_tools::workspace::Workspace, TurnError> {
+        Ok(mentions::open(Path::new(path), &policy.path_deny)?.with_deny_list(self.host_deny()))
+    }
+
+    /// `commands_list`: the custom commands of a workspace and of the
+    /// person's own folder (created `0700` when missing), by name, the
+    /// workspace's shadowing the person's. Not under the workspace's claim:
+    /// it only reads, so it also answers while a turn runs.
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`.
+    pub fn commands_list(&self, workspace_id: &str) -> Result<Vec<ListedCommand>, TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let folder = self.command_folder(&workspace.path, &policy)?;
+        if let Some(dir) = &self.deps.user_commands_dir
+            && !dir.exists()
+            && let Err(error) = elitea_local_index::fs::create_private_dir(dir)
+        {
+            log::warn!("the commands folder could not be created: {error}");
+        }
+        Ok(slash_commands::listed(
+            elitea_local_tools::slash_commands::list(
+                Some(&folder),
+                self.deps.user_commands_dir.as_deref(),
+            ),
+        ))
+    }
+
     /// The approval rule files (IPC `rules_*`, src/rules.rs).
     pub fn rule_files(&self) -> &Arc<RuleFiles> {
         &self.rules
@@ -1277,7 +1326,15 @@ impl AgentHost {
     ///
     /// A refusal (`secrets_withheld`, `local_work_disabled`, …) or a failed
     /// platform call.
-    pub async fn start(self: &Arc<Self>, request: TurnRequest) -> Result<TurnStarted, TurnError> {
+    pub async fn start(
+        self: &Arc<Self>,
+        mut request: TurnRequest,
+    ) -> Result<TurnStarted, TurnError> {
+        // A command's turn is recorded everywhere (history, start, commit)
+        // as the person typed it; only the model gets the expansion.
+        if let Some(pick) = &request.command {
+            request.prompt = slash_commands::literal(pick);
+        }
         let turn_id = uuid::Uuid::new_v4().to_string();
         let started_at = chrono::Utc::now().timestamp_millis();
         let tap = TurnTap::new(self.deps.emitter.clone(), self.deps.history.clone());
@@ -1544,6 +1601,7 @@ impl AgentHost {
             skills: Vec::new(),
             compact: false,
             model: None,
+            command: None,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1619,9 +1677,22 @@ impl AgentHost {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
         skills::check(&request.skills)?;
+        if let Some(pick) = &request.command {
+            slash_commands::check(pick)?;
+        }
         // Checked first, so a refusal costs no request; again under the claim.
         let bound = self.bound_workspace(request)?;
         let policy = self.policy()?;
+        // A custom command is read again now (it may have changed since the
+        // menu listed it) and expanded here, before any request.
+        let command = match &request.command {
+            Some(pick) => Some(slash_commands::resolve(
+                Some(&self.command_folder(&bound.path, &policy)?),
+                self.deps.user_commands_dir.as_deref(),
+                pick,
+            )?),
+            None => None,
+        };
         // The "@" references, checked against the folder the way the
         // session sees it (path_deny included), become part of the prompt
         // every later step (start, run, commit) carries.
@@ -1635,6 +1706,10 @@ impl AgentHost {
             index.prioritise(&request.workspace_id, checked.iter().cloned());
         }
         drop(folder);
+        let command = command.map(|command| CommandTurn {
+            mentions: checked.clone(),
+            command,
+        });
         let request = &TurnRequest {
             prompt: mentions::with_mentions(&request.prompt, &checked),
             mentions: Vec::new(),
@@ -1910,6 +1985,7 @@ impl AgentHost {
             tap,
             project,
             invoked,
+            command,
             request: request.clone(),
             events: events.clone(),
             workspace: workspace_session,
@@ -1941,6 +2017,7 @@ impl AgentHost {
             tap,
             project,
             invoked,
+            command,
             request,
             events,
             workspace,
@@ -1987,6 +2064,7 @@ impl AgentHost {
             &admitted,
             &project,
             &invoked,
+            command.as_ref(),
             &started,
             &recorder,
             &sink,
@@ -2389,6 +2467,7 @@ impl AgentHost {
         admitted: &Admitted,
         project: &ProjectInstructions,
         invoked: &[InvokedSkill],
+        command: Option<&CommandTurn>,
         started: &LocalTurnStarted,
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
@@ -2681,7 +2760,18 @@ impl AgentHost {
         // approvals); on "continue" the same runner runs again on the same
         // session, within this execution, from the host's own prompt.
         let mut budget = StepBudget::new(admitted.step_limit);
-        let mut content = Content::new("user").with_text(request.prompt.clone());
+        // A command's expansion, framed under this turn's nonce, is the
+        // person's message to the model; anything else goes as typed.
+        let message = command.map_or_else(
+            || request.prompt.clone(),
+            |turn| {
+                mentions::with_mentions(
+                    &slash_commands::model_prompt(&turn.command, &nonce),
+                    &turn.mentions,
+                )
+            },
+        );
+        let mut content = Content::new("user").with_text(message);
         loop {
             match run_once(&runner, &session_id, content, sink, recorder).await? {
                 RunEnd::Answered => {
@@ -3488,6 +3578,12 @@ struct FailedCommit {
     entry: Arc<TurnEntry>,
 }
 
+/// A command's turn: the expansion and the "@" references listed under it.
+struct CommandTurn {
+    command: ExpandedCommand,
+    mentions: Vec<String>,
+}
+
 struct Prepared {
     /// The conversation as the UI named it (its id or UUID).
     conversation: String,
@@ -3499,6 +3595,8 @@ struct Prepared {
     project: ProjectInstructions,
     /// The skills the person picked for this turn, resolved.
     invoked: Vec<InvokedSkill>,
+    /// The custom command the person picked, read and expanded.
+    command: Option<CommandTurn>,
     request: TurnRequest,
     events: Arc<TurnEvents>,
     workspace: Arc<WorkspaceSession>,
