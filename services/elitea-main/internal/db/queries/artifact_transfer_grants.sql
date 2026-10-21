@@ -60,6 +60,26 @@ UPDATE elitea_storage.transfer_grants
 SET consumed_at = now()
 WHERE id = sqlc.arg('id')::text::uuid AND consumed_at IS NULL;
 
+-- name: ClaimArtifactTransferGrantForCommit :one
+-- The same single-use stamp as MarkArtifactTransferGrantConsumed, taken
+-- BEFORE a single-shot commit touches the grant's final key, and returning
+-- the stamp so a failed commit can hand the grant back
+-- (ReleaseArtifactTransferGrantClaim). No row means already consumed (or
+-- claimed by a commit in flight).
+UPDATE elitea_storage.transfer_grants
+SET consumed_at = clock_timestamp()
+WHERE id = sqlc.arg('id')::text::uuid AND consumed_at IS NULL
+RETURNING consumed_at;
+
+-- name: ReleaseArtifactTransferGrantClaim :execrows
+-- Undoes ClaimArtifactTransferGrantForCommit after a commit that did not
+-- complete, so the caller can retry on the same grant. The stamp match makes
+-- it a no-op on anything but this commit's own claim.
+UPDATE elitea_storage.transfer_grants
+SET consumed_at = NULL
+WHERE id = sqlc.arg('id')::text::uuid
+  AND consumed_at = sqlc.arg('claimed_at')::timestamptz;
+
 -- name: ClaimExpiredArtifactTransferGrants :many
 -- Claims a bounded batch of expired, unconsumed grants for the retention
 -- sweeper, and returns what it needs to reclaim the bytes.

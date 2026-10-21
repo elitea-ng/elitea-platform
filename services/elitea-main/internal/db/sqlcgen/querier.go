@@ -26,6 +26,12 @@ type Querier interface {
 	// owner's access to project_user_<userID>.
 	CanManageCurrentTracingConfiguration(ctx context.Context, arg CanManageCurrentTracingConfigurationParams) (bool, error)
 	CancelCurrentAgentExecution(ctx context.Context, arg CancelCurrentAgentExecutionParams) (CancelCurrentAgentExecutionRow, error)
+	// The same single-use stamp as MarkArtifactTransferGrantConsumed, taken
+	// BEFORE a single-shot commit touches the grant's final key, and returning
+	// the stamp so a failed commit can hand the grant back
+	// (ReleaseArtifactTransferGrantClaim). No row means already consumed (or
+	// claimed by a commit in flight).
+	ClaimArtifactTransferGrantForCommit(ctx context.Context, id string) (pgtype.Timestamptz, error)
 	// Claim only the oldest unfinished revision for each configuration. A lower
 	// pending, retrying, processing, or dead revision remains an explicit ordering
 	// barrier. Expired processing rows are reclaimed with a new caller-owned lease
@@ -560,6 +566,10 @@ type Querier interface {
 	// unmaterialized row is released, so this is a no-op after a successful
 	// materialize and safe to run on every non-created outcome.
 	ReleaseAgentAdmissionReservation(ctx context.Context, arg ReleaseAgentAdmissionReservationParams) (int64, error)
+	// Undoes ClaimArtifactTransferGrantForCommit after a commit that did not
+	// complete, so the caller can retry on the same grant. The stamp match makes
+	// it a no-op on anything but this commit's own claim.
+	ReleaseArtifactTransferGrantClaim(ctx context.Context, arg ReleaseArtifactTransferGrantClaimParams) (int64, error)
 	ReleaseIndexMetaInitialization(ctx context.Context, arg ReleaseIndexMetaInitializationParams) (int64, error)
 	ReleaseScheduledOccurrenceForRetry(ctx context.Context, arg ReleaseScheduledOccurrenceForRetryParams) (int64, error)
 	ReplaceCurrentConfiguration(ctx context.Context, arg ReplaceCurrentConfigurationParams) (ReplaceCurrentConfigurationRow, error)

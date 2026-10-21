@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -413,6 +414,123 @@ func TestArtifactGrantStagedCommitUsesTheServerSideCopy(t *testing.T) {
 		t.Fatalf("copies = %v", store.copies)
 	}
 	if got := downloadGrantObject(t, h, grant); string(got) != "copied" {
+		t.Fatalf("served %q", got)
+	}
+}
+
+// pausingCopyStore holds its FIRST server-side copy until release is closed,
+// so a test can run a second commit while the first one is mid-copy.
+type pausingCopyStore struct {
+	*copyingStore
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *pausingCopyStore) Copy(ctx context.Context, src, dst storage.ObjectRef) (storage.ObjectInfo, error) {
+	first := false
+	s.once.Do(func() { first = true })
+	if first {
+		close(s.entered)
+		<-s.release
+	}
+	return s.copyingStore.Copy(ctx, src, dst)
+}
+
+// Two concurrent commits on one staged grant: exactly one wins, and the
+// object the winner reported is the one served. Without a claim before the
+// copy, both passed the consumed_at read; the later copy then replaced the
+// winner's verified, registered object with whatever the still-valid URL
+// held by then.
+func TestArtifactGrantConcurrentStagedCommitsHaveOneWinnerAndKeepItsObject(t *testing.T) {
+	_, repo, fake := newObjectTestHandler(t)
+	fake.presign = true
+	store := &pausingCopyStore{
+		copyingStore: &copyingStore{fakeStore: fake},
+		entered:      make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+	h := artifacts.NewHandler(repo, store)
+	r := newGrantTestRouter(h)
+
+	grant := createTestGrant(t, r, `{"method":"PUT","content_type":"text/plain","max_bytes":64}`)
+	simulateGrantUpload(t, fake, grant+".upload", "text/plain", []byte("first"))
+
+	commit := func() *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+		return rr
+	}
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { firstDone <- commit() }()
+	<-store.entered
+
+	second := commit()
+	// The still-valid URL is rewritten while the first commit is mid-copy.
+	simulateGrantUpload(t, fake, grant+".upload", "text/plain", []byte("second, longer bytes"))
+	close(store.release)
+	first := <-firstDone
+
+	var winner *httptest.ResponseRecorder
+	for _, rr := range []*httptest.ResponseRecorder{first, second} {
+		switch rr.Code {
+		case http.StatusOK:
+			if winner != nil {
+				t.Fatalf("both commits succeeded")
+			}
+			winner = rr
+		case http.StatusConflict:
+		default:
+			t.Fatalf("commit: status = %d; body=%s", rr.Code, rr.Body.String())
+		}
+	}
+	if winner == nil {
+		t.Fatalf("no commit succeeded: first=%d %s second=%d %s", first.Code, first.Body.String(), second.Code, second.Body.String())
+	}
+	var committed struct {
+		SizeBytes int64 `json:"size_bytes"`
+	}
+	if err := json.Unmarshal(winner.Body.Bytes(), &committed); err != nil {
+		t.Fatal(err)
+	}
+	served := downloadGrantObject(t, h, grant)
+	if int64(len(served)) != committed.SizeBytes {
+		t.Fatalf("served %q (%d bytes), but the winning commit registered %d bytes", served, len(served), committed.SizeBytes)
+	}
+	bucket, err := repo.GetBucket(t.Context(), 1, "reports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := repo.objects[fakeObjectKey(bucket.ID, grant)]; record.byteLength != committed.SizeBytes {
+		t.Fatalf("byte_length = %d, want %d", record.byteLength, committed.SizeBytes)
+	}
+}
+
+// A commit that fails verification hands its claim back: the caller can fix
+// the upload and commit the same grant again.
+func TestArtifactGrantStagedCommitCanBeRetriedAfterARejection(t *testing.T) {
+	h, _, store := newObjectTestHandler(t)
+	store.presign = true
+	r := newGrantTestRouter(h)
+
+	content := []byte("expected")
+	declared := sha256.Sum256(content)
+	grant := createTestGrant(t, r, `{"method":"PUT","content_type":"text/plain","max_bytes":64,"digest_alg":"sha256","digest":"`+hex.EncodeToString(declared[:])+`"}`)
+	simulateGrantUpload(t, store, grant+".upload", "text/plain", []byte("something else"))
+
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("first commit: status = %d, want 409; body=%s", rr.Code, rr.Body.String())
+	}
+
+	simulateGrantUpload(t, store, grant+".upload", "text/plain", content)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/grants/1/"+grant+":commit", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("retried commit: status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+	}
+	if got := downloadGrantObject(t, h, grant); !bytes.Equal(got, content) {
 		t.Fatalf("served %q", got)
 	}
 }

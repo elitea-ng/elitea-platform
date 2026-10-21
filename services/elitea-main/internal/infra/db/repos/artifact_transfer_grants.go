@@ -9,6 +9,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -64,6 +65,8 @@ type artifactTransferGrantQueries interface {
 	GetArtifactTransferGrant(context.Context, sqlcgen.GetArtifactTransferGrantParams) (sqlcgen.GetArtifactTransferGrantRow, error)
 	GetArtifactTransferGrantByID(context.Context, string) (sqlcgen.GetArtifactTransferGrantByIDRow, error)
 	MarkArtifactTransferGrantConsumed(context.Context, string) (int64, error)
+	ClaimArtifactTransferGrantForCommit(context.Context, string) (pgtype.Timestamptz, error)
+	ReleaseArtifactTransferGrantClaim(context.Context, sqlcgen.ReleaseArtifactTransferGrantClaimParams) (int64, error)
 	ClaimExpiredArtifactTransferGrants(context.Context, sqlcgen.ClaimExpiredArtifactTransferGrantsParams) ([]sqlcgen.ClaimExpiredArtifactTransferGrantsRow, error)
 	ListExpiredArtifactGrantStaging(context.Context, sqlcgen.ListExpiredArtifactGrantStagingParams) ([]sqlcgen.ListExpiredArtifactGrantStagingRow, error)
 	ClearArtifactGrantStaging(context.Context, sqlcgen.ClearArtifactGrantStagingParams) error
@@ -188,6 +191,35 @@ func (r *ArtifactTransferGrantsRepository) MarkTransferGrantConsumed(ctx context
 		return storage.ErrAlreadyExists
 	}
 	return nil
+}
+
+// ClaimTransferGrant stamps consumed_at like MarkTransferGrantConsumed, but
+// up front: a single-shot commit claims the grant before it writes the
+// grant's final key, so two concurrent commits can never both copy into it.
+// It returns the stamp ReleaseTransferGrantClaim needs. An already consumed
+// (or already claimed) grant returns storage.ErrAlreadyExists.
+func (r *ArtifactTransferGrantsRepository) ClaimTransferGrant(ctx context.Context, id string) (time.Time, error) {
+	claimedAt, err := r.queries.ClaimArtifactTransferGrantForCommit(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, storage.ErrAlreadyExists
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("claim artifact transfer grant: %w", err)
+	}
+	return claimedAt.Time, nil
+}
+
+// ReleaseTransferGrantClaim hands back a claim ClaimTransferGrant took, after
+// a commit that did not complete, so the caller can retry on the same grant.
+// It reports whether the claim was still this commit's to release.
+func (r *ArtifactTransferGrantsRepository) ReleaseTransferGrantClaim(ctx context.Context, id string, claimedAt time.Time) (bool, error) {
+	rows, err := r.queries.ReleaseArtifactTransferGrantClaim(ctx, sqlcgen.ReleaseArtifactTransferGrantClaimParams{
+		ID: id, ClaimedAt: pgtype.Timestamptz{Time: claimedAt, Valid: true},
+	})
+	if err != nil {
+		return false, fmt.Errorf("release artifact transfer grant claim: %w", err)
+	}
+	return rows > 0, nil
 }
 
 // ClaimExpiredTransferGrants marks a bounded batch of expired, unconsumed

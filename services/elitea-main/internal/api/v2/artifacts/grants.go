@@ -461,7 +461,13 @@ func (h *Handler) CommitTransferGrant(w http.ResponseWriter, r *http.Request) {
 		if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.Key}) {
 			return
 		}
-		h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, ref, false)
+		claimedAt, ok := h.claimGrantForCommit(w, r, grant.ID)
+		if !ok {
+			return
+		}
+		if !h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, ref, true) {
+			h.releaseGrantClaim(r.Context(), grant.ID, claimedAt)
+		}
 		return
 	}
 
@@ -482,17 +488,56 @@ func (h *Handler) CommitTransferGrant(w http.ResponseWriter, r *http.Request) {
 	if !h.allowKeys(w, r, projectID, bucketRow, []string{grant.ID}) {
 		return
 	}
+	// Claim BEFORE the copy. The consumed_at read above is only an early
+	// exit: two concurrent commits can both pass it, and without a claim the
+	// later copy would overwrite the object the earlier one had already
+	// verified and registered, or (on a mismatch) rejectCommit would delete
+	// it. Only the claim holder ever writes or deletes final, and a failed
+	// commit hands the claim back so the caller can retry on this grant.
+	claimedAt, ok := h.claimGrantForCommit(w, r, grant.ID)
+	if !ok {
+		return
+	}
 	if err := h.copyGrantUpload(r.Context(), staging, final); err != nil {
+		h.releaseGrantClaim(r.Context(), grant.ID, claimedAt)
 		h.writeStorageError(r.Context(), w, "copy uploaded object", err)
 		return
 	}
-	if !h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, final, false) {
+	if !h.finalizeGrantCommit(r.Context(), w, projectID, grant, bucketRow, final, true) {
+		h.releaseGrantClaim(r.Context(), grant.ID, claimedAt)
 		return
 	}
 	// Committed. A failed delete leaves bytes nothing serves; the retention
 	// sweep reclaims them after the grant expires.
 	if err := h.store.Delete(r.Context(), staging); err != nil && !errors.Is(err, storage.ErrNotFound) {
 		h.logInternal(r.Context(), "delete committed grant staging object", err)
+	}
+}
+
+// claimGrantForCommit takes CommitTransferGrant's single-use claim. Losing it
+// to a concurrent commit (or to the retention sweeper) is the same 409 as a
+// grant committed earlier.
+func (h *Handler) claimGrantForCommit(w http.ResponseWriter, r *http.Request, grantID string) (time.Time, bool) {
+	claimedAt, err := h.repo.ClaimTransferGrant(r.Context(), grantID)
+	if errors.Is(err, storage.ErrAlreadyExists) {
+		writeError(w, http.StatusConflict, "AlreadyExists", "grant has already been committed")
+		return time.Time{}, false
+	}
+	if err != nil {
+		h.writeInternal(w, r, "claim transfer grant", err)
+		return time.Time{}, false
+	}
+	return claimedAt, true
+}
+
+// releaseGrantClaim hands back a failed commit's claim. It runs detached from
+// the request's cancellation: a client that hung up mid-commit must not
+// leave the grant consumed with nothing committed. A release that still
+// fails leaves the grant unusable, not inconsistent: the retention sweep
+// reclaims its staging object once the URL expires.
+func (h *Handler) releaseGrantClaim(ctx context.Context, grantID string, claimedAt time.Time) {
+	if _, err := h.repo.ReleaseTransferGrantClaim(context.WithoutCancel(ctx), grantID, claimedAt); err != nil {
+		h.logInternal(ctx, "release transfer grant claim", err)
 	}
 }
 

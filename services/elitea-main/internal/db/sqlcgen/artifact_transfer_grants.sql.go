@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimArtifactTransferGrantForCommit = `-- name: ClaimArtifactTransferGrantForCommit :one
+UPDATE elitea_storage.transfer_grants
+SET consumed_at = clock_timestamp()
+WHERE id = $1::text::uuid AND consumed_at IS NULL
+RETURNING consumed_at
+`
+
+// The same single-use stamp as MarkArtifactTransferGrantConsumed, taken
+// BEFORE a single-shot commit touches the grant's final key, and returning
+// the stamp so a failed commit can hand the grant back
+// (ReleaseArtifactTransferGrantClaim). No row means already consumed (or
+// claimed by a commit in flight).
+func (q *Queries) ClaimArtifactTransferGrantForCommit(ctx context.Context, id string) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, claimArtifactTransferGrantForCommit, id)
+	var consumed_at pgtype.Timestamptz
+	err := row.Scan(&consumed_at)
+	return consumed_at, err
+}
+
 const claimExpiredArtifactTransferGrants = `-- name: ClaimExpiredArtifactTransferGrants :many
 UPDATE elitea_storage.transfer_grants
 SET consumed_at = now()
@@ -385,6 +404,29 @@ WHERE id = $1::text::uuid AND consumed_at IS NULL
 // AbortMultipartUpload.
 func (q *Queries) MarkArtifactTransferGrantConsumed(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.Exec(ctx, markArtifactTransferGrantConsumed, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const releaseArtifactTransferGrantClaim = `-- name: ReleaseArtifactTransferGrantClaim :execrows
+UPDATE elitea_storage.transfer_grants
+SET consumed_at = NULL
+WHERE id = $1::text::uuid
+  AND consumed_at = $2::timestamptz
+`
+
+type ReleaseArtifactTransferGrantClaimParams struct {
+	ID        string             `db:"id" json:"id"`
+	ClaimedAt pgtype.Timestamptz `db:"claimed_at" json:"claimed_at"`
+}
+
+// Undoes ClaimArtifactTransferGrantForCommit after a commit that did not
+// complete, so the caller can retry on the same grant. The stamp match makes
+// it a no-op on anything but this commit's own claim.
+func (q *Queries) ReleaseArtifactTransferGrantClaim(ctx context.Context, arg ReleaseArtifactTransferGrantClaimParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseArtifactTransferGrantClaim, arg.ID, arg.ClaimedAt)
 	if err != nil {
 		return 0, err
 	}

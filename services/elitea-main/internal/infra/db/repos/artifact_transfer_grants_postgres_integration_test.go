@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -231,5 +232,69 @@ func TestArtifactGrantRepositoryMarkConsumedEnforcesSingleUseAgainstRealPostgres
 
 	if err := grants.MarkTransferGrantConsumed(ctx, created.ID); !errors.Is(err, storage.ErrAlreadyExists) {
 		t.Fatalf("second MarkTransferGrantConsumed: err = %v, want ErrAlreadyExists", err)
+	}
+}
+
+// Concurrent single-shot commits race for ClaimTransferGrant: exactly one
+// gets a stamp, and only that stamp releases the grant for a retry.
+func TestArtifactGrantRepositoryClaimHasOneWinnerAndReleasesOnlyItsOwnClaimAgainstRealPostgres(t *testing.T) {
+	buckets, grants := newArtifactTransferGrantsTestRepos(t)
+	ctx := context.Background()
+	const projectID = int64(9211)
+
+	bucket := mustCreateArtifactBucket(t, buckets, projectID, "reports")
+	const grantID = "21111111-1111-4111-8111-111111111111"
+	if _, err := grants.CreateTransferGrant(ctx, NewTransferGrantInput{
+		ID: grantID, ProjectID: projectID, BucketID: bucket.ID, Key: grantID + GrantStagingSuffix,
+		Method: "PUT", ContentType: "text/plain", MaxBytes: 64, ExpiresAt: time.Now().Add(15 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateTransferGrant: %v", err)
+	}
+
+	const racers = 8
+	stamps := make(chan time.Time, racers)
+	errs := make(chan error, racers)
+	var wg sync.WaitGroup
+	for range racers {
+		wg.Go(func() {
+			at, err := grants.ClaimTransferGrant(ctx, grantID)
+			if err != nil {
+				errs <- err
+				return
+			}
+			stamps <- at
+		})
+	}
+	wg.Wait()
+	close(stamps)
+	close(errs)
+	if len(stamps) != 1 {
+		t.Fatalf("claims won = %d, want 1", len(stamps))
+	}
+	for err := range errs {
+		if !errors.Is(err, storage.ErrAlreadyExists) {
+			t.Fatalf("losing claim: %v, want ErrAlreadyExists", err)
+		}
+	}
+	claimedAt := <-stamps
+
+	if released, err := grants.ReleaseTransferGrantClaim(ctx, grantID, claimedAt.Add(time.Microsecond)); err != nil || released {
+		t.Fatalf("release with a foreign stamp: released=%v err=%v, want false", released, err)
+	}
+	if err := grants.MarkTransferGrantConsumed(ctx, grantID); !errors.Is(err, storage.ErrAlreadyExists) {
+		t.Fatalf("mark while claimed: %v, want ErrAlreadyExists", err)
+	}
+	if released, err := grants.ReleaseTransferGrantClaim(ctx, grantID, claimedAt); err != nil || !released {
+		t.Fatalf("release own claim: released=%v err=%v, want true", released, err)
+	}
+	row, err := grants.GetTransferGrant(ctx, grantID, projectID)
+	if err != nil {
+		t.Fatalf("GetTransferGrant: %v", err)
+	}
+	if row.ConsumedAt != nil {
+		t.Fatalf("consumed_at = %v after release, want NULL", row.ConsumedAt)
+	}
+	if _, err := grants.ClaimTransferGrant(ctx, grantID); err != nil {
+		t.Fatalf("claim after release: %v", err)
 	}
 }
