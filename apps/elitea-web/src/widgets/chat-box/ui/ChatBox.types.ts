@@ -68,6 +68,8 @@ export interface ChatBoxProps {
      * it, `local_work_turn`).
      */
     readonly noRegenerate?: boolean;
+    /** "Fork from here" on a settled message (client contract 1.11): the host forks and opens the new conversation. Absent hides it. */
+    readonly onForkFromMessage?: ((messageId: string) => void) | undefined;
     /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
     readonly editorCallbacks?: ChatBoxEditorCallbacks;
     /** Real lists for the composer's "+" menu — see `processes/chat/model/usePlusMenuEntities.ts`, which is the only layer allowed to fetch them. */

@@ -182,6 +182,21 @@ export interface StoredTurn {
   live: boolean;
 }
 
+/** What `thread_history_fork` copies (IPC.md "Thread history"). */
+export interface ThreadForkRequest {
+  workspaceId: string;
+  sourceConversationId: string;
+  targetConversationId: string;
+  targetConversationUuid: string;
+  /** The fork point's turn: the turns up to and including it are copied. Absent: every turn. */
+  upToTurnId?: string;
+  /**
+   * The fork answer's `forked_messages` (source message UUID → the copy's): the copied turns' `done`
+   * events name the new conversation's messages, so they can be fork points in turn.
+   */
+  messageIds?: Readonly<Record<string, string>>;
+}
+
 /**
  * A rejected workspace / turn command. The host rejects with `{code, message}`
  * (`IpcError` in `src-tauri/src/local_commands.rs`): `code` is what the UI
@@ -233,6 +248,12 @@ export interface WorkspaceIpc {
   threadHistory(workspaceId: string, conversationId: string): Promise<StoredTurn[]>;
   /** Forget a thread's recorded turns (the conversation itself stays); resolves with how many. */
   deleteThreadHistory(workspaceId: string, conversationId: string): Promise<number>;
+  /**
+   * The local half of a fork (`thread_history_fork`): copy a thread's recorded turns, up to and including
+   * `upToTurnId` (all when absent), into the conversation the server fork made, in the same folder.
+   * Resolves with how many turns were copied (0 when this machine recorded none).
+   */
+  forkThreadHistory(request: ThreadForkRequest): Promise<number>;
   /** Subscribe to `agent://event`; resolves once the subscription is live, with its unsubscribe. */
   onEvent(handler: AgentEventHandler): Promise<() => void>;
 }
@@ -279,6 +300,17 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       (await invoke<{ turns: StoredTurn[] }>('thread_history', { workspace_id: workspaceId, conversation_id: conversationId })).turns,
     deleteThreadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
+    forkThreadHistory: async (request) =>
+      (
+        await invoke<{ copied: number }>('thread_history_fork', {
+          workspace_id: request.workspaceId,
+          source_conversation_id: request.sourceConversationId,
+          target_conversation_id: request.targetConversationId,
+          target_conversation_uuid: request.targetConversationUuid,
+          ...(request.upToTurnId === undefined ? {} : { up_to_turn_id: request.upToTurnId }),
+          ...(request.messageIds === undefined ? {} : { message_ids: request.messageIds }),
+        })
+      ).copied,
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

@@ -701,6 +701,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if testRuns != nil {
 		resp["editor_test_runs"] = *testRuns
 	}
+	// Client contract 1.11: the fork's source, with its name when the caller
+	// can still see it.
+	if ff := forkedFrom(conv.Meta); ff != nil {
+		h.annotateForkSource(r.Context(), projectID, ff)
+		resp["forked_from"] = ff
+	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
 	messagesLimit, _ := strconv.Atoi(r.URL.Query().Get("messages_limit"))
@@ -738,6 +744,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// widgets/chat-box/ui/hooks/useChatBoxSend.ts:310-313), and pylon stored
 	// it (legacy/plugins/elitea_core/api/v2/conversations.py:153-164).
 	if meta, ok := body["meta"].(map[string]any); ok {
+		// `forked_from` is the server's: only forkConversation writes it.
+		delete(meta, ForkedFromMetaKey)
 		conv.Meta = meta
 	}
 	actorID, err := chatauthority.Actor(r.Context())

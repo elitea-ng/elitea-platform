@@ -34,6 +34,8 @@ import { isLocalWorkConversation, lastAnswerRanOnDesktop, localWorkFolderName, w
 import { useSelectedProject } from '@/widgets/app-shell';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 
+import { forkedFromOf, type ForkedFromLinkData } from './forkedFrom';
+
 const MESSAGE_PAGE_SIZE = 50;
 
 export interface UseChatPageDataParams {
@@ -49,6 +51,8 @@ export interface UseChatPageDataResult {
   readonly localWork: { readonly folderName: string | undefined } | undefined;
   /** Where the thread runs (`workspace_executor`), the conversation's UUID and owner, and whether the newest answer ran on a desktop. */
   readonly handoff: { readonly executor: WorkspaceExecutorName; readonly uuid: string | undefined; readonly authorId: string | undefined; readonly lastAnswerOnDesktop: boolean };
+  /** The source of a fork, when the reader can still see it (the "Forked from" link). */
+  readonly forkedFrom: ForkedFromLinkData | undefined;
 }
 
 /**
@@ -112,7 +116,7 @@ function adaptCurrentMessageRows(rows: readonly unknown[]): MessageGroupWire[] {
 }
 
 /** Maps the REST conversation-details + message-list queries into `ChatBox`'s `activeConversation` prop shape. */
-function useActiveConversation(projectId: string | undefined, conversationId: string | undefined): { readonly activeConversation: NonNullable<ChatBoxProps['conversation']>['active']; readonly isLoading: boolean; readonly localWork: UseChatPageDataResult['localWork']; readonly handoff: UseChatPageDataResult['handoff'] } {
+function useActiveConversation(projectId: string | undefined, conversationId: string | undefined): { readonly activeConversation: NonNullable<ChatBoxProps['conversation']>['active']; readonly isLoading: boolean; readonly localWork: UseChatPageDataResult['localWork']; readonly handoff: UseChatPageDataResult['handoff']; readonly forkedFrom: UseChatPageDataResult['forkedFrom'] } {
   const enabled = projectId !== undefined && conversationId !== undefined;
   const detailsQuery = conversationApi.useDetails({ projectId: projectId ?? '', id: conversationId ?? '' }, { enabled });
   const messageListQuery = conversationApi.useMessageList(
@@ -159,7 +163,8 @@ function useActiveConversation(projectId: string | undefined, conversationId: st
       lastAnswerOnDesktop: conversationId && messageListQuery.data !== undefined ? lastAnswerRanOnDesktop(unwrapList<unknown>(messageListQuery.data, 'conversation.messageList')) : false,
     };
   }, [details, conversationId, messageListQuery.data]);
-  return { activeConversation, isLoading: enabled && (detailsQuery.isLoading || messageListQuery.isLoading), localWork, handoff };
+  const forkedFrom = useMemo(() => forkedFromOf(details), [details]);
+  return { activeConversation, isLoading: enabled && (detailsQuery.isLoading || messageListQuery.isLoading), localWork, handoff, forkedFrom };
 }
 
 /** @public Composes real project/user/conversation data for the `/chat` page. */
@@ -169,9 +174,9 @@ export function useChatPageData({ conversationId }: UseChatPageDataParams): UseC
   const author = currentAuthorOf(authorQuery.data);
 
   const projectId = project?.id ?? author?.personal_project_id;
-  const { activeConversation, isLoading, localWork, handoff } = useActiveConversation(projectId, conversationId);
+  const { activeConversation, isLoading, localWork, handoff, forkedFrom } = useActiveConversation(projectId, conversationId);
 
   const user = author ? { id: author.id, name: author.name, avatar: author.avatar } : undefined;
 
-  return { projectId, user, activeConversation, isLoadingConversation: isLoading, localWork, handoff };
+  return { projectId, user, activeConversation, isLoadingConversation: isLoading, localWork, handoff, forkedFrom };
 }

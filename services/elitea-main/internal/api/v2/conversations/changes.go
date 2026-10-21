@@ -40,10 +40,15 @@ import (
 // ArchiveConversation), so the delta re-delivers the row to every member who
 // can see it. The archiver's display name is added after the scan
 // (annotateArchivers).
+//
+// `uuid`, `source` and `forked_from` (client contract 1.11) follow. The
+// fork's source is read from `meta.forked_from` (forkedFrom); its name is
+// on getConversation only, where the caller's sight of the source is
+// checked.
 func conversationSelectSQL(s, projectID string, withSync bool) string {
 	sync := ""
 	if withSync {
-		sync = ", c.sync_at, c.uuid::text"
+		sync = ", c.sync_at"
 	}
 	project, err := strconv.ParseInt(projectID, 10, 32)
 	if err != nil {
@@ -54,7 +59,7 @@ func conversationSelectSQL(s, projectID string, withSync bool) string {
 			(SELECT COUNT(*) FROM %[1]s.chat_message_group mg WHERE mg.conversation_id = c.id),
 			EXISTS (SELECT 1 FROM centry.social_pins sp
 			        WHERE sp.entity = 'conversation' AND sp.project_id = %[3]d AND sp.entity_id = c.id),
-			arch.archived_by, arch.archived_at%[2]s
+			arch.archived_by, arch.archived_at, COALESCE(c.uuid::text, ''), COALESCE(c.source, '')%[2]s
 		FROM %[1]s.chat_conversations c
 		LEFT JOIN %[1]s.chat_conversation_archives arch ON arch.conversation_id = c.id`, s, sync, project)
 }
@@ -107,11 +112,11 @@ func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesy
 	var pinned bool
 	var archivedBy *int64
 	var archivedAt *time.Time
+	var conversationUUID, source string
 	var syncAt time.Time
-	var conversationUUID *string
-	dest := []any{&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount, &pinned, &archivedBy, &archivedAt}
+	dest := []any{&id, &name, &createdAt, &updatedAt, &metaBytes, &msgCount, &pinned, &archivedBy, &archivedAt, &conversationUUID, &source}
 	if withSync {
-		dest = append(dest, &syncAt, &conversationUUID)
+		dest = append(dest, &syncAt)
 	}
 	if err := rows.Scan(dest...); err != nil {
 		return nil, changesync.Position{}, nil, err
@@ -135,13 +140,23 @@ func scanConversationRow(rows pgx.Rows, withSync bool) (map[string]any, changesy
 		"message_groups_count": msgCount,
 		"is_pinned":            pinned,
 		"is_archived":          archivedBy != nil,
+		"uuid":                 conversationUUID,
+		"source":               source,
+	}
+	// Client contract 1.11: the fork's source, from the server-owned meta key.
+	if ff := forkedFrom(meta); ff != nil {
+		row["forked_from"] = ff
 	}
 	if archivedBy != nil && archivedAt != nil {
 		// archived_at is a UTC wall clock without a zone; the wire is RFC 3339.
 		row["archived_by"] = map[string]any{"id": *archivedBy, "name": ""}
 		row["archived_at"] = archivedAt.UTC().Format(time.RFC3339Nano)
 	}
-	return row, changesync.Position{At: syncAt, ID: int64(id)}, conversationUUID, nil
+	var tombstoneUUID *string // a tombstone's uuid; absent when the row has none
+	if conversationUUID != "" {
+		tombstoneUUID = &conversationUUID
+	}
+	return row, changesync.Position{At: syncAt, ID: int64(id)}, tombstoneUUID, nil
 }
 
 // annotateArchivers fills `archived_by.name` with the archiver's display

@@ -72,6 +72,7 @@ import type {
   ConversationMessageListing,
   ConversationParticipant,
   ConversationParticipantCreate,
+  ConversationSummary,
   CreateSupportConversationBody,
   CreatedConversation,
   ErrorResponse,
@@ -80,6 +81,7 @@ import type {
   ExecutionInterruptError,
   ExecutionInterruptList,
   ExportConversationParams,
+  ForkConversationRequest,
   GetConversationParams,
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
@@ -107,6 +109,7 @@ import type {
   N401Response,
   N403Response,
   N404Response,
+  N409Response,
   N500Response,
   OkResponse,
   ParticipantCandidatesPage,
@@ -2237,6 +2240,390 @@ export function useUnarchiveConversation<
   const queryOptions = getUnarchiveConversationQueryOptions(
     projectId,
     conversationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type forkConversationResponse201 = {
+  data: ConversationSummary;
+  status: 201;
+};
+
+export type forkConversationResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type forkConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type forkConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type forkConversationResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type forkConversationResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type forkConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type forkConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type forkConversationResponseSuccess = forkConversationResponse201 & {
+  headers: Headers;
+};
+export type forkConversationResponseError = (
+  | forkConversationResponse400
+  | forkConversationResponse401
+  | forkConversationResponse403
+  | forkConversationResponse404
+  | forkConversationResponse409
+  | forkConversationResponse426
+  | forkConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type forkConversationResponse =
+  forkConversationResponseSuccess | forkConversationResponseError;
+
+export const getForkConversationUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_fork/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.11. Creates a NEW conversation from the history of
+ * the source conversation. With `message_id`, the new conversation holds
+ * the messages up to and including that message (the fork point), and
+ * every later message that belongs to one of them: the replies to a
+ * copied message (its answer, a regenerated or swarm answer) and the
+ * swarm children of a copied answer. Without it, it holds the whole
+ * history.
+ *
+ * The copy is one transaction. It copies the message groups, their items
+ * (text, context, attachments, canvases with their versions) and their
+ * trace steps, with new ids, in the same order and with the same
+ * `created_at`; the answer's `forked_messages` maps each copied message
+ * group's UUID to its copy's. It copies the participants with their
+ * per-conversation settings, except the other members: the fork is the
+ * caller's, so another member's questions are copied (still theirs, with
+ * `role` `user`) but that member is not a participant of the fork and
+ * cannot read it. It copies the instructions, `source` and the
+ * conversation settings in `meta`. Attachment files are copied to the new conversation, so a
+ * delete of either conversation leaves the other one readable. It does
+ * NOT copy the pin, the archive, likes and dislikes, a selection, the
+ * folder of another member, or a pending tool approval.
+ *
+ * The new conversation belongs to the caller, in the same project, with
+ * the privacy a new conversation of the caller gets. Its name is `name`,
+ * or the source name with " (fork)" added. Its `meta.forked_from` and
+ * the row's `forked_from` name the source conversation and the fork
+ * point. A Local work thread (`source: local_work`) gives a Local work
+ * thread with the same folder settings; the desktop copies its local
+ * turn history itself.
+ *
+ * Needs `models.chat.conversations.create` and
+ * `models.chat.conversation.details`, and access to the source
+ * conversation (the chat authority's detail rule). A source the caller
+ * cannot see answers 404. A `message_id` that is not a message of the
+ * source answers 404. A fork point that is still streaming or waits for
+ * a tool approval answers 409 `fork_point_unsettled`, as does a later
+ * reply of the copy that is; without
+ * `message_id`, the newest message is the fork point. An editor Test
+ * conversation answers 409 `fork_not_supported`.
+ * @summary Fork a conversation into a new conversation
+ */
+export const forkConversation = async (
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<forkConversationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<forkConversationResponse>(
+    getForkConversationUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(forkConversationRequest),
+    },
+  );
+};
+
+export const getForkConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/conversation_fork/prompt_lib/${projectId}/${conversationId}`,
+    forkConversationRequest,
+  ] as const;
+};
+
+export const getForkConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getForkConversationQueryKey(
+      projectId,
+      conversationId,
+      forkConversationRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof forkConversation>>
+  > = ({ signal }) =>
+    forkConversation(projectId, conversationId, forkConversationRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof forkConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ForkConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof forkConversation>>
+>;
+export type ForkConversationQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest: undefined | ForkConversationRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof forkConversation>>,
+          TError,
+          Awaited<ReturnType<typeof forkConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof forkConversation>>,
+          TError,
+          Awaited<ReturnType<typeof forkConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Fork a conversation into a new conversation
+ */
+
+export function useForkConversation<
+  TData = Awaited<ReturnType<typeof forkConversation>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  forkConversationRequest?: ForkConversationRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof forkConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getForkConversationQueryOptions(
+    projectId,
+    conversationId,
+    forkConversationRequest,
     options,
   );
 

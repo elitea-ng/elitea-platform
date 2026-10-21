@@ -11,6 +11,7 @@
 // own `<DeleteOutlineIcon fontSize="small" />` already established for an
 // identical baseline `sx={{fontSize:'1rem'}}` icon.
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
+import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
 import ContentCopyOutlinedIcon from '@mui/icons-material/ContentCopyOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
@@ -123,6 +124,8 @@ export interface MenuItemsParams {
   readonly onDuplicate: () => void;
   /** Archives the conversation in its project, for every member (client contract 1.10); absent leaves the entry out. */
   readonly onArchive?: (() => void) | undefined;
+  /** Forks the whole conversation into a new one the caller owns (client contract 1.11); absent leaves the entry out. */
+  readonly onFork?: (() => void) | undefined;
 }
 
 /** Playback rows only ever offer Delete/Edit (`ConversationItem.jsx:264-278`). */
@@ -279,6 +282,17 @@ export function buildActiveMenuItems(params: MenuItemsParams): ControlsDropdownI
     disabled: isEditingActive,
     onClick: params.onDuplicate,
   });
+
+  // Fork copies the history too (Duplicate does not), into a new conversation of the caller: any viewer may.
+  if (params.onFork !== undefined) {
+    items.push({
+      key: 'fork',
+      label: t('features.chatConversationList.conversationItem.menu.fork', 'Fork'),
+      icon: <CallSplitOutlinedIcon fontSize="small" />,
+      disabled: isEditingActive,
+      onClick: params.onFork,
+    });
+  }
 
   if (conversation.isPrivate && !isPublicOrPersonal) {
     items.push({

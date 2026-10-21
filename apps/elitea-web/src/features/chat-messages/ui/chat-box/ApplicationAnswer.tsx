@@ -99,7 +99,7 @@ export function ApplicationAnswer({
   isLastMessage = false,
   author: { participantName, isSwarmChild = false, swarmAgentName = '' } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
-  actions: { onCopy, onDelete, onRegenerate, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
+  actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
   continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume, staticPause } = {},
@@ -377,6 +377,7 @@ export function ApplicationAnswer({
               onAutoSpeak={onAutoSpeak ? handleAutoSpeak : undefined}
               onCopy={onCopy}
               onRegenerate={onRegenerate}
+              onFork={onFork}
               onDelete={onDelete}
               onOpenAsDocument={
                 onCreateCanvasFromSelection && wholeAnswerText && wholeAnswerText.trim() !== '' ? onOpenAsDocument : undefined

@@ -690,6 +690,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	if err := conversations.PreserveEditorTestUpdate(current, &conv); err != nil {
 		return conversations.Conversation{}, err
 	}
+	conversations.PreserveForkedFrom(current, &conv)
 	s := schema(projectID)
 
 	if conv.IsPrivate != nil && !*conv.IsPrivate && publicproject.IDString() == projectID {
@@ -851,28 +852,44 @@ func scanAttachmentRefs(ctx context.Context, q attachmentQuerier, sql string, ar
 }
 
 // collectGroupAttachments reports every stored attachment the named message
-// groups carry.
+// groups carry, except an object that an attachment row of another group
+// still names. A fork renames its copies onto its own objects
+// (conversation_fork.go), but a name without the source prefix is copied as
+// it is, and then both conversations name one object.
 func collectGroupAttachments(ctx context.Context, q attachmentQuerier, s string, groupIDs []int64) ([]conversations.AttachmentRef, error) {
 	return scanAttachmentRefs(ctx, q, fmt.Sprintf(`
 		SELECT att.bucket, att.name
-		FROM %s.chat_message_items mi
-		JOIN %s.chat_messages_attachment att ON att.id = mi.id
+		FROM %[1]s.chat_message_items mi
+		JOIN %[1]s.chat_messages_attachment att ON att.id = mi.id
 		WHERE mi.message_group_id = ANY($1) AND mi.item_type = 'attachment_message'
-		ORDER BY mi.message_group_id, mi.order_index`, s, s), groupIDs)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM %[1]s.chat_messages_attachment other
+		    JOIN %[1]s.chat_message_items other_item ON other_item.id = other.id
+		    WHERE other.bucket = att.bucket AND other.name = att.name
+		      AND other_item.message_group_id <> ALL($1))
+		ORDER BY mi.message_group_id, mi.order_index`, s), groupIDs)
 }
 
 // collectConversationAttachments reports every stored attachment any message in
 // one conversation carries. Scoped by conversation_id through the group join:
 // the tenant schema holds every conversation in the project, so an unscoped
-// read would hand the handler other conversations' files to destroy.
+// read would hand the handler other conversations' files to destroy. An
+// object that another conversation's attachment row still names (a fork
+// that shares it, see collectGroupAttachments) is kept.
 func collectConversationAttachments(ctx context.Context, q attachmentQuerier, s string, conversationID int64) ([]conversations.AttachmentRef, error) {
 	return scanAttachmentRefs(ctx, q, fmt.Sprintf(`
 		SELECT att.bucket, att.name
-		FROM %s.chat_message_items mi
-		JOIN %s.chat_message_group g ON g.id = mi.message_group_id
-		JOIN %s.chat_messages_attachment att ON att.id = mi.id
+		FROM %[1]s.chat_message_items mi
+		JOIN %[1]s.chat_message_group g ON g.id = mi.message_group_id
+		JOIN %[1]s.chat_messages_attachment att ON att.id = mi.id
 		WHERE g.conversation_id = $1 AND mi.item_type = 'attachment_message'
-		ORDER BY mi.message_group_id, mi.order_index`, s, s, s), conversationID)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM %[1]s.chat_messages_attachment other
+		    JOIN %[1]s.chat_message_items other_item ON other_item.id = other.id
+		    JOIN %[1]s.chat_message_group other_group ON other_group.id = other_item.message_group_id
+		    WHERE other.bucket = att.bucket AND other.name = att.name
+		      AND other_group.conversation_id <> $1)
+		ORDER BY mi.message_group_id, mi.order_index`, s), conversationID)
 }
 
 func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationID string) ([]conversations.AttachmentRef, error) {
@@ -2647,10 +2664,12 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 	q := fmt.Sprintf(`
 		SELECT mg.id, COALESCE(mg.uuid::text, ''), mg.author_participant_id,
 			mg.sent_to_id, mg.reply_to_id, mg.meta, mg.is_streaming,
-			mg.created_at, mg.updated_at, mg.task_id
-		FROM %s.chat_message_group mg
+			mg.created_at, mg.updated_at, mg.task_id,
+			COALESCE(author.entity_name = 'user', FALSE)
+		FROM %[1]s.chat_message_group mg
+		LEFT JOIN %[1]s.chat_participants author ON author.id = mg.author_participant_id
 		WHERE mg.conversation_id = $1
-		ORDER BY mg.created_at %s
+		ORDER BY mg.created_at %[2]s
 		LIMIT $2`, s, order)
 
 	rows, err := r.pool.Query(ctx, q, id, limit)
@@ -2671,8 +2690,9 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 		var createdAt time.Time
 		var updatedAt *time.Time
 		var taskID *string
+		var byUser bool
 
-		if err := rows.Scan(&id, &uuid, &authorParticipantID, &sentToID, &replyToID, &meta, &isStreaming, &createdAt, &updatedAt, &taskID); err != nil {
+		if err := rows.Scan(&id, &uuid, &authorParticipantID, &sentToID, &replyToID, &meta, &isStreaming, &createdAt, &updatedAt, &taskID, &byUser); err != nil {
 			continue
 		}
 
@@ -2692,6 +2712,14 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 			"is_streaming":          isStreaming,
 			"created_at":            createdAt.Format("2006-01-02 15:04:05.999999"),
 			"message_items":         []map[string]any{},
+			// From the author's participant row, as the message list's role
+			// is: a member's question copied by a fork is authored by a
+			// participant the fork does not map, and a reader that infers
+			// the role from the participant list would show it as an answer.
+			"role": "assistant",
+		}
+		if byUser {
+			group["role"] = "user"
 		}
 		if sentToID != nil {
 			group["sent_to_id"] = *sentToID

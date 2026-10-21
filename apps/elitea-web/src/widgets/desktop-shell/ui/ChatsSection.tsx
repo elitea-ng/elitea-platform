@@ -33,6 +33,7 @@ import { useNavigate } from '@tanstack/react-router';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import Box from '@mui/material/Box';
 
+import { useForkConversation } from '@/features/chat-conversation-list';
 import { t } from '@/shared/i18n';
 
 import { ARCHIVED_PATH, ChatRailProvider, openConversationId, PINNED_GROUP, useChatRail, type ChatRail } from '../model/chatRail';
@@ -72,8 +73,9 @@ function useErrorNotice(rail: ChatRail): void {
   }, [error, dismissError]);
 }
 
-function useRowActions(rail: ChatRail, openId: string, rights: { readonly canArchive: boolean; readonly canMoveToFolder: boolean }): ConversationRowActions {
+function useRowActions(rail: ChatRail, openId: string, projectId: string | undefined, rights: { readonly canArchive: boolean; readonly canMoveToFolder: boolean }): ConversationRowActions {
   const navigate = useNavigate();
+  const fork = useForkConversation({ projectId, toastError: (message) => useDesktopLayout.getState().setNotice(message) });
   return {
     open: (conversation) => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id } }),
     pin: rail.pin,
@@ -83,6 +85,11 @@ function useRowActions(rail: ChatRail, openId: string, rights: { readonly canArc
     canMoveToFolder: rights.canMoveToFolder,
     // The open conversation stays open when it is archived (an archive changes the lists, not the chat).
     archive: rail.archive,
+    // The fork opens at once, as a new chat does.
+    fork: (conversation) =>
+      void fork(conversation.id).then((made) => {
+        if (made !== undefined) void navigate({ to: '/chat/$conversationId', params: { conversationId: made.id } });
+      }),
     remove: (conversation) =>
       void rail.remove(conversation).then((removed) => {
         if (removed && conversation.id === openId) void navigate({ to: '/chat' });
@@ -106,10 +113,10 @@ export interface ChatsSectionProps {
   readonly canMoveToFolder?: boolean;
 }
 
-function ChatsList({ rail, pathname, creatingFolder = false, onCreatingFolderDone, canArchive = false, canMoveToFolder = false }: ChatsSectionProps & { readonly rail: ChatRail }): React.JSX.Element {
+function ChatsList({ rail, projectId, pathname, creatingFolder = false, onCreatingFolderDone, canArchive = false, canMoveToFolder = false }: ChatsSectionProps & { readonly rail: ChatRail }): React.JSX.Element {
   useErrorNotice(rail);
   const openId = openConversationId(pathname);
-  const actions = useRowActions(rail, openId, { canArchive, canMoveToFolder });
+  const actions = useRowActions(rail, openId, projectId, { canArchive, canMoveToFolder });
   const navigate = useNavigate();
   const drag = useSidebarChatDrag(rail);
   const open = useChatDisclosures(rail, openId);

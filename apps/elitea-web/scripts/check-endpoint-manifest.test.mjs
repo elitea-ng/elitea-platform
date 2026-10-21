@@ -750,7 +750,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // unarchiveConversation, the per-user conversation archive the chat lists
 // of the web, desktop and mobile apps share. Their manifest entries land
 // with the screens that call them (see MANIFEST_ENTRY_COUNT).
-const GENERATED_OPERATION_COUNT = 337;
+// 337 -> 338 (client contract 1.11): forkConversation, "Fork from here" in
+// the chat and Local work views of the web, desktop and mobile apps. Its
+// manifest entries land with the screens that call it.
+const GENERATED_OPERATION_COUNT = 338;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -955,8 +958,12 @@ const GENERATED_OPERATION_COUNT = 337;
  * 279 -> 281 (project-level chat archive): conversation.archive and
  * conversation.unarchive, the chat lists' Archive and the Archived chats
  * page's Unarchive (pages/chat-archived). Generated.
+ *
+ * 281 -> 282 (client contract 1.11): conversation.fork, "Fork" on a chat
+ * list row and "Fork from here" on a message, in the web and desktop chat
+ * and in the desktop's Local work view. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 281;
+const MANIFEST_ENTRY_COUNT = 282;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

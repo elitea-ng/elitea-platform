@@ -41,6 +41,7 @@
  */
 import * as zod from "zod";
 import { ConversationArchivedBy } from "./conversationArchivedBy.zod";
+import { ConversationForkedFrom } from "./conversationForkedFrom.zod";
 
 export const ConversationSummary = zod
   .object({
@@ -74,6 +75,25 @@ export const ConversationSummary = zod
       .optional()
       .describe(
         "Client contract 1.10. When the conversation was archived, in UTC. Present only when `is_archived` is true.\n",
+      ),
+    uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.11. The conversation's UUID, the id the chat send and the attachment routes take.\n",
+      ),
+    source: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.11. The conversation's origin (`elitea` for a chat, `local_work` for a Local work thread).\n",
+      ),
+    forked_from: ConversationForkedFrom.optional(),
+    forked_messages: zod
+      .record(zod.string(), zod.uuid())
+      .optional()
+      .describe(
+        "Client contract 1.11, forkConversation's answer only. Maps the UUID of each message group the fork copied to the UUID of its copy in the new conversation; empty when nothing was copied. A client that recorded message ids of the source (the desktop's turn history) rewrites them with it. No other read carries it.\n",
       ),
     meta: zod
       .record(zod.string(), zod.unknown())

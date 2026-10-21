@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.10"
+  x-elitea-client-contract: "1.11"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2180,6 +2180,30 @@ components:
           description: >
             Client contract 1.10. When the conversation was archived, in UTC.
             Present only when `is_archived` is true.
+        uuid:
+          type: string
+          format: uuid
+          description: >
+            Client contract 1.11. The conversation's UUID, the id the chat
+            send and the attachment routes take.
+        source:
+          type: string
+          description: >
+            Client contract 1.11. The conversation's origin (`elitea` for a
+            chat, `local_work` for a Local work thread).
+        forked_from:
+          $ref: '#/components/schemas/ConversationForkedFrom'
+        forked_messages:
+          type: object
+          additionalProperties:
+            type: string
+            format: uuid
+          description: >
+            Client contract 1.11, forkConversation's answer only. Maps the
+            UUID of each message group the fork copied to the UUID of its copy
+            in the new conversation; empty when nothing was copied. A client
+            that recorded message ids of the source (the desktop's turn
+            history) rewrites them with it. No other read carries it.
         meta:
           type: object
           additionalProperties: true
@@ -2213,6 +2237,59 @@ components:
           description: The user id.
         name:
           type: string
+
+    ConversationForkedFrom:
+      type: object
+      description: >
+        Client contract 1.11. The conversation this conversation was forked
+        from (forkConversation), and the fork point. Absent when the
+        conversation is not a fork. The source can be deleted, or become
+        invisible to the reader, later; then the ids stay and `name` is
+        absent.
+      required: [conversation_id]
+      properties:
+        conversation_id:
+          type: integer
+          description: The source conversation's numeric id.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: The source conversation's UUID.
+        message_id:
+          type: integer
+          description: >
+            The numeric id of the fork point message group. Absent when the
+            whole conversation was forked.
+        message_uuid:
+          type: string
+          format: uuid
+          description: The UUID of the fork point message group, when there is one.
+        name:
+          type: string
+          description: >
+            getConversation only. The source conversation's current name.
+            Present only when the source still exists and the reader can see
+            it; a client shows the "Forked from" link only then.
+
+    ForkConversationRequest:
+      type: object
+      description: >
+        Client contract 1.11. The body of forkConversation. An absent body
+        forks the whole conversation with the default name.
+      properties:
+        message_id:
+          type: string
+          description: >
+            The fork point: the numeric id or the UUID of a message group of
+            the source conversation, a user message or an assistant message.
+            Absent: the whole conversation.
+        name:
+          type: string
+          description: >
+            The new conversation's name. Absent: the source name with
+            " (fork)" added ("New conversation (fork)" when the source name is
+            blank). Trimmed; blank, longer than 256 characters or with a
+            control character answers 400.
 
     ConversationListing:
       type: object
@@ -2980,6 +3057,8 @@ components:
         is_private:
           type: boolean
           description: Always present; a row that cannot say reads as private.
+        forked_from:
+          $ref: "#/components/schemas/ConversationForkedFrom"
         meta:
           type: object
           additionalProperties: true
@@ -2999,7 +3078,9 @@ components:
           description: >
             Present only when `messages_limit` > 0. The legacy message-group projection (items and their details).
             Prefer the message list (listConversationMessages) for a transcript: it is the read that supports
-            `changes_since`.
+            `changes_since`. Each group carries `role` (`user` or `assistant`, from its author's participant row,
+            as the message list's `role` is): a fork copies another member's questions without making that member
+            a participant of the fork, so the participant list alone cannot tell such a question from an answer.
           items:
             type: object
             additionalProperties: true
@@ -17040,6 +17121,103 @@ paths:
           $ref: "#/components/responses/403"
         "404":
           $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The source conversation's numeric id or its UUID; both resolve.
+    post:
+      operationId: forkConversation
+      summary: Fork a conversation into a new conversation
+      description: |
+        Client contract 1.11. Creates a NEW conversation from the history of
+        the source conversation. With `message_id`, the new conversation holds
+        the messages up to and including that message (the fork point), and
+        every later message that belongs to one of them: the replies to a
+        copied message (its answer, a regenerated or swarm answer) and the
+        swarm children of a copied answer. Without it, it holds the whole
+        history.
+
+        The copy is one transaction. It copies the message groups, their items
+        (text, context, attachments, canvases with their versions) and their
+        trace steps, with new ids, in the same order and with the same
+        `created_at`; the answer's `forked_messages` maps each copied message
+        group's UUID to its copy's. It copies the participants with their
+        per-conversation settings, except the other members: the fork is the
+        caller's, so another member's questions are copied (still theirs, with
+        `role` `user`) but that member is not a participant of the fork and
+        cannot read it. It copies the instructions, `source` and the
+        conversation settings in `meta`. Attachment files are copied to the new conversation, so a
+        delete of either conversation leaves the other one readable. It does
+        NOT copy the pin, the archive, likes and dislikes, a selection, the
+        folder of another member, or a pending tool approval.
+
+        The new conversation belongs to the caller, in the same project, with
+        the privacy a new conversation of the caller gets. Its name is `name`,
+        or the source name with " (fork)" added. Its `meta.forked_from` and
+        the row's `forked_from` name the source conversation and the fork
+        point. A Local work thread (`source: local_work`) gives a Local work
+        thread with the same folder settings; the desktop copies its local
+        turn history itself.
+
+        Needs `models.chat.conversations.create` and
+        `models.chat.conversation.details`, and access to the source
+        conversation (the chat authority's detail rule). A source the caller
+        cannot see answers 404. A `message_id` that is not a message of the
+        source answers 404. A fork point that is still streaming or waits for
+        a tool approval answers 409 `fork_point_unsettled`, as does a later
+        reply of the copy that is; without
+        `message_id`, the newest message is the fork point. An editor Test
+        conversation answers 409 `fork_not_supported`.
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForkConversationRequest"
+      responses:
+        "201":
+          description: >
+            The new conversation, in the row shape of listConversations.
+            `uuid`, `source`, `forked_from` and `forked_messages` are always
+            present on this response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSummary"
+        "400":
+          description: >
+            A body that is not a JSON object, an invalid `name` (blank, longer
+            than 256 characters or with a control character), a `message_id`
+            that is not a string, or a native client version that does not
+            parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          $ref: "#/components/responses/409"
         "426":
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":

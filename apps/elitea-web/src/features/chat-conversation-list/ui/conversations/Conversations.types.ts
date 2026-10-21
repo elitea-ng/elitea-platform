@@ -65,6 +65,8 @@ export interface ConversationsProps {
   readonly onArchiveConversation?: ((conversation: Conversation) => void) | undefined;
   /** Opens the archived conversations page: the header's Archived button. Absent hides it. */
   readonly onOpenArchived?: (() => void) | undefined;
+  /** Forks a conversation's whole history into a new one (client contract 1.11): the row menu's Fork. Absent hides it. */
+  readonly onForkConversation?: ((conversation: Conversation) => void) | undefined;
   readonly onCreateConversation: (conversation: Conversation) => Promise<unknown>;
   readonly onCancelCreateConversation: () => void;
   readonly onChangeActiveConversationName: (name: string) => void;

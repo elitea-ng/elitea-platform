@@ -21,6 +21,7 @@ const PUBLIC_SURFACE = [
   'useDeleteFolder',
   'useDragAndDrop',
   'useEditFolder',
+  'useForkConversation',
   'useMoveToFolderConversation',
   'usePinConversation',
   'useQueryFoldersList',

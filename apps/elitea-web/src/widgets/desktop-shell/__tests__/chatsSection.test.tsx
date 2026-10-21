@@ -4,8 +4,8 @@
  * groups closed with a count, each remembered; the group that holds the open
  * conversation opens for it), the open conversation highlighted (also after
  * the list is read again), Local work threads left out, Archive asks first
- * and takes the row away (and keeps it away when the list mounts again), and
- * the trailing "Archived" row opens the archived chats page.
+ * and takes the row away (and keeps it away when the list mounts again), Fork
+ * opens the new chat, and the trailing "Archived" row opens the archived chats page.
  */
 import { useState } from 'react';
 
@@ -74,6 +74,7 @@ function mount(path = '/chat/72', canArchive = true) {
 }
 
 let archived: string[];
+let forked: { readonly id: string; readonly body: unknown }[];
 
 beforeEach(() => {
   resetConfigForTests();
@@ -82,6 +83,7 @@ beforeEach(() => {
   clearNamespace();
   archived = [];
   listingReads = 0;
+  forked = [];
   server.use(
     http.get('*/auth/permissions/prompt_lib/:projectId', () => HttpResponse.json([{ name: 'models.chat.folders.get', enabled: true }])),
     http.get('*/social/author', () => HttpResponse.json({ id: 3, name: 'Me' })),
@@ -98,6 +100,10 @@ beforeEach(() => {
       return HttpResponse.json({ ok: true });
     }),
     http.get('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({ rows: [], total: 0 })),
+    http.post('*/elitea_core/conversation_fork/prompt_lib/:projectId/:conversationId', async ({ params, request }) => {
+      forked.push({ id: String(params['conversationId']), body: await request.json().catch(() => null) });
+      return HttpResponse.json({ id: 90, uuid: '00000000-0000-4000-8000-000000000090', name: 'Helm values (fork)', source: 'elitea', created_at: at, updated_at: at, duration: -1, message_groups_count: 2, is_pinned: false, is_archived: false, forked_from: { conversation_id: 77 } }, { status: 201 });
+    }),
   );
 });
 
@@ -222,6 +228,19 @@ describe('ChatsSection', () => {
     await user.click(screen.getByRole('button', { name: 'toggle list' }));
     await screen.findByText('quick overview');
     expect(screen.queryByText('Postgres connection math')).not.toBeInTheDocument();
+  });
+
+  it('forks the whole chat from the ⋯ menu and opens the new chat', async () => {
+    const user = userEvent.setup();
+    const router = mount();
+    await screen.findByText('quick overview');
+    await user.click(caption('Previous 7 days'));
+    await screen.findByText('Helm values');
+    const target = screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('Helm'));
+    await user.click(within(target as HTMLElement).getByTestId('shell-conversation-more'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Fork' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/90'));
+    expect(forked).toEqual([{ id: '77', body: {} }]);
   });
 
   it('opens the archived chats page from the trailing Archived row, and marks it there', async () => {

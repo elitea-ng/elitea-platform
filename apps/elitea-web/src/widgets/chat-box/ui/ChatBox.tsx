@@ -86,7 +86,7 @@ const ChatBoxInner = memo(function ChatBox({
   onDelete,
   extensions,
 }: ChatBoxProps) {
-  const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator, readOnlyNotice, noRegenerate } = extensions ?? {};
+  const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator, readOnlyNotice, noRegenerate, onForkFromMessage } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
   const { activeConversation, isLoadingConversation, onConversationCreated, onTurn } = unwrapChatBoxConversation(conversation);
@@ -311,6 +311,7 @@ const ChatBoxInner = memo(function ChatBox({
             onDeleteAnswer: handleDeleteAnswer,
             onRegenerateAnswer: handleRegenerate,
             onSubmitEditedMessage: handleSubmitEditedMessage,
+            onForkFromMessage,
           }, noRegenerate)}
           continuation={{ ...buildChatBoxContinuationProps({ onHitlResume: handleHitlResume, onContinueMcpExecution: handleContinueMcpExecution, onContinueTokenLimitExecution: handleContinueTokenLimit }, projectIdString), staticPause }}
           tts={buildTtsProps(readAloud, state.isSpeakingMode)} canvas={buildCanvasProps(editorCallbacks)}

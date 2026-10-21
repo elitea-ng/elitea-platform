@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.10",
+  "client_contract": "1.11",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -4337,6 +4337,31 @@
                   "type": "string",
                   "nullable": true
                 },
+                "forked_from": {
+                  "type": "object",
+                  "required": [
+                    "conversation_id"
+                  ],
+                  "properties": {
+                    "conversation_id": {
+                      "type": "integer"
+                    },
+                    "conversation_uuid": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "message_id": {
+                      "type": "integer"
+                    },
+                    "message_uuid": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                },
                 "id": {
                   "type": "string"
                 },
@@ -4939,6 +4964,35 @@
                       "duration": {
                         "type": "integer"
                       },
+                      "forked_from": {
+                        "type": "object",
+                        "required": [
+                          "conversation_id"
+                        ],
+                        "properties": {
+                          "conversation_id": {
+                            "type": "integer"
+                          },
+                          "conversation_uuid": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "message_id": {
+                            "type": "integer"
+                          },
+                          "message_uuid": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "forked_messages": {
+                        "type": "object",
+                        "open": true
+                      },
                       "id": {
                         "type": "integer"
                       },
@@ -4959,8 +5013,15 @@
                       "name": {
                         "type": "string"
                       },
+                      "source": {
+                        "type": "string"
+                      },
                       "updated_at": {
                         "type": "string"
+                      },
+                      "uuid": {
+                        "type": "string",
+                        "format": "uuid"
                       },
                       "workspace_executor": {
                         "type": "string"
@@ -12224,6 +12285,288 @@
           "headers": {
             "retry-after": {
               "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}": {
+      "operation_id": "forkConversation",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "content": {
+          "application/json": {
+            "type": "object",
+            "properties": {
+              "message_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "created_at",
+                "duration",
+                "id",
+                "is_archived",
+                "is_pinned",
+                "message_groups_count",
+                "name",
+                "updated_at"
+              ],
+              "properties": {
+                "archived_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "archived_by": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "duration": {
+                  "type": "integer"
+                },
+                "forked_from": {
+                  "type": "object",
+                  "required": [
+                    "conversation_id"
+                  ],
+                  "properties": {
+                    "conversation_id": {
+                      "type": "integer"
+                    },
+                    "conversation_uuid": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "message_id": {
+                      "type": "integer"
+                    },
+                    "message_uuid": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "forked_messages": {
+                  "type": "object",
+                  "open": true
+                },
+                "id": {
+                  "type": "integer"
+                },
+                "is_archived": {
+                  "type": "boolean"
+                },
+                "is_pinned": {
+                  "type": "boolean"
+                },
+                "message_groups_count": {
+                  "type": "integer"
+                },
+                "meta": {
+                  "type": "object",
+                  "nullable": true,
+                  "open": true
+                },
+                "name": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "uuid": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "workspace_executor": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
             }
           }
         }

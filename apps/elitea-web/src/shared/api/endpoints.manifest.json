@@ -3314,6 +3314,16 @@
       "responseSchema": "OkResponse",
       "fixture": null,
       "usedBy": ["features/chat-conversation-list", "pages/chat-archived"]
+    },
+    {
+      "id": "conversation.fork",
+      "method": "POST",
+      "path": "/elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}",
+      "operationId": "forkConversation",
+      "source": "generated",
+      "responseSchema": "ConversationSummary",
+      "fixture": null,
+      "usedBy": ["features/chat-conversation-list", "processes/chat", "pages/chat", "widgets/desktop-shell", "pages/workspace"]
     }
   ]
 }

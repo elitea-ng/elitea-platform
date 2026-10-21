@@ -101,6 +101,7 @@ export { useDateGroupExpansion } from './lib/hooks/useDateGroupExpansion.hooks';
 export { useDeleteFolder } from './lib/hooks/useDeleteFolder.hooks';
 export { useDragAndDrop } from './lib/hooks/useDragAndDrop';
 export { useEditFolder } from './lib/hooks/useEditFolder';
+export { useForkConversation } from './lib/hooks/useForkConversation.hooks';
 export { useMoveToFolderConversation } from './lib/hooks/useMoveToFolderConversation.hooks';
 export { usePinConversation } from './lib/hooks/usePinConversation.hooks';
 export { useQueryFoldersList } from './lib/hooks/useQueryFoldersList.hooks';

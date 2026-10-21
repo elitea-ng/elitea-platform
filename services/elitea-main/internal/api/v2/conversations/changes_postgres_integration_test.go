@@ -183,11 +183,13 @@ func TestConversationDeltaLegacyResponseIsUnchanged(t *testing.T) {
 	}
 	var rows []map[string]json.RawMessage
 	_ = json.Unmarshal(keys["rows"], &rows)
-	// Ten keys: the seven of the legacy row, `is_pinned` (client contract
-	// 1.4), `workspace_executor` (client contract 1.8) and `is_archived`
-	// (client contract 1.10), all additive.
-	if len(rows) != 1 || len(rows[0]) != 10 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
-		string(rows[0]["workspace_executor"]) != `"local"` || string(rows[0]["is_archived"]) != "false" {
+	// Twelve keys: the seven of the legacy row, `is_pinned` (client contract
+	// 1.4), `workspace_executor` (client contract 1.8), `is_archived`
+	// (client contract 1.10), and `uuid` and `source` (client contract 1.11),
+	// all additive. `forked_from` is present only on a fork.
+	if len(rows) != 1 || len(rows[0]) != 12 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
+		string(rows[0]["workspace_executor"]) != `"local"` || string(rows[0]["is_archived"]) != "false" ||
+		string(rows[0]["source"]) != `"elitea"` || len(rows[0]["uuid"]) != 38 || rows[0]["forked_from"] != nil {
 		t.Fatalf("legacy row shape changed: %s", body)
 	}
 }

@@ -16,6 +16,8 @@ import Tooltip from '@mui/material/Tooltip';
 
 import { t } from '@/shared/i18n';
 
+import { ForkMessageButton } from './ForkMessageButton';
+
 /** @public Props for `ApplicationAnswerActions`. */
 export interface ApplicationAnswerActionsProps {
   readonly hasContent: boolean;
@@ -27,6 +29,8 @@ export interface ApplicationAnswerActionsProps {
   readonly onCopy?: (() => void) | undefined;
   readonly onRegenerate?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
+  /** "Fork from here" (client contract 1.11); omitted, no button renders. */
+  readonly onFork?: (() => void) | undefined;
   /**
    * Carves the WHOLE answer out into a `document` canvas (issue #879) — the
    * same underlying create route the selection-drag affordance calls, with
@@ -47,6 +51,7 @@ export function ApplicationAnswerActions({
   onCopy,
   onRegenerate,
   onDelete,
+  onFork,
   onOpenAsDocument,
 }: ApplicationAnswerActionsProps): ReactNode {
   return (
@@ -116,6 +121,7 @@ export function ApplicationAnswerActions({
           </span>
         </Tooltip>
       )}
+      {onFork && <ForkMessageButton onFork={onFork} disabled={isProcessing} />}
       {onDelete && (
         <Tooltip title="Delete" placement="top">
           <IconButton
