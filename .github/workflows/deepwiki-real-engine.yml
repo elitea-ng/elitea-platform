@@ -89,7 +89,7 @@ concurrency:
   # One at a time. Two of these on the same ref would each want the fixed
   # oidc-mock port 9400, and both would want the whole runner's disk.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
