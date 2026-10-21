@@ -1234,9 +1234,10 @@ fn git_in(dir: &std::path::Path, args: &[&str]) {
 }
 
 /// The first `/llm` request's system prompt: the agent's instructions, the
-/// host's environment section (folder name, branch, changed files,
-/// enforcement, network; no absolute path), then the untrusted parts
-/// (the picked skill, AGENTS.md, both nonce-framed), then the memory.
+/// host's environment section (enforcement, network; no absolute path),
+/// then the untrusted parts (the picked skill, AGENTS.md, both
+/// nonce-framed), then the environment's volatile part (date, folder name,
+/// branch, changed files) and the memory.
 #[tokio::test]
 async fn system_prompt_order_env_before_untrusted() {
     let server = serve(platform(agent_details(), &[])).await;
@@ -1265,18 +1266,24 @@ async fn system_prompt_order_env_before_untrusted() {
         at("## Environment\n"),
         at("name=\"Style\">\nWrite tersely."),
         at("Run task test."),
+        at("## Environment (this turn)\n"),
         at("Memory: the user likes tea."),
     ];
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
     let environment = &system[order[1]..];
     let environment = &environment[..environment.find("\n\n## ").unwrap()];
+    // The volatile lines (date, git) come last, after AGENTS.md (#1314).
+    let current = &system[order[4]..order[5]];
     let folder = h.workspaces.get(&h.workspace_id).unwrap().unwrap().name;
     assert!(
-        environment.contains(&format!(
+        current.contains(&format!(
             "- Workspace: {folder} (git: branch main, 2 changed files)"
         )),
-        "{environment}"
+        "{current}"
     );
+    assert!(current.contains("- Today: "), "{current}");
+    assert!(!current.contains("nonce="), "{current}");
+    assert!(!environment.contains("- Today: "), "{environment}");
     assert!(
         environment.contains("- Sandbox: workspace-write, "),
         "{environment}"
