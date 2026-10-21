@@ -1234,6 +1234,11 @@ files `0600`, never in the workspace, at most 64 MiB, emptied when the
 session reopens after a policy change and removed with the session), and
 the result names it as `output_id`; the model pages it with `read_output`
 (by id only, no path). A `tool_result`'s `summary` is unchanged.
+Inside a long turn, once a model request passes 60% of an assumed
+128k-token window, the tool results older than the newest 6 are sent to
+the model as short notes naming the tool, its arguments and any
+`output_id` (`elitea-agent-runtime` `context::ToolResultElision`); the
+session and the committed transcript keep them whole.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.

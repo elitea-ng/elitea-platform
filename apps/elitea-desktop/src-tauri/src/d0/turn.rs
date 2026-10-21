@@ -31,6 +31,7 @@ use adk_core::{
 };
 use adk_runner::Runner;
 use async_trait::async_trait;
+use elitea_agent_runtime::context::ToolResultElision;
 use elitea_agent_runtime::host::{
     EventSink, ExecutionGuard, HostError, LocalExecutionGuard, LocalStop, ModelRequest,
     ModelTransport, RunOutcome, ToolProvider, ToolsetRequest,
@@ -87,6 +88,10 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// At most this many tool calls of one model step run at once (adk's
 /// `Auto` overlaps only read-only, concurrency-safe calls).
 const MAX_CONCURRENT_TOOLS: usize = 8;
+/// The model window the desktop assumes for eliding older tool results
+/// (the catalogue's window is not known here): past 60% of it, a long
+/// turn's older tool results are sent as short notes (#1215).
+const ELISION_WINDOW_TOKENS: u64 = 128_000;
 
 /// Where the stored `native_client_policy` comes from.
 pub trait PolicySource: Send + Sync {
@@ -2254,6 +2259,9 @@ impl AgentHost {
             // adk takes it from the agent: RunConfig has no such field.
             .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
+        // A long turn's older tool results go to the model as notes once
+        // the request passes the threshold; the session keeps them whole.
+        builder = ToolResultElision::for_window(ELISION_WINDOW_TOKENS).bind_builder(builder);
         for toolset in toolsets {
             // The local tools and the index tools run here; only the
             // toolkits' tools are remote.
