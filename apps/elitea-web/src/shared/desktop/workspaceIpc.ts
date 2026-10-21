@@ -38,6 +38,27 @@ export interface TurnStartRequest {
   compact?: boolean;
   /** Another chat model of the project for this turn and the thread's next ones (IPC.md "Model per turn"). */
   model?: TurnModelChoice | undefined;
+  /** A custom command the person picked with "/": the host reads and expands its file itself, and records the prompt as `/<name> <arguments>`. */
+  command?: TurnCommand | undefined;
+}
+
+/** `agent_turn_start.command`: the command's name as `commands_list` gave it, and what follows it in the message. */
+export interface TurnCommand {
+  name: string;
+  arguments: string;
+}
+
+/** One row of `commands_list`: a custom "/" command of the workspace (`.elitea/commands`, `.claude/commands`) or of the person's own folder. */
+export interface CustomCommand {
+  /** `name`, or `folder:name` for a file in a sub-folder. */
+  name: string;
+  description: string | null;
+  argument_hint: string | null;
+  source: 'workspace' | 'user';
+  /** Workspace-relative, or relative to the person's folder. */
+  path: string;
+  /** What the file asks for that the host ignores (`allowed-tools`, `model`, `! shell lines`, `@ file includes`). */
+  ignored: string[];
 }
 
 /** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
@@ -274,6 +295,8 @@ export interface WorkspaceIpc {
   bindProject(id: string, projectId: number): Promise<void>;
   /** The "@" picker: the workspace's files and folders matching `query`, best first. */
   files(workspaceId: string, query: string, limit?: number): Promise<WorkspaceFile[]>;
+  /** The "/" menu's custom commands of the workspace and of the person's own folder, by name. */
+  commands(workspaceId: string): Promise<CustomCommand[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
   /** Send a turn's failed commit again (after `commit_failed`); resolves once it is saved. */
   retryCommit(executionId: string): Promise<void>;
@@ -327,6 +350,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     bindProject: (id, projectId) => invoke<void>('workspace_bind_project', { id, project_id: projectId }),
     files: (workspaceId, query, limit) =>
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
+    commands: (workspaceId) => invoke<CustomCommand[]>('commands_list', { workspace_id: workspaceId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
     prewarm: (request) => invoke<TurnPrewarmed>('agent_prewarm', { ...request }),
     retryCommit: (executionId) => invoke<void>('turn_commit_retry', { execution_id: executionId }),

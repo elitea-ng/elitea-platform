@@ -29,6 +29,7 @@ import { HandoffBanner } from './HandoffControls';
 import { firstError, SessionNotices } from './sessionParts';
 import type { ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
+import { useCustomCommands } from './useCustomCommands';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import type { SessionCommands } from './useSessionCommands';
@@ -81,12 +82,14 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
+  // A custom command is the local host's: none for the cloud copy.
+  const customCommands = useCustomCommands(ipc, workspaceId, !cloudMode);
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
-    onSend: async (prompt, mentions, picked) => {
+    onSend: async (prompt, mentions, picked, command) => {
       model.dismissNotice();
-      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice);
+      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice, command);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
     },
@@ -99,7 +102,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   return (
     <>
       <HandoffBanner handoff={handoff} />
-      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} />
+      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={skills} />
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}
@@ -117,6 +120,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         }
         onPlanModeChange={commands.setPlanMode}
         skills={skills}
+        customCommands={customCommands}
         onCommand={session.run}
         onFocus={session.prewarm}
         {...(cloudMode ? cloudBinding(cloud) : local)}

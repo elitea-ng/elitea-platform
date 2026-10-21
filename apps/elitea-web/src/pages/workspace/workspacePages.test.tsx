@@ -1252,6 +1252,58 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[0]?.skills).toEqual(['style']);
     });
 
+    it('lists the custom commands by source after the host commands and sends the picked one as a command', async () => {
+      const ipc = createFakeWorkspaceIpc({
+        workspaces: [{ ...FOLDER, project_id: 42 }],
+        commands: [
+          { name: 'standup', description: 'My standup', argument_hint: null, source: 'user', path: 'standup.md', ignored: [] },
+          { name: 'review', description: 'Review the diff', argument_hint: '[files]', source: 'workspace', path: '.claude/commands/review.md', ignored: ['allowed-tools'] },
+        ],
+      });
+      const user = await ready(ipc, [
+        { id: '7', name: 'style', description: 'The house style' },
+        { id: '8', name: 'review', description: 'Hidden by the command' },
+      ]);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(9));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
+        '/new', '/plan', '/undo', '/agent', '/clear', '/help', '/review', '/standup', '/style',
+      ]);
+      expect(within(menu).getByText('Commands in this workspace')).toBeInTheDocument();
+      expect(within(menu).getByText('Your commands')).toBeInTheDocument();
+      expect(within(menu).getByText('Review the diff · [files] · ignored: allowed-tools')).toBeInTheDocument();
+
+      await user.type(input, 'rev');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/review '));
+      await user.type(input, 'src/a.rs{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/review src/a.rs');
+      expect(ipc.calls.started[0]?.command).toEqual({ name: 'review', arguments: 'src/a.rs' });
+      expect(ipc.calls.started[0]?.skills).toEqual([]);
+    });
+
+    it('lists the custom commands and skills in /help', async () => {
+      const ipc = createFakeWorkspaceIpc({
+        workspaces: [{ ...FOLDER, project_id: 42 }],
+        commands: [{ name: 'standup', description: 'My standup', argument_hint: null, source: 'user', path: 'standup.md', ignored: [] }],
+      });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, '/');
+      await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(screen.getByTestId('workspace-command-menu')).getAllByRole('option')).toHaveLength(8));
+      await user.type(input, 'help');
+      await user.keyboard('{Enter}');
+      const help = await screen.findByTestId('workspace-help');
+      expect(help).toHaveTextContent('/standup — My standup (yours)');
+      expect(help).toHaveTextContent('/style — The house style');
+      expect(help).toHaveTextContent('/new — Start a new conversation');
+    });
+
     it('sends no skill when the message does not start with one', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc, [{ id: '7', name: 'style' }]);

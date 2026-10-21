@@ -8,9 +8,11 @@
  *   picked paths still in the text go to the host as the turn's `mentions`.
  * - "/" as the first word lists the local commands (`/new`, `/plan`, …);
  *   picking one clears it from the input and hands it to the page. Below
- *   them, in their own section, the selected agent's skills: picking one
- *   inserts `/<skill name>`, and a message that still starts with it is
- *   sent with that skill (`skills`), which the host applies to the turn.
+ *   them, in sections of their own, the custom commands (the workspace's,
+ *   then the person's; `commands_list`) and the selected agent's skills:
+ *   picking one inserts `/<name> `, and a message that still starts with
+ *   it is sent as that command (`command`, which the host reads and
+ *   expands itself) or with that skill (`skills`, applied to the turn).
  *   `/model <name>` sent as the whole message sets the turn model instead
  *   (`onModelCommand`); `/model` alone opens the model chip's menu.
  *
@@ -32,12 +34,13 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { CustomCommand, TurnCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Segmented } from '@/widgets/desktop-shell';
 
 type ComposerHandle = ComponentRef<typeof NewChatInput>;
 type Token = ReturnType<typeof composer.activeToken>;
+type SlashEntry = ReturnType<typeof composer.slashMenu>[number];
 
 const FILE_LIMIT = 50;
 
@@ -73,8 +76,13 @@ export interface WorkspaceComposerProps {
   onPlanModeChange: (planMode: boolean) => void;
   /** The selected agent's skills, offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
-  /** Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes. */
-  onSend: (prompt: string, mentions: string[], skills: string[]) => Promise<boolean>;
+  /** The custom commands (`commands_list`), offered after the host commands; none for a cloud thread. */
+  customCommands: readonly CustomCommand[];
+  /**
+   * Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes;
+   * `command`: the custom command it runs, if any (then no skill).
+   */
+  onSend: (prompt: string, mentions: string[], skills: string[], command?: TurnCommand) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
   /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
@@ -105,6 +113,36 @@ function placeholderFor(readOnly: boolean): string {
   return readOnly
     ? t('workspace.composer.cloudPlaceholder', 'This thread is running in the cloud. Take it back to continue here.')
     : t('workspace.composer.placeholder', 'What should the agent do? Type @ to add a file, / for commands and skills');
+}
+
+/** One "/" menu row: host commands under the menu's title, then a section per source, then the skills. */
+function slashItem(entry: SlashEntry): SuggestionItem {
+  switch (entry.kind) {
+    case 'host':
+      return { key: entry.command.id, label: entry.command.name, description: entry.command.description };
+    case 'custom':
+      return {
+        key: `command:${entry.command.source}:${entry.command.name}`,
+        label: composer.customCommandToken(entry.command),
+        description: composer.customCommandDetail(entry.command),
+        section:
+          entry.command.source === 'workspace'
+            ? t('workspace.composer.workspaceCommands', 'Commands in this workspace')
+            : t('workspace.composer.userCommands', 'Your commands'),
+      };
+    case 'skill':
+      return {
+        key: `skill:${entry.skill.id}`,
+        label: composer.skillToken(entry.skill),
+        section: t('workspace.composer.skills', 'Skills'),
+        ...(entry.skill.description !== undefined ? { description: entry.skill.description } : {}),
+      };
+  }
+}
+
+/** What picking a custom command or a skill inserts. */
+function insertedToken(entry: Exclude<SlashEntry, { kind: 'host' }>): string {
+  return entry.kind === 'custom' ? composer.customCommandToken(entry.command) : composer.skillToken(entry.skill);
 }
 
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
@@ -144,7 +182,7 @@ function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, mod
 }
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
-  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, onSend, onStop, onCommand } = props;
+  const { ipc, workspaceId, canSend, busy, planMode, onPlanModeChange, skills, customCommands, onSend, onStop, onCommand } = props;
   // The thread runs in the cloud: the input is off, and `canSend` is false.
   const locked = props.readOnly === true;
   const inputRef = useRef<ComposerHandle>(null);
@@ -163,21 +201,9 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     placeholderData: (previous) => previous,
   });
 
-  const commands = useMemo(() => (open?.kind === 'command' ? composer.matchingCommands(open.query) : []), [open]);
-  const skillMatches = useMemo(() => (open?.kind === 'command' ? composer.matchingSkills(skills, open.query) : []), [open, skills]);
+  const slash = useMemo(() => (open?.kind === 'command' ? composer.slashMenu(open.query, customCommands, skills) : []), [open, customCommands, skills]);
   const items: SuggestionItem[] = useMemo(() => {
-    if (open?.kind === 'command') {
-      const section = t('workspace.composer.skills', 'Skills');
-      return [
-        ...commands.map((c) => ({ key: c.id, label: c.name, description: c.description })),
-        ...skillMatches.map((s) => ({
-          key: `skill:${s.id}`,
-          label: composer.skillToken(s),
-          section,
-          ...(s.description !== undefined ? { description: s.description } : {}),
-        })),
-      ];
-    }
+    if (open?.kind === 'command') return slash.map(slashItem);
     if (open?.kind === 'file') {
       return (files.data ?? []).map((f) => ({
         key: `${f.kind}:${f.path}`,
@@ -186,7 +212,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       }));
     }
     return [];
-  }, [open, commands, skillMatches, files.data]);
+  }, [open, slash, files.data]);
   const menuOpen = open !== null && items.length > 0;
   const highlighted = Math.min(activeIndex, Math.max(items.length - 1, 0));
 
@@ -201,12 +227,11 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     if (open === null) return;
     const handle = inputRef.current;
     if (open.kind === 'command') {
-      const command = commands[index];
-      if (command === undefined) {
-        // A skill: the message starts with it, and the caret goes on after it.
-        const skill = skillMatches[index - commands.length];
-        if (skill === undefined) return;
-        handle?.replaceRange(open.start, open.end, `${composer.skillToken(skill)} `);
+      const entry = slash[index];
+      if (entry === undefined) return;
+      if (entry.kind !== 'host') {
+        // A custom command or a skill: the message starts with it, and the caret goes on after it.
+        handle?.replaceRange(open.start, open.end, `${insertedToken(entry)} `);
         setToken(null);
         return;
       }
@@ -215,7 +240,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       const content = handle?.getInputContent() ?? '';
       handle?.setValue(content.slice(0, open.start) + content.slice(open.end));
       setToken(null);
-      onCommand(command.id);
+      onCommand(entry.command.id);
       return;
     }
     const file = files.data?.[index];
@@ -265,8 +290,11 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       return;
     }
     const mentions = composer.referencedPaths(question, picked);
-    const skill = composer.invokedSkill(question, skills);
-    void onSend(question, mentions, skill === null ? [] : [skill.name]).then((sent) => {
+    // A custom command first: it hides a skill of its name in the menu too.
+    const command = composer.invokedCustomCommand(question, customCommands);
+    const skill = command === null ? composer.invokedSkill(question, skills) : null;
+    const sending = command === null ? onSend(question, mentions, skill === null ? [] : [skill.name]) : onSend(question, mentions, [], command);
+    void sending.then((sent) => {
       if (sent) clearInput();
     });
   };
