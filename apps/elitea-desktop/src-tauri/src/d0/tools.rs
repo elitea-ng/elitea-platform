@@ -92,7 +92,7 @@ fn args_summary(args: &Value) -> String {
 /// The paths a local file tool is about to change.
 fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)>) {
     match tool {
-        "write_file" | "edit_file" => (
+        "write_file" | "edit_file" | "multi_edit" => (
             args.get("path")
                 .and_then(Value::as_str)
                 .map(|p| vec![p.to_owned()])
@@ -286,6 +286,8 @@ mod tests {
         assert_eq!(renames, vec![("u.txt".to_owned(), "v.txt".to_owned())]);
         let (paths, _) = changed_paths("write_file", &json!({"path": "a.rs", "content": ""}));
         assert_eq!(paths, ["a.rs"]);
+        let (paths, _) = changed_paths("multi_edit", &json!({"path": "m.rs", "edits": []}));
+        assert_eq!(paths, ["m.rs"]);
         assert!(
             changed_paths("read_file", &json!({"path": "a.rs"}))
                 .0

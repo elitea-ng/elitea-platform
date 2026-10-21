@@ -163,7 +163,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "edit_file",
         read_only: false,
-        description: "Replace an exact string in a file you have read. old_string must occur exactly once unless replace_all is true.",
+        description: "Replace a string in a file you have read. old_string must occur exactly once unless replace_all is true; when it is not there exactly, a match ignoring line endings, trailing whitespace and a uniform indentation shift is used and reported. The result shows the changed lines.",
         parameters: || {
             json!({
                 "type": "object",
@@ -174,6 +174,34 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                     "replace_all": { "type": "boolean" }
                 },
                 "required": ["path", "old_string", "new_string"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "multi_edit",
+        read_only: false,
+        description: "Apply several replacements to one file you have read, in one atomic write. Every old_string is matched against the original file (not after earlier edits), must be unique unless replace_all, and must not overlap another; if one fails, nothing is changed. Matching and the result are as for edit_file.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": path_param("Path relative to the workspace root."),
+                    "edits": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": { "type": "string" },
+                                "new_string": { "type": "string" },
+                                "replace_all": { "type": "boolean" }
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
+                },
+                "required": ["path", "edits"]
             })
         },
     },
@@ -542,7 +570,7 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 14);
+        assert_eq!(names(true).len(), 15);
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

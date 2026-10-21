@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::apply_patch::{self, Hunk, Pass};
 use crate::budget::{self, SpillStore};
+use crate::edit::{self, EditMatch, EditSpec, Span, Unplaced, locate, snippet, splice};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
 use crate::patch;
@@ -187,42 +188,173 @@ pub(crate) struct EditArgs {
     pub replace_all: bool,
 }
 
-/// `edit_file`, after approval: exact string replacement.
+#[derive(Deserialize)]
+pub(crate) struct MultiEditArgs {
+    pub path: String,
+    pub edits: Vec<EditSpec>,
+}
+
+/// Each edit's spans (with its index), and how each edit matched.
+type Placed = (Vec<(usize, Span)>, Vec<EditMatch>);
+
+/// The written path, the replacement count, how each edit matched, and
+/// the snippet (with whether it was cut).
+type Edited = (WsPath, usize, Vec<EditMatch>, (String, bool));
+
+/// The edits' places in `text`, every one against the original, refused
+/// when one is missing, ambiguous or overlaps another. `label(i)` names
+/// edit `i` in a message.
+fn place_edits(
+    text: &str,
+    path: &WsPath,
+    edits: &[EditSpec],
+    label: &dyn Fn(usize) -> String,
+) -> ToolResult<Placed> {
+    let mut spans: Vec<(usize, Span)> = Vec::new();
+    let mut matches = Vec::new();
+    for (index, edit) in edits.iter().enumerate() {
+        if edit.old_string.is_empty() {
+            return Err(ToolError::invalid(format!(
+                "{}old_string is empty; use write_file to create a file",
+                label(index)
+            )));
+        }
+        if edit.old_string == edit.new_string {
+            return Err(ToolError::invalid(format!(
+                "{}old_string and new_string are the same",
+                label(index)
+            )));
+        }
+        let (found, how) = locate(text, edit).map_err(|unplaced| match unplaced {
+            Unplaced::Absent => ToolError::new(
+                ErrorCode::Conflict,
+                format!("{}old_string does not occur in `{path}`", label(index)),
+            ),
+            Unplaced::Ambiguous(count, how) => ToolError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "{}old_string occurs {count} times in `{path}`{}; add context to make it unique, or set replace_all",
+                    label(index),
+                    if how == EditMatch::Normalised {
+                        " (whitespace-normalised)"
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+        })?;
+        spans.extend(found.into_iter().map(|span| (index, span)));
+        matches.push(how);
+    }
+    spans.sort_by_key(|(_, span)| span.start);
+    for pair in spans.windows(2) {
+        let ((first, before), (second, after)) = (&pair[0], &pair[1]);
+        if after.start < before.end {
+            let (low, high) = if first < second {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                format!("edits[{low}] and edits[{high}] overlap in `{path}`; nothing was changed"),
+            ));
+        }
+    }
+    Ok((spans, matches))
+}
+
+/// Run `edits` on `path` as one atomic write after one freshness check;
+/// the written path, the replacement count, how each edit matched, and the
+/// snippet.
+fn run_edits(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    path: &str,
+    edits: &[EditSpec],
+    label: &dyn Fn(usize) -> String,
+) -> ToolResult<Edited> {
+    let path = workspace.resolve(path, Intent::Write)?;
+    let now = check_fresh(workspace, ledger, &path)?
+        .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("`{path}` does not exist")))?;
+    let text = text_of(&now)?;
+    let (spans, matches) = place_edits(text, &now.path, edits, label)?;
+    let spans: Vec<Span> = spans.into_iter().map(|(_, span)| span).collect();
+    let (updated, changed) = splice(text, &spans);
+    if updated.len() as u64 > MAX_FILE_BYTES {
+        return Err(ToolError::new(
+            ErrorCode::TooLarge,
+            "the result is too large",
+        ));
+    }
+    let written = write_and_record(workspace, ledger, &now.path, updated.as_bytes())?;
+    let mut budget = edit::MAX_SNIPPET_BYTES;
+    let shown = snippet(&updated, &changed, &mut budget);
+    Ok((written, spans.len(), matches, shown))
+}
+
+/// Put a snippet into a result: `snippet`, and `snippet_truncated` when
+/// the 4 KiB cap left lines out.
+fn with_snippet(mut result: Value, (shown, cut): (String, bool)) -> Value {
+    if let Value::Object(map) = &mut result {
+        map.insert("snippet".to_owned(), Value::String(shown));
+        if cut {
+            map.insert("snippet_truncated".to_owned(), Value::Bool(true));
+        }
+    }
+    result
+}
+
+/// `edit_file`, after approval: one replacement, exact or (reported)
+/// whitespace-normalised.
 pub(crate) fn edit(
     workspace: &Workspace,
     ledger: &ReadLedger,
     args: &EditArgs,
 ) -> ToolResult<Value> {
-    if args.old_string.is_empty() {
-        return Err(ToolError::invalid(
-            "old_string is empty; use write_file to create a file",
-        ));
+    let edits = [EditSpec {
+        old_string: args.old_string.clone(),
+        new_string: args.new_string.clone(),
+        replace_all: args.replace_all,
+    }];
+    let (written, count, matches, snippet) =
+        run_edits(workspace, ledger, &args.path, &edits, &|_| String::new())?;
+    Ok(with_snippet(
+        json!({
+            "path": written.display_string(),
+            "replacements": count,
+            "match": matches.first().map_or("exact", |how| how.as_str()),
+        }),
+        snippet,
+    ))
+}
+
+/// `multi_edit`, after approval: an ordered list of replacements, each
+/// matched against the original, applied together or not at all.
+pub(crate) fn multi_edit(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    args: &MultiEditArgs,
+) -> ToolResult<Value> {
+    if args.edits.is_empty() || args.edits.len() > edit::MAX_EDITS {
+        return Err(ToolError::invalid(format!(
+            "edits takes 1 to {} replacements",
+            edit::MAX_EDITS
+        )));
     }
-    if args.old_string == args.new_string {
-        return Err(ToolError::invalid("old_string and new_string are the same"));
-    }
-    let path = workspace.resolve(&args.path, Intent::Write)?;
-    let now = check_fresh(workspace, ledger, &path)?
-        .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("`{path}` does not exist")))?;
-    let text = text_of(&now)?;
-    let count = text.matches(args.old_string.as_str()).count();
-    if count == 0 {
-        return Err(ToolError::new(
-            ErrorCode::Conflict,
-            format!("old_string does not occur in `{path}`"),
-        ));
-    }
-    if count > 1 && !args.replace_all {
-        return Err(ToolError::new(
-            ErrorCode::Conflict,
-            format!(
-                "old_string occurs {count} times in `{path}`; add context to make it unique, or set replace_all"
-            ),
-        ));
-    }
-    let updated = text.replace(args.old_string.as_str(), &args.new_string);
-    let written = write_and_record(workspace, ledger, &now.path, updated.as_bytes())?;
-    Ok(json!({ "path": written.display_string(), "replacements": count }))
+    let (written, count, matches, snippet) =
+        run_edits(workspace, ledger, &args.path, &args.edits, &|index| {
+            format!("edits[{index}]: ")
+        })?;
+    Ok(with_snippet(
+        json!({
+            "path": written.display_string(),
+            "edits": args.edits.len(),
+            "replacements": count,
+            "matches": matches.iter().map(|how| how.as_str()).collect::<Vec<_>>(),
+        }),
+        snippet,
+    ))
 }
 
 /// One file of a checked patch, ready to write.
@@ -236,9 +368,11 @@ pub(crate) struct PlannedChange {
     /// Permission bits to write with (a renamed file keeps its own, a
     /// created file may name them); `None`: keep the existing or default.
     pub mode: Option<u32>,
-    /// How each hunk was located (a Codex envelope's chunks); empty for a
-    /// create or delete.
+    /// How each hunk was located; empty for a create or delete.
     pub matches: Vec<Pass>,
+    /// The new text's changed lines (`[start, end)`, 0-based), for the
+    /// snippet; empty for a create or delete.
+    pub changed: Vec<(usize, usize)>,
 }
 
 /// Parse a patch, resolve its paths and compute every result, before
@@ -273,6 +407,7 @@ pub(crate) fn plan_patch(
                     content: Some(content),
                     mode: Some(original.mode),
                     matches: applied.matches,
+                    changed: applied.changed,
                 },
             )?;
             push(
@@ -283,6 +418,7 @@ pub(crate) fn plan_patch(
                     content: None,
                     mode: None,
                     matches: Vec::new(),
+                    changed: Vec::new(),
                 },
             )?;
             continue;
@@ -295,18 +431,24 @@ pub(crate) fn plan_patch(
                 "a section names two different paths; a rename needs git's `rename from` / `rename to` lines",
             ));
         }
-        let (typed, target, content, matches) = if file.is_create() {
+        let (typed, target, content, matches, changed) = if file.is_create() {
             let (typed, target) = absent(workspace, ledger, file.target())?;
-            (typed, target, patch::apply("", &file)?, Vec::new())
+            (
+                typed,
+                target,
+                patch::apply("", &file)?,
+                Vec::new(),
+                Vec::new(),
+            )
         } else {
             let (typed, target, read) = existing(workspace, ledger, file.target())?;
             let applied = patch::apply_reported(text_of(&read)?, &file)?;
-            let matches = if applied.content.is_some() {
-                applied.matches
+            let (matches, changed) = if applied.content.is_some() {
+                (applied.matches, applied.changed)
             } else {
-                Vec::new()
+                (Vec::new(), Vec::new())
             };
-            (typed, target, applied.content, matches)
+            (typed, target, applied.content, matches, changed)
         };
         push(
             &mut planned,
@@ -316,6 +458,7 @@ pub(crate) fn plan_patch(
                 content,
                 mode: file.created_mode(),
                 matches,
+                changed,
             },
         )?;
     }
@@ -372,6 +515,7 @@ fn plan_envelope(
                         content: Some(contents),
                         mode: None,
                         matches: Vec::new(),
+                        changed: Vec::new(),
                     },
                 )?;
             }
@@ -385,6 +529,7 @@ fn plan_envelope(
                         content: None,
                         mode: None,
                         matches: Vec::new(),
+                        changed: Vec::new(),
                     },
                 )?;
             }
@@ -408,6 +553,7 @@ fn plan_envelope(
                             content: Some(derived.content),
                             mode: None,
                             matches: derived.matches,
+                            changed: derived.changed,
                         },
                     )?,
                     Some(to) => {
@@ -421,6 +567,7 @@ fn plan_envelope(
                                 content: Some(derived.content),
                                 mode: Some(read.mode),
                                 matches: derived.matches,
+                                changed: derived.changed,
                             },
                         )?;
                         push(
@@ -431,6 +578,7 @@ fn plan_envelope(
                                 content: None,
                                 mode: None,
                                 matches: Vec::new(),
+                                changed: Vec::new(),
                             },
                         )?;
                     }
@@ -532,7 +680,7 @@ pub(crate) fn apply_patch(
         }
         changed.push(change.path.display_string());
     }
-    let mut result = json!({ "changed": changed });
+    let result = json!({ "changed": changed });
     // How each file's hunks matched: a fuzzy location is never silent.
     let files: Vec<Value> = planned
         .iter()
@@ -549,6 +697,30 @@ pub(crate) fn apply_patch(
         .flat_map(|change| &change.matches)
         .filter(|pass| **pass != Pass::Exact)
         .count();
+    // What the changed files now hold around each hunk, within one 4 KiB
+    // budget for the call.
+    let mut budget = edit::MAX_SNIPPET_BYTES;
+    let mut shown = String::new();
+    let mut cut = false;
+    for change in planned.iter().filter(|change| !change.changed.is_empty()) {
+        let Some(content) = &change.content else {
+            continue;
+        };
+        let header = format!("{}:\n", change.path.display_string());
+        if header.len() >= budget {
+            cut = true;
+            break;
+        }
+        budget -= header.len();
+        shown.push_str(&header);
+        let (text, file_cut) = snippet(content, &change.changed, &mut budget);
+        shown.push_str(&text);
+        if file_cut {
+            cut = true;
+            break;
+        }
+    }
+    let mut result = with_snippet(result, (shown, cut));
     if let Value::Object(map) = &mut result {
         if !files.is_empty() {
             map.insert("files".to_owned(), Value::Array(files));
@@ -1416,8 +1588,11 @@ pub(crate) fn document(
 mod tests {
     use serde_json::json;
 
-    use super::{EditArgs, WriteArgs, apply_patch, edit, plan_patch, tree, write};
+    use super::{
+        EditArgs, MultiEditArgs, WriteArgs, apply_patch, edit, multi_edit, plan_patch, tree, write,
+    };
     use crate::budget::SpillStore;
+    use crate::edit::EditSpec;
     use crate::error::ErrorCode;
     use crate::ledger::ReadLedger;
     use crate::workspace::Workspace;
@@ -1605,6 +1780,191 @@ mod tests {
                 .code(),
             ErrorCode::InvalidArgument
         );
+    }
+
+    fn numbered_lines(count: usize, line: impl Fn(usize) -> String) -> String {
+        (1..=count).fold(String::new(), |mut text, n| {
+            text.push_str(&line(n));
+            text.push('\n');
+            text
+        })
+    }
+
+    fn edits(path: &str, pairs: &[(&str, &str)]) -> MultiEditArgs {
+        MultiEditArgs {
+            path: path.to_owned(),
+            edits: pairs
+                .iter()
+                .map(|(old, new)| EditSpec {
+                    old_string: (*old).to_owned(),
+                    new_string: (*new).to_owned(),
+                    replace_all: false,
+                })
+                .collect(),
+        }
+    }
+
+    /// Every `old_string` is matched against the original (an edit's output
+    /// is not the next one's input), and the file is written once.
+    #[test]
+    fn multi_edit_applies_against_original() {
+        use std::os::unix::fs::MetadataExt;
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.rs", "fn a() {}\nfn b() {}\nfn c() {}\n");
+        read(&ws, &ledger, json!({ "path": "a.rs" })).expect("read");
+        let before = std::fs::metadata(dir.path().join("a.rs")).expect("meta");
+        let args = edits(
+            "a.rs",
+            &[
+                ("fn c() {}", "fn c() { 3 }"),
+                ("fn a() {}", "fn b() {}"),
+                ("fn b() {}", "fn bb() {}"),
+            ],
+        );
+        let result = multi_edit(&ws, &ledger, &args).expect("multi_edit");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.rs")).expect("a"),
+            "fn b() {}\nfn bb() {}\nfn c() { 3 }\n",
+            "edits[2] replaced the original `fn b`, not the one edits[1] wrote"
+        );
+        assert_eq!(result["edits"], 3);
+        assert_eq!(result["replacements"], 3);
+        assert_eq!(result["matches"], json!(["exact", "exact", "exact"]));
+        assert_eq!(
+            result["snippet"],
+            "     1\tfn b() {}\n     2\tfn bb() {}\n     3\tfn c() { 3 }\n"
+        );
+        // One atomic write: a new inode (temp file + rename), once.
+        let after = std::fs::metadata(dir.path().join("a.rs")).expect("meta");
+        assert_ne!(before.ino(), after.ino());
+        // Its own write keeps the ledger current.
+        multi_edit(&ws, &ledger, &edits("a.rs", &[("bb", "b2")])).expect("again");
+        // A whitespace-normalised match is reported.
+        seed(&dir, "w.rs", "fn f() {   \r\n    x();\r\n}\r\n");
+        read(&ws, &ledger, json!({ "path": "w.rs" })).expect("read");
+        let result = multi_edit(
+            &ws,
+            &ledger,
+            &edits(
+                "w.rs",
+                &[("  fn f() {\n      x();\n  }", "  fn f() {\n      y();\n  }")],
+            ),
+        )
+        .expect("normalised");
+        assert_eq!(result["matches"], json!(["normalised"]));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("w.rs")).expect("w"),
+            "fn f() {\r\n    y();\r\n}\r\n"
+        );
+    }
+
+    #[test]
+    fn multi_edit_refuses_overlap() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "alpha beta gamma\nbeta\n");
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        let refused = |args: &MultiEditArgs| {
+            let error = multi_edit(&ws, &ledger, args).expect_err("refused");
+            (error.code(), error.message().to_owned())
+        };
+        let (code, message) = refused(&edits(
+            "a.txt",
+            &[("gamma", "G"), ("alpha beta", "AB"), ("beta gamma", "BG")],
+        ));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(
+            message.contains("edits[1] and edits[2] overlap"),
+            "{message}"
+        );
+        let (code, message) = refused(&edits("a.txt", &[("alpha", "A"), ("beta", "B")]));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(
+            message.contains("edits[1]: old_string occurs 2 times"),
+            "{message}"
+        );
+        let (code, message) = refused(&edits("a.txt", &[("alpha", "A"), ("zeta", "Z")]));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(
+            message.starts_with("edits[1]: old_string does not occur"),
+            "{message}"
+        );
+        let (code, message) = refused(&edits("a.txt", &[("alpha", "A"), ("", "Z")]));
+        assert_eq!(code, ErrorCode::InvalidArgument);
+        assert!(message.starts_with("edits[1]:"), "{message}");
+        assert_eq!(refused(&edits("a.txt", &[])).0, ErrorCode::InvalidArgument);
+        let too_many: Vec<(&str, &str)> = vec![("alpha", "A"); 51];
+        assert_eq!(
+            refused(&edits("a.txt", &too_many)).0,
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "alpha beta gamma\nbeta\n",
+            "nothing was written"
+        );
+        // replace_all lifts the uniqueness rule.
+        let mut all = edits("a.txt", &[("beta", "B")]);
+        all.edits[0].replace_all = true;
+        assert_eq!(
+            multi_edit(&ws, &ledger, &all).expect("all")["replacements"],
+            2
+        );
+    }
+
+    #[test]
+    fn multi_edit_stale_file_refused() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "one two\n");
+        let args = edits("a.txt", &[("one", "1"), ("two", "2")]);
+        assert_eq!(
+            multi_edit(&ws, &ledger, &args).expect_err("unread").code(),
+            ErrorCode::StaleRead
+        );
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        std::fs::write(dir.path().join("a.txt"), "one two three\n").expect("external");
+        assert_eq!(
+            multi_edit(&ws, &ledger, &args).expect_err("stale").code(),
+            ErrorCode::StaleRead
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "one two three\n"
+        );
+    }
+
+    /// `edit_file` and `apply_patch` results show the changed lines.
+    #[test]
+    fn edit_results_carry_a_snippet() {
+        let (dir, ws, ledger) = setup(&[]);
+        let text = numbered_lines(30, |n| format!("line {n}"));
+        seed(&dir, "a.txt", &text);
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        let result =
+            edit(&ws, &ledger, &edit_args("a.txt", "line 15\n", "fifteen\n")).expect("edit");
+        assert_eq!(result["match"], "exact");
+        assert_eq!(
+            result["snippet"],
+            "    12\tline 12\n    13\tline 13\n    14\tline 14\n    15\tfifteen\n    16\tline 16\n    17\tline 17\n    18\tline 18\n"
+        );
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -2,1 +2,1 @@\n-line 2\n+two\n@@ -28,1 +28,1 @@\n-line 28\n+twenty-eight\n";
+        let planned = plan_patch(&ws, &ledger, diff).expect("plan");
+        let result = apply_patch(&ws, &ledger, &planned).expect("apply");
+        let snippet = result["snippet"].as_str().expect("snippet");
+        assert!(
+            snippet.starts_with("a.txt:\n     1\tline 1\n     2\ttwo\n"),
+            "{snippet}"
+        );
+        assert!(snippet.contains("...\n    25\tline 25\n"), "{snippet}");
+        assert!(snippet.contains("    28\ttwenty-eight\n"), "{snippet}");
+        // The snippet is capped at 4 KiB per call.
+        let long = numbered_lines(400, |n| format!("{n:0>60}"));
+        seed(&dir, "long.txt", &long);
+        read(&ws, &ledger, json!({ "path": "long.txt" })).expect("read");
+        let mut all = edit_args("long.txt", "0\n", "X\n");
+        all.replace_all = true;
+        let result = edit(&ws, &ledger, &all).expect("all");
+        assert!(result["snippet"].as_str().expect("snippet").len() <= 4096);
+        assert_eq!(result["snippet_truncated"], true);
     }
 
     #[test]

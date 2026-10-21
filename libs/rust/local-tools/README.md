@@ -12,7 +12,7 @@ destructive.**
 | Call | Default |
 |---|---|
 | `read_file`, `list_tree`, `search_files`, `find_files`, `read_output`, `read_document`, git reads | allowed |
-| `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
+| `write_file`, `edit_file`, `multi_edit`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 | `run_command` that is destructive (below), asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; decided per command, from the sandbox chosen for it) | asked |
@@ -83,6 +83,24 @@ changed since is refused, whatever the format.
   the header's line numbers; only when its context matches exactly
   nowhere is the same fuzzy ladder tried (after the previous hunk), with
   the same uniqueness rule and the same report.
+
+* `multi_edit` takes `{path, edits: [{old_string, new_string,
+  replace_all?}]}` (1 to 50): every `old_string` is matched against the
+  original file, must be unique unless `replace_all`, and must not overlap
+  another; a failure names the edit (`edits[2]: …`, `edits[0] and
+  edits[3] overlap`) and nothing is written. One freshness check, one
+  atomic write. Same approval row as `edit_file` (`ToolKind::EditFile`).
+* `edit_file` and `multi_edit` match exactly first; when an `old_string`
+  is nowhere exactly, a whitespace-normalised match (CRLF read as LF,
+  trailing whitespace ignored, one uniform indentation shift, whole lines
+  only) is accepted only when unique (or with `replace_all`), re-indents
+  `new_string` by the same shift and is reported (`match` /
+  `matches[]`: `exact` or `normalised`). A replacement takes the line
+  ending of the text it replaces.
+* `edit_file`, `multi_edit` and `apply_patch` results carry `snippet`: the
+  new text 3 lines around each change, numbered like `read_file`, gaps
+  marked `...` (per file, `path:` first, for `apply_patch`), at most 4 KiB
+  per call (`snippet_truncated: true` when cut).
 
 The envelope parser and the ladder are adapted from OpenAI Codex
 (Apache-2.0); see `NOTICE`.

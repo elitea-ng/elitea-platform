@@ -20,6 +20,7 @@ pub mod checkpoint;
 pub mod classify;
 pub mod command;
 pub mod deny;
+pub mod edit;
 pub mod error;
 pub mod execpolicy;
 pub mod files;

@@ -416,7 +416,7 @@ type FileChange = {
 ```
 
 `turn_changes` covers files the turn's file tools (`write_file`,
-`edit_file`, `apply_patch`) changed, against what they held before the turn
+`edit_file`, `multi_edit`, `apply_patch`) changed, against what they held before the turn
 first changed them. A file only a shell command changed is not listed (D0),
 but `checkpoint_restore` undoes it with the rest of the turn.
 

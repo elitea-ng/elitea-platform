@@ -236,7 +236,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "edit_file",
         kind: ToolKind::EditFile,
-        description: "Replace an exact string in a file you have read. old_string must occur exactly once unless replace_all is true.",
+        description: "Replace a string in a file you have read. old_string must occur exactly once unless replace_all is true; when it is not there exactly, a match ignoring line endings, trailing whitespace and a uniform indentation shift is used and reported. The result shows the changed lines.",
         parameters: || {
             json!({
                 "type": "object",
@@ -247,6 +247,34 @@ pub const TOOLS: &[ToolSpec] = &[
                     "replace_all": { "type": "boolean" }
                 },
                 "required": ["path", "old_string", "new_string"]
+            })
+        },
+    },
+    ToolSpec {
+        name: "multi_edit",
+        kind: ToolKind::EditFile,
+        description: "Apply several replacements to one file you have read, in one atomic write. Every old_string is matched against the original file (not after earlier edits), must be unique unless replace_all, and must not overlap another; if one fails, nothing is changed. Matching and the result are as for edit_file.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": path_param("Path relative to the workspace root."),
+                    "edits": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 50,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": { "type": "string" },
+                                "new_string": { "type": "string" },
+                                "replace_all": { "type": "boolean" }
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
+                },
+                "required": ["path", "edits"]
             })
         },
     },
@@ -351,6 +379,28 @@ struct CommandArgs {
     sandbox: Option<SandboxMode>,
     #[serde(default)]
     network: bool,
+}
+
+/// An `edit_file` or a `multi_edit` call.
+enum EditCall {
+    One(files::EditArgs),
+    Many(files::MultiEditArgs),
+}
+
+impl EditCall {
+    fn path(&self) -> &str {
+        match self {
+            EditCall::One(args) => &args.path,
+            EditCall::Many(args) => &args.path,
+        }
+    }
+
+    fn set_path(&mut self, path: String) {
+        match self {
+            EditCall::One(args) => args.path = path,
+            EditCall::Many(args) => args.path = path,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -873,25 +923,7 @@ impl LocalSession {
                 })
                 .await
             }
-            ToolKind::EditFile => {
-                let mut args: files::EditArgs = parse(args)?;
-                let (typed, target) = self.write_target(&args.path)?;
-                self.blocking({
-                    let target = target.clone();
-                    move |this| {
-                        files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
-                    }
-                })
-                .await?;
-                self.authorize_change(call_id, ToolKind::EditFile, &typed, &target, "edit a file")
-                    .await?;
-                args.path = target.display_string();
-                self.blocking(move |this| {
-                    this.unchanged_target(&target)?;
-                    files::edit(&this.workspace, &this.ledger, &args)
-                })
-                .await
-            }
+            ToolKind::EditFile => self.edit_file(spec, call_id, args).await,
             ToolKind::ApplyPatch => {
                 let patch = args
                     .get("patch")
@@ -923,6 +955,37 @@ impl LocalSession {
             }
             ToolKind::RunCommand => self.run_command(call_id, args).await,
         }
+    }
+
+    /// `edit_file` and `multi_edit`: one path, the same approval row.
+    async fn edit_file(
+        self: &Arc<Self>,
+        spec: &ToolSpec,
+        call_id: &str,
+        args: Value,
+    ) -> ToolResult<Value> {
+        let mut edit = if spec.name == "multi_edit" {
+            EditCall::Many(parse(args)?)
+        } else {
+            EditCall::One(parse(args)?)
+        };
+        let (typed, target) = self.write_target(edit.path())?;
+        self.blocking({
+            let target = target.clone();
+            move |this| files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
+        })
+        .await?;
+        self.authorize_change(call_id, ToolKind::EditFile, &typed, &target, "edit a file")
+            .await?;
+        edit.set_path(target.display_string());
+        self.blocking(move |this| {
+            this.unchanged_target(&target)?;
+            match &edit {
+                EditCall::One(args) => files::edit(&this.workspace, &this.ledger, args),
+                EditCall::Many(args) => files::multi_edit(&this.workspace, &this.ledger, args),
+            }
+        })
+        .await
     }
 
     async fn read_only(
