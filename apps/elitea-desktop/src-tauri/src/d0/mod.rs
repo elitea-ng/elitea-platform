@@ -12,6 +12,8 @@
 //!   start/commit, remote toolkit call) over HTTPS with the native token;
 //! * [`cache`] — the session's in-memory caches of the agent versions and
 //!   the conversations' answering participants (a warm turn's one round trip);
+//! * [`catalogue`] — the project's chat models a turn's chosen model is
+//!   checked against, and the family flag of reasoning replay (#1228);
 //! * [`commits`] — a turn's commit after its `done`, one FIFO lane per
 //!   conversation, retried with backoff;
 //! * [`definition`] — what D0 runs, and the refusals for what it does not;
@@ -35,6 +37,7 @@
 pub mod api;
 pub mod approvals;
 pub mod cache;
+pub mod catalogue;
 pub mod commits;
 pub mod context;
 pub mod definition;

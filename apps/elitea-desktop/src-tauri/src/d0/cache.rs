@@ -19,6 +19,8 @@
 //!
 //! The model catalogue's context limits of each model (#1217) are kept the
 //! same way; a lookup that failed is not kept, so the next turn asks again.
+//! The catalogue of chat models a turn's chosen model is checked against
+//! (#1228) is kept for a minute per project (`super::catalogue`).
 //!
 //! The local turn's `start` itself is never cached: the memory recall it
 //! answers is computed fresh at every turn (ADR-0029 decision 8).
@@ -29,6 +31,7 @@ use std::sync::Mutex;
 use elitea_agent_runtime::request::ModelContextLimits;
 
 use super::api::{AnsweringParticipant, ResolvedVersion};
+use super::catalogue::Catalogues;
 
 /// An agent version as one session read it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -75,6 +78,8 @@ pub struct TurnCaches {
     versions: Mutex<HashMap<VersionKey, CachedVersion>>,
     participants: Mutex<HashMap<ParticipantKey, AnsweringParticipant>>,
     limits: Mutex<HashMap<LimitsKey, ModelContextLimits>>,
+    /// The projects' chat models (#1228), each kept for a minute.
+    pub catalogues: Catalogues,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -144,6 +149,7 @@ impl TurnCaches {
         locked(&self.versions).clear();
         locked(&self.participants).clear();
         locked(&self.limits).clear();
+        self.catalogues.clear();
     }
 }
 

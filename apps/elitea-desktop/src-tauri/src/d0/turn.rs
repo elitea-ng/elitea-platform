@@ -62,9 +62,10 @@ use super::api::{
 };
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
+use super::catalogue;
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
 use super::context::{self, ContextHost, TurnContext};
-use super::definition::{self, Admitted};
+use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents};
 use super::framing;
@@ -173,6 +174,10 @@ pub struct TurnRequest {
     /// `/compact`: compact the session's context at the turn's first model
     /// call, whatever its size (#1217).
     pub compact: bool,
+    /// The model the person chose for this turn (#1228); kept as the
+    /// thread's model for its next turns. `None`: the thread's kept choice,
+    /// else the agent's model.
+    pub model: Option<ModelChoice>,
 }
 
 /// `agent_turn_start`'s answer.
@@ -997,6 +1002,15 @@ impl AgentHost {
             .clone()
     }
 
+    /// Whether the workspace's settings let a turn run on another model
+    /// than the agent's (#1228; unreadable settings: the default, allowed).
+    fn model_override_allowed(&self, workspace_id: &str) -> bool {
+        self.deps
+            .workspaces
+            .agent_settings(workspace_id)
+            .map_or(true, |settings| settings.model_override_allowed())
+    }
+
     /// The step limit the workspace's settings set, if any (unreadable
     /// settings are logged and ignored: the turn runs on the default).
     fn workspace_step_limit(&self, workspace_id: &str) -> Option<u32> {
@@ -1340,6 +1354,10 @@ impl AgentHost {
         let admitted = definition::admit(resolved, &local_tool_names())
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
             .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
+        let admitted = match &request.model {
+            Some(choice) => self.chosen_model(&request.workspace_id, admitted, choice)?,
+            None => admitted,
+        };
         let invoked = skills::resolve(&request.skills, &admitted.version_details)?;
         InstructionPlan::admit(&execution_request(
             request,
@@ -1354,6 +1372,61 @@ impl AgentHost {
             )
         })?;
         Ok((admitted, invoked))
+    }
+
+    /// `admitted` on the model the person chose (#1228): refused when the
+    /// agent pins its model (`model_pinned`) or the workspace's settings
+    /// turn the choice off (`model_override_disabled`).
+    fn chosen_model(
+        &self,
+        workspace_id: &str,
+        admitted: Admitted,
+        choice: &ModelChoice,
+    ) -> Result<Admitted, TurnError> {
+        let chosen = admitted
+            .with_model_choice(choice)
+            .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
+        if chosen.model_chosen && !self.model_override_allowed(workspace_id) {
+            return Err(TurnError::new(
+                "model_override_disabled",
+                "This workspace's settings run every turn on the agent's own model.",
+            ));
+        }
+        Ok(chosen)
+    }
+
+    /// The thread's model for this turn, kept in its session (#1228): the
+    /// request's choice is kept when it changed; a request without one
+    /// runs on the kept choice, unless the agent now pins its model or the
+    /// workspace turned the choice off (then on the agent's, as admitted).
+    async fn thread_model(
+        &self,
+        request: &TurnRequest,
+        admitted: Admitted,
+        memory: &SessionPlan,
+    ) -> Admitted {
+        let kept = memory.model_choice().await;
+        match &request.model {
+            Some(choice) => {
+                let keep = admitted.model_chosen.then_some(choice);
+                if kept.as_ref() != keep {
+                    memory.keep_model_choice(keep).await;
+                }
+                admitted
+            }
+            None => match kept {
+                Some(kept) => self
+                    .chosen_model(&request.workspace_id, admitted.clone(), &kept)
+                    .unwrap_or_else(|error| {
+                        log::info!(
+                            "the thread's model choice does not apply to this turn: {}",
+                            error.code
+                        );
+                        admitted
+                    }),
+                None => admitted,
+            },
+        }
     }
 
     /// The conversation's agent session for this turn (see [`SessionPlan`]).
@@ -1429,6 +1502,7 @@ impl AgentHost {
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,
+            model: None,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1556,7 +1630,7 @@ impl AgentHost {
         // together (neither depends on the other), with whose session this
         // is (cached after the session's first turn).
         let reading = std::time::Instant::now();
-        let (fetched, looked_up, owner) = tokio::join!(
+        let (fetched, looked_up, owner, models) = tokio::join!(
             async {
                 if warm.is_some() {
                     return None;
@@ -1581,6 +1655,16 @@ impl AgentHost {
                 Some(answer)
             },
             async { self.owner(&api).await.ok() },
+            // A chosen model is checked against the project's chat models
+            // (#1228), read beside the rest (kept for a minute).
+            async {
+                match &request.model {
+                    Some(_) => {
+                        catalogue::read(&api, &self.caches.catalogues, request.project_id).await
+                    }
+                    None => None,
+                }
+            },
         );
         // The version's refusals come before the conversation's.
         let (resolved_withheld, (admitted, invoked), revalidate) = match (warm, fetched) {
@@ -1610,6 +1694,22 @@ impl AgentHost {
                 ));
             }
         };
+        // A chosen model the project's catalogue does not list is refused
+        // before anything starts; one it could not answer for is left to the
+        // gateway, which governs every request.
+        if admitted.model_chosen
+            && models
+                .as_ref()
+                .is_some_and(|models| models.find(&admitted.model.model_name).is_none())
+        {
+            return Err(TurnError::new(
+                "model_unavailable",
+                format!(
+                    "The model {} is not one of this project's chat models.",
+                    admitted.model.model_name
+                ),
+            ));
+        }
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
@@ -1767,6 +1867,7 @@ impl AgentHost {
         };
         events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
+        let admitted = self.thread_model(request, admitted, &memory).await;
         Ok(Prepared {
             conversation,
             conversation_uuid: answering.conversation_uuid,
@@ -1837,7 +1938,7 @@ impl AgentHost {
         // the thread unless its model or meta.edit_format changes.
         session.set_edit_profile(admitted.edit_profile);
         session.begin_turn(&checkpoint_label(&request.prompt));
-        events.running(&project.paths());
+        events.running(&project.paths(), &turn_model(&admitted));
 
         let sink = Arc::new(TurnSink::with_events(events.clone()));
         let turn_context = TurnContext::default();
@@ -1950,7 +2051,8 @@ impl AgentHost {
         }
         events.tools_done();
         let sandbox_mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
-        let mut assistant = json!({ "content": answer });
+        // The model the turn ran on, as the cloud's turns carry it.
+        let mut assistant = json!({ "content": answer, "model_name": admitted.model.model_name });
         if let Some(error) = &failure {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
@@ -2195,7 +2297,7 @@ impl AgentHost {
         let budget = match RequestContextBudget::resolve(
             Some(limits),
             &Map::new(),
-            admitted.model.max_tokens,
+            model_request.max_tokens,
         ) {
             Ok(Some(budget)) => budget,
             Ok(None) | Err(_) => {
@@ -2270,7 +2372,14 @@ impl AgentHost {
             .map(|tool| tool.name.to_owned())
             .collect();
         // The model's context limits (the frozen ones, else the catalogue's,
-        // kept for the app's session) are read beside them.
+        // kept for the app's session) are read beside them. The frozen ones
+        // are the agent's model's: a chosen model's come from the catalogue.
+        let unfrozen = Map::new();
+        let frozen_from = if admitted.model_chosen {
+            &unfrozen
+        } else {
+            &admitted.version_details
+        };
         let (index, mut facts, limits) = tokio::join!(
             async {
                 match &self.deps.index {
@@ -2291,7 +2400,7 @@ impl AgentHost {
                 &self.caches,
                 request.project_id,
                 &admitted.model.model_name,
-                &admitted.version_details,
+                frozen_from,
             ),
         );
         // The runtime's planner, offered to every workspace turn (a coding
@@ -2326,11 +2435,19 @@ impl AgentHost {
         // elision below counts it as the provider request carries it.
         let instruction_tokens =
             elitea_agent_runtime::context_budget::estimate_tokens(instruction.len());
+        // The agent's `max_tokens`, at most what a chosen model can answer.
+        let max_tokens = admitted.model.max_tokens.map(|tokens| {
+            if admitted.model_chosen && !limits.max_output_fallback {
+                tokens.min(limits.max_output_tokens)
+            } else {
+                tokens
+            }
+        });
         let model_request = ModelRequest {
             model_project_id: check_project_id(request.project_id)?,
             model_name: admitted.model.model_name.clone(),
             system_instruction: instruction,
-            max_tokens: admitted.model.max_tokens,
+            max_tokens,
             temperature: admitted.model.temperature,
             reasoning_effort: admitted.model.reasoning_effort,
             response_schema: None,
@@ -3447,6 +3564,19 @@ async fn run_once(
         }
     }
     Ok(RunEnd::Answered)
+}
+
+/// The model a turn runs on, as its `status` `running` event names it.
+fn turn_model(admitted: &Admitted) -> Value {
+    let mut model = json!({
+        "name": admitted.model.model_name,
+        "chosen": admitted.model_chosen,
+        "pinned": admitted.model.pinned,
+    });
+    if let Some(effort) = admitted.model.reasoning_effort {
+        model["reasoning_effort"] = json!(definition::effort_name(effort));
+    }
+    model
 }
 
 fn model_failure(text: &str) -> TurnError {

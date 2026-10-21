@@ -22,6 +22,7 @@ use crate::d0::mentions::Located;
 use crate::auth::{AuthService, RefreshResult};
 use crate::d0::api::{ApiError, Bearer, Credentials};
 use crate::d0::approvals::UiDecision;
+use crate::d0::definition::ModelChoice;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
 use crate::d0::turn::{
@@ -521,6 +522,15 @@ pub fn workspace_bind_project(
     Ok(state.agents.bind_project(&id, project_id)?)
 }
 
+/// `agent_turn_start`'s `model` (#1228): the model the person chose for
+/// the turn, and its reasoning effort (`none`, `low`, `medium`, `high`).
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct TurnModel {
+    pub name: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list
 #[tauri::command(rename_all = "snake_case")]
 pub async fn agent_turn_start(
@@ -535,6 +545,7 @@ pub async fn agent_turn_start(
     mentions: Option<Vec<String>>,
     skills: Option<Vec<String>>,
     compact: Option<bool>,
+    model: Option<TurnModel>,
 ) -> Result<TurnStarted, IpcError> {
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
@@ -559,6 +570,12 @@ pub async fn agent_turn_start(
             mentions: mentions.unwrap_or_default(),
             skills: skills.unwrap_or_default(),
             compact: compact.unwrap_or(false),
+            model: model
+                .map(|model| {
+                    ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
+                        .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
+                })
+                .transpose()?,
         })
         .await?)
 }
