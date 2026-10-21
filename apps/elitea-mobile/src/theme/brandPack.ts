@@ -1,3 +1,4 @@
+import { DEFAULT_PACK_ACCENTS } from '@elitea/client-core/brand';
 import { z } from 'zod';
 
 import { anonymousFetch, readJson, type AnonymousFetchOptions } from '@/api/anonymous';
@@ -254,12 +255,13 @@ export function cleanAccentSource(value: Partial<Record<keyof BrandAccentSource,
 /**
  * The Elitea product default pack's accent inputs (elitea-main
  * `internal/api/v2/branding/product_default.pack.json`): its `brand.hue` and the
- * `primary.main` it states per scheme.
+ * `primary.main` it states per scheme. Generated from that pack into
+ * `@elitea/client-core/brand`, so it cannot drift from it.
  */
 export const PRODUCT_DEFAULT_ACCENTS = {
-  hue: '#6ae8fa',
-  light: 'rgba(196, 40, 221, 1)',
-  dark: '#6ae8fa',
+  hue: DEFAULT_PACK_ACCENTS.hue,
+  light: DEFAULT_PACK_ACCENTS.light.accent,
+  dark: DEFAULT_PACK_ACCENTS.dark.accent,
 } as const;
 
 function sameColor(a: string | null | undefined, b: string): boolean {

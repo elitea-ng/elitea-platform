@@ -1,8 +1,8 @@
 # Elitea AI assets
 
-The app's fixed identity is the Elitea logo mark, the same artwork as the web app
-(`apps/elitea-web/public/brand/logo-mark.svg`) and the desktop app
-(`apps/elitea-desktop/src-tauri/icons/`). Rules for using it are in `docs/design-system.md` §5.
+The app's fixed identity is the Elitea logo mark, the same artwork as the web app and the
+desktop app (`apps/elitea-desktop/src-tauri/icons/`); its canonical source is
+`libs/ts/client-core/src/brand/logo-mark.svg`. Rules for using it are in `docs/design-system.md` §5.
 
 A workspace's own branding (its brand pack: accent, logo, fonts) is applied at runtime by
 `src/theme/` and never changes these files: icons are fixed binaries (an OS rule), and the mark
@@ -11,9 +11,12 @@ is never recoloured with the workspace brand.
 ## In the app
 
 The mark is drawn as vector art by `<EliteaMark variant size />` (`src/components/EliteaMark.tsx`)
-from the SVG in `src/components/eliteaMarkSvg.ts`. `EliteaMark.test.tsx` fails if that copy
-drifts from the web app's `logo-mark.svg`. Variants: `mark` (the mark alone) and `avatar` (the
-mark in a circle on the theme surface, the primary agent's fallback avatar).
+from `ELITEA_MARK_SVG` in `@elitea/client-core/brand`. Its one canonical source is
+`libs/ts/client-core/src/brand/logo-mark.svg`; `libs/ts/client-core/scripts/gen-brand.mjs`
+derives the string the app imports and the web app's copies from it, and
+`node libs/ts/client-core/scripts/gen-brand.mjs --check` fails in CI when any copy drifts.
+Variants: `mark` (the mark alone) and `avatar` (the mark in a circle on the theme surface, the
+primary agent's fallback avatar).
 
 ## App icon (wired in `app.config.ts`)
 
@@ -40,7 +43,7 @@ over to the first screen without a flash.
 
 ## Regenerate
 
-The rasters are made from `apps/elitea-web/public/brand/logo-mark.svg`:
+The rasters are made from `libs/ts/client-core/src/brand/logo-mark.svg`:
 
 1. Render the SVG with transparency at 2048 px wide, e.g.
    `inkscape logo-mark.svg --export-type=png --export-width=2048 --export-filename=mark.png`.

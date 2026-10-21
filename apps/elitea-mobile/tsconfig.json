@@ -8,6 +8,9 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@elitea/client-core/*": [
+        "../../libs/ts/client-core/src/*/index.ts"
       ]
     },
     "types": [

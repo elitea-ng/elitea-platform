@@ -1,6 +1,6 @@
 import { CLIENT_VERSION_HEADER } from '@/api/clientVersion';
 import { ApiError } from '@/api/errors';
-import type { SseEvent } from '@/api/sse/parser';
+import type { SseEvent } from '@elitea/client-core/stream';
 import { ResumableStream, backoffDelay, type ResumableStreamOptions, type StreamStatusInfo } from '@/api/sse/stream';
 import { abortAll, inFlightCount } from '@/lib/abortRegistry';
 import { __resetSessionForTests, getSession, setCredential, setSession } from '@/state/session';

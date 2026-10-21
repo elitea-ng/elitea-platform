@@ -10,14 +10,16 @@ name: CI — Mobile app
 # Path-filtered to the app and the server spec it generates its client from
 # (services/elitea-main/api/openapi/v2.yaml): a spec edit to an operation the
 # app uses must regenerate apps/elitea-mobile/src/api/generated/elitea.gen.ts in
-# the same change. The mark test reads apps/elitea-web/public/brand/logo-mark.svg.
+# the same change. The app compiles the shared client package from source
+# (libs/ts/client-core: brand defaults, stream parsing), so a change there runs
+# this job too; the package's own tests run in ci-web.yml's static gates.
 
 on:
   pull_request:
     paths:
       - "apps/elitea-mobile/**"
       - "services/elitea-main/api/openapi/v2.yaml"
-      - "apps/elitea-web/public/brand/logo-mark.svg"
+      - "libs/ts/client-core/**"
       - ".github/workflows/ci-mobile.yml"
       - ".github/actions/npm-cache/**"
   push:
@@ -26,7 +28,7 @@ on:
     paths:
       - "apps/elitea-mobile/**"
       - "services/elitea-main/api/openapi/v2.yaml"
-      - "apps/elitea-web/public/brand/logo-mark.svg"
+      - "libs/ts/client-core/**"
       # This workflow's own file, in both arms (#518).
       - ".github/workflows/ci-mobile.yml"
       - ".github/actions/npm-cache/**"
@@ -84,6 +86,13 @@ jobs:
 
       - name: Test (script tests + jest)
         run: npm test -- --ci
+
+      # Metro, not jest, resolves @elitea/client-core in the shipped app (tsconfig
+      # paths + watchFolders, metro.config.js). Bundle once, so a resolution break fails here.
+      - name: Bundle (Metro resolves the shared package)
+        run: npx expo export --platform ios --output-dir "$RUNNER_TEMP/expo-export"
+        env:
+          CI: "1"
 
       - name: Release config has no developer sign-in switch
         run: npm run check:release-config

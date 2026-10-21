@@ -7,7 +7,7 @@ import { parseFrame } from '@/features/chat/frames';
 import { loadFixtureBytes } from '@/features/chat/__fixtures__/loadFixture';
 import { TurnController } from '@/features/chat/turnController';
 import { INITIAL_TURN, reduceTurn } from '@/features/chat/turnReducer';
-import { EventStreamParser } from '@/api/sse/parser';
+import { EventStreamParser } from '@elitea/client-core/stream';
 import { abortAll } from '@/lib/abortRegistry';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';

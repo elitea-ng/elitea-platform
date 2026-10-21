@@ -1,0 +1,20 @@
+{
+  "name": "@elitea/client-core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure TypeScript shared by the Elitea web, desktop and mobile clients: brand defaults and chat stream parsing.",
+  "type": "module",
+  "exports": {
+    "./brand": "./src/brand/index.ts",
+    "./stream": "./src/stream/index.ts"
+  },
+  "scripts": {
+    "test": "node --import ./test/register.mjs --test \"src/**/*.test.ts\"",
+    "typecheck": "../../../apps/elitea-web/node_modules/.bin/tsc -p tsconfig.json",
+    "gen": "node scripts/gen-brand.mjs",
+    "check:generated": "node scripts/gen-brand.mjs --check"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

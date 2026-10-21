@@ -4,22 +4,16 @@ import { staticPauseFromFrame } from './chatStreamStaticPause';
  *
  * The stream transport reads it to know when it stops owning a run. The file
  * is separate because §3.5 caps a file at 400 lines with no warning tier.
+ *
+ * The failure frames (`TURN_FAILURE_TYPES`) are the shared classification of
+ * `@elitea/client-core/stream`. The reducer settles the message on each of
+ * them. The worker sends no more node events after a failure.
  */
+import { TURN_FAILURE_TYPES } from '@elitea/client-core/stream';
+
 import { isTerminalPauseFrame } from './chatStreamInterruptFrames';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
 import { isFullMessageResultFrame, isRootAnswerFrame } from './chatStreamFinalResult';
-
-/**
- * The frames on which the run FAILED.
- *
- * The reducer settles the message on each of them. The worker sends no more
- * node events after a failure.
- */
-const TURN_FAILURE_TYPES: ReadonlySet<string> = new Set<string>([
-  SocketMessageType.Error,
-  SocketMessageType.LlmError,
-  SocketMessageType.AgentException,
-]);
 
 /**
  * Is this the last frame of the turn?

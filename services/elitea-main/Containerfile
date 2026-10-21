@@ -12,13 +12,16 @@
 # target below builds from this one stage.
 FROM node:26-trixie-slim AS admin-builder
 
-WORKDIR /build
+# The repository layout is kept (the app at apps/elitea-web), because the app
+# compiles the shared client package from source at ../../libs/ts/client-core.
+WORKDIR /build/apps/elitea-web
 
 # npm ci + package-lock.json: apps/elitea-web has no packageManager field and
 # ships a package-lock.json, so npm is the package manager, not pnpm/yarn.
 COPY apps/elitea-web/package.json apps/elitea-web/package-lock.json ./
 RUN npm ci
 
+COPY libs/ts/client-core/ /build/libs/ts/client-core/
 COPY apps/elitea-web/index.html apps/elitea-web/tsconfig.json apps/elitea-web/vite.config.ts ./
 COPY apps/elitea-web/src/ ./src/
 
@@ -157,8 +160,8 @@ ENV ADMIN_UI_STATIC_DIR=/nonexistent
 # artefact that ships" true by construction rather than by convention (#122).
 FROM runtime AS e2e
 
-COPY --from=admin-builder /build/dist/admin /data/admin_ui/static/dist
-COPY --from=admin-builder /build/dist/brand-preview/ /data/admin_ui/static/brand-preview/
+COPY --from=admin-builder /build/apps/elitea-web/dist/admin /data/admin_ui/static/dist
+COPY --from=admin-builder /build/apps/elitea-web/dist/brand-preview/ /data/admin_ui/static/brand-preview/
 
 # ── Stage 6: standalone final image (default target) ──────────────────────────
 # Last stage, so a `docker build` with no --target still produces the shipping

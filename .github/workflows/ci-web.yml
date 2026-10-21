@@ -42,6 +42,10 @@ on:
       - "tools/uictl/**"
       - "services/elitea-main/**"
       - "deploy/**"
+      # The shared client package the app compiles from source. The client
+      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
+      # so a table-only edit does not start this pipeline.
+      - "libs/ts/client-core/**"
       - ".github/workflows/ci-web.yml"
   push:
     branches:
@@ -51,6 +55,10 @@ on:
       - "tools/uictl/**"
       - "services/elitea-main/**"
       - "deploy/**"
+      # The shared client package the app compiles from source. The client
+      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
+      # so a table-only edit does not start this pipeline.
+      - "libs/ts/client-core/**"
       - ".github/workflows/ci-web.yml"
     # NO `tags: v*` — issue #309, Gate 2. publish.yml cuts release tags with
     # `secrets.GITHUB_TOKEN`, and GitHub does not start workflow runs for refs
@@ -505,7 +513,7 @@ jobs:
       - name: Generated artifacts — route export drift (parity/new-app-routes.json)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/export-routes.mjs --check
-      - name: Generated artifacts — brand token drift (default.pack.json + palette.augment.d.ts)
+      - name: Generated artifacts — brand token drift (default.pack.json + palette.augment.d.ts + client-core defaultPack.gen.ts)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Runs even when the step above failed, so one pull request reports
         # every stale artifact instead of one per push.
@@ -513,6 +521,24 @@ jobs:
       - name: Generated artifacts — hue preview drift (parity/brand-hue-preview.html)
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/gen-hue-preview.mjs --check
+
+      # ── Shared client package (libs/ts/client-core) ─────────────────────
+      # Pure TypeScript that the web, desktop and mobile clients compile from
+      # source. It has no dependencies: its typecheck borrows this job's
+      # installed TypeScript and @types/node, and its tests are node:test.
+      # The mobile app compiles and bundles it in ci-mobile.yml.
+      - name: Shared client package — typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: libs/ts/client-core
+        run: npm run typecheck
+      - name: Shared client package — tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: libs/ts/client-core
+        run: npm test
+      - name: Generated artifacts — brand artwork drift (logo-mark/favicon/logo-full + mark.gen.ts)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: libs/ts/client-core
+        run: npm run check:generated
 
       # ── Endpoint manifest ───────────────────────────────────────────────
       # Issue #426. Both the checker and the manifest it reads are in the tree,

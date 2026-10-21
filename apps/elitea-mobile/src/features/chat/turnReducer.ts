@@ -1,3 +1,5 @@
+import { ANSWER_DELTA_TYPES, FRAME_TYPE, TURN_FAILURE_TYPES } from '@elitea/client-core/stream';
+
 import type { Frame, NodeEvent } from '@/features/chat/frames';
 import { budgetRefusalText, budgetScopeOf, type BudgetScope } from '@/features/usage/budgetRefusal';
 import {
@@ -84,9 +86,7 @@ export const CANCELLED_CODE = 'CANCELLED';
 export const GENERIC_FAILURE = 'The agent could not finish this reply.';
 const MAX_ERROR_TEXT = 300;
 
-const DELTA_TYPES = new Set(['agent_llm_chunk', 'chunk', 'AIMessageChunk']);
-const FAILURE_TYPES = new Set(['error', 'llm_error', 'agent_exception']);
-const PROGRESS_TYPES = new Set(['agent_start', 'start_task', 'agent_llm_start', 'agent_llm_end']);
+const PROGRESS_TYPES: ReadonlySet<string> = new Set<string>([FRAME_TYPE.AgentStart, FRAME_TYPE.StartTask, FRAME_TYPE.AgentLlmStart, FRAME_TYPE.AgentLlmEnd]);
 
 function textOf(content: unknown): string {
   return typeof content === 'string' ? content : '';
@@ -100,10 +100,10 @@ function isFanoutChildPause(node: NodeEvent): boolean {
 }
 
 function isTerminalPause(node: NodeEvent): boolean {
-  if (node.type === 'mcp_authorization_required') {
+  if (node.type === FRAME_TYPE.McpAuthorizationRequired) {
     return Array.isArray(node.response_metadata?.authorization_requests);
   }
-  return node.type === 'agent_hitl_interrupt' && !isFanoutChildPause(node);
+  return node.type === FRAME_TYPE.AgentHitlInterrupt && !isFanoutChildPause(node);
 }
 
 /** Is this the last frame of the turn (the client must then close the stream)? */
@@ -111,9 +111,9 @@ export function isTurnTerminal(frame: Frame): boolean {
   if (frame.kind === 'failed') return true;
   if (frame.kind !== 'node') return false;
   const { node } = frame;
-  if (node.type === 'pipeline_finish') return true;
-  if (node.type === 'agent_response') return Boolean(node.response_metadata?.finish_reason);
-  if (FAILURE_TYPES.has(node.type)) return true;
+  if (node.type === FRAME_TYPE.PipelineFinish) return true;
+  if (node.type === FRAME_TYPE.AgentResponse) return Boolean(node.response_metadata?.finish_reason);
+  if (TURN_FAILURE_TYPES.has(node.type)) return true;
   return isTerminalPause(node);
 }
 
@@ -166,11 +166,11 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
   const { node } = frame;
   const streaming: TurnState = state.phase === 'sending' ? { ...state, phase: 'streaming' } : state;
 
-  if (DELTA_TYPES.has(node.type)) {
+  if (ANSWER_DELTA_TYPES.has(node.type)) {
     return appendDelta(streaming, textOf(node.content));
   }
   switch (node.type) {
-    case 'agent_response': {
+    case FRAME_TYPE.AgentResponse: {
       const text = textOf(node.content);
       if (node.response_metadata?.finish_reason) {
         return {
@@ -186,7 +186,7 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
       }
       return { ...appendDelta(streaming, text), paragraphPending: true };
     }
-    case 'pipeline_finish': {
+    case FRAME_TYPE.PipelineFinish: {
       const text = textOf(node.content);
       return {
         ...streaming,
@@ -195,7 +195,7 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
         content: streaming.content === '' && text !== '' ? text : streaming.content,
       };
     }
-    case 'agent_requires_confirmation':
+    case FRAME_TYPE.AgentRequiresConfirmation:
       // The answer stopped at the model's output limit; it still settles.
       return { ...streaming, pause: pauseOf(node) };
     default:
@@ -203,7 +203,7 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
   }
   if (isToolFrame(node.type)) {
     const tools = reduceToolFrame(streaming.tools, node);
-    if (node.type === 'agent_tool_start') {
+    if (node.type === FRAME_TYPE.AgentToolStart) {
       const started = tools.find((t) => t.status === 'running' && t.id === tools[tools.length - 1]?.id);
       const label = started?.displayName ?? started?.name;
       return { ...streaming, tools, status: label ? `Using ${label}…` : 'Using a tool…' };
@@ -211,7 +211,7 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
     const running = tools.some((t) => t.status === 'running');
     return { ...streaming, tools, status: running ? streaming.status : null };
   }
-  if (FAILURE_TYPES.has(node.type)) {
+  if (TURN_FAILURE_TYPES.has(node.type)) {
     return {
       ...streaming,
       phase: 'failed',
@@ -219,8 +219,8 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
       error: { message: failureText(node.content), retryable: true },
     };
   }
-  if (node.type === 'agent_hitl_interrupt' || node.type === 'mcp_authorization_required') {
-    const tools = node.type === 'mcp_authorization_required' ? reduceToolFrame(streaming.tools, node) : streaming.tools;
+  if (node.type === FRAME_TYPE.AgentHitlInterrupt || node.type === FRAME_TYPE.McpAuthorizationRequired) {
+    const tools = node.type === FRAME_TYPE.McpAuthorizationRequired ? reduceToolFrame(streaming.tools, node) : streaming.tools;
     const pause = pauseOf(node);
     const merged = pause === null ? streaming.pause : mergeFanout(streaming.pause, pause);
     if (isTerminalPause(node)) return { ...streaming, tools, pause: merged, phase: 'paused', status: null };

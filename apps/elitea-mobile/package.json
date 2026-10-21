@@ -88,6 +88,13 @@
   "private": true,
   "jest": {
     "preset": "jest-expo",
+    "moduleDirectories": [
+      "node_modules",
+      "<rootDir>/node_modules"
+    ],
+    "moduleNameMapper": {
+      "^@elitea/client-core/(.*)$": "<rootDir>/../../libs/ts/client-core/src/$1/index.ts"
+    },
     "testPathIgnorePatterns": [
       "/node_modules/",
       "/.expo/",

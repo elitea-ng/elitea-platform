@@ -1,10 +1,10 @@
 /**
  * A WHATWG `text/event-stream` parser as a pure, incremental function of
  * bytes (HTML Living Standard, "Server-sent events" § parsing an event
- * stream). Ported in logic from the mobile client's `api/sse/parser.ts`; it
- * exists because the desktop client reads the stream with `fetch` (a bearer
- * header cannot be set on `EventSource`) and must therefore do the parsing the
- * browser does for it.
+ * stream). One copy for each client that reads the stream with `fetch`: the
+ * desktop client (a bearer header cannot be set on `EventSource`) and the
+ * mobile client (React Native has no `EventSource`). The browser web client
+ * uses the platform `EventSource` and does not need it.
  *
  * - UTF-8 with a streaming decoder, so a multi-byte character split across
  *   chunks survives; a leading BOM is dropped.
@@ -16,8 +16,9 @@
  *   its `id` still moves `lastEventId` (the resume cursor). The cursor moves
  *   at dispatch only: an `id:` line of an event cut off by the end of the
  *   stream is discarded with it.
- * - An event larger than `maxEventChars` is dropped, which bounds memory
- *   against a misbehaving peer.
+ * - An event larger than `maxEventChars` is dropped and counted, which bounds
+ *   memory against a misbehaving peer. The server caps a frame at 64 KiB. The
+ *   bound is on decoded UTF-16 code units, which never exceed the UTF-8 bytes.
  */
 
 export interface SseEvent {
@@ -28,9 +29,17 @@ export interface SseEvent {
   data: string;
 }
 
-const DEFAULT_MAX_EVENT_CHARS = 256 * 1024;
+export const DEFAULT_MAX_EVENT_CHARS = 256 * 1024;
+
+export interface ParserOptions {
+  /** The size bound of one event, in UTF-16 code units. */
+  maxEventChars?: number;
+  /** The resume cursor carried over from an earlier connection. */
+  lastEventId?: string | null;
+}
 
 export class EventStreamParser {
+  /** The resume cursor: the id of the last dispatched event. It persists across events. */
   lastEventId: string | null;
   /** The last valid `retry:` value in milliseconds, if any. */
   retryMs: number | null = null;
@@ -49,7 +58,7 @@ export class EventStreamParser {
   /** The current event's `id:` value; committed to `lastEventId` only when the event is dispatched. */
   private idBuffer: string | null = null;
 
-  constructor(options: { maxEventChars?: number; lastEventId?: string | null } = {}) {
+  constructor(options: ParserOptions = {}) {
     this.maxEventChars = options.maxEventChars ?? DEFAULT_MAX_EVENT_CHARS;
     this.lastEventId = options.lastEventId ?? null;
   }

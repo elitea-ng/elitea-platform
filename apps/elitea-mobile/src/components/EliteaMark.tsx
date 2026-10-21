@@ -1,7 +1,7 @@
+import { DEFAULT_PRODUCT, ELITEA_MARK_ASPECT, ELITEA_MARK_SVG } from '@elitea/client-core/brand';
 import { StyleSheet, View, type ViewProps } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 
-import { ELITEA_MARK_ASPECT, ELITEA_MARK_SVG } from '@/components/eliteaMarkSvg';
 import { useDesign } from '@/design/DesignProvider';
 
 /**
@@ -11,7 +11,8 @@ import { useDesign } from '@/design/DesignProvider';
  *  - `avatar`: the mark in a circle on the theme surface; the fallback avatar of the
  *              conversation's primary agent (24 pt minimum).
  *
- * The mark is vector art (the same SVG as the web app), so it is sharp at every size. It is never
+ * The mark is vector art, the canonical SVG of `@elitea/client-core/brand` (libs/ts/client-core,
+ * the same source as the web app's copies), so it is sharp at every size. It is never
  * recoloured or tinted with the workspace brand, and it never overlaps or replaces the workspace's
  * own logo (the runtime brand pack, src/theme/BrandLogo.tsx), nor appears on approval, security
  * or destructive surfaces.
@@ -22,7 +23,7 @@ import { useDesign } from '@/design/DesignProvider';
 
 export type EliteaMarkVariant = 'mark' | 'avatar';
 
-export const ELITEA_MARK_NAME = 'Elitea';
+export const ELITEA_MARK_NAME: string = DEFAULT_PRODUCT.name;
 
 /** Minimum rendered size (pt). */
 export const ELITEA_MARK_MIN_SIZE = 24;

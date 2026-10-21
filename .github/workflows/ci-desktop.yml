@@ -45,6 +45,8 @@ on:
       - "apps/elitea-web/vite.config.ts"
       - "apps/elitea-web/package.json"
       - "apps/elitea-web/package-lock.json"
+      # The shared client package the web bundle compiles from source.
+      - "libs/ts/client-core/**"
       - ".github/workflows/ci-desktop.yml"
   push:
     branches:
@@ -79,6 +81,8 @@ on:
       - "apps/elitea-web/vite.config.ts"
       - "apps/elitea-web/package.json"
       - "apps/elitea-web/package-lock.json"
+      # The shared client package the web bundle compiles from source.
+      - "libs/ts/client-core/**"
       - ".github/workflows/ci-desktop.yml"
   workflow_dispatch:
 

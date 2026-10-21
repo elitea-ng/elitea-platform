@@ -1,26 +1,16 @@
+import { ELITEA_MARK_ASPECT } from '@elitea/client-core/brand';
 import { render, screen } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import { EliteaMark, ELITEA_MARK_NAME } from '@/components/EliteaMark';
-import { ELITEA_MARK_ASPECT, ELITEA_MARK_SVG } from '@/components/eliteaMarkSvg';
 import { DesignProvider } from '@/design/DesignProvider';
 import { colors } from '@/design/tokens';
 
-// The app's tsconfig has no Node types; jest runs this file in Node.
-declare const __dirname: string;
-const fs = require('fs') as { readFileSync(path: string, encoding: 'utf8'): string };
+// The artwork itself is the canonical SVG of libs/ts/client-core; its own tests and
+// `gen-brand.mjs --check` keep every copy (this app's and the web app's) equal to it.
 
 jest.mock('@/theme/brandStore', () => ({ useBrandTheme: () => null }));
 jest.mock('@/theme/brandFonts', () => ({ useBrandFontFamily: () => undefined }));
-
-describe('Elitea mark artwork', () => {
-  it('is the web app logo mark, verbatim (one source of truth in the monorepo)', () => {
-    const web = fs.readFileSync(`${__dirname}/../../../elitea-web/public/brand/logo-mark.svg`, 'utf8').trim();
-    expect(ELITEA_MARK_SVG).toBe(web.replace(' width="100%" height="100%"', ''));
-    expect(ELITEA_MARK_SVG).toContain('viewBox="0 0 36 34"');
-    expect(ELITEA_MARK_ASPECT).toBeCloseTo(36 / 34, 6);
-  });
-});
 
 describe('<EliteaMark>', () => {
   it('is an image labelled "Elitea" by default', async () => {
