@@ -17,8 +17,7 @@ elitea-platform/
 │   ├── elitea-ui/           # React SPA (git submodule)
 │   └── elitea-web/          # React SPA rewrite; also builds the admin console
 │                            #   (src/entries/admin) served by elitea-main
-├── proto/                   # Protobuf contracts (buf v2) → gen/go, gen/python
-├── gen/                     # Generated protobuf stubs (Go + Python)
+├── libs/proto/              # Protobuf contracts (buf v2) and their generated Go/Python stubs
 ├── libs/go/                 # Shared Go libraries
 ├── deploy/
 │   ├── docker/              # Containerfiles for UI and helper images
