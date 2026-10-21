@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "elitea/runtime/v1/common.proto",
         "elitea/runtime/v1/control.proto",
         "elitea/runtime/v1/compiled_code.proto",
+        "elitea/runtime/v1/content.proto",
         "elitea/runtime/v1/envelope.proto",
         "elitea/runtime/v1/errors.proto",
         "elitea/runtime/v1/indexing.proto",
@@ -47,8 +48,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("cargo:rerun-if-changed={}", proto.display());
     }
 
+    // Server stubs exist for the supervisor and for unit tests only: the
+    // worker's own tests stand up real in-process servers (a fake Main
+    // content listener, a fake store), and a default worker build carries no
+    // server code at all. A build script cannot see cfg(test), so the stubs
+    // are always generated and the attribute removes them everywhere else.
     tonic_prost_build::configure()
-        .build_server(env::var_os("CARGO_FEATURE_SANDBOX_SUPERVISOR").is_some())
+        .build_server(true)
+        .server_mod_attribute(".", r#"#[cfg(any(test, feature = "sandbox-supervisor"))]"#)
         .include_file("elitea.rs")
         .compile_with_config(prost_config, &protos, std::slice::from_ref(&proto_root))?;
 

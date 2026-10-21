@@ -9,10 +9,10 @@ use crate::{
         code_remote::CodeRuntimeFactory,
     },
     protocol::control::ClaimBoundSandboxAuthority,
-    transport::input_content::{InputContentRpc, InputContentTransportError},
+    protocol::elitea::runtime::v1::{RegisterCodeVisitRequestV1, RegisterCodeVisitResponseV1},
+    transport::input_content::content_fake::{ContentFake, claim_of},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use http_body_util::BodyExt as _;
 
 #[derive(Default)]
 struct Calls {
@@ -22,24 +22,22 @@ struct Calls {
     snapshot: Option<serde_json::Value>,
 }
 struct OriginalVisitRpc(Arc<std::sync::Mutex<Calls>>);
-#[async_trait]
-impl InputContentRpc for OriginalVisitRpc {
-    async fn get(
+/// Only the visit RPC is served: the test must never request a dispatch grant
+/// or a final intent, and every other RPC answers Unimplemented.
+#[tonic::async_trait]
+impl ContentFake for OriginalVisitRpc {
+    async fn register_code_visit(
         &self,
-        request: http::Request<tonic::body::Body>,
-    ) -> Result<http::Response<tonic::body::Body>, InputContentTransportError> {
-        assert_eq!(request.method(), http::Method::POST);
-        assert!(
-            request.uri().path().ends_with("/code-sandbox/visits"),
-            "test must never request a dispatch grant/final intent"
-        );
-        assert!(request.headers().contains_key("x-elitea-claim-id"));
-        assert!(request.headers().contains_key("x-elitea-fence"));
-        let segments: Vec<_> = request.uri().path().split('/').collect();
-        let execution = segments[2].to_owned();
-        let generation: u64 = segments[4].parse().unwrap();
-        let bytes = request.into_body().collect().await.unwrap().to_bytes();
-        let visit: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        request: tonic::Request<RegisterCodeVisitRequestV1>,
+    ) -> Result<tonic::Response<RegisterCodeVisitResponseV1>, tonic::Status> {
+        let (claim, fence) = claim_of(&request);
+        assert!(!claim.is_empty());
+        assert_eq!(fence.len(), 32);
+        let request = request.into_inner();
+        let scope = request.scope.unwrap();
+        let execution = scope.execution_id;
+        let generation = scope.generation;
+        let visit: serde_json::Value = serde_json::from_slice(&request.visit_json).unwrap();
         assert_eq!(
             visit["schema"],
             "elitea.sandbox.original-code-visit-request.v1"
@@ -65,16 +63,9 @@ impl InputContentRpc for OriginalVisitRpc {
         calls.order.push("visits");
         calls.visit = Some(visit);
         drop(calls);
-        let raw = serde_json::to_vec(&response).unwrap();
-        Ok(http::Response::builder()
-            .status(http::StatusCode::OK)
-            .version(http::Version::HTTP_2)
-            .header(http::header::CONTENT_TYPE, "application/json")
-            .header(http::header::CONTENT_LENGTH, raw.len())
-            .body(tonic::body::Body::new(http_body_util::Full::new(
-                bytes::Bytes::from(raw),
-            )))
-            .unwrap())
+        Ok(tonic::Response::new(RegisterCodeVisitResponseV1 {
+            visit_json: serde_json::to_vec(&response).unwrap(),
+        }))
     }
 }
 struct Sink(Arc<std::sync::Mutex<Calls>>);

@@ -1,11 +1,12 @@
 //! Original-visit-scoped repository snapshot acquisition. No caller URL or credential.
 use super::{
-    Body, CLAIM_HEADER, CONTENT_DIGEST_HEADER, CONTENT_LENGTH, CONTENT_TYPE, FENCE_HEADER,
-    InputContentClient, InputContentError, Method, PATH_SEGMENT, Request, StatusCode, Version,
-    sha256_header, timeout, utf8_percent_encode,
+    Code, InputContentClient, InputContentError, Status, claim_request, content_scope,
+    is_transport_status, timeout,
 };
 use crate::{
-    protocol::control::ClaimBoundSandboxAuthority,
+    protocol::{
+        control::ClaimBoundSandboxAuthority, elitea::runtime::v1::ResolveCodeWorkspaceRequestV1,
+    },
     sandbox::{
         code_recovery::OriginalCodeVisitRef,
         request::PreparedJob,
@@ -13,7 +14,6 @@ use crate::{
     },
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use http_body_util::BodyExt as _;
 use serde::Serialize;
 #[derive(Serialize)]
 struct Resolve<'a> {
@@ -47,43 +47,60 @@ impl InputContentClient {
             return Err(invalid());
         }
         let (execution, generation, claim_id, fence) = claim.intent_content_binding();
-        let uri = format!(
-            "{}/executions/{}/generations/{generation}/runtime-context/code-workspace",
-            self.config.origin,
-            utf8_percent_encode(execution, PATH_SEGMENT)
-        );
-        let request = Request::builder()
-            .method(Method::POST)
-            .version(Version::HTTP_2)
-            .uri(uri)
-            .header(CLAIM_HEADER, claim_id)
-            .header(FENCE_HEADER, URL_SAFE_NO_PAD.encode(fence))
-            .header(CONTENT_TYPE, "application/json")
-            .header(CONTENT_LENGTH, body.len())
-            .body(Body::new(http_body_util::Full::new(bytes::Bytes::from(
-                body,
-            ))))
-            .map_err(|_| invalid())?;
-        timeout(self.config.deadline,async {
-            let mut response=self.rpc.get(request).await.map_err(InputContentError::Transport)?;
-            if matches!(response.status(),StatusCode::UNAUTHORIZED|StatusCode::FORBIDDEN|StatusCode::CONFLICT){return Err(invalid())}
-            if response.status()==StatusCode::UNPROCESSABLE_ENTITY {return Err(InputContentError::InvalidInput("the saved Code repository selection exceeds operator policy or requires unsupported writable storage"))}
-            if response.status()!=StatusCode::OK||response.version()!=Version::HTTP_2||response.headers().get(CONTENT_TYPE).and_then(|v|v.to_str().ok())!=Some("application/json"){return Err(InputContentError::DependencyUnavailable("Code repository acquisition is unavailable"))}
-            let root=response.headers().get("x-elitea-workspace-root").and_then(|v|v.to_str().ok()).filter(|v|v.len()==64&&v.bytes().all(|c|c.is_ascii_digit()||(b'a'..=b'f').contains(&c))).ok_or_else(invalid)?.to_owned();
-            let digest=sha256_header(response.headers(),&CONTENT_DIGEST_HEADER)?;
-            let bytes_expected=response.headers().get(CONTENT_LENGTH).and_then(|v|v.to_str().ok()).and_then(|v|v.parse::<usize>().ok()).filter(|v|(1..=4<<20).contains(v)).ok_or_else(invalid)?;
-            let mut bytes=Vec::new();
-            while let Some(frame)=response.body_mut().frame().await {
-                let frame=frame.map_err(|_|InputContentError::DependencyUnavailable("Code repository response was interrupted"))?;
-                if frame.is_trailers(){return Err(invalid())}
-                if let Ok(data)=frame.into_data(){if bytes.len().checked_add(data.len()).is_none_or(|v|v>bytes_expected){return Err(invalid())}bytes.extend_from_slice(&data)}
+        let request = claim_request(
+            ResolveCodeWorkspaceRequestV1 {
+                scope: Some(content_scope(execution, generation)),
+                request_json: body,
+            },
+            claim_id,
+            fence,
+        )
+        .ok_or_else(invalid)?;
+        let mut rpc = self.rpc();
+        timeout(self.config.deadline, async {
+            let response = rpc
+                .resolve_code_workspace(request)
+                .await
+                .map_err(workspace_status)?
+                .into_inner();
+            let root = response.workspace_root;
+            if root.len() != 64
+                || !root
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                || !(1..=4 << 20).contains(&response.manifest_json.len())
+            {
+                return Err(invalid());
             }
-            if bytes.len()!=bytes_expected||ring::digest::digest(&ring::digest::SHA256,&bytes).as_ref()!=digest{return Err(invalid())}
-            let manifest=WorkspaceManifest::from_bound_transport(&bytes,&root).map_err(|_|invalid())?;
-            if manifest.selection()!=selection{return Err(invalid())}
+            let manifest = WorkspaceManifest::from_bound_transport(&response.manifest_json, &root)
+                .map_err(|_| invalid())?;
+            if manifest.selection() != selection {
+                return Err(invalid());
+            }
             Ok(manifest)
-        }).await.map_err(|_|InputContentError::DependencyUnavailable("Code repository acquisition timed out; retry the same original visit"))?
+        })
+        .await
+        .map_err(|_| timed_out())?
     }
+}
+/// A refused bound is the selection's problem, not an outage; a stale claim
+/// is a refusal; Main's other answers are an acquisition that may succeed on
+/// a retry of the same visit.
+fn workspace_status(status: Status) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied | Code::Aborted => invalid(),
+        Code::FailedPrecondition => InputContentError::InvalidInput(
+            "the saved Code repository selection exceeds operator policy or requires unsupported writable storage",
+        ),
+        Code::DeadlineExceeded => timed_out(),
+        _ if is_transport_status(&status) => InputContentError::transport(status),
+        _ => InputContentError::DependencyUnavailable("Code repository acquisition is unavailable"),
+    }
+}
+fn timed_out() -> InputContentError {
+    InputContentError::DependencyUnavailable(
+        "Code repository acquisition timed out; retry the same original visit",
+    )
 }
 fn invalid() -> InputContentError {
     InputContentError::AuthorizationFailed("the original Code repository binding is invalid")

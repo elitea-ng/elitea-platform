@@ -106,11 +106,11 @@ fn artifact_assembler(
 ) -> (PipelineNativeAgentAssembler, Arc<Mutex<Vec<String>>>) {
     let paths = Arc::new(Mutex::new(Vec::new()));
     let runtime = RuntimeContextClient::with_rpc(
-        PipelineRuntimeContextFixture {
+        Routes(PipelineRuntimeContextFixture {
             responses: Mutex::new(responses.iter().map(runtime_response).collect()),
             calls: Arc::new(AtomicUsize::new(0)),
             paths: Arc::clone(&paths),
-        },
+        }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),
             deadline: Duration::from_secs(1),
@@ -169,7 +169,7 @@ async fn artifact_list_node_runs_under_the_claim_and_projects_its_listing() {
     let paths = paths.lock().expect("fixture paths").clone();
     assert_eq!(paths.len(), 1, "exactly one claim-bound call: {paths:?}");
     assert!(
-        paths[0].ends_with("/runtime-context/artifacts/list"),
+        paths[0] == "artifacts/list",
         "the listing must use the claim-bound artifact route: {paths:?}"
     );
     let rendered = serde_json::to_string(&browser).expect("browser events");

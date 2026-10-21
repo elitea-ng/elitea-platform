@@ -5,16 +5,17 @@ use crate::agents::assembly_tests::ordinary_request;
 use crate::agents::model_scope::ModelScopeBackend;
 use crate::agents::request::AgentExecutionKind;
 use crate::protocol::control::test_runtime_context_authority;
+use crate::transport::input_content::content_fake::{
+    ContextAnswer, ContextCall, ContextRoutes, Routes,
+};
 use crate::transport::openai_compatible_facade::{
     CapturedModelRequests, TestModelGatewayOutcome, test_model_gateway_client,
     test_model_gateway_config, test_model_gateway_response,
 };
-use crate::transport::runtime_context::{
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextRpc, RuntimeContextTransportError,
-};
+use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 use adk_rust::graph::Checkpointer as _;
 use bytes::Bytes;
-use http::{Request, Response, Version};
+use http::Response;
 use http_body_util::Full;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -31,14 +32,11 @@ struct FrozenVersions {
     fingerprints: BTreeMap<Identity, String>,
     reads: Arc<StdMutex<Vec<Identity>>>,
 }
-#[async_trait]
-impl RuntimeContextRpc for FrozenVersions {
-    async fn post(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, RuntimeContextTransportError> {
-        let path = request.uri().path();
-        let value = if path.ends_with("/elitea-client-token") {
+#[tonic::async_trait]
+impl ContextRoutes for FrozenVersions {
+    async fn answer(&self, call: ContextCall) -> Result<ContextAnswer, tonic::Status> {
+        let path = call.route;
+        let value = if path == "elitea-client-token" {
             json!({"schema_version":"elitea.runtime.elitea-client-token.v1", "project_id":17, "token":"fixture-materialization-token"})
         } else {
             let parts = path.split('/').collect::<Vec<_>>();
@@ -46,12 +44,12 @@ impl RuntimeContextRpc for FrozenVersions {
                 .get(parts.len() - 3)
                 .and_then(|v| v.parse::<u64>().ok())
                 .zip(parts.last().and_then(|v| v.parse::<u64>().ok()))
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture route"))?;
             self.reads.lock().unwrap().push(identity);
             let version = self
                 .versions
                 .get(&identity)
-                .ok_or(RuntimeContextTransportError::Unavailable)?;
+                .ok_or_else(|| tonic::Status::unavailable("fixture version"))?;
             let mut value = json!({"schema_version":"elitea.runtime.application-version.v1", "project_id":17,
                 "application_id":identity.0,"version_id":identity.1,"version_details":version});
             if let Some(fingerprint) = self.fingerprints.get(&identity) {
@@ -59,16 +57,7 @@ impl RuntimeContextRpc for FrozenVersions {
             }
             value
         };
-        let body = value.to_string();
-        Response::builder()
-            .status(200)
-            .version(Version::HTTP_2)
-            .header("content-type", "application/json")
-            .header("cache-control", "private, no-cache, no-store")
-            .header("pragma", "no-cache")
-            .header("content-length", body.len())
-            .body(Body::new(Full::new(Bytes::from(body))))
-            .map_err(|_| RuntimeContextTransportError::Unavailable)
+        Ok(ContextAnswer::from(&value))
     }
 }
 fn reference(identity: Identity, kind: &str, alias: &str) -> Value {
@@ -112,11 +101,11 @@ impl Fixture {
     ) -> Self {
         let reads = Arc::new(StdMutex::new(Vec::new()));
         let rpc = RuntimeContextClient::with_rpc(
-            FrozenVersions {
+            Routes(FrozenVersions {
                 versions,
                 fingerprints,
                 reads: reads.clone(),
-            },
+            }),
             RuntimeContextConfig {
                 origin: "https://content.internal".to_owned(),
                 deadline: Duration::from_secs(1),

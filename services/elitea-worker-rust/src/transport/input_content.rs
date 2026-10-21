@@ -1,31 +1,32 @@
-//! Claim-bound, bounded HTTP/2 input materialization.
+//! Claim-bound, bounded input materialization over Main's runtime content
+//! service (`elitea.runtime.v1.RuntimeContentService`).
 //!
 //! The content channel is distinct from control gRPC and the command bus. Production
 //! construction requires the private CA and worker identity, then creates its
 //! own tonic [`Channel`] from the same validated origin used for hostname
-//! verification.
+//! verification. Every claim-scoped call carries the claim id and the raw
+//! fence token as gRPC metadata ([`claim_request`]), never in the message.
 
 use std::fmt;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use base64::Engine as _;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use bytes::Bytes;
-use http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Version};
-use http_body_util::BodyExt as _;
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use ring::digest;
 use subtle::ConstantTimeEq;
 use tokio::time::timeout;
 use tonic::body::Body;
+use tonic::metadata::{AsciiMetadataValue, BinaryMetadataValue};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
+use tonic::{Code, Status, Streaming};
 use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
 use crate::protocol::control::{
     ClaimBoundInputAuthority, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
+};
+use crate::protocol::elitea::runtime::v1::runtime_content_service_client::RuntimeContentServiceClient;
+use crate::protocol::elitea::runtime::v1::{
+    GetInputRequestV1, GetInputResponseV1, InputContentHeaderV1, RuntimeContentScopeV1,
+    get_input_response_v1::Part,
 };
 
 #[path = "code_intent_content.rs"]
@@ -45,47 +46,102 @@ pub(crate) use node_recovery_content::{
     NodeRecoveryAckReply, receipt_sha256 as node_recovery_receipt_sha256,
 };
 
+#[cfg(test)]
+#[path = "content_fake.rs"]
+pub(crate) mod content_fake;
+#[cfg(test)]
+#[path = "content_grpc_tests.rs"]
+mod content_grpc_tests;
+
 const MAX_SAFE_TEXT_BYTES: usize = 256;
 const MAX_ORIGIN_BYTES: usize = 2048;
 const MAX_MATERIALIZED_INPUT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INPUT_DEADLINE: Duration = Duration::from_mins(5);
-const CLAIM_HEADER: HeaderName = HeaderName::from_static("x-elitea-claim-id");
-const FENCE_HEADER: HeaderName = HeaderName::from_static("x-elitea-fence");
-const CONTENT_DIGEST_HEADER: HeaderName = HeaderName::from_static("content-digest");
-const SOURCE_DIGEST_HEADER: HeaderName = HeaderName::from_static("x-elitea-source-content-digest");
-const SOURCE_LENGTH_HEADER: HeaderName = HeaderName::from_static("x-elitea-source-content-length");
-const SOURCE_VERSION_HEADER: HeaderName =
-    HeaderName::from_static("x-elitea-source-immutable-version");
-const PATH_SEGMENT: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'!')
-    .add(b'"')
-    .add(b'#')
-    .add(b'$')
-    .add(b'%')
-    .add(b'&')
-    .add(b'\'')
-    .add(b'(')
-    .add(b')')
-    .add(b'*')
-    .add(b'+')
-    .add(b',')
-    .add(b'/')
-    .add(b':')
-    .add(b';')
-    .add(b'<')
-    .add(b'=')
-    .add(b'>')
-    .add(b'?')
-    .add(b'@')
-    .add(b'[')
-    .add(b'\\')
-    .add(b']')
-    .add(b'^')
-    .add(b'`')
-    .add(b'{')
-    .add(b'|')
-    .add(b'}');
+/// The accepted claim's id, one ASCII metadata value.
+pub(crate) const CLAIM_METADATA: &str = "elitea-claim-id";
+/// The raw 32-byte fence token, one binary metadata value.
+pub(crate) const FENCE_METADATA: &str = "elitea-claim-fence-bin";
+/// One content message's ceiling in either direction. tonic decodes at most
+/// 4 MiB by default and an attachment envelope reaches 6 MiB.
+pub(crate) const MAX_CONTENT_MESSAGE_BYTES: usize = 16 << 20;
+
+/// The service under the generated content client: the mTLS channel in
+/// production, an in-process server in tests. Either way every call is
+/// encoded, framed and answered as real gRPC.
+pub(crate) type ContentTransport = tower::util::BoxCloneSyncService<
+    http::Request<Body>,
+    http::Response<Body>,
+    ContentTransportError,
+>;
+
+/// The failure of the service under the generated client, as one concrete
+/// error type. (A boxed `dyn Error` here would leave the generated client's
+/// `Into<StdError>` bound higher-ranked, which no `Send` future satisfies.)
+#[derive(Debug)]
+pub(crate) struct ContentTransportError(tonic::codegen::StdError);
+
+impl fmt::Display for ContentTransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for ContentTransportError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+/// The generated `RuntimeContentService` client every worker-side content
+/// call goes through.
+pub(crate) type ContentRpc = RuntimeContentServiceClient<ContentTransport>;
+
+/// The generated client over `transport`, with the content message caps.
+pub(crate) fn content_rpc(transport: ContentTransport) -> ContentRpc {
+    RuntimeContentServiceClient::new(transport)
+        .max_decoding_message_size(MAX_CONTENT_MESSAGE_BYTES)
+        .max_encoding_message_size(MAX_CONTENT_MESSAGE_BYTES)
+}
+
+/// The production transport: one connected channel to the content origin.
+pub(crate) fn channel_transport(channel: Channel) -> ContentTransport {
+    ContentTransport::new(channel.map_err(|error| ContentTransportError(Box::new(error))))
+}
+
+/// One claim-scoped content message with the claim's metadata attached: the
+/// claim id as ASCII and the fence token as raw binary metadata. `None` when
+/// the claim id cannot be a metadata value.
+pub(crate) fn claim_request<T>(
+    message: T,
+    claim_id: &str,
+    fence: &[u8],
+) -> Option<tonic::Request<T>> {
+    let claim = AsciiMetadataValue::try_from(claim_id).ok()?;
+    let mut request = tonic::Request::new(message);
+    request.metadata_mut().insert(CLAIM_METADATA, claim);
+    request
+        .metadata_mut()
+        .insert_bin(FENCE_METADATA, BinaryMetadataValue::from_bytes(fence));
+    Some(request)
+}
+
+/// The execution and generation a claim-scoped call is made under.
+pub(crate) fn content_scope(execution_id: &str, generation: u64) -> RuntimeContentScopeV1 {
+    RuntimeContentScopeV1 {
+        execution_id: execution_id.to_owned(),
+        generation,
+    }
+}
+
+/// Whether a failed call is the channel's failure rather than a handler's
+/// answer: no connection, a reset stream, or an overloaded peer. Every such
+/// status is handled as the connection failure it replaced.
+pub(crate) fn is_transport_status(status: &Status) -> bool {
+    matches!(
+        status.code(),
+        Code::Unavailable | Code::Unknown | Code::Cancelled
+    )
+}
 
 /// Sensitive materialized bytes which are erased when parsing releases them.
 ///
@@ -172,6 +228,11 @@ impl InputContentError {
             Self::DependencyUnavailable(_) | Self::Transport(_) | Self::Timeout(_)
         )
     }
+
+    /// The channel's failure of one call (see [`is_transport_status`]).
+    pub(crate) fn transport(status: Status) -> Self {
+        Self::Transport(InputContentTransportError::Status(Box::new(status)))
+    }
 }
 
 impl fmt::Display for InputContentError {
@@ -202,12 +263,14 @@ impl std::error::Error for InputContentError {
 pub enum InputContentTransportError {
     Unavailable,
     Tonic(tonic::transport::Error),
+    /// A call the channel failed; the status keeps its source chain.
+    Status(Box<Status>),
 }
 
 impl fmt::Display for InputContentTransportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unavailable | Self::Tonic(_) => {
+            Self::Unavailable | Self::Tonic(_) | Self::Status(_) => {
                 formatter.write_str("the input content service is unavailable")
             }
         }
@@ -219,59 +282,20 @@ impl std::error::Error for InputContentTransportError {
         match self {
             Self::Unavailable => None,
             Self::Tonic(error) => Some(error),
+            Self::Status(status) => Some(status.as_ref()),
         }
     }
 }
 
-/// One-attempt HTTP request edge used for component fault injection.
-///
-/// Implementors are trusted worker composition: the request contains the
-/// bearer fence header. Production uses [`TonicInputContentRpc`]; test doubles
-/// must not log or retain request authority beyond the bounded assertion.
-#[async_trait]
-pub(crate) trait InputContentRpc: Send + Sync {
-    async fn get(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, InputContentTransportError>;
-}
-
-/// Raw HTTP/2 request adapter over a caller-authenticated tonic channel.
-#[derive(Clone)]
-struct TonicInputContentRpc {
-    channel: Channel,
-}
-
-impl TonicInputContentRpc {
-    #[must_use]
-    fn new(channel: Channel) -> Self {
-        Self { channel }
-    }
-}
-
-#[async_trait]
-impl InputContentRpc for TonicInputContentRpc {
-    async fn get(
-        &self,
-        request: Request<Body>,
-    ) -> Result<Response<Body>, InputContentTransportError> {
-        self.channel
-            .clone()
-            .oneshot(request)
-            .await
-            .map_err(InputContentTransportError::Tonic)
-    }
-}
-
-/// One-attempt materialized input client over a dedicated origin-bound HTTP/2
-/// request edge.
+/// One-attempt materialized input client over a dedicated origin-bound
+/// content channel.
 pub struct InputContentClient {
-    rpc: Box<dyn InputContentRpc>,
+    rpc: ContentRpc,
     config: InputContentConfig,
 }
 
 impl InputContentClient {
-    /// Build and connect the dedicated mTLS HTTP/2 channel from the validated
+    /// Build and connect the dedicated mTLS channel from the validated
     /// origin. The caller cannot substitute a preconnected mismatched channel.
     ///
     /// # Errors
@@ -299,21 +323,27 @@ impl InputContentClient {
             .map_err(InputContentTransportError::Tonic)
             .map_err(InputContentError::Transport)?;
         Ok(Self {
-            rpc: Box::new(TonicInputContentRpc::new(channel)),
+            rpc: content_rpc(channel_transport(channel)),
             config,
         })
     }
 
+    /// A client over an in-process content service.
     #[cfg(test)]
-    pub(super) fn with_rpc(
-        rpc: impl InputContentRpc + 'static,
+    pub(crate) fn with_rpc(
+        fake: impl content_fake::ContentFake,
         config: InputContentConfig,
     ) -> Result<Self, InputContentError> {
         config.validate()?;
         Ok(Self {
-            rpc: Box::new(rpc),
+            rpc: content_rpc(content_fake::in_process(fake)),
             config,
         })
+    }
+
+    /// A fresh handle on the shared channel for one call.
+    fn rpc(&self) -> ContentRpc {
+        self.rpc.clone()
     }
 
     /// Fetch exactly one claim-bound, source-bound materialized agent input.
@@ -322,9 +352,9 @@ impl InputContentClient {
     /// unique lease-monitor ownership. Raw claim IDs and fence tokens are never
     /// accepted through this public API.
     ///
-    /// The method performs one network attempt, does not follow redirects, and
-    /// validates HTTP/2, response metadata, source identity, body bounds, and
-    /// the response SHA-256 before returning bytes.
+    /// The method performs one network attempt and validates the stream's
+    /// header, source identity, length bounds, and the response SHA-256 before
+    /// returning bytes.
     ///
     /// # Errors
     ///
@@ -394,8 +424,17 @@ impl InputContentClient {
                 "the admitted input source exceeds the configured deployment limit",
             ));
         }
-        let request = build_request(&reference)?;
-        let operation = fetch_response(self.rpc.as_ref(), request, &reference, &self.config);
+        let request = input_request(&reference)?;
+        let mut rpc = self.rpc();
+        let max_bytes = self.config.max_materialized_bytes;
+        let operation = async {
+            let stream = rpc
+                .get_input(request)
+                .await
+                .map_err(input_status)?
+                .into_inner();
+            collect_input(stream, &reference, max_bytes).await
+        };
         timeout(self.config.deadline, operation)
             .await
             .map_err(|_| InputContentError::Timeout("the input content request timed out"))?
@@ -435,180 +474,83 @@ fn validate_reference(reference: &ClaimBoundInputAuthority<'_>) -> Result<(), In
     Ok(())
 }
 
-fn build_request(
+/// The claim-scoped request naming one admitted input.
+fn input_request(
     reference: &ClaimBoundInputAuthority<'_>,
-) -> Result<Request<Body>, InputContentError> {
-    let execution = encode_path_segment(reference.execution_id);
-    let content = encode_path_segment(reference.content_id);
-    let version = encode_path_segment(reference.immutable_version);
-    let path = format!(
-        "/executions/{execution}/generations/{}/inputs/{content}/versions/{version}",
-        reference.generation
-    );
-    let mut request = Request::builder()
-        .method(Method::GET)
-        .uri(path)
-        .body(Body::empty())
-        .map_err(|_| InputContentError::InvalidInput("the input content request is malformed"))?;
-    request.headers_mut().insert(
-        CLAIM_HEADER,
-        HeaderValue::from_str(reference.claim_id).map_err(|_| {
-            InputContentError::InvalidInput("the input content request authority is malformed")
-        })?,
-    );
-    request.headers_mut().insert(
-        FENCE_HEADER,
-        HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(reference.fence_token)).map_err(|_| {
-            InputContentError::InvalidInput("the input content request authority is malformed")
-        })?,
-    );
-    Ok(request)
+) -> Result<tonic::Request<GetInputRequestV1>, InputContentError> {
+    claim_request(
+        GetInputRequestV1 {
+            scope: Some(content_scope(reference.execution_id, reference.generation)),
+            content_id: reference.content_id.to_owned(),
+            immutable_version: reference.immutable_version.to_owned(),
+        },
+        reference.claim_id,
+        reference.fence_token,
+    )
+    .ok_or(InputContentError::InvalidInput(
+        "the input content request authority is malformed",
+    ))
 }
 
-async fn fetch_response(
-    rpc: &dyn InputContentRpc,
-    request: Request<Body>,
-    reference: &ClaimBoundInputAuthority<'_>,
-    config: &InputContentConfig,
-) -> Result<MaterializedInput, InputContentError> {
-    let response = rpc
-        .get(request)
-        .await
-        .map_err(InputContentError::Transport)?;
-    let validated = validate_response_head(&response, reference, config)?;
-    collect_validated_body(response, validated, config.max_materialized_bytes).await
+/// What a refused or failed `GetInput` means, by status code. The codes are
+/// the ones Main's content service maps its outcomes to; anything the
+/// channel produced is the connection failure it always was.
+fn input_status(status: Status) -> InputContentError {
+    match status.code() {
+        Code::Unauthenticated | Code::PermissionDenied => {
+            InputContentError::AuthorizationFailed("the claim-bound input grant was rejected")
+        }
+        Code::NotFound | Code::Unimplemented => {
+            InputContentError::InvalidInput("the admitted input content was not found")
+        }
+        Code::ResourceExhausted => InputContentError::ResourceExhausted(
+            "the admitted input exceeds the content service limit",
+        ),
+        Code::InvalidArgument | Code::FailedPrecondition => {
+            InputContentError::InvalidInput("the input content service rejected materialization")
+        }
+        Code::DeadlineExceeded => {
+            InputContentError::Timeout("the input content transfer was interrupted")
+        }
+        _ if is_transport_status(&status) => InputContentError::transport(status),
+        _ => InputContentError::DependencyUnavailable(
+            "the input content service did not accept the request",
+        ),
+    }
 }
 
-struct ValidatedResponseHead {
+struct ValidatedInputHeader {
     response_digest: [u8; 32],
     declared_length: usize,
 }
 
-fn validate_response_head(
-    response: &Response<Body>,
+/// Assemble one `GetInput` stream: exactly one header, then chunks that fill
+/// exactly the declared length and hash to the declared digest.
+async fn collect_input(
+    mut stream: Streaming<GetInputResponseV1>,
     reference: &ClaimBoundInputAuthority<'_>,
-    config: &InputContentConfig,
-) -> Result<ValidatedResponseHead, InputContentError> {
-    if response.version() != Version::HTTP_2 {
-        return Err(InputContentError::DependencyUnavailable(
-            "the input content service did not negotiate HTTP/2",
-        ));
-    }
-    match response.status() {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(InputContentError::AuthorizationFailed(
-                "the claim-bound input grant was rejected",
-            ));
-        }
-        StatusCode::NOT_FOUND => {
-            return Err(InputContentError::InvalidInput(
-                "the admitted input content was not found",
-            ));
-        }
-        StatusCode::PAYLOAD_TOO_LARGE => {
-            return Err(InputContentError::ResourceExhausted(
-                "the admitted input exceeds the content service limit",
-            ));
-        }
-        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-            return Err(InputContentError::InvalidInput(
-                "the input content service rejected materialization",
-            ));
-        }
-        status if status.is_redirection() => {
-            return Err(InputContentError::DependencyUnavailable(
-                "the input content service attempted an unsupported redirect",
-            ));
-        }
-        status if !status.is_success() => {
-            return Err(InputContentError::DependencyUnavailable(
-                "the input content service did not accept the request",
-            ));
-        }
-        _ => {}
-    }
-    let headers = response.headers();
-    let response_digest = sha256_header(headers, &CONTENT_DIGEST_HEADER)?;
-    let source_digest = sha256_header(headers, &SOURCE_DIGEST_HEADER)?;
-    if source_digest
-        .ct_eq(reference.expected_source_sha256)
-        .unwrap_u8()
-        != 1
-    {
-        return Err(InputContentError::AuthorizationFailed(
-            "the materialized input source digest does not match the admitted descriptor",
-        ));
-    }
-    let source_length = positive_decimal_header(headers, &SOURCE_LENGTH_HEADER)?;
-    if source_length != reference.expected_source_length {
-        return Err(InputContentError::AuthorizationFailed(
-            "the materialized input source length does not match the admitted descriptor",
-        ));
-    }
-    let source_version = single_header(headers, &SOURCE_VERSION_HEADER)?;
-    if source_version.as_bytes() != reference.immutable_version.as_bytes() {
-        return Err(InputContentError::AuthorizationFailed(
-            "the materialized input source version does not match the admitted descriptor",
-        ));
-    }
-    let cache = single_header(headers, &CACHE_CONTROL)?;
-    let normalized_cache = cache
-        .bytes()
-        .filter(|byte| *byte != b' ')
-        .map(|byte| byte.to_ascii_lowercase());
-    if !normalized_cache.eq(b"private,no-store".iter().copied()) {
-        return Err(InputContentError::InvalidInput(
-            "the input content cache policy is malformed",
-        ));
-    }
-    let media = single_header(headers, &CONTENT_TYPE)?;
-    if media
-        .split(';')
-        .next()
-        .map(str::trim)
-        .is_none_or(|value| !value.eq_ignore_ascii_case(reference.media_type))
-    {
-        return Err(InputContentError::InvalidInput(
-            "the input content media type is malformed",
-        ));
-    }
-    let declared_length = positive_decimal_header(headers, &CONTENT_LENGTH)?;
-    let declared_length = usize::try_from(declared_length).map_err(|_| {
-        InputContentError::ResourceExhausted("the materialized input exceeds its approved limit")
-    })?;
-    if declared_length > config.max_materialized_bytes {
-        return Err(InputContentError::ResourceExhausted(
-            "the materialized input exceeds its approved limit",
-        ));
-    }
-    Ok(ValidatedResponseHead {
-        response_digest,
-        declared_length,
-    })
-}
-
-async fn collect_validated_body(
-    mut response: Response<Body>,
-    validated: ValidatedResponseHead,
     max_bytes: usize,
 ) -> Result<MaterializedInput, InputContentError> {
-    let mut body = Zeroizing::new(Vec::with_capacity(validated.declared_length.min(max_bytes)));
-    while let Some(frame) = response.body_mut().frame().await {
-        let Ok(frame) = frame else {
-            return Err(InputContentError::DependencyUnavailable(
-                "the input content response was interrupted",
+    let Some(GetInputResponseV1 {
+        part: Some(Part::Header(header)),
+    }) = stream.message().await.map_err(input_status)?
+    else {
+        return Err(InputContentError::InvalidInput(
+            "the input content stream did not open with its header",
+        ));
+    };
+    let validated = validate_input_header(&header, reference, max_bytes)?;
+    let mut body = Zeroizing::new(Vec::with_capacity(validated.declared_length));
+    while let Some(message) = stream.message().await.map_err(input_status)? {
+        let Some(Part::Chunk(chunk)) = message.part else {
+            return Err(InputContentError::InvalidInput(
+                "the input content stream carried more than chunks after its header",
             ));
         };
-        if frame.is_trailers() {
-            return Err(InputContentError::InvalidInput(
-                "the input content response contains unexpected trailers",
-            ));
-        }
-        if let Ok(chunk) = frame.into_data() {
-            append_bounded(&mut body, &chunk, max_bytes)?;
-        }
+        let chunk = Zeroizing::new(chunk);
+        append_bounded(&mut body, &chunk, validated.declared_length)?;
     }
-    if body.is_empty() || body.len() != validated.declared_length {
+    if body.len() != validated.declared_length {
         return Err(InputContentError::InvalidInput(
             "the input content length does not match its response",
         ));
@@ -627,83 +569,92 @@ async fn collect_validated_body(
     Ok(MaterializedInput(body))
 }
 
+/// The header restates the admitted descriptor; nothing is trusted until it
+/// matches.
+fn validate_input_header(
+    header: &InputContentHeaderV1,
+    reference: &ClaimBoundInputAuthority<'_>,
+    max_bytes: usize,
+) -> Result<ValidatedInputHeader, InputContentError> {
+    let response_digest = digest_field(&header.sha256)?;
+    let source_digest = digest_field(&header.source_sha256)?;
+    if source_digest
+        .ct_eq(reference.expected_source_sha256)
+        .unwrap_u8()
+        != 1
+    {
+        return Err(InputContentError::AuthorizationFailed(
+            "the materialized input source digest does not match the admitted descriptor",
+        ));
+    }
+    if header.source_length == 0 {
+        return Err(InputContentError::InvalidInput(
+            "the input content response length is malformed",
+        ));
+    }
+    if header.source_length != reference.expected_source_length {
+        return Err(InputContentError::AuthorizationFailed(
+            "the materialized input source length does not match the admitted descriptor",
+        ));
+    }
+    if header.source_immutable_version.as_bytes() != reference.immutable_version.as_bytes() {
+        return Err(InputContentError::AuthorizationFailed(
+            "the materialized input source version does not match the admitted descriptor",
+        ));
+    }
+    let media = header.media_type.as_str();
+    if !media.eq_ignore_ascii_case(reference.media_type)
+        && media
+            .split(';')
+            .next()
+            .map(str::trim)
+            .is_none_or(|value| !value.eq_ignore_ascii_case(reference.media_type))
+    {
+        return Err(InputContentError::InvalidInput(
+            "the input content media type is malformed",
+        ));
+    }
+    if header.length == 0 {
+        return Err(InputContentError::InvalidInput(
+            "the input content response length is malformed",
+        ));
+    }
+    let declared_length = usize::try_from(header.length)
+        .ok()
+        .filter(|length| *length <= max_bytes)
+        .ok_or(InputContentError::ResourceExhausted(
+            "the materialized input exceeds its approved limit",
+        ))?;
+    Ok(ValidatedInputHeader {
+        response_digest,
+        declared_length,
+    })
+}
+
+fn digest_field(value: &[u8]) -> Result<[u8; 32], InputContentError> {
+    value.try_into().map_err(|_| {
+        InputContentError::InvalidInput("the input content response digest is malformed")
+    })
+}
+
+/// A chunk past the declared length is a protocol violation, not a large
+/// input: the header already bounded the size.
 fn append_bounded(
     body: &mut Vec<u8>,
-    chunk: &Bytes,
-    max_bytes: usize,
+    chunk: &[u8],
+    declared_length: usize,
 ) -> Result<(), InputContentError> {
     if body
         .len()
         .checked_add(chunk.len())
-        .is_none_or(|length| length > max_bytes)
+        .is_none_or(|length| length > declared_length)
     {
-        return Err(InputContentError::ResourceExhausted(
-            "the materialized input exceeds its approved limit",
+        return Err(InputContentError::InvalidInput(
+            "the input content length does not match its response",
         ));
     }
     body.extend_from_slice(chunk);
     Ok(())
-}
-
-fn sha256_header(headers: &HeaderMap, name: &HeaderName) -> Result<[u8; 32], InputContentError> {
-    let value = single_header(headers, name)?;
-    let encoded = value
-        .strip_prefix("sha-256=:")
-        .and_then(|value| value.strip_suffix(':'))
-        .filter(|value| value.len() == 44 && !value.bytes().any(|byte| matches!(byte, b',' | b' ')))
-        .ok_or(InputContentError::InvalidInput(
-            "the input content response digest is malformed",
-        ))?;
-    let decoded = STANDARD.decode(encoded).map_err(|_| {
-        InputContentError::InvalidInput("the input content response digest is malformed")
-    })?;
-    if STANDARD.encode(&decoded) != encoded {
-        return Err(InputContentError::InvalidInput(
-            "the input content response digest is malformed",
-        ));
-    }
-    decoded.try_into().map_err(|_| {
-        InputContentError::InvalidInput("the input content response digest is malformed")
-    })
-}
-
-fn positive_decimal_header(
-    headers: &HeaderMap,
-    name: &HeaderName,
-) -> Result<u64, InputContentError> {
-    let value = single_header(headers, name)?;
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(InputContentError::InvalidInput(
-            "the input content response length is malformed",
-        ));
-    }
-    let parsed = value.parse::<u64>().map_err(|_| {
-        InputContentError::InvalidInput("the input content response length is malformed")
-    })?;
-    if parsed == 0 {
-        return Err(InputContentError::InvalidInput(
-            "the input content response length is malformed",
-        ));
-    }
-    Ok(parsed)
-}
-
-fn single_header<'a>(
-    headers: &'a HeaderMap,
-    name: &HeaderName,
-) -> Result<&'a str, InputContentError> {
-    let mut values = headers.get_all(name).iter();
-    let value = values.next().ok_or(InputContentError::InvalidInput(
-        "the input content response metadata is missing",
-    ))?;
-    if values.next().is_some() {
-        return Err(InputContentError::InvalidInput(
-            "the input content response metadata is ambiguous",
-        ));
-    }
-    value.to_str().map_err(|_| {
-        InputContentError::InvalidInput("the input content response metadata is malformed")
-    })
 }
 
 fn canonical_https_origin(value: &str) -> Result<String, InputContentError> {
@@ -748,10 +699,6 @@ fn canonical_https_origin(value: &str) -> Result<String, InputContentError> {
         Some(443) | None => Ok(format!("https://{host}")),
         Some(port) => Ok(format!("https://{host}:{port}")),
     }
-}
-
-fn encode_path_segment(value: &str) -> String {
-    utf8_percent_encode(value, PATH_SEGMENT).to_string()
 }
 
 fn bounded_text(value: &str) -> bool {

@@ -1,10 +1,14 @@
 //! Distinct running-owner evidence. This never grants Code execution or retry.
+#[cfg(feature = "sandbox-supervisor")]
 use super::{
     code_recovery::{CodeRecoveryError, WholeCodeBinding, canonical, hex, hex_id, sha256},
     compiled_snapshot::{Binding, ContentSha256, Control, Descriptor, Purpose},
     request::PreparedJob,
 };
-use serde::{Deserialize, Serialize};
+#[cfg(feature = "sandbox-supervisor")]
+use serde::Deserialize;
+use serde::Serialize;
+#[cfg(feature = "sandbox-supervisor")]
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CodePlatformBinding {
@@ -17,6 +21,7 @@ pub(crate) struct CodePlatformBinding {
     #[serde(deserialize_with = "required_nullable")]
     pub(crate) compiled_execute: Option<CodePlatformCompiledExecute>,
 }
+#[cfg(feature = "sandbox-supervisor")]
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CodePlatformCompiledExecute {
@@ -24,6 +29,7 @@ pub(crate) struct CodePlatformCompiledExecute {
     pub(crate) snapshot_key_sha256: ContentSha256,
     pub(crate) selected_descriptor_sha256: ContentSha256,
 }
+#[cfg(feature = "sandbox-supervisor")]
 impl CodePlatformCompiledExecute {
     fn control(&self) -> Control {
         Control {
@@ -42,6 +48,7 @@ impl CodePlatformCompiledExecute {
                 .is_ok_and(|digest| hex(&digest) == request)
     }
 }
+#[cfg(feature = "sandbox-supervisor")]
 impl CodePlatformBinding {
     pub(crate) fn from_job(
         job: &PreparedJob,
@@ -147,6 +154,7 @@ pub enum RetainedRuntimeKind {
     Docker,
     Kubernetes,
 }
+#[cfg(feature = "sandbox-supervisor")]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RetainedCodePlatformRuntime {
@@ -162,6 +170,7 @@ pub(crate) struct RetainedCodePlatformRuntime {
     pub(crate) lifecycle: &'static str,
     pub(crate) compiled_execute: Option<CodePlatformCompiledExecute>,
 }
+#[cfg(feature = "sandbox-supervisor")]
 fn required_nullable<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -169,12 +178,14 @@ where
 {
     Option::<T>::deserialize(d)
 }
+#[cfg(feature = "sandbox-supervisor")]
 pub(crate) enum CodePlatformOwnerObservation {
     NotReady,
     Completed,
     Completing,
     Running(Box<CodePlatformOwnerResponse>),
 }
+#[cfg(feature = "sandbox-supervisor")]
 #[derive(Clone, Eq, PartialEq)]
 pub(crate) struct OwnedCodePlatformRuntime {
     pub(crate) runtime_id: String,
@@ -183,6 +194,7 @@ pub(crate) struct OwnedCodePlatformRuntime {
     pub(crate) binding: WholeCodeBinding,
     pub(crate) broker: CodePlatformBinding,
 }
+#[cfg(feature = "sandbox-supervisor")]
 #[allow(
     clippy::large_enum_variant,
     reason = "Keep bounded authenticated owner records inline without changing their contracts."
@@ -192,6 +204,7 @@ pub(crate) enum CodePlatformLedgerObservation {
     Completed,
     Running(OwnedCodePlatformRuntime),
 }
+#[cfg(feature = "sandbox-supervisor")]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CodePlatformOwnerResponse {

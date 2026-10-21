@@ -1129,7 +1129,7 @@ async fn final_hydration_and_submission_verify_execution_files_before_dispatch()
         .permissions(std::fs::Permissions::from_mode(0o700))
         .tempdir()
         .unwrap();
-    // The final index and submission perform no HTTP transfer.
+    // The final index and submission perform no content transfer.
     let content = DependencyContentClient::new(
         "https://content.invalid:9445",
         &std::fs::read(tls.join("ca.pem")).unwrap(),
