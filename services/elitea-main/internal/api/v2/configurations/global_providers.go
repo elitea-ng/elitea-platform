@@ -629,6 +629,8 @@ func (h *Handler) rewriteGlobalProviderBody(
 	body["section"] = GlobalProviderSection
 	if creating {
 		completeGlobalRowLabel(body)
+	} else if !h.mergeStoredGlobalProviderData(w, r, body) {
+		return nil, false
 	}
 	request, ok := encodeGlobalBody(w, r, body)
 	if !ok {
@@ -638,6 +640,60 @@ func (h *Handler) rewriteGlobalProviderBody(
 	// pinned to the public project and forced to shared, which is exactly the
 	// row the gateway accepts as a platform credential (keyless_credentials.go).
 	return request.WithContext(withPlatformCredentialWrite(request.Context())), true
+}
+
+// mergeStoredGlobalProviderData lays the stored row's `data` UNDER the body's,
+// so an update keeps every key the body omits.
+//
+// The delegated Update is partial per COLUMN: a present `data` is written
+// whole. The provider dialog never reads a secret back, so an edit that leaves
+// the key blank omits it — and a whole-column write then erased the sealed
+// `{{secret.NAME}}` reference, leaving a platform credential with no key after
+// an endpoint fix. On this surface an omitted key means "keep". The merged
+// stored reference is passed through by sealing, and a switch to the keyless
+// mode still clears it (admitKeylessCredentialData runs on the merged object).
+//
+// A body with no `data` object is left alone: the delegated handler then does
+// not touch the column, and a malformed `data` is its refusal to make.
+func (h *Handler) mergeStoredGlobalProviderData(
+	w http.ResponseWriter, r *http.Request, body map[string]any,
+) bool {
+	incoming, isObject := body["data"].(map[string]any)
+	// A nil pool is reachable only from a unit test that calls the rewrite
+	// directly: every route reaches it through pinPublicProject, which answers
+	// 503 for a missing store before this runs.
+	if !isObject || h.pool == nil {
+		return true
+	}
+	configID := chi.URLParam(r, "configID")
+	schema := pgx.Identifier{fmt.Sprintf("p_%d", h.publicProjectID)}.Sanitize()
+	var raw []byte
+	err := h.pool.QueryRow(r.Context(), fmt.Sprintf(
+		`SELECT data FROM %s.configuration WHERE %s = $1`,
+		schema, configurationIDColumn(configID)), configID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+			return false
+		}
+		slog.ErrorContext(r.Context(), "global provider stored data read failed",
+			"schema", schema, "configuration_id", configID, "err", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "internal server error")
+		return false
+	}
+	var stored map[string]any
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "invalid stored configuration")
+			return false
+		}
+	}
+	for key, value := range stored {
+		if _, present := incoming[key]; !present {
+			incoming[key] = value
+		}
+	}
+	return true
 }
 
 // completeGlobalRowLabel gives a CREATE the display label the row contract

@@ -69,6 +69,28 @@ export function isCredentialPropertyVisible(
   return visibleWhenMatches(property, data);
 }
 
+/**
+ * Catalogue fields a PROJECT credential must not offer, per type.
+ *
+ * `auth_mode` selects workload identity (the gateway pod's own Google
+ * identity), which the server accepts only for a platform provider: every
+ * project route refuses `workload_identity` with a 400. `token_audience` is
+ * meaningful only in that mode. The admin providers dialog renders its own
+ * control for both. The fields stay in `data` (seeded from the schema default,
+ * `auth_mode: "key"`, which a project write accepts), so hiding them changes
+ * nothing that is submitted, and a stored value survives an edit unchanged.
+ */
+const PLATFORM_ONLY_CREDENTIAL_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  vertex_ai: new Set(['auth_mode']),
+  ai_dial: new Set(['auth_mode', 'token_audience']),
+};
+
+/** True when the project-level form hides this field of this type. */
+export function isPlatformOnlyCredentialField(type: string | undefined, fieldKey: string): boolean {
+  if (type === undefined) return false;
+  return PLATFORM_ONLY_CREDENTIAL_FIELDS[type]?.has(fieldKey) ?? false;
+}
+
 /** Return all field keys that a section owns. */
 export function credentialSectionFieldKeys(section: ConfigSchemaSection): readonly string[] {
   const keys = new Set<string>();

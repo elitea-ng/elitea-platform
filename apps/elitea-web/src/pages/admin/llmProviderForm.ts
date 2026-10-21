@@ -291,8 +291,10 @@ export function missingProviderFields(
  * The `data` object to send.
  *
  * A blank SECRET field is OMITTED rather than sent as an empty string. That is
- * the difference between "keep the stored key" and "erase the stored key", and
- * the delegated update is partial, so an omitted key really does keep it.
+ * the difference between "keep the stored key" and "erase the stored key". The
+ * project routes write `data` whole; the admin providers surface lays the
+ * stored row's `data` under the body's (mergeStoredGlobalProviderData), so an
+ * omitted key really does keep it.
  *
  * A blank NON-secret field is sent as the empty string, because clearing an
  * endpoint or an api-version is a thing an operator legitimately does and there
@@ -313,10 +315,11 @@ export function providerDataFor(
     if (field.secret && value === '') continue;
     data[field.key] = value;
   }
-  // Sent on EVERY save of a type with the choice, `key` included: the update
-  // is partial, so omitting it on a switch back to a key would leave a stored
-  // `workload_identity` in place. A field the mode hides is not sent, so a
-  // stored key survives a switch to workload identity and back.
+  // Sent on EVERY save of a type with the choice, `key` included: an omitted
+  // key keeps its stored value, so omitting it on a switch back to a key
+  // would leave a stored `workload_identity` in place. A switch TO workload
+  // identity clears the stored key server-side, so switching back needs the
+  // key typed again.
   if (supportsWorkloadIdentity(type)) data['auth_mode'] = authMode;
   return data;
 }
