@@ -97,7 +97,7 @@ pub struct Facts {
     /// The detected test and check commands
     /// ([`elitea_local_tools::project::ProjectProfile::preamble_line`]):
     /// fixed words and plain folder names only. `None` when nothing was
-    /// detected (or not in time).
+    /// detected (or not in time), or when the policy has no shell.
     pub project: Option<String>,
 }
 
@@ -364,6 +364,11 @@ pub async fn gather(
             }
         },
         async {
+            // Without the shell the agent cannot run the project's
+            // commands: no line naming them.
+            if !policy.shell {
+                return None;
+            }
             // Cached by the session; detected again when a marker changed.
             let probe = tokio::task::spawn_blocking({
                 let session = session.clone();

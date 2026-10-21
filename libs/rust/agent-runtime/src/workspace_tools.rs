@@ -601,6 +601,17 @@ mod tests {
             .specs();
         let patch_names: Vec<_> = patch.iter().map(|spec| spec.name).collect();
         assert!(!patch_names.contains(&"edit_file") && !patch_names.contains(&"multi_edit"));
+        assert!(patch_names.contains(&"run_command") && patch_names.contains(&"run_tests"));
+        let patch_no_shell: Vec<_> = WorkspaceToolProvider::new(runner.clone(), false)
+            .with_edit_profile(EditProfile::Patch)
+            .specs()
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert!(
+            !patch_no_shell.contains(&"run_command") && !patch_no_shell.contains(&"run_tests"),
+            "{patch_no_shell:?}"
+        );
         let apply = patch
             .iter()
             .find(|spec| spec.name == "apply_patch")

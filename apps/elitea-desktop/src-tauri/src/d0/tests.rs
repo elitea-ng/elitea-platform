@@ -5755,7 +5755,7 @@ async fn a_transient_catalogue_answer_is_asked_again_next_turn() {
 
 /// `run_tests` (#1224) is a command tool: offered with the shell policy,
 /// gone with it (as `run_command` is), and the environment preamble names
-/// the detected test command and points the model at it.
+/// the detected test command and points the model at it only with it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn run_tests_is_offered_only_with_shell() {
     for shell in [true, false] {
@@ -5780,8 +5780,10 @@ async fn run_tests_is_offered_only_with_shell() {
         let llm = seen(&h.server, "/llm/v1/chat/completions");
         let first: Value = serde_json::from_str(&llm[0].body).unwrap();
         let system = first["messages"][0]["content"].as_str().unwrap();
-        assert!(
+        // Without the shell the commands cannot run: no line naming them.
+        assert_eq!(
             system.contains("- Project: cargo crate; tests: cargo test; check: cargo check"),
+            shell,
             "{system}"
         );
         assert_eq!(

@@ -348,6 +348,29 @@ fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<
             config.temp_dir.join("go-build").display().to_string(),
         ));
     }
+    // Gradle's and Maven's caches under the home are not writable there
+    // either: the session's temporary directory holds them too, unless the
+    // host passes its own (`GRADLE_USER_HOME`, `-Dmaven.repo.local` in
+    // `MAVEN_OPTS`).
+    if !out.iter().any(|(name, _)| name == "GRADLE_USER_HOME") {
+        out.push((
+            "GRADLE_USER_HOME".to_owned(),
+            config.temp_dir.join("gradle").display().to_string(),
+        ));
+    }
+    let maven_repo = format!(
+        "-Dmaven.repo.local={}",
+        config.temp_dir.join("m2-repository").display()
+    );
+    match out.iter_mut().find(|(name, _)| name == "MAVEN_OPTS") {
+        Some((_, opts)) if opts.contains("-Dmaven.repo.local=") => {}
+        Some((_, opts)) if opts.trim().is_empty() => *opts = maven_repo,
+        Some((_, opts)) => {
+            opts.push(' ');
+            opts.push_str(&maven_repo);
+        }
+        None => out.push(("MAVEN_OPTS".to_owned(), maven_repo)),
+    }
     // A container host's workspace root that git must trust although
     // another uid owns it (empty on the desktop).
     let trust = config.sandbox.git_trust_env();
@@ -838,6 +861,63 @@ mod tests {
                 .iter()
                 .any(|(name, _)| name == "LANG")
         );
+    }
+
+    /// Go's, Gradle's and Maven's caches go to the session's temporary
+    /// directory (the sandbox cannot write the home's), unless the host
+    /// passes its own; a host's other `MAVEN_OPTS` are kept.
+    #[test]
+    fn build_tool_caches_default_to_the_session_temp_dir() {
+        let (_dir, _workspace, config) = setup();
+        let value = |env: &[(String, String)], name: &str| {
+            env.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        let temp = config.temp_dir.clone();
+        let env = super::environment_from(&config, Vec::new());
+        assert_eq!(
+            value(&env, "GOCACHE"),
+            Some(temp.join("go-build").display().to_string())
+        );
+        assert_eq!(
+            value(&env, "GRADLE_USER_HOME"),
+            Some(temp.join("gradle").display().to_string())
+        );
+        let repo = format!(
+            "-Dmaven.repo.local={}",
+            temp.join("m2-repository").display()
+        );
+        assert_eq!(value(&env, "MAVEN_OPTS"), Some(repo.clone()));
+        let passed = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        let env = super::environment_from(
+            &config,
+            passed(&[
+                ("GRADLE_USER_HOME", "/host/gradle"),
+                ("MAVEN_OPTS", "-Xmx1g -Dmaven.repo.local=/host/m2"),
+            ]),
+        );
+        assert_eq!(
+            value(&env, "GRADLE_USER_HOME").as_deref(),
+            Some("/host/gradle")
+        );
+        assert_eq!(
+            value(&env, "MAVEN_OPTS").as_deref(),
+            Some("-Xmx1g -Dmaven.repo.local=/host/m2")
+        );
+        assert_eq!(
+            env.iter()
+                .filter(|(name, _)| name == "GRADLE_USER_HOME")
+                .count(),
+            1
+        );
+        let env = super::environment_from(&config, passed(&[("MAVEN_OPTS", "-Xmx1g")]));
+        assert_eq!(value(&env, "MAVEN_OPTS"), Some(format!("-Xmx1g {repo}")));
     }
 
     #[tokio::test]

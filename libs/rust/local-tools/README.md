@@ -30,7 +30,8 @@ vitest and jest (through the package manager the lockfile names), pytest,
 Maven (`./mvnw` when present), Gradle (`./gradlew` when present), or the
 package's own `test` script. The profile is cached per session and
 re-read when a marker file changes; the desktop's environment preamble
-shows it as its `Project:` line.
+shows it as its `Project:` line (only when the policy allows the shell:
+without it the agent cannot run those commands).
 
 `run_tests {command?, filter?, cwd?, timeout_seconds? (1..1800), network?}`
 runs the detected command for `cwd` (or validates a given one: it must be
@@ -40,7 +41,10 @@ jest `--json`, pytest `--junitxml` into the session's `TMPDIR`; Maven and
 Gradle reports are read from their report folders, only those this run
 wrote). It runs exactly as `run_command` runs a command: the OS sandbox in
 `workspace-write`, the network off unless asked, the deny list, the same
-rules and checkpoint. The answer:
+rules and checkpoint. Go's, Gradle's and Maven's caches (`GOCACHE`,
+`GRADLE_USER_HOME`, `-Dmaven.repo.local` in `MAVEN_OPTS`) default to the
+session's temporary directory, since the sandbox cannot write the home's,
+unless the host passes its own. The answer:
 
 ```json
 {"kind": "cargo", "command": "cargo test --message-format=json", "cwd": ".",

@@ -1659,6 +1659,7 @@ mod tests {
         let patch = tools_for(EditProfile::select("gpt-5", None));
         let patch_names: Vec<_> = patch.iter().map(|spec| spec.name).collect();
         assert!(patch_names.contains(&"write_file") && patch_names.contains(&"apply_patch"));
+        assert!(patch_names.contains(&"run_command") && patch_names.contains(&"run_tests"));
         assert!(!patch_names.contains(&"edit_file") && !patch_names.contains(&"multi_edit"));
         let apply = patch
             .iter()
