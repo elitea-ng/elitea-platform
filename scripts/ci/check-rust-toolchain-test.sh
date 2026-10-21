@@ -145,10 +145,10 @@ fresh; for f in services/elitea-vector/Containerfile services/elitea-inventory-e
 expect "(b)(d) image references below the floor" fail "services/elitea-inventory-engine/Containerfile: found 0 rust image reference(s), expected at least 2"
 
 # (c) MSRV
-fresh; edit services/elitea-vector/Cargo.toml 's/^rust-version = "1\.95"/rust-version = "1.96"/'
-expect "(c) a crate with another MSRV" fail "services/elitea-vector/Cargo.toml: rust-version 1.96 (stated)"
-fresh; edit libs/rust/Cargo.toml 's/^rust-version = "1\.95"/rust-version = "1.94"/'
-expect "(c) the workspace MSRV moves under its members" fail "libs/rust/agent-runtime/Cargo.toml: rust-version 1.94 (inherited"
+fresh; edit services/elitea-vector/Cargo.toml 's/^rust-version = "1\.99"/rust-version = "1.98"/'
+expect "(c) a crate with another MSRV" fail "services/elitea-vector/Cargo.toml: rust-version 1.98 (stated)"
+fresh; edit libs/rust/Cargo.toml 's/^rust-version = "1\.99"/rust-version = "1.98"/'
+expect "(c) the workspace MSRV moves under its members" fail "libs/rust/agent-runtime/Cargo.toml: rust-version 1.98 (inherited"
 fresh; edit services/elitea-worker-rust/Cargo.toml '/^rust-version/d'
 expect "(c)(d) a crate with no rust-version" fail "services/elitea-worker-rust/Cargo.toml: no readable rust-version"
 fresh; edit libs/rust/vendor/leiden-rs/Cargo.toml 's/^rust-version = "[^"]*"/rust-version = "1.100"/'

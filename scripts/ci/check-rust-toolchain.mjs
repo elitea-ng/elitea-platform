@@ -21,9 +21,10 @@ import { loadYamlNodes } from "./ci-compat.mjs";
 
 // The image index digest of rust:<pin>-trixie (all platforms). Moves with the pin.
 export const RUST_IMAGE_DIGEST = "sha256:767c71592f7d1f3f242292000f8efd4e67b6732363da176772f4d220332e264f";
-// The minimum supported Rust version of our own crates: the documented floor,
-// deliberately below the pin (see the PR #1297 body). Must be <= the pin.
-export const MSRV = "1.95";
+// The minimum supported Rust version of our own crates: the documented floor
+// (see the PR #1297 body; raised to 1.99 with the 1.99.1 pin in PR #1376).
+// Must be <= the pin.
+export const MSRV = "1.99";
 
 const MIN_TOOLCHAIN_FILES = 9;
 const MIN_CRATES = 30;

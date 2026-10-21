@@ -2,7 +2,7 @@
 name = "elitea-vector"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.99"
 publish = false
 description = "The platform's vector facade: the only Qdrant client, with project scope injection (ADR-0031)."
 
