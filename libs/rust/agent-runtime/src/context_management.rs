@@ -518,7 +518,7 @@ const fn invalid_input() -> NativeAgentAssemblyError {
 
 /// The context-settings key of [`CompactionPolicy::admit`]:
 /// `true`, or `{"reserve_tokens": n, "keep_recent_tokens": n,
-/// "fresh_window": bool}` (each optional). Not one of [`ADMITTED_KEYS`]:
+/// "fresh_window": bool}` (each optional). Not one of `ADMITTED_KEYS`:
 /// a worker that admitted it would also have to compose it.
 pub const SESSION_COMPACTION_KEY: &str = "session_compaction";
 
