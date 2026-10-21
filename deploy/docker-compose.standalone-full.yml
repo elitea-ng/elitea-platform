@@ -1186,6 +1186,9 @@ services:
       # A restored database can already carry the cluster-wide admission
       # policy. All Main replicas must use that persisted value; the runtime
       # deliberately rejects a mismatch instead of silently changing capacity.
+      # To change it (1..4096): set the new value, recreate elitea-main, then
+      # `exec elitea-main /elitea-admission-ctl set` once (deploy/runtime/
+      # README.md, "Changing the admission cap"; #966).
       ELITEA_RUNTIME_MAX_OUTSTANDING: "${ELITEA_RUNTIME_MAX_OUTSTANDING:-64}"
 
       # Agent-execution dispatch: the chat send path. Its own stream; config.go

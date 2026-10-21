@@ -1910,6 +1910,11 @@ main:
     # profile — and different from every dispatch stream below. A stream's
     # capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs.
     commandStream: ""
+    # The durable admission cap per capability, 1..4096 (ELITEA_RUNTIME_MAX_OUTSTANDING).
+    # It is also persisted in the database, and every start fails closed while
+    # the two differ. To change it: upgrade with the new value, then run
+    # `kubectl exec deploy/<release>-main -- /elitea-admission-ctl set` once
+    # (deploy/runtime/README.md, "Changing the admission cap"; #966).
     maxOutstanding: 64
 
     # The runtime plane's NATS connection: the command bus producer and the

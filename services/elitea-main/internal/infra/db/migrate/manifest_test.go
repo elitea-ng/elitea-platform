@@ -718,7 +718,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// proxy replica), shared by every Main replica so a turn yields one audit
 	// event and a Main restart loses nothing (ADR-0034 decision 9). A new
 	// table, no data, no permission.
-	require.EqualValues(t, 169, Head(shared))
+	//
+	// 170: shared/0170_execution_admission_cap_4096.sql, the durable admission
+	// hard ceiling rises from 1024 to 4096 per capability (#966): the CHECKs on
+	// execution_admission_policies.max_outstanding and
+	// agent_admission_reservations.configured_max. No data, no permission.
+	require.EqualValues(t, 170, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

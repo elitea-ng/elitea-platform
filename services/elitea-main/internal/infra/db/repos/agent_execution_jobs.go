@@ -371,12 +371,14 @@ func (r *AgentExecutionJobsRepository) reserveAgentAdmissionError(
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case "E9651":
-			return fmt.Errorf(
-				"%w: capability %q configured=%d",
-				ErrAdmissionPolicyMismatch,
-				capabilityID,
-				r.policy.MaxOutstanding,
-			)
+			// The guard trigger (shared/0126) names both values in its
+			// message; the persisted one is read back from it for the
+			// operator, and reported as unknown if the text ever changes.
+			var persisted, configured int64
+			if _, scanErr := fmt.Sscanf(pgErr.Message, "agent admission policy mismatch: persisted %d configured %d", &persisted, &configured); scanErr != nil {
+				persisted = 0
+			}
+			return admissionPolicyMismatchError(capabilityID, r.policy.MaxOutstanding, persisted)
 		case "E9652":
 			return &executionapp.AdmissionCapacityError{
 				CapabilityID:   capabilityID,

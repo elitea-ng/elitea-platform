@@ -248,6 +248,37 @@ With `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` set, `seed-llm` behaves exactly as
 it did before: the real credential is seeded and the mock is not, so nothing can
 quietly answer a request meant for a provider.
 
+## Changing the admission cap (#966)
+
+`ELITEA_RUNTIME_MAX_OUTSTANDING` (Helm `main.runtime.maxOutstanding`, default
+64, at most 4096) is the number of durable executions one capability may have
+outstanding. The first start of each capability persists the starting
+replica's value in `elitea_runtime.execution_admission_policies`, and from then
+on every start re-locks that row and **fails closed** while the replica's value
+differs from the persisted one — two replicas must never admit under two
+ceilings. A cap change is therefore two coordinated changes, and until both
+are made every start answers 500 "Failed to start agent execution":
+
+1. Give every elitea-main replica the new value: `helm upgrade … --set
+   main.runtime.maxOutstanding=2048`, or the env var and a recreate on compose.
+2. Once, from any elitea-main container, bring the persisted cap to the value
+   that replica runs with:
+
+   ```sh
+   kubectl exec deploy/<release>-main -- /elitea-admission-ctl set
+   # compose: podman compose exec elitea-main /elitea-admission-ctl set
+   ```
+
+   With no `-max` it writes that container's own
+   `ELITEA_RUNTIME_MAX_OUTSTANDING` to every persisted capability, then prints
+   them all. `-max N` and `-capability ID` narrow it; `show` only prints.
+
+Starts fail closed between the rollout and step 2, so run step 2 right after
+the rollout completes. Each replica logs `runtime admission cap` at startup
+with `configured` and `persisted` per capability, as an ERROR with the fix
+when they differ, and the mismatch error of a failed start names both values
+and this command.
+
 ## What still does not work
 
 The chat loop has not been driven end to end from a message to a streamed

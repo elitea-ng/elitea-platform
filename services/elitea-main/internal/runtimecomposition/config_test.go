@@ -1,6 +1,7 @@
 package runtimecomposition
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -467,6 +468,24 @@ func TestConfigNATSURLAndIdentityContract(t *testing.T) {
 // Every Redis-era variable is gone from the configuration surface: a stale
 // deployment that still sets them gets no Redis client, and nothing in the
 // composition reads them (TestNoRuntimeRedisLookups in nats_test.go).
+// #966: the env parse follows the repository ceiling (4096), not the former
+// 1024, and still refuses anything above it.
+func TestConfigMaxOutstandingAcceptsCapsAboveTheFormer1024Ceiling(t *testing.T) {
+	for _, raw := range []string{"1025", "2048", "4096"} {
+		env := validEnvironment()
+		env["ELITEA_RUNTIME_MAX_OUTSTANDING"] = raw
+		config, err := ConfigFromEnv(mapLookup(env))
+		if err != nil || fmt.Sprint(config.MaxOutstanding) != raw {
+			t.Fatalf("ELITEA_RUNTIME_MAX_OUTSTANDING=%s: config=%d err=%v", raw, config.MaxOutstanding, err)
+		}
+	}
+	env := validEnvironment()
+	env["ELITEA_RUNTIME_MAX_OUTSTANDING"] = "4097"
+	if _, err := ConfigFromEnv(mapLookup(env)); err == nil {
+		t.Fatal("accepted ELITEA_RUNTIME_MAX_OUTSTANDING=4097")
+	}
+}
+
 func TestConfigNeedsNoRedis(t *testing.T) {
 	for name := range validEnvironment() {
 		if strings.Contains(name, "REDIS") || strings.Contains(name, "CONSUMER_GROUP") || strings.Contains(name, "STREAM_MAX_ENTRIES") {

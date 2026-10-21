@@ -1009,7 +1009,7 @@ and the term that actually moves is the one this counts.
 {{- fail (printf "runtime.commandStream is %q. The command bus has three streams, %v, created by the nats-bootstrap chart and named in the NATS permission table; config.go refuses any other name." ($runtime.commandStream | toString) $streams) -}}
 {{- end -}}
 {{- if not $runtime.maxOutstanding -}}
-{{- fail "runtime.enabled=true needs runtime.maxOutstanding (ELITEA_RUNTIME_MAX_OUTSTANDING), a positive integer no greater than 1024." -}}
+{{- fail "runtime.enabled=true needs runtime.maxOutstanding (ELITEA_RUNTIME_MAX_OUTSTANDING), a positive integer no greater than 4096 (#966)." -}}
 {{- end -}}
 {{- range $legacy := list "streamMaxEntries" "redis" -}}
 {{- if hasKey $runtime $legacy -}}
