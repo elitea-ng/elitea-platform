@@ -309,7 +309,8 @@ nats:
                 subject: "gateway.events.project.*.events"
           users:
             # elitea-main: the project SSE relay, the canvas presence roster
-            # it publishes, and the presence KV bucket it reads and writes.
+            # it publishes, the presence KV bucket it reads and writes, and
+            # the platform MCP replay bucket.
             - user: "spiffe://elitea.internal/nats/elitea-main"
               permissions:
                 publish:
@@ -341,6 +342,15 @@ nats:
                     # when a watcher falls behind, so no test exercises this
                     # grant; without it a slow replica's watcher stalls.
                     - "$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>"
+                    # Platform MCP call replay (issue 1231): claim (kv.Create),
+                    # answer (kv.Update), release (kv.Delete) — all publishes
+                    # on the bucket's own subjects; bind and the TTL check;
+                    # and the read-back kv.Create and kv.Get make (the bucket
+                    # is allow_direct, so a direct get). No consumer: a
+                    # waiting retry polls.
+                    - "$KV.ELITEA_PLATFORM_MCP_REPLAY.>"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_PLATFORM_MCP_REPLAY"
+                    - "$JS.API.DIRECT.GET.KV_ELITEA_PLATFORM_MCP_REPLAY.>"
                   deny:
                     # The gateway's family, imported: elitea-main reads it and
                     # never speaks for the gateway on it.
@@ -360,8 +370,8 @@ nats:
                     - "gateway.events.project.*.events"
                     - "_INBOX_elitea-main.>"
 
-            # elitea-nats-bootstrap-main: creates and reconciles MAIN's one
-            # bucket. Publishes no data.
+            # elitea-nats-bootstrap-main: creates and reconciles MAIN's two
+            # buckets. Publishes no data.
             - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-main"
               permissions:
                 publish:
@@ -372,6 +382,9 @@ nats:
                     - "$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE"
                     - "$JS.API.STREAM.CREATE.KV_ELITEA_CANVAS_PRESENCE"
                     - "$JS.API.STREAM.UPDATE.KV_ELITEA_CANVAS_PRESENCE"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_PLATFORM_MCP_REPLAY"
+                    - "$JS.API.STREAM.CREATE.KV_ELITEA_PLATFORM_MCP_REPLAY"
+                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_PLATFORM_MCP_REPLAY"
                 subscribe:
                   allow:
                     - "_INBOX_elitea-nats-bootstrap-main.>"

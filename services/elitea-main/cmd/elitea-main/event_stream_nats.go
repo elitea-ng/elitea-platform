@@ -15,6 +15,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 
 	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
@@ -245,4 +246,22 @@ func newCanvasPresenceStore(ctx context.Context, conn *nats.Conn) (*v2canvaspres
 		store.Resync()
 	})
 	return store, nil
+}
+
+// newPlatformMCPReplayStore binds the platform MCP replay bucket on the
+// live-update connection (issue 1231): every replica claims a platform call's
+// Idempotency-Key there before running it, so a retry that lands on another
+// replica never runs a write twice. Like the presence bucket it is the
+// nats-bootstrap Job's (#1076), and a missing one stops startup.
+func newPlatformMCPReplayStore(ctx context.Context, conn *nats.Conn) (*desktopopsapi.NATSPlatformReplays, error) {
+	if conn == nil {
+		return nil, errors.New("a NATS connection is required")
+	}
+	js, err := jetstream.New(conn)
+	if err != nil {
+		return nil, fmt.Errorf("open JetStream: %w", err)
+	}
+	bindCtx, cancel := context.WithTimeout(ctx, eventsNATSConnectTimeout)
+	defer cancel()
+	return desktopopsapi.NewNATSPlatformReplays(bindCtx, js, desktopopsapi.PlatformReplayBucket)
 }

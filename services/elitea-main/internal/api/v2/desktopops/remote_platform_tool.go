@@ -15,10 +15,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,11 +29,14 @@ const (
 	// platformToolTimeout bounds one in-process platform call, the 60
 	// seconds the operation documents for a worker run.
 	platformToolTimeout = 60 * time.Second
-	// platformReplayTTL and platformReplayCap bound the replay memory: a
-	// retry with the same Idempotency-Key within the TTL answers the first
-	// attempt's result and never runs the tool again.
-	platformReplayTTL = 15 * time.Minute
-	platformReplayCap = 4096
+	// platformReplayWait is how long a retry that finds its key still in
+	// progress (on any replica) waits for that attempt's answer before
+	// answering 409 remote_toolkit_in_progress; platformReplayPoll is how
+	// often it looks.
+	platformReplayWait = 30 * time.Second
+	platformReplayPoll = 250 * time.Millisecond
+	// platformReplayStoreTimeout bounds one replay store call.
+	platformReplayStoreTimeout = 5 * time.Second
 )
 
 // ErrPlatformToolsUnavailable is a bridge nothing was bound to: the
@@ -99,99 +102,14 @@ func (b *PlatformToolBridge) CallPlatformTool(request *http.Request, call Platfo
 	return (*caller).CallPlatformTool(request, call)
 }
 
-// platformReplays remembers each platform call by (caller, Idempotency-Key),
-// on this replica: a saved toolkit's run is idempotent on its admission row,
-// and an in-process call has no such row, so a retry after a dropped answer
-// would otherwise run a write twice.
-type platformReplays struct {
-	mu      sync.Mutex
-	entries map[string]*platformReplay
-	now     func() time.Time
-}
-
-type platformReplay struct {
-	digest  string
-	done    bool
-	status  int
-	body    map[string]any
-	expires time.Time
-}
-
-func newPlatformReplays(now func() time.Time) *platformReplays {
-	return &platformReplays{entries: map[string]*platformReplay{}, now: now}
-}
-
-type replayVerdict int
-
-const (
-	replayNew replayVerdict = iota
-	replayInProgress
-	replayDone
-	replayConflict
-)
-
-// begin claims key for a call whose input digest is digest.
-func (p *platformReplays) begin(key, digest string) (replayVerdict, *platformReplay) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := p.now()
-	for k, entry := range p.entries {
-		if entry.done && now.After(entry.expires) {
-			delete(p.entries, k)
-		}
-	}
-	if entry, ok := p.entries[key]; ok {
-		switch {
-		case entry.digest != digest:
-			return replayConflict, nil
-		case !entry.done:
-			return replayInProgress, nil
-		default:
-			return replayDone, entry
-		}
-	}
-	if len(p.entries) >= platformReplayCap {
-		var oldestKey string
-		var oldest time.Time
-		for k, entry := range p.entries {
-			if entry.done && (oldestKey == "" || entry.expires.Before(oldest)) {
-				oldestKey, oldest = k, entry.expires
-			}
-		}
-		if oldestKey == "" {
-			return replayInProgress, nil
-		}
-		delete(p.entries, oldestKey)
-	}
-	p.entries[key] = &platformReplay{digest: digest}
-	return replayNew, nil
-}
-
-// finish records the answer of key; a call that did not reach the tool
-// (forget) leaves no entry, so its retry runs.
-func (p *platformReplays) finish(key string, status int, body map[string]any) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if entry, ok := p.entries[key]; ok {
-		entry.done, entry.status, entry.body = true, status, body
-		entry.expires = p.now().Add(platformReplayTTL)
-	}
-}
-
-func (p *platformReplays) forget(key string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.entries, key)
-}
-
 func platformCallDigest(toolkitType, toolName, argumentsSHA256 string) string {
 	digest := sha256.Sum256([]byte(toolkitType + "\x00" + toolName + "\x00" + argumentsSHA256))
 	return hex.EncodeToString(digest[:])
 }
 
-// runPlatformTool runs the authorized call once per Idempotency-Key and
-// answers it. It is reached after every check serve makes; only a call it
-// admits is charged to the caller's rate.
+// runPlatformTool runs the authorized call once per Idempotency-Key, on any
+// replica, and answers it. It is reached after every check serve makes; only
+// a call it admits is charged to the caller's rate.
 func (h *remoteToolkitHandler) runPlatformTool(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -200,15 +118,26 @@ func (h *remoteToolkitHandler) runPlatformTool(
 	arguments json.RawMessage,
 	charge func() bool,
 ) {
-	key := "actor:" + strconv.FormatInt(call.actor, 10) + ":" + idempotencyKey
-	verdict, replay := h.replays.begin(key, platformCallDigest(call.toolkitType, call.toolName, call.argumentsSHA256))
-	switch verdict {
-	case replayConflict:
+	key := platformReplayKey(call.actor, call.project, idempotencyKey)
+	digest := platformCallDigest(call.toolkitType, call.toolName, call.argumentsSHA256)
+	// The store's own calls are bounded and detached from the caller's
+	// cancellation, like the tool run below: a claim must not be left half
+	// written because the client hung up.
+	storeCtx := func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.WithoutCancel(request.Context()), platformReplayStoreTimeout)
+	}
+	claim, err := h.claimPlatformCall(request.Context(), key, digest, storeCtx)
+	if err != nil {
+		h.writeReplayUnavailable(request.Context(), writer, call, err)
+		return
+	}
+	switch claim.Verdict {
+	case ReplayConflict:
 		call.outcome = "idempotency_conflict"
 		desktopwire.WriteError(writer, http.StatusConflict, "idempotency_conflict",
 			"This request key already belongs to a different tool input.")
 		return
-	case replayInProgress:
+	case ReplayInProgress:
 		call.outcome = "in_progress"
 		desktopwire.WriteJSON(writer, http.StatusConflict, map[string]any{
 			"ok": false, "error": "remote_toolkit_in_progress", "toolkit_id": 0,
@@ -216,13 +145,23 @@ func (h *remoteToolkitHandler) runPlatformTool(
 				"the retry answers its result once it finishes. It never runs the tool again.",
 		})
 		return
-	case replayDone:
+	case ReplayDone:
 		call.outcome = "replayed"
-		desktopwire.WriteJSON(writer, replay.status, replay.body)
+		writePlatformReplay(writer, call, claim.Result)
 		return
 	}
+	release := func() {
+		ctx, cancel := storeCtx()
+		defer cancel()
+		if err := h.replays.Release(ctx, key, claim); err != nil {
+			// The key stays "in progress" until the bucket expires it: a
+			// retry is answered 409 and never runs the tool, which is the
+			// safe side of a lost release.
+			slog.WarnContext(request.Context(), "platform MCP replay: release failed", "err", err)
+		}
+	}
 	if !charge() {
-		h.replays.forget(key)
+		release()
 		return
 	}
 	// Detached from the caller's cancellation (its values, the authenticated
@@ -234,7 +173,7 @@ func (h *remoteToolkitHandler) runPlatformTool(
 		ProjectID: call.project, ToolkitType: call.toolkitType, ToolName: call.toolName, Arguments: arguments,
 	})
 	if err != nil {
-		h.replays.forget(key)
+		release()
 		call.outcome = "run_error"
 		if errors.Is(err, ErrPlatformToolsUnavailable) {
 			desktopwire.WriteError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
@@ -248,8 +187,77 @@ func (h *remoteToolkitHandler) runPlatformTool(
 	}
 	status, body := platformAnswer(call, result)
 	call.outcome = platformOutcome(result)
-	h.replays.finish(key, status, body)
-	desktopwire.WriteJSON(writer, status, body)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		encoded = nil
+	}
+	recordCtx, recordCancel := storeCtx()
+	defer recordCancel()
+	if err := h.replays.Complete(recordCtx, key, claim, PlatformReplayResult{
+		Status: status, Body: encoded, Omitted: encoded == nil || len(encoded) > platformReplayMaxBody, OK: body["ok"] == true,
+	}); err != nil {
+		// The tool ran; its answer goes to this caller. The key stays "in
+		// progress" until it expires, so a retry is refused and never runs
+		// the tool again.
+		slog.WarnContext(request.Context(), "platform MCP replay: recording the answer failed", "err", err)
+	}
+	if encoded == nil {
+		desktopwire.WriteJSON(writer, status, body)
+		return
+	}
+	desktopwire.WriteJSON(writer, status, json.RawMessage(encoded))
+}
+
+// claimPlatformCall claims key, and while another attempt holds it waits up
+// to h.replayWait for that attempt's answer (or for it to release the key,
+// which this call then claims).
+func (h *remoteToolkitHandler) claimPlatformCall(
+	requestCtx context.Context, key, digest string, storeCtx func() (context.Context, context.CancelFunc),
+) (PlatformReplay, error) {
+	deadline := h.now().Add(h.replayWait)
+	for {
+		ctx, cancel := storeCtx()
+		claim, err := h.replays.Claim(ctx, key, digest)
+		cancel()
+		if err != nil || claim.Verdict != ReplayInProgress || !h.now().Before(deadline) {
+			return claim, err
+		}
+		select {
+		case <-requestCtx.Done():
+			// The caller left; it retries with the same key.
+			return claim, nil
+		case <-time.After(h.replayPoll):
+		}
+	}
+}
+
+// writeReplayUnavailable answers a call the replay store could not decide:
+// fail closed. Running without the claim could run a retried write twice.
+func (h *remoteToolkitHandler) writeReplayUnavailable(ctx context.Context, writer http.ResponseWriter, call *remoteCall, err error) {
+	slog.WarnContext(ctx, "platform MCP replay store unavailable; refusing the call", "err", err)
+	call.outcome = "replay_store_unavailable"
+	writer.Header().Set("Retry-After", "1")
+	desktopwire.WriteError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
+		"The server could not record this call's Idempotency-Key right now, so it did not run it. Retry with the same key and body.")
+}
+
+// writePlatformReplay answers a retry with the first attempt's answer. One too
+// large to keep answers that the call ran, without running it again.
+func writePlatformReplay(writer http.ResponseWriter, call *remoteCall, result PlatformReplayResult) {
+	if !result.Omitted && len(result.Body) > 0 {
+		desktopwire.WriteJSON(writer, result.Status, result.Body)
+		return
+	}
+	outcome := "failed"
+	if result.OK {
+		outcome = "succeeded"
+	}
+	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
+		"ok": false, "toolkit_id": 0, "toolkit_type": call.toolkitType, "tool_name": call.toolName,
+		"status": "tool_error", "result_omitted": true, "replayed_status": result.Status,
+		"error": "This call already ran with this Idempotency-Key (it " + outcome + ", HTTP " + strconv.Itoa(result.Status) +
+			"), and its result was too large to keep for a retry. It was not run again.",
+	})
 }
 
 func platformOutcome(result PlatformToolResult) string {

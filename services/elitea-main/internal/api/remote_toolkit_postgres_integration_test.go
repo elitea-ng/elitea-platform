@@ -145,6 +145,21 @@ func (remoteGatePlatformAuthorizer) AuthorizeRemoteTool(_ context.Context, reque
 
 const remoteToolkitEditorID = 15604
 
+// freshReplays claims every key: each call below has its own Idempotency-Key,
+// and the replay store's semantics have their own tests against a real
+// JetStream (desktopops' platform_replay_nats_test.go).
+type freshReplays struct{}
+
+func (freshReplays) Claim(context.Context, string, string) (desktopopsapi.PlatformReplay, error) {
+	return desktopopsapi.PlatformReplay{Verdict: desktopopsapi.ReplayClaimed}, nil
+}
+
+func (freshReplays) Complete(context.Context, string, desktopopsapi.PlatformReplay, desktopopsapi.PlatformReplayResult) error {
+	return nil
+}
+
+func (freshReplays) Release(context.Context, string, desktopopsapi.PlatformReplay) error { return nil }
+
 // One internal builder (Elitea Applications) through executeRemoteToolkitTool
 // on a CLEAN database (issue 1231): the real Auth and legacyrbac resolver, and
 // the REAL MCP server dispatch behind the router's bridge. The call runs as
@@ -176,7 +191,7 @@ ON CONFLICT (id) DO NOTHING;`, id, role)); err != nil {
 		t.Helper()
 		route, err := desktopopsapi.NewRemoteToolkitRoute(desktopopsapi.RemoteToolkitDependencies{
 			Worker: "rust", Authorizer: remoteGatePlatformAuthorizer{}, Turns: remoteGateTurns{}, Audit: remoteGateAudit{},
-			Confirmations: remoteGateLedger{}, Platform: bridge,
+			Confirmations: remoteGateLedger{}, Platform: bridge, Replays: freshReplays{},
 		}, apimw.AuthConfig{
 			Validator:          apimw.TokenValidator(platformTokenValidator{userID: userID}),
 			PrincipalValidator: testPrincipalValidator{},

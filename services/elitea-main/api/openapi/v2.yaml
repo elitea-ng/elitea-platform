@@ -19950,8 +19950,11 @@ paths:
         answers 422 `reason: unknown_tool` naming the server's tools, and MCP
         exposure switched off answers 422 `reason: unsupported_toolkit`. A
         retry with the same Idempotency-Key and body answers the first call's
-        result (remembered per server replica for 15 minutes; 409
-        `remote_toolkit_in_progress` while it runs).
+        result on any server replica (claimed in a shared JetStream KV store
+        before the tool runs and kept 15 minutes; a retry that finds it still
+        running waits up to 30 s, then answers 409
+        `remote_toolkit_in_progress`). Without that store the call never
+        runs (503 `remote_toolkit_unavailable_now`).
       tags: [toolkits, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'

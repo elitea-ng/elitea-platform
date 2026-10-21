@@ -2452,6 +2452,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		canvasPresence = v2canvaspresence.Backend{Store: presenceStore, Bus: liveNATSBus}
 	}
 
+	// The platform MCP replay store (issue 1231): a JetStream KV bucket on the
+	// same server, which every replica claims a platform call's
+	// Idempotency-Key in before running it. Without the live-update NATS
+	// there is none, and the remote toolkit route answers 501 for platform
+	// MCP tools rather than dedupe them per replica.
+	var platformMCPReplays desktopopsapi.PlatformReplayStore
+	if eventsNATS != nil {
+		replayStore, err := newPlatformMCPReplayStore(ctx, eventsNATS)
+		if err != nil {
+			return fmt.Errorf("compose platform MCP replay store: %w", err)
+		}
+		platformMCPReplays = replayStore
+	} else {
+		logger.Warn("platform MCP tools of local turns are disabled: " + eventsNATSURLEnv +
+			" is unset, so there is no shared Idempotency-Key store (executeRemoteToolkitTool answers 501 for toolkit id 0)")
+	}
+
 	// The toolkit TYPE catalogue (GET /elitea_core/toolkits/prompt_lib/
 	// {projectID}) serves each tool's argument schema from the digest-pinned SDK
 	// snapshot. It is loaded unconditionally and here, in the composition root,
@@ -2511,7 +2528,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// local turn runs through the same dispatch a cloud turn's does.
 	platformMCPTools := desktopopsapi.NewPlatformToolBridge()
 	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
-		nativePolicy, auditRecorder, platformMCPTools, apiGroupAuth, logger)
+		nativePolicy, auditRecorder, platformMCPTools, platformMCPReplays, apiGroupAuth, logger)
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}

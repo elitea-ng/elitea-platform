@@ -3,8 +3,8 @@ name: nats-bootstrap
 description: >-
   Hook Job that creates and reconciles every elitea JetStream asset
   (GATEWAY_BUDGET and GATEWAY_RATELIMIT counter streams, GATEWAY_BUDGET_DELTAS
-  and its budget-writeback consumer, GATEWAY_ALERT_COOLDOWN and
-  ELITEA_CANVAS_PRESENCE KV buckets) at a replicas count matching the NATS
+  and its budget-writeback consumer, GATEWAY_ALERT_COOLDOWN,
+  ELITEA_CANVAS_PRESENCE and ELITEA_PLATFORM_MCP_REPLAY KV buckets) at a replicas count matching the NATS
   profile. Connects over mTLS to each NATS account that owns assets (MAIN,
   GATEWAY, RUNTIME, WORKER; SCHEDULER owns none) as that account's bootstrap identity, the only one there that may create
   streams and consumers (#1076), with install-only certificates.

@@ -15,6 +15,8 @@
 #
 #   account MAIN
 #     KV     ELITEA_CANVAS_PRESENCE  elitea-main canvas presence rosters
+#     KV     ELITEA_PLATFORM_MCP_REPLAY  platform MCP call claims and answers
+#                                    (Idempotency-Key replay across replicas)
 #   account GATEWAY
 #     stream GATEWAY_BUDGET          budget counters (Nats-Incr, AllowMsgCounter);
 #                                    one running total per subject
@@ -280,7 +282,7 @@ assert_asset() {
 
 # ── account MAIN ────────────────────────────────────────────────────────────
 bootstrap_main() {
-  expect 1
+  expect 2
   # ELITEA_CANVAS_PRESENCE: canvas presence rosters. One entry per (roster,
   # editor). Every heartbeat is a new message, and the bucket TTL (MaxAge) is
   # the garbage collector for editors nobody refreshes.
@@ -290,7 +292,24 @@ bootstrap_main() {
     --ttl "${PRESENCE_TTL}" \
     --description "elitea-main canvas presence rosters (one entry per editor; TTL-bounded)"
 
+  # ELITEA_PLATFORM_MCP_REPLAY: one entry per platform MCP tool call of a
+  # local turn (executeRemoteToolkitTool, toolkit id 0; issue 1231), keyed on
+  # a hash of (caller, project, Idempotency-Key). elitea-main claims the key
+  # (kv.Create) before running the call and stores its answer, so a retry on
+  # another replica replays it instead of running a write twice. The TTL is
+  # the API's 15-minute replay window and elitea-main refuses less at boot;
+  # it is not a knob. A full bucket refuses new claims, and elitea-main then
+  # answers 503 rather than run a call it could not dedupe.
+  ensure_kv ELITEA_PLATFORM_MCP_REPLAY \
+    --replicas "${REPLICAS}" \
+    --history 1 \
+    --ttl 15m \
+    --max-value-size 262144 \
+    --max-bucket-size 536870912 \
+    --description "elitea-main platform MCP call replay (Idempotency-Key claims and answers; 15m)"
+
   assert_asset kv ELITEA_CANVAS_PRESENCE
+  assert_asset kv ELITEA_PLATFORM_MCP_REPLAY
 }
 
 # ── account GATEWAY ─────────────────────────────────────────────────────────

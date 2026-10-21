@@ -71,8 +71,8 @@ func TestEveryIdentityIsInItsPlanesAccount(t *testing.T) {
 func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	s := natstest.Start(t)
 	out := s.Bootstrap(t, nil) // also asserts no bootstrap identity hit a violation
-	if !strings.Contains(out, "13 of 13 expected assertions") {
-		t.Fatalf("bootstrap did not verify thirteen assets:\n%s", out)
+	if !strings.Contains(out, "14 of 14 expected assertions") {
+		t.Fatalf("bootstrap did not verify fourteen assets:\n%s", out)
 	}
 	for _, acct := range []string{"main", "gateway", "runtime"} {
 		if !strings.Contains(out, "account "+acct+": reconciling") {

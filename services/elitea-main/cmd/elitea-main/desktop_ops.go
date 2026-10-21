@@ -40,7 +40,9 @@ func composeResolvedVersion(
 // answers 501. The worker implementation only words the refusal of a tool the
 // worker cannot run remotely (the Rust worker admits read-only tools only).
 // platformTools runs a platform MCP server's tool (toolkit id 0) in process;
-// the router binds it to the MCP server it builds.
+// the router binds it to the MCP server it builds. platformReplays is the
+// cross-replica Idempotency-Key store those calls claim (nil without the
+// live-update NATS: platform calls then answer 501).
 func composeRemoteToolkit(
 	pool *pgxpool.Pool,
 	toolRuns toolkitrun.UseCase,
@@ -49,6 +51,7 @@ func composeRemoteToolkit(
 	policy localturn.PolicyReader,
 	recorder audit.Recorder,
 	platformTools *desktopopsapi.PlatformToolBridge,
+	platformReplays desktopopsapi.PlatformReplayStore,
 	groupAuth apimw.AuthConfig,
 	logger *slog.Logger,
 ) (http.Handler, error) {
@@ -63,5 +66,6 @@ func composeRemoteToolkit(
 	return desktopopsapi.NewRemoteToolkitRoute(desktopopsapi.RemoteToolkitDependencies{
 		Runs: toolRuns, Worker: workerImplementation, Authorizer: authorizer, Turns: turns,
 		Confirmations: localTurns, Audit: recorder, Platform: platformTools,
+		Replays: platformReplays,
 	}, groupAuth, legacyrbac.NewPostgresResolver(pool))
 }

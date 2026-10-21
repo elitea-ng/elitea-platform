@@ -100,6 +100,11 @@ type RemoteToolkitDependencies struct {
 	// (*PlatformToolBridge, bound by the router). Nil answers 501 for those
 	// calls only.
 	Platform PlatformToolCaller
+	// Replays claims each platform call's Idempotency-Key before it runs and
+	// keeps its answer, across replicas (*NATSPlatformReplays). Nil answers
+	// 501 for platform calls: without it a retry on another replica could
+	// run a write twice.
+	Replays PlatformReplayStore
 }
 
 // RemoteToolkitUseCase is the toolkit.call_tool.v1 producer — the SAME
@@ -164,9 +169,9 @@ func newRemoteToolkitHandler(deps RemoteToolkitDependencies) *remoteToolkitHandl
 	handler := &remoteToolkitHandler{
 		useCase: deps.Runs, worker: deps.Worker, authorizer: deps.Authorizer, turns: deps.Turns,
 		confirmations: deps.Confirmations, audit: recorder, limiter: limiter, now: time.Now,
-		platform: deps.Platform,
+		platform: deps.Platform, replays: deps.Replays,
+		replayWait: platformReplayWait, replayPoll: platformReplayPoll,
 	}
-	handler.replays = newPlatformReplays(func() time.Time { return handler.now() })
 	return handler
 }
 
@@ -184,7 +189,9 @@ type remoteToolkitHandler struct {
 	limiter       *failurelimit.Limiter
 	now           func() time.Time
 	platform      PlatformToolCaller
-	replays       *platformReplays
+	replays       PlatformReplayStore
+	replayWait    time.Duration
+	replayPoll    time.Duration
 }
 
 // remoteToolkitConfirmation is the user's approval of ONE sensitive call: it
@@ -255,6 +262,12 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		h.authorizer == nil || h.turns == nil || h.confirmations == nil {
 		desktopwire.WriteError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
 			"This deployment runs no cloud worker that can execute toolkit tools.")
+		return
+	}
+	if platform && h.replays == nil {
+		desktopwire.WriteError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
+			"This deployment has no shared Idempotency-Key store (the live-update NATS), so it cannot run a platform MCP tool "+
+				"without risking a retried write running twice.")
 		return
 	}
 	// REQUIRED, unlike test_tool's. A remote call may write, and a client

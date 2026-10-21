@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/guardrails"
@@ -36,6 +37,8 @@ func platformHandler(platform PlatformToolCaller) (*remoteToolkitHandler, *fakeA
 	runs := &fakeToolRuns{}
 	h, _, authorizer, recorder := remoteHandler(runs, "rust")
 	h.platform = platform
+	h.replays = newMemoryReplays()
+	h.replayWait, h.replayPoll = 0, time.Millisecond
 	authorizer.grant = storage.RemoteToolGrant{
 		ToolkitType: "mcp_elitea_internal_applications", ToolkitName: "Elitea Applications", PlatformMCP: true,
 	}
@@ -172,6 +175,25 @@ func TestRemoteToolkitPlatformMCPKeepsEveryGate(t *testing.T) {
 			t.Fatalf("status = %d, body %s", response.Code, response.Body)
 		}
 	})
+	t.Run("no replay store answers 501 and runs nothing", func(t *testing.T) {
+		platform := &fakePlatform{result: PlatformToolResult{Text: `{}`}}
+		h, _, _, _ := platformHandler(platform)
+		h.replays = nil
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, remoteBody(`"tool_name":"x"`), desktopToken(), h.serve)
+		if response.Code != http.StatusNotImplemented || len(platform.calls) != 0 {
+			t.Fatalf("status = %d, calls %d, body %s", response.Code, len(platform.calls), response.Body)
+		}
+	})
+	t.Run("a replay store that fails answers 503 and runs nothing", func(t *testing.T) {
+		platform := &fakePlatform{result: PlatformToolResult{Text: `{}`}}
+		h, _, _, _ := platformHandler(platform)
+		h.replays.(*memoryReplays).err = ErrPlatformReplayUnavailable
+		response := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, remoteBody(`"tool_name":"x"`), desktopToken(), h.serve)
+		if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") == "" ||
+			!strings.Contains(response.Body.String(), "remote_toolkit_unavailable_now") || len(platform.calls) != 0 {
+			t.Fatalf("status = %d, calls %d, body %s", response.Code, len(platform.calls), response.Body)
+		}
+	})
 	t.Run("a platform server has no MCP authorisation", func(t *testing.T) {
 		platform := &fakePlatform{}
 		h, _, _, _ := platformHandler(platform)
@@ -200,6 +222,11 @@ func TestRemoteToolkitPlatformMCPKeepsEveryGate(t *testing.T) {
 		response := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, remoteBody(`"tool_name":"x"`), desktopToken(), h.serve)
 		if response.Code != http.StatusTooManyRequests || len(platform.calls) != 0 {
 			t.Fatalf("status = %d, calls %d", response.Code, len(platform.calls))
+		}
+		// The refused call released its key: once the window passes, the
+		// same key runs.
+		if held := len(h.replays.(*memoryReplays).entries); held != 0 {
+			t.Fatalf("a rate-limited call left %d claims", held)
 		}
 	})
 }
