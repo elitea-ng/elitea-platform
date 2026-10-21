@@ -33,6 +33,34 @@ func TestTrustedProxyResolverUsesNearestUntrustedForwardedHop(t *testing.T) {
 	}
 }
 
+// elitea-main is the compose browser edge (#1359): nothing in front of it, so
+// the socket peer is the browser. A peer outside the trusted set keys as
+// itself, and the X-Forwarded-For it sends is ignored, or every request could
+// name a fresh address and get a fresh login attempt window.
+func TestTrustedProxyResolverKeysDirectClientByPeerAndIgnoresItsForwardedFor(t *testing.T) {
+	resolver := newTestTrustedProxyResolver(t)
+	for _, forwarded := range []string{"203.0.113.1", "203.0.113.2, 10.1.1.1", ""} {
+		request := forwardedTestRequest("/auth/login")
+		request.RemoteAddr = "192.0.2.10:443"
+		if forwarded == "" {
+			request.Header.Del("X-Forwarded-For")
+		} else {
+			request.Header.Set("X-Forwarded-For", forwarded)
+		}
+		clientKey, err := resolver.ResolveClientKey(request)
+		if err != nil || clientKey != "192.0.2.10" {
+			t.Fatalf("ResolveClientKey(XFF %q) = %q, %v; want the peer 192.0.2.10", forwarded, clientKey, err)
+		}
+	}
+
+	request := forwardedTestRequest("/auth/login")
+	request.RemoteAddr = "[2001:db8:9:9::5]:443"
+	request.Header.Set("X-Forwarded-For", "203.0.113.1")
+	if clientKey, err := resolver.ResolveClientKey(request); err != nil || clientKey != "2001:db8:9:9::/64" {
+		t.Fatalf("ResolveClientKey(IPv6 peer) = %q, %v; want its /64", clientKey, err)
+	}
+}
+
 // One IPv6 subscriber holds at least a /64 and can rotate through it, so the
 // attempt limiter keys IPv6 clients by /64. IPv4 keys the address; an
 // IPv4-mapped IPv6 address keys as its IPv4 address.
@@ -63,7 +91,6 @@ func TestTrustedProxyResolverRejectsUntrustedOrAmbiguousInput(t *testing.T) {
 		name   string
 		mutate func(*http.Request)
 	}{
-		{name: "untrusted peer", mutate: func(request *http.Request) { request.RemoteAddr = "192.0.2.10:443" }},
 		{name: "unparseable peer", mutate: func(request *http.Request) { request.RemoteAddr = "not-an-address" }},
 		{name: "missing client chain", mutate: func(request *http.Request) { request.Header.Del("X-Forwarded-For") }},
 		{name: "malformed client chain", mutate: func(request *http.Request) { request.Header.Set("X-Forwarded-For", "not-an-ip") }},

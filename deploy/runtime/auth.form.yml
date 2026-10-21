@@ -35,12 +35,17 @@ schema_version: elitea.auth.form.v2
 # host or port names that one.
 public_origin: https://localhost:8084
 
-# The compose network. Non-empty is mandatory; these are the RFC1918 ranges
-# podman/docker hand out to compose networks.
+# The proxies whose X-Forwarded-For is believed. Loopback only, which in
+# practice means none: elitea-main is this stack's browser edge (#1359) and
+# nothing proxies in front of it, so a browser's request arrives from the
+# compose network's gateway address. Trusting the compose network (RFC1918,
+# as this file once did) believed the browser's own X-Forwarded-For, so a
+# client could name a fresh address per request and dodge the login attempt
+# limiter. An untrusted peer is keyed by its socket address instead
+# (browserauth.TrustedProxyResolver). The list must not be empty.
 trusted_proxy_cidrs:
-  - 10.0.0.0/8
-  - 172.16.0.0/12
-  - 192.168.0.0/16
+  - 127.0.0.1/32
+  - ::1/128
 
 redirects:
   direct_access_denied: /app/

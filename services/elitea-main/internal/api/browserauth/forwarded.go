@@ -37,9 +37,12 @@ type TrustedProxyConfig struct {
 }
 
 // TrustedProxyResolver validates one or more explicitly trusted proxy hops.
-// It never consumes X-Forwarded-* metadata from an arbitrary direct client.
-// Request.RemoteAddr must still contain the raw socket peer; generic RealIP
-// middleware must not run before this resolver.
+// It never consumes X-Forwarded-* metadata from an arbitrary direct client:
+// a peer outside the trusted set IS the client, whatever X-Forwarded-For it
+// sends. That is the compose case, where elitea-main is the browser edge
+// with no proxy in front (#1359). Request.RemoteAddr must still contain the
+// raw socket peer; generic RealIP middleware must not run before this
+// resolver.
 type TrustedProxyResolver struct {
 	trusted []netip.Prefix
 }
@@ -100,8 +103,13 @@ func (r *TrustedProxyResolver) resolveClientIP(request *http.Request) (netip.Add
 		return netip.Addr{}, ErrInvalidForwardedRequest
 	}
 	peer, err := remoteAddress(request.RemoteAddr)
-	if err != nil || !r.isTrusted(peer) {
+	if err != nil {
 		return netip.Addr{}, ErrInvalidForwardedRequest
+	}
+	if !r.isTrusted(peer) {
+		// A direct client: its X-Forwarded-For is its own claim, and
+		// believing it would let it pick a fresh attempt window per request.
+		return peer, nil
 	}
 	raw, err := uniqueRequiredHeader(request.Header, "X-Forwarded-For")
 	if err != nil || len(raw) > maxForwardedForBytes {

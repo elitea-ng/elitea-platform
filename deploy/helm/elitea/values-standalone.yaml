@@ -149,7 +149,13 @@ main:
         # (Secure, host-only) and must be https with no path or query.
         public_origin: https://elitea.example.com
 
-        # The pod network. A non-empty list is mandatory.
+        # The proxies whose X-Forwarded-For is believed: the pod network the
+        # cluster Gateway or ingress controller forwards from. Narrow it to that
+        # range. Any peer inside it can name its own client address and so its
+        # own login attempt window, so it must never include an address a
+        # browser reaches elitea-main from directly (a NodePort or LoadBalancer
+        # Service). A peer outside it is keyed by its socket address. A
+        # non-empty list is mandatory.
         trusted_proxy_cidrs:
           - 10.0.0.0/8
           - 172.16.0.0/12
