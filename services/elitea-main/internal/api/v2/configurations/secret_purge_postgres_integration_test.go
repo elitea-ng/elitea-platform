@@ -102,10 +102,12 @@ func TestDeletingAConfigurationPurgesItsHiddenSecret(t *testing.T) {
 	}
 }
 
-// A secret another row still references survives — both another
-// configuration row and a toolkit row count.
+// A secret another row still references survives — another configuration
+// row, a toolkit row, and any copy elsewhere in the tenant schema: a
+// conversation participant's settings, and a table this code has never heard
+// of (the scan reads the catalog, so a copy in a later table counts too).
 func TestDeletingAConfigurationKeepsAStillReferencedSecret(t *testing.T) {
-	for _, holder := range []string{"configuration", "toolkit"} {
+	for _, holder := range []string{"configuration", "toolkit", "participant", "unknown table"} {
 		t.Run(holder, func(t *testing.T) {
 			pool := newStoredCheckPool(t)
 			router := storedCheckRouter(t, pool, &fakeConnectionChecker{})
@@ -125,6 +127,25 @@ func TestDeletingAConfigurationKeepsAStillReferencedSecret(t *testing.T) {
 						jsonb_build_object('access_token', $1::text))`,
 					storedCheckProject), reference); err != nil {
 					t.Fatalf("seed the toolkit row: %v", err)
+				}
+			case "participant":
+				if _, err := pool.Exec(ctx, fmt.Sprintf(`
+					INSERT INTO p_%d.chat_participants (uuid, entity_name, entity_meta)
+					VALUES (gen_random_uuid(), 'toolkit',
+						jsonb_build_object('settings', jsonb_build_object('token', $1::text)))`,
+					storedCheckProject), reference); err != nil {
+					t.Fatalf("seed the participant row: %v", err)
+				}
+			case "unknown table":
+				if _, err := pool.Exec(ctx, fmt.Sprintf(`
+					CREATE TABLE p_%d.some_later_snapshot (id serial PRIMARY KEY, body json NOT NULL)`,
+					storedCheckProject)); err != nil {
+					t.Fatalf("create the table: %v", err)
+				}
+				if _, err := pool.Exec(ctx, fmt.Sprintf(`
+					INSERT INTO p_%d.some_later_snapshot (body) VALUES (json_build_object('nested', json_build_array($1::text)))`,
+					storedCheckProject), "Bearer "+reference); err != nil {
+					t.Fatalf("seed the snapshot row: %v", err)
 				}
 			}
 
