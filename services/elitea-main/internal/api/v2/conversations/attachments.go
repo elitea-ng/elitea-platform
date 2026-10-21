@@ -14,13 +14,14 @@ package conversations
 // No claim/lock guards the merge step deliberately: if two concurrent
 // requests both observe "all chunks present" (the last two chunks of one
 // upload arriving on two different replicas within the same race window),
-// both independently read the same committed chunk rows, both merge and
-// storage.ObjectStore.Put the identical bytes to the identical deterministic
-// key (last-writer-wins, not a torn write), and both call DeleteChunks
-// (idempotent — the second delete just removes zero rows). Redundant work
-// on that rare race, never corrupted output — the same trade-off S14's
-// sweeper already accepts for its own duplicate-tick idempotency, not a new
-// risk this stage introduces.
+// both independently read the same committed chunk rows, both merge, and
+// each reserves its own key (#1059: the second gets `name (1).ext`), Puts
+// the identical bytes there, and calls DeleteChunks (idempotent — the second
+// delete just removes zero rows). Each answer names a complete copy; the copy
+// the client does not send is an unreferenced object the retention sweeper
+// expires. Redundant work on that rare race, never corrupted output — the
+// same trade-off S14's sweeper already accepts for its own duplicate-tick
+// idempotency.
 //
 // Bytes are written through the S6/S9 metadata tables (a reserved
 // project-scoped "system" bucket, elitea_storage.buckets/objects), not a
@@ -44,8 +45,9 @@ package conversations
 // still composing: at upload time there is no message group to attach to yet.
 //
 // What that leaves this file responsible for is unchanged — the bytes, the
-// elitea_storage.buckets/objects metadata, and the deterministic
-// `{conversationUUID}/{sanitizedFilename}` object key. That key is load
+// elitea_storage.buckets/objects metadata, and the
+// `{conversationUUID}/{sanitizedFilename}` object key (numbered when the name
+// is taken, #1059). That key is load
 // bearing on the other side: the client sends the filepath this endpoint
 // returned, the admission splits it on the first slash after the bucket, and
 // the remainder becomes the item's `name` — which is what
@@ -135,6 +137,13 @@ type AttachmentStore interface {
 	// past retention_days. Each attachment carries its own deadline
 	// instead — see the RecordAttachmentObject call below.
 	RequireAttachmentBucket(ctx context.Context, projectID int64, bucketName string, retentionDays int32) (bucketID int64, err error)
+	// ReserveAttachmentObject claims key in the bucket for an upload whose
+	// bytes are not written yet: it inserts a placeholder metadata row unless
+	// a row already holds the key, and reports whether this caller got it.
+	// The unique (bucket_id, key) index is the arbiter, so two concurrent
+	// uploads never both get one key (#1059). RecordAttachmentObject then
+	// overwrites the placeholder with the stored object's size and type.
+	ReserveAttachmentObject(ctx context.Context, bucketID int64, key string, mediaType string, expiresAt *time.Time) (bool, error)
 	RecordAttachmentObject(ctx context.Context, bucketID int64, key string, byteLength int64, mediaType string, expiresAt *time.Time) error
 
 	// LookupAttachmentBucket resolves the same reserved system bucket
@@ -451,6 +460,47 @@ func (h *Handler) writeAttachmentBytes(w http.ResponseWriter, r *http.Request) {
 	_ = h.attachments.DeleteAttachmentChunks(r.Context(), projectID, conversationID, fileID)
 }
 
+// maxAttachmentNameAttempts bounds the numbered names one upload tries
+// before it gives up: `name.ext` and then `name (1).ext` through
+// `name (99).ext`.
+const maxAttachmentNameAttempts = 100
+
+// reserveAttachmentKey claims the first free `{conversationID}/{name}` key,
+// numbering the name when it is taken, and returns the key with its object
+// ref. A conversation holding every numbered variant answers 409.
+func (h *Handler) reserveAttachmentKey(ctx context.Context, bucketID int64, projectIDStr, bucketName, conversationID, name, contentType string, expiresAt *time.Time) (string, storage.ObjectRef, error) {
+	for attempt := 0; attempt < maxAttachmentNameAttempts; attempt++ {
+		key := conversationID + "/" + numberedAttachmentName(name, attempt)
+		ref, err := storage.NewObjectRef(projectIDStr, bucketName, key)
+		if err != nil {
+			return "", storage.ObjectRef{}, apierr.BadRequest("invalid attachment file name: " + err.Error())
+		}
+		reserved, err := h.attachments.ReserveAttachmentObject(ctx, bucketID, key, contentType, expiresAt)
+		if err != nil {
+			return "", storage.ObjectRef{}, apierr.Internal("reserve attachment name: " + err.Error())
+		}
+		if reserved {
+			return key, ref, nil
+		}
+	}
+	return "", storage.ObjectRef{}, apierr.Conflict(fmt.Sprintf("this conversation already holds %d files named %q; rename the file and upload again", maxAttachmentNameAttempts, name))
+}
+
+// numberedAttachmentName is name itself for attempt 0, and otherwise name
+// with " (attempt)" before its extension: `photo (1).jpg`, `notes (2)`. A
+// name that is only an extension (`.env`) is numbered at its end.
+func numberedAttachmentName(name string, attempt int) string {
+	if attempt == 0 {
+		return name
+	}
+	ext := path.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	if stem == "" {
+		stem, ext = name, ""
+	}
+	return fmt.Sprintf("%s (%d)%s", stem, attempt, ext)
+}
+
 // finalizeAttachment validates size limits, writes the object through the
 // S6/S9 metadata tables, and writes the response — the shared tail of both
 // the chunked and the plain-multipart paths above, mirroring legacy's own
@@ -514,10 +564,18 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 	// reaching this point. That guard is what makes this sentence true; without
 	// it the claim was merely a hope about the caller, and the composer's own
 	// upload disproved it.
-	key := conversationID + "/" + sanitizeAttachmentFilename(fileName)
-	ref, err := storage.NewObjectRef(projectIDStr, bucketName, key)
+	//
+	// A NAME ALREADY TAKEN IN THIS CONVERSATION GETS A NUMBER (#1059). The key
+	// used to be the sanitized name alone, so a second `photo.jpg` overwrote
+	// the first — bytes an earlier message still names. The upload now
+	// reserves a free key first (`photo.jpg`, then `photo (1).jpg`, …) with a
+	// placeholder metadata row, and the unique (bucket_id, key) index decides
+	// between two concurrent uploads of one name. The answer carries the key
+	// that was reserved, and every client already sends back the filepath it
+	// was given, so stored objects and their paths are untouched.
+	key, ref, err := h.reserveAttachmentKey(ctx, bucketID, projectIDStr, bucketName, conversationID, sanitizeAttachmentFilename(fileName), contentType, &attachmentExpiresAt)
 	if err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid attachment file name: "+err.Error()))
+		apierr.Write(w, err)
 		return
 	}
 
@@ -526,8 +584,14 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 		ContentLength: int64(len(content)),
 	})
 	if err != nil {
+		// Free the key: the placeholder names bytes that were never stored.
+		_ = h.attachments.DeleteAttachmentObjects(ctx, bucketID, []string{key})
 		apierr.Write(w, apierr.Internal("store attachment: "+err.Error()))
 		return
+	}
+	if info.Key != key {
+		// A store that chose its own key: the reservation names nothing.
+		_ = h.attachments.DeleteAttachmentObjects(ctx, bucketID, []string{key})
 	}
 
 	if err := h.attachments.RecordAttachmentObject(ctx, bucketID, info.Key, info.Size, contentType, &attachmentExpiresAt); err != nil {

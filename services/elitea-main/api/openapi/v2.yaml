@@ -3322,12 +3322,15 @@ components:
       description: >
         One stored file. Send `filepath` back verbatim in the chat send's
         `payload.attachments`. NOTE(W2):
-        internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`).
+        internal/api/v2/conversations/attachments.go:234 (`attachmentCreated`).
       required: [filepath, file_size]
       properties:
         filepath:
           type: string
-          description: '`/{bucket}/{conversation_uuid}/{file name}`.'
+          description: >-
+            `/{bucket}/{conversation_uuid}/{file name}`. The file name is the
+            uploaded one, numbered (`name (1).ext`) when the conversation
+            already holds that name (client contract 1.12).
         file_size: { type: integer, format: int64 }
 
     ConversationAttachmentChunkReceived:
@@ -3335,7 +3338,7 @@ components:
       description: >
         A chunk of a chunked upload was stored; the file is assembled when the
         last chunk arrives, and that request answers 201. NOTE(W2):
-        internal/api/v2/conversations/attachments.go:409.
+        internal/api/v2/conversations/attachments.go:425.
       required: [status, file_id, chunk_index, total_chunks, message]
       properties:
         status:
@@ -20356,6 +20359,14 @@ paths:
         `payload.attachments`. Size limits are the project's storage policy
         (images and documents have separate ceilings); one chunk is at most a
         few MB.
+
+        Client contract 1.12: a name already stored in this conversation is
+        never overwritten. The file is stored under the first free numbered
+        name instead (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …;
+        the number goes before the extension), and two concurrent uploads of
+        one name always get two different names. Always send the returned
+        `filepath`, never one built from the local file name. A conversation
+        that already holds a hundred files of one name answers 409.
       tags: [chat, client]
       requestBody:
         required: true
@@ -20401,6 +20412,12 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: Every numbered variant of this file name is taken in the conversation; rename the file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}:

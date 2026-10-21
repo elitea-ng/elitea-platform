@@ -566,6 +566,12 @@ type Querier interface {
 	ReplaceCurrentDeletedLLMApplicationReferences(ctx context.Context, arg ReplaceCurrentDeletedLLMApplicationReferencesParams) (ReplaceCurrentDeletedLLMApplicationReferencesRow, error)
 	RequestCurrentIndexIngestCancellation(ctx context.Context, arg RequestCurrentIndexIngestCancellationParams) (bool, error)
 	ReserveAgentAdmission(ctx context.Context, arg ReserveAgentAdmissionParams) (string, error)
+	// Claims (bucket_id, key) for a write that has not happened yet, and never
+	// touches a row that already holds the key: objects_bucket_key_uniq decides
+	// between two concurrent claims, so exactly one of them affects a row. The
+	// placeholder is overwritten by UpsertArtifactObject once the bytes are
+	// stored (#1059).
+	ReserveArtifactObjectKey(ctx context.Context, arg ReserveArtifactObjectKeyParams) (int64, error)
 	ResetCurrentAgentResponse(ctx context.Context, arg ResetCurrentAgentResponseParams) (ResetCurrentAgentResponseRow, error)
 	// Chat history for this turn: one entry per prior message group, whose
 	// `content` is the group's items flattened into ONE LangChain content array.

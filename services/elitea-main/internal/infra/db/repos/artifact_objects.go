@@ -86,6 +86,7 @@ type NewObjectInput struct {
 
 type artifactObjectQueries interface {
 	UpsertArtifactObject(context.Context, sqlcgen.UpsertArtifactObjectParams) (sqlcgen.EliteaStorageObject, error)
+	ReserveArtifactObjectKey(context.Context, sqlcgen.ReserveArtifactObjectKeyParams) (int64, error)
 	ListArtifactObjects(context.Context, sqlcgen.ListArtifactObjectsParams) ([]sqlcgen.EliteaStorageObject, error)
 	DeleteArtifactObjects(context.Context, sqlcgen.DeleteArtifactObjectsParams) (int64, error)
 	SumArtifactBucketBytes(context.Context, int64) (int64, error)
@@ -146,6 +147,28 @@ func (r *ArtifactObjectsRepository) UpsertObject(ctx context.Context, input NewO
 		return ObjectRow{}, fmt.Errorf("upsert artifact object: %w", err)
 	}
 	return objectRowFromModel(row), nil
+}
+
+// ReserveObjectKey claims (bucketID, key) for bytes the caller is about to
+// write, with a zero-length placeholder row, and reports whether it got the
+// key. It never overwrites a row that already holds the key, and the unique
+// (bucket_id, key) index decides between two concurrent claims, so two
+// callers never both get one key. UpsertObject replaces the placeholder once
+// the bytes are stored; DeleteObjects releases a key whose write failed.
+func (r *ArtifactObjectsRepository) ReserveObjectKey(ctx context.Context, bucketID int64, key, mediaType string, expiresAt *time.Time) (bool, error) {
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	affected, err := r.queries.ReserveArtifactObjectKey(ctx, sqlcgen.ReserveArtifactObjectKeyParams{
+		BucketID:  bucketID,
+		Key:       key,
+		MediaType: mediaType,
+		ExpiresAt: toTimestamptz(expiresAt),
+	})
+	if err != nil {
+		return false, fmt.Errorf("reserve artifact object key: %w", err)
+	}
+	return affected == 1, nil
 }
 
 // ListObjects lists an individual bucket's object metadata rows, optionally

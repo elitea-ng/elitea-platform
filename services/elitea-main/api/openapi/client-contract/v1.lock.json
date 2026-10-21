@@ -11682,6 +11682,21 @@
             }
           }
         },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "426": {
           "content": {
             "application/json": {

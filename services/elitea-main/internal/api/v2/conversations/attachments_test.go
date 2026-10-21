@@ -36,6 +36,7 @@ type fakeAttachmentStore struct {
 	buckets       map[string]int64 // "projectID/name" -> id
 	chunks        map[string][]conversations.AttachmentChunk
 	recorded      []recordedAttachmentObject
+	reserved      map[string]bool // "bucketID/key" claimed by ReserveAttachmentObject
 	bucketErr     error
 }
 
@@ -49,8 +50,9 @@ type recordedAttachmentObject struct {
 
 func newFakeAttachmentStore() *fakeAttachmentStore {
 	return &fakeAttachmentStore{
-		buckets: map[string]int64{},
-		chunks:  map[string][]conversations.AttachmentChunk{},
+		buckets:  map[string]int64{},
+		chunks:   map[string][]conversations.AttachmentChunk{},
+		reserved: map[string]bool{},
 	}
 }
 
@@ -71,6 +73,24 @@ func (f *fakeAttachmentStore) RequireAttachmentBucket(_ context.Context, project
 	f.nextBucketID++
 	f.buckets[key] = f.nextBucketID
 	return f.nextBucketID, nil
+}
+
+// ReserveAttachmentObject mirrors the unique (bucket_id, key) index: a key is
+// taken once a reservation or a recorded row holds it.
+func (f *fakeAttachmentStore) ReserveAttachmentObject(_ context.Context, bucketID int64, key, _ string, _ *time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	slot := fmt.Sprintf("%d/%s", bucketID, key)
+	if f.reserved[slot] {
+		return false, nil
+	}
+	for _, row := range f.recorded {
+		if row.BucketID == bucketID && row.Key == key {
+			return false, nil
+		}
+	}
+	f.reserved[slot] = true
+	return true, nil
 }
 
 func (f *fakeAttachmentStore) RecordAttachmentObject(_ context.Context, bucketID int64, key string, byteLength int64, mediaType string, expiresAt *time.Time) error {

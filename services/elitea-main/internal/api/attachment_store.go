@@ -180,6 +180,10 @@ func (a *attachmentRepoAdapter) DeleteAttachmentObjects(ctx context.Context, buc
 	return a.objects.DeleteObjects(ctx, bucketID, keys)
 }
 
+func (a *attachmentRepoAdapter) ReserveAttachmentObject(ctx context.Context, bucketID int64, key string, mediaType string, expiresAt *time.Time) (bool, error) {
+	return a.objects.ReserveObjectKey(ctx, bucketID, key, mediaType, expiresAt)
+}
+
 func (a *attachmentRepoAdapter) RecordAttachmentObject(ctx context.Context, bucketID int64, key string, byteLength int64, mediaType string, expiresAt *time.Time) error {
 	_, err := a.objects.UpsertObject(ctx, dbrepos.NewObjectInput{
 		BucketID:   bucketID,

@@ -63,6 +63,7 @@ func (f *fakeAttachmentStore) DeleteAttachmentObjects(_ context.Context, bucketI
 	drop := map[string]bool{}
 	for _, k := range keys {
 		drop[k] = true
+		delete(f.reserved, fmt.Sprintf("%d/%s", bucketID, k))
 	}
 	kept := f.recorded[:0:0]
 	for _, row := range f.recorded {

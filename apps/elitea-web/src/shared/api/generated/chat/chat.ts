@@ -13659,6 +13659,11 @@ export type uploadConversationAttachmentResponse403 = {
   status: 403;
 };
 
+export type uploadConversationAttachmentResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
 export type uploadConversationAttachmentResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
@@ -13679,6 +13684,7 @@ export type uploadConversationAttachmentResponseError = (
   | uploadConversationAttachmentResponse400
   | uploadConversationAttachmentResponse401
   | uploadConversationAttachmentResponse403
+  | uploadConversationAttachmentResponse409
   | uploadConversationAttachmentResponse426
   | uploadConversationAttachmentResponse500
 ) & {
@@ -13705,6 +13711,14 @@ export const getUploadConversationAttachmentUrl = (
  * `payload.attachments`. Size limits are the project's storage policy
  * (images and documents have separate ceilings); one chunk is at most a
  * few MB.
+ *
+ * Client contract 1.12: a name already stored in this conversation is
+ * never overwritten. The file is stored under the first free numbered
+ * name instead (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …;
+ * the number goes before the extension), and two concurrent uploads of
+ * one name always get two different names. Always send the returned
+ * `filepath`, never one built from the local file name. A conversation
+ * that already holds a hundred files of one name answers 409.
  * @summary Upload a file to attach to the next chat message
  */
 export const uploadConversationAttachment = async (
@@ -13762,6 +13776,7 @@ export const getUploadConversationAttachmentQueryOptions = <
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -13822,6 +13837,7 @@ export type UploadConversationAttachmentQueryError =
   | N400Response
   | N401Response
   | N403Response
+  | ErrorResponse
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -13831,6 +13847,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -13865,6 +13882,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -13899,6 +13917,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -13929,6 +13948,7 @@ export function useUploadConversationAttachment<
     | N400Response
     | N401Response
     | N403Response
+    | ErrorResponse
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
