@@ -450,3 +450,122 @@ func TestCodeForHTTPStatus(t *testing.T) {
 		}
 	}
 }
+
+// editStream is an ImageEdit server stream that records when Recv runs
+// relative to the handler: grpc-go forbids Recv after the handler returned.
+// After the head, Recv blocks until the test releases it, as a client that
+// has not sent its body yet would.
+type editStream struct {
+	grpc.ServerStream
+	ctx      context.Context
+	frames   []*llmv1.ImageEditRequest
+	release  chan struct{}
+	mu       sync.Mutex
+	returned bool
+	inRecv   int
+	late     int
+	answered *llmv1.ImageEditResponse
+}
+
+func (s *editStream) Context() context.Context { return s.ctx }
+
+func (s *editStream) Recv() (*llmv1.ImageEditRequest, error) {
+	s.mu.Lock()
+	if s.returned {
+		s.late++
+	}
+	s.inRecv++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inRecv--
+		s.mu.Unlock()
+	}()
+	if len(s.frames) == 0 {
+		<-s.release
+		return nil, io.EOF
+	}
+	frame := s.frames[0]
+	s.frames = s.frames[1:]
+	return frame, nil
+}
+
+func (s *editStream) SendAndClose(answer *llmv1.ImageEditResponse) error {
+	s.answered = answer
+	return nil
+}
+
+// handlerReturned marks the handler done and reports Recv calls still
+// running at that moment.
+func (s *editStream) handlerReturned() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.returned = true
+	return s.inRecv
+}
+
+func multipartHead() *llmv1.ImageEditRequest {
+	return &llmv1.ImageEditRequest{Frame: &llmv1.ImageEditRequest_Head{Head: &llmv1.ImageEditHead{ContentType: "multipart/form-data; boundary=x"}}}
+}
+
+// The pipeline refuses before it reads the body (a bad bearer here): the
+// handler must not leave a Recv running behind it.
+func TestImageEditEarlyRefusalLeavesNoRecvBehind(t *testing.T) {
+	refusing := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	service, err := modelgrpc.NewServer(refusing, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &editStream{
+		ctx:     context.Background(),
+		frames:  []*llmv1.ImageEditRequest{multipartHead()},
+		release: make(chan struct{}),
+	}
+	err = service.ImageEdit(stream)
+	running := stream.handlerReturned()
+	close(stream.release)
+	time.Sleep(20 * time.Millisecond) // a leaked reader would Recv again by now
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("ImageEdit = %v, want Unauthenticated", err)
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if running != 0 || stream.late != 0 {
+		t.Fatalf("Recv ran after the handler returned: %d in flight, %d late", running, stream.late)
+	}
+}
+
+// The body is read as the pipeline asks for it, and a second head is the
+// caller's protocol error, not the pipeline's.
+func TestImageEditReadsTheBodyOnDemandAndRefusesASecondHead(t *testing.T) {
+	var read string
+	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		read = string(body)
+		_, _ = io.WriteString(w, `{}`)
+	})
+	service, err := modelgrpc.NewServer(echo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := func(s string) *llmv1.ImageEditRequest {
+		return &llmv1.ImageEditRequest{Frame: &llmv1.ImageEditRequest_Data{Data: []byte(s)}}
+	}
+	released := make(chan struct{})
+	close(released)
+	stream := &editStream{ctx: context.Background(), frames: []*llmv1.ImageEditRequest{multipartHead(), data("ab"), data("cd")}, release: released}
+	if err := service.ImageEdit(stream); err != nil || read != "abcd" || stream.answered == nil {
+		t.Fatalf("ImageEdit = %v, read %q, answered %v", err, read, stream.answered)
+	}
+
+	stream = &editStream{ctx: context.Background(), frames: []*llmv1.ImageEditRequest{multipartHead(), data("ab"), multipartHead()}, release: released}
+	if err := service.ImageEdit(stream); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("a second head = %v, want InvalidArgument", err)
+	}
+}

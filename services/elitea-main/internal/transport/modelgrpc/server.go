@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -177,39 +178,68 @@ func (s *Server) ImageEdit(stream grpc.ClientStreamingServer[llmv1.ImageEditRequ
 	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/form-data") || !HeaderSafe(contentType) {
 		return status.Error(codes.InvalidArgument, "an ImageEdit body is multipart/form-data")
 	}
-	body, writer := io.Pipe()
-	ctx, cancel := context.WithCancel(stream.Context())
-	defer cancel()
-	go func() {
-		// The reader side stops reading when the pipeline is done; closing
-		// it with an error ends this loop at its next write.
-		for {
-			frame, err := stream.Recv()
-			if errors.Is(err, io.EOF) {
-				_ = writer.Close()
-				return
-			}
-			if err != nil {
-				_ = writer.CloseWithError(err)
-				return
-			}
-			data, ok := frame.GetFrame().(*llmv1.ImageEditRequest_Data)
-			if !ok {
-				_ = writer.CloseWithError(status.Error(codes.InvalidArgument, "an ImageEdit call has one head"))
-				cancel()
-				return
-			}
-			if _, err := writer.Write(data.Data); err != nil {
-				return
-			}
-		}
-	}()
-	defer func() { _ = body.CloseWithError(context.Canceled) }()
-	head, answer, err := s.serveUnary(ctx, imageEditPath, open.GetCall(), contentType, body)
+	// The body is pulled from the stream as the pipeline reads it, on the
+	// pipeline's own goroutine, so stream.Recv never runs after this handler
+	// returns, which grpc-go forbids. A pipeline that refuses before reading
+	// (a bad bearer, a budget) never calls Recv at all.
+	body := &editBody{stream: stream}
+	head, answer, err := s.serveUnary(stream.Context(), imageEditPath, open.GetCall(), contentType, body)
+	if violation := body.close(); violation != nil {
+		return violation
+	}
 	if err != nil {
 		return err
 	}
 	return stream.SendAndClose(&llmv1.ImageEditResponse{Head: head, Body: answer})
+}
+
+// editBody is an ImageEdit's multipart body: the data frames after the head,
+// read from the stream on demand.
+type editBody struct {
+	stream grpc.ClientStreamingServer[llmv1.ImageEditRequest, llmv1.ImageEditResponse]
+
+	mu        sync.Mutex
+	pending   []byte
+	err       error
+	violation error
+	closed    bool
+}
+
+func (b *editBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for len(b.pending) == 0 {
+		if b.err != nil {
+			return 0, b.err
+		}
+		if b.closed {
+			return 0, io.ErrClosedPipe
+		}
+		frame, err := b.stream.Recv()
+		if err != nil {
+			b.err = err
+			continue
+		}
+		data, ok := frame.GetFrame().(*llmv1.ImageEditRequest_Data)
+		if !ok {
+			b.violation = status.Error(codes.InvalidArgument, "an ImageEdit call has one head")
+			b.err = b.violation
+			continue
+		}
+		b.pending = data.Data
+	}
+	n := copy(p, b.pending)
+	b.pending = b.pending[n:]
+	return n, nil
+}
+
+// close ends the body: no Read after it reaches the stream. It returns the
+// protocol violation a Read met, if any, which is the call's answer.
+func (b *editBody) close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+	return b.violation
 }
 
 // newRequest builds the /llm request one RPC makes.
