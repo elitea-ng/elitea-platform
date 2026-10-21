@@ -132,6 +132,19 @@ export async function upsertConversationRow(
 }
 
 /**
+ * Writes the caller's `unread` (client contract 1.12) into a stored list row after a read
+ * (markConversationRead). A read does not re-deliver the row in the delta, so without this the
+ * offline copy would keep the row unread. The transcript is not marked for a sync.
+ */
+export async function setConversationRowUnread(db: SqlExecutor, projectId: number, conversationId: number, unread: boolean): Promise<void> {
+  await db.run(
+    `UPDATE conversations SET row_json = json_set(row_json, '$.unread', json(?))
+     WHERE project_id = ? AND id = ? AND row_json IS NOT NULL AND json_valid(row_json)`,
+    [unread ? 'true' : 'false', projectId, conversationId],
+  );
+}
+
+/**
  * Keeps the last full read of a conversation (participants and uuid, without
  * its message groups) so the thread can be shown and addressed offline.
  */

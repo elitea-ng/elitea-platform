@@ -204,6 +204,10 @@ G ──────────────────────────
 
 - Rows are grouped by Pinned, Today, Yesterday, This week and Older. The group headers
   use the footnote role, uppercase on iOS and sentence case on Android.
+- **Activity** (client contract 1.12): a trailing glyph shows a running turn (a spinner), a
+  chat that waits for the user (an amber ring with a dot), a recent unread answer (a filled
+  check; the title is bold) or a recent read one (a light check). A group header with rows
+  that wait for the user says "N needs you" in the warning colour. Opening a chat marks it read.
 - **Avatar:** the agent icon if it has one, else the Elitea mark (with the single-use
   rule, design-system §4.6 and §5), else a monogram.
 - Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename,

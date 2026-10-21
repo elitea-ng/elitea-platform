@@ -3,6 +3,8 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import type { SwipeRowA11y } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
 import type { SnippetPart } from '@/db/search';
+import { ACTIVITY_LABEL, UNREAD_LABEL, type ActivityGlyphKind } from '@/features/chats/activity';
+import { ActivityGlyph } from '@/features/chats/ActivityGlyph';
 import { executorBadge, type WorkspaceExecutor } from '@/features/localWork/model';
 import { Icon, ListRow, Text } from '@/ui';
 
@@ -16,6 +18,9 @@ export const UNTITLED = 'Untitled conversation';
  * both draw this (through `ConversationList`), so the review screenshots show the list the user
  * gets (D2). `a11y` carries the row's actions (Pin, Rename, Delete) so VoiceOver/TalkBack can
  * reach them (§4.11), and its busy state while one runs; a long press opens the same actions.
+ * From client contract 1.12 the row carries its activity glyph at the trailing edge (running,
+ * needs you, finished unread or read) and a bold title while an answer is unread; the glyph's
+ * name is in the spoken label.
  */
 export function ConversationRow({
   title,
@@ -31,6 +36,8 @@ export function ConversationRow({
   archivedBy,
   busy = false,
   busyText,
+  activity = null,
+  unread = false,
 }: {
   title: string | null | undefined;
   age: string;
@@ -50,6 +57,10 @@ export function ConversationRow({
   /** An action runs on the row (a fork): a spinner, `busyText` for the age, read as busy. */
   busy?: boolean;
   busyText?: string;
+  /** Client contract 1.12: the activity glyph (null: none). */
+  activity?: ActivityGlyphKind | null;
+  /** Client contract 1.12: an answer not opened yet (the title is bold). */
+  unread?: boolean;
 }) {
   const { colors } = useDesign();
   const archivedLine = archivedBy ? `Archived by ${archivedBy}` : null;
@@ -57,13 +68,15 @@ export function ConversationRow({
   const name = title || UNTITLED;
   const passage = snippet && snippet.length > 0 ? snippet.map((part) => part.text).join('') : null;
   const badge = executor === undefined ? null : executorBadge(executor);
+  const activityLabel = activity !== null ? ACTIVITY_LABEL[activity] : unread ? UNREAD_LABEL : null;
   return (
     <View style={{ backgroundColor: current ? colors.accentSoft : colors.surface }}>
       <ListRow
         title={name}
+        titleEmphasized={unread}
         value={shownAge}
         leading={pinned ? <Icon name="pin" size={17} tone="secondaryBrand" /> : undefined}
-        trailing={busy ? <ActivityIndicator testID="chat-row-busy" color={colors.accent} /> : undefined}
+        trailing={busy ? <ActivityIndicator testID="chat-row-busy" color={colors.accent} /> : activity !== null ? <ActivityGlyph kind={activity} /> : undefined}
         footer={
           badge !== null || (snippet && passage) || archivedLine ? (
             <View style={styles.footer}>
@@ -97,7 +110,7 @@ export function ConversationRow({
             </View>
           ) : undefined
         }
-        accessibilityLabel={[name, pinned ? 'pinned' : null, badge, archivedLine, shownAge, passage].filter(Boolean).join(', ')}
+        accessibilityLabel={[name, pinned ? 'pinned' : null, activityLabel, badge, archivedLine, shownAge, passage].filter(Boolean).join(', ')}
         onPress={onPress}
         onLongPress={onLongPress}
         accessibilityActions={a11y?.accessibilityActions}

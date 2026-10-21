@@ -5,10 +5,11 @@ import { SwipeActions, type RowAction } from '@/components/SwipeActions';
 import type { SnippetPart } from '@/db/search';
 import { useDesign } from '@/design/DesignProvider';
 import { ActionMenu, type ActionMenuItem } from '@/features/chat/ActionMenu';
+import { countNeedsYou, needsYouText, type ActivityGlyphKind } from '@/features/chats/activity';
 import { ConversationRow, UNTITLED } from '@/features/chats/ConversationRow';
 import type { WorkspaceExecutor } from '@/features/localWork/model';
 import { CHAT_SECTION_TITLE, groupChatsByDate, type ChatSection } from '@/features/chats/sections';
-import { ListSection, uiPlatform } from '@/ui';
+import { ListSection, Text, uiPlatform } from '@/ui';
 
 export interface ChatListItem {
   id: number;
@@ -26,6 +27,12 @@ export interface ChatListItem {
   archived?: boolean;
   /** The Archived chats list: who archived it (`archived_by.name`), when the row carries it. */
   archivedBy?: string;
+  /** Client contract 1.12: the activity glyph (null or absent: none). */
+  activity?: ActivityGlyphKind | null;
+  /** Client contract 1.12: an answer the user has not opened (the title is bold). */
+  unread?: boolean;
+  /** Client contract 1.12: the conversation waits for the user (counted in its section's header). */
+  needsYou?: boolean;
 }
 
 /** What the rows can do; each is absent when it is not possible (an older server, the offline copy). */
@@ -157,7 +164,10 @@ export function ConversationList({
         onEndReachedThreshold={0.5}
         onEndReached={onEndReached}
         renderItem={({ item: section }) => (
-          <ListSection title={section.title} style={[styles.section, { marginHorizontal: space.screenGutterCompact }]}>
+          <ListSection
+            title={section.title}
+            accessory={<NeedsYouCount count={countNeedsYou(section.data)} />}
+            style={[styles.section, { marginHorizontal: space.screenGutterCompact }]}>
             {section.data.map((row) => {
               const { pin, rename, archive, fork, remove } = rowActions(row, rowsActions);
               return (
@@ -179,6 +189,8 @@ export function ConversationList({
                       onLongPress={hasMenu ? () => setMenu(row) : undefined}
                       a11y={a11y}
                       archivedBy={row.archivedBy}
+                      activity={row.activity}
+                      unread={row.unread === true}
                       busy={busyId === row.id}
                       busyText={busyText}
                       current={selectedId === row.id}
@@ -193,6 +205,16 @@ export function ConversationList({
       />
       <ActionMenu visible={menu !== null} title={menu?.name || UNTITLED} items={menuItems} onClose={() => setMenu(null)} />
     </>
+  );
+}
+
+/** A section header's "N needs you" (client contract 1.12), in the warning colour; nothing at zero. */
+function NeedsYouCount({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <Text variant="footnote" tone="warning" emphasized testID="section-needs-you">
+      {needsYouText(count)}
+    </Text>
   );
 }
 
