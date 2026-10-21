@@ -541,17 +541,26 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		filters += " AND (c.meta->>'is_hidden' IS NULL OR c.meta->>'is_hidden' = 'false')"
 	}
 
-	baseWhere := "WHERE " + visibility + " AND " + filters
+	// The project's archive (client contract 1.10). Kept out of `filters`:
+	// the delta treats it differently (see conversationChangesQuery).
+	mode := archivedMode(r.URL.Query())
+	archived := archivedFilter(s, mode)
+
+	baseWhere := "WHERE " + visibility + " AND " + filters + " AND " + archived
 
 	if raw, delta := changesync.Requested(r.URL.Query()); delta {
 		h.listChanges(w, r, pool, conversationChangesQuery{
-			schema:     s,
-			projectID:  projectID,
-			visibility: visibility,
-			filters:    filters,
-			args:       args,
-			admin:      access.Admin,
-			raw:        raw,
+			schema:       s,
+			projectID:    projectID,
+			visibility:   visibility,
+			filters:      filters,
+			archived:     archived,
+			archivedMode: mode,
+			// A client at contract 1.10 or later states `archived`.
+			archivedStated: r.URL.Query().Has("archived"),
+			args:           args,
+			admin:          access.Admin,
+			raw:            raw,
 		})
 		return
 	}
@@ -580,7 +589,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	result := []map[string]any{}
 	for rows.Next() {
-		row, _, err := scanConversationRow(rows, false)
+		row, _, _, err := scanConversationRow(rows, false)
 		if err != nil {
 			apierr.Write(w, err)
 			return
@@ -594,6 +603,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	rows.Close()
 	annotateWorkspaceExecutors(ctx, pool, s, projectID, result)
+	annotateArchivers(ctx, pool, result)
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": result})
 }
 
@@ -691,6 +701,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	if testRuns != nil {
 		resp["editor_test_runs"] = *testRuns
 	}
+	// Client contract 1.11: the fork's source, with its name when the caller
+	// can still see it.
+	if ff := forkedFrom(conv.Meta); ff != nil {
+		h.annotateForkSource(r.Context(), projectID, ff)
+		resp["forked_from"] = ff
+	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
 	messagesLimit, _ := strconv.Atoi(r.URL.Query().Get("messages_limit"))
@@ -728,6 +744,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// widgets/chat-box/ui/hooks/useChatBoxSend.ts:310-313), and pylon stored
 	// it (legacy/plugins/elitea_core/api/v2/conversations.py:153-164).
 	if meta, ok := body["meta"].(map[string]any); ok {
+		// `forked_from` is the server's: only forkConversation writes it.
+		delete(meta, ForkedFromMetaKey)
 		conv.Meta = meta
 	}
 	actorID, err := chatauthority.Actor(r.Context())

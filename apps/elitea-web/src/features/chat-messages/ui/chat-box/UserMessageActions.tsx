@@ -15,15 +15,19 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 
+import { ForkMessageButton } from './ForkMessageButton';
+
 /** Each button only renders when its handler is supplied. */
 export function UserMessageActions({
   onCopy,
   onEdit,
   onDelete,
+  onFork,
 }: {
   readonly onCopy?: (() => void) | undefined;
   readonly onEdit?: (() => void) | undefined;
   readonly onDelete?: (() => void) | undefined;
+  readonly onFork?: (() => void) | undefined;
 }): ReactNode {
   return (
     // baseline `RelativeButtonsContainer`: right-aligned inside the card,
@@ -58,6 +62,7 @@ export function UserMessageActions({
           </IconButton>
         </Tooltip>
       )}
+      {onFork && <ForkMessageButton onFork={onFork} />}
       {onDelete && (
         // eslint-disable-next-line i18next/no-literal-string — tooltip label
         <Tooltip title="Delete" placement="top">

@@ -1033,3 +1033,64 @@ describe('CredentialForm — type catalogue scope', () => {
     await waitFor(() => expect(seen).toEqual([['credentials']]));
   });
 });
+
+/**
+ * The catalogue's `ai_dial` entry, as the server ships it: `auth_mode` and
+ * `token_audience` are in the schema because the ADMIN providers surface
+ * accepts them. A project credential cannot use workload identity — every
+ * project route refuses it — so this form must not offer the choice.
+ */
+const AI_DIAL_TYPE = {
+  type: 'ai_dial',
+  section: 'ai_credentials',
+  config_schema: {
+    title: 'AI DIAL',
+    properties: {
+      data: {
+        required: ['api_base'],
+        properties: {
+          api_base: { type: 'string', title: 'Api Base' },
+          api_key: { type: 'string', format: 'password', title: 'Api Key' },
+          api_version: { type: 'string', title: 'Api Version' },
+          auth_mode: { type: 'string', enum: ['key', 'workload_identity'], default: 'key', title: 'Auth Mode' },
+          token_audience: { anyOf: [{ type: 'string' }, { type: 'null' }], default: null, title: 'Token Audience' },
+        },
+      },
+    },
+  },
+};
+
+describe('CredentialForm — platform-only provider fields', () => {
+  it('hides auth_mode and token_audience and submits the key mode the project route accepts', async () => {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/configurations/available/`, () => HttpResponse.json([AI_DIAL_TYPE])));
+    let capturedBody: { data?: Record<string, unknown> } | undefined;
+    server.use(
+      http.post(`${BASE}/configurations/configurations/7`, async ({ request }) => {
+        capturedBody = (await request.json()) as { data?: Record<string, unknown> };
+        return HttpResponse.json({ uid: 'new-dial', type: 'ai_dial' });
+      }),
+    );
+    const onSaved = vi.fn();
+    renderForm(
+      <CredentialForm
+        context={CONTEXT}
+        mode={{ kind: 'create', credentialType: 'ai_dial' }}
+        onSaved={onSaved}
+        onDiscarded={vi.fn()}
+      />,
+    );
+    await screen.findByText('Api Key');
+    expect(screen.getByText('Api Version')).toBeInTheDocument();
+    expect(screen.queryByText('Auth Mode')).not.toBeInTheDocument();
+    expect(screen.queryByText('Token Audience')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'my-dial' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    // Never the platform-only mode: `key` (the schema default) is what a
+    // project write accepts, and a hidden field must not carry anything else.
+    expect(capturedBody?.data?.['auth_mode']).toBe('key');
+    expect(capturedBody?.data?.['token_audience'] ?? null).toBeNull();
+  });
+});

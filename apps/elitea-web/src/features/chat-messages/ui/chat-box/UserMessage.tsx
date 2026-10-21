@@ -94,6 +94,8 @@ export interface UserMessageProps {
   readonly onEdit?: (() => void) | undefined;
   /** Called when the user clicks the delete button. */
   readonly onDelete?: (() => void) | undefined;
+  /** "Fork from here": a new conversation up to and including this message. */
+  readonly onFork?: (() => void) | undefined;
   /** Called when the user clicks the regenerate button. */
   readonly onRegenerate?: (() => void) | undefined;
   /** Whether regeneration is currently disabled. */
@@ -202,6 +204,7 @@ export function UserMessage({
   onCopy,
   onEdit,
   onDelete,
+  onFork,
   onSubmit,
   onRemoveAttachment,
   onOpenFileInCanvas,
@@ -374,6 +377,7 @@ export function UserMessage({
             onCopy={onCopy}
             onEdit={onSubmit ? handleEditClick : undefined}
             onDelete={onDelete}
+            onFork={onFork}
           />
         </Box>
       )}

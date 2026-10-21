@@ -51,6 +51,7 @@ export const ListConversationsParams = zod.object({
   entity_meta_id: zod.string().optional(),
   mine: zod.boolean().optional(),
   hidden: zod.string().optional(),
+  archived: zod.string().optional(),
   limit: zod
     .int()
     .max(listConversationsParamsLimitMax)

@@ -57,7 +57,7 @@
 //!         kind TEXT, payload TEXT /* JSON */, PRIMARY KEY (turn_id, seq))
 //! ```
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -146,6 +146,26 @@ pub struct NewTurn {
     pub prompt: String,
     pub mentions: Vec<String>,
     pub started_at: i64,
+}
+
+/// What [`HistoryStore::copy_thread`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadCopy {
+    /// The number of turns copied (0 when the source has none here).
+    Copied(usize),
+    /// `up_to_turn` is not a turn of the source thread.
+    UnknownTurn,
+    /// The target thread already has turns: nothing was copied.
+    TargetNotEmpty,
+}
+
+/// Where [`HistoryStore::copy_thread`] copies to: the new thread's id and
+/// UUID, and the server fork's source-to-copy message UUID map.
+#[derive(Clone, Copy, Debug)]
+pub struct ThreadCopyTarget<'a> {
+    pub id: &'a str,
+    pub uuid: &'a str,
+    pub messages: &'a HashMap<String, String>,
 }
 
 /// One stored event, in the `agent://event` shape.
@@ -889,6 +909,107 @@ impl HistoryStore {
         })
     }
 
+    /// Copy one thread of `owner` into a new, empty thread of the same
+    /// workspace (a fork, `thread_history_fork`): the source's turns, oldest
+    /// first, up to and including `up_to_turn` (all of them when `None`),
+    /// less those in `skip` (a turn still running), each under a new turn
+    /// id and keyed by the target's id and UUID, with every event. A
+    /// copied `done` event names the copies' messages: each of its
+    /// `message_ids` found in the target's `messages` (the server fork's source-to-copy
+    /// map, `forked_messages`) is rewritten, so a fork of the fork can name a
+    /// copied turn's answer. One transaction: the target gets all of the
+    /// turns or none. The source is not changed. Only `owner`'s rows are
+    /// read, so another account's or deployment's thread copies nothing.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read or written.
+    pub fn copy_thread(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        source: &str,
+        target: ThreadCopyTarget<'_>,
+        up_to_turn: Option<&str>,
+        skip: &HashSet<String>,
+    ) -> Result<ThreadCopy, HostError> {
+        let ThreadCopyTarget {
+            id: target_id,
+            uuid: target_uuid,
+            messages,
+        } = target;
+        self.flush();
+        self.with("could not copy the thread history", |conn| {
+            let tx = conn.transaction()?;
+            let source_uuid = thread_uuid(&tx, owner, workspace_id, source)?;
+            let target_known = thread_uuid(&tx, owner, workspace_id, target_id)?;
+            let occupied: i64 = tx.query_row(
+                &format!("SELECT count(*) FROM turns WHERE {THREAD}"),
+                params![
+                    owner.origin,
+                    owner.user_id,
+                    workspace_id,
+                    target_uuid,
+                    target_known
+                ],
+                |row| row.get(0),
+            )?;
+            if occupied > 0 {
+                return Ok(ThreadCopy::TargetNotEmpty);
+            }
+            let ids: Vec<String> = {
+                let mut statement = tx.prepare(&format!(
+                    "SELECT turn_id FROM turns WHERE {THREAD} ORDER BY started_at, rowid"
+                ))?;
+                statement
+                    .query_map(
+                        params![
+                            owner.origin,
+                            owner.user_id,
+                            workspace_id,
+                            source,
+                            source_uuid
+                        ],
+                        |row| row.get(0),
+                    )?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            let ids: Vec<String> = match up_to_turn {
+                None => ids,
+                Some(last) => match ids.iter().position(|id| id == last) {
+                    Some(index) => ids[..=index].to_vec(),
+                    None => return Ok(ThreadCopy::UnknownTurn),
+                },
+            };
+            let mut copied = 0;
+            for old in ids.iter().filter(|id| !skip.contains(*id)) {
+                let new = uuid::Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO turns (turn_id, origin, user_id, workspace_id, conversation_id,
+                         conversation_uuid, prompt, mentions, started_at, finished_at, changes,
+                         events_bytes, events_truncated, turn_origin)
+                     SELECT ?1, origin, user_id, workspace_id, ?2, ?3, prompt, mentions,
+                            started_at, finished_at, changes, events_bytes, events_truncated,
+                            turn_origin
+                     FROM turns WHERE turn_id = ?4",
+                    params![new, target_id, target_uuid, old],
+                )?;
+                tx.execute(
+                    "INSERT INTO events (turn_id, seq, kind, payload)
+                     SELECT ?1, seq, kind, payload FROM events WHERE turn_id = ?2",
+                    params![new, old],
+                )?;
+                if !messages.is_empty() {
+                    rename_done_messages(&tx, &new, messages)?;
+                }
+                copied += 1;
+            }
+            prune_thread(&tx, owner, workspace_id, target_id, Some(target_uuid))?;
+            tx.commit()?;
+            Ok(ThreadCopy::Copied(copied))
+        })
+    }
+
     /// Forget every thread of a removed workspace, whoever's.
     ///
     /// # Errors
@@ -1104,6 +1225,44 @@ fn add_bytes(conn: &Connection, turn_id: &str, bytes: usize) -> rusqlite::Result
         "UPDATE turns SET events_bytes = events_bytes + ?2 WHERE turn_id = ?1",
         params![turn_id, i64::try_from(bytes).unwrap_or(i64::MAX)],
     )
+}
+
+/// Rewrite the `message_ids` of the `done` events of `turn_id` through
+/// `messages`; an id it does not name is kept.
+fn rename_done_messages(
+    conn: &Connection,
+    turn_id: &str,
+    messages: &HashMap<String, String>,
+) -> rusqlite::Result<()> {
+    let done: Vec<(i64, String)> = {
+        let mut statement =
+            conn.prepare("SELECT seq, payload FROM events WHERE turn_id = ?1 AND kind = 'done'")?;
+        statement
+            .query_map(params![turn_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (seq, payload) in done {
+        let Ok(mut value) = serde_json::from_str::<Value>(&payload) else {
+            continue;
+        };
+        let Some(ids) = value.get_mut("message_ids").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let mut changed = false;
+        for id in ids.iter_mut() {
+            if let Some(copy) = id.as_str().and_then(|old| messages.get(old)) {
+                *id = Value::String(copy.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            conn.execute(
+                "UPDATE events SET payload = ?3 WHERE turn_id = ?1 AND seq = ?2",
+                params![turn_id, seq, value.to_string()],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn insert_event(
@@ -1582,6 +1741,14 @@ mod tests {
     }
 
     /// Play a whole turn through a tap; returns what the window received.
+    fn target<'a>(
+        id: &'a str,
+        uuid: &'a str,
+        messages: &'a HashMap<String, String>,
+    ) -> ThreadCopyTarget<'a> {
+        ThreadCopyTarget { id, uuid, messages }
+    }
+
     fn play(store: &Arc<HistoryStore>, turn: NewTurn) -> Vec<AgentEvent> {
         let window = Arc::new(VecEmitter::default());
         let tap = TurnTap::new(window.clone(), Some(store.clone()));
@@ -1987,6 +2154,213 @@ mod tests {
         // Nor can it delete it.
         assert_eq!(store.delete_thread(&owner(2), "w1", "42").unwrap(), 0);
         assert_eq!(store.thread(&owner(1), "w1", "42").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_fork_copies_the_turns_up_to_the_fork_point_into_the_new_thread() {
+        let (_root, store) = store();
+        let mut first = new_turn(owner(1), "t1", "42");
+        first.started_at = 1;
+        let mut second = new_turn(owner(1), "t2", "42");
+        second.started_at = 2;
+        let mut third = new_turn(owner(1), "t3", "42");
+        third.started_at = 3;
+        play(&store, first);
+        play(&store, second);
+        play(&store, third);
+        play(&store, new_turn(owner(1), "other", "43"));
+        play(&store, new_turn(owner(2), "foreign", "42"));
+        let none = HashSet::new();
+        let unmapped = HashMap::new();
+
+        // Up to and including t2, addressed by the source's UUID.
+        let copied = store
+            .copy_thread(
+                &owner(1),
+                "w1",
+                "uuid-42",
+                target("50", "uuid-50", &unmapped),
+                Some("t2"),
+                &none,
+            )
+            .unwrap();
+        assert_eq!(copied, ThreadCopy::Copied(2));
+        let fork = store.thread(&owner(1), "w1", "50").unwrap();
+        assert_eq!(fork.len(), 2);
+        assert!(fork.iter().all(|turn| turn.conversation_id == "50"
+            && turn.conversation_uuid.as_deref() == Some("uuid-50")));
+        assert!(
+            fork.iter()
+                .all(|turn| !["t1", "t2", "t3"].contains(&turn.turn_id.as_str()))
+        );
+        assert_eq!(fork[0].started_at, 1);
+        assert_eq!(fork[1].started_at, 2);
+        let source = store.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(
+            fork[0].events,
+            source[0]
+                .events
+                .iter()
+                .map(|e| StoredEvent {
+                    turn_id: fork[0].turn_id.clone(),
+                    ..e.clone()
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(fork[0].changes, source[0].changes);
+        assert_eq!(fork[0].state, "done");
+        // The source and the other threads are as they were.
+        assert_eq!(source.len(), 3);
+        assert_eq!(store.thread(&owner(1), "w1", "43").unwrap().len(), 1);
+        assert_eq!(store.thread(&owner(2), "w1", "42").unwrap().len(), 1);
+        assert_eq!(store.thread(&owner(1), "w1", "uuid-50").unwrap().len(), 2);
+
+        // A second copy into a thread with turns copies nothing.
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(1),
+                    "w1",
+                    "42",
+                    target("50", "uuid-50", &unmapped),
+                    None,
+                    &none
+                )
+                .unwrap(),
+            ThreadCopy::TargetNotEmpty
+        );
+        assert_eq!(store.thread(&owner(1), "w1", "50").unwrap().len(), 2);
+        // The whole thread, less a running turn.
+        let running: HashSet<String> = ["t3".to_owned()].into();
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(1),
+                    "w1",
+                    "42",
+                    target("51", "uuid-51", &unmapped),
+                    None,
+                    &running
+                )
+                .unwrap(),
+            ThreadCopy::Copied(2)
+        );
+        // A fork point of another thread, or another account's thread.
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(1),
+                    "w1",
+                    "42",
+                    target("52", "uuid-52", &unmapped),
+                    Some("other"),
+                    &none
+                )
+                .unwrap(),
+            ThreadCopy::UnknownTurn
+        );
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(3),
+                    "w1",
+                    "42",
+                    target("53", "uuid-53", &unmapped),
+                    None,
+                    &none
+                )
+                .unwrap(),
+            ThreadCopy::Copied(0)
+        );
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(2),
+                    "w1",
+                    "42",
+                    target("54", "uuid-54", &unmapped),
+                    Some("t1"),
+                    &none
+                )
+                .unwrap(),
+            ThreadCopy::UnknownTurn
+        );
+        assert!(store.thread(&owner(1), "w1", "52").unwrap().is_empty());
+        assert!(store.thread(&owner(3), "w1", "53").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_fork_of_a_fork_names_the_copied_messages() {
+        let (_root, store) = store();
+        let window = Arc::new(VecEmitter::default());
+        let tap = TurnTap::new(window, Some(store.clone()));
+        tap.emit(event("t1", 0, "status", json!({"phase": "resolving"})));
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        tap.emit(event("t1", 1, "text_delta", json!({"text": "Hi"})));
+        tap.emit(event(
+            "t1",
+            2,
+            "done",
+            json!({"committed": true, "conversation_id": "42", "message_ids": ["q-a", "a-a", "other"], "changed_files": 0}),
+        ));
+        let none = HashSet::new();
+        // The server fork A -> B copied q-a and a-a.
+        let a_to_b: HashMap<String, String> = [("q-a", "q-b"), ("a-a", "a-b")]
+            .into_iter()
+            .map(|(from, to)| (from.to_owned(), to.to_owned()))
+            .collect();
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(1),
+                    "w1",
+                    "42",
+                    target("50", "uuid-50", &a_to_b),
+                    None,
+                    &none
+                )
+                .unwrap(),
+            ThreadCopy::Copied(1)
+        );
+        let fork = store.thread(&owner(1), "w1", "50").unwrap();
+        let done = fork[0].events.iter().find(|e| e.kind == "done").unwrap();
+        // B's turn names B's messages, so its fork point is a message of B;
+        // an id the fork did not copy is kept.
+        assert_eq!(done.payload["message_ids"], json!(["q-b", "a-b", "other"]));
+        assert_eq!(done.payload["committed"], json!(true));
+        let text = fork[0]
+            .events
+            .iter()
+            .find(|e| e.kind == "text_delta")
+            .unwrap();
+        assert_eq!(text.payload, json!({"text": "Hi"}));
+        // The source keeps its own ids.
+        let source = store.thread(&owner(1), "w1", "42").unwrap();
+        let done = source[0].events.iter().find(|e| e.kind == "done").unwrap();
+        assert_eq!(done.payload["message_ids"], json!(["q-a", "a-a", "other"]));
+
+        // Forking B at its copied turn (B -> C) names C's messages in turn.
+        let b_to_c: HashMap<String, String> = [("q-b", "q-c"), ("a-b", "a-c")]
+            .into_iter()
+            .map(|(from, to)| (from.to_owned(), to.to_owned()))
+            .collect();
+        let copied_turn = fork[0].turn_id.clone();
+        assert_eq!(
+            store
+                .copy_thread(
+                    &owner(1),
+                    "w1",
+                    "50",
+                    target("60", "uuid-60", &b_to_c),
+                    Some(&copied_turn),
+                    &none,
+                )
+                .unwrap(),
+            ThreadCopy::Copied(1)
+        );
+        let second = store.thread(&owner(1), "w1", "60").unwrap();
+        let done = second[0].events.iter().find(|e| e.kind == "done").unwrap();
+        assert_eq!(done.payload["message_ids"], json!(["q-c", "a-c", "other"]));
     }
 
     #[test]

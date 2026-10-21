@@ -367,6 +367,18 @@ type Config struct {
 	// including the pylon-indexer relay this route exists for. A browser origin
 	// must be named here on purpose.
 	RealtimeAllowedOrigins []string
+
+	// WorkloadIdentityEnabled arms keyless PLATFORM credentials
+	// (GATEWAY_WORKLOAD_IDENTITY_ENABLED): a vertex_ai or ai_dial row with
+	// `auth_mode = workload_identity` then authenticates with the pod's own
+	// Google identity (GKE Workload Identity, read through ADC). Only a shared
+	// row of the public project is admitted; see internal/account
+	// workload_identity.go.
+	//
+	// FALSE IS THE DEFAULT, and the parse is strict: only the exact words
+	// "true" and "false" are read. Anything else is false, because the value
+	// that weakens tenant isolation is the one a typo must never select.
+	WorkloadIdentityEnabled bool
 }
 
 // FromEnv builds a Config from environment variables, applying the §9.5
@@ -413,6 +425,23 @@ func FromEnv() Config {
 		GovernanceRefresh:      secondsOr("LLM_GOVERNANCE_REFRESH_SEC", DefaultGovernanceRefresh),
 		RealtimeMaxSessions:    intOr("LLM_REALTIME_MAX_SESSIONS", DefaultRealtimeMaxSessions),
 		RealtimeAllowedOrigins: csvOr("LLM_REALTIME_ALLOWED_ORIGINS"),
+
+		WorkloadIdentityEnabled: strictBoolOr("GATEWAY_WORKLOAD_IDENTITY_ENABLED", false),
+	}
+}
+
+// strictBoolOr reads a boolean that accepts exactly "true" or "false". Any
+// other value, "1", "TRUE" and "yes" included, returns def. strconv.ParseBool
+// is not used: it reads "1" and "T" as true, and for a switch that lends the
+// pod's cloud identity a loose reading is a widening nobody chose.
+func strictBoolOr(key string, def bool) bool {
+	switch os.Getenv(key) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return def
 	}
 }
 

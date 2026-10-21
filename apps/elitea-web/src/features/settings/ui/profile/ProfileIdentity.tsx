@@ -18,6 +18,12 @@
  * documents the endpoint, the live verification and why the field is read
  * defensively. The row renders whether or not the deployment supplies a
  * value, matching `Profile.jsx:67-70`.
+ *
+ * "Sign-in reference" rows are this deployment's own addition: one per
+ * `provider_refs` entry of `/social/author` (`oidc:<sub>`, `saml:<nameid>`).
+ * An operator copies one into `identity.initial_global_admins` to make the
+ * first administrator. Before these rows the only way to read the value was
+ * a curl with a session cookie. A Form login holds none, so no row renders.
  */
 import { memo, useCallback } from 'react';
 
@@ -40,6 +46,8 @@ export interface ProfileIdentityProps {
   userId: string;
   /** Already formatted for display; `''` when the deployment does not supply one. */
   lastLogin: string;
+  /** The caller's federated sign-in references. Empty for a Form login. */
+  providerRefs?: readonly string[];
   isFetching: boolean;
 }
 
@@ -97,6 +105,7 @@ export const ProfileIdentity = memo(function ProfileIdentity({
   avatar,
   userId,
   lastLogin,
+  providerRefs = [],
   isFetching,
 }: ProfileIdentityProps) {
   const onLogout = useCallback(() => {
@@ -124,6 +133,13 @@ export const ProfileIdentity = memo(function ProfileIdentity({
           <IdentityRow label={t('settings.profile.email', 'Email:')} value={email} />
           <IdentityRow label={t('settings.profile.userId', 'User ID:')} value={userId} />
           <IdentityRow label={t('settings.profile.lastLogin', 'Last login:')} value={lastLogin} />
+          {providerRefs.map((ref) => (
+            <IdentityRow
+              key={ref}
+              label={t('settings.profile.signInReference', 'Sign-in reference:')}
+              value={ref}
+            />
+          ))}
         </Box>
 
         <Button

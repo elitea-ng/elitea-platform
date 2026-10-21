@@ -9,6 +9,7 @@
 import type { ExecutionEventData } from '@/shared/api/sse';
 
 import type { ChatBoxActiveConversation } from './ChatBox.helpers';
+import type { ChatBoxTurnSink } from './hooks/useTurnActivity';
 
 /**
  * `ChatBoxProps.extensions.onAgentEvent` — the sink for a host that renders
@@ -34,6 +35,8 @@ export interface ChatBoxConversationProp {
   readonly isLoading?: boolean;
   /** Promote a newly persisted conversation into the page route and state. */
   readonly onCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string; readonly activeParticipantId?: string }) => void) | undefined;
+  /** A turn opened (`sent`) or closed (`settled`) in this conversation (`hooks/useTurnActivity.ts`). */
+  readonly onTurn?: ChatBoxTurnSink | undefined;
 }
 
 /** Flattens the `conversation` bundle back into the two values `ChatBox` reads (baseline: the separate `activeConversation`/`isLoadingConversation` props, bundled to stay under the §3.5 component-props budget once `ref` became a prop). */
@@ -41,10 +44,12 @@ export function unwrapChatBoxConversation(conversation: ChatBoxConversationProp 
   readonly activeConversation: ChatBoxActiveConversation | undefined;
   readonly isLoadingConversation: boolean | undefined;
   readonly onConversationCreated: ChatBoxConversationProp['onCreated'];
+  readonly onTurn: ChatBoxConversationProp['onTurn'];
 } {
   return {
     activeConversation: conversation?.active,
     isLoadingConversation: conversation?.isLoading,
     onConversationCreated: conversation?.onCreated,
+    onTurn: conversation?.onTurn,
   };
 }

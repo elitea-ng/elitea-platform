@@ -13,11 +13,15 @@ import * as slice from './index';
  */
 const PUBLIC_SURFACE = [
   'Conversations',
+  'useArchiveConversation',
+  'useConversationActivity',
+  'useConversationRail',
   'useCreateFolder',
   'useDateGroupExpansion',
   'useDeleteFolder',
   'useDragAndDrop',
   'useEditFolder',
+  'useForkConversation',
   'useMoveToFolderConversation',
   'usePinConversation',
   'useQueryFoldersList',

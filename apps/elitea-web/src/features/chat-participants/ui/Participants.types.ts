@@ -128,4 +128,6 @@ export interface ParticipantsProps {
   readonly selectedManager?: string;
   /** Same as `selectedManager`, but for a conversation still being composed (not yet persisted). */
   readonly newConversationSelectedManager?: string;
+  /** The desktop inspector hosts the panel: native captions for the title and the sections (`ParticipantsWrapperProps.appearance`). */
+  readonly inspector?: boolean;
 }

@@ -21,7 +21,7 @@ import (
 func statusBody(t *testing.T, sharedProjectID string) governanceStatusBody {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	makeGovernanceStatusHandler(nil, nil, sharedProjectID, nil)(
+	makeGovernanceStatusHandler(nil, nil, sharedProjectID, false, nil)(
 		recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 
 	if recorder.Code != http.StatusOK {
@@ -48,7 +48,7 @@ func TestTheStatusRouteNamesTheSharedProject(t *testing.T) {
 // gateway is too old to say".
 func TestAnUnarmedSharedScopeReportsEmpty(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	makeGovernanceStatusHandler(nil, nil, "", nil)(
+	makeGovernanceStatusHandler(nil, nil, "", false, nil)(
 		recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
 
 	var raw map[string]json.RawMessage
@@ -61,5 +61,31 @@ func TestAnUnarmedSharedScopeReportsEmpty(t *testing.T) {
 	}
 	if string(encoded) != `""` {
 		t.Errorf("shared_project_id = %s, want an empty string", encoded)
+	}
+}
+
+// TestTheStatusRouteReportsWorkloadIdentity — the admin providers screen reads
+// workload_identity_enabled to explain a refused keyless provider. Both values
+// must be ON THE WIRE: an omitted false would read as "too old to say".
+func TestTheStatusRouteReportsWorkloadIdentity(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		recorder := httptest.NewRecorder()
+		makeGovernanceStatusHandler(nil, nil, "", enabled, nil)(
+			recorder, httptest.NewRequest(http.MethodGet, "/governance/status", nil))
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(recorder.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		encoded, present := raw["workload_identity_enabled"]
+		if !present {
+			t.Fatalf("enabled=%v: workload_identity_enabled was omitted", enabled)
+		}
+		want := "false"
+		if enabled {
+			want = "true"
+		}
+		if string(encoded) != want {
+			t.Errorf("workload_identity_enabled = %s, want %s", encoded, want)
+		}
 	}
 }

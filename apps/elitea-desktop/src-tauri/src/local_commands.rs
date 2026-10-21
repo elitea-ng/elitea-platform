@@ -7,6 +7,7 @@
 //! A failed command here rejects with [`IpcError`], `{code, message}`: the
 //! UI branches on the machine code and shows the message.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -696,6 +697,40 @@ pub async fn thread_history_delete(
         deleted: state
             .agents
             .delete_thread_history(&workspace_id, &conversation_id)
+            .await?,
+    })
+}
+
+#[derive(Serialize)]
+pub struct HistoryForked {
+    copied: usize,
+}
+
+/// Copy one thread's stored turns into the conversation a server fork
+/// made (`forkConversation`), in the same workspace: up to and including
+/// `up_to_turn_id`, or all of them. The signed-in account's rows only.
+/// `message_ids` is the fork's `forked_messages` (source message UUID to
+/// the copy's): the copied turns name the new conversation's messages.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_history_fork(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    source_conversation_id: String,
+    target_conversation_id: String,
+    target_conversation_uuid: String,
+    up_to_turn_id: Option<String>,
+    message_ids: Option<HashMap<String, String>>,
+) -> Result<HistoryForked, IpcError> {
+    Ok(HistoryForked {
+        copied: state
+            .agents
+            .fork_thread_history(
+                &workspace_id,
+                &source_conversation_id,
+                (&target_conversation_id, &target_conversation_uuid),
+                up_to_turn_id.as_deref(),
+                message_ids.unwrap_or_default(),
+            )
             .await?,
     })
 }

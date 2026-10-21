@@ -24,6 +24,17 @@
 {{- $aiProjectId := include "elitea.aiProjectId" . }}
 {{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
 {{- $pg := .Values.postgresql | default dict }}
+{{- /*
+  With the pooler on, main.secrets.DATABASE_URL is how elitea-main's pods are
+  pointed at it, and that entry must NOT reach this Job. The pool is sized for
+  request traffic, not for a migration's long DDL transactions, and
+  reservedConnections already budgets the migration's direct connection. The
+  migration stays on the direct DSN in postgresql.existingSecret, as the
+  pooler's section in values.yaml promises.
+*/ -}}
+{{- if and (.Values.pgbouncer | default dict).enabled $pg.existingSecret }}
+{{- $secrets = omit $secrets "DATABASE_URL" }}
+{{- end }}
 {{- if and $pg.existingSecret (not (hasKey $secrets "DATABASE_URL")) }}
 {{- $secrets = merge (deepCopy $secrets) (dict "DATABASE_URL" (dict "secretName" $pg.existingSecret "key" (required "postgresql.key is required when postgresql.existingSecret is set" $pg.key))) }}
 {{- end }}

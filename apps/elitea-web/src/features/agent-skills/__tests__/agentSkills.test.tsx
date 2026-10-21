@@ -15,6 +15,7 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { useListApplicationSkills } from '@/shared/api/generated/skills/skills';
 import { server } from '@/test/setup';
 
 import { AgentSkillsPanel } from '../ui/AgentSkillsPanel';
@@ -89,6 +90,27 @@ function panel(props: Partial<Parameters<typeof AgentSkillsPanel>[0]> = {}): Rea
 }
 
 describe('AgentSkillsPanel', () => {
+  it('shares the query cache with the generated hook without either reading the other shape', async () => {
+    // The agent editor mounts the instructions `/skill` mention (generated
+    // hook, envelope) next to this section under ONE query key. Caching a
+    // bare array here crashed the editor with `attached.map is not a function`.
+    attached = [{ id: 3, name: 'Reviewer' }];
+    function MentionReader(): ReactElement {
+      const query = useListApplicationSkills(PROJECT, Number(VERSION), { query: { enabled: true } });
+      const data = (query.data as { data?: { items?: unknown } } | undefined)?.data;
+      return <span data-testid="mention-shape">{Array.isArray(data?.items) ? 'envelope' : 'pending'}</span>;
+    }
+    renderWithProviders(
+      <>
+        <MentionReader />
+        {panel()}
+      </>,
+    );
+
+    expect(await screen.findByText('Reviewer')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('mention-shape')).toHaveTextContent('envelope'));
+  });
+
   it('reads the skills of THIS agent version, not the project list', async () => {
     attached = [{ id: 3, name: 'Reviewer', description: 'reviews code' }];
     renderWithProviders(panel());

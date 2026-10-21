@@ -3,7 +3,7 @@ name: Nightly — Image scan (latest)
 # Every image the release publishes, scanned every night AS PUBLISHED: what
 # `ghcr.io/elitea-ng/<image>:latest` resolves to, by digest. For each image with
 # a HIGH or CRITICAL finding there is ONE issue, opened, kept current and closed
-# by scripts/ci/image_scan_issue.py.
+# by scripts/ci/image-scan-issue.mjs (through actions/github-script).
 #
 # WHY NIGHTLY, AND WHY `latest` (owner request, 2026-10-20)
 #
@@ -34,7 +34,8 @@ name: Nightly — Image scan (latest)
 #      expect_type per image (the dormancy guard), and the same exemption
 #      register (.github/image-scan-exempt.txt).
 #   3. A report that does not prove the scan ran never closes an issue
-#      (image_scan_issue.py exits 2), and the gate step fails the job for it.
+#      (image-scan-issue.mjs returns 2 and the step fails), and the gate step
+#      fails the job for it.
 #
 # The PR-time checks that cost seconds — every published image has a scan, the
 # exemption register agrees with the release matrix, the gate goes red, the
@@ -142,7 +143,7 @@ jobs:
 
       # exit-code 0: this step collects the report; the two steps below act on it.
       # The same inputs as publish.yml's release scan, plus `cache: "false"`
-      # (scripts/ci/check_workflow_cache_writes.py: trivy-action's own DB
+      # (scripts/ci/check-workflow-cache-writes.mjs: trivy-action's own DB
       # cache is a full actions/cache, saved from whatever ref runs it).
       - name: Scan the image latest resolves to
         uses: aquasecurity/trivy-action@v0.36.0
@@ -158,19 +159,36 @@ jobs:
           output: trivy-report.json
           exit-code: "0"
 
+      # Pinned to the v9.0.0 commit, as cancel-merged-pr-runs.yml pins it:
+      # this step holds issues: write.
       - name: Open, update or close this image's issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 scripts/ci/image_scan_issue.py \
-            --report trivy-report.json \
-            --image "${{ matrix.image.name }}" \
-            --expect-type "${{ matrix.image.expect_type }}" \
-            --blocking "${{ matrix.image.blocking }}" \
-            --digest "${{ steps.pull.outputs.digest }}" \
-            --version "${{ steps.pull.outputs.version }}" \
-            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --repo "${{ github.repository }}"
+          IMAGE: ${{ matrix.image.name }}
+          EXPECT_TYPE: ${{ matrix.image.expect_type }}
+          BLOCKING: ${{ matrix.image.blocking }}
+          DIGEST: ${{ steps.pull.outputs.digest }}
+          VERSION: ${{ steps.pull.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/image-scan-issue.mjs`);
+            const env = process.env;
+            const code = await main({
+              github,
+              args: {
+                report: "trivy-report.json",
+                image: env.IMAGE,
+                expectType: env.EXPECT_TYPE,
+                blocking: env.BLOCKING,
+                digest: env.DIGEST,
+                version: env.VERSION,
+                runUrl: env.RUN_URL,
+                repo: env.REPO,
+              },
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/image-scan-issue.mjs exited ${code}`);
 
       # The release gate's rule, so a red square here means what it means
       # there. Runs even when the issue step failed: the job must still say

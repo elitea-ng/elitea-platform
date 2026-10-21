@@ -1,0 +1,263 @@
+---
+title: "Deploy on Google Cloud (GKE)"
+description: "The Google Cloud choices for a from-scratch install: a GKE cluster with Workload Identity, Cloud SQL for PostgreSQL, a GCS bucket with no keys, the edge in front of it, and platform models from Vertex AI or AI DIAL authenticated by a service account."
+---
+
+This page is the Google Cloud companion to [Deploy from scratch](/deployment/from-scratch), for chart **4.60.0 or newer**. Follow that guide step by step. Where a step has a GCP-specific answer, this page gives it. The goal is an install where **no static cloud credential exists anywhere**: object storage and the model providers authenticate as Google service accounts through GKE Workload Identity.
+
+| From-scratch step | On GCP |
+|---|---|
+| Prerequisites | [GKE cluster](#the-cluster) with Dataplane V2 and Workload Identity |
+| Step 2: PostgreSQL | [Cloud SQL for PostgreSQL 16+](#cloud-sql-for-postgresql), private IP |
+| Step 3: Object storage | [GCS bucket](#gcs-bucket-with-no-keys), Workload Identity, no Secret |
+| Step 7: The edge | [Envoy Gateway behind a Google load balancer](#the-edge), or the GKE Gateway with caveats |
+| Step 8: Models | [Vertex AI or AI DIAL with a service account](#platform-models-with-a-service-account), configured in the admin console |
+
+## The cluster
+
+Create a GKE Standard or Autopilot cluster with:
+
+- **Dataplane V2** (`--enable-dataplane-v2`). It enforces the chart's NetworkPolicies, including `ipBlock` exceptions. Autopilot has it on by default.
+- **Workload Identity Federation for GKE** (`--workload-pool=<PROJECT_ID>.svc.id.goog`). Every keyless path on this page depends on it.
+- **A private cluster**, with Cloud NAT for egress to model providers and to `ghcr.io`, where the images are published.
+- A node pool with at least one node that has **2 free CPUs** for the worker during a rolling update.
+- Optional: a **GKE Sandbox** node pool (`--sandbox type=gvisor`) if you will turn on the cloud executor. GKE installs the `gvisor` RuntimeClass itself, so the `elitea-sandbox-runtime` chart is not needed. See [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes).
+
+Install cert-manager as the from-scratch guide says.
+
+<Warning title="NodeLocal DNSCache">
+If NodeLocal DNSCache is on, pods resolve through `169.254.20.10`. That is a link-local address, inside the deny ranges of the egress proxy and of the sandbox workspace policies, which only admit kube-dns pods. Leave it off, or add the address to those policies, before you turn on the cloud executor.
+</Warning>
+
+### Service accounts
+
+Create one Google service account (GSA) per component that calls a Google API, and link it to the component's Kubernetes service account (KSA). The chart names the KSAs after the release, so with the release name `elitea`:
+
+| Component | KSA | GSA (example) | Needs |
+|---|---|---|---|
+| elitea-main | `elitea-main` | `elitea-main@<PROJECT_ID>.iam.gserviceaccount.com` | the GCS bucket |
+| elitea-llm-gateway | `elitea-llm-gateway` | `elitea-llm@<PROJECT_ID>.iam.gserviceaccount.com` | Vertex AI and/or the AI DIAL audience |
+
+```bash
+PROJECT_ID=<your project>
+for gsa in elitea-main elitea-llm; do
+  gcloud iam service-accounts create "$gsa" --project "$PROJECT_ID"
+done
+
+# Each KSA may act as its GSA. Nothing else may.
+gcloud iam service-accounts add-iam-policy-binding \
+  "elitea-main@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:$PROJECT_ID.svc.id.goog[elitea/elitea-main]"
+gcloud iam service-accounts add-iam-policy-binding \
+  "elitea-llm@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:$PROJECT_ID.svc.id.goog[elitea/elitea-llm-gateway]"
+```
+
+Use linked GSAs rather than granting roles to the KSA principal directly. AI DIAL authentication needs a Google-signed **ID token**, and GKE's metadata server issues one only for a linked GSA.
+
+## Cloud SQL for PostgreSQL
+
+Create a **PostgreSQL 16 or newer** instance with a **private IP** in the cluster's VPC. Cloud SQL supports the `vector` (pgvector) extension, which the platform needs.
+
+- **Connections.** Set the `max_connections` database flag deliberately and copy the same number into `postgresql.maxConnections`. The chart sizes elitea-main's autoscaler against it; see [the connection budget](/deployment/from-scratch#the-connection-budget).
+- **TLS.** Turn on "Allow only SSL connections" and use `sslmode=require` in both DSNs. The chart has no mount for a server CA, so `verify-full` is not available.
+- **No Cloud SQL Auth Proxy.** The chart renders no sidecars. Connect over private IP. If your policy requires the proxy, run it as its own Deployment and Service, and point the DSNs at that Service.
+
+Cloud SQL has no superuser, so use the **DBA tab** of the from-scratch Step 2 (`dbInit.enabled: false`, `dbInit.externallyManaged: true`). Create the login role with `gcloud`, then run the few statements below once, connected as `postgres`. This is the only SQL in the install. After it, the migration Job builds everything else.
+
+```bash
+gcloud sql users create elitea_v2 --instance <instance> \
+  --password "$(cat elitea-material/db-password)"
+```
+
+```sql
+-- as postgres; it must be able to act as the owner it assigns
+GRANT elitea_v2 TO postgres;
+CREATE DATABASE elitea_v2 OWNER elitea_v2;
+CREATE DATABASE elitea_v2_agentstate OWNER elitea_v2;
+\c elitea_v2
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Set `DB_HOST` to the instance's private IP when you run the mint script, so both DSNs point at it.
+
+## GCS bucket with no keys
+
+```bash
+BUCKET=<project>-elitea-artifacts
+gcloud storage buckets create "gs://$BUCKET" --location <region> \
+  --uniform-bucket-level-access --public-access-prevention
+
+# Scoped to this one bucket, never to the project.
+gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
+  --member "serviceAccount:elitea-main@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role roles/storage.admin
+```
+
+elitea-main needs more than object access on its bucket. At boot it **replaces the bucket's lifecycle configuration** (`storage.buckets.update`) and reads its encryption settings. `roles/storage.admin` granted on the bucket alone covers both. Use a dedicated bucket.
+
+In the values file, replace the S3 block of the from-scratch Step 6 with:
+
+```yaml
+main:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-main@<PROJECT_ID>.iam.gserviceaccount.com
+  env:
+    STORAGE_BACKEND: "gcs"
+    STORAGE_CONTAINER: "<project>-elitea-artifacts"
+    GCS_ENDPOINT: ""        # empty for real GCS
+```
+
+Also remove `S3_ACCESS_KEY` and `S3_SECRET_KEY` from `main.secrets`, and do not create `elitea-main-storage-secrets`. With Application Default Credentials there is no signing key, so the platform does not hand out presigned URLs: downloads and workspace transfers stream through elitea-main instead. Nothing needs configuring for that.
+
+<Warning title="Set the annotation, or the pod runs as the node">
+With no Secret and no annotation, the Google client library falls back to the node's own service account. If that account can reach the bucket, elitea-main starts and works under the wrong identity. Always set the annotation.
+</Warning>
+
+## The edge
+
+The from-scratch Step 7 lists what the edge must do: split paths, **strip identity headers**, keep server-sent event streams open for minutes, accept 150 MiB uploads, and serve the MCP path, which needs a regular-expression match. Two ways to meet that on GKE:
+
+<Tabs>
+<Tab title="Envoy Gateway (recommended)">
+Install [Envoy Gateway](https://gateway.envoyproxy.io/) into the cluster and expose its data plane with a `Service` of type `LoadBalancer`, which GKE implements as a passthrough Network Load Balancer. TLS terminates at Envoy, using a certificate from cert-manager (for example, Let's Encrypt through an ACME `ClusterIssuer`) or one you import.
+
+Every route, filter and timeout in the from-scratch Step 7 then applies **unchanged**, including the MCP regex rule. Use the `ingressFrom` selector shown there (`app.kubernetes.io/name: envoy` in `envoy-gateway-system`).
+
+To use Cloud Armor, put a Google Application Load Balancer in front of this Service as well. The routing rules stay in Envoy either way.
+</Tab>
+<Tab title="GKE Gateway (managed)">
+The GKE Gateway controller (`gatewayClassName: gke-l7-global-external-managed`) works, with differences you must handle and then test:
+
+- **No MCP endpoint.** GKE's HTTPRoute supports `Exact` and `PathPrefix` path matches only. Leave out the `RegularExpression` rule. Everything except Elitea's MCP server works.
+- **Stream timeouts.** The load balancer's backend timeout defaults to 30 seconds. Attach a `GCPBackendPolicy` to the `elitea-main` Service that raises `timeoutSec` to cover a whole model answer, for example 3600.
+- **Health checks.** Attach a `HealthCheckPolicy` that checks `/healthz` on `elitea-main:8080` and `/app/` on `elitea-web:80`.
+- **NetworkPolicy.** There are no gateway pods. Google's front ends connect to the pods directly, so `networkPolicies.main.ingressFrom` must be an `ipBlock` for Google's load-balancer ranges (`35.191.0.0/16`, `130.211.0.0/22`). `ELITEA_TRUSTED_PROXY_CIDRS` must include them too.
+- **Header stripping is mandatory.** Keep the `RequestHeaderModifier` filter of Step 7. After the bullet above, Google's front ends are trusted proxies, so a header that is not stripped becomes a forged identity.
+
+Run every check of the from-scratch Step 9 before go-live.
+</Tab>
+</Tabs>
+
+## Single sign-on
+
+Install with OIDC configured in the values file (`OIDC_*` in from-scratch Step 6). That is what makes the sign-in routes exist. Any identity provider with OIDC works, including Google Workspace (`OIDC_ISSUER_URL: https://accounts.google.com`), Entra ID, Okta and Keycloak. Name the first administrator as `email:<address>`. That form matches when the provider marks the address as verified.
+
+After the first sign-in, everything else is in the admin console, under **Configuration › Authentication**, with no restart:
+
+- **SAML.** Add a SAML 2.0 provider. Give the identity provider this service's metadata URL, `https://<host>/auth/saml/metadata`, and copy its entity ID, SSO URL and certificate back into the form. Signing authentication requests is optional.
+- **SCIM.** Create a SCIM client, put its Tenant URL and token into the identity provider, then bind directory groups to a project and a role.
+
+[Authentication](/admin/authentication) describes every field.
+
+## Platform models with a service account
+
+Platform models are the shared models every project can use. An administrator adds them in the admin console. On GCP, authenticate them as the gateway's service account rather than with a pasted key.
+
+### 1. Allow workload identity on the gateway
+
+It needs chart **4.60.0 or newer**. Older charts have no `llmGateway.workloadIdentity` and render no annotations on the gateway's service account. Workload identity is off by default, and it is honoured only for **platform** credentials, the ones an administrator adds in the admin console. A project's own credential can never borrow the gateway's identity.
+
+```yaml
+llmGateway:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-llm@<PROJECT_ID>.iam.gserviceaccount.com
+  workloadIdentity:
+    enabled: true
+  env:
+    # Add the provider hosts you use.
+    GATEWAY_EGRESS_ALLOWLIST: >-
+      <region>-aiplatform.googleapis.com,aiplatform.googleapis.com,dial.example.com
+
+main:
+  env:
+    # Recommended: projects use shared platform models only.
+    ELITEA_ALLOW_PROJECT_OWN_LLMS: "false"
+```
+
+A private AI DIAL address needs its IP or CIDR in the allowlist as well; see [model egress](/deployment/from-scratch#choices-in-this-file-you-may-want-to-change).
+
+### 2. Grant the service account access
+
+<Tabs>
+<Tab title="Vertex AI">
+```bash
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member "serviceAccount:elitea-llm@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role roles/aiplatform.user
+```
+Enable the Vertex AI API in that project. To use models from another project, grant the role there and enter that project in the provider form.
+</Tab>
+<Tab title="AI DIAL">
+The gateway signs in to DIAL with a **Google-signed ID token** for `elitea-llm@<PROJECT_ID>.iam.gserviceaccount.com`, sent as `Authorization: Bearer`. The token's audience is the DIAL endpoint's origin, unless you set another one in the provider form.
+
+Your DIAL administrators configure DIAL core to accept that token:
+
+- an identity provider with issuer `https://accounts.google.com` and JWKS `https://www.googleapis.com/oauth2/v3/certs`
+- accept only the audience above and this service account's e-mail (or `sub`)
+- give that principal a role with access to the models you will publish
+
+Until that is in place, the connection check in the admin console fails with DIAL's `401`.
+</Tab>
+</Tabs>
+
+### 3. Add the provider and publish models
+
+<Steps>
+<Step title="Open the LLM Proxy">
+In the admin console, open **Configuration › LLM Proxy › Providers & models**.
+</Step>
+<Step title="Add a provider">
+Choose **Vertex AI** or **EPAM DIAL**, and set **Authentication** to **Workload identity (GKE service account)**.
+- Vertex AI: the Google Cloud project and location. There is no key field.
+- EPAM DIAL: the endpoint and API version, plus a token audience if your DIAL expects one other than the endpoint's origin.
+
+Save the provider, then run **Test connection**. A keyless provider can be tested only after it is saved. A warning under the Workload identity option means `llmGateway.workloadIdentity.enabled` is not on.
+</Step>
+<Step title="Publish models">
+Add a platform model for each model you share: its name as the provider knows it, its context window, and, for DIAL, its **DIAL protocol**. **Default** fits most models. Choose **OpenAI Responses API** for gpt models that need it, and **Anthropic Messages API** for Claude with extended thinking.
+</Step>
+<Step title="Choose the platform default model">
+Set it on the same tab. New conversations use it.
+</Step>
+</Steps>
+
+Then open a chat as any user, pick a shared model and send a message.
+
+## Checklist for the values file
+
+On top of the from-scratch values file:
+
+```yaml
+networkPolicies:
+  main:
+    ingressFrom:            # Envoy Gateway; see "The edge" for the GKE Gateway
+      - namespaceSelector:
+          matchLabels: {kubernetes.io/metadata.name: envoy-gateway-system}
+        podSelector:
+          matchLabels: {app.kubernetes.io/name: envoy}
+
+main:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-main@<PROJECT_ID>.iam.gserviceaccount.com
+  env:
+    STORAGE_BACKEND: "gcs"
+    STORAGE_CONTAINER: "<project>-elitea-artifacts"
+    ELITEA_TRUSTED_PROXY_CIDRS: "<pod CIDR>"
+    ELITEA_ALLOW_PROJECT_OWN_LLMS: "false"
+  # remove S3_ACCESS_KEY / S3_SECRET_KEY from main.secrets
+
+llmGateway:
+  serviceAccount:
+    annotations:
+      iam.gke.io/gcp-service-account: elitea-llm@<PROJECT_ID>.iam.gserviceaccount.com
+  workloadIdentity:
+    enabled: true
+```
+
+{/* source: deploy/helm/elitea/values.yaml (main.env GCS_ENDPOINT, main.serviceAccount, llmGateway.serviceAccount, llmGateway.workloadIdentity, sandboxKubernetes.runtimeClass); deploy/helm/elitea/env-drift-allowlist.txt (GOOGLE_APPLICATION_CREDENTIALS not wired); services/elitea-main/internal/infra/storage/gcs/backend.go (ADC, no presign, lifecycle); services/elitea-llm-gateway/internal/account (workload identity for platform credentials); deploy/helm/elitea-sandbox-runtime/README.md (not needed on GKE). GKE Gateway caveats are GKE product behaviour, not tested by this repository: verify against Google's GKE Gateway documentation for your GKE version. */}

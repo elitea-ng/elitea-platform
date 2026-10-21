@@ -3124,6 +3124,32 @@ llmGateway:
   serviceAccount:
     create: true
     name: ""
+    # GKE Workload Identity binds the pod to a Google service account here:
+    #   iam.gke.io/gcp-service-account: elitea-llm-gateway@PROJECT.iam.gserviceaccount.com
+    # The binding alone gives the gateway an identity. It does not make the
+    # gateway USE it: set workloadIdentity.enabled below for that. Empty by
+    # default, like main.serviceAccount.annotations.
+    annotations: {}
+
+  # Keyless PLATFORM credentials (GATEWAY_WORKLOAD_IDENTITY_ENABLED). When true,
+  # a platform provider (Administration, LLM providers) of type vertex_ai or
+  # ai_dial can set `auth_mode: workload_identity` and hold no key. The gateway
+  # then signs in with the pod's Google identity (Application Default
+  # Credentials): an OAuth access token for Vertex AI, and a Google ID token for
+  # AI DIAL (audience: the row's token_audience, else the api_base origin).
+  #
+  # A PROJECT credential can never use the mode. The gateway admits it only for
+  # a shared row of the public project, and refuses every other row with
+  # WORKLOAD_IDENTITY_NOT_ALLOWED. A failed token mint refuses the request; it
+  # never falls back to another credential.
+  #
+  # OFF by default. Bind the service account first (serviceAccount.annotations
+  # above). With networkPolicy.enabled, true also opens egress to the GKE
+  # metadata server (169.254.169.254:80 and 169.254.169.252:988), and only
+  # that. The in-process egress guard still refuses every tenant api_base that
+  # resolves to a link-local address, so tenant traffic cannot reach it.
+  workloadIdentity:
+    enabled: false
 
   # OFF by default: this chart's own scale-1 profile (replicaCount: 1 above)
   # means minAvailable: 1 against a single replica would block every voluntary

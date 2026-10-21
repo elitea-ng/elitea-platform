@@ -123,7 +123,7 @@ func TestStatusReportsNotConfiguredDistinctly(t *testing.T) {
 // specification of a contract the gateway owns — free to drift silently, which
 // is the exact failure the status route exists to expose.
 func TestStatusPassesTheGatewayBodyThrough(t *testing.T) {
-	upstream := `{"enabled":true,"rate_limits_enforceable":false,"definitions":{"rows":4,"rejected":[{"id":"a","type":"routing_rule","name":"r","reason":"CEL compile error"}]}}`
+	upstream := `{"enabled":true,"rate_limits_enforceable":false,"workload_identity_enabled":true,"definitions":{"rows":4,"rejected":[{"id":"a","type":"routing_rule","name":"r","reason":"CEL compile error"}]}}`
 	h := NewLLMProxyHandler(nil, stubStatus{body: json.RawMessage(upstream)})
 
 	rec := doLLMProxy(t, h.Routes(), http.MethodGet, "/status", "")
@@ -139,6 +139,10 @@ func TestStatusPassesTheGatewayBodyThrough(t *testing.T) {
 	// The fields an operator acts on must survive the hop verbatim.
 	if gw["rate_limits_enforceable"] != false {
 		t.Errorf("rate_limits_enforceable did not survive: %v", gw["rate_limits_enforceable"])
+	}
+	// The Admin UI offers the keyless auth mode only when the gateway armed it.
+	if gw["workload_identity_enabled"] != true {
+		t.Errorf("workload_identity_enabled did not survive: %v", gw["workload_identity_enabled"])
 	}
 	defs, _ := gw["definitions"].(map[string]any)
 	rejected, _ := defs["rejected"].([]any)

@@ -244,6 +244,7 @@ tasks:
       - task: helm:main-master-key
       - task: helm:worker-node-recovery
       - task: helm:gateway-master-key
+      - task: helm:gateway-workload-identity
       - task: helm:indexing-runtime
 
   helm:indexing-runtime:
@@ -274,6 +275,12 @@ tasks:
       # The gateway refuses to start without the key, as elitea-main does.
       # Needs yq.
       - bash deploy/helm/tests/render-gateway-master-key.sh
+
+  helm:gateway-workload-identity:
+    desc: Check that llmGateway.workloadIdentity.enabled renders GATEWAY_WORKLOAD_IDENTITY_ENABLED, the ServiceAccount binding, and the metadata egress rule only when true
+    cmds:
+      # Keyless platform credentials for Vertex AI and AI DIAL. Needs yq.
+      - bash deploy/helm/tests/render-gateway-workload-identity.sh
 
   helm:code-consumers:
     desc: Check opt-in Code consumers and private material boundaries

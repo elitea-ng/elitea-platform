@@ -120,6 +120,11 @@ type Cursor struct {
 	Full  bool
 	Rows  Position
 	Tombs Position
+	// Snapshot is set on the later pages of a full sync: the instant the
+	// full sync's first page read the list at. A stream may narrow the rows
+	// stamped at or before it as it narrowed that first page, and treat the
+	// rows stamped after it as changes. Zero on every other cursor.
+	Snapshot time.Time
 }
 
 type wireCursor struct {
@@ -130,6 +135,9 @@ type wireCursor struct {
 	I     int64  `json:"i"`
 	DT    string `json:"dt"`
 	DI    int64  `json:"di"`
+	// FS is Cursor.Snapshot; absent on every cursor that is not inside a
+	// full sync, so the cursors issued before it existed still decode.
+	FS string `json:"fs,omitempty"`
 }
 
 // Requested reports whether the query asks for delta mode, and the raw value.
@@ -173,18 +181,27 @@ func Decode(raw, stream, scope string) (Cursor, error) {
 	if err != nil {
 		return Cursor{}, ErrInvalidCursor
 	}
+	var snapshot time.Time
+	if wire.FS != "" {
+		at, err := time.Parse(time.RFC3339Nano, wire.FS)
+		if err != nil {
+			return Cursor{}, ErrInvalidCursor
+		}
+		snapshot = at.UTC()
+	}
 	return Cursor{
-		Stream: stream,
-		Scope:  scope,
-		Rows:   Position{At: rowsAt.UTC(), ID: wire.I},
-		Tombs:  Position{At: tombsAt.UTC(), ID: wire.DI},
+		Stream:   stream,
+		Scope:    scope,
+		Rows:     Position{At: rowsAt.UTC(), ID: wire.I},
+		Tombs:    Position{At: tombsAt.UTC(), ID: wire.DI},
+		Snapshot: snapshot,
 	}, nil
 }
 
 // Encode renders a cursor. Full is not encoded: an encoded cursor is always
 // a position.
 func Encode(cursor Cursor) string {
-	body, _ := json.Marshal(wireCursor{
+	wire := wireCursor{
 		V:     cursorVersion,
 		S:     cursor.Stream,
 		Scope: cursor.Scope,
@@ -192,7 +209,11 @@ func Encode(cursor Cursor) string {
 		I:     cursor.Rows.ID,
 		DT:    cursor.Tombs.At.UTC().Format(time.RFC3339Nano),
 		DI:    cursor.Tombs.ID,
-	})
+	}
+	if !cursor.Snapshot.IsZero() {
+		wire.FS = cursor.Snapshot.UTC().Format(time.RFC3339Nano)
+	}
+	body, _ := json.Marshal(wire)
 	return base64.RawURLEncoding.EncodeToString(body)
 }
 

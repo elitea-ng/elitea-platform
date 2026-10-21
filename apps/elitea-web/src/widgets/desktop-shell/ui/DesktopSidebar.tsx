@@ -8,13 +8,18 @@
  * no global project switcher over the folders; the project the Elitea pages
  * work in is a quiet caption on that section.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
+import { useNavigate } from '@tanstack/react-router';
 
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
+import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -36,13 +41,15 @@ import Typography from '@mui/material/Typography';
 
 import type { Project } from '@/entities/project';
 import { t } from '@/shared/i18n';
+import { PERMISSIONS } from '@/shared/lib/permissions';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
 import { eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
-import { useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
+import { useChatsSectionOpen, useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
+import { ChatsSection } from './ChatsSection';
 import type { ShellLocation } from '../model/useShellLocation';
 import { LocalWorkSection } from './LocalWorkSection';
 import { ShellRow, SectionCaption } from './rows';
@@ -112,6 +119,73 @@ function ProjectCaption({
   );
 }
 
+/** The room the Chats row's hover actions take: two buttons, or three with New folder. */
+const TWO_ACTIONS = '3.75rem';
+const THREE_ACTIONS = '5.5rem';
+
+interface ChatsRowActionsProps {
+  readonly open: boolean;
+  readonly onToggle: () => void;
+  /** Absent without the folder create permission. */
+  readonly onNewFolder?: (() => void) | undefined;
+}
+
+/** The Chats row's hover actions: a new chat, a new folder, and the disclosure of the conversations under it. */
+function ChatsRowActions({ open, onToggle, onNewFolder }: ChatsRowActionsProps): React.JSX.Element {
+  const navigate = useNavigate();
+  const newChat = t('desktop.chats.new', 'New chat');
+  const newFolder = t('desktop.chats.newFolder', 'New folder');
+  const disclosure = open ? t('desktop.chats.hide', 'Hide chats') : t('desktop.chats.show', 'Show chats');
+  return (
+    <>
+      {onNewFolder !== undefined && (
+        <Tooltip title={newFolder}>
+          <IconButton size="small" aria-label={newFolder} data-testid="shell-chats-new-folder" onClick={onNewFolder}>
+            <CreateNewFolderOutlinedIcon fontSize="inherit" />
+          </IconButton>
+        </Tooltip>
+      )}
+      <Tooltip title={newChat}>
+        {/* `create=1` starts a new chat even on `/chat` itself (`processes/chat/ui/useCreateChatReset.ts`). */}
+        <IconButton size="small" aria-label={newChat} data-testid="shell-chats-new" onClick={() => void navigate({ to: '/chat', search: { create: '1' } as never })}>
+          <AddOutlinedIcon fontSize="inherit" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title={disclosure}>
+        <IconButton size="small" aria-label={disclosure} aria-expanded={open} data-testid="shell-chats-toggle" onClick={onToggle}>
+          {open ? <ExpandMoreIcon fontSize="inherit" /> : <ChevronRightIcon fontSize="inherit" />}
+        </IconButton>
+      </Tooltip>
+    </>
+  );
+}
+
+/** The chat routes: `/chat`, a conversation, the archived chats page. */
+function isChatPath(pathname: string): boolean {
+  return pathname === '/chat' || pathname.startsWith('/chat/');
+}
+
+/**
+ * Opening the chat expands the Elitea section and the Chats disclosure, so its
+ * conversations are on screen. It runs on each navigation to a chat route, not
+ * on every render: a person who collapses them on the chat page keeps them
+ * collapsed until the next navigation.
+ */
+function useExpandOnChat(pathname: string, expandElitea: () => void, expandChats: () => void): void {
+  const onChat = isChatPath(pathname);
+  useEffect(() => {
+    if (!onChat) return;
+    expandElitea();
+    expandChats();
+  }, [onChat, pathname, expandElitea, expandChats]);
+}
+
+/** Which Elitea row is highlighted: on a conversation (or the archived page) its own row is, not Chats. */
+function highlightedItem(pathname: string, selected: EliteaItemValue | undefined): EliteaItemValue | undefined {
+  if (selected === 'chat' && pathname !== '/chat' && pathname !== '/chat/') return undefined;
+  return selected;
+}
+
 export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   const { location, run, permissions, selectedProjectId } = props;
   const items = useMemo(
@@ -120,7 +194,17 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   );
   const selected = selectedEliteaItem(location.pathname, items);
   const vibrancy = useDesktopLayout((state) => state.platform.vibrancy);
-  const [eliteaOpen, toggleElitea] = useEliteaSectionOpen();
+  const [eliteaOpen, toggleElitea, expandElitea] = useEliteaSectionOpen();
+  const [chatsOpen, toggleChats, expandChats] = useChatsSectionOpen();
+  useExpandOnChat(location.pathname, expandElitea, expandChats);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const onNewFolder = permissions.has(PERMISSIONS.chat.folders.create)
+    ? () => {
+        expandChats();
+        setCreatingFolder(true);
+      }
+    : undefined;
+  const highlighted = highlightedItem(location.pathname, selected);
 
   return (
     <Box
@@ -200,9 +284,15 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
                   testId={`shell-elitea-${item.value}`}
                   icon={ITEM_ICONS[item.value]}
                   label={item.label}
-                  selected={selected === item.value}
+                  selected={highlighted === item.value}
                   onClick={() => run({ type: 'go', to: item.url })}
+                  {...(item.value === 'chat'
+                    ? { ariaExpanded: chatsOpen, trailingOnHover: true, trailingRoom: onNewFolder === undefined ? TWO_ACTIONS : THREE_ACTIONS, trailing: <ChatsRowActions open={chatsOpen} onToggle={toggleChats} onNewFolder={onNewFolder} /> }
+                    : {})}
                 />
+                {item.value === 'chat' && chatsOpen && (
+                  <ChatsSection projectId={selectedProjectId} pathname={location.pathname} creatingFolder={creatingFolder} onCreatingFolderDone={() => setCreatingFolder(false)} canArchive={permissions.has(PERMISSIONS.chat.archive)} canMoveToFolder={permissions.has(PERMISSIONS.chat.folders.update)} />
+                )}
               </li>
             ))}
           </Box>

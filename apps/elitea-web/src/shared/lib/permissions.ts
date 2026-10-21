@@ -32,6 +32,13 @@ export const PERMISSIONS = {
      * permission — memory read/write is not a wider claim than reading or
      * editing the conversation itself.
      */
+    /**
+     * Archive and unarchive (client contract 1.10). The archive is the
+     * project's — it takes the chat out of every member's lists — so the
+     * routes ask for the conversation edit right, which the RBAC seed grants
+     * admins and editors, not viewers (router.go, `conversation_archive`).
+     */
+    archive: 'models.chat.conversation.edit',
     memories: {
       list: 'models.chat.conversation.details',
       write: 'models.chat.conversation.update',

@@ -56,7 +56,7 @@
 #   1. Set `channel` in rust-toolchain.toml at the root AND in every file this
 #      script lists (it prints them). One value per file.
 #   2. Set `rust:<new>-trixie@sha256:<digest>` in every Containerfile it lists,
-#      and RUST_IMAGE_DIGEST in check_rust_toolchain.py to the same digest, read from the registry:
+#      and RUST_IMAGE_DIGEST in check-rust-toolchain.mjs to the same digest, read from the registry:
 #        docker buildx imagetools inspect rust:<new>-trixie   # "Digest:" line
 #   3. Set the release literal in every file assertion (e) lists (the native
 #      bundle validators, the release audit and their tests), then regenerate
@@ -71,8 +71,10 @@
 #   bash scripts/ci/check-rust-toolchain.sh
 # Point it at another tree (the negative tests do) with RUST_TOOLCHAIN_ROOT.
 #
-# The checks live in scripts/ci/check_rust_toolchain.py (PyYAML is the only
-# dependency, as for check_worker_ignored_tests.py); the digest, MSRV, floors,
-# exemptions and per-file lists are constants at its top.
+# The checks live in scripts/ci/check-rust-toolchain.mjs, run with the
+# runner's own node; the `yaml` package is its only dependency
+# (scripts/ci/package.json, installed with `npm ci --prefix scripts/ci`, as for
+# check-worker-ignored-tests.mjs). The digest, MSRV, floors, exemptions and
+# per-file lists are constants at its top.
 set -euo pipefail
-exec python3 "$(dirname "$0")/check_rust_toolchain.py" "$@"
+exec node "$(dirname "$0")/check-rust-toolchain.mjs" "$@"

@@ -45,6 +45,7 @@ const ONE_RUN_LISTING: ConversationListing = {
       duration: -1,
       message_groups_count: 3,
       is_pinned: false,
+      is_archived: false,
       meta: null,
     },
   ],

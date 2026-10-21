@@ -61,6 +61,12 @@ export interface ConversationsProps {
   readonly onPinConversation: (conversation: Conversation, shouldPin: boolean) => void;
   /** Issue 940/A6 — clones a conversation (participants + settings) into a new, independent one and selects it. */
   readonly onDuplicateConversation: (conversation: Conversation) => void;
+  /** Archives a conversation for the caller (client contract 1.10): the row menu's Archive. Absent hides it. */
+  readonly onArchiveConversation?: ((conversation: Conversation) => void) | undefined;
+  /** Opens the archived conversations page: the header's Archived button. Absent hides it. */
+  readonly onOpenArchived?: (() => void) | undefined;
+  /** Forks a conversation's whole history into a new one (client contract 1.11): the row menu's Fork. Absent hides it. */
+  readonly onForkConversation?: ((conversation: Conversation) => void) | undefined;
   readonly onCreateConversation: (conversation: Conversation) => Promise<unknown>;
   readonly onCancelCreateConversation: () => void;
   readonly onChangeActiveConversationName: (name: string) => void;

@@ -10,6 +10,14 @@
 {{- /* The chart owns GATEWAY_NATS_TLS_* when it mounts the certificate (env list below). */ -}}
 {{- if .Values.nats.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
 {{- /*
+  The chart owns GATEWAY_WORKLOAD_IDENTITY_ENABLED (env list below), because the
+  NetworkPolicy's metadata rule follows the same value. A second source in the
+  env map could switch the mode on with the metadata server closed, or off with
+  it open. The binary accepts only "true" or "false".
+*/ -}}
+{{- if hasKey $env "GATEWAY_WORKLOAD_IDENTITY_ENABLED" }}{{- fail "llmGateway.env.GATEWAY_WORKLOAD_IDENTITY_ENABLED is owned by the chart: set llmGateway.workloadIdentity.enabled instead" }}{{- end }}
+{{- if not (kindIs "bool" (dig "workloadIdentity" "enabled" false .Values.llmGateway)) }}{{- fail "llmGateway.workloadIdentity.enabled must be true or false" }}{{- end }}
+{{- /*
   The public project, from the ONE place an operator sets it — the same value
   elitea-main gets. Set on one side only, the picker offers shared models the
   gateway cannot resolve; that is issue #316's inert state, and it was the
@@ -146,6 +154,10 @@ spec:
             - name: GATEWAY_NATS_TLS_KEY_FILE
               value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
             {{- end }}
+            # Keyless platform credentials (llmGateway.workloadIdentity). Always
+            # rendered, so the pod states the mode even when it is off.
+            - name: GATEWAY_WORKLOAD_IDENTITY_ENABLED
+              value: {{ ternary "true" "false" (dig "workloadIdentity" "enabled" false .Values.llmGateway) | quote }}
             {{- range $name, $ref := $secrets }}
             # Sensitive vars from Kubernetes Secrets (never plaintext in env map).
             - name: {{ $name }}

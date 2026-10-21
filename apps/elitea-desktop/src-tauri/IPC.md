@@ -337,6 +337,14 @@ never ran with `turn_unknown`.
 | --- | --- | --- |
 | `thread_history` | `{workspace_id, conversation_id}` | `{turns: StoredTurn[]}` — the turns of that thread the host recorded for the signed-in account, oldest first. `[]` when it has none (the thread ran on the web or another machine, or before this version) or runs without a store. `conversation_id` is the id the turns started with or the conversation's UUID. Rejects `invalid_request`, `not_signed_in`, `storage`, or the platform's code when the user lookup fails. |
 | `thread_history_delete` | `{workspace_id, conversation_id}` | `{deleted: number}` — forgets that thread's stored turns (the signed-in account's only) and the agent's session of that conversation (below). The conversation on the server is untouched. |
+| `thread_history_fork` | `{workspace_id, source_conversation_id, target_conversation_id, target_conversation_uuid, up_to_turn_id?, message_ids?}` | `{copied: number}` — the local half of a fork. The UI first forks the conversation on the server (`forkConversation`), then copies the source thread's stored turns into the new conversation, in the same workspace: the turns oldest first up to and including `up_to_turn_id` (all of them when absent), never a turn still running, each with a new `turn_id` and all its events. `message_ids` is the fork answer's `forked_messages` (source message UUID → the copy's UUID): every id of a copied `done` event's `message_ids` it names is rewritten, so the new thread's turns name the new conversation's messages and can be fork points in turn. One SQLite transaction: all of the turns or none. The source thread is unchanged; the signed-in account's rows only. The new thread's agent session is not copied: its first turn seeds it from the server conversation. `0` without a store. Rejects `invalid_request` (a malformed id, `target_conversation_uuid` not a UUID), `turn_unknown` (`up_to_turn_id` is not a turn of the thread here), `turn_running`, `thread_not_empty` (the target has turns already: nothing copied), `not_signed_in`, `storage`. Files in the folder are not changed. |
+
+**Fork point.** A stored turn is one exchange: the prompt and its answer,
+whose server message UUIDs its `done` event lists (`message_ids`: question,
+answer). "Fork from here" on a turn forks the server conversation at the
+turn's answer and copies the turns up to that turn (`up_to_turn_id`). A
+thread the host has no record of (it ran on the web or another machine)
+forks on the server only, and copies nothing here.
 
 ```ts
 type StoredTurn = {

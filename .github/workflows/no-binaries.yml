@@ -21,7 +21,7 @@ on:
 # gate needs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -42,6 +42,9 @@ jobs:
       # rust-version, held to the repository-root pin. This workflow has no
       # path filter, so the gate runs on whatever file moved. The second
       # command proves the gate red, once per assertion, on a broken copy.
+      # check-rust-toolchain.mjs reads the YAML files with the `yaml` package.
+      - name: Install the toolchain check's one dependency
+        uses: ./.github/actions/ci-scripts-deps
       - name: One Rust toolchain across cargo, CI and images
         run: |
           bash scripts/ci/check-rust-toolchain.sh
@@ -220,14 +223,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
       # The check asks `origin` whether the branch it names still exists, so the
       # authenticated remote that actions/checkout leaves behind is required.
-      # It reads only the standard library; there is nothing to install.
+      # It reads only node's standard library (the runner's node); there is
+      # nothing to install.
       - name: Every push arm that names main also names the staging branch
-        run: python scripts/ci/check_workflow_branch_coverage.py
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-workflow-branch-coverage.test.mjs
+          node scripts/ci/check-workflow-branch-coverage.mjs
 
   # Issue #520. A migration states its version number when an author writes it.
   # The number is only true when the pull request MERGES. Pull requests #369 and
@@ -357,34 +361,39 @@ jobs:
           # The walk needs the trunk. The checker REFUSES a shallow clone
           # rather than reporting a short walk as a pass.
           fetch-depth: 0
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
       # The suite builds throwaway bare repositories with git plumbing. It
-      # reads only the standard library, so there is nothing to install.
+      # reads only node's standard library (the runner's node), so there is
+      # nothing to install.
       #
-      # Read the COUNT of scenarios, not the exit status alone. `unittest`
+      # Read the COUNT of scenarios, not the exit status alone. A test runner
       # exits 0 when it collects nothing, so a renamed file or a renamed method
       # would turn this step into a silent no-op (#534). The number comes from
       # the suite file itself, so adding a scenario raises it.
       - name: The checker still sees the deletion it exists for
         run: |
           set -euo pipefail
-          expected="$(grep -c '^    def test_' scripts/ci/test_check_landed_line_survival.py)"
+          expected="$(grep -c '^test(' scripts/ci/check-landed-line-survival.test.mjs)"
           if [ "${expected}" -lt 8 ]; then
             echo "::error::found ${expected} scenario(s) in the suite, expected at least 8 — the pattern stopped matching, so this step checked nothing"
             exit 1
           fi
-          output="$(python -m unittest discover -s scripts/ci -p 'test_check_landed_line_survival.py' -v 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-landed-line-survival.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ]; then
-            echo "::error::unittest printed no result line, so the number of scenarios it ran was never reported"
+            echo "::error::node --test printed no pass line, so the number of scenarios it ran was never reported"
             exit 1
           fi
           if [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::the suite file holds ${expected} scenario(s) and unittest ran ${ran}; a scenario that does not run is not a passed scenario"
+            echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran}; a scenario that does not run is not a passed scenario"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-landed-line-survival.test.mjs exited ${status}"
+            exit "${status}"
           fi
           echo "line-survival checker: ${ran} of ${expected} scenarios ran"
       - name: The lines the last merged pull requests added are still on the trunk
@@ -417,7 +426,7 @@ jobs:
               tip="${folded}"
             fi
           fi
-          python scripts/ci/check_landed_line_survival.py --tip "${tip}"
+          node scripts/ci/check-landed-line-survival.mjs --tip "${tip}"
 
   # The 10 GB Actions cache. Measured 2026-10-16 it held 10.7 GB in 809
   # entries, GitHub evicted entries within minutes, and the largest writers
@@ -426,7 +435,7 @@ jobs:
   # main-branch entry each pull request should have been reading. The rule
   # since then is "pull requests read, a push to main writes"; this job holds
   # it, for every workflow and composite action, with the negative cases in
-  # scripts/ci/test_check_workflow_cache_writes.py.
+  # scripts/ci/check-workflow-cache-writes.test.mjs.
   #
   # actionlint over EVERY workflow runs here too: no other job lints the
   # whole directory, and a cache condition that does not parse is a cache
@@ -439,54 +448,76 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install the checker's one dependency
-        run: python -m pip install --disable-pip-version-check pyyaml==6.0.3
-      # Read the COUNT of scenarios, not the exit status alone: `unittest`
-      # exits 0 when it collects nothing (#534).
+      # The checks read YAML with the `yaml` package (scripts/ci/package-lock.json);
+      # the runner's node runs them.
+      - name: Install the checkers' one dependency
+        uses: ./.github/actions/ci-scripts-deps
+      - name: The PyYAML-compatible YAML read the node checks share
+        run: node --test scripts/ci/ci-compat.test.mjs
+      # Read the COUNT of scenarios, not the exit status alone: a suite that
+      # collects nothing exits 0 (#534).
       - name: The checker still refuses every pull-request writer it exists for
         run: |
           set -euo pipefail
-          expected="$(grep -c '^    def test_' scripts/ci/test_check_workflow_cache_writes.py)"
+          expected="$(grep -c '^test(' scripts/ci/check-workflow-cache-writes.test.mjs)"
           if [ "${expected}" -lt 30 ]; then
             echo "::error::found ${expected} scenario(s) in the suite, expected at least 30 — the pattern stopped matching, so this step checked nothing"
             exit 1
           fi
-          output="$(python -m unittest discover -s scripts/ci -p 'test_check_workflow_cache_writes.py' -v 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-workflow-cache-writes.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::the suite file holds ${expected} scenario(s) and unittest ran ${ran:-none}"
+            echo "::error::the suite file holds ${expected} scenario(s) and node --test passed ${ran:-none}"
             exit 1
           fi
-          echo "cache-write checker: ${ran} of ${expected} scenarios ran"
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test check-workflow-cache-writes.test.mjs exited ${status}"
+            exit "${status}"
+          fi
+          echo "cache-write checker: ${ran} of ${expected} scenarios passed"
       - name: No workflow cache step writes from a pull request
-        run: python scripts/ci/check_workflow_cache_writes.py
+        run: node scripts/ci/check-workflow-cache-writes.mjs
       # ci-web-e2e.yml builds each stack image once and the lanes pull it by
-      # digest: scripts/ci/stack_images.py is the contract between the two
+      # digest: scripts/ci/stack-images.mjs is the contract between the two
       # halves (it refuses an image nobody built, or one built from another
       # variant), and the CI-only `ci-*` images must stay out of everything
-      # that ships. Counted like the suite above: unittest exits 0 on nothing.
+      # that ships. Counted like the suite above: a suite that collects
+      # nothing exits 0.
       - name: The build-once contract and the CI-image prune policy hold
         run: |
           set -euo pipefail
-          for suite in test_stack_images.py test_prune_ci_images.py; do
-            expected="$(grep -c '^    def test_' "scripts/ci/${suite}")"
+          for suite in stack-images.test.mjs prune-ci-images.test.mjs; do
+            expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
-            output="$(python -m unittest discover -s scripts/ci -p "${suite}" -v 2>&1)"
+            # Capture the status: under `set -e` a failing command substitution
+            # exits at the assignment and the output is never printed.
+            status=0
+            output="$(node --test --test-reporter=tap "scripts/ci/${suite}" 2>&1)" || status=$?
             printf '%s\n' "${output}"
-            ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+            ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
             if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-              echo "::error::${suite} holds ${expected} scenario(s) and unittest ran ${ran:-none}"
+              echo "::error::${suite} holds ${expected} scenario(s) and node --test passed ${ran:-none}"
               exit 1
+            fi
+            if [ "${status}" -ne 0 ]; then
+              echo "::error::node --test ${suite} exited ${status}"
+              exit "${status}"
             fi
           done
       - name: CI-only images are referenced only by CI
-        run: python scripts/ci/check_ci_image_references.py
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-ci-image-references.test.mjs
+          node scripts/ci/check-ci-image-references.mjs
       - name: The E2E workflow starts on every input of its stack
-        run: python scripts/ci/check_e2e_paths.py
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-e2e-paths.test.mjs
+          node scripts/ci/check-e2e-paths.mjs
       - name: actionlint over every workflow
         env:
           ACTIONLINT_VERSION: 1.7.12

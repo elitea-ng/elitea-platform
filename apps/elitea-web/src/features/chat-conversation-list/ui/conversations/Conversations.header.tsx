@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 
+import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
@@ -40,6 +41,27 @@ export interface ConversationsHeaderProps {
   readonly onSearchClear: () => void;
   /** The "Local work" filter toggle; absent hides it. */
   readonly localWork?: LocalWorkFilterButtonProps | undefined;
+  /** Opens the archived conversations page; absent hides the button. */
+  readonly onOpenArchived?: (() => void) | undefined;
+}
+
+/** The way to the archived conversations: the same 28px icon-button skin as the Local work toggle beside it. */
+function ArchivedButton({ onOpen }: { readonly onOpen: (() => void) | undefined }): ReactNode {
+  if (onOpen === undefined) return null;
+  const label = t('features.chatConversationList.conversations.archived', 'Archived chats');
+  return (
+    <Tooltip title={label} placement="top">
+      <IconButton
+        onClick={onOpen}
+        color="secondary"
+        aria-label={label}
+        data-testid="conversation-archived-open"
+        sx={(theme) => ({ minWidth: '28px', width: '28px', height: '28px', boxSizing: 'border-box', padding: theme.spacing(0.75), marginLeft: 0 })}
+      >
+        <ArchiveOutlinedIcon sx={{ width: '16px', height: '16px', color: (theme) => theme.vars.palette.icon.fill.secondary }} />
+      </IconButton>
+    </Tooltip>
+  );
 }
 
 /** The `collapsed && !isSmallWindow` narrow-rail toolbar (`Conversations.jsx:591-643`) — extracted to its own function purely to keep `ConversationsHeader`'s own complexity under the §3.5 budget. */
@@ -105,7 +127,7 @@ function HeaderSearchBar(props: { readonly searchQuery: string; readonly onSearc
 }
 
 export function ConversationsHeader(props: ConversationsHeaderProps): ReactNode {
-  const { collapsed, isSmallWindow, hasFolderCreatePermission, onCreateFolderExpanded, onCreateFolderCollapsed, onCollapsedToggle, onSearchActivate, isSearchActive, searchQuery, onSearchChange, onSearchClear, localWork } = props;
+  const { collapsed, isSmallWindow, hasFolderCreatePermission, onCreateFolderExpanded, onCreateFolderCollapsed, onCollapsedToggle, onSearchActivate, isSearchActive, searchQuery, onSearchChange, onSearchClear, localWork, onOpenArchived } = props;
   const theme = useTheme();
   const createFolderLabel = t('features.chatConversationList.conversations.createFolder', 'Create folder');
   const showExpandedControls = !collapsed || isSmallWindow;
@@ -153,6 +175,7 @@ export function ConversationsHeader(props: ConversationsHeaderProps): ReactNode 
                 onSearchActivate={onSearchActivate}
               />
               <LocalWorkFilterButton localWork={localWork} />
+              <ArchivedButton onOpen={onOpenArchived} />
             </>
           )}
         </Box>

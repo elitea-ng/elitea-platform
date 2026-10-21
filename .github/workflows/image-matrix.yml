@@ -23,8 +23,9 @@ on:
       # The scan gate both scans run, the nightly issue script, and their tests.
       - "scripts/ci/image-scan-gate.sh"
       - "scripts/ci/image-scan-gate-test.sh"
-      - "scripts/ci/image_scan_issue.py"
-      - "scripts/ci/test_image_scan_issue.py"
+      - "scripts/ci/image-scan-issue.mjs"
+      - "scripts/ci/image-scan-issue.test.mjs"
+      - "scripts/ci/py-compat.mjs"
       - "scripts/ci/testdata/trivy-*.json"
       - ".github/workflows/image-matrix.yml"
   push:
@@ -39,8 +40,9 @@ on:
       # The scan gate both scans run, the nightly issue script, and their tests.
       - "scripts/ci/image-scan-gate.sh"
       - "scripts/ci/image-scan-gate-test.sh"
-      - "scripts/ci/image_scan_issue.py"
-      - "scripts/ci/test_image_scan_issue.py"
+      - "scripts/ci/image-scan-issue.mjs"
+      - "scripts/ci/image-scan-issue.test.mjs"
+      - "scripts/ci/py-compat.mjs"
       - "scripts/ci/testdata/trivy-*.json"
       - ".github/workflows/image-matrix.yml"
 
@@ -78,8 +80,9 @@ jobs:
         run: bash scripts/ci/image-scan-gate-test.sh
 
   # The nightly issue script, against two REAL trimmed trivy reports and a
-  # fake `gh`. The COUNT is read, not only the exit status: `unittest` exits 0
-  # when it collects nothing (#534).
+  # fake github-script client. The COUNT is read, not only the exit status:
+  # a suite that collects nothing exits 0 (#534). Only node built-ins: the
+  # runner's node, nothing to install.
   issue-script:
     name: The nightly scan's issue script opens, updates and closes
     runs-on: ubuntu-latest
@@ -88,15 +91,22 @@ jobs:
       - name: Run every scenario
         run: |
           set -euo pipefail
-          expected="$(grep -c '^    def test_' scripts/ci/test_image_scan_issue.py)"
+          expected="$(grep -c '^test(' scripts/ci/image-scan-issue.test.mjs)"
           if [ "${expected}" -lt 15 ]; then
             echo "::error::found ${expected} scenario(s), expected at least 15 — the pattern stopped matching"
             exit 1
           fi
-          output="$(python3 -m unittest discover -s scripts/ci -p 'test_image_scan_issue.py' -v 2>&1)"
+          # Capture the status: under `set -e` a failing command substitution
+          # exits at the assignment and the output is never printed.
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/image-scan-issue.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
-          ran="$(printf '%s\n' "${output}" | sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p')"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
-            echo "::error::the suite holds ${expected} scenario(s) and unittest ran ${ran:-none}"
+            echo "::error::the suite holds ${expected} scenario(s) and node --test passed ${ran:-none}"
             exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test image-scan-issue.test.mjs exited ${status}"
+            exit "${status}"
           fi

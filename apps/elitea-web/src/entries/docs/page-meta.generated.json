@@ -80,6 +80,11 @@
     "description": "A complete Kubernetes install on an empty cluster: decisions to make first, the external database and object store, every Secret and certificate authority, the edge in front of it, and the first sign-in."
   },
   {
+    "slug": "deployment/gcp",
+    "title": "Deploy on Google Cloud (GKE)",
+    "description": "The Google Cloud choices for a from-scratch install: a GKE cluster with Workload Identity, Cloud SQL for PostgreSQL, a GCS bucket with no keys, the edge in front of it, and platform models from Vertex AI or AI DIAL authenticated by a service account."
+  },
+  {
     "slug": "deployment/helm-install",
     "title": "Install with Helm",
     "description": "Prerequisites, secrets to create beforehand, which values file to start from, and the install sequence from nats through the first admin."

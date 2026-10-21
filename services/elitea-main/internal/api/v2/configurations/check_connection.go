@@ -168,6 +168,13 @@ type checkConnectionRequestBody struct {
 	// The llm_model check sets it for an ai_dial credential only. The gateway's
 	// model probe then posts to the route the runtime uses for that protocol.
 	DialProtocol string `json:"dial_protocol,omitempty"`
+
+	// AuthMode and TokenAudience carry the keyless mode (keyless_credentials.go).
+	// The gateway probes a keyless payload with its own Google identity, and
+	// only when the SIGNED project is the public project; a payload without
+	// the mode would test as "missing key" for a provider that works.
+	AuthMode      string `json:"auth_mode,omitempty"`
+	TokenAudience string `json:"token_audience,omitempty"`
 }
 
 // checkConnectionResponseBody is the gateway's reply (mirrors
@@ -189,6 +196,12 @@ var connectionCheckMessages = map[string]string{
 	"unreachable":        "Could not reach the provider.",
 	"upstream_error":     "The provider returned an unexpected response.",
 	"unsupported_type":   "Checking connection is not supported yet for this configuration type.",
+	// The keyless mode's three reasons (the gateway's
+	// checkconnection_workload_identity.go).
+	"workload_identity_not_allowed": "Workload identity is not enabled on the LLM gateway, " +
+		"or this credential is not a platform provider.",
+	"workload_identity_token_unavailable": "The LLM gateway could not get a token from its Google identity.",
+	"invalid_auth_mode":                   "The auth mode is invalid, or a keyless credential still holds a key.",
 }
 
 func connectionCheckMessageFor(reason, detail string) string {
@@ -273,6 +286,9 @@ func (c *GatewayConnectionChecker) Check(ctx context.Context, configType string,
 		VertexProject:     strVal(data, "vertex_project"),
 		VertexLocation:    strVal(data, "vertex_location"),
 		VertexCredentials: data["vertex_credentials"],
+
+		AuthMode:      strVal(data, "auth_mode"),
+		TokenAudience: strVal(data, "token_audience"),
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -340,6 +356,12 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 
 	if err := validateNotSelfReferential(data, selfLLMOrigins()); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
+		return
+	}
+	if message, refused := refuseUnsavedKeylessCheck(configType, data); refused {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false, "message": message, "reason": unsavedKeylessCheckReason,
+		})
 		return
 	}
 
@@ -480,6 +502,9 @@ func (h *Handler) checkBatchItem(ctx context.Context, projectID string, item map
 
 	if err := validateNotSelfReferential(data, selfLLMOrigins()); err != nil {
 		return map[string]any{"id": id, "success": false, "message": err.Error()}
+	}
+	if message, refused := refuseUnsavedKeylessCheck(configType, data); refused {
+		return map[string]any{"id": id, "success": false, "message": message, "reason": unsavedKeylessCheckReason}
 	}
 
 	if _, checkable := checkableConnectionTypes[configType]; !checkable {

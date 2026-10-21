@@ -444,6 +444,150 @@ describe('WorkspaceSessionPage', () => {
     expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
   });
 
+  describe('fork', () => {
+    const FORK_UUID = '00000000-0000-4000-8000-000000000088';
+    const forkBodies: unknown[] = [];
+    const forkOfForkBodies: unknown[] = [];
+    function serveFork(status = 201): void {
+      forkBodies.length = 0;
+      forkOfForkBodies.length = 0;
+      server.use(
+        http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/88`, async ({ request }) => {
+          forkOfForkBodies.push(await request.json().catch(() => null));
+          return HttpResponse.json({ error: 'stop here' }, { status: 409 });
+        }),
+        http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/77`, async ({ request }) => {
+          forkBodies.push(await request.json().catch(() => null));
+          if (status !== 201) return HttpResponse.json({ error: 'fork_point_unsettled' }, { status });
+          return HttpResponse.json(
+            {
+              id: 88,
+              uuid: FORK_UUID,
+              name: 'Fix the build (fork)',
+              source: 'local_work',
+              created_at: '2026-10-20T00:00:00',
+              updated_at: '2026-10-20T00:00:00',
+              duration: -1,
+              message_groups_count: 2,
+              is_pinned: false,
+              is_archived: false,
+              forked_from: { conversation_id: 77, message_id: 2, message_uuid: 'a1' },
+              forked_messages: { q1: 'q1-copy', a1: 'a1-copy' },
+            },
+            { status: 201 },
+          );
+        }),
+        http.get(`${BASE}/elitea_core/messages/prompt_lib/42/88`, () => HttpResponse.json({ items: [], total: 0, page: 1, page_size: 100, total_pages: 1 })),
+      );
+    }
+    const answered = (turnId: string, question: string, answer: string): StoredTurn => {
+      const base = recorded(turnId);
+      return {
+        ...base,
+        events: base.events.map((event) =>
+          event.kind === 'done' ? { ...event, payload: { ...event.payload, message_ids: [question, answer] } } : event,
+        ),
+      };
+    };
+
+    it('forks from a recorded turn: the server at its answer, the host up to the turn, then opens the new thread in the folder', async () => {
+      serveProject();
+      serveFork();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1'), answered('t2', 'q2', 'a2')]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      const prompts = await screen.findAllByTestId('your-prompt');
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(prompts[0] as HTMLElement);
+
+      await waitFor(() => expect(forkBodies).toEqual([{ message_id: 'a1' }]));
+      const labels = (appIpc.calls.contextMenus[0] ?? []).map((item) => ('label' in item ? item.label : '-'));
+      expect(labels).toEqual(['Copy', '-', 'Fork from Here']);
+      await waitFor(() =>
+        expect(ipc.calls.forks).toEqual([
+          {
+            workspaceId: 'w1',
+            sourceConversationId: '77',
+            targetConversationId: '88',
+            targetConversationUuid: FORK_UUID,
+            upToTurnId: 't1',
+            messageIds: { q1: 'q1-copy', a1: 'a1-copy' },
+          },
+        ]),
+      );
+      // The new thread opens with the turns up to the fork point, and says the files were not rolled back.
+      expect(await screen.findByTestId('fork-notice')).toHaveTextContent('Files stay as they are now.');
+      expect(screen.getAllByTestId('history-turn')).toHaveLength(1);
+      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+      expect(screen.queryByText('Prompt of t2')).toBeNull();
+      expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
+      // The source thread is untouched.
+      expect(await ipc.threadHistory('w1', '77')).toHaveLength(2);
+
+      // A fork of the fork, at the copied turn, names the copy's answer: a message of the new conversation.
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu((await screen.findAllByTestId('your-prompt'))[0] as HTMLElement);
+      await waitFor(() => expect(forkOfForkBodies).toEqual([{ message_id: 'a1-copy' }]));
+    });
+
+    it('forks the whole thread from the ⋯ menu, and still opens it when the local copy fails', async () => {
+      serveProject();
+      serveFork();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1')]);
+      ipc.failNext('forkThreadHistory', 'storage', 'disk full');
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1?conversation=77');
+
+      await screen.findByText('Prompt of t1');
+      await user.click(screen.getByRole('button', { name: 'More' }));
+      await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
+
+      await waitFor(() => expect(forkBodies).toEqual([{}]));
+      expect(ipc.calls.forks[0]).toEqual({
+        workspaceId: 'w1',
+        sourceConversationId: '77',
+        targetConversationId: '88',
+        targetConversationUuid: FORK_UUID,
+        messageIds: { q1: 'q1-copy', a1: 'a1-copy' },
+      });
+      expect(await screen.findByTestId('fork-notice')).toHaveTextContent('the tool history on this computer was not copied');
+      expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
+    });
+
+    it('says why a fork point that is not settled cannot be forked, and stays in the thread', async () => {
+      serveProject();
+      serveFork(409);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [answered('t1', 'q1', 'a1')]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      const prompt = await screen.findByTestId('your-prompt');
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu(prompt);
+
+      expect(await screen.findByTestId('fork-error')).toHaveTextContent('a turn is still running or waits for an approval');
+      expect(ipc.calls.forks).toEqual([]);
+      expect(screen.getByText('Prompt of t1')).toBeInTheDocument();
+    });
+
+    it('offers no fork point on a turn whose answer is not known', async () => {
+      serveProject();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setHistory('w1', '77', [recorded('t1', { state: 'interrupted', events: recorded('t1').events.slice(0, 2) })]);
+      const appIpc = createFakeAppIpc();
+      mount(ipc, '/workspaces/w1?conversation=77', undefined, appIpc);
+
+      fireEvent.contextMenu(await screen.findByTestId('your-prompt'));
+      await waitFor(() => expect(appIpc.calls.contextMenus).toHaveLength(1));
+      const fork = (appIpc.calls.contextMenus[0] ?? []).find((item) => 'label' in item && item.label === 'Fork from Here');
+      expect(fork !== undefined && 'enabled' in fork ? fork.enabled : undefined).toBe(false);
+    });
+  });
+
   it('points to the chat when neither this computer nor the server can say what came before', async () => {
     serveProject();
     server.use(http.get(`${BASE}/elitea_core/messages/prompt_lib/42/77`, () => HttpResponse.json({ error: 'boom' }, { status: 500 })));

@@ -73,6 +73,9 @@ export function Conversations(props: ConversationsProps): ReactNode {
     onDeleteConversation,
     onPinConversation,
     onDuplicateConversation,
+    onArchiveConversation,
+    onForkConversation,
+    onOpenArchived,
     onCreateConversation,
     onCancelCreateConversation,
     onChangeActiveConversationName,
@@ -269,6 +272,8 @@ export function Conversations(props: ConversationsProps): ReactNode {
     onDeleteConversation,
     onPinConversation,
     onDuplicateConversation,
+    onArchiveConversation,
+    onForkConversation,
     onCreateConversation,
     onCancelCreateConversation,
     onChangeActiveConversationName,
@@ -328,6 +333,7 @@ export function Conversations(props: ConversationsProps): ReactNode {
           onSearchChange={setSearchQuery}
           onSearchClear={handleSearchClear}
           localWork={onLocalWorkOnlyChange ? { on: localWorkOnly, onChange: onLocalWorkOnlyChange } : undefined}
+          onOpenArchived={onOpenArchived}
         />
         <ConversationsBody
           listRef={listRef}

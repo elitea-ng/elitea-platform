@@ -70,7 +70,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
@@ -241,6 +241,11 @@ jobs:
 
       - name: The DeepWiki component renders, and its guards refuse
         run: bash deploy/helm/tests/render-deepwiki.sh
+
+      # Keyless platform credentials: the gateway's GKE metadata egress opens
+      # only with llmGateway.workloadIdentity.enabled, and the env has one source.
+      - name: Gateway workload identity renders from one value
+        run: bash deploy/helm/tests/render-gateway-workload-identity.sh
 
       # The SECOND provider, and its own suite rather than a case added to
       # DeepWiki's: what has to be asserted is mostly what is DIFFERENT — no

@@ -92,6 +92,12 @@ CREATE TABLE p_1.chat_conversations (
 );
 CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,entity_name text,entity_meta jsonb);
 CREATE TABLE p_1.chat_participant_mapping(conversation_id integer,participant_id integer);
+-- tenant/0151: the project's conversation archive (client contract 1.10).
+CREATE TABLE p_1.chat_conversation_archives (
+    conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,
+    archived_by bigint NOT NULL,
+    archived_at timestamp NOT NULL DEFAULT now()
+);
 CREATE TABLE p_1.chat_message_group (
     id serial PRIMARY KEY,
     conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id)

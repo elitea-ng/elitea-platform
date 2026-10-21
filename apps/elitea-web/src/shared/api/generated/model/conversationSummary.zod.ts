@@ -40,6 +40,8 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConversationArchivedBy } from "./conversationArchivedBy.zod";
+import { ConversationForkedFrom } from "./conversationForkedFrom.zod";
 
 export const ConversationSummary = zod
   .object({
@@ -61,6 +63,37 @@ export const ConversationSummary = zod
       .boolean()
       .describe(
         'Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app\'s "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned.\n',
+      ),
+    is_archived: zod
+      .boolean()
+      .describe(
+        "Client contract 1.10. The conversation is archived in its project (archiveConversation). The archive is shared by the project, as the pin is: every member who can see the row sees the same value. An archived row keeps its `is_pinned`; a client leaves archived rows out of its pinned section. An archive or unarchive re-delivers the row in the `changes_since` delta of every member who can see it; it does not change `updated_at`. A server before 1.10 omits the field, which means not archived.\n",
+      ),
+    archived_by: ConversationArchivedBy.optional(),
+    archived_at: zod.iso
+      .datetime({ offset: true })
+      .optional()
+      .describe(
+        "Client contract 1.10. When the conversation was archived, in UTC. Present only when `is_archived` is true.\n",
+      ),
+    uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.11. The conversation's UUID, the id the chat send and the attachment routes take.\n",
+      ),
+    source: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.11. The conversation's origin (`elitea` for a chat, `local_work` for a Local work thread).\n",
+      ),
+    forked_from: ConversationForkedFrom.optional(),
+    forked_messages: zod
+      .record(zod.string(), zod.uuid())
+      .optional()
+      .describe(
+        "Client contract 1.11, forkConversation's answer only. Maps the UUID of each message group the fork copied to the UUID of its copy in the new conversation; empty when nothing was copied. A client that recorded message ids of the source (the desktop's turn history) rewrites them with it. No other read carries it.\n",
       ),
     meta: zod
       .record(zod.string(), zod.unknown())

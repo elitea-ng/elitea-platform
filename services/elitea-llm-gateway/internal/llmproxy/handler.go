@@ -21,6 +21,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/overhead"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/pkg/ssewriter"
 )
 
@@ -201,6 +202,11 @@ type Handler struct {
 	// terms a saved one would be (issue #13). nil makes CheckConnection refuse
 	// every request — fail closed rather than skip the check.
 	egressPolicy EgressPolicy
+
+	// workloadIdentity admits keyless PLATFORM credentials on the probe
+	// routes (check_connection, list_provider_models). The zero value refuses
+	// every one; see checkconnection_workload_identity.go.
+	workloadIdentity probeWorkloadIdentity
 }
 
 // HandlerOption customises Handler construction. It keeps NewHandler's core
@@ -220,6 +226,19 @@ func WithModelResolver(r *ModelResolver) HandlerOption {
 // rest of the gateway uses for an unconfigured Account.
 func WithEgressPolicy(p EgressPolicy) HandlerOption {
 	return func(h *Handler) { h.egressPolicy = p }
+}
+
+// WithWorkloadIdentity arms keyless platform credentials on the probe routes.
+// enabled is GATEWAY_WORKLOAD_IDENTITY_ENABLED; publicProjectID is the
+// operator-configured public project (ELITEA_AI_PROJECT_ID); tokens mints the
+// ADC tokens. A probe is admitted only when enabled is true, tokens is not
+// nil, AND the SIGNED project of the request is publicProjectID.
+func WithWorkloadIdentity(enabled bool, publicProjectID string, tokens workloadidentity.Tokens) HandlerOption {
+	return func(h *Handler) {
+		h.workloadIdentity = probeWorkloadIdentity{
+			enabled: enabled, publicProjectID: publicProjectID, tokens: tokens,
+		}
+	}
 }
 
 // WithBudgetGate wires the pre-LLM budget enforcement gate. When gate is nil
