@@ -70,8 +70,7 @@
 #                                 CI sets it. Locally the ledger only reports,
 #                                 because a developer without PostgreSQL,
 #                                 NATS or the storage emulators should still
-#                                 be able to run `task test`. Same shape as
-#                                 CONTRACT_REQUIRE_PARITY in ci-contract.yml.
+#                                 be able to run `task test`.
 #
 # `set -e` is deliberately absent: this script must survive a module failure to
 # run the next module. Every status is therefore checked by hand.

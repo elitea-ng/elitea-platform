@@ -6,9 +6,7 @@ package contract
 // every other Postgres-integration package in this repo applies), and a
 // real S3-compatible backend (RustFS, the same emulator
 // internal/infra/storage/conformance drives — see
-// deploy/docker-compose.storage-test.yml). This is independent of the
-// legacy-parity harness in contract_test.go (goBaseURL/legacyBaseURL/
-// authToken), which stays gated on CONTRACT_AUTH_TOKEN — see TestMain.
+// deploy/docker-compose.storage-test.yml).
 //
 // Built once for the whole test binary (not per-test): every TestArtifact*
 // test shares one Postgres database and one physical RustFS bucket, each
@@ -54,6 +52,18 @@ const (
 // once in TestMain, torn down once after m.Run() returns.
 var artifactServer *httptest.Server
 
+// TestMain builds the shared artifact harness once for the whole binary and
+// tears it down after m.Run() returns. TestMain, not t.Cleanup, is the right
+// place for setup shared across many independent top-level test functions.
+// It never exits early: absent env vars make each TestArtifact* test skip
+// itself (requireArtifactSuite), so the package's other tests still run.
+func TestMain(m *testing.M) {
+	teardown := setupArtifactSuite()
+	code := m.Run()
+	teardown()
+	os.Exit(code)
+}
+
 // artifactPool is the same pool the router's real handlers use, exposed for
 // tests that need to seed a row (elitea_storage.project_storage_policy) or
 // manipulate one directly (forcing a grant's expires_at into the past) that
@@ -96,9 +106,7 @@ func requireArtifactSuite(t *testing.T) *httptest.Server {
 // and returns a teardown func for TestMain to run after m.Run(). It never
 // fails the process: absent env vars mean every TestArtifact* test skips
 // itself individually via requireArtifactSuite, exactly like S4's
-// conformance package already does for its own three backend legs — this
-// suite must not gate the pre-existing legacy-parity tests, which have
-// their own, unrelated CONTRACT_AUTH_TOKEN gate.
+// conformance package already does for its own three backend legs.
 func setupArtifactSuite() (teardown func()) {
 	noop := func() {}
 

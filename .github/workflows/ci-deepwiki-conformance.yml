@@ -11,9 +11,8 @@ name: CI — Provider conformance fixtures
 # The Python DeepWiki service and its service, storage-parity and image jobs
 # were removed with services/elitea-deepwiki; the Rust engine's gates are in
 # ci-deepwiki-engine.yml, and the Go host replays the same fixtures in
-# ci-go.yml. Re-recording the fixtures from the legacy deepwiki_plugin
-# checkout (conformance/provider/tools/record_*.py) is a local step — the
-# legacy plugin is not available to CI.
+# ci-go.yml. The fixtures are frozen; conformance/provider/README.md says how
+# they are maintained.
 
 on:
   pull_request:

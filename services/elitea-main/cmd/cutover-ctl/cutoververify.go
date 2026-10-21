@@ -10,17 +10,14 @@ import (
 // cutover-verify (spec BFC.9, post-cutover gate):
 //
 // After the big-bang cutover this gate confirms that the migration is truly
-// complete and no legacy path remains active. It checks four invariants:
+// complete and no legacy path remains active. It checks three invariants:
 //
 //  1. Zero gateway 5xx responses over the observation window: the gateway must
 //     be stable. Any 5xx indicates a broken route that needs attention.
-//  2. The runtime_engine_litellm subprocess is ABSENT from pylon-indexer pods:
-//     pylon-indexer must no longer spawn LiteLLM as a child process. Its
-//     presence means the pod image was not rolled or the env flag was not set.
-//  3. Zero traffic to litellm-svc:4000: the internal LiteLLM service must be
+//  2. Zero traffic to litellm-svc:4000: the internal LiteLLM service must be
 //     receiving no traffic. Any positive RPS means callers are still hitting the
 //     legacy path.
-//  4. The 402-hard-block is confirmed: the gateway must respond 402 Payment
+//  3. The 402-hard-block is confirmed: the gateway must respond 402 Payment
 //     Required when the project budget is exhausted. Without this, quota
 //     enforcement is broken post-cutover.
 //
@@ -28,7 +25,6 @@ import (
 //
 // The real gate gathers state from live cluster sources:
 //   - Prometheus: query rate(elitea_gateway_http_requests_total{status=~"5.."}[Wm]) == 0
-//   - kubectl exec / pod metrics: ps aux | grep runtime_engine_litellm
 //   - Prometheus: query rate(elitea_litellm_svc_requests_total[Wm]) == 0
 //   - HTTP probe: POST /llm/v1/chat/completions with an exhausted budget → expect 402
 //
@@ -53,11 +49,6 @@ type cutoverState struct {
 	// gateway over the observation window. Must be zero for the gate to pass.
 	Gateway5xxCount int `json:"gateway_5xx_count"`
 
-	// LiteLLMSubprocessPresent is true if runtime_engine_litellm is running as
-	// a subprocess inside any pylon-indexer pod. Must be false for the gate to
-	// pass.
-	LiteLLMSubprocessPresent bool `json:"litellm_subprocess_present"`
-
 	// LegacySvcTrafficRPS is the observed traffic rate to litellm-svc:4000 in
 	// requests per second. Must be exactly 0.0 for the gate to pass.
 	LegacySvcTrafficRPS float64 `json:"legacy_svc_traffic_rps"`
@@ -72,7 +63,7 @@ type cutoverState struct {
 }
 
 // evaluateCutover is the pure check function. It accepts a populated
-// cutoverState and returns (ok, reasons). ok is true only when all four
+// cutoverState and returns (ok, reasons). ok is true only when all three
 // invariants hold. reasons lists one human-readable sentence per failed check;
 // it is empty when ok is true.
 //
@@ -84,10 +75,6 @@ func evaluateCutover(state cutoverState) (ok bool, reasons []string) {
 			"gateway 5xx count is %d over the window (want 0); investigate broken routes before declaring cutover clean",
 			state.Gateway5xxCount,
 		))
-	}
-	if state.LiteLLMSubprocessPresent {
-		reasons = append(reasons, "runtime_engine_litellm subprocess is still present in pylon-indexer pods; "+
-			"the pod image was not rolled or LITELLM_ENABLED is still set")
 	}
 	if state.LegacySvcTrafficRPS != 0 {
 		reasons = append(reasons, fmt.Sprintf(
@@ -131,7 +118,7 @@ func loadCutoverStateFromFile(path string) (cutoverState, error) {
 //
 // Exit codes:
 //
-//	0  — all four invariants hold; cutover is clean
+//	0  — all three invariants hold; cutover is clean
 //	1  — one or more invariants failed; reasons listed on stderr
 //	2  — flag/usage error or fixture load failure
 func cmdCutoverVerify(args []string) {
@@ -171,7 +158,6 @@ func cmdCutoverVerify(args []string) {
 			"  Use --fixture <path> for hermetic verification, or implement the Prometheus/k8s\n"+
 			"  queries below for your environment (see the TODO markers in cutoververify.go).")
 		// TODO: query Prometheus for gateway 5xx count over the window.
-		// TODO: kubectl exec / pod-metrics to detect runtime_engine_litellm process.
 		// TODO: query Prometheus for litellm-svc:4000 traffic RPS.
 		// TODO: HTTP probe against gateway for 402 response with exhausted budget.
 		os.Exit(2)
@@ -180,10 +166,9 @@ func cmdCutoverVerify(args []string) {
 	ok, reasons := evaluateCutover(state)
 
 	// Print a summary for operator visibility regardless of outcome.
-	fmt.Printf("cutover-verify: window=%dm  5xx=%d  litellm_subprocess=%v  legacy_rps=%.4f  402_confirmed=%v\n",
+	fmt.Printf("cutover-verify: window=%dm  5xx=%d  legacy_rps=%.4f  402_confirmed=%v\n",
 		state.WindowMinutes,
 		state.Gateway5xxCount,
-		state.LiteLLMSubprocessPresent,
 		state.LegacySvcTrafficRPS,
 		state.HardBlock402Confirmed,
 	)

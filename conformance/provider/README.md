@@ -26,10 +26,10 @@ in this directory touches elitea-main, `v2.yaml` or any migration.
 
 ```
 conformance/provider/
-├── pyproject.toml            no runtime deps; [record] extras only to re-record
+├── pyproject.toml            no runtime deps; pytest only
 ├── spi/contract.json         THE CONTRACT: the SPI path set, provider-agnostic
-├── tools/                    the recorders (run against the legacy checkout), and
-│                             build_descriptor_v1.py (legacy-v0 -> legacy-v1)
+├── tools/                    build_descriptor_v1.py (legacy-v0 -> legacy-v1) and
+│                             build_inventory_descriptor_v2.py
 ├── tests/test_fixtures.py    invariants over the committed fixtures (stdlib + pytest)
 ├── tests/test_descriptor_revision.py
 │                             legacy-v1 and the Go host's served copy are what
@@ -61,8 +61,10 @@ and the SHA-256 of each source file it was derived from.
 
 ### Recorded, not transcribed
 
-The recorders import the legacy sources verbatim (with a stubbed
-`pylon.core.tools` and, where needed, a stubbed `flask`) and **execute** them:
+The P0 fixtures were recorded once by executing the legacy plugin's own code
+(not by transcribing it). Those one-off recorders have been removed with the
+legacy runtime; the fixtures are now frozen, and the table below records which
+legacy code each one came from:
 
 | Fixture | Executed legacy code |
 | --- | --- |
@@ -88,8 +90,8 @@ Two things are restated rather than executed, and say so in the fixture:
   hash-bucketed bag-of-tokens projection recorded in
   `retrieval/sample-repo/embedding_model.json`; the generation fixtures supply
   the page bodies directly.
-* **Chunker parity is not covered.** `tools/record_retrieval.py::chunk_corpus`
-  is a trivial `def`/`class` splitter, *not* the legacy tree-sitter pipeline.
+* **Chunker parity is not covered.** The recorder's `chunk_corpus` was a
+  trivial `def`/`class` splitter, *not* the legacy tree-sitter pipeline.
   Its output is committed as `nodes.json`, so the retrieval fixtures stand on a
   frozen input either way. Parser/chunk parity is separate work.
 * **The FAISS ensemble path is not recorded.** `UNIFIED_RETRIEVER_ENABLED` is
@@ -114,15 +116,26 @@ The same run checks the DeepWiki descriptor revision: `legacy-v1` and
 what `python tools/build_descriptor_v1.py` builds from `legacy-v0` (run it
 without `--check` to rewrite both).
 
-Re-recording needs a read-only legacy checkout and the `record` extras:
+### How the goldens are maintained
 
-```bash
-cd conformance/provider && DEEPWIKI_LEGACY_ROOT=~/projects/eliteaai/legacy/plugins/deepwiki_plugin python tools/record_spi.py --check
-```
+The fixtures are no longer re-recorded: the legacy plugin they were captured
+from is retired, so they are frozen inputs. They are kept honest by the
+implementations that replay them, each in its own CI workflow:
 
-`DEEPWIKI_LEGACY_ROOT` is optional when the checkout sits at the usual
-workspace path. Every recorder takes `--check`, which fails on drift instead of
-rewriting — that is how the legacy plugin is watched while it is still alive.
+* `ci-deepwiki-conformance.yml` — `tests/` here: internal consistency of the
+  fixture set, and the descriptor revision guard.
+* `ci-deepwiki-engine.yml` — the Rust DeepWiki engine's tests
+  (`services/elitea-deepwiki-engine/tests/conformance.rs`, `wiki_contract.rs`,
+  `storage_parity.rs`, `native_generate.rs`) replay `fixtures/deepwiki/`.
+* `ci-inventory-engine.yml` — the Rust Inventory engine's tests
+  (`services/elitea-inventory-engine/tests/conformance.rs`) replay
+  `fixtures/inventory/`.
+* `ci-go.yml` — the Go host (`services/elitea-subapp-host`) and the
+  elitea-main facades replay the SPI fixtures.
+
+A deliberate contract change edits the fixture and the implementations in the
+same change, so every replay above stays green against the new golden; the
+descriptor fixtures are regenerated with the `tools/build_*` scripts above.
 
 ## How each fixture set is replayed in P1
 
