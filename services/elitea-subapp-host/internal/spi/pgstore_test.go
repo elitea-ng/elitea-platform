@@ -8,6 +8,7 @@ package spi_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/testpg"
 	"net/http"
@@ -28,7 +29,7 @@ const migration = "../../../elitea-deepwiki-engine/migrations/0002_invocations.s
 // testStore creates a throwaway schema, applies the migration into it, and
 // returns a store bound to that schema plus a second connection for
 // assertions. The schema is dropped at cleanup.
-func testStore(t *testing.T, owner string) (*spi.PostgresStore, *pgxpool.Pool) {
+func testStore(t *testing.T, owner string, options ...spi.StoreOption) (*spi.PostgresStore, *pgxpool.Pool) {
 	t.Helper()
 	dsn := testpg.DSN(os.Getenv("ELITEA_SUBAPP_HOST_TEST_DSN"))
 	if dsn == "" {
@@ -69,7 +70,7 @@ func testStore(t *testing.T, owner string) (*spi.PostgresStore, *pgxpool.Pool) {
 		t.Fatalf("apply the migration: %v", err)
 	}
 	pool.Close()
-	store, err := spi.NewPostgresStore(ctx, scoped, owner, nil)
+	store, err := spi.NewPostgresStore(ctx, scoped, owner, nil, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +179,119 @@ func TestPostgresStoreReconcilesAnotherOwnersOrphans(t *testing.T) {
 	// Idempotent: a second pass finds nothing.
 	if n, _ := fresh.Reconcile(ctx); n != 0 {
 		t.Fatalf("a second reconcile touched %d rows", n)
+	}
+}
+
+// The claim's session drops (a PostgreSQL restart, a failover, an idle
+// kill): the lock is free and siblings would take this process for dead. It
+// must notice, refuse new work while it cannot re-take the claim, and
+// resume once it has.
+func TestPostgresStoreRefusesWorkWhileItsClaimIsLostAndResumesOnceRetaken(t *testing.T) {
+	store, assertions := testStore(t, "pod-flaky/1", spi.WithClaimCheckInterval(200*time.Millisecond))
+	ctx := context.Background()
+	if !store.ClaimHeld() {
+		t.Fatal("a new store does not hold its claim")
+	}
+	// Another session: it kills the claim's session and takes the lock
+	// before the store's next check can, standing in for whatever might
+	// hold it in the gap.
+	thief, err := assertions.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thief.Release()
+	var key int64
+	if err := thief.QueryRow(ctx, `SELECT hashtextextended($1, $2)`, store.Owner(), 0x53_41_48_31).Scan(&key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := thief.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		  AND classid = ($1::bigint >> 32)::oid AND objid = ($1::bigint & 4294967295)::oid`, key); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the thief to take the freed lock", func() bool {
+		var took bool
+		_ = thief.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&took)
+		return took
+	})
+	waitFor(t, "the store to notice its lost claim", func() bool { return !store.ClaimHeld() })
+	refused := &spi.Invocation{ID: "invocation_refused", Toolkit: "Wikis", Tool: "ask", Status: "pending", CreatedAt: time.Now()}
+	if err := store.Create(ctx, refused); !errors.Is(err, spi.ErrClaimLost) {
+		t.Fatalf("Create without the claim = %v, want ErrClaimLost", err)
+	}
+	if _, err := thief.Exec(ctx, `SELECT pg_advisory_unlock($1)`, key); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the store to re-take its claim", store.ClaimHeld)
+	if err := store.Create(ctx, refused); err != nil {
+		t.Fatalf("Create after the claim was re-taken: %v", err)
+	}
+	// Alive again: a sibling leaves its row alone.
+	sibling, err := spi.NewPostgresStore(ctx, dsnOf(t, store), "pod-sibling/1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sibling.Close()
+	if n, err := sibling.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a sibling reconciled a live owner's row: %d %v", n, err)
+	}
+}
+
+// A row a sibling terminated as an orphan keeps that answer: the original
+// owner, still running it, writes nothing over it.
+func TestPostgresStoreUpdateLeavesARowAnotherOwnerTerminated(t *testing.T) {
+	store, assertions := testStore(t, "pod-slow/1")
+	ctx := context.Background()
+	invocation := &spi.Invocation{ID: "invocation_reaped", Toolkit: "Wikis", Tool: "ask", Status: "running", CreatedAt: time.Now()}
+	if err := store.Create(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assertions.Exec(ctx, `UPDATE invocations SET status = 'stopped', result = '{"status":"Error"}', finished_at = now(), owner = 'claim1:pod-reaper/1' WHERE invocation_id = $1`, invocation.ID); err != nil {
+		t.Fatal(err)
+	}
+	invocation.Status = "stopped"
+	invocation.Result = map[string]any{"status": "Completed"}
+	if err := store.Update(ctx, invocation); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.Get(ctx, "Wikis", "ask", invocation.ID); got.Result["status"] != "Error" {
+		t.Fatalf("the original owner overwrote the reaped answer: %+v", got)
+	}
+}
+
+// A row from an image before #1359 names an owner that takes no lock, so a
+// free lock says nothing about it. During a rolling deploy that owner is
+// alive; the new replica leaves its rows for legacyGrace after first seeing
+// them, then treats them as orphans.
+func TestPostgresStoreGivesALegacyOwnerAGraceBeforeReconcilingIt(t *testing.T) {
+	store, assertions := testStore(t, "pod-new/1", spi.WithLegacyOwnerGrace(300*time.Millisecond))
+	ctx := context.Background()
+	if _, err := assertions.Exec(ctx, `INSERT INTO invocations (invocation_id, toolkit_name, tool_name, status, owner) VALUES ('invocation_legacy', 'Wikis', 'generate_wiki', 'running', 'pod-old/7')`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a legacy owner's row was reconciled on first sight: %d %v", n, err)
+	}
+	if n, err := store.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a legacy owner's row was reconciled inside its grace: %d %v", n, err)
+	}
+	time.Sleep(350 * time.Millisecond)
+	if n, err := store.Reconcile(ctx); err != nil || n != 1 {
+		t.Fatalf("a legacy owner's row past its grace: reconciled %d %v, want 1", n, err)
+	}
+	if orphan, _ := store.Get(ctx, "Wikis", "generate_wiki", "invocation_legacy"); orphan.Status != "stopped" || orphan.Result["status"] != "Error" {
+		t.Fatalf("legacy orphan %+v", orphan)
+	}
+}
+
+func waitFor(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

@@ -4,6 +4,36 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## DeepWiki and Inventory replicas share invocations; owner rows are marked
+
+**Affects:** DeepWiki and Inventory installs with a database
+(`<PREFIX>DATABASE_URL`), above all a rolling upgrade from an image before
+#1359. No migration and no setting.
+
+**What changed.**
+
+* Each sub-app host process holds a PostgreSQL advisory lock for as long as
+  it lives, on a dedicated connection, keyed by a 64-bit hash of its owner
+  id. A sibling that finds the lock free terminates the owner's in-flight
+  invocations as orphans, at startup and every minute after.
+* The host checks its own lock every 10 seconds. When its session dropped
+  (a PostgreSQL restart, a failover, an idle-session kill) it refuses new
+  invocations and reports `owner_claim: false` in its gRPC health readiness
+  until it has re-taken the lock. A run a sibling terminated in that gap
+  keeps the terminated answer.
+* Rows written by this release carry an owner prefixed `claim1:`. Rows from
+  an older image carry no prefix, and that image takes no lock, so a free
+  lock means nothing for them: a new replica leaves them alone for 15
+  minutes after it first sees them in flight, then terminates them. A
+  rolling deploy therefore no longer cuts off what the old replicas are
+  still running.
+
+**What to do.**
+
+* Nothing. A pooler in front of the database must keep a client's session
+  (session pooling, not transaction pooling) for the lock to mean anything;
+  point `<PREFIX>DATABASE_URL` at PostgreSQL or at a session-mode pool.
+
 ## A direct client is keyed by its socket address; compose trusts no proxy
 
 **Affects:** every install with a Form authentication document

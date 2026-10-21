@@ -103,7 +103,11 @@ func run(logger *slog.Logger) error {
 		} else if reconciled > 0 {
 			logger.Warn("invocations orphaned by a process that is gone were terminated", "count", reconciled)
 		}
-		options = append(options, spi.WithStore(store))
+		// A lost owner claim refuses new invocations (spi.ErrClaimLost);
+		// readiness says so, so the caller can route around this replica.
+		options = append(options, spi.WithStore(store), spi.WithReadiness(func(context.Context) map[string]bool {
+			return map[string]bool{"owner_claim": store.ClaimHeld()}
+		}))
 	}
 	bus, closeBus, err := composeCancelBus(settings, os.LookupEnv, logger)
 	if err != nil {
