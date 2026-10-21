@@ -63,6 +63,8 @@ package conversations
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -460,30 +462,94 @@ func (h *Handler) writeAttachmentBytes(w http.ResponseWriter, r *http.Request) {
 	_ = h.attachments.DeleteAttachmentChunks(r.Context(), projectID, conversationID, fileID)
 }
 
-// maxAttachmentNameAttempts bounds the numbered names one upload tries
-// before it gives up: `name.ext` and then `name (1).ext` through
-// `name (99).ext`.
-const maxAttachmentNameAttempts = 100
+// attachmentNameRetries bounds the inserts one upload makes after the
+// first numbered name it picked was taken by a concurrent upload of the
+// same name, first counting up from that number and then with a random
+// suffix. A busy name never answers 409.
+const attachmentNameRetries = 4
 
-// reserveAttachmentKey claims the first free `{conversationID}/{name}` key,
-// numbering the name when it is taken, and returns the key with its object
-// ref. A conversation holding every numbered variant answers 409.
+// reserveAttachmentKey claims a free `{conversationID}/{name}` key and returns
+// it with its object ref: the name itself when it is free, otherwise the
+// next number after the highest `name (N).ext` the conversation holds, read
+// in one query rather than probed name by name (a phone names every photo
+// image.jpg, and a long conversation collects hundreds). Concurrent uploads
+// of one name race on the unique (bucket_id, key) index, so a lost insert
+// moves on to the next number and finally to a random suffix.
 func (h *Handler) reserveAttachmentKey(ctx context.Context, bucketID int64, projectIDStr, bucketName, conversationID, name, contentType string, expiresAt *time.Time) (string, storage.ObjectRef, error) {
-	for attempt := 0; attempt < maxAttachmentNameAttempts; attempt++ {
-		key := conversationID + "/" + numberedAttachmentName(name, attempt)
+	try := func(candidate string) (string, storage.ObjectRef, bool, error) {
+		key := conversationID + "/" + candidate
 		ref, err := storage.NewObjectRef(projectIDStr, bucketName, key)
 		if err != nil {
-			return "", storage.ObjectRef{}, apierr.BadRequest("invalid attachment file name: " + err.Error())
+			return "", storage.ObjectRef{}, false, apierr.BadRequest("invalid attachment file name: " + err.Error())
 		}
 		reserved, err := h.attachments.ReserveAttachmentObject(ctx, bucketID, key, contentType, expiresAt)
 		if err != nil {
-			return "", storage.ObjectRef{}, apierr.Internal("reserve attachment name: " + err.Error())
+			return "", storage.ObjectRef{}, false, apierr.Internal("reserve attachment name: " + err.Error())
 		}
-		if reserved {
-			return key, ref, nil
+		return key, ref, reserved, nil
+	}
+
+	key, ref, reserved, err := try(name)
+	if err != nil || reserved {
+		return key, ref, err
+	}
+
+	stem, ext := splitAttachmentName(name)
+	held, err := h.attachments.ListAttachmentObjectKeys(ctx, bucketID, conversationID+"/"+stem+" (")
+	if err != nil {
+		return "", storage.ObjectRef{}, apierr.Internal("list attachment names: " + err.Error())
+	}
+	next := 1
+	for _, k := range held {
+		if n, ok := attachmentNameNumber(strings.TrimPrefix(k, conversationID+"/"), stem, ext); ok && n >= next {
+			next = n + 1
 		}
 	}
-	return "", storage.ObjectRef{}, apierr.Conflict(fmt.Sprintf("this conversation already holds %d files named %q; rename the file and upload again", maxAttachmentNameAttempts, name))
+	for attempt := 0; attempt < attachmentNameRetries; attempt++ {
+		if key, ref, reserved, err = try(numberedAttachmentName(name, next+attempt)); err != nil || reserved {
+			return key, ref, err
+		}
+	}
+	for attempt := 0; attempt < attachmentNameRetries; attempt++ {
+		suffix := make([]byte, 4)
+		if _, err := rand.Read(suffix); err != nil {
+			return "", storage.ObjectRef{}, apierr.Internal("reserve attachment name: " + err.Error())
+		}
+		if key, ref, reserved, err = try(fmt.Sprintf("%s (%s)%s", stem, hex.EncodeToString(suffix), ext)); err != nil || reserved {
+			return key, ref, err
+		}
+	}
+	return "", storage.ObjectRef{}, apierr.Internal(fmt.Sprintf("could not reserve a name for %q: every candidate was taken concurrently", name))
+}
+
+// splitAttachmentName splits name into the stem a number follows and the
+// extension it goes before. A name that is only an extension (`.env`) is
+// all stem.
+func splitAttachmentName(name string) (stem, ext string) {
+	ext = path.Ext(name)
+	stem = strings.TrimSuffix(name, ext)
+	if stem == "" {
+		return name, ""
+	}
+	return stem, ext
+}
+
+// attachmentNameNumber reports N when candidate is exactly `stem (N)ext`
+// for a positive decimal N.
+func attachmentNameNumber(candidate, stem, ext string) (int, bool) {
+	digits, ok := strings.CutPrefix(candidate, stem+" (")
+	if !ok {
+		return 0, false
+	}
+	digits, ok = strings.CutSuffix(digits, ")"+ext)
+	if !ok || digits == "" || len(digits) > 9 || strings.TrimLeft(digits, "0123456789") != "" || digits[0] == '0' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // numberedAttachmentName is name itself for attempt 0, and otherwise name
@@ -493,11 +559,7 @@ func numberedAttachmentName(name string, attempt int) string {
 	if attempt == 0 {
 		return name
 	}
-	ext := path.Ext(name)
-	stem := strings.TrimSuffix(name, ext)
-	if stem == "" {
-		stem, ext = name, ""
-	}
+	stem, ext := splitAttachmentName(name)
 	return fmt.Sprintf("%s (%d)%s", stem, attempt, ext)
 }
 
@@ -568,8 +630,8 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 	// A NAME ALREADY TAKEN IN THIS CONVERSATION GETS A NUMBER (#1059). The key
 	// used to be the sanitized name alone, so a second `photo.jpg` overwrote
 	// the first — bytes an earlier message still names. The upload now
-	// reserves a free key first (`photo.jpg`, then `photo (1).jpg`, …) with a
-	// placeholder metadata row, and the unique (bucket_id, key) index decides
+	// reserves a free key first (`photo.jpg`, else the next free
+	// `photo (N).jpg`) with a placeholder metadata row, and the unique (bucket_id, key) index decides
 	// between two concurrent uploads of one name. The answer carries the key
 	// that was reserved, and every client already sends back the filepath it
 	// was given, so stored objects and their paths are untouched.

@@ -7,7 +7,9 @@ package conversations_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"sync"
 	"testing"
@@ -101,6 +103,50 @@ func TestAttachmentConcurrentSameNameUploadsNeverShareAKey(t *testing.T) {
 	defer objStore.mu.Unlock()
 	if len(objStore.objects) != uploads {
 		t.Fatalf("stored objects = %d, want %d", len(objStore.objects), uploads)
+	}
+}
+
+// A phone names every photo image.jpg, so a long conversation holds hundreds
+// of them. The next upload takes the number after the highest one held,
+// whatever the count; it used to probe a hundred names one insert at a time
+// and then answer 409.
+func TestAttachmentNumberingContinuesPastTheHighestHeldNumber(t *testing.T) {
+	attStore := newFakeAttachmentStore()
+	objStore := newFakeAttachmentObjectStore()
+	h := newAttachmentTestHandler(t, attStore, objStore)
+
+	first := doAttachmentUpload(t, h, nil, "image.jpg", []byte("first"))
+	uploadedFilepath(t, first.Code, first.Body.Bytes())
+	attStore.mu.Lock()
+	bucketID := attStore.recorded[0].BucketID
+	for n := 1; n <= 150; n++ {
+		attStore.recorded = append(attStore.recorded, recordedAttachmentObject{BucketID: bucketID, Key: fmt.Sprintf("conv-abc/image (%d).jpg", n)})
+	}
+	// Names that only look numbered do not move the counter.
+	for _, k := range []string{"conv-abc/image (900).png", "conv-abc/image (0999).jpg", "conv-abc/image (x).jpg", "conv-abc/image (1000) (1).jpg"} {
+		attStore.recorded = append(attStore.recorded, recordedAttachmentObject{BucketID: bucketID, Key: k})
+	}
+	attStore.mu.Unlock()
+
+	rec := doAttachmentUpload(t, h, nil, "image.jpg", []byte("next"))
+	if got := uploadedFilepath(t, rec.Code, rec.Body.Bytes()); got != "/chat-attachments/conv-abc/image (151).jpg" {
+		t.Fatalf("filepath = %q, want image (151).jpg", got)
+	}
+}
+
+// Concurrent uploads that keep taking the next number push the upload onto
+// a random suffix; a busy name is never refused.
+func TestAttachmentBusyNameFallsBackToARandomSuffix(t *testing.T) {
+	attStore := newFakeAttachmentStore()
+	objStore := newFakeAttachmentObjectStore()
+	h := newAttachmentTestHandler(t, attStore, objStore)
+	numbered := regexp.MustCompile(`^conv-abc/busy( \([0-9]+\))?\.txt$`)
+	attStore.raceKey = numbered.MatchString
+
+	rec := doAttachmentUpload(t, h, nil, "busy.txt", []byte("x"))
+	got := uploadedFilepath(t, rec.Code, rec.Body.Bytes())
+	if !regexp.MustCompile(`^/chat-attachments/conv-abc/busy \([0-9a-f]{8}\)\.txt$`).MatchString(got) {
+		t.Fatalf("filepath = %q, want busy (<random>).txt", got)
 	}
 }
 

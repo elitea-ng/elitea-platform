@@ -388,12 +388,14 @@ export interface paths {
          *     few MB.
          *
          *     Client contract 1.12: a name already stored in this conversation is
-         *     never overwritten. The file is stored under the first free numbered
-         *     name instead (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …;
-         *     the number goes before the extension), and two concurrent uploads of
-         *     one name always get two different names. Always send the returned
-         *     `filepath`, never one built from the local file name. A conversation
-         *     that already holds a hundred files of one name answers 409.
+         *     never overwritten. The file is stored under a numbered name instead:
+         *     the number after the highest one the conversation holds for that name
+         *     (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
+         *     before the extension), and two concurrent uploads of one name always
+         *     get two different names, the loser of a race possibly a random
+         *     suffix such as `photo (3f9c01ab).jpg`. However many files of one name
+         *     a conversation holds, the upload is never refused for it. Always send
+         *     the returned `filepath`, never one built from the local file name.
          *
          *     Client contract 1.13: a stored document's text is extracted in the
          *     background as soon as it is uploaded, so the first turn that carries
@@ -3951,7 +3953,7 @@ export interface operations {
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
-            /** @description Every numbered variant of this file name is taken in the conversation; rename the file. */
+            /** @description The project's attachment bucket name is held by a bucket a person created; rename or delete that bucket. */
             409: {
                 headers: {
                     [name: string]: unknown;

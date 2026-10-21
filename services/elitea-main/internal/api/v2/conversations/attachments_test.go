@@ -37,7 +37,10 @@ type fakeAttachmentStore struct {
 	chunks        map[string][]conversations.AttachmentChunk
 	recorded      []recordedAttachmentObject
 	reserved      map[string]bool // "bucketID/key" claimed by ReserveAttachmentObject
-	bucketErr     error
+	// raceKey, when set, makes ReserveAttachmentObject lose every key it
+	// matches, standing in for concurrent uploads that took it first.
+	raceKey   func(key string) bool
+	bucketErr error
 }
 
 type recordedAttachmentObject struct {
@@ -81,7 +84,7 @@ func (f *fakeAttachmentStore) ReserveAttachmentObject(_ context.Context, bucketI
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	slot := fmt.Sprintf("%d/%s", bucketID, key)
-	if f.reserved[slot] {
+	if f.reserved[slot] || (f.raceKey != nil && f.raceKey(key)) {
 		return false, nil
 	}
 	for _, row := range f.recorded {
