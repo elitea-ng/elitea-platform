@@ -2,6 +2,8 @@ package authcomposition
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -450,7 +452,47 @@ func compiledAttemptConfig(key []byte) authattempt.Config {
 		FormBegin:            authattempt.Policy{MaxAttempts: 20, Window: time.Minute},
 		FormCredentialClient: authattempt.Policy{MaxAttempts: 5, Window: time.Minute},
 		FormCredentialLogin:  authattempt.Policy{MaxAttempts: 25, Window: time.Minute},
+		// Single sign-on (#1078), per client only. Generous on purpose: a
+		// client key is one IPv4 address, so a whole office behind one NAT
+		// egress shares it, and a sign-in that bounces between the identity
+		// provider and the callback must survive a few user retries. The
+		// limit exists to bound one client's state and identity provider
+		// traffic, not to stop guessing — the provider verifies credentials.
+		OIDCBegin:    authattempt.Policy{MaxAttempts: 120, Window: time.Minute},
+		OIDCCallback: authattempt.Policy{MaxAttempts: 120, Window: time.Minute},
+		SAMLBegin:    authattempt.Policy{MaxAttempts: 120, Window: time.Minute},
+		SAMLACS:      authattempt.Policy{MaxAttempts: 120, Window: time.Minute},
 	}
+}
+
+// singleSignOnAttemptKeyDomain separates the single-sign-on limiter's key from
+// every other use of APPLICATION_SECRET_KEY.
+const singleSignOnAttemptKeyDomain = "elitea-sso-browser-attempt-key-v1"
+
+// NewSingleSignOnAttemptAdmitter builds the attempt limiter the OIDC and SAML
+// planes (internal/api/v2/auth) share, with the same code-owned policies as
+// the Form graph's (compiledAttemptConfig).
+//
+// A single-sign-on deployment usually has no authentication document and so
+// no attempt key file; the key is derived from APPLICATION_SECRET_KEY, which
+// that plane already requires, under its own domain. Rotating that secret
+// starts every window over, which only ever admits more.
+func NewSingleSignOnAttemptAdmitter(
+	pool *pgxpool.Pool,
+	applicationSecretKey string,
+) (*authattempt.PostgresAdmitter, error) {
+	if pool == nil || applicationSecretKey == "" {
+		return nil, ErrInvalidGraph
+	}
+	mac := hmac.New(sha256.New, []byte(applicationSecretKey))
+	_, _ = mac.Write([]byte(singleSignOnAttemptKeyDomain))
+	key := mac.Sum(nil)
+	defer clear(key)
+	admitter, err := authattempt.NewPostgresAdmitter(pool, compiledAttemptConfig(key))
+	if err != nil {
+		return nil, composeError("single sign-on attempt admission", err)
+	}
+	return admitter, nil
 }
 
 func provisioningPolicy(config IdentityConfig) identityapp.ProvisioningPolicy {

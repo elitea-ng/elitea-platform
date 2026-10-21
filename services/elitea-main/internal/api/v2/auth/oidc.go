@@ -16,6 +16,7 @@ import (
 
 	"errors"
 
+	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
@@ -96,6 +97,10 @@ type OIDCHandler struct {
 
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*oidcRuntime
+
+	// attempts is the begin/callback limiter (signin_attempts.go). Nil
+	// unless WithAttemptLimiter attached one.
+	attempts *signInAttempts
 }
 
 // NewOIDCHandler builds the handler.
@@ -162,6 +167,10 @@ func (h *OIDCHandler) WithPersonalProjectWait(wait time.Duration) *OIDCHandler {
 }
 
 func (h *OIDCHandler) Login(w http.ResponseWriter, r *http.Request) {
+	// Admitted before any provider resolution, cookie or redirect.
+	if !h.attempts.admit(w, r, browserapp.BrowserAttemptOIDCBegin) {
+		return
+	}
 	runtime, err := h.runtime(r.Context())
 	if err != nil {
 		// The cause is logged, never returned: it names the issuer, the vault
@@ -335,6 +344,11 @@ func (h *OIDCHandler) consumeNonce(w http.ResponseWriter, r *http.Request, token
 
 func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	// Admitted before the code exchange and token verification.
+	if !h.attempts.admit(w, r, browserapp.BrowserAttemptOIDCCallback) {
+		return
+	}
 
 	// Resolved FIRST, and from the same source Login used. A callback that
 	// resolved a different provider from the login that started it would verify

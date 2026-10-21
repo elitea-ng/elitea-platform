@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/net/http/httpguts"
 
+	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
 )
 
@@ -186,21 +187,10 @@ func (r *TrustedProxyResolver) ResolveClientKey(request *http.Request) (string, 
 	return attemptClientKey(clientIP), nil
 }
 
-// ipv6ClientPrefixBits is the IPv6 grouping of attemptClientKey: the
-// smallest prefix one end site is normally assigned (RFC 6177).
-const ipv6ClientPrefixBits = 64
-
+// attemptClientKey is browserapp.AttemptClientKey, which the single-sign-on
+// planes (internal/api/v2/auth) key their attempts with too.
 func attemptClientKey(address netip.Addr) string {
-	address = address.Unmap()
-	if address.Is4() {
-		return address.String()
-	}
-	prefix, err := address.WithZone("").Prefix(ipv6ClientPrefixBits)
-	if err != nil {
-		// Unreachable for a valid IPv6 address; the full address still keys.
-		return address.String()
-	}
-	return prefix.String()
+	return browserapp.AttemptClientKey(address)
 }
 
 // VerifyForwardedIdentityPeer proves that EdgeAuth produced the X-Auth-*

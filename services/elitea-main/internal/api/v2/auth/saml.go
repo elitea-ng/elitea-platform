@@ -78,6 +78,7 @@ import (
 	saml2 "github.com/russellhaering/gosaml2"
 	"github.com/russellhaering/gosaml2/types"
 
+	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
@@ -135,6 +136,10 @@ type SAMLHandler struct {
 
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*samlRuntime
+
+	// attempts is the begin/ACS limiter (signin_attempts.go). Nil unless
+	// WithAttemptLimiter attached one.
+	attempts *signInAttempts
 }
 
 // WithSessionManager gives this plane the server-side session store.
@@ -289,6 +294,9 @@ func serviceProviderMetadata(runtime *samlRuntime) (*types.EntityDescriptor, err
 
 // Login answers `GET /auth/saml/login`.
 func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
+	if !h.attempts.admit(w, r, browserapp.BrowserAttemptSAMLBegin) {
+		return
+	}
 	runtime, ok := h.resolve(w, r)
 	if !ok {
 		return
@@ -359,6 +367,10 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 // ACS answers `POST /auth/saml/acs`.
 func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
+	// Admitted before the body is read or the assertion is validated.
+	if !h.attempts.admit(w, r, browserapp.BrowserAttemptSAMLACS) {
+		return
+	}
 	runtime, ok := h.resolve(w, r)
 	if !ok {
 		return

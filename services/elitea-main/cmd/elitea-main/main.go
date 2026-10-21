@@ -577,6 +577,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
+	// The caller-address resolver every plane keys its limiters on: the SCIM
+	// token endpoint, the native endpoints and the single-sign-on attempt
+	// limiter below. Built here, before the single-sign-on block, because
+	// that block attaches it.
+	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
+	if err != nil {
+		return fmt.Errorf("load SCIM caller-address settings: %w", err)
+	}
+
 	// Wire OIDC browser-session authentication when OIDC_ISSUER_URL is set.
 	// SessionHandler and OIDCHandler are independent of the FormGraph path and
 	// can coexist with it (both populate RouterConfig.Auth) — but only because
@@ -701,6 +710,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		).WithFirstLoginPolicy(firstLoginPolicy).WithSessionManager(sessionManager)
 		if storedSAMLProvider {
 			logger.Info("SAML authentication enabled from an authored identity provider")
+		}
+
+		// The begin/callback attempt limiter for both planes (#1078).
+		if err := composeSingleSignOnAttempts(
+			pool, appSecretKey, scimClientAddresses, oidcOIDCHandler, oidcSAMLHandler, logger,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -2469,11 +2485,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var patSigner v2auth.TokenSigner
 	if formGraph != nil {
 		patSigner = formGraph
-	}
-
-	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
-	if err != nil {
-		return fmt.Errorf("load SCIM caller-address settings: %w", err)
 	}
 
 	// One native policy reader for the router (discovery, token responses,
