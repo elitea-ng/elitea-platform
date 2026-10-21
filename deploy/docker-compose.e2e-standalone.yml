@@ -5,7 +5,9 @@
 # (e.g. centry's pylon_main already holds 8080).
 #
 # Ports used (all non-default to avoid clashing with centry/dev stacks):
-#   8082 → traefik (E2E entry point)  — set via E2E_PORT env (default 8082)
+#   8082 → elitea-main (E2E entry point, the browser edge) — E2E_PORT
+#          (default 8082). elitea-main relays /app and /docs to elitea-web and
+#          redirects `/` to /app/ (internal/api/webedge); no Traefik (#1359 P2).
 #   9400 → oidc-provider-mock
 #   15432 → postgres                  (separate from centry's 5432)
 #
@@ -216,9 +218,16 @@ services:
       # `e2e` is byte-identical to the shipping `final` stage (`final` derives
       # from it), so the admin journeys run against the artefact that ships.
       target: e2e
+    # elitea-main IS the browser edge (#1359 P2): E2E_PORT, the port the deleted
+    # Traefik published, now maps straight to its :8080 listener.
+    ports:
+      - "${E2E_PORT:-8082}:8080"
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
+      # Relay /app and /docs to elitea-web and redirect `/` to /app/
+      # (internal/api/webedge). Compose only; the chart never sets it.
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
       # The brand pack's FILE layer (ADR-0024); empty means the journeys brand
       # from the database layer over the product default, as a fresh install
       # does. See docker-compose.standalone-full.yml for the mount recipe.
@@ -240,7 +249,7 @@ services:
       # answers 503, so the native-client journeys
       # (admin.native-clients.spec.ts, settings.devices.spec.ts) could not
       # register a client or sign a device in. It is the browser-facing
-      # origin, traefik on E2E_PORT, the same origin OIDC_REDIRECT_URI uses.
+      # origin, elitea-main on E2E_PORT, the same origin OIDC_REDIRECT_URI uses.
       DEPLOYMENT_URL: "http://localhost:${E2E_PORT:-8082}"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). Empty by default: this stack's E2E seeder
@@ -509,17 +518,3 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
-
-  # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────
-  traefik:
-    image: traefik:v3.4
-    ports:
-      - "${E2E_PORT:-8082}:80"
-    volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.e2e.yml:/etc/traefik/dynamic.yml:ro
-    depends_on:
-      elitea-main:
-        condition: service_healthy
-      elitea-web:
-        condition: service_healthy

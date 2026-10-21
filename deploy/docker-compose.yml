@@ -1,15 +1,4 @@
 services:
-  traefik:
-    image: traefik:v3.4
-    ports:
-      - "8080:80"
-    volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-    depends_on:
-      - elitea-main
-      - elitea-ui
-
   postgres:
     image: postgres:18
     shm_size: '2g'
@@ -173,9 +162,17 @@ services:
       dockerfile: services/elitea-main/Containerfile
       target: final
     image: ghcr.io/elitea-ng/elitea-main:dev
+    # elitea-main IS the browser edge of this stack (#1359 P2): the browser
+    # origin is http://localhost:8080, the port the deleted Traefik published.
+    ports:
+      - "8080:8080"
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
+      # Relay /app and /docs to the SPA container and redirect `/` to /app/
+      # (internal/api/webedge). Compose only: a cluster's Gateway API
+      # HTTPRoute does this routing, and the chart never sets it.
+      ELITEA_WEB_UPSTREAM: "http://elitea-ui:80"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme"
       SKIP_MIGRATIONS: "1"

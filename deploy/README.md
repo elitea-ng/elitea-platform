@@ -1302,7 +1302,9 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   only backend. A cluster that also serves the web app from `/app` needs a rule
   per root-mounted Go route, or the SPA backend swallows them:
   `deploy/gateway-api/httproute.yaml` is the reviewed edge for that shape, and
-  it must stay in step with `deploy/traefik/dynamic.yml`. Both are walked by
+  it must stay in step with elitea-main's compose edge
+  (`internal/api/webedge`, which relays `/app` and `/docs` to elitea-web when
+  `ELITEA_WEB_UPSTREAM` is set; compose only, #1359). Both are checked by
   `services/elitea-main/tests/deployedge/`, so a new root-mounted family fails
   CI until every edge routes it (#568).
 - **One namespace for NATS and the platform.** The Argo CD sample installs

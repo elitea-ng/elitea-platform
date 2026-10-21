@@ -936,7 +936,10 @@ case "${1:-}" in
     # container states, so a REAL failure — a service stuck `starting`, an
     # unhealthy container, a migration that exited non-zero — still exits 1.
     up_status=0
-    $COMPOSE_BIN $COMPOSE_F up -d --wait || up_status=$?
+    # --remove-orphans: a stack brought up before #1359 P2 still runs its
+    # `traefik` container, which holds STANDALONE_PORT and would refuse
+    # elitea-main the browser port it now publishes.
+    $COMPOSE_BIN $COMPOSE_F up -d --wait --remove-orphans || up_status=$?
     if [ "$up_status" -ne 0 ]; then
       if stack_is_settled; then
         echo "→ compose --wait exited ${up_status} because a one-shot job finished;"
@@ -1656,6 +1659,48 @@ SQL
       *) fail "the gateway gRPC listener did not refuse a caller with no client certificate, so the elitea-main → gateway hop is not proven mutually authenticated: $(printf '%s' "$gw_anon" | grep -E 'alert|error|errno|Verify return' | tr '\n' ' ' | cut -c1-200)" ;;
     esac
 
+    echo "→ browser edge on http://localhost:${PORT} (elitea-main, #1359 P2):"
+    # elitea-main IS the browser edge: it redirects `/`, relays /app and /docs
+    # to elitea-web (internal/api/webedge) and serves everything else itself.
+    # The relayed answers carry nginx's Server header and elitea-main's do
+    # not, which is what tells the two sides apart here.
+    edge_probe() { # $1 path → "<code> <location> <server>"
+      curl -sS -o /dev/null -w '%{http_code} %{redirect_url} %header{server}' \
+           "http://localhost:${PORT}$1" 2>/dev/null || echo "000"
+    }
+    edge_root="$(edge_probe '/?utm_source=check')"
+    case "$edge_root" in
+      "302 http://localhost:${PORT}/app/?utm_source=check "*)
+        ok "/ redirects to /app/ (302, query kept)" ;;
+      *) fail "/ did not answer 302 to /app/?utm_source=check: ${edge_root}" ;;
+    esac
+    # Two sites, not a loop: the assertion floor counts `ok` sites.
+    edge_web="$(edge_probe /app/)"
+    case "$edge_web" in
+      "200 "*nginx*) ok "/app/ is served by elitea-web through elitea-main (${edge_web})" ;;
+      *) fail "/app/ did not come from elitea-web: ${edge_web}" ;;
+    esac
+    edge_web="$(edge_probe /docs/)"
+    case "$edge_web" in
+      "200 "*nginx*) ok "/docs/ is served by elitea-web through elitea-main (${edge_web})" ;;
+      *) fail "/docs/ did not come from elitea-web: ${edge_web}" ;;
+    esac
+    edge_mcp="$(edge_probe '/app/1/mcp')"
+    case "$edge_mcp" in
+      000*|*nginx*) fail "/app/1/mcp did not reach elitea-main (the MCP carve-out): ${edge_mcp}" ;;
+      *) ok "/app/1/mcp reaches elitea-main, not the SPA (${edge_mcp%% *})" ;;
+    esac
+    edge_health="$(curl -sS "http://localhost:${PORT}/healthz" 2>/dev/null || true)"
+    case "$edge_health" in
+      *'"status":"ok"'*) ok "/healthz is public on the browser origin" ;;
+      *) fail "/healthz did not answer {\"status\":\"ok\"}: $(printf '%s' "$edge_health" | cut -c1-200)" ;;
+    esac
+    edge_ready="$(edge_probe '/readyz')"
+    case "$edge_ready" in
+      "404 "*) ok "/readyz is withheld from the browser origin (404)" ;;
+      *) fail "/readyz answered ${edge_ready%% *} on the browser origin; its body names each dependency's state" ;;
+    esac
+
     echo "→ elitea-main /llm reachability:"
     # NOT a mount check, despite appearances. Auth runs before route matching, so
     # every /api/v2 path answers 401 to an unauthenticated caller whether or not
@@ -1881,9 +1926,9 @@ sys.stdout.write(reply)
         ;;
     esac
 
-    # The worker's platform_origin is elitea-main's platform listener (#1359,
-    # it replaced the platform-edge Traefik). The listener loop above proves it
-    # refuses a client with no certificate; this proves the worker's own
+    # The worker's platform_origin is elitea-main's platform listener (#1359).
+    # The listener loop above proves it refuses a client with no certificate;
+    # this proves the worker's own
     # identity is ADMITTED and the chain verifies for elitea-main against the
     # runtime CA alone, which is exactly what the worker's transport checks.
     # The listener is gRPC only (#1359 D1), so the probe is grpc.health.v1

@@ -93,11 +93,11 @@ jobs:
       - name: The derived assertion floors move with their assertions
         run: bash scripts/lib/assertion-floor-test.sh
       # This gate lives here, and not only in ci-go.yml, because ci-go.yml is
-      # path-filtered and does not select deploy/traefik/** or deploy/runtime/**.
-      # A pull request that edits only the edge YAML would not run it there. Traefik
-      # drops a router that names an unknown middleware and keeps serving, so
-      # the fault reaches production as a silent fallback to pylon rather than
-      # as an error (#338).
+      # path-filtered and does not select deploy/gateway-api/**, the compose
+      # files or the chart values. A pull request that edits only an edge file
+      # would not run it there. It drives elitea-main's compose edge for real
+      # and reads the Gateway API HTTPRoute and the chart strip list (#338,
+      # #568, #1359).
       - uses: actions/setup-go@v7
         with:
           # The cache is .github/actions/go-cache below: setup-go's own
@@ -111,7 +111,7 @@ jobs:
       # -count=1 is required, not tidiness. The gate reads YAML from deploy/,
       # which is outside this module, so the Go test cache does not notice an
       # edit to those files and can serve a stale pass.
-      - name: Validate the Traefik edge middleware references
+      - name: Validate the browser edges
         working-directory: services/elitea-main
         run: go test -count=1 ./tests/deployedge/...
       # The permission-grant gate lives here for the same reason as the step

@@ -180,9 +180,9 @@ certificate**: the worker presents `agent-worker-client.crt`. It is a **gRPC**
 listener (ALPN h2 only): each gRPC service on it admits only the workload
 identities configured for it, `grpc.health.v1` answers any verified workload,
 and it serves no HTTP route — probe it with `/elitea-grpc-health` from the
-elitea-main image, not curl. It replaced `platform-edge`, a second Traefik that
-used to terminate TLS for this origin. It is not the browser edge and publishes
-no host port.
+elitea-main image, not curl. It replaced `platform-edge`, the proxy that used
+to terminate TLS for this origin. It is not the browser edge and publishes no
+host port.
 
 **Model calls are `elitea.llm.v1.ModelService` on that listener** (#1359 U2,
 `libs/proto/elitea/llm/v1/model.proto`), not HTTP `/llm`. elitea-main admits

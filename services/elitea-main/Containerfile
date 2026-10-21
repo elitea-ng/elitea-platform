@@ -149,7 +149,7 @@ ENTRYPOINT ["/elitea-main"]
 
 # ── Stage 4: mixed Centry deployment ──────────────────────────────────────────
 # `/nonexistent` is deliberate and stays that way. In deploy/centry-hybrid the
-# traefik router sends only /healthz and a short list of API paths to
+# edge router sent only /healthz and a short list of API paths to
 # elitea-main; `/admin/app` falls through the `current-platform` PathPrefix(`/`)
 # router to pylon_main, which serves the legacy admin_ui plugin. This image is
 # not an admin server, so it carries no admin bundle.

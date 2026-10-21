@@ -1,7 +1,7 @@
 package runtimecomposition
 
 // The platform listener (#1359): elitea-main's product API on an internal
-// mutual-TLS port, the replacement of the Traefik platform-edge. These pin
+// mutual-TLS port, the replacement of the platform-edge proxy. These pin
 // the configuration contract; cmd/elitea-runtime-material's
 // TestPlatformListenerAdmitsOnlyRuntimeCAClients proves the handshake.
 

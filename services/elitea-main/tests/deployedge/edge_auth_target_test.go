@@ -24,19 +24,20 @@
 // TestRouterStripsClientIdentityHeaders proves the root strip is mounted, and
 // TestInProcessStripCoversTheEdgeFloor below holds its list to the edges'.
 //
+// The compose Traefik is gone too (#1359 P2): elitea-main is the compose edge,
+// so the compose half of this gate asks elitea-main directly.
+//
 // RUN IT WITH -count=1, for the reason stated in edge_middlewares_test.go: the
 // YAML this file reads lives in deploy/, outside this module.
 package deployedge_test
 
 import (
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 )
@@ -44,79 +45,25 @@ import (
 // removedAuthPath is the edge-auth address elitea-main used to register.
 const removedAuthPath = "/internal/auth/main"
 
-// edgeAuthMiddleware is one middleware definition, as far as this gate reads
-// it.
-type edgeAuthMiddleware struct {
-	ForwardAuth *struct {
-		Address string `yaml:"address"`
-	} `yaml:"forwardAuth"`
-}
-
-// edgeWithEdgeAuth re-reads the edge YAML with the fields this gate needs.
-type edgeWithEdgeAuth struct {
-	HTTP struct {
-		Routers map[string]struct {
-			Middlewares []string `yaml:"middlewares"`
-		} `yaml:"routers"`
-		Middlewares map[string]edgeAuthMiddleware `yaml:"middlewares"`
-	} `yaml:"http"`
-}
-
-func parseEdgeWithEdgeAuth(t *testing.T, path string) edgeWithEdgeAuth {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var parsed edgeWithEdgeAuth
-	if err := yaml.Unmarshal(raw, &parsed); err != nil {
-		t.Fatalf("parse %s as Traefik dynamic configuration: %v", path, err)
-	}
-	return parsed
-}
-
-// TestNoLoadedEdgeDefinesAForwardAuth is the gate over every configuration set
-// a stack actually loads.
-func TestNoLoadedEdgeDefinesAForwardAuth(t *testing.T) {
-	root := repoRoot(t)
-
-	routersChecked := 0
-	for _, set := range configSets() {
-		for _, path := range set.resolve(t, root) {
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				relative = path
-			}
-			parsed := parseEdgeWithEdgeAuth(t, path)
-			routersChecked += len(parsed.HTTP.Routers)
-
-			names := make([]string, 0, len(parsed.HTTP.Middlewares))
-			for name := range parsed.HTTP.Middlewares {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				definition := parsed.HTTP.Middlewares[name]
-				if definition.ForwardAuth == nil {
-					continue
-				}
-				t.Errorf(
-					"set %q: %s defines forwardAuth middleware %q (address %q).\n"+
-						"Edge authentication was removed in #1359: elitea-main "+
-						"authenticates every request itself, and %s no longer "+
-						"exists, so the edge would return its 404 to every "+
-						"caller. Delete the middleware and every reference to it.",
-					set.name, relative, name, definition.ForwardAuth.Address, removedAuthPath,
-				)
-			}
+// TestNoEdgeServesTheRemovedAuthenticator replaces the parsed-Traefik half of
+// this gate. The compose edge is elitea-main now, so the question "does a
+// loaded edge call an authenticator" becomes "does elitea-main, AS the edge,
+// still answer the address one would call". It must not: a 2xx there would be
+// an authentication plane nobody reviews, and the address existing at all
+// invites the next edge to name it. TestNoTraefikEdgeShips keeps a forwardAuth
+// edge from coming back in a compose file, and the walk below covers the
+// chart and the Gateway API manifests.
+func TestNoEdgeServesTheRemovedAuthenticator(t *testing.T) {
+	edge := startComposeEdge(t, browserFacingRouterConfig(), browserRemoteAddr)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		answer := edge.do(t, method, removedAuthPath, http.Header{"Cookie": {"elitea_session=forged"}})
+		if answer.reachedWeb {
+			t.Fatalf("%s %s reached the web container; the path routing changed under this gate", method, removedAuthPath)
 		}
-	}
-
-	if routersChecked == 0 {
-		t.Fatal(
-			"no configuration set declares a router, so this gate proved " +
-				"nothing. The edge changed shape, or a set stopped being declared.",
-		)
+		if answer.status != http.StatusNotFound && answer.status != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s answered %d through the compose edge. Edge authentication was removed in #1359; "+
+				"elitea-main must not serve that address", method, removedAuthPath, answer.status)
+		}
 	}
 }
 
@@ -175,8 +122,9 @@ func TestNoDeployConfigurationCallsTheRemovedAuthPath(t *testing.T) {
 
 // TestInProcessStripCoversTheEdgeFloor holds elitea-main's own strip list
 // (apimw.ClientIdentityHeaders) to the floor the browser edges were held to.
-// The edges are no longer what makes elitea-main safe; a name the edges delete
-// and elitea-main keeps is one a deployment without those edges would trust.
+// In compose that list IS the edge strip; in a cluster the HTTPRoute strips as
+// well. A name on the floor that elitea-main keeps is one a deployment without
+// a stripping edge would trust.
 //
 // X-Elitea-Execution-Id is the one exemption, for the reason
 // apimw.StripClientIdentityHeaders records: it is legitimate client input on

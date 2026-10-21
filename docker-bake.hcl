@@ -64,7 +64,7 @@ target "elitea-ui" {
 # New UI (spec §7.3): context is the repo root and the Containerfile lives with
 # the app, so bake, publish.yml and Taskfile build with identical contexts —
 # fixing defect D1 by construction. Built in parallel with elitea-ui for the
-# whole cutover; rollback is a traefik weight change, never a rebuild.
+# whole cutover; rollback is an edge routing change, never a rebuild.
 target "elitea-web" {
   context    = "."
   dockerfile = "apps/elitea-web/Containerfile"

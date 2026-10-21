@@ -2993,7 +2993,7 @@ func (h *Handler) UploadIcon(w http.ResponseWriter, r *http.Request) {
 
 // DownloadIcon serves an uploaded icon at the exact URL UploadIcon already
 // returns (/icons/{projectID}/{filename}) — before S20b nothing served this
-// path at all (no route, no Traefik rule, no volume: every uploaded icon
+// path at all (no route, no edge rule, no volume: every uploaded icon
 // was unreachable). Deliberately not a *Handler method: this route must be
 // mounted outside the authenticated /elitea_core route group — a browser
 // <img src="..."> request carries no Authorization header — the same

@@ -40,7 +40,7 @@ Install `kind` v0.33 or newer, `kubectl`, and Helm v3 or v4 if you plan to exerc
 | `apps/` | `elitea-web` (the current frontend, a Vite/React monorepo of its own) and `elitea-ui` (a Git submodule, the frontend `elitea-web` is replacing) |
 | `libs/` | Shared code: `libs/go` (Go libraries consumed across services), `libs/proto` (versioned cross-language contracts), `libs/jsonschema`, `libs/provider` |
 | `gen/` | Generated Go bindings from `libs/proto` |
-| `deploy/` | Compose files, the standalone-stack and e2e-stack scripts, Helm charts, ArgoCD manifests, the kind stack, Traefik and cert-generation scripts |
+| `deploy/` | Compose files, the standalone-stack and e2e-stack scripts, Helm charts, ArgoCD manifests, the kind stack and cert-generation scripts |
 | `tools/` | Repository-local CLI tooling (for example `uictl`) |
 | `conformance/`, `testdata/` | Cross-language conformance fixtures and byte vectors the workers and Go services test against |
 
@@ -71,10 +71,9 @@ The standalone compose stack is the shape every local deployment path in this se
 
 ```mermaid
 flowchart LR
-    Browser -->|HTTP| Traefik
-    Traefik --> Web[elitea-web]
-    Traefik --> Main[elitea-main]
-    Traefik --> OIDC[oidc-mock]
+    Browser -->|HTTP| Main[elitea-main]
+    Browser -->|HTTP| OIDC[oidc-mock]
+    Main -->|"/app, /docs (relayed)"| Web[elitea-web]
     Main -->|mTLS| Gateway[elitea-llm-gateway]
     Main -->|NATS JetStream| Worker[agent worker: python or rust]
     Gateway --> Worker

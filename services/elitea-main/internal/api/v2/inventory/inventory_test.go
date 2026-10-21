@@ -223,7 +223,7 @@ func TestReadingIsNotInvoking(t *testing.T) {
 // while DeepWiki's read `/api/v2/deepwiki/...`. The platform edge forwards
 // `/api/v2` and nothing else, so the facade answered 200 to a request made
 // directly against elitea-main's port inside the compose network and 404 to
-// the identical request through traefik — measured on a running stack. Every
+// the identical request through the edge — measured on a running stack. Every
 // test in this package passed throughout, because they all drove the composed
 // handler directly and never asked where it was mounted.
 //

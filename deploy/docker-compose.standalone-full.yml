@@ -70,8 +70,7 @@
 #   obvious:
 #     * platform_origin must be an https origin. elitea-main serves its
 #       /api/v2 + /llm surface over mTLS on its platform listener,
-#       https://elitea-main:9446 (#1359; it replaced the `platform-edge`
-#       Traefik), and the worker presents its runtime client certificate there
+#       https://elitea-main:9446 (#1359), and the worker presents its runtime client certificate there
 #       as on the other three listeners.
 #     * the native worker hands the runtime CA to every internal client in
 #       code; its process-wide trust store (SSL_CERT_FILE, set by
@@ -125,7 +124,9 @@
 #   to re-port something that is already there.
 #
 # ── Ports ────────────────────────────────────────────────────────────────────
-#   8084  traefik (entry point)     STANDALONE_PORT
+#   8084  elitea-main (browser edge) STANDALONE_PORT — elitea-main's :8080, which
+#         relays /app and /docs to elitea-web and redirects `/` to /app/
+#         (internal/api/webedge, ELITEA_WEB_UPSTREAM). No Traefik (#1359 P2).
 #   8085  gateway health/metrics    STANDALONE_GATEWAY_PORT
 #   15433 postgres                  STANDALONE_PG_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
@@ -886,7 +887,14 @@ services:
       # `e2e` builds the admin SPA from apps/elitea-web/src/entries/admin, so no
       # admin-ui submodule checkout is required.
       target: e2e
+    # elitea-main IS the browser edge (#1359 P2): STANDALONE_PORT, the port the
+    # deleted Traefik published, now maps straight to its :8080 listener.
+    ports:
+      - "${STANDALONE_PORT:-8084}:8080"
     environment:
+      # Relay /app and /docs to elitea-web and redirect `/` to /app/
+      # (internal/api/webedge). Compose only; the chart never sets it.
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
       # main reaches Postgres through the pooler (issue #964); the pooler
       # reaches Postgres directly. The migration jobs, db-init, the LLM
       # gateway and the one-shots keep their direct connections on purpose.
@@ -1269,9 +1277,8 @@ services:
       ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
       # The platform listener (#1359): elitea-main's internal gRPC port, the
       # worker's platform_origin and the engines' model origin. gRPC only, no
-      # HTTP. It replaced the `platform-edge` Traefik. Same keypair as the
-      # content listener (same process, same SAN); a client without a
-      # runtime-CA certificate is refused at the handshake.
+      # HTTP. Same keypair as the content listener (same process, same SAN); a
+      # client without a runtime-CA certificate is refused at the handshake.
       ELITEA_RUNTIME_PLATFORM_ADDRESS: ":9446"
       ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
       ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
@@ -2033,20 +2040,6 @@ services:
       mcp-mock:
         condition: service_healthy
     restart: "no"
-
-  # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────
-  traefik:
-    image: traefik:v3.4
-    ports:
-      - "${STANDALONE_PORT:-8084}:80"
-    volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.e2e.yml:/etc/traefik/dynamic.yml:ro
-    depends_on:
-      elitea-main:
-        condition: service_healthy
-      elitea-web:
-        condition: service_healthy
 
 volumes:
   # The engine sidecar's Unix socket, shared between the Go host and the

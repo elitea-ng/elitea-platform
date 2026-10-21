@@ -6,6 +6,7 @@ import (
 	appmailer "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/emailsettings"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -65,6 +66,7 @@ import (
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
 	v2tracing "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tracing"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webedge"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
@@ -143,6 +145,10 @@ type AuthDeps struct {
 // #194 (AI draft generation, tool testing and MCP tool sync have no backend).
 
 type RouterConfig struct {
+	// WebUpstream turns elitea-main into the browser edge of a compose stack
+	// (ELITEA_WEB_UPSTREAM; see internal/api/webedge). Nil in a cluster, where
+	// the Gateway API HTTPRoute routes /app and /docs to elitea-web.
+	WebUpstream        *url.URL
 	Auth               AuthDeps
 	AuthValidator      apimw.TokenValidator
 	PrincipalValidator apimw.PrincipalValidator
@@ -1407,6 +1413,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	}
 
 	r := chi.NewRouter()
+	// The compose browser edge goes first, so the web container's answers
+	// leave untouched (internal/api/webedge). A no-op when WebUpstream is nil.
+	r.Use(webedge.Middleware(cfg.WebUpstream))
 	permissionResolver := legacyrbac.NewPostgresResolver(cfg.Pool)
 
 	// The audit-trail recorder. Built from the same pool the audit READS use,

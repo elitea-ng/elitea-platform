@@ -9,7 +9,7 @@
 #                    directly and the operator-declared peers; the control,
 #                    output and content listeners admit the worker pods only;
 #                    the platform listener (#1359, which replaced the
-#                    platform-edge Traefik) admits the worker and, when its
+#                    platform-edge proxy) admits the worker and, when its
 #                    callback hop uses it, DeepWiki — and no edge pod or
 #                    platform-edge policy is rendered any more.
 #   worker           no inbound traffic at all; egress is not restricted.

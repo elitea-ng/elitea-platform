@@ -165,7 +165,7 @@ type Config struct {
 	// (ELITEA_RUNTIME_PLATFORM_ADDRESS, #1359 D1): the port in-cluster
 	// workloads — the worker, the DeepWiki/Inventory engines, the
 	// sub-application host — call elitea-main's internal gRPC services on.
-	// It replaced the Traefik `platform-edge` (#1359). Optional: empty opens
+	// It replaced the `platform-edge` proxy (#1359). Optional: empty opens
 	// no listener. When set, PlatformTLS is required and a client certificate
 	// that chains to PlatformTLS.ClientCAPath is required at the handshake.
 	PlatformAddress string

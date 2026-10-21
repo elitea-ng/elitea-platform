@@ -4,7 +4,8 @@
 //
 // edge_root_routes_test.go walks the real Go router and fails when a
 // root-mounted route matches no rule at the browser edge. It read TWO files,
-// both of them traefik, both of them compose-only. The cluster runs neither.
+// both of them traefik, both of them compose-only (since deleted: elitea-main
+// is the compose edge now, #1359 P2). The cluster ran neither.
 // Its edge is a Gateway API HTTPRoute, it lived in the deployment repository
 // alone, and no file here described it. So the walk could not reach it,
 // `requiredWalkedFamilies` proved nothing about the cluster, and a green run
@@ -18,7 +19,7 @@
 // WHAT THIS FILE ADDS.
 //
 // deploy/gateway-api/httproute.yaml is now the reviewed source of that edge,
-// and this file holds it to the same two rules the traefik edges answer to:
+// and this file holds it to the same two rules the compose edge answers to:
 //
 //  1. every root-mounted Go route is forwarded, or excluded with a reason;
 //  2. every rule that reaches elitea-main removes the caller's identity
@@ -26,8 +27,8 @@
 //
 // The classification uses assertPatternsClassified and assertNoStaleExclusions
 // from edge_root_routes_test.go. Sharing them is the point: ONE definition of
-// "classified" now covers all three edges, so widening it cannot reach the
-// compose edges and leave the cluster behind — which is this defect.
+// "classified" now covers both edges, so widening it cannot reach the compose
+// edge and leave the cluster behind — which is this defect.
 //
 // WHAT IT STILL DOES NOT COVER.
 //
@@ -54,6 +55,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 )
 
 // gatewayAPIEdgeFiles are the checked-in Gateway-API manifests that serve a
@@ -76,7 +79,7 @@ const chartValuesFile = "deploy/helm/elitea/values.yaml"
 // fails when this edge does forward it after all.
 var notAtTheGatewayAPIEdge = map[string]string{
 	"/app/{projectID}/mcp": "the MCP server shares the SPA prefix and needs a path REGULAR EXPRESSION to be carved back out of it. " +
-		"The traefik edges use PathRegexp. Gateway API v1 has Exact and PathPrefix as its portable path matches, and support for " +
+		"The compose edge matches it with a regular expression (internal/api/webedge.MCPPath). Gateway API v1 has Exact and PathPrefix as its portable path matches, and support for " +
 		"RegularExpression is implementation-specific, so this copy does not claim it. An MCP client on this edge reaches the SPA " +
 		"backend and gets its 404. Add a RegularExpression match when the Gateway of the deployment supports one, and delete this entry",
 	"/app/{projectID}/mcp/*": "the same route, wildcard form",
@@ -422,9 +425,10 @@ func TestGatewayAPIEdgeStripsClientIdentity(t *testing.T) {
 // applied to the identity strip rather than to the routes.
 //
 // PR #564 widened the compose edge and the cluster edge stayed behind, and that
-// went unnoticed because nothing compared the two. A header name added to the
-// traefik files alone would repeat it exactly, and the cost would be higher: an
-// identity header the compose stacks delete and the cluster forwards.
+// went unnoticed because nothing compared the two. The compose edge's strip is
+// elitea-main's own list now (apimw.ClientIdentityHeaders, #1359 P2). A name
+// added there alone would repeat #568 exactly, and the cost would be higher:
+// an identity header the compose stacks delete and the cluster forwards.
 //
 // The check is a SUPERSET, not equality. A name this edge deletes and the
 // compose edges do not is safe, and the hop-marker exception is what makes the
@@ -433,21 +437,11 @@ func TestGatewayAPIEdgeStripsAtLeastWhatTheComposeEdgesStrip(t *testing.T) {
 	root := repoRoot(t)
 
 	composeStripped := map[string]string{}
-	for _, relative := range browserEdgeFiles {
-		definition, defined := parseEdgeWithHeaders(t, filepath.Join(root, relative)).HTTP.Middlewares[stripMiddlewareName]
-		if !defined {
-			// TestBrowserEdgesStripClientIdentity reports this, and it reports
-			// it as the more serious fault.
-			continue
-		}
-		for name, value := range definition.Headers.CustomRequestHeaders {
-			if value == "" {
-				composeStripped[name] = relative
-			}
-		}
+	for _, name := range apimw.ClientIdentityHeaders {
+		composeStripped[name] = "apimw.ClientIdentityHeaders"
 	}
 	if len(composeStripped) == 0 {
-		t.Fatal("the compose edges strip no header at all, so this comparison read nothing")
+		t.Fatal("the compose edge strips no header at all, so this comparison read nothing")
 	}
 
 	for _, relative := range gatewayAPIEdgeFiles {
@@ -479,7 +473,7 @@ func TestGatewayAPIEdgeStripsAtLeastWhatTheComposeEdgesStrip(t *testing.T) {
 }
 
 // TestGatewayAPIEdgeForwardsTheHopMarker points the OPPOSITE way, and it is the
-// same exception edge_identity_strip_test.go carves for the traefik edges
+// same exception edge_identity_strip_test.go carves for the compose edge
 // (#164). The two must stay consistent: the marker survives EVERY edge, or the
 // anti-circular-routing mechanism breaks on the edge that deletes it.
 //
@@ -523,7 +517,7 @@ func TestGatewayAPIEdgeForwardsTheHopMarker(t *testing.T) {
 								"elitea-main -> gateway — is contained on its first re-entry. An edge that deletes "+
 								"it leaves the gateway unable to recognise its own traffic, with every unit test "+
 								"still green.\n"+
-								"deploy/traefik/dynamic.yml carries the same exception. Keep the edges consistent: "+
+								"The compose edge carries the same exception. Keep the edges consistent: "+
 								"the marker survives all of them, or none of them protects the loop.",
 							relative, index, forwarded,
 						)

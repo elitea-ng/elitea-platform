@@ -117,13 +117,13 @@ tasks:
     desc: Start full local environment (postgres, NATS, all services)
     cmds:
       - git submodule update --init --recursive
-      - podman compose -f deploy/docker-compose.yml up --build
+      - podman compose -f deploy/docker-compose.yml up --build --remove-orphans
 
   up:detach:
     desc: Start local environment in background
     cmds:
       - git submodule update --init --recursive
-      - podman compose -f deploy/docker-compose.yml up --build -d
+      - podman compose -f deploy/docker-compose.yml up --build -d --remove-orphans
 
   down:
     desc: Stop local environment
@@ -202,7 +202,7 @@ tasks:
 
   # ── Deploy ────────────────────────────────────────────────────────────────────
   deploy:check-edge:
-    desc: Check the middleware, the service and the edge-auth target of every Traefik router
+    desc: Check the browser edges (compose edge in elitea-main, Gateway API HTTPRoute, chart strip list)
     cmds:
       # -count=1 is required. The gate reads YAML from deploy/, which is
       # outside the module, so the Go test cache does not notice an edit to

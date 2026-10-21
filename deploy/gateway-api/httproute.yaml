@@ -2,7 +2,7 @@
 #
 # WHAT THIS FILE IS.
 #
-# The cluster does not run traefik. Its browser edge is a Gateway API
+# The cluster's browser edge is a Gateway API
 # HTTPRoute, and until now that HTTPRoute existed only in the deployment
 # repository. No file here described it, so no gate read it, and the two edges
 # drifted apart with CI green.
@@ -65,10 +65,10 @@ spec:
   # with no hostname attaches to every hostname the Gateway listener serves.
   rules:
     # ONE rule, MANY matches. Gateway API treats the matches of a rule as a
-    # disjunction, so this rule is the equivalent of the `api` router rule in
-    # deploy/traefik/dynamic.yml. Keep the two lists in step: the gate that
-    # reads this file reads that file as well, and it fails when a route the Go
-    # router serves is missing from either one.
+    # disjunction. It is the cluster's half of what elitea-main's compose edge
+    # (internal/api/webedge) decides in Go. The gate that reads this file walks
+    # the Go router and drives that compose edge too, and it fails when a route
+    # the Go router serves is missing from either one.
     #
     # PathPrefix here is NOT a string prefix. Gateway API matches it on path
     # element boundaries, so `/icons` matches `/icons/1/a.png` and never
@@ -77,8 +77,7 @@ spec:
     # `/app/application_icon` and `/app/application_tool_icon` are longer than
     # the SPA's `/app` prefix below, and Gateway API ranks a longer path match
     # first. The two Go file servers therefore win that prefix back with no
-    # priority field. The traefik edge ranks by whole-rule length instead, which
-    # is why its MCP router states `priority: 100`.
+    # priority field.
     - matches:
         # The v2 API surface.
         - path:
@@ -155,8 +154,8 @@ spec:
       # RequestHeaderModifier acts on the REQUEST going in. It removes what the
       # CLIENT sent. It does not touch what an authenticating edge adds later.
       #
-      # Names must be enumerated. Gateway API has no prefix wildcard, exactly
-      # as traefik has none. Extend this list; never shorten it.
+      # Names must be enumerated. Gateway API has no prefix wildcard. Extend
+      # this list; never shorten it.
       #
       # X-Elitea-Llm-Hop IS DELIBERATELY ABSENT, and the gate fails if it
       # appears. It is the LLM gateway's hop marker (#164). The gateway stamps
@@ -166,8 +165,8 @@ spec:
       # this very edge, so an edge that deleted the marker would leave hop
       # detection armed in the code and dead on the wire. The marker is not
       # identity: it grants nothing, and recognising it only REFUSES a request.
-      # deploy/traefik/dynamic.yml carries the same exception, and
-      # edge_identity_strip_test.go holds the two edges to it together.
+      # elitea-main's own strip (apimw.ClientIdentityHeaders) carries the same
+      # exception, and tests/deployedge holds the two edges to it together.
       filters:
         - type: RequestHeaderModifier
           requestHeaderModifier:
@@ -226,10 +225,8 @@ spec:
           port: 80
     # The root redirect. The SPA container's nginx does not serve `/`.
     #
-    # This is a different mechanism from the traefik edge's `redirectRegex`, so
-    # TestRootRedirectKeepsTheQueryString does not read it: that test asserts a
-    # regular expression against a whole request URI, and there is no regular
-    # expression here. Check the query string against the Gateway
+    # TestRootRedirectKeepsTheQueryString drives the compose edge's Go
+    # redirect, not this filter. Check the query string against the Gateway
     # implementation before you rely on it.
     - matches:
         - path:

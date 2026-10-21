@@ -671,8 +671,9 @@ main:
     # carrying this deployment's own value, which contains a circular route on
     # its first re-entry. An edge that removes it disarms that detection. The
     # marker is not identity — it grants nothing, and recognising it only
-    # refuses the caller's own request. Both traefik edges carry the same
-    # exception, and edge_identity_strip_test.go holds them together.
+    # refuses the caller's own request. elitea-main's own strip (the compose
+    # edge) carries the same exception, and tests/deployedge holds them
+    # together.
     identityHeadersStrippedByController: false
     stripIdentityHeaders:
       - X-Auth-Type
@@ -2059,7 +2060,7 @@ main:
     # ONLY (elitea.llm.v1.ModelService today; the artifact and internal-MCP
     # services follow in #1359 U3/U5) and no HTTP. It reuses the content
     # listener's keypair and requires a client certificate the runtime CA
-    # signed. It replaced the platform-edge Traefik. Not 8080.
+    # signed. It replaced the platform-edge proxy. Not 8080.
     #
     # contentAddress serves elitea.runtime.v1.RuntimeContentService, gRPC only
     # (#1359): the worker's and the sandbox supervisor's input, bundle and
@@ -3284,7 +3285,7 @@ deepwiki:
   # lands.
   #
   # This replaced callbackViaPlatformEdge (ADR-0027), which went with the
-  # platform-edge Traefik. Setting the old key to true fails the render with a
+  # platform-edge proxy. Setting the old key to true fails the render with a
   # migration message rather than mapping over: the new hop needs the client
   # certificate the old one never had.
   callbackViaPlatformListener: false
@@ -4566,7 +4567,7 @@ worker:
     # elitea-main's platform listener (main.runtime.listeners.platformAddress):
     # the product API over mutual TLS. The worker presents its runtime client
     # certificate there, as on the three listeners above. It replaced the
-    # platform-edge Traefik (#1359).
+    # platform-edge proxy (#1359).
     platformOrigin: "https://elitea-main:9446"
     # The deployment's public base URL (an http(s) origin a browser opens), for
     # links the Rust worker puts in answers such as a chart's Markdown image.

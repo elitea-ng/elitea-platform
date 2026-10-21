@@ -40,7 +40,7 @@ const secretsHeaderValueBytes = 32
 // cryptographically secure source.
 //
 // The text is base64url with no padding. A header value must survive the SDK,
-// Traefik and pylon unchanged, so the alphabet holds no character that any of
+// edge and pylon unchanged, so the alphabet holds no character that any of
 // them quotes, folds or strips.
 func NewSecretsHeaderValue() (string, error) {
 	raw := make([]byte, secretsHeaderValueBytes)

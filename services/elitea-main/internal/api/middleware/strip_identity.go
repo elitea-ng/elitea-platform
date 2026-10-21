@@ -3,10 +3,10 @@ package middleware
 import "net/http"
 
 // ClientIdentityHeaders are the request headers StripClientIdentityHeaders
-// deletes. It is the list the browser edges carried as
-// `strip-client-identity` (deploy/traefik/dynamic.yml) and as the HTTPRoute's
+// deletes. It is the list the cluster edge carries as the HTTPRoute's
 // RequestHeaderModifier (deploy/gateway-api/httproute.yaml), less one name;
-// see StripClientIdentityHeaders.
+// see StripClientIdentityHeaders. In a compose stack elitea-main is the browser
+// edge itself (internal/api/webedge), so this list IS that edge's strip.
 //
 // Extend it; never shorten it. tests/deployedge holds it to those edge lists.
 var ClientIdentityHeaders = []string{

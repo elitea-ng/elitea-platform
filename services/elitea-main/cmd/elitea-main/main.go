@@ -58,6 +58,7 @@ import (
 	v2tags "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/tags"
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	v2toolkits "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkits"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webedge"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	identityapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/identity"
@@ -854,7 +855,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// Both answered `401 missing authorization header` to a browser holding a
 	// valid session: their AuthConfig carried the forwarded-identity verifier
-	// and no SessionSecret, and deploy/traefik/dynamic.yml strips every
+	// and no SessionSecret, and the browser edge strips every
 	// inbound X-Auth-* header and runs no edgeAuth, so forwarded identity
 	// never arrives and cannot be made to. The avatar route is what renders
 	// the user menu, so the failure was visible on every page.
@@ -2550,7 +2551,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitReconcilerErr = startToolkitDeletionReconciler(ctx, toolkitReconciler, journal, logger)
 	}
 
+	// The compose browser edge (#1359 P2): /app and /docs relayed to the web
+	// container, `/` redirected to /app/. Unset in a cluster.
+	webUpstream, err := webedge.ParseUpstream(os.Getenv(webedge.UpstreamEnv))
+	if err != nil {
+		return fmt.Errorf("configure web edge: %w", err)
+	}
+	if webUpstream != nil {
+		logger.Info("compose browser edge enabled", "web_upstream", webUpstream.String())
+	}
+
 	r := api.NewRouter(api.RouterConfig{
+		WebUpstream:                   webUpstream,
 		OnProjectProvisioner:          startDeletionReconciler,
 		OnToolkitCleanupJournal:       startToolkitReconciler,
 		ProjectCleanupContext:         ctx,

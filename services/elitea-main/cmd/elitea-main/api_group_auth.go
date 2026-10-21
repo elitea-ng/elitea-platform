@@ -124,7 +124,7 @@ func apiGroupAuthConfig(
 
 // withNativeTokens teaches the composed credential set the native access token
 // (ADR-0025 WP2), in ONE place: the /api/v2 group, the artifact routes and the
-// Traefik /auth edge endpoint all derive their validator from apiGroupAuth, so
+// /auth edge endpoint all derive their validator from apiGroupAuth, so
 // all of them accept an `elnat_` bearer from this one change.
 //
 // The selected validator is wrapped, not replaced: a token with the `elnat_`

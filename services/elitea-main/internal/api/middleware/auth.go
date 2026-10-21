@@ -121,8 +121,8 @@ type AuthConfig struct {
 // PrincipalValidator never ran on it.
 //
 // A deactivated user who kept access was the smaller failure. The headers were
-// the whole credential. deploy/traefik/dynamic.yml removes no inbound X-Auth-*
-// header. No composition root set the CIDR list, so the TRUSTED_PROXY_CIDRS
+// the whole credential. The compose edge of the time removed no inbound
+// X-Auth-* header. No composition root set the CIDR list, so the TRUSTED_PROXY_CIDRS
 // environment variable was the only switch. An operator who set that variable
 // to the ingress range gave every anonymous caller any user ID.
 //

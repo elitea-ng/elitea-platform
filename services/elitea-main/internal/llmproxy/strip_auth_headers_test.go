@@ -17,7 +17,7 @@ import (
 )
 
 // TestProxy_StripsClientAuthHeaders asserts that a request carrying spoofed
-// X-Elitea-* identity headers, X-Auth-* Traefik headers, Authorization, Cookie,
+// X-Elitea-* identity headers, X-Auth-* edge headers, Authorization, Cookie,
 // and X-Api-Key reaches the upstream with all of those stripped, and only the
 // edge-signed X-Elitea-* headers present.
 func TestProxy_StripsClientAuthHeaders(t *testing.T) {

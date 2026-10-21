@@ -89,7 +89,7 @@ func parseBindMount(entry string) (bindMount, bool) {
 // composeFilesDefiningGateway finds every compose file under deploy/ that
 // declares the gateway service. Discovery, and not a fixed path, is what stops a
 // second compose file from adding a directory mount that nothing checks — the
-// same fail-closed rule TestEveryEdgeFileBelongsToASet applies to the edge.
+// same fail-closed rule TestNoTraefikEdgeShips applies to the edge.
 func composeFilesDefiningGateway(t *testing.T, root string) map[string]composeFile {
 	t.Helper()
 

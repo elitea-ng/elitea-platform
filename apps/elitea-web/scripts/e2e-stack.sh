@@ -67,7 +67,9 @@ case "$CMD" in
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
     # --wait: wait for every healthcheck to report healthy before returning.
     # elitea-main runs migrations on startup; postgres is its dependency.
-    $COMPOSE_BIN $COMPOSE_F up -d --wait
+    # --remove-orphans drops the `traefik` container a pre-#1359 stack still
+    # runs; it holds E2E_PORT, which elitea-main now publishes itself.
+    $COMPOSE_BIN $COMPOSE_F up -d --wait --remove-orphans
     echo "→ Stack ready."
     ;;
 

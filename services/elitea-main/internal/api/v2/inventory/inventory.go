@@ -77,7 +77,7 @@ var ErrInvalidRoute = errors.New("invalid Inventory route")
 // without the prefix is a route served at `/inventory/slots/{id}`, which the
 // platform edge does not forward: it routes `/api/v2`. MEASURED on a running
 // stack: the facade answered 200 to a request made directly against
-// elitea-main's port and 404 to the same request through traefik, so every
+// elitea-main's port and 404 to the same request through the edge, so every
 // test in this package passed while no browser and no API client could reach
 // the feature. See TestTheMountedPathsAreReachableThroughTheEdge.
 const (

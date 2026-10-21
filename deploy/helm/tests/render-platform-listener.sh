@@ -3,7 +3,7 @@
 # headers at the edges the chart renders.
 #
 # elitea-main serves the worker's platform_origin itself, on its internal mTLS
-# "platform" listener (:9446, #1359). It replaced the platform-edge Traefik
+# "platform" listener (:9446, #1359). It replaced the platform-edge proxy
 # this script used to check. The listener is gRPC-only; that it serves no HTTP
 # and admits each service only to its allowlisted workload identities is gated
 # by services/elitea-main/internal/transport/runtimegrpc/platform_server_test.go;
