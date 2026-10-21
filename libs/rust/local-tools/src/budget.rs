@@ -389,7 +389,7 @@ fn check_private(fd: &OwnedFd, directory: bool) -> ToolResult<()> {
     if stat.st_uid != rustix::process::geteuid().as_raw() {
         return Err(spill_error("owned by another user"));
     }
-    if u32::from(stat.st_mode) & 0o077 != 0 {
+    if crate::workspace::mode_bits(stat.st_mode) & 0o077 != 0 {
         return Err(spill_error("open to group or others"));
     }
     Ok(())
