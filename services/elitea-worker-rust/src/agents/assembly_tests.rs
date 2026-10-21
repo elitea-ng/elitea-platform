@@ -597,6 +597,68 @@ fn insert_version_internal_tools(request: &mut AgentExecutionRequest, name: &str
         .insert("internal_tools".to_owned(), json!([name]));
 }
 
+/// #1214: the cloud workspace offers the edit tools the desktop would for
+/// the same agent: the model family's, unless `meta.edit_format` names one.
+#[test]
+fn the_edit_profile_follows_the_model_and_meta_edit_format() {
+    use elitea_agent_runtime::edit_profile::EditProfile;
+    fn admit(kind: AgentExecutionKind, model: &str, edit_format: Option<&str>) -> EditProfile {
+        let mut request = ordinary_request(kind);
+        let (settings, key) = match kind {
+            AgentExecutionKind::Application => (
+                request
+                    .payload
+                    .application
+                    .get_mut("version_details")
+                    .and_then(|version| version.get_mut("llm_settings")),
+                "model_name",
+            ),
+            AgentExecutionKind::Adhoc => (request.payload.llm.get_mut("kwargs"), "model"),
+        };
+        settings
+            .and_then(Value::as_object_mut)
+            .expect("model settings")
+            .insert(key.to_owned(), json!(model));
+        if let Some(format) = edit_format {
+            insert_application_meta(&mut request, "edit_format", json!(format));
+        }
+        OrdinaryNoToolProfile::validate(&request)
+            .expect("admitted")
+            .edit_profile()
+    }
+    use AgentExecutionKind::{Adhoc, Application};
+    assert_eq!(
+        admit(Application, "fixture-model", None),
+        EditProfile::StrReplace
+    );
+    assert_eq!(
+        admit(Application, "claude-sonnet-4-5", None),
+        EditProfile::StrReplace
+    );
+    assert_eq!(admit(Application, "gpt-5", None), EditProfile::Patch);
+    assert_eq!(
+        admit(Application, "azure/gpt-5-codex", None),
+        EditProfile::Patch
+    );
+    assert_eq!(
+        admit(Application, "claude-sonnet-4-5", Some("patch")),
+        EditProfile::Patch
+    );
+    assert_eq!(
+        admit(Application, "gpt-5", Some("str_replace")),
+        EditProfile::StrReplace
+    );
+    assert_eq!(
+        admit(Application, "gpt-5", Some("auto")),
+        EditProfile::Patch
+    );
+    assert_eq!(admit(Adhoc, "gpt-5", None), EditProfile::Patch);
+    assert_eq!(
+        admit(Adhoc, "claude-sonnet-4-5", None),
+        EditProfile::StrReplace
+    );
+}
+
 fn insert_application_meta(request: &mut AgentExecutionRequest, key: &str, value: Value) {
     request
         .payload
