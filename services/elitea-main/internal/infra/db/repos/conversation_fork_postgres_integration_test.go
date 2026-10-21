@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -579,5 +580,265 @@ func TestADeleteKeepsAnObjectAnotherConversationStillNames(t *testing.T) {
 	got := strings.Join(attachmentKeys(refs), ",")
 	if !strings.Contains(got, forkBucket+"/legacy/shared.pdf") || !strings.Contains(got, forkBucket+"/"+forkUUID+"/notes.txt") {
 		t.Fatalf("the fork's delete reported %v", got)
+	}
+}
+
+// forkedMessages reads the fork answer's source-to-copy message UUID map.
+func forkedMessages(t *testing.T, row map[string]any) map[string]string {
+	t.Helper()
+	raw, ok := row["forked_messages"].(map[string]any)
+	if !ok {
+		t.Fatalf("the fork answer has no forked_messages: %v", row)
+	}
+	out := map[string]string{}
+	for from, to := range raw {
+		text, ok := to.(string)
+		if !ok {
+			t.Fatalf("forked_messages[%s] = %v", from, to)
+		}
+		out[from] = text
+	}
+	return out
+}
+
+// The desktop names a recorded turn's answer by the UUID it had in the
+// conversation the turn ran in. A copied turn must name the copy's message,
+// or forking the fork at that turn is a 404: the answer maps them.
+func TestForkAnswersTheCopiedMessagesAndAForkOfTheForkTakesThem(t *testing.T) {
+	f := newForkFixture(t)
+	ctx := context.Background()
+	row := f.fork(t, "7", `{"message_id": "`+f.groups[1]+`"}`)
+	forkUUID := row["uuid"].(string)
+	mapped := forkedMessages(t, row)
+	if len(mapped) != 2 || mapped[f.groups[0]] == "" || mapped[f.groups[1]] == "" {
+		t.Fatalf("forked_messages = %v, want q1 and a1", mapped)
+	}
+	for from, to := range mapped {
+		var inFork bool
+		if err := f.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM p_1.chat_message_group g
+			JOIN p_1.chat_conversations c ON c.id = g.conversation_id WHERE g.uuid = $1::uuid AND c.uuid = $2::uuid)`,
+			to, forkUUID).Scan(&inFork); err != nil {
+			t.Fatal(err)
+		}
+		if !inFork || to == from {
+			t.Fatalf("%s maps to %s, which is not a message of the fork", from, to)
+		}
+	}
+
+	// The source's answer is not a message of the fork; its copy is.
+	if code, _, raw := f.do(t, http.MethodPost, "7", "/fork/1/"+forkUUID, `{"message_id": "`+f.groups[1]+`"}`); code != http.StatusNotFound {
+		t.Fatalf("forking the fork at the source's answer answered %d: %s", code, raw)
+	}
+	code, second, raw := f.do(t, http.MethodPost, "7", "/fork/1/"+forkUUID, `{"message_id": "`+mapped[f.groups[1]]+`"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("forking the fork at the copied answer answered %d: %s", code, raw)
+	}
+	if got := strings.Join(forkTranscript(t, f.pool, rowID(t, second)), ","); got != "q1,a1" {
+		t.Fatalf("the fork of the fork holds %q, want q1,a1", got)
+	}
+	if again := forkedMessages(t, second); again[mapped[f.groups[1]]] == "" {
+		t.Fatalf("the second fork's forked_messages = %v", again)
+	}
+}
+
+// A fork of a shared chat is the caller's alone: the other member's
+// questions are copied, still theirs and still user messages, but the other
+// member is not a participant of the fork and cannot read it.
+func TestForkOfASharedChatKeepsTheOtherMembersQuestionsWithoutGrantingThemTheFork(t *testing.T) {
+	f := newForkFixture(t)
+	ctx := context.Background()
+	// q2 is user 8's; the answers are the agent's.
+	if _, err := f.pool.Exec(ctx, `UPDATE p_1.chat_message_group SET author_participant_id = (
+		SELECT p.id FROM p_1.chat_participants p JOIN p_1.chat_participant_mapping m ON m.participant_id = p.id
+		WHERE m.conversation_id = $1::int AND p.entity_name = 'user' AND p.entity_meta->>'id' = '8')
+		WHERE uuid = $2::uuid`, f.sourceID, f.groups[2]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE p_1.chat_message_group SET author_participant_id = (
+		SELECT p.id FROM p_1.chat_participants p JOIN p_1.chat_participant_mapping m ON m.participant_id = p.id
+		WHERE m.conversation_id = $1::int AND p.entity_name = 'application')
+		WHERE uuid = ANY($2::uuid[])`, f.sourceID, []string{f.groups[1], f.groups[3]}); err != nil {
+		t.Fatal(err)
+	}
+	row := f.fork(t, "7", "")
+	forkUUID := row["uuid"].(string)
+	mapped := forkedMessages(t, row)
+
+	code, detail, raw := f.do(t, http.MethodGet, "7", "/conversation/1/"+forkUUID+"?messages_limit=10", "")
+	if code != http.StatusOK {
+		t.Fatalf("the fork's detail answered %d: %s", code, raw)
+	}
+	roles := map[string]any{}
+	for _, value := range detail["message_groups"].([]any) {
+		group := value.(map[string]any)
+		roles[group["uuid"].(string)] = group["role"]
+	}
+	for i, want := range []string{"user", "assistant", "user", "assistant"} {
+		if got := roles[mapped[f.groups[i]]]; got != want {
+			t.Errorf("group %d of the fork has role %v, want %s (%v)", i, got, want, roles)
+		}
+	}
+	var otherAuthored bool
+	if err := f.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM p_1.chat_message_group g JOIN p_1.chat_participants p
+		ON p.id = g.author_participant_id WHERE g.uuid = $1::uuid AND p.entity_name = 'user' AND p.entity_meta->>'id' = '8')`,
+		mapped[f.groups[2]]).Scan(&otherAuthored); err != nil {
+		t.Fatal(err)
+	}
+	if !otherAuthored {
+		t.Fatal("the copied question is no longer user 8's")
+	}
+
+	// User 8 reads the source, not the fork.
+	if code, _, raw := f.do(t, http.MethodGet, "8", "/conversation/1/"+forkUUID, ""); code != http.StatusNotFound {
+		t.Fatalf("user 8 reading the fork answered %d: %s", code, raw)
+	}
+	if code, _, raw := f.do(t, http.MethodGet, "8", "/conversation/1/"+f.sourceUUID, ""); code != http.StatusOK {
+		t.Fatalf("user 8 reading the source answered %d: %s", code, raw)
+	}
+}
+
+// seedForkGroup adds one group with a text item to the fixture's source,
+// written after every other group, authored as q1 is.
+func seedForkGroup(t *testing.T, f *forkFixture, content, meta string) string {
+	t.Helper()
+	var groupUUID string
+	if err := f.pool.QueryRow(context.Background(), `WITH grp AS (
+		  INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, created_at)
+		  SELECT gen_random_uuid(), q.author_participant_id, q.conversation_id, $3::jsonb,
+		         (SELECT max(created_at) FROM p_1.chat_message_group WHERE conversation_id = q.conversation_id) + interval '1 second'
+		  FROM p_1.chat_message_group q WHERE q.uuid = $1::uuid
+		  RETURNING id, uuid
+		), item AS (
+		  INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, message_group_id, created_at)
+		  SELECT gen_random_uuid(), 'text_message', 0, grp.id, now() AT TIME ZONE 'UTC' FROM grp RETURNING id
+		)
+		INSERT INTO p_1.chat_messages_text (id, content) SELECT item.id, $2 FROM item
+		RETURNING (SELECT uuid::text FROM grp)`, f.groups[0], content, meta).Scan(&groupUUID); err != nil {
+		t.Fatalf("seed group %s: %v", content, err)
+	}
+	return groupUUID
+}
+
+// A group written after the fork point still belongs to the copy when it
+// replies to a copied group (an answer, a regenerated answer) or is a swarm
+// child of a copied answer.
+func TestForkCopiesTheLaterRepliesAndSwarmChildrenOfTheCopiedMessages(t *testing.T) {
+	f := newForkFixture(t)
+	ctx := context.Background()
+	late := seedForkGroup(t, f, "late", `{}`)
+	linkReply(t, f.repo, late, f.groups[0])
+	child := seedForkGroup(t, f, "child", `{"is_child_agent": true, "parent_message_id": "`+f.groups[1]+`"}`)
+
+	// At the answer a1: its regenerated sibling and its swarm child come too.
+	row := f.fork(t, "7", `{"message_id": "`+f.groups[1]+`"}`)
+	if got := strings.Join(forkTranscript(t, f.pool, rowID(t, row)), ","); got != "q1,a1,late,child" {
+		t.Fatalf("the fork at a1 holds %q, want q1,a1,late,child", got)
+	}
+	mapped := forkedMessages(t, row)
+	var parent string
+	var replyCopied bool
+	if err := f.pool.QueryRow(ctx, `SELECT c.meta->>'parent_message_id',
+		EXISTS (SELECT 1 FROM p_1.chat_message_group l JOIN p_1.chat_message_group q ON q.id = l.reply_to_id
+		        WHERE l.uuid = $2::uuid AND q.uuid = $3::uuid)
+		FROM p_1.chat_message_group c WHERE c.uuid = $1::uuid`, mapped[child], mapped[late], mapped[f.groups[0]]).
+		Scan(&parent, &replyCopied); err != nil {
+		t.Fatal(err)
+	}
+	if parent != mapped[f.groups[1]] || !replyCopied {
+		t.Fatalf("the copied child names parent %s (want %s), the late reply is linked to the copied q1: %v", parent, mapped[f.groups[1]], replyCopied)
+	}
+
+	// At the question q1: its answers come, written after it, and a1's child.
+	row = f.fork(t, "7", `{"message_id": "`+f.groups[0]+`"}`)
+	if got := strings.Join(forkTranscript(t, f.pool, rowID(t, row)), ","); got != "q1,a1,late,child" {
+		t.Fatalf("the fork at q1 holds %q", got)
+	}
+
+	// A later reply that is still streaming is an unfinished answer.
+	if _, err := f.pool.Exec(ctx, `UPDATE p_1.chat_message_group SET is_streaming = TRUE WHERE uuid = $1::uuid`, late); err != nil {
+		t.Fatal(err)
+	}
+	code, decoded, raw := f.do(t, http.MethodPost, "7", "/fork/1/"+f.sourceUUID, `{"message_id": "`+f.groups[1]+`"}`)
+	if code != http.StatusConflict || decoded["error"] != "fork_point_unsettled" {
+		t.Fatalf("a fork with a streaming later reply answered %d: %s", code, raw)
+	}
+}
+
+// The attachment bytes are copied while the fork holds no transaction.
+func TestForkCopiesTheAttachmentBytesBeforeItsTransaction(t *testing.T) {
+	f := newForkFixture(t)
+	calls := 0
+	_, err := f.repo.ForkConversation(asUser("7"), "1", f.sourceUUID, conversations.ForkRequest{
+		CopyAttachments: func(ctx context.Context, copies []conversations.AttachmentCopy) error {
+			calls++
+			var open int
+			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid() AND xact_start IS NOT NULL`).Scan(&open); err != nil {
+				return err
+			}
+			if open != 0 || len(copies) != 1 {
+				t.Errorf("the copy ran with %d open transactions, for %v", open, copies)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("CopyAttachments ran %d times, want once", calls)
+	}
+}
+
+// keyedObjects stores an object under a key of its own choosing, as a
+// store that versions its keys may.
+type keyedObjects struct{ *forkObjects }
+
+func (s keyedObjects) Put(ctx context.Context, ref storage.ObjectRef, body io.Reader, options storage.PutOptions) (storage.ObjectInfo, error) {
+	stored, err := storage.NewObjectRef(ref.ProjectID(), ref.Bucket(), ref.Key()+".v2")
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	return s.forkObjects.Put(ctx, stored, body, options)
+}
+
+// failingRows refuses to record the metadata of a copied object.
+type failingRows struct{ *forkAttachmentRows }
+
+func (failingRows) RecordAttachmentObject(context.Context, int64, string, int64, string, *time.Time) error {
+	return errors.New("metadata store is down")
+}
+
+// A failed fork deletes the object under the key the store wrote.
+func TestAFailedForkDeletesTheObjectUnderTheKeyTheStoreWrote(t *testing.T) {
+	f := newForkFixture(t)
+	objects := keyedObjects{f.objects}
+	handler := conversations.NewHandler(f.repo).WithPool(f.pool).WithObjectStore(objects).WithAttachmentStore(failingRows{f.attachments})
+	router := chi.NewRouter()
+	router.Post("/fork/{projectID}/{conversationID}", handler.Fork)
+	request := httptest.NewRequest(http.MethodPost, "/fork/1/"+f.sourceUUID, nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{UserID: "7"}))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code < 500 {
+		t.Fatalf("the fork answered %d, want a failure: %s", recorder.Code, recorder.Body.String())
+	}
+	for key := range f.objects.objects {
+		if strings.HasSuffix(key, ".v2") {
+			t.Fatalf("the failed fork left %s behind: %v", key, f.objects.objects)
+		}
+	}
+	if len(f.objects.objects) != 1 {
+		t.Fatalf("objects after the failed fork: %v", f.objects.objects)
+	}
+}
+
+func TestForkOfAnUnnamedConversationTakesTheDefaultName(t *testing.T) {
+	f := newForkFixture(t)
+	if _, err := f.pool.Exec(context.Background(), `UPDATE p_1.chat_conversations SET name = '   ' WHERE id = $1::int`, f.sourceID); err != nil {
+		t.Fatal(err)
+	}
+	if row := f.fork(t, "7", ""); row["name"] != "New conversation (fork)" {
+		t.Fatalf("the fork of an unnamed conversation is named %q", row["name"])
 	}
 }

@@ -9,33 +9,45 @@ package repos
 // the message groups and the message items, which the next statements bind
 // as unnest() pairs. A group or an item gets its new id from its column
 // default; its new UUID is drawn in a MATERIALIZED CTE and is how the
-// RETURNING rows are matched back to their source rows.
+// RETURNING rows are matched back to their source rows. The groups'
+// old-to-new UUID map is the result's MessageUUIDs: the desktop rewrites the
+// message ids its copied turn history names with it.
 //
 // WHAT IS COPIED. The participants that are not users, and the caller's own
 // user participant, with their per-conversation entity_settings (agent
 // versions, model settings). Another member's user participant is NOT
-// copied: a participant of a private conversation can read it, and the fork
-// is the caller's private conversation. Their messages are copied as
-// history. Then the message groups up to and including the fork point, in
-// transcript order (created_at, id), with their created_at; their items;
-// the item payloads (text, context, attachment, canvas and its versions);
-// and the trace steps. `reply_to_id` is remapped onto the copies. The
-// conversation's instructions, source, attachment participant and meta are
-// copied; the folder only when it is the caller's own folder.
+// mapped: a user participant of a private conversation can read it, and the
+// fork is the caller's private conversation. Their messages are copied as
+// history, still authored by their participant row, so the transcript keeps
+// them as user messages (the detail's `role`). Then the message groups up to
+// and including the fork point, in transcript order (created_at, id), with
+// their created_at, and every group that belongs to a copied group although
+// it was written later: a reply (`reply_to_id`, an answer, a regenerated or
+// swarm answer) or a swarm child (`meta.parent_message_id`), followed to any
+// depth. Then their items; the item payloads (text, context, attachment,
+// canvas and its versions); and the trace steps. `reply_to_id` and
+// `meta.parent_message_id` are remapped onto the copies. The conversation's
+// instructions, source, attachment participant and meta are copied; the
+// folder only when it is the caller's own folder.
 //
 // WHAT IS NOT. The project pin and archive (other tables, keyed by the
 // source id), likes and dislikes (keyed by the source groups' UUIDs), the
 // per-user selection, a group's execution binding (`task_id`), and a
 // pending pause: the pause keys are removed from every copied group's meta,
 // and a fork point that is still streaming or paused is refused
-// (ErrForkPointUnsettled). chat_canvas_version_authors is not copied: no
-// read uses it.
+// (ErrForkPointUnsettled), as is a later reply of the copy that is.
+// chat_canvas_version_authors is not copied: no read uses it.
 //
 // ATTACHMENTS. An attachment item names its object `{conversationUUID}/{file}`
 // and the download route derives the key from the conversation it
 // authorized. The copied rows are renamed to the fork's UUID (name, content
-// and the item meta), and CopyAttachments copies the objects before any row
-// is written. The two conversations then own separate objects, so deleting
+// and the item meta), and CopyAttachments copies the objects BEFORE the
+// transaction begins: the fork is planned once without locks (the source,
+// the fork point, the groups and their attachments), the bytes are copied,
+// and the transaction then plans again under its locks. An attachment the
+// second plan names that the first did not (a reply written in between) is
+// copied then, inside the transaction; that is the only store I/O that can
+// run there. The two conversations then own separate objects, so deleting
 // either one leaves the other readable. A name without the source prefix
 // (an older writer) is copied as it is and shared; the delete paths keep an
 // object that another conversation's row still names
@@ -73,7 +85,12 @@ const conversationForkTimeout = 2 * time.Minute
 // removes the same keys when a turn is stopped).
 var forkPauseKeys = []string{"hitl_interrupt", "hitl_interrupts", "authorization_requests", "node_recovery_required_v1"}
 
-// forkSource is the locked source conversation.
+// forkLeafTables are the optional payload tables the fork copies. Some
+// fixtures and older tenants lack a few of them.
+var forkLeafTables = []string{"chat_messages_text", "chat_messages_context", "chat_messages_attachment",
+	"chat_messages_canvas", "chat_canvas_versions", "chat_message_trace_step"}
+
+// forkSource is the source conversation.
 type forkSource struct {
 	id                      int64
 	uuid                    string
@@ -85,11 +102,25 @@ type forkSource struct {
 	attachmentParticipantID *int64
 }
 
-// forkPoint is the last message group the fork copies.
+// forkPoint is the last message group the fork cuts at.
 type forkPoint struct {
 	id        int64
 	uuid      string
 	createdAt time.Time
+}
+
+// forkPlan is what one fork copies: the source, the fork point (nil when
+// the source has no messages) and the groups, in transcript order.
+type forkPlan struct {
+	src    forkSource
+	point  *forkPoint
+	groups []int64
+}
+
+// forkQuerier is the read half of a pool or a transaction.
+type forkQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // ForkConversation copies the source conversation into a new conversation
@@ -116,6 +147,45 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if err != nil {
 		return conversations.ForkResult{}, err
 	}
+	tables, err := forkTables(ctx, r.pool, s)
+	if err != nil {
+		return conversations.ForkResult{}, err
+	}
+
+	// The first plan, without locks: it names the attachment objects, which
+	// are copied before the transaction holds anything.
+	plan, err := readForkPlan(ctx, r.pool, s, identity, access, conversationID, request.MessageID, false)
+	if err != nil {
+		return conversations.ForkResult{}, err
+	}
+	copiedObjects := map[conversations.AttachmentCopy]bool{}
+	copyObjects := func(copies []conversations.AttachmentCopy) error {
+		var pending []conversations.AttachmentCopy
+		for _, item := range copies {
+			if !copiedObjects[item] {
+				pending = append(pending, item)
+			}
+		}
+		if len(pending) == 0 || request.CopyAttachments == nil {
+			return nil
+		}
+		if err := request.CopyAttachments(ctx, pending); err != nil {
+			return err
+		}
+		for _, item := range pending {
+			copiedObjects[item] = true
+		}
+		return nil
+	}
+	if tables["chat_messages_attachment"] != nil && len(plan.groups) > 0 && request.CopyAttachments != nil {
+		copies, err := forkAttachmentCopies(ctx, r.pool, s, plan.groups, plan.src.uuid, newUUID)
+		if err != nil {
+			return conversations.ForkResult{}, err
+		}
+		if err := copyObjects(copies); err != nil {
+			return conversations.ForkResult{}, err
+		}
+	}
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -123,55 +193,20 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// The source, under the detail rule, locked against a delete.
-	visible, args := access.Predicate(s, "c", 2, chatauthority.Detail)
-	var src forkSource
-	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT c.id, c.uuid::text, c.name, COALESCE(c.source, 'elitea'), c.meta,
-		c.instructions, c.folder_id, c.attachment_participant_id
-		FROM %s.chat_conversations c WHERE %s AND %s FOR KEY SHARE OF c`, s, identity, visible),
-		append([]any{conversationID}, args...)...).
-		Scan(&src.id, &src.uuid, &src.name, &src.source, &src.meta, &src.instructions, &src.folderID, &src.attachmentParticipantID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return conversations.ForkResult{}, apierr.NotFound("chat resource not found")
-	}
-	if err != nil {
-		return conversations.ForkResult{}, fmt.Errorf("conversations: fork: read source: %w", err)
-	}
-	if src.source == conversations.EditorTestSource {
-		return conversations.ForkResult{}, conversations.ErrForkNotSupported
-	}
-
-	point, err := resolveForkPoint(ctx, tx, s, src.id, request.MessageID)
+	// The plan again, under the locks the copy relies on.
+	plan, err = readForkPlan(ctx, tx, s, identity, access, conversationID, request.MessageID, true)
 	if err != nil {
 		return conversations.ForkResult{}, err
 	}
-
-	// The groups the fork copies, in transcript order.
-	var groups []int64
-	if point != nil {
-		if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT COALESCE(array_agg(g.id ORDER BY g.created_at, g.id), '{}')
-			FROM %s.chat_message_group g
-			WHERE g.conversation_id = $1 AND (g.created_at, g.id) <= ($2::timestamp, $3::integer)`, s),
-			src.id, point.createdAt, point.id).Scan(&groups); err != nil {
-			return conversations.ForkResult{}, fmt.Errorf("conversations: fork: read groups: %w", err)
-		}
-	}
-
-	tables, err := forkTables(ctx, tx, s)
-	if err != nil {
-		return conversations.ForkResult{}, err
-	}
-
-	// The attachment objects, copied before any row is written.
-	if tables["chat_messages_attachment"] && len(groups) > 0 && request.CopyAttachments != nil {
+	src, point, groups := plan.src, plan.point, plan.groups
+	if tables["chat_messages_attachment"] != nil && len(groups) > 0 && request.CopyAttachments != nil {
 		copies, err := forkAttachmentCopies(ctx, tx, s, groups, src.uuid, newUUID)
 		if err != nil {
 			return conversations.ForkResult{}, err
 		}
-		if len(copies) > 0 {
-			if err := request.CopyAttachments(ctx, copies); err != nil {
-				return conversations.ForkResult{}, err
-			}
+		// Only what changed since the first plan (see the file comment).
+		if err := copyObjects(copies); err != nil {
+			return conversations.ForkResult{}, err
 		}
 	}
 
@@ -206,8 +241,9 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if err := forkParticipants(ctx, tx, s, src.id, newID, access.ActorID); err != nil {
 		return conversations.ForkResult{}, err
 	}
+	messageUUIDs := map[string]string{}
 	if len(groups) > 0 {
-		if err := forkMessages(ctx, tx, s, tables, groups, newID, src.uuid, newUUID); err != nil {
+		if messageUUIDs, err = forkMessages(ctx, tx, s, tables, groups, newID, src.uuid, newUUID); err != nil {
 			return conversations.ForkResult{}, err
 		}
 	}
@@ -219,32 +255,72 @@ func (r *ConversationsRepo) ForkConversation(ctx context.Context, projectID, con
 	if err := tx.Commit(ctx); err != nil {
 		return conversations.ForkResult{}, fmt.Errorf("conversations: fork commit: %w", err)
 	}
-	return conversations.ForkResult{ID: newID, UUID: newUUID}, nil
+	return conversations.ForkResult{ID: newID, UUID: newUUID, MessageUUIDs: messageUUIDs}, nil
+}
+
+// readForkPlan reads the source under the detail rule, the fork point and
+// the groups. With lock, the source and the fork point are locked FOR KEY
+// SHARE against a delete (q is then the transaction).
+func readForkPlan(ctx context.Context, q forkQuerier, s, identity string, access chatauthority.Scope, conversationID, messageID string, lock bool) (forkPlan, error) {
+	locking := ""
+	if lock {
+		locking = " FOR KEY SHARE OF c"
+	}
+	visible, args := access.Predicate(s, "c", 2, chatauthority.Detail)
+	var plan forkPlan
+	src := &plan.src
+	err := q.QueryRow(ctx, fmt.Sprintf(`SELECT c.id, c.uuid::text, c.name, COALESCE(c.source, 'elitea'), c.meta,
+		c.instructions, c.folder_id, c.attachment_participant_id
+		FROM %s.chat_conversations c WHERE %s AND %s%s`, s, identity, visible, locking),
+		append([]any{conversationID}, args...)...).
+		Scan(&src.id, &src.uuid, &src.name, &src.source, &src.meta, &src.instructions, &src.folderID, &src.attachmentParticipantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return forkPlan{}, apierr.NotFound("chat resource not found")
+	}
+	if err != nil {
+		return forkPlan{}, fmt.Errorf("conversations: fork: read source: %w", err)
+	}
+	if src.source == conversations.EditorTestSource {
+		return forkPlan{}, conversations.ErrForkNotSupported
+	}
+	if plan.point, err = resolveForkPoint(ctx, q, s, src.id, messageID, lock); err != nil {
+		return forkPlan{}, err
+	}
+	if plan.point != nil {
+		if plan.groups, err = forkGroups(ctx, q, s, src.id, plan.point); err != nil {
+			return forkPlan{}, err
+		}
+	}
+	return plan, nil
 }
 
 // resolveForkPoint reads the fork point: the named group of the source, or
 // the newest group when messageID is empty (nil when the source has no
 // messages). A group that is streaming or holds a pending pause is
-// ErrForkPointUnsettled. It is locked FOR KEY SHARE against a delete.
-func resolveForkPoint(ctx context.Context, tx pgx.Tx, s string, sourceID int64, messageID string) (*forkPoint, error) {
+// ErrForkPointUnsettled. With lock, it is locked FOR KEY SHARE against a
+// delete.
+func resolveForkPoint(ctx context.Context, q forkQuerier, s string, sourceID int64, messageID string, lock bool) (*forkPoint, error) {
 	where := "TRUE ORDER BY g.created_at DESC, g.id DESC LIMIT 1"
 	args := []any{sourceID}
 	if messageID != "" {
-		switch {
-		case isNumericRowID(messageID):
+		if isNumericRowID(messageID) {
 			where = "g.id = $2::bigint"
-		case validUUIDText(messageID):
+		} else if _, err := uuid.Parse(messageID); err == nil {
 			where = "g.uuid = $2::uuid"
-		default:
+		} else {
 			return nil, apierr.NotFound("message not found")
 		}
 		args = append(args, messageID)
 	}
+	locking := ""
+	if lock {
+		locking = " FOR KEY SHARE OF g"
+	}
 	var point forkPoint
 	var unsettled bool
-	err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT g.id, g.uuid::text, g.created_at,
+	err := q.QueryRow(ctx, fmt.Sprintf(`SELECT g.id, g.uuid::text, g.created_at,
 		g.is_streaming OR g.meta ?| $%d::text[]
-		FROM %s.chat_message_group g WHERE g.conversation_id = $1 AND %s FOR KEY SHARE OF g`, len(args)+1, s, where),
+		FROM %s.chat_message_group g WHERE g.conversation_id = $1 AND %s%s`, len(args)+1, s, where, locking),
 		append(args, forkPauseKeys)...).Scan(&point.id, &point.uuid, &point.createdAt, &unsettled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if messageID == "" {
@@ -261,31 +337,63 @@ func resolveForkPoint(ctx context.Context, tx pgx.Tx, s string, sourceID int64, 
 	return &point, nil
 }
 
-func validUUIDText(text string) bool {
-	_, err := uuid.Parse(text)
-	return err == nil
+// forkGroups reads the groups the fork copies, in transcript order: those up
+// to and including the fork point, and then, to any depth, every group that
+// replies to a copied group or is a swarm child of one, whenever it was
+// written. Such a later group that is still streaming or paused makes the
+// fork point ErrForkPointUnsettled: its answer is not finished.
+func forkGroups(ctx context.Context, q forkQuerier, s string, sourceID int64, point *forkPoint) ([]int64, error) {
+	var groups []int64
+	var unsettled bool
+	if err := q.QueryRow(ctx, fmt.Sprintf(`WITH RECURSIVE copied AS (
+		  SELECT g.id, g.uuid FROM %[1]s.chat_message_group g
+		  WHERE g.conversation_id = $1 AND (g.created_at, g.id) <= ($2::timestamp, $3::integer)
+		  UNION
+		  SELECT later.id, later.uuid FROM %[1]s.chat_message_group later
+		  JOIN copied ON later.reply_to_id = copied.id OR later.meta->>'parent_message_id' = copied.uuid::text
+		  WHERE later.conversation_id = $1
+		)
+		SELECT COALESCE(array_agg(g.id ORDER BY g.created_at, g.id), '{}'),
+		       COALESCE(bool_or((g.created_at, g.id) > ($2::timestamp, $3::integer) AND (g.is_streaming OR g.meta ?| $4::text[])), FALSE)
+		FROM copied JOIN %[1]s.chat_message_group g ON g.id = copied.id`, s),
+		sourceID, point.createdAt, point.id, forkPauseKeys).Scan(&groups, &unsettled); err != nil {
+		return nil, fmt.Errorf("conversations: fork: read groups: %w", err)
+	}
+	if unsettled {
+		return nil, conversations.ErrForkPointUnsettled
+	}
+	return groups, nil
 }
 
-// forkTables reports which optional payload tables this tenant has. Some
-// fixtures and older tenants lack a few of them.
-func forkTables(ctx context.Context, tx pgx.Tx, s string) (map[string]bool, error) {
-	names := []string{"chat_messages_text", "chat_messages_context", "chat_messages_attachment",
-		"chat_messages_canvas", "chat_canvas_versions", "chat_message_trace_step"}
-	present := map[string]bool{}
-	for _, name := range names {
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, s+"."+name).Scan(&exists); err != nil {
-			return nil, fmt.Errorf("conversations: fork: probe %s: %w", name, err)
-		}
-		present[name] = exists
+// forkTables reads the columns of each optional payload table this tenant
+// has, in one catalog read; a table it lacks is absent. s is the quoted
+// schema, which to_regnamespace takes as it is.
+func forkTables(ctx context.Context, q forkQuerier, s string) (map[string][]string, error) {
+	rows, err := q.Query(ctx, `SELECT c.relname::text, array_agg(a.attname::text ORDER BY a.attnum)
+		FROM pg_class c
+		JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+		WHERE c.relnamespace = to_regnamespace($1) AND c.relname = ANY($2::text[]) AND c.relkind IN ('r', 'p')
+		GROUP BY c.relname`, s, forkLeafTables)
+	if err != nil {
+		return nil, fmt.Errorf("conversations: fork: read tables: %w", err)
 	}
-	return present, nil
+	defer rows.Close()
+	present := map[string][]string{}
+	for rows.Next() {
+		var table string
+		var columns []string
+		if err := rows.Scan(&table, &columns); err != nil {
+			return nil, fmt.Errorf("conversations: fork: scan tables: %w", err)
+		}
+		present[table] = columns
+	}
+	return present, rows.Err()
 }
 
 // forkAttachmentCopies lists the objects the fork copies: the attachment
 // rows of the copied groups whose name carries the source prefix.
-func forkAttachmentCopies(ctx context.Context, tx pgx.Tx, s string, groups []int64, sourceUUID, newUUID string) ([]conversations.AttachmentCopy, error) {
-	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT DISTINCT a.bucket, a.name
+func forkAttachmentCopies(ctx context.Context, q forkQuerier, s string, groups []int64, sourceUUID, newUUID string) ([]conversations.AttachmentCopy, error) {
+	rows, err := q.Query(ctx, fmt.Sprintf(`SELECT DISTINCT a.bucket, a.name
 		FROM %[1]s.chat_message_items i JOIN %[1]s.chat_messages_attachment a ON a.id = i.id
 		WHERE i.message_group_id = ANY($1) AND i.item_type = 'attachment_message'
 		  AND starts_with(a.name, $2 || '/')
@@ -329,10 +437,14 @@ func forkMeta(src forkSource, point *forkPoint) ([]byte, error) {
 	return encoded, nil
 }
 
-// defaultForkName is "<source> (fork)", within the name limit.
+// defaultForkName is "<source> (fork)", within the name limit. A blank
+// source name reads as the default conversation name.
 func defaultForkName(source string) string {
 	limit := conversations.MaxConversationNameLength - utf8.RuneCountInString(conversations.ForkNameSuffix)
 	source = strings.TrimSpace(source)
+	if source == "" {
+		source = conversations.DefaultConversationName
+	}
 	if utf8.RuneCountInString(source) > limit {
 		source = string([]rune(source)[:limit])
 	}
@@ -341,7 +453,9 @@ func defaultForkName(source string) string {
 
 // forkParticipants maps the source's participants onto the fork: every
 // participant that is not a user, and the caller. The caller and the
-// default dummy participant are then made sure of, as Create does.
+// default dummy participant are then made sure of, as Create does. Another
+// member is not mapped (a mapping is access, chatauthority.Predicate); the
+// groups they wrote keep their participant row as the author.
 func forkParticipants(ctx context.Context, tx pgx.Tx, s string, sourceID, newID, actorID int64) error {
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %[1]s.chat_participant_mapping
 		(conversation_id, participant_id, entity_settings, created_at)
@@ -364,9 +478,9 @@ func forkParticipants(ctx context.Context, tx pgx.Tx, s string, sourceID, newID,
 }
 
 // forkMessages copies the groups, their items, the item payloads and the
-// trace steps.
-func forkMessages(ctx context.Context, tx pgx.Tx, s string, tables map[string]bool, groups []int64, newID int64, sourceUUID, newUUID string) error {
-	oldGroups, newGroups, err := scanIDPairs(tx.Query(ctx, fmt.Sprintf(`WITH src AS MATERIALIZED (
+// trace steps. It returns the groups' source-to-copy UUID map.
+func forkMessages(ctx context.Context, tx pgx.Tx, s string, tables map[string][]string, groups []int64, newID int64, sourceUUID, newUUID string) (map[string]string, error) {
+	rows, err := tx.Query(ctx, fmt.Sprintf(`WITH src AS MATERIALIZED (
 		  SELECT o.id AS old_id, gen_random_uuid() AS new_uuid, o.ord
 		  FROM unnest($2::integer[]) WITH ORDINALITY AS o(id, ord)
 		), ins AS (
@@ -378,17 +492,45 @@ func forkMessages(ctx context.Context, tx pgx.Tx, s string, tables map[string]bo
 		  ORDER BY src.ord
 		  RETURNING id, uuid
 		)
-		SELECT src.old_id, ins.id FROM src JOIN ins ON ins.uuid = src.new_uuid ORDER BY src.ord`, s),
-		newID, groups, forkPauseKeys))
+		SELECT src.old_id, ins.id, g.uuid::text, ins.uuid::text
+		FROM src JOIN ins ON ins.uuid = src.new_uuid JOIN %[1]s.chat_message_group g ON g.id = src.old_id
+		ORDER BY src.ord`, s),
+		newID, groups, forkPauseKeys)
 	if err != nil {
-		return fmt.Errorf("conversations: fork: message groups: %w", err)
+		return nil, fmt.Errorf("conversations: fork: message groups: %w", err)
+	}
+	var oldGroups, newGroups []int64
+	var oldUUIDs, newUUIDs []string
+	messageUUIDs := map[string]string{}
+	for rows.Next() {
+		var oldID, newGroupID int64
+		var oldUUID, newGroupUUID string
+		if err := rows.Scan(&oldID, &newGroupID, &oldUUID, &newGroupUUID); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("conversations: fork: message groups: %w", err)
+		}
+		oldGroups, newGroups = append(oldGroups, oldID), append(newGroups, newGroupID)
+		oldUUIDs, newUUIDs = append(oldUUIDs, oldUUID), append(newUUIDs, newGroupUUID)
+		messageUUIDs[oldUUID] = newGroupUUID
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("conversations: fork: message groups: %w", err)
 	}
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %[1]s.chat_message_group n SET reply_to_id = target.new_id
 		FROM unnest($1::integer[], $2::integer[]) AS m(old_id, new_id)
 		JOIN %[1]s.chat_message_group o ON o.id = m.old_id
 		JOIN unnest($1::integer[], $2::integer[]) AS target(old_id, new_id) ON target.old_id = o.reply_to_id
 		WHERE n.id = m.new_id`, s), oldGroups, newGroups); err != nil {
-		return fmt.Errorf("conversations: fork: reply links: %w", err)
+		return nil, fmt.Errorf("conversations: fork: reply links: %w", err)
+	}
+	// A swarm child names its parent answer by UUID (meta.parent_message_id).
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %[1]s.chat_message_group n
+		SET meta = jsonb_set(n.meta, '{parent_message_id}', to_jsonb(parent.new_uuid))
+		FROM unnest($2::text[], $3::text[]) AS parent(old_uuid, new_uuid)
+		WHERE n.conversation_id = $1 AND n.meta->>'parent_message_id' = parent.old_uuid`, s),
+		newID, oldUUIDs, newUUIDs); err != nil {
+		return nil, fmt.Errorf("conversations: fork: swarm parents: %w", err)
 	}
 
 	oldItems, newItems, err := scanIDPairs(tx.Query(ctx, fmt.Sprintf(`WITH gm AS (
@@ -408,7 +550,7 @@ func forkMessages(ctx context.Context, tx pgx.Tx, s string, tables map[string]bo
 		SELECT src.old_id, ins.id FROM src JOIN ins ON ins.uuid = src.new_uuid`, s),
 		oldGroups, newGroups, sourceUUID, newUUID))
 	if err != nil {
-		return fmt.Errorf("conversations: fork: message items: %w", err)
+		return nil, fmt.Errorf("conversations: fork: message items: %w", err)
 	}
 
 	type leaf struct {
@@ -430,28 +572,24 @@ func forkMessages(ctx context.Context, tx pgx.Tx, s string, tables map[string]bo
 		{table: "chat_message_trace_step", mapColumn: "message_group_id", order: "src.id", exclude: []string{"id"}, old: oldGroups, new: newGroups},
 	}
 	for _, l := range leaves {
-		if !tables[l.table] || len(l.old) == 0 {
+		columns, present := tables[l.table]
+		if !present || len(l.old) == 0 {
 			continue
 		}
-		if err := copyForkLeaf(ctx, tx, s, l.table, l.mapColumn, l.order, l.exclude, l.overrides, l.old, l.new, l.extra...); err != nil {
-			return err
+		if err := copyForkLeaf(ctx, tx, s, l.table, l.mapColumn, l.order, columns, l.exclude, l.overrides, l.old, l.new, l.extra...); err != nil {
+			return nil, err
 		}
 	}
-	return nil
+	return messageUUIDs, nil
 }
 
 // copyForkLeaf copies the rows of one child table whose mapColumn holds an
-// old id, writing the new id there. Every other column is copied as it is,
-// so a tenant whose table has more columns than this repository declares
-// keeps them; exclude names columns left to their defaults, and overrides
-// replaces a column's expression (alias src; $3 onward are extra).
-func copyForkLeaf(ctx context.Context, tx pgx.Tx, s, table, mapColumn, order string, exclude []string, overrides map[string]string, oldIDs, newIDs []int64, extra ...any) error {
-	var columns []string
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(array_agg(attname::text ORDER BY attnum), '{}')
-		FROM pg_attribute WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped AND attgenerated = ''`,
-		s+"."+table).Scan(&columns); err != nil {
-		return fmt.Errorf("conversations: fork: columns of %s: %w", table, err)
-	}
+// old id, writing the new id there. Every other column (columns, read from
+// the catalog by forkTables) is copied as it is, so a tenant whose table has
+// more columns than this repository declares keeps them; exclude names
+// columns left to their defaults, and overrides replaces a column's
+// expression (alias src; $3 onward are extra).
+func copyForkLeaf(ctx context.Context, tx pgx.Tx, s, table, mapColumn, order string, columns, exclude []string, overrides map[string]string, oldIDs, newIDs []int64, extra ...any) error {
 	skip := map[string]bool{mapColumn: true}
 	for _, column := range exclude {
 		skip[column] = true

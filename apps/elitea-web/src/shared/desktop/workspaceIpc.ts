@@ -190,6 +190,11 @@ export interface ThreadForkRequest {
   targetConversationUuid: string;
   /** The fork point's turn: the turns up to and including it are copied. Absent: every turn. */
   upToTurnId?: string;
+  /**
+   * The fork answer's `forked_messages` (source message UUID → the copy's): the copied turns' `done`
+   * events name the new conversation's messages, so they can be fork points in turn.
+   */
+  messageIds?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -303,6 +308,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
           target_conversation_id: request.targetConversationId,
           target_conversation_uuid: request.targetConversationUuid,
           ...(request.upToTurnId === undefined ? {} : { up_to_turn_id: request.upToTurnId }),
+          ...(request.messageIds === undefined ? {} : { message_ids: request.messageIds }),
         })
       ).copied,
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),

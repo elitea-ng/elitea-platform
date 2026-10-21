@@ -79,11 +79,11 @@ describe('createWorkspaceIpc', () => {
     const ipc = createWorkspaceIpc(invoke, noListen);
     const request = { workspaceId: 'w1', sourceConversationId: '42', targetConversationId: '88', targetConversationUuid: 'u-88' };
     expect(await ipc.forkThreadHistory({ ...request, upToTurnId: 't2' })).toBe(2);
-    expect(await ipc.forkThreadHistory(request)).toBe(3);
+    expect(await ipc.forkThreadHistory({ ...request, messageIds: { 'q-a': 'q-b' } })).toBe(3);
     const args = { workspace_id: 'w1', source_conversation_id: '42', target_conversation_id: '88', target_conversation_uuid: 'u-88' };
     expect(invoke.mock.calls).toEqual([
       ['thread_history_fork', { ...args, up_to_turn_id: 't2' }],
-      ['thread_history_fork', args],
+      ['thread_history_fork', { ...args, message_ids: { 'q-a': 'q-b' } }],
     ]);
   });
 

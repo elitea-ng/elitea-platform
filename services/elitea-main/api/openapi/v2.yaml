@@ -2193,6 +2193,17 @@ components:
             chat, `local_work` for a Local work thread).
         forked_from:
           $ref: '#/components/schemas/ConversationForkedFrom'
+        forked_messages:
+          type: object
+          additionalProperties:
+            type: string
+            format: uuid
+          description: >
+            Client contract 1.11, forkConversation's answer only. Maps the
+            UUID of each message group the fork copied to the UUID of its copy
+            in the new conversation; empty when nothing was copied. A client
+            that recorded message ids of the source (the desktop's turn
+            history) rewrites them with it. No other read carries it.
         meta:
           type: object
           additionalProperties: true
@@ -2276,8 +2287,9 @@ components:
           type: string
           description: >
             The new conversation's name. Absent: the source name with
-            " (fork)" added. Trimmed; blank, longer than 256 characters or
-            with a control character answers 400.
+            " (fork)" added ("New conversation (fork)" when the source name is
+            blank). Trimmed; blank, longer than 256 characters or with a
+            control character answers 400.
 
     ConversationListing:
       type: object
@@ -3066,7 +3078,9 @@ components:
           description: >
             Present only when `messages_limit` > 0. The legacy message-group projection (items and their details).
             Prefer the message list (listConversationMessages) for a transcript: it is the read that supports
-            `changes_since`.
+            `changes_since`. Each group carries `role` (`user` or `assistant`, from its author's participant row,
+            as the message list's `role` is): a fork copies another member's questions without making that member
+            a participant of the fork, so the participant list alone cannot tell such a question from an answer.
           items:
             type: object
             additionalProperties: true
@@ -17126,15 +17140,22 @@ paths:
       description: |
         Client contract 1.11. Creates a NEW conversation from the history of
         the source conversation. With `message_id`, the new conversation holds
-        the messages up to and including that message (the fork point).
-        Without it, it holds the whole history.
+        the messages up to and including that message (the fork point), and
+        every later message that belongs to one of them: the replies to a
+        copied message (its answer, a regenerated or swarm answer) and the
+        swarm children of a copied answer. Without it, it holds the whole
+        history.
 
         The copy is one transaction. It copies the message groups, their items
         (text, context, attachments, canvases with their versions) and their
         trace steps, with new ids, in the same order and with the same
-        `created_at`. It copies the participants with their per-conversation
-        settings, the instructions, `source` and the conversation settings in
-        `meta`. Attachment files are copied to the new conversation, so a
+        `created_at`; the answer's `forked_messages` maps each copied message
+        group's UUID to its copy's. It copies the participants with their
+        per-conversation settings, except the other members: the fork is the
+        caller's, so another member's questions are copied (still theirs, with
+        `role` `user`) but that member is not a participant of the fork and
+        cannot read it. It copies the instructions, `source` and the
+        conversation settings in `meta`. Attachment files are copied to the new conversation, so a
         delete of either conversation leaves the other one readable. It does
         NOT copy the pin, the archive, likes and dislikes, a selection, the
         folder of another member, or a pending tool approval.
@@ -17152,7 +17173,8 @@ paths:
         conversation (the chat authority's detail rule). A source the caller
         cannot see answers 404. A `message_id` that is not a message of the
         source answers 404. A fork point that is still streaming or waits for
-        a tool approval answers 409 `fork_point_unsettled`; without
+        a tool approval answers 409 `fork_point_unsettled`, as does a later
+        reply of the copy that is; without
         `message_id`, the newest message is the fork point. An editor Test
         conversation answers 409 `fork_not_supported`.
       tags:
@@ -17170,8 +17192,8 @@ paths:
         "201":
           description: >
             The new conversation, in the row shape of listConversations.
-            `uuid`, `source` and `forked_from` are always present on this
-            response.
+            `uuid`, `source`, `forked_from` and `forked_messages` are always
+            present on this response.
           content:
             application/json:
               schema:

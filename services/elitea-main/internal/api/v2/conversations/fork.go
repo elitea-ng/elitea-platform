@@ -9,9 +9,10 @@ package conversations
 // route derives that key from the conversation it authorized
 // (attachment_download.go), so the fork cannot read the source's objects.
 // The repository rewrites the copied attachment names to the new
-// conversation's UUID and calls CopyAttachments, inside its transaction and
-// before it inserts a row, with the objects to copy. A copy failure rolls the
-// fork back, and the bytes copied so far are deleted again.
+// conversation's UUID and calls CopyAttachments with the objects to copy,
+// before its transaction begins (and, for an object a racing reply added,
+// once more inside it). A copy failure rolls the fork back, and the bytes
+// copied so far are deleted again.
 
 import (
 	"context"
@@ -40,6 +41,14 @@ const ForkedFromMetaKey = "forked_from"
 // ForkNameSuffix is added to the source name when the request names no fork.
 const ForkNameSuffix = " (fork)"
 
+// DefaultConversationName stands in for a blank source name in a fork's
+// default name (pylon's `conversations.py` default).
+const DefaultConversationName = "New conversation"
+
+// ForkedMessagesKey is the forkConversation answer's map of the copied
+// message groups: source UUID to the copy's UUID. Only that answer has it.
+const ForkedMessagesKey = "forked_messages"
+
 // ErrForkPointUnsettled: the fork point is still streaming, or it waits for
 // a tool approval. Answered 409 `fork_point_unsettled`.
 var ErrForkPointUnsettled = errors.New("conversations: fork point is not settled")
@@ -65,16 +74,19 @@ type ForkRequest struct {
 	// Name is the fork's name, already validated; empty takes the default.
 	Name    string
 	NewUUID string
-	// CopyAttachments copies the attachment objects. It runs inside the
-	// repository's transaction, after the access and fork point checks and
-	// before any row is written. Nil copies nothing.
+	// CopyAttachments copies the attachment objects. It runs after the
+	// access and fork point checks, before the repository's transaction
+	// begins; it runs again inside it only for an object the transaction's
+	// own plan names that the first one did not. Nil copies nothing.
 	CopyAttachments func(ctx context.Context, copies []AttachmentCopy) error
 }
 
-// ForkResult names the new conversation.
+// ForkResult names the new conversation. MessageUUIDs maps each copied
+// message group's source UUID to its copy's UUID.
 type ForkResult struct {
-	ID   int64
-	UUID string
+	ID           int64
+	UUID         string
+	MessageUUIDs map[string]string
 }
 
 // ConversationForker is the optional repository half of the fork. Optional
@@ -169,6 +181,11 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		}
 		h.events.Emit(r.Context(), projectID, "conversation.created", payload)
 	}
+	forked := result.MessageUUIDs
+	if forked == nil {
+		forked = map[string]string{}
+	}
+	row[ForkedMessagesKey] = forked
 	writeJSON(w, http.StatusCreated, row)
 }
 
@@ -252,11 +269,13 @@ func (h *Handler) copyForkAttachments(ctx context.Context, projectIDText string,
 		if err != nil {
 			return apierr.Internal("copy attachment")
 		}
-		*copied = append(*copied, AttachmentRef{Bucket: item.Bucket, Name: item.To})
 		key := stored.Key
 		if key == "" {
 			key = item.To
 		}
+		// The key the store wrote is the one the metadata names and a
+		// rollback deletes.
+		*copied = append(*copied, AttachmentRef{Bucket: item.Bucket, Name: key})
 		if err := h.attachments.RecordAttachmentObject(ctx, bucketID, key, stored.Size, info.MediaType, &expiresAt); err != nil {
 			return apierr.Internal("record attachment metadata")
 		}

@@ -89,6 +89,12 @@ export const ConversationSummary = zod
         "Client contract 1.11. The conversation's origin (`elitea` for a chat, `local_work` for a Local work thread).\n",
       ),
     forked_from: ConversationForkedFrom.optional(),
+    forked_messages: zod
+      .record(zod.string(), zod.uuid())
+      .optional()
+      .describe(
+        "Client contract 1.11, forkConversation's answer only. Maps the UUID of each message group the fork copied to the UUID of its copy in the new conversation; empty when nothing was copied. A client that recorded message ids of the source (the desktop's turn history) rewrites them with it. No other read carries it.\n",
+      ),
     meta: zod
       .record(zod.string(), zod.unknown())
       .nullish()

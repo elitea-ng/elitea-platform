@@ -13,7 +13,10 @@
  *
  * The fork point of a recorded or live turn is its answer (the last of its
  * `done` event's `message_ids`), and the host copies the turns up to and
- * including that turn. A server message (a thread this computer has no
+ * including that turn. The server's answer maps the copied messages
+ * (`forked_messages`), and the host rewrites the copied `done` events with
+ * it, so a turn of the new thread names the new conversation's messages and
+ * a fork of the fork works. A server message (a thread this computer has no
  * record of) is forked on the server only.
  *
  * If the host copy fails after the server fork, the new thread still opens
@@ -92,6 +95,8 @@ interface Created {
   id: string;
   uuid: string;
   name: string;
+  /** Source message UUID → the copy's (`forked_messages`). */
+  messageIds: Readonly<Record<string, string>>;
 }
 
 /** The server half: the new conversation, or a throw. */
@@ -100,7 +105,7 @@ async function forkOnServer(projectId: number, conversationId: string, point: Fo
   if (response.status !== 201) throw new Error(`the fork answered ${String(response.status)}`);
   const row = response.data;
   if (row.uuid === undefined || row.uuid === '') throw new Error('the fork answered without a uuid');
-  return { id: String(row.id), uuid: row.uuid, name: row.name };
+  return { id: String(row.id), uuid: row.uuid, name: row.name, messageIds: row.forked_messages ?? {} };
 }
 
 /** The local half; false when the host could not copy. A server-only message has no recorded turns to copy. */
@@ -113,6 +118,7 @@ async function copyLocalTurns(ipc: WorkspaceIpc, workspaceId: string, conversati
       targetConversationId: created.id,
       targetConversationUuid: created.uuid,
       ...(point?.turnId === undefined ? {} : { upToTurnId: point.turnId }),
+      messageIds: created.messageIds,
     });
     return true;
   } catch {

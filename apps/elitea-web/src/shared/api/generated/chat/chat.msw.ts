@@ -336,6 +336,12 @@ export const getForkConversationResponseMock = (
     },
     undefined,
   ]),
+  forked_messages: faker.helpers.arrayElement([
+    {
+      [faker.string.alphanumeric(5)]: faker.string.uuid(),
+    },
+    undefined,
+  ]),
   meta: faker.helpers.arrayElement([
     faker.helpers.arrayElement([null]),
     undefined,
@@ -442,6 +448,12 @@ export const getListConversationsResponseMock = (
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
+      },
+      undefined,
+    ]),
+    forked_messages: faker.helpers.arrayElement([
+      {
+        [faker.string.alphanumeric(5)]: faker.string.uuid(),
       },
       undefined,
     ]),

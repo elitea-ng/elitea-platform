@@ -447,9 +447,15 @@ describe('WorkspaceSessionPage', () => {
   describe('fork', () => {
     const FORK_UUID = '00000000-0000-4000-8000-000000000088';
     const forkBodies: unknown[] = [];
+    const forkOfForkBodies: unknown[] = [];
     function serveFork(status = 201): void {
       forkBodies.length = 0;
+      forkOfForkBodies.length = 0;
       server.use(
+        http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/88`, async ({ request }) => {
+          forkOfForkBodies.push(await request.json().catch(() => null));
+          return HttpResponse.json({ error: 'stop here' }, { status: 409 });
+        }),
         http.post(`${BASE}/elitea_core/conversation_fork/prompt_lib/42/77`, async ({ request }) => {
           forkBodies.push(await request.json().catch(() => null));
           if (status !== 201) return HttpResponse.json({ error: 'fork_point_unsettled' }, { status });
@@ -466,6 +472,7 @@ describe('WorkspaceSessionPage', () => {
               is_pinned: false,
               is_archived: false,
               forked_from: { conversation_id: 77, message_id: 2, message_uuid: 'a1' },
+              forked_messages: { q1: 'q1-copy', a1: 'a1-copy' },
             },
             { status: 201 },
           );
@@ -500,7 +507,14 @@ describe('WorkspaceSessionPage', () => {
       expect(labels).toEqual(['Copy', '-', 'Fork from Here']);
       await waitFor(() =>
         expect(ipc.calls.forks).toEqual([
-          { workspaceId: 'w1', sourceConversationId: '77', targetConversationId: '88', targetConversationUuid: FORK_UUID, upToTurnId: 't1' },
+          {
+            workspaceId: 'w1',
+            sourceConversationId: '77',
+            targetConversationId: '88',
+            targetConversationUuid: FORK_UUID,
+            upToTurnId: 't1',
+            messageIds: { q1: 'q1-copy', a1: 'a1-copy' },
+          },
         ]),
       );
       // The new thread opens with the turns up to the fork point, and says the files were not rolled back.
@@ -511,6 +525,11 @@ describe('WorkspaceSessionPage', () => {
       expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
       // The source thread is untouched.
       expect(await ipc.threadHistory('w1', '77')).toHaveLength(2);
+
+      // A fork of the fork, at the copied turn, names the copy's answer: a message of the new conversation.
+      appIpc.chooseFromContextMenu('fork');
+      fireEvent.contextMenu((await screen.findAllByTestId('your-prompt'))[0] as HTMLElement);
+      await waitFor(() => expect(forkOfForkBodies).toEqual([{ message_id: 'a1-copy' }]));
     });
 
     it('forks the whole thread from the ⋯ menu, and still opens it when the local copy fails', async () => {
@@ -527,7 +546,13 @@ describe('WorkspaceSessionPage', () => {
       await user.click(await screen.findByRole('menuitem', { name: 'Fork Thread' }));
 
       await waitFor(() => expect(forkBodies).toEqual([{}]));
-      expect(ipc.calls.forks[0]).toEqual({ workspaceId: 'w1', sourceConversationId: '77', targetConversationId: '88', targetConversationUuid: FORK_UUID });
+      expect(ipc.calls.forks[0]).toEqual({
+        workspaceId: 'w1',
+        sourceConversationId: '77',
+        targetConversationId: '88',
+        targetConversationUuid: FORK_UUID,
+        messageIds: { q1: 'q1-copy', a1: 'a1-copy' },
+      });
       expect(await screen.findByTestId('fork-notice')).toHaveTextContent('the tool history on this computer was not copied');
       expect(screen.getByTestId('thread-title')).toHaveTextContent('Fix the build (fork)');
     });

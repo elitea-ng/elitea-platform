@@ -4989,6 +4989,10 @@
                           }
                         }
                       },
+                      "forked_messages": {
+                        "type": "object",
+                        "open": true
+                      },
                       "id": {
                         "type": "integer"
                       },
@@ -12388,6 +12392,10 @@
                       "type": "string"
                     }
                   }
+                },
+                "forked_messages": {
+                  "type": "object",
+                  "open": true
                 },
                 "id": {
                   "type": "integer"

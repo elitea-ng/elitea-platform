@@ -81,7 +81,7 @@ export const ConversationDetail = zod
       .array(zod.record(zod.string(), zod.unknown()))
       .optional()
       .describe(
-        "Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`.\n",
+        "Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`. Each group carries `role` (`user` or `assistant`, from its author's participant row, as the message list's `role` is): a fork copies another member's questions without making that member a participant of the fork, so the participant list alone cannot tell such a question from an answer.\n",
       ),
     editor_test_runs: EditorTestRunsPage.optional(),
   })

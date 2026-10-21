@@ -71,7 +71,9 @@ use super::remote_tools::{
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
 use super::tools::{ObservedToolset, ToolObserver};
-use crate::history::{HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, TurnTap};
+use crate::history::{
+    HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
+};
 use crate::index::IndexRegistry;
 use crate::sessions::DesktopStateStore;
 use crate::workspaces::{Workspace, WorkspaceStore};
@@ -2497,7 +2499,9 @@ impl AgentHost {
     /// including `up_to_turn` (all when `None`), never one still running.
     /// The new thread's agent session is not copied: the first turn there
     /// seeds it from the server conversation, which holds the copied
-    /// messages. The number of turns copied; 0 without a history store.
+    /// messages. `messages` is the server fork's `forked_messages` (source
+    /// message UUID to the copy's): the copied `done` events name the
+    /// copies. The number of turns copied; 0 without a history store.
     ///
     /// # Errors
     ///
@@ -2512,6 +2516,7 @@ impl AgentHost {
         source_conversation_id: &str,
         target: (&str, &str),
         up_to_turn: Option<&str>,
+        messages: HashMap<String, String>,
     ) -> Result<usize, TurnError> {
         let source = conversation_key(&Value::String(source_conversation_id.to_owned()))?;
         let target_id = conversation_key(&Value::String(target.0.to_owned()))?;
@@ -2560,7 +2565,11 @@ impl AgentHost {
                 &owner,
                 &workspace,
                 &source,
-                (&target_id, &target_uuid),
+                ThreadCopyTarget {
+                    id: &target_id,
+                    uuid: &target_uuid,
+                    messages: &messages,
+                },
                 last.as_deref(),
                 &running,
             )

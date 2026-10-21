@@ -2664,10 +2664,12 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 	q := fmt.Sprintf(`
 		SELECT mg.id, COALESCE(mg.uuid::text, ''), mg.author_participant_id,
 			mg.sent_to_id, mg.reply_to_id, mg.meta, mg.is_streaming,
-			mg.created_at, mg.updated_at, mg.task_id
-		FROM %s.chat_message_group mg
+			mg.created_at, mg.updated_at, mg.task_id,
+			COALESCE(author.entity_name = 'user', FALSE)
+		FROM %[1]s.chat_message_group mg
+		LEFT JOIN %[1]s.chat_participants author ON author.id = mg.author_participant_id
 		WHERE mg.conversation_id = $1
-		ORDER BY mg.created_at %s
+		ORDER BY mg.created_at %[2]s
 		LIMIT $2`, s, order)
 
 	rows, err := r.pool.Query(ctx, q, id, limit)
@@ -2688,8 +2690,9 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 		var createdAt time.Time
 		var updatedAt *time.Time
 		var taskID *string
+		var byUser bool
 
-		if err := rows.Scan(&id, &uuid, &authorParticipantID, &sentToID, &replyToID, &meta, &isStreaming, &createdAt, &updatedAt, &taskID); err != nil {
+		if err := rows.Scan(&id, &uuid, &authorParticipantID, &sentToID, &replyToID, &meta, &isStreaming, &createdAt, &updatedAt, &taskID, &byUser); err != nil {
 			continue
 		}
 
@@ -2709,6 +2712,14 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 			"is_streaming":          isStreaming,
 			"created_at":            createdAt.Format("2006-01-02 15:04:05.999999"),
 			"message_items":         []map[string]any{},
+			// From the author's participant row, as the message list's role
+			// is: a member's question copied by a fork is authored by a
+			// participant the fork does not map, and a reader that infers
+			// the role from the participant list would show it as an answer.
+			"role": "assistant",
+		}
+		if byUser {
+			group["role"] = "user"
 		}
 		if sentToID != nil {
 			group["sent_to_id"] = *sentToID

@@ -2319,15 +2319,22 @@ export const getForkConversationUrl = (
 /**
  * Client contract 1.11. Creates a NEW conversation from the history of
  * the source conversation. With `message_id`, the new conversation holds
- * the messages up to and including that message (the fork point).
- * Without it, it holds the whole history.
+ * the messages up to and including that message (the fork point), and
+ * every later message that belongs to one of them: the replies to a
+ * copied message (its answer, a regenerated or swarm answer) and the
+ * swarm children of a copied answer. Without it, it holds the whole
+ * history.
  *
  * The copy is one transaction. It copies the message groups, their items
  * (text, context, attachments, canvases with their versions) and their
  * trace steps, with new ids, in the same order and with the same
- * `created_at`. It copies the participants with their per-conversation
- * settings, the instructions, `source` and the conversation settings in
- * `meta`. Attachment files are copied to the new conversation, so a
+ * `created_at`; the answer's `forked_messages` maps each copied message
+ * group's UUID to its copy's. It copies the participants with their
+ * per-conversation settings, except the other members: the fork is the
+ * caller's, so another member's questions are copied (still theirs, with
+ * `role` `user`) but that member is not a participant of the fork and
+ * cannot read it. It copies the instructions, `source` and the
+ * conversation settings in `meta`. Attachment files are copied to the new conversation, so a
  * delete of either conversation leaves the other one readable. It does
  * NOT copy the pin, the archive, likes and dislikes, a selection, the
  * folder of another member, or a pending tool approval.
@@ -2345,7 +2352,8 @@ export const getForkConversationUrl = (
  * conversation (the chat authority's detail rule). A source the caller
  * cannot see answers 404. A `message_id` that is not a message of the
  * source answers 404. A fork point that is still streaming or waits for
- * a tool approval answers 409 `fork_point_unsettled`; without
+ * a tool approval answers 409 `fork_point_unsettled`, as does a later
+ * reply of the copy that is; without
  * `message_id`, the newest message is the fork point. An editor Test
  * conversation answers 409 `fork_not_supported`.
  * @summary Fork a conversation into a new conversation

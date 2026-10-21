@@ -202,8 +202,13 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const source = history.get(historyKey(request.workspaceId, request.sourceConversationId)) ?? [];
       const end = request.upToTurnId === undefined ? source.length : source.findIndex((turn) => turn.turn_id === request.upToTurnId) + 1;
       if (end === 0 && request.upToTurnId !== undefined) return Promise.reject(new WorkspaceIpcError('turn_unknown', 'That turn is not in this thread.'));
+      const renamed = (ids: readonly string[]): string[] => ids.map((id) => request.messageIds?.[id] ?? id);
       const copied = source.slice(0, end).map((turn, index) => ({
         ...turn,
+        // As the host does: a copied `done` names the fork's messages.
+        events: turn.events.map((event) =>
+          event.kind === 'done' ? { ...event, payload: { ...event.payload, message_ids: renamed(event.payload.message_ids) } } : event,
+        ),
         turn_id: `${turn.turn_id}-fork-${String(index)}`,
         conversation_id: request.targetConversationId,
         conversation_uuid: request.targetConversationUuid,
