@@ -17,7 +17,6 @@ const PUBLIC_SURFACE = [
   'useConversationActivity',
   'useConversationRail',
   'useCreateFolder',
-  'useDateGroupExpansion',
   'useDeleteFolder',
   'useDragAndDrop',
   'useEditFolder',
