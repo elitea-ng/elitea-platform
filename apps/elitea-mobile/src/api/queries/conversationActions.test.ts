@@ -33,6 +33,24 @@ describe('sendConversationAction', () => {
     expect(server.requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([`POST /api/v2${PIN}`, `DELETE /api/v2${PIN}`]);
   });
 
+  it('archives with PUT and unarchives with DELETE on the project archive (contract 1.10)', async () => {
+    const server = fakeServer();
+    const ARCHIVE = '/elitea_core/conversation_archive/prompt_lib/7/41';
+    server.on('PUT', ARCHIVE, { status: 200, body: { ok: true } });
+    server.on('DELETE', ARCHIVE, { status: 200, body: { ok: true } });
+    expect(await sendConversationAction(7, 41, { kind: 'archive', archived: true }, server.client)).toEqual({ outcome: 'done' });
+    expect(await sendConversationAction(7, 41, { kind: 'archive', archived: false }, server.client)).toEqual({ outcome: 'done' });
+    expect(server.requests.map((r) => `${r.method} ${r.url.pathname}`)).toEqual([`PUT /api/v2${ARCHIVE}`, `DELETE /api/v2${ARCHIVE}`]);
+  });
+
+  it('an archive refused for want of the permission (403) is not sent again; one of a chat that is gone is gone', async () => {
+    const server = fakeServer();
+    const ARCHIVE = '/elitea_core/conversation_archive/prompt_lib/7/41';
+    server.on('PUT', ARCHIVE, { status: 403, body: { error: 'forbidden' } }, { status: 404, body: { error: 'not found' } });
+    expect(await sendConversationAction(7, 41, { kind: 'archive', archived: true }, server.client)).toEqual({ outcome: 'rejected', status: 403 });
+    expect(await sendConversationAction(7, 41, { kind: 'archive', archived: true }, server.client)).toEqual({ outcome: 'gone' });
+  });
+
   it('a delete of a conversation already gone is done; a rename of one is gone', async () => {
     const server = fakeServer();
     server.on('DELETE', CONV, { status: 404, body: { error: 'not found' } });

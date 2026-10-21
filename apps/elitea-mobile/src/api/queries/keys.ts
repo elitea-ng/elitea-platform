@@ -9,6 +9,8 @@ export const queryKeys = {
   conversations: (projectId: number) => ['p', projectId, 'conversations'] as const,
   /** The Local work list (desktop agent threads, `source=local_work`); a separate list from `conversations`. */
   localWork: (projectId: number) => ['p', projectId, 'localWork'] as const,
+  /** The project's archived chats (`archived=only`, client contract 1.10); online only, never in the offline store. */
+  archived: (projectId: number) => ['p', projectId, 'archived'] as const,
   /** One Local work thread's handoff state (the cloud executor banner), keyed below by conversation uuid. */
   handoff: (projectId: number, conversationUuid: string) => ['p', projectId, 'handoff', conversationUuid] as const,
   /** The caller's permissions in a project (who may erase a cloud copy). */

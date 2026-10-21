@@ -4,13 +4,14 @@ import type { Db, SqlExecutor } from '@/db/sql';
 import { log } from '@/lib/log';
 
 /**
- * The Chats list's action queue (issue #6): rename, pin/unpin and delete made on this
+ * The Chats list's action queue (issue #6): rename, pin/unpin, archive/unarchive (client
+ * contract 1.10) and delete made on this
  * device, kept in the encrypted store (`conversation_ops`, migration 3) until the
  * workspace took them, so they survive going offline, a restart and the lock.
  *
  * - One pending action per conversation and kind: a second rename replaces the first, an
- *   unpin replaces a pending pin (the last word wins). A delete drops the conversation's
- *   pending rename and pin (they would only 404).
+ *   unpin replaces a pending pin, an unarchive a pending archive (the last word wins). A
+ *   delete drops the conversation's pending rename, pin and archive (they would only 404).
  * - The list shows the queued state at once (`overlayOf`), over whatever the network or
  *   the saved copy says, until the action is sent.
  * - Drain (on reconnect, foreground, the store opening, and right after an action): each
@@ -51,6 +52,7 @@ interface OpRow {
 function toAction(kind: string, value: string | null): ConversationAction | null {
   if (kind === 'rename' && typeof value === 'string' && value !== '') return { kind: 'rename', name: value };
   if (kind === 'pin') return { kind: 'pin', pinned: value === '1' };
+  if (kind === 'archive') return { kind: 'archive', archived: value === '1' };
   if (kind === 'delete') return { kind: 'delete' };
   return null;
 }
@@ -58,6 +60,7 @@ function toAction(kind: string, value: string | null): ConversationAction | null
 function valueOf(action: ConversationAction): string | null {
   if (action.kind === 'rename') return action.name;
   if (action.kind === 'pin') return action.pinned ? '1' : '0';
+  if (action.kind === 'archive') return action.archived ? '1' : '0';
   return null;
 }
 
@@ -80,7 +83,7 @@ export async function enqueueOp(db: Db, projectId: number, conversationId: numbe
     if (action.kind === 'delete') {
       await tx.run('DELETE FROM conversation_ops WHERE project_id = ? AND conversation_id = ?', [projectId, conversationId]);
     } else {
-      // A conversation already queued for deletion is not renamed or pinned.
+      // A conversation already queued for deletion is not renamed, pinned or archived.
       const doomed = await tx.get<{ n: number }>(
         "SELECT count(*) AS n FROM conversation_ops WHERE project_id = ? AND conversation_id = ? AND kind = 'delete'",
         [projectId, conversationId],
@@ -116,6 +119,8 @@ export async function removeOp(db: Db, op: Pick<ConversationOp, 'projectId' | 'c
 export interface ConversationOverlay {
   name?: string;
   pinned?: boolean;
+  /** Archived (true) or unarchived (false) on this device, not sent yet. */
+  archived?: boolean;
   deleted?: boolean;
 }
 
@@ -126,14 +131,18 @@ export function overlayOf(ops: readonly Pick<ConversationOp, 'conversationId' | 
     const entry = map.get(op.conversationId) ?? {};
     if (op.action.kind === 'rename') entry.name = op.action.name;
     else if (op.action.kind === 'pin') entry.pinned = op.action.pinned;
+    else if (op.action.kind === 'archive') entry.archived = op.action.archived;
     else entry.deleted = true;
     map.set(op.conversationId, entry);
   }
   return map;
 }
 
-/** Applies queued state to list rows: deleted rows leave, renamed and (un)pinned rows change. */
-export function applyOverlay<T extends { id: number; name?: string | null; is_pinned?: boolean }>(
+/**
+ * Applies queued state to list rows: deleted rows leave, renamed, (un)pinned and (un)archived
+ * rows change. Each list then keeps the rows that belong to it (`is_archived`).
+ */
+export function applyOverlay<T extends { id: number; name?: string | null; is_pinned?: boolean; is_archived?: boolean }>(
   rows: readonly T[],
   overlay: ReadonlyMap<number, ConversationOverlay>,
 ): T[] {
@@ -150,6 +159,7 @@ export function applyOverlay<T extends { id: number; name?: string | null; is_pi
       ...row,
       ...(entry.name !== undefined ? { name: entry.name } : {}),
       ...(entry.pinned !== undefined ? { is_pinned: entry.pinned } : {}),
+      ...(entry.archived !== undefined ? { is_archived: entry.archived } : {}),
     });
   }
   return out;
@@ -191,6 +201,17 @@ export async function applyTakenOp(tx: SqlExecutor, op: Pick<ConversationOp, 'pr
            row_json = CASE WHEN row_json IS NOT NULL AND json_valid(row_json) THEN json_set(row_json, '$.is_pinned', json(?)) ELSE row_json END
          WHERE ${where}`,
         [op.action.pinned ? 'true' : 'false', ...key],
+      );
+      return;
+    case 'archive':
+      // The saved Chats list leaves an archived row out at once (src/db/repo.ts); the delta then
+      // tells it as `access_lost` (the app's delta reads carry no `archived`), and an unarchive
+      // re-delivers the row.
+      await tx.run(
+        `UPDATE conversations SET
+           row_json = CASE WHEN row_json IS NOT NULL AND json_valid(row_json) THEN json_set(row_json, '$.is_archived', json(?)) ELSE row_json END
+         WHERE ${where}`,
+        [op.action.archived ? 'true' : 'false', ...key],
       );
   }
 }
@@ -302,7 +323,7 @@ export class ConversationOpsDrainer {
         log.warn('conversation action refused', { kind: op.action.kind, status: result.status });
         if (!superseded) await removeOp(db, op);
       } else if (result.outcome === 'gone' && op.action.kind !== 'delete') {
-        // A rename or pin answered 404: the conversation was deleted elsewhere or the caller
+        // A rename, pin or archive answered 404: the conversation was deleted elsewhere or the caller
         // lost access to it. The server took nothing, so the value is not saved; the
         // conversation (and whatever else is queued for it) is forgotten instead.
         await db.transaction(async (tx) => {

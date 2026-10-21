@@ -107,3 +107,15 @@ although the 1.4 type says it is required, so the app reads it as `row.is_pinned
 
 There is no server-side conversation search in 1.3 or the planned 1.4; the list's search is
 the on-device FTS5 index (`src/db/search.ts`).
+
+## Client contract 1.10
+
+| Area | What |
+|---|---|
+| Archive | `archiveConversation` / `unarchiveConversation`: `PUT` / `DELETE /elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}`, a shared project archive like the pin. Queued in the action queue (`src/sync/conversationOps.ts`, kind `archive`). Offered with `models.chat.conversation.edit` (`permissionList`), as on the web. |
+| Archived flag | `ConversationSummary.is_archived` (optional in `src/db/repo.ts`: a row saved from an older server has none). The Chats list and the offline store's reads leave archived rows out. |
+| Archived chats | `listConversations` with `archived=only` (and `mine=true`), online only. |
+
+The app's `changes_since` reads do not send `archived`, so the server answers them in the
+pre-1.10 shape: an archived conversation is an `access_lost` tombstone and leaves the offline
+store, and an unarchived one is a row again.

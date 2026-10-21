@@ -206,8 +206,13 @@ G ──────────────────────────
   use the footnote role, uppercase on iOS and sentence case on Android.
 - **Avatar:** the agent icon if it has one, else the Elitea mark (with the single-use
   rule, design-system §4.6 and §5), else a monogram.
-- Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename and
-  Delete (the contract has no Archive). Pin and Rename need client contract 1.4.
+- Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename,
+  Archive and Delete. Pin and Rename need client contract 1.4. Archive needs client contract
+  1.10 and the permission the web app checks (`models.chat.conversation.edit`); it is queued
+  like Pin (offline too), the row leaves at once and comes back if the workspace refuses it.
+- **Archived chats** (`/archived`, client contract 1.10): a row above the list opens the
+  caller's chats the project archived (`archived=only`), with Unarchive. Online only: the
+  offline store keeps the default list, which leaves archived chats out.
 - Search is over the titles and messages kept on the device (the encrypted store's FTS5
   index), the same online and offline: the workspace offers no conversation search. A message
   hit shows the matched passage under the title.

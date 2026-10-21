@@ -1,6 +1,6 @@
 import type { ActionOutcome } from '@/api/queries/conversationActions';
 import { migrate } from '@/db/migrations';
-import { dropProject, upsertConversationRow, upsertMessageRow } from '@/db/repo';
+import { dropProject, readConversationRows, upsertConversationRow, upsertMessageRow } from '@/db/repo';
 import { readPinnedConversationRows, searchConversations } from '@/db/search';
 import { Db } from '@/db/sql';
 import { openNodeSqlite } from '@/test/nodeSqlite';
@@ -96,6 +96,71 @@ describe('overlay', () => {
       { id: 2, name: 'Two', is_pinned: true },
       { id: 4, name: 'Same' },
     ]);
+  });
+});
+
+describe('archive (client contract 1.10)', () => {
+  it('queues one archive state per conversation: an unarchive replaces a pending archive, a delete drops it', async () => {
+    const db = await store();
+    await enqueueOp(db, 7, 41, { kind: 'archive', archived: true }, 1);
+    await enqueueOp(db, 7, 41, { kind: 'archive', archived: false }, 2);
+    expect((await listOps(db, 7)).map((op) => op.action)).toEqual([{ kind: 'archive', archived: false }]);
+    await enqueueOp(db, 7, 42, { kind: 'archive', archived: true }, 3);
+    await enqueueOp(db, 7, 42, { kind: 'delete' }, 4);
+    await enqueueOp(db, 7, 42, { kind: 'archive', archived: false }, 5);
+    expect((await listOps(db, 7)).filter((op) => op.conversationId === 42).map((op) => op.action)).toEqual([{ kind: 'delete' }]);
+  });
+
+  it('the overlay marks a queued archive or unarchive on the row', () => {
+    const overlay = overlayOf([
+      { conversationId: 1, action: { kind: 'archive', archived: true } },
+      { conversationId: 2, action: { kind: 'archive', archived: false } },
+    ]);
+    expect(applyOverlay([{ id: 1, name: 'A' }, { id: 2, name: 'B', is_archived: true }, { id: 3, name: 'C' }], overlay)).toEqual([
+      { id: 1, name: 'A', is_archived: true },
+      { id: 2, name: 'B', is_archived: false },
+      { id: 3, name: 'C' },
+    ]);
+  });
+
+  it('a taken archive takes the chat off the saved list, its pins and its search at once', async () => {
+    const db = await store();
+    await db.transaction((tx) => upsertConversationRow(tx, 7, { ...row(41, 'Q3 planning'), is_pinned: true }, 1));
+    await enqueueOp(db, 7, 41, { kind: 'archive', archived: true });
+    const { d, settled } = drainer(db, [{ outcome: 'done' }]);
+    await d.drain();
+    expect(settled).toEqual([['archive', 'done']]);
+    expect(await listOps(db)).toEqual([]);
+    expect((await readConversationRows(db, 7, 30, 0)).rows.map((r) => r.id)).toEqual([42]);
+    expect((await readConversationRows(db, 7, 30, 0)).total).toBe(1);
+    expect(await readPinnedConversationRows(db, 7)).toEqual([]);
+    expect(await searchConversations(db, 7, 'planning')).toEqual([]);
+    // An unarchive taken later brings it back.
+    await enqueueOp(db, 7, 41, { kind: 'archive', archived: false });
+    await drainer(db, [{ outcome: 'done' }]).d.drain();
+    expect((await readConversationRows(db, 7, 30, 0)).rows.map((r) => r.id).sort()).toEqual([41, 42]);
+  });
+
+  it('a refused archive (403) is dropped and reported: the row is back as the server has it', async () => {
+    const db = await store();
+    await enqueueOp(db, 7, 41, { kind: 'archive', archived: true });
+    expect(applyOverlay((await readConversationRows(db, 7, 30, 0)).rows, overlayOf(await listOps(db, 7))).find((r) => r.id === 41)?.is_archived).toBe(true);
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { d, settled } = drainer(db, [{ outcome: 'rejected', status: 403 }]);
+    await d.drain();
+    expect(settled).toEqual([['archive', 'rejected']]);
+    expect(await listOps(db)).toEqual([]);
+    const rows = applyOverlay((await readConversationRows(db, 7, 30, 0)).rows, overlayOf(await listOps(db, 7)));
+    expect(rows.map((r) => [r.id, r.is_archived])).toEqual(expect.arrayContaining([[41, undefined]]));
+  });
+
+  it('is kept while offline and survives as the overlay (the reconnect sends it)', async () => {
+    const db = await store();
+    await enqueueOp(db, 7, 41, { kind: 'archive', archived: true });
+    const { d, sent } = drainer(db, [{ outcome: 'done' }], { online: false });
+    await d.drain();
+    expect(sent).toEqual([]);
+    expect(overlayOf(await listOps(db, 7)).get(41)).toEqual({ archived: true });
   });
 });
 

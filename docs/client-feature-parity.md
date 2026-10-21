@@ -35,7 +35,7 @@ clients generated from it.
 | Regenerate an answer | shipped | shipped | shipped | |
 | File attachments | shipped | shipped | shipped | |
 | Rename, pin and delete chats | shipped | shipped | shipped | Mobile queues the actions offline. |
-| Archive and Archived chats (contract 1.10) | shipped | shipped | planned (#1352) | |
+| Archive and Archived chats (contract 1.10) | shipped | shipped | shipped | Mobile queues Archive and Unarchive offline; Archived chats is online only. |
 | Fork a conversation (contract 1.11) | shipped | shipped | planned (#1351) | |
 | Activity status and read markers in chat lists (contract 1.12) | shipped | shipped | planned (#1350) | Mobile regenerated its client for 1.12 (the list fields are typed); the glyphs, read markers and `conversation_activity` events are not wired yet. |
 | Notifications | shipped | shipped | shipped | |

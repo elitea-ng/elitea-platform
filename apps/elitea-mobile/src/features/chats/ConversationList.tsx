@@ -22,6 +22,8 @@ export interface ChatListItem {
   snippet?: readonly SnippetPart[] | null;
   /** The Local work list only: where the desktop thread runs now (the row's badge). */
   executor?: WorkspaceExecutor;
+  /** A row of the Archived chats list (client contract 1.10): its archive action is Unarchive. */
+  archived?: boolean;
 }
 
 /** What the rows can do; each is absent when it is not possible (an older server, the offline copy). */
@@ -32,15 +34,28 @@ export interface ChatRowActions {
   onTogglePin?: ((row: ChatListItem) => void) | null;
   /** Opens the rename sheet (client contract 1.4). */
   onRename?: ((row: ChatListItem) => void) | null;
+  /** Archives, or (a row of the Archived chats list) unarchives (client contract 1.10, with the archive permission). */
+  onToggleArchive?: ((row: ChatListItem) => void) | null;
 }
 
-function rowActions(row: ChatListItem, actions: ChatRowActions | null): { pin: RowAction | null; rename: RowAction | null; remove: RowAction | null } {
+interface RowActionSet {
+  pin: RowAction | null;
+  rename: RowAction | null;
+  archive: RowAction | null;
+  remove: RowAction | null;
+}
+
+function rowActions(row: ChatListItem, actions: ChatRowActions | null): RowActionSet {
   const togglePin = actions?.onTogglePin ?? null;
   const rename = actions?.onRename ?? null;
+  const toggleArchive = actions?.onToggleArchive ?? null;
   const remove = actions?.onDelete ?? null;
   return {
     pin: togglePin ? { name: 'pin', label: row.pinned ? 'Unpin' : 'Pin', icon: row.pinned ? 'unpin' : 'pin', run: () => togglePin(row) } : null,
     rename: rename ? { name: 'rename', label: 'Rename', icon: 'rename', run: () => rename(row) } : null,
+    archive: toggleArchive
+      ? { name: 'archive', label: row.archived ? 'Unarchive' : 'Archive', icon: row.archived ? 'unarchive' : 'archive', run: () => toggleArchive(row) }
+      : null,
     remove: remove ? { name: 'delete', label: 'Delete', icon: 'delete', run: () => remove(row) } : null,
   };
 }
@@ -50,7 +65,8 @@ function rowActions(row: ChatListItem, actions: ChatRowActions | null): { pin: R
  * Yesterday, Previous 7 days, Earlier), or one Results section while searching. Row actions
  * follow design-system §4.11: on iOS the leading swipe toggles Pin and the trailing swipe
  * deletes (it asks first); Android has the trailing swipe only. Every action (Pin, Rename,
- * Delete) is also in the row's long-press menu and in its accessibility actions. The Chats
+ * Delete, and Archive from client contract 1.10) is also in the row's long-press menu and in
+ * its accessibility actions. The Chats
  * tab and its `__DEV__` preview both render this (D2).
  */
 export function ConversationList({
@@ -97,16 +113,17 @@ export function ConversationList({
   const [menu, setMenu] = useState<ChatListItem | null>(null);
   const menuItems: ActionMenuItem[] = [];
   if (menu) {
-    const { pin, rename, remove } = rowActions(menu, rowsActions);
+    const { pin, rename, archive, remove } = rowActions(menu, rowsActions);
     const close = (run: () => unknown) => () => {
       setMenu(null);
       void run();
     };
     if (pin) menuItems.push({ key: 'pin', label: pin.label, icon: pin.icon, onPress: close(pin.run) });
     if (rename) menuItems.push({ key: 'rename', label: 'Rename', icon: 'rename', onPress: close(rename.run) });
+    if (archive) menuItems.push({ key: 'archive', label: archive.label, icon: archive.icon, onPress: close(archive.run) });
     if (remove) menuItems.push({ key: 'delete', label: 'Delete', icon: 'delete', destructive: true, onPress: close(remove.run) });
   }
-  const hasMenu = rowsActions !== null && (rowsActions.onDelete || rowsActions.onTogglePin || rowsActions.onRename);
+  const hasMenu = rowsActions !== null && (rowsActions.onDelete || rowsActions.onTogglePin || rowsActions.onRename || rowsActions.onToggleArchive);
   return (
     <>
       <FlatList<ChatSection<ChatListItem>>
@@ -128,14 +145,14 @@ export function ConversationList({
         renderItem={({ item: section }) => (
           <ListSection title={section.title} style={[styles.section, { marginHorizontal: space.screenGutterCompact }]}>
             {section.data.map((row) => {
-              const { pin, rename, remove } = rowActions(row, rowsActions);
+              const { pin, rename, archive, remove } = rowActions(row, rowsActions);
               return (
                 <SwipeActions
                   key={row.id}
                   // HIG: the leading swipe is a toggle (Pin); Material 3 has none (§4.11).
                   leading={uiPlatform === 'ios' ? pin : null}
                   trailing={remove}
-                  extra={[...(uiPlatform === 'ios' ? [] : pin ? [pin] : []), ...(rename ? [rename] : [])]}
+                  extra={[...(uiPlatform === 'ios' ? [] : pin ? [pin] : []), ...(rename ? [rename] : []), ...(archive ? [archive] : [])]}
                   testID={`chat-${row.id}`}>
                   {(a11y) => (
                     <ConversationRow

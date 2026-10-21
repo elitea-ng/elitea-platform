@@ -5,7 +5,7 @@
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
  * client contract:    1.12
- * operations sha256:  5f445416957ab134d0467128cf1145c6b6e0cbde4945380f5baa586e53d58510
+ * operations sha256:  f36e814784dc1e54a0fdedfe414059ca0e9b5913b0c51843aa678830b76016ed
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -472,6 +472,66 @@ export interface paths {
          */
         post: operations["continueChatExecution"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Archive a conversation in its project
+         * @description Client contract 1.10. Archives the conversation in its project. The
+         *     archive is shared by the project, as the conversation pin is: one
+         *     archive per conversation, and every member's default conversation
+         *     list leaves it out. The list row names who archived it
+         *     (`archived_by`) and when (`archived_at`). The archive does not change
+         *     the conversation. It stays open by id, it keeps its project pin, and
+         *     new turns work as before.
+         *
+         *     Needs `models.chat.conversation.edit`, because an archive changes
+         *     every member's default list (a default-mode viewer does not hold
+         *     it), and access to the conversation itself (the chat authority's
+         *     detail rule, the same one the conversation pin passes). A
+         *     conversation the caller cannot see
+         *     answers 404 and archives nothing. A repeated request succeeds and
+         *     keeps the FIRST archive: its `archived_by` and `archived_at` do not
+         *     change, and nothing is re-delivered.
+         *
+         *     The archive re-delivers the conversation's list row, with
+         *     `is_archived: true`, in the `changes_since` delta of every member who
+         *     can see the conversation. It does not change `updated_at`. It writes
+         *     no tombstone: a tombstone means a deletion or a loss of access. Only
+         *     a delta call without `archived` (a client before contract 1.10) gets
+         *     the archived row as an `access_lost` tombstone; see listConversations.
+         */
+        put: operations["archiveConversation"];
+        post?: never;
+        /**
+         * Unarchive a conversation in its project
+         * @description Client contract 1.10. Removes the project's archive of the
+         *     conversation, whichever member archived it, as unpinEntity removes a
+         *     pin. The conversation is in every member's default conversation list
+         *     again. Needs the same access as archiveConversation; a conversation
+         *     the caller cannot see answers 404. A repeated request succeeds,
+         *     removes nothing and re-delivers nothing.
+         *
+         *     An unarchive re-delivers the list row, with `is_archived: false`, in
+         *     the `changes_since` delta of every member who can see the
+         *     conversation.
+         */
+        delete: operations["unarchiveConversation"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4126,6 +4186,74 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
+        };
+    };
+    archiveConversation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conversation is archived in its project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    unarchiveConversation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive is removed, or there was none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
         };
     };
     exportConversation: {

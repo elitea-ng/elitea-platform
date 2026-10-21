@@ -4,6 +4,7 @@ import { sessionApiClient, type ApiClient } from '@/api/client';
 import { unwrap } from '@/api/errors';
 import type { components } from '@/api/generated/elitea.gen';
 import { queryKeys } from '@/api/queries/keys';
+import { useHasProjectPermission } from '@/api/queries/permissions';
 import { PROJECT_SETTINGS_EDIT } from '@/features/localWork/model';
 
 /**
@@ -82,18 +83,5 @@ export function useHandoffInfo(projectId: number | null, conversationUuid: strin
 
 /** True when the caller may edit the project's settings (`models.project_settings.edit`); false while unknown or unreadable. */
 export function usePermissionToEditProjectSettings(projectId: number | null, enabled: boolean): boolean {
-  const on = enabled && projectId !== null;
-  const query = useQuery({
-    queryKey: queryKeys.permissions(projectId ?? 0),
-    enabled: on,
-    retry: false,
-    staleTime: 5 * 60_000,
-    queryFn: async () => {
-      const list = await unwrap(
-        sessionApiClient().GET('/auth/permissions/prompt_lib/{project_id}', { params: { path: { project_id: String(projectId) } } }),
-      );
-      return Array.isArray(list) && list.some((entry) => entry?.enabled === true && entry.name === PROJECT_SETTINGS_EDIT);
-    },
-  });
-  return query.data === true;
+  return useHasProjectPermission(projectId, PROJECT_SETTINGS_EDIT, enabled);
 }

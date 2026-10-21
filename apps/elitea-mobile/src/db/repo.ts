@@ -88,6 +88,16 @@ export async function dropProject(tx: SqlExecutor, projectId: number): Promise<v
 // --- conversations ---------------------------------------------------------
 
 /**
+ * A SQL condition on `conversations` (aliased `alias`): the row is not archived (client contract
+ * 1.10). The Chats list leaves archived conversations out; a row the device archived itself is
+ * marked at once (src/sync/conversationOps.ts), before the delta tells it.
+ */
+export function notArchivedSql(alias = ''): string {
+  const col = `${alias === '' ? '' : `${alias}.`}row_json`;
+  return `(${col} IS NULL OR NOT json_valid(${col}) OR COALESCE(json_extract(${col}, '$.is_archived'), 0) = 0)`;
+}
+
+/**
  * Upserts a list row and marks its transcript for a sync. Every delivered row
  * marks it, even one byte-identical to the stored row: the server re-delivers
  * a conversation when one of its message groups changed (a trigger bumps the
@@ -166,12 +176,12 @@ export async function readConversationRows(
   kind: ListKind = 'chat',
 ): Promise<{ rows: ConversationSummary[]; total: number }> {
   const rows = await db.all<{ row_json: string }>(
-    `SELECT row_json FROM conversations WHERE project_id = ? AND row_json IS NOT NULL AND list_kind = ?
+    `SELECT row_json FROM conversations WHERE project_id = ? AND row_json IS NOT NULL AND list_kind = ? AND ${notArchivedSql()}
      ORDER BY COALESCE(updated_ms, 0) DESC, id DESC LIMIT ? OFFSET ?`,
     [projectId, kind, limit, offset],
   );
   const total = await db.get<{ n: number }>(
-    'SELECT count(*) AS n FROM conversations WHERE project_id = ? AND row_json IS NOT NULL AND list_kind = ?',
+    `SELECT count(*) AS n FROM conversations WHERE project_id = ? AND row_json IS NOT NULL AND list_kind = ? AND ${notArchivedSql()}`,
     [projectId, kind],
   );
   return { rows: rows.map((r) => JSON.parse(r.row_json) as ConversationSummary), total: total?.n ?? 0 };

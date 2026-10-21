@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { speaksContract } from '@/api/discovery';
+import { CHAT_ARCHIVE_PERMISSION, useHasProjectPermission } from '@/api/queries/permissions';
 import type { ConversationSummary } from '@/api/queries/conversations';
 import { offlineStore } from '@/db/offlineStore';
 import type { ListKind } from '@/db/repo';
@@ -14,6 +15,22 @@ import { subscribeSyncChanges } from '@/sync/appSync';
 export function useListActionsAvailable(): boolean {
   const workspace = useWorkspaceInfo();
   return speaksContract(workspace?.discovery, 1, 4);
+}
+
+/** The Archived chats list (`archived=only`) needs client contract 1.10. */
+export function useArchivedListAvailable(): boolean {
+  const workspace = useWorkspaceInfo();
+  return speaksContract(workspace?.discovery, 1, 10);
+}
+
+/**
+ * Archive and unarchive (client contract 1.10) need the permission the web app checks
+ * (`models.chat.conversation.edit`; a project viewer does not hold it). Hidden while the
+ * permission is unknown (not read yet, or offline before the first read this session).
+ */
+export function useArchiveAvailable(projectId: number | null): boolean {
+  const listed = useArchivedListAvailable();
+  return useHasProjectPermission(projectId, CHAT_ARCHIVE_PERMISSION, listed) && listed;
 }
 
 /** Re-runs `read` when the store opens or closes, a sync changed the project, or the action queue moved. */
