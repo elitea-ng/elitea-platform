@@ -120,6 +120,19 @@ if [ -d "$SUBAPP" ]; then
   install_files "$SUBAPP" 10001:10001 0600 subapp-callback-client.key
 fi
 
+# ── the DeepWiki / Inventory HOSTS (distroless nonroot, uid 65532) ─────────
+# The same three files for the hosts' artifact calls over
+# elitea.runtime.v1.ArtifactObjectService on the platform listener (#1359 U5),
+# in a volume of their own: the engines' copy above is owned by 10001 with a
+# 0600 key, which uid 65532 cannot read. Installed only when the compose file
+# mounts the volume.
+SUBAPP_HOST=/dst/subapp-host
+if [ -d "$SUBAPP_HOST" ]; then
+  chown 65532:65532 "$SUBAPP_HOST"; chmod 700 "$SUBAPP_HOST"
+  install_files "$SUBAPP_HOST" 65532:65532 0644 runtime-ca.crt subapp-callback-client.crt
+  install_files "$SUBAPP_HOST" 65532:65532 0600 subapp-callback-client.key
+fi
+
 # There is no platform-edge volume any more (#1359): elitea-main serves the
 # worker's platform_origin itself, on its mTLS platform listener (:9446), with
 # the content listener's keypair above.

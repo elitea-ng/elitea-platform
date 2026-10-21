@@ -242,10 +242,9 @@ services:
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
 
-      # The origin the PROVIDER calls back to for artifacts and models. The
-      # engine derives the artifact API base by stripping `/llm/v1` off this,
-      # so it is one value and not two.
-      ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # No ELITEA_DEEPWIKI_CALLBACK_BASE_URL (#1359 U5): the provider's model
+      # and artifact calls are gRPC on elitea-main's platform listener, which
+      # this stack does not open. elitea-main refuses the old key.
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       # The provider's gRPC listener (#1359): the facade's SPI calls and the
@@ -371,11 +370,11 @@ services:
   #
   # KNOWN LIMIT (#1359 U2): the native runner makes its model calls over
   # elitea.llm.v1.ModelService on elitea-main's platform listener
-  # (ELITEA_DEEPWIKI_MODEL_SERVICE_URL), which this stack does not open (no
-  # runtime plane). Without it the engine refuses the cleartext callback base
-  # as a model origin, so generation needs a model here only on
-  # docker-compose.standalone-full.yml; DEEPWIKI_NATIVE_RUNNER=fixture runs
-  # without one.
+  # (ELITEA_DEEPWIKI_MODEL_SERVICE_URL), and its artifact calls over
+  # ArtifactObjectService there (#1359 U5); this stack does not open that
+  # listener (no runtime plane). Generation with a model, and artifact
+  # uploads, need docker-compose.standalone-full.yml;
+  # DEEPWIKI_NATIVE_RUNNER=fixture runs without one.
   elitea-deepwiki-engine:
     profiles: ["deepwiki"]
     build:

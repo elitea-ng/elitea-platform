@@ -64,6 +64,10 @@ case "$CMD" in
     # in place and neither hop is signed by a root the other does not trust.
     INVENTORY_CERT_SANS="DNS:elitea-inventory,DNS:localhost,IP:127.0.0.1" \
       bash "${REPO_ROOT}/deploy/scripts/gen-inventory-certs.sh"
+    # elitea-main's platform gRPC listener (#1359 U5), where the hosts store
+    # their artifacts: its server certificate and the hosts' callback client
+    # certificate, off the same CA.
+    bash "${REPO_ROOT}/deploy/scripts/gen-platform-listener-certs.sh"
     echo "→ Bringing up E2E stack (${COMPOSE_BIN})…"
     # --wait: wait for every healthcheck to report healthy before returning.
     # elitea-main runs migrations on startup; postgres is its dependency.

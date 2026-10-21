@@ -21,9 +21,9 @@ CHART="deploy/helm/elitea"
 # (.invalid is reserved by RFC 2606).
 GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
 
-# The runtime plane (the standalone profile): the engine sidecar makes its
-# model calls over ModelService on elitea-main's platform listener (#1359 U2),
-# so DeepWiki renders only beside it.
+# The runtime plane (the standalone profile): the host's artifact calls and
+# the engine sidecar's model calls go over gRPC on elitea-main's platform
+# listener (#1359 U2/U5), so DeepWiki renders only beside it.
 RUNTIME="-f $CHART/values-standalone.yaml"
 
 # A complete, correct DeepWiki install. Every refusal case below is this minus
@@ -35,7 +35,6 @@ $RUNTIME \
 --set main.fileConfig.deepwikiClientMaterial.enabled=true \
 --set main.fileConfig.deepwikiClientMaterial.secretName=elitea-main-deepwiki-client-tls \
 --set main.env.ELITEA_DEEPWIKI_ENABLED=true \
---set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080 \
 --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
 --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=/run/elitea-deepwiki/tls.crt \
 --set main.env.ELITEA_DEEPWIKI_CLIENT_KEY_FILE=/run/elitea-deepwiki/tls.key \
@@ -146,7 +145,6 @@ refuses() {
 
 refuses "provider with no git allowlist"        --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=
 refuses "facade with no git allowlist"          --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=
-refuses "facade with no callback origin"        --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=
 refuses "the retired base URL (#1359)"         --set main.env.ELITEA_DEEPWIKI_BASE_URL=https://elitea-deepwiki-svc:8443
 refuses "facade with no provider to dial"       --set deepwiki.enabled=false
 refuses "facade with no client certificate"     --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=
@@ -322,60 +320,42 @@ else
   fail "runner=fixture is refused for a missing database URL, which the fixture never reads"
 fi
 
-# ── The callback hop to elitea-main's platform listener (#1359) ─────────────
+# ── The platform listener: the only way back to elitea-main (#1359 U2/U5) ──
 #
-# On: elitea-main's callback origin becomes the platform listener, BOTH
-# containers trust the runtime CA — that one key of the worker's material
-# Secret and nothing else — and BOTH present the callback client certificate
-# the listener requires. Refused: the flag without the runtime plane, the flag
-# beside an explicit origin that is not the listener, and the retired
-# callbackViaPlatformEdge key. Off (every render above): none of it appears.
-
-echo "== deepwiki.callbackViaPlatformListener routes the callback hop over mTLS =="
-VIA="-f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformListener=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
-via="$(render $COMPLETE $VIA)" || fail "the callback hop to the platform listener does not render: $via"
-expect "callback origin in elitea-main" \
-  "$(printf '%s' "$via" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
-  "https://elitea-main:9446"
-expect "the callback origin is the port elitea-main serves its platform listener on" \
-  "$(printf '%s' "$via" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_RUNTIME_PLATFORM_ADDRESS' -)" \
+# Always on: BOTH containers trust the runtime CA (that one key of the worker's
+# material Secret and nothing else) and present the callback client
+# certificate; the HOST dials ArtifactObjectService at ARTIFACT_SERVICE_URL,
+# the ENGINE ModelService (and its artifact reads) at MODEL_SERVICE_URL, both
+# the platform origin; elitea-main admits dns:elitea-subapp-callback to both
+# services and the DeepWiki pods on 9446 and NOT on 8080. Refused: DeepWiki
+# without the runtime plane or the callback Secret (sidecar or not), the
+# retired HTTP callback origin, and both retired switches whatever their value.
+echo "== the host and the engine reach elitea-main over gRPC on the platform listener =="
+expect "the platform listener port" \
+  "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_RUNTIME_PLATFORM_ADDRESS' -)" \
   ":9446"
-ed() { printf '%s' "$via" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+ed() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+en() { ed ".spec.template.spec.containers[$1].env[] | select(.name == \"$2\") | .value"; }
 for c in 0 1; do
   label="$([ "$c" = 0 ] && echo host || echo engine)"
-  expect "$label callback CA" "$(ed ".spec.template.spec.containers[$c].env[] | select(.name == \"ELITEA_DEEPWIKI_CALLBACK_CA_FILE\") | .value")" "/run/elitea-runtime-ca/runtime-ca.crt"
-  expect "$label callback client certificate" "$(ed ".spec.template.spec.containers[$c].env[] | select(.name == \"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE\") | .value")" "/run/elitea-callback-client/tls.crt"
-  expect "$label callback client key" "$(ed ".spec.template.spec.containers[$c].env[] | select(.name == \"ELITEA_DEEPWIKI_CALLBACK_KEY_FILE\") | .value")" "/run/elitea-callback-client/tls.key"
+  expect "$label callback CA" "$(en $c ELITEA_DEEPWIKI_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
+  expect "$label callback client certificate" "$(en $c ELITEA_DEEPWIKI_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
+  expect "$label callback client key" "$(en $c ELITEA_DEEPWIKI_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
 done
+expect "host ARTIFACT_SERVICE_URL" "$(en 0 ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL)" "https://elitea-main:9446"
+expect "engine MODEL_SERVICE_URL" "$(en 1 ELITEA_DEEPWIKI_MODEL_SERVICE_URL)" "https://elitea-main:9446"
 expect "runtime CA mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "runtime-ca") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-runtime-ca "
 expect "callback client mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "callback-client") | .mountPath' | tr '\n' ' ')" "/run/elitea-callback-client /run/elitea-callback-client "
 expect "only runtime-ca.crt leaves the worker Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
 expect "the callback client comes from its own Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "callback-client") | .secret.secretName')" "elitea-deepwiki-callback-client"
-fo() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
-expect "the flag off: the HOST gets no callback material" \
-  "$(fo '.spec.template.spec.containers[0] | [(.env[].name | select(test("CALLBACK_(CA|CERT|KEY)_FILE"))), (.volumeMounts[].name | select(. == "runtime-ca" or . == "callback-client"))] | length')" "0"
-
-# ── The model hop: ModelService on the platform listener (#1359 U2) ─────────
-#
-# Independent of the flag: the engine sidecar ALWAYS dials ModelService on the
-# platform origin with the runtime CA and the callback client certificate,
-# and elitea-main admits it as dns:elitea-subapp-callback. Without the runtime
-# plane or the callback Secret the render is refused.
-echo "== the engine's model calls go to ModelService, flag off or on =="
-for pair in "flag off:$manifest" "flag on:$via"; do
-  label="${pair%%:*}"; doc="${pair#*:}"
-  en() { printf '%s' "$doc" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | .spec.template.spec.containers[1].env[] | select(.name == \"$1\") | .value" -; }
-  expect "$label: engine MODEL_SERVICE_URL" "$(en ELITEA_DEEPWIKI_MODEL_SERVICE_URL)" "https://elitea-main:9446"
-  expect "$label: engine callback CA" "$(en ELITEA_DEEPWIKI_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
-  expect "$label: engine callback certificate" "$(en ELITEA_DEEPWIKI_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
-  expect "$label: engine callback key" "$(en ELITEA_DEEPWIKI_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
-  expect "$label: elitea-main admits the callback identity" \
-    "$(printf '%s' "$doc" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_MODEL_SERVICE_CLIENTS' - | tr ',' '\n' | grep -cx 'dns:elitea-subapp-callback')" "1"
-  expect "$label: elitea-main admits DeepWiki on the platform port" \
-    "$(printf '%s' "$doc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-main-netpol") | .spec.ingress[] | select(.ports[0].port == 9446) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | grep -cx elitea-deepwiki)" "1"
+mc() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$1" -; }
+for var in ELITEA_MODEL_SERVICE_CLIENTS ELITEA_ARTIFACT_SERVICE_CLIENTS; do
+  expect "elitea-main's $var admits the callback identity" "$(mc $var | tr ',' '\n' | grep -cx 'dns:elitea-subapp-callback')" "1"
 done
-expect "flag off: the artifact hop still reaches 8080" \
-  "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-main-netpol") | .spec.ingress[] | select(.ports[0].port == 8080) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | grep -cx elitea-deepwiki)" "1"
+expect "no HTTP callback origin is rendered" "$(mc ELITEA_DEEPWIKI_CALLBACK_BASE_URL)" "null"
+np() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"NetworkPolicy\" and .metadata.name == \"elitea-main-netpol\") | .spec.ingress[] | select(.ports[0].port == $1) | .from[].podSelector.matchLabels.\"app.kubernetes.io/name\"" - | grep -cx elitea-deepwiki || true; }
+expect "elitea-main admits DeepWiki on the platform port" "$(np 9446)" "1"
+expect "elitea-main does NOT admit DeepWiki on 8080" "$(np 8080)" "0"
 refuses_with() {
   local description="$1" text="$2"; shift 2
   local output
@@ -387,35 +367,39 @@ refuses_with() {
     fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
   fi
 }
-refuses_with "the engine without the runtime plane" "main.runtime.enabled is false, so there is no such listener" \
+refuses_with "DeepWiki without the runtime plane" "deepwiki.enabled needs main.runtime.enabled" \
   ${COMPLETE#"$RUNTIME "}
-refuses_with "the engine without a callback client Secret" "deepwiki.callbackClient.secretName is empty" \
+refuses_with "DeepWiki without a callback client Secret" "deepwiki.enabled needs deepwiki.callbackClient.secretName" \
   $COMPLETE --set deepwiki.callbackClient.secretName=
-for name in ELITEA_DEEPWIKI_MODEL_SERVICE_URL ELITEA_DEEPWIKI_CALLBACK_CA_FILE ELITEA_DEEPWIKI_CALLBACK_CERT_FILE ELITEA_DEEPWIKI_CALLBACK_KEY_FILE; do
+for name in ELITEA_DEEPWIKI_MODEL_SERVICE_URL ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL ELITEA_DEEPWIKI_CALLBACK_CA_FILE ELITEA_DEEPWIKI_CALLBACK_CERT_FILE ELITEA_DEEPWIKI_CALLBACK_KEY_FILE; do
   refuses_with "deepwiki.env.$name set by hand" "deepwiki.env sets $name" $COMPLETE --set deepwiki.env.$name=x
 done
-# No sidecar (the host's runner unavailable): no model calls, so neither the
-# runtime plane nor the callback identity is required.
-hostonly="$(render --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable)" \
-  || fail "a host-only DeepWiki (no engine sidecar) without the runtime plane does not render: $hostonly"
-expect "host-only: no engine container" "$(printf '%s' "$hostonly" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[].name' - | tr '\n' ' ')" "elitea-deepwiki "
-if render ${COMPLETE#"$RUNTIME "} --set deepwiki.callbackViaPlatformListener=true >/dev/null 2>&1; then
-  fail "callbackViaPlatformListener renders with no runtime plane, so no platform listener to dial"
-else
-  note "refused without main.runtime"
-fi
-if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformListener=true >/dev/null 2>&1; then
-  fail "callbackViaPlatformListener renders beside an explicit non-listener callback origin"
-else
-  note "refused beside http://elitea-main:8080"
-fi
-out="$(render $COMPLETE $VIA --set deepwiki.callbackViaPlatformEdge=true)" && fail "the retired callbackViaPlatformEdge key still renders" || {
-  if printf '%s' "$out" | grep -q 'callbackViaPlatformEdge was removed'; then
-    note "the retired callbackViaPlatformEdge key is refused with a migration message"
+# No sidecar (the host's runner unavailable): no model calls, but the host
+# still uploads over ArtifactObjectService, so the runtime plane is still
+# required and the host still carries the material.
+refuses_with "a host-only DeepWiki without the runtime plane" "deepwiki.enabled needs main.runtime.enabled" \
+  --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable
+hostonly="$(render $RUNTIME --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable)" \
+  || fail "a host-only DeepWiki (no engine sidecar) beside the runtime plane does not render: $hostonly"
+ho() { printf '%s' "$hostonly" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "host-only: no engine container" "$(ho '.spec.template.spec.containers[].name' | tr '\n' ' ')" "elitea-deepwiki "
+expect "host-only: the host still dials ArtifactObjectService" "$(ho '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL") | .value')" "https://elitea-main:9446"
+retired_with() {
+  local description="$1" text="$2"; shift 2
+  local output
+  if output="$(render $COMPLETE "$@" 2>&1)"; then
+    fail "accepted: $description"
+  elif printf '%s' "$output" | grep -q -- "$text" && printf '%s' "$output" | grep -q 'docs/UPGRADING.md'; then
+    note "refused with the migration note: $description"
   else
-    fail "the retired callbackViaPlatformEdge key is refused for another reason: $(printf '%s' "$out" | tail -1)"
+    fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
   fi
 }
+retired_with "the retired HTTP callback origin" "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080
+retired_with "an EMPTY retired HTTP callback origin" "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=
+retired_with "callbackViaPlatformListener=true" "callbackViaPlatformListener was removed" --set deepwiki.callbackViaPlatformListener=true
+retired_with "callbackViaPlatformListener=false" "callbackViaPlatformListener was removed" --set deepwiki.callbackViaPlatformListener=false
+retired_with "the retired callbackViaPlatformEdge key" "callbackViaPlatformEdge was removed" --set deepwiki.callbackViaPlatformEdge=true
 
 # ── The platform gRPC service (elitea.subapp.v1.PlatformOperations) ─────────
 #

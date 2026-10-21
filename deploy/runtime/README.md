@@ -197,12 +197,37 @@ present with `subapp-callback-client.crt` / `.key`. The engines dial
 (`ELITEA_<APP>_CALLBACK_CERT_FILE` / `_KEY_FILE`); compose installs the three
 files into the `standalone_runtime_subapp` volume (`install-material.sh`), the
 chart mounts `runtime-ca.crt` of `worker.materialSecretName` plus
-`deepwiki.callbackClient` / `inventory.callbackClient`. Their artifact hop
-stays HTTP on `ELITEA_<APP>_CALLBACK_BASE_URL` (`http://elitea-main:8080`)
-until #1359 U5. `standalone-stack.sh check` calls ModelService with grpcurl:
-the callback identity with an invalid bearer must get `Unauthenticated` plus
-the `elitea-model-refusal-bin` trailer (the pipeline's 401), and an unlisted
-runtime-CA identity `PermissionDenied` without it.
+`deepwiki.callbackClient` / `inventory.callbackClient`. `standalone-stack.sh
+check` calls ModelService with grpcurl: the callback identity with an invalid
+bearer must get `Unauthenticated` plus the `elitea-model-refusal-bin` trailer
+(the pipeline's 401), and an unlisted runtime-CA identity `PermissionDenied`
+without it.
+
+**Artifacts and internal MCP tools are gRPC on that listener too** (#1359 U5,
+`libs/proto/elitea/runtime/v1/artifact_object.proto` and
+`internal_tool.proto`). Each RPC runs the same artifact route or MCP endpoint
+in process, under the bearer in `authorization` metadata:
+
+| Service | Callers | Allowlist |
+|---|---|---|
+| `elitea.runtime.v1.ArtifactObjectService` | the worker (Office toolkits, indexing artifact sources); the DeepWiki/Inventory hosts (page and graph uploads) and engines (artifact-folder ingest) | `ELITEA_ARTIFACT_SERVICE_CLIENTS` |
+| `elitea.runtime.v1.InternalToolService` | the worker (its internal MCP toolkits: `ListTools`, `CallTool`); the Inventory engine (`InvokeToolkit`, its `investigate` source-tool calls, which replaced HTTP `test_tool`) | `ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS` |
+
+An empty allowlist leaves that service unregistered. The chart renders both
+lists (worker identity, `dns:elitea-subapp-callback` when a provider needs it,
+`main.runtime.<service>.extraClients`); compose names the worker and the
+callback identity. The provider HOSTS (distroless `nonroot`, uid 65532) read
+the callback material from their own volume, `standalone_runtime_subapp_host`,
+because the engines' copy is owned by uid 10001 with a 0600 key. There is no
+HTTP callback origin any more: `ELITEA_<APP>_CALLBACK_BASE_URL` and
+`ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL` are refused at boot, and the chart
+refuses `deepwiki.callbackViaPlatformListener` and
+`main.runtime.agentExecutionDispatch.currentMainBaseUrl`. The worker addresses
+its internal MCP catalogue entries by the fixed origin
+`https://internal-tools.elitea.invalid`, which only names the entry; the call
+itself is InternalToolService. `standalone-stack.sh check` probes both services
+the same way as ModelService (invalid bearer → `Unauthenticated` plus
+`elitea-artifact-refusal-bin` / `elitea-internal-tool-refusal-bin`).
 (`content_origin` is different: that one is elitea-main's
 own :9445 listener, reached over mTLS. It keeps the `https://host:port` form,
 but since #1359 it is gRPC only — `elitea.runtime.v1.RuntimeContentService`,
@@ -323,34 +348,20 @@ in a mixed deployment for the same reason. A plain adhoc turn touches none of th
 The web chat surface also still emits into a noop socket.io client rather than
 subscribing to `{events_url}`; that port is #93.
 
-Next-input suggestions are inert. This is a deliberate gap (#334). Each turn asks
-the current platform for the suggestion policy at
-`GET /api/v2/elitea_core/next_input_suggestion_config/prompt_lib/{projectID}`,
-over `ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`. **No readable repository implements
-that path.** This monorepo does not. The pylon runtime and the plugin
-repositories do not.
+Next-input suggestions are inert. This is a deliberate gap (#334). Each turn
+asks for the suggestion policy, whose legacy contract was
+`GET /api/v2/elitea_core/next_input_suggestion_config/prompt_lib/{projectID}`.
+**No readable repository implements that path.** This monorepo does not. The
+pylon runtime and the plugin repositories do not.
 
-Both stacks make the call fail, and now for the same reason: no server answers
-the path. The hybrid edge sends it to legacy Centry, which registers no such
-rule. The standalone stack calls elitea-main, which registers no such route, so
-the answer is 404. The turn is not affected. The policy is optional metadata, and
-the caller fails open by design. Each turn therefore carries
-`next_input_suggestion: null`.
-
-`ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL` is optional. Leave it unset and the call
-goes to this process's own listener, `http://127.0.0.1:<port of
-ELITEA_HTTP_ADDRESS>`. That is the standalone stack: the call is a self call, and
-elitea-main serves cleartext. The stack used to set `https://elitea-main:8080`,
-which aimed TLS at that same cleartext port, so every turn logged
-`http: server gave HTTP response to HTTPS client` — a deployment fault reported
-per turn, hiding the routing gap behind it. `internal/runtimecomposition/config.go`
-now refuses that value at boot. Set the variable only where another server
-answers the path, as the retired centry-hybrid stack did with its edge.
-
-The cost is one bounded request of 3 s for each send, regeneration, continuation
-and ad-hoc turn. The failure is now visible. The client writes the cause to the
-log once for each process, at warning level. It names the endpoint and the
-reason.
+Until #1359 elitea-main asked over HTTP, calling itself, and every call came
+back 404. That self call is gone: the resolver asks an in-process policy source
+(`internal/infra/currentcore`), none exists, and the turn carries
+`next_input_suggestion: null` with no network hop. The policy is optional
+metadata and the caller fails open by design. The first failure is logged once
+for each process, at warning level. `ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`,
+which once named the origin of that call and then of the worker's internal
+MCP, is retired (#1359 U5) and refused at boot.
 
 The product owner must settle #334. The Go stack can own the policy, or the team
 can drop the feature. Nobody can read the original policy shape, because it is on

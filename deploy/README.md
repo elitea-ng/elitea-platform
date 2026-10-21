@@ -177,6 +177,18 @@ word for "dial the sidecar socket"; `legacy` is an accepted alias) and its sidec
 `elitea-inventory-engine` (with its own `elitea-inventory-migrate` service).
 Both sidecars serve their `fixture` runner, so `up` shows a populated wiki
 and a populated Inventory graph with no repository and no model.
+
+The way BACK is gRPC on elitea-main's platform listener (`https://elitea-main:9446`,
+#1359): the hosts upload and read artifacts over
+`elitea.runtime.v1.ArtifactObjectService`; the engines make model calls over
+`elitea.llm.v1.ModelService`, read artifact folders over ArtifactObjectService,
+and (Inventory) run their `investigate` source tools over
+`elitea.runtime.v1.InternalToolService.InvokeToolkit`. All of them present the
+sub-application callback certificate (`DNS:elitea-subapp-callback`) that
+`runtime-material` installs (engines: `standalone_runtime_subapp`, uid 10001;
+hosts: `standalone_runtime_subapp_host`, uid 65532). No provider calls
+elitea-main on 8080, and the old `ELITEA_<APP>_CALLBACK_BASE_URL` is refused at
+boot.
 `DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead, and
 `INVENTORY_ENGINE_RUNNER=native` the real Inventory engine (graph in the
 stack's PostgreSQL; it clones repositories itself, admitting the hosts in
@@ -302,11 +314,15 @@ ingest through the agent worker, on the same command stream.
 
 One component is off by default and needs TWO settings, not one. `deepwiki`
 is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
-block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its callback origin, git
-allowlist and the three client-certificate paths (elitea-main reaches the
+block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its git allowlist and the
+three client-certificate paths, beside the runtime plane (`main.runtime.enabled`)
+and `deepwiki.callbackClient`: the provider calls back only over gRPC on
+elitea-main's platform listener, for its artifacts and models (#1359 U5; there
+is no callback origin any more, and `ELITEA_DEEPWIKI_CALLBACK_BASE_URL` is
+refused). elitea-main reaches the
 provider over gRPC, `elitea.subapp.v1.ProviderService`, at
 `ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET`, which the chart derives; the old
-`ELITEA_DEEPWIKI_BASE_URL` is refused, #1359) — elitea-main is
+`ELITEA_DEEPWIKI_BASE_URL` is refused, #1359); elitea-main is
 the only door to it, so a provider nobody can reach is a Deployment doing
 nothing. Both halves refuse to render while half configured
 (`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the

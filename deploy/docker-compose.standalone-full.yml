@@ -324,6 +324,9 @@ services:
       - standalone_runtime_worker:/dst/worker
       # The engines' ModelService client material (#1359 U2).
       - standalone_runtime_subapp:/dst/subapp
+      # The same material for the hosts' artifact calls (#1359 U5), owned by
+      # their uid.
+      - standalone_runtime_subapp_host:/dst/subapp-host
     restart: "no"
 
   # ── Schema bootstrap ────────────────────────────────────────────────────────
@@ -980,8 +983,8 @@ services:
 
       # ── Production auth (issue #281) ───────────────────────────────────────
       # Mandatory companion of ELITEA_RUNTIME_ENABLED: main.go:686-688 refuses
-      # to boot the runtime without a PrincipalValidator and a
-      # ForwardedIdentityVerifier, and both are assigned only in this branch.
+      # to boot the runtime without a PrincipalValidator and the Form session
+      # reader, and both are assigned only in this branch.
       # The browser keeps logging in through oidc-mock — the general /api/v2
       # router still carries SessionSecret when formGraph is present
       # (main.go:933-944), so session cookies keep working. The runtime's own
@@ -1028,10 +1031,9 @@ services:
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
 
-      # Where the provider calls BACK to upload the pages it generated: this
-      # service on the compose network, plain HTTP — the minted bearer is the
-      # credential; mTLS is on the hop the other way.
-      ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # (No ELITEA_DEEPWIKI_CALLBACK_BASE_URL, #1359 U5: the provider uploads
+      # its pages over ArtifactObjectService on the platform listener below,
+      # and elitea-main refuses the old key.)
       # The engine's platform gRPC listener (#1243): where this service
       # deletes a project's wiki search indexes when the project is
       # deprovisioned, presenting the same client certificate as the facade
@@ -1065,11 +1067,10 @@ services:
       # and a deployment that wants one and not the other must be able to say
       # so. Checked BEFORE the vault is opened.
       ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
-      # Where the provider calls back to store the graph it built. EMPTY
-      # would disable source expansion rather than fail the boot — the eight
-      # read-only tools would still work and the three that name a source
-      # would get the provider's own refusal.
-      ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
+      # (No ELITEA_INVENTORY_CALLBACK_BASE_URL, #1359 U5: the provider stores
+      # its graph over ArtifactObjectService and runs its source tools over
+      # InternalToolService.InvokeToolkit, both on the platform listener
+      # below; elitea-main refuses the old key.)
       # The engine's platform gRPC listener (#1244): where this service
       # deletes an Inventory toolkit's graph when the toolkit is deleted and
       # every graph of a project when the project is deprovisioned, presenting
@@ -1210,12 +1211,9 @@ services:
       # refuses sharing the configuration-validation stream.
       ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
       ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
-      # The internal MCP origin handed to workers: Main's platform listener
-      # (ELITEA_RUNTIME_PLATFORM_ADDRESS below, #1359). Main no longer calls
-      # itself (the next-input-suggestion lookup is in process), so it needs
-      # no client identity of its own. TODO(#1359 U5): retires when the
-      # worker's internal MCP moves to InternalToolService over gRPC.
-      ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: https://elitea-main:9446
+      # (No ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL, #1359 U5: the worker's
+      # internal MCP toolkits are InternalToolService on the platform listener
+      # it already dials; elitea-main refuses the old key.)
 
       # Index-ingest dispatch: the toolkit `index_data` path behind
       # POST /api/v2/elitea_core/test_toolkit_tool/prompt_lib/{projectID}
@@ -1276,9 +1274,10 @@ services:
       ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
       ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
       # The platform listener (#1359): elitea-main's internal gRPC port, the
-      # worker's platform_origin and the engines' model origin. gRPC only, no
-      # HTTP. Same keypair as the content listener (same process, same SAN); a
-      # client without a runtime-CA certificate is refused at the handshake.
+      # worker's platform_origin and the sub-applications' model and artifact
+      # origin. gRPC only, no HTTP. It replaced the `platform-edge` proxy. Same keypair as the
+      # content listener (same process, same SAN); a client without a
+      # runtime-CA certificate is refused at the handshake.
       ELITEA_RUNTIME_PLATFORM_ADDRESS: ":9446"
       ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
       ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
@@ -1289,6 +1288,15 @@ services:
       # sub-application callback certificate, DNS:elitea-subapp-callback).
       # elitea-main refuses to start with this empty.
       ELITEA_MODEL_SERVICE_CLIENTS: "${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker},dns:elitea-subapp-callback"
+      # Who may call elitea.runtime.v1.ArtifactObjectService (#1359 U5): the
+      # worker (Office toolkits, indexing artifact sources) and the
+      # DeepWiki/Inventory hosts and engines (page and graph uploads,
+      # artifact-folder ingest). Empty leaves the service unregistered.
+      ELITEA_ARTIFACT_SERVICE_CLIENTS: "${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker},dns:elitea-subapp-callback"
+      # Who may call elitea.runtime.v1.InternalToolService (#1359 U5): the
+      # worker (its internal MCP toolkits) and the Inventory engine
+      # (InvokeToolkit, its `investigate` source-tool calls).
+      ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS: "${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker},dns:elitea-subapp-callback"
 
       # ── elitea-vector token introspection (ADR-0031 V0) ─────────────────
       # The client identities admitted to TokenIntrospectionService on the
@@ -1476,6 +1484,15 @@ services:
       ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
       # Cancellation fan-out between replicas (elitea.subapp.deepwiki.cancel.<id>).
       ELITEA_DEEPWIKI_NATS_URL: "nats://nats:4222"
+      # Artifact uploads and reads (#1359 U5): elitea.runtime.v1.
+      # ArtifactObjectService on elitea-main's platform listener, trusting the
+      # runtime CA and presenting the sub-application callback identity,
+      # which elitea-main admits through ELITEA_ARTIFACT_SERVICE_CLIENTS. No
+      # HTTP callback origin any more.
+      ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
+      ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
+      ELITEA_DEEPWIKI_CALLBACK_KEY_FILE: /run/elitea-subapp/subapp-callback-client.key
     expose:
       - "9443"
     volumes:
@@ -1483,7 +1500,11 @@ services:
       - ./certs/deepwiki-server.crt:/certs/deepwiki-server.crt:ro
       - ./certs/deepwiki-server.key:/certs/deepwiki-server.key:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
+      # Installed by runtime-material for this host's uid (65532, key 0600).
+      - standalone_runtime_subapp_host:/run/elitea-subapp:ro
     depends_on:
+      runtime-material:
+        condition: service_completed_successfully
       elitea-deepwiki-engine:
         condition: service_healthy
       nats-health:
@@ -1555,10 +1576,11 @@ services:
       # The native runner's model calls (#1359 U2): elitea.llm.v1.ModelService
       # on elitea-main's platform listener, trusting the runtime CA and
       # presenting the sub-application callback identity, which elitea-main
-      # admits through ELITEA_MODEL_SERVICE_CLIENTS. The invocation's
-      # llm_settings.api_base (http://elitea-main:8080/llm/v1) then only names
-      # the route and stays the artifact hop's origin. The fixture runner
-      # calls no model and ignores them.
+      # admits through ELITEA_MODEL_SERVICE_CLIENTS. Its artifact-folder reads
+      # take the same origin and identity (ArtifactObjectService, #1359 U5).
+      # The invocation's llm_settings.api_base is a fixed placeholder
+      # (https://elitea-platform.invalid/llm/v1) that only names the route.
+      # The fixture runner calls no model and ignores them.
       ELITEA_DEEPWIKI_MODEL_SERVICE_URL: "https://elitea-main:9446"
       ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
       ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
@@ -1638,6 +1660,15 @@ services:
       ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
       # Cancellation fan-out between replicas (elitea.subapp.inventory.cancel.<id>).
       ELITEA_INVENTORY_NATS_URL: "nats://nats:4222"
+      # Artifact uploads and reads (#1359 U5): elitea.runtime.v1.
+      # ArtifactObjectService on elitea-main's platform listener, trusting the
+      # runtime CA and presenting the sub-application callback identity,
+      # which elitea-main admits through ELITEA_ARTIFACT_SERVICE_CLIENTS. No
+      # HTTP callback origin any more.
+      ELITEA_INVENTORY_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_INVENTORY_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
+      ELITEA_INVENTORY_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
+      ELITEA_INVENTORY_CALLBACK_KEY_FILE: /run/elitea-subapp/subapp-callback-client.key
     expose:
       - "9443"
     volumes:
@@ -1645,7 +1676,11 @@ services:
       - ./certs/inventory-server.crt:/certs/inventory-server.crt:ro
       - ./certs/inventory-server.key:/certs/inventory-server.key:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
+      # Installed by runtime-material for this host's uid (65532, key 0600).
+      - standalone_runtime_subapp_host:/run/elitea-subapp:ro
     depends_on:
+      runtime-material:
+        condition: service_completed_successfully
       elitea-inventory-engine:
         condition: service_healthy
       nats-health:
@@ -1717,9 +1752,12 @@ services:
       # The native runner's model calls (#1359 U2): elitea.llm.v1.ModelService
       # on elitea-main's platform listener, trusting the runtime CA and
       # presenting the sub-application callback identity, which elitea-main
-      # admits through ELITEA_MODEL_SERVICE_CLIENTS. The invocation's
-      # llm_settings.api_base (http://elitea-main:8080/llm/v1) then only names
-      # the route. The fixture runner calls no model and ignores them.
+      # admits through ELITEA_MODEL_SERVICE_CLIENTS. Its artifact-folder reads
+      # and its `investigate` source-tool calls (InternalToolService.
+      # InvokeToolkit) take the same origin and identity (#1359 U5). The
+      # invocation's llm_settings.api_base is a fixed placeholder
+      # (https://elitea-platform.invalid/llm/v1) that only names the route.
+      # The fixture runner calls no model and ignores them.
       ELITEA_INVENTORY_MODEL_SERVICE_URL: "https://elitea-main:9446"
       ELITEA_INVENTORY_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
       ELITEA_INVENTORY_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
@@ -2062,6 +2100,9 @@ volumes:
   # The DeepWiki/Inventory engines' ModelService client: runtime CA plus the
   # sub-application callback certificate and key (#1359 U2).
   standalone_runtime_subapp:
+  # The same material for the DeepWiki/Inventory hosts' artifact calls
+  # (#1359 U5), owned by their uid (65532).
+  standalone_runtime_subapp_host:
   # The worker's output spool. Private (0700, uid 10001) — prepared by
   # worker-spool-init because a fresh named volume starts 0755 root-owned.
   standalone_worker_spool:

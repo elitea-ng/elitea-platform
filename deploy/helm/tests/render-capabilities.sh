@@ -393,7 +393,9 @@ fi
 
 # A name config.go reads through lookup() but derives when absent is marked
 # `// helm-render-optional: NAME` beside its lookup; the chart may omit it.
-grep -oE 'helm-render-optional: ELITEA_RUNTIME_[A-Z0-9_]+' "$CONFIG_GO" |
+# None is marked today (#1359 U5 retired the last, CURRENT_MAIN_BASE_URL), so
+# an empty match is not an error.
+{ grep -oE 'helm-render-optional: ELITEA_RUNTIME_[A-Z0-9_]+' "$CONFIG_GO" || true; } |
   sed -E 's/.*: //' | sort -u >"$WORK/optional-names.txt"
 comm -23 "$WORK/required-names.all.txt" "$WORK/optional-names.txt" \
   >"$WORK/required-names.txt"

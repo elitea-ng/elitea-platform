@@ -2009,6 +2009,45 @@ sys.stdout.write(reply)
       skip "no deploy/certs/vector/main-client.crt to probe an unlisted ModelService identity with (run: deploy/scripts/gen-vector-certs.sh)"
     fi
 
+    # elitea.runtime.v1.ArtifactObjectService and InternalToolService (#1359
+    # U5): the artifact and internal-MCP hops that used to be HTTP. The same
+    # shape as the ModelService probe: an invalid bearer, so nothing is read
+    # or run. Admitted, the call reaches the artifact route (or the MCP
+    # endpoint), whose 401 comes back WITH the service's refusal trailer;
+    # PermissionDenied without it is grpcauth refusing an identity missing
+    # from ELITEA_ARTIFACT_SERVICE_CLIENTS / ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS.
+    runtime_rpc() { # runtime_rpc <cert basename> <proto> <json> <method>
+      $ENGINE run --rm --network "$NETWORK" --user 0:0 \
+        -v "${RUNTIME_CERTS}:/m:ro" -v "${REPO_ROOT}/libs/proto:/proto:ro" \
+        docker.io/fullstorydev/grpcurl:v1.9.1 -v \
+        -cacert /m/runtime-ca.crt -cert "/m/$1.crt" -key "/m/$1.key" \
+        -import-path /proto -proto "$2" \
+        -H 'authorization: Bearer standalone-stack-invalid-bearer' \
+        -d "$3" \
+        elitea-main:9446 "$4" 2>&1 || true
+    }
+    runtime_service_probe() { # runtime_service_probe <label> <identity> <clients env> <trailer> <answer>
+      case "$5" in
+        *"$4"*"Code: Unauthenticated"*)
+          ok "$1 on :9446 admits $2 and answers an invalid bearer with the route's 401 (Unauthenticated + $4)" ;;
+        *"Code: PermissionDenied"*)
+          fail "$1 on :9446 refused $2 — it is missing from $3" ;;
+        *"Code: Unimplemented"*)
+          fail "$1 is not registered on :9446 ($3 is empty?)" ;;
+        *) fail "$1 on :9446 did not answer as its route: $(printf '%s' "$5" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
+      esac
+    }
+    for ident in subapp-callback-client agent-worker-client; do
+      runtime_service_probe ArtifactObjectService "$ident" ELITEA_ARTIFACT_SERVICE_CLIENTS elitea-artifact-refusal-bin \
+        "$(runtime_rpc "$ident" elitea/runtime/v1/artifact_object.proto '{"project_id":1}' elitea.runtime.v1.ArtifactObjectService/ListBuckets)"
+    done
+    runtime_service_probe InternalToolService agent-worker-client ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS elitea-internal-tool-refusal-bin \
+      "$(runtime_rpc agent-worker-client elitea/runtime/v1/internal_tool.proto '{"scope":{"project_id":1,"scope":"applications"}}' elitea.runtime.v1.InternalToolService/ListTools)"
+    # The Inventory engine's `investigate` source-tool calls (InvokeToolkit)
+    # are made under the callback identity.
+    runtime_service_probe InternalToolService subapp-callback-client ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS elitea-internal-tool-refusal-bin \
+      "$(runtime_rpc subapp-callback-client elitea/runtime/v1/internal_tool.proto '{"project_id":1,"toolkit_id":"1","tool_name":"probe"}' elitea.runtime.v1.InternalToolService/InvokeToolkit)"
+
     # ── Client identity headers, from inside the network ────────────────────
     # The signed X-Auth-* projection an authenticating edge used to add is gone
     # (#1359): elitea-main reads no X-Auth-* header at all, signed or not. These

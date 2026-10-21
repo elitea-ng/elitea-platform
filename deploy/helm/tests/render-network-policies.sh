@@ -5,13 +5,14 @@
 #
 # What is enforced, asserted on the RENDERED manifests:
 #
-#   elitea-main      HTTP 8080 admits only the provider pods that call back
-#                    directly and the operator-declared peers; the control,
-#                    output and content listeners admit the worker pods only;
-#                    the platform listener (#1359, which replaced the
-#                    platform-edge proxy) admits the worker and, when its
-#                    callback hop uses it, DeepWiki — and no edge pod or
-#                    platform-edge policy is rendered any more.
+#   elitea-main      HTTP 8080 admits only the operator-declared peers — no
+#                    provider pod (#1359 U5: every provider call is gRPC on
+#                    the platform listener now); the control, output and
+#                    content listeners admit the worker pods only; the
+#                    platform listener (#1359, which replaced the
+#                    platform-edge proxy) admits the worker, DeepWiki and
+#                    Inventory — and no edge pod or platform-edge policy is
+#                    rendered any more.
 #   worker           no inbound traffic at all; egress is not restricted.
 #   sandbox          the supervisor ports admit the worker and elitea-main only.
 #   deepwiki         one port (#1359), the gRPC listener that serves the
@@ -66,7 +67,6 @@ DEEPWIKI=(--set deepwiki.enabled=true
   --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=/run/elitea-deepwiki/tls.crt
   --set main.env.ELITEA_DEEPWIKI_CLIENT_KEY_FILE=/run/elitea-deepwiki/tls.key
   --set main.env.ELITEA_DEEPWIKI_CA_FILE=/run/elitea-deepwiki/ca.crt)
-DEEPWIKI_DIRECT=(--set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080)
 INVENTORY=(--set inventory.enabled=true
   --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com
   --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db
@@ -74,7 +74,6 @@ INVENTORY=(--set inventory.enabled=true
   --set main.fileConfig.inventoryClientMaterial.enabled=true
   --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls
   --set main.env.ELITEA_INVENTORY_ENABLED=true
-  --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=http://elitea-main:8080
   --set main.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com
   --set main.env.ELITEA_INVENTORY_CLIENT_CERT_FILE=/run/elitea-inventory/tls.crt
   --set main.env.ELITEA_INVENTORY_CLIENT_KEY_FILE=/run/elitea-inventory/tls.key
@@ -91,7 +90,7 @@ render() { # render <name> <args...> -> $WORK/<name>.yaml
 }
 
 # ── 1. The policies, against the pods the chart renders ──────────────────────
-# check <name> <worker> <supervisor> <deepwiki: none|direct|platform> <inventory: 0|1>
+# check <name> <worker> <supervisor> <deepwiki: 0|1> <inventory: 0|1>
 check() {
   python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "${EXPECT_GRPC:-}" "${EXPECT_INV_GRPC:-}" <<'PY'
 import sys, yaml
@@ -99,7 +98,7 @@ import sys, yaml
 path, name, worker, sup, deepwiki, inventory = sys.argv[1:7]
 expect_grpc = sys.argv[7] if len(sys.argv) > 7 else ""
 expect_inv_grpc = sys.argv[8] if len(sys.argv) > 8 else ""
-worker, sup, inventory = worker == "1", sup == "1", inventory == "1"
+worker, sup, deepwiki, inventory = worker == "1", sup == "1", deepwiki == "1", inventory == "1"
 docs = [d for d in yaml.safe_load_all(open(path)) if d]
 bad = []
 count = 0
@@ -136,7 +135,7 @@ if worker:
     expected["elitea-worker-netpol"] = WORKER
 if sup:
     expected["elitea-sandbox-supervisor-netpol"] = SUP
-if deepwiki != "none":
+if deepwiki:
     expected["elitea-deepwiki-netpol"] = DW
 if inventory:
     expected["elitea-inventory-netpol"] = INV
@@ -187,7 +186,10 @@ if main:
     # No platform-edge pod exists any more (#1359): nothing named after it
     # may render, and nothing reaches 8080 on its behalf.
     check(not any("platform-edge" in n for n in pods), "a platform-edge workload is still rendered")
-    want_http = sorted(([DW] if deepwiki == "direct" else []) + ([INV] if inventory else []))
+    # No provider pod on 8080 (#1359 U5): DeepWiki's artifact hop and
+    # Inventory's test_tool hop are gRPC on the platform listener now, and
+    # these renders declare no operator peer.
+    want_http = []
     http = by.get((8080,))
     check(http is not None or not want_http, "main: no rule for 8080")
     check(http is None or want_http, "main: 8080 rule without a peer")
@@ -195,20 +197,20 @@ if main:
         got = peer_targets(http, "main:8080")
         check(got == want_http, f"main:8080 admits {got}, want {want_http}")
         check(WORKER not in got, "main:8080 must not admit the worker")
+        check(DW not in got and INV not in got, "main:8080 must not admit a provider pod")
     # runtime listeners: exactly the ports the Deployment declares. control,
     # output and content admit the worker only; the platform listener admits
-    # the worker and, when its callback uses it, DeepWiki.
+    # the worker, DeepWiki and Inventory.
     ctr = deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0]["ports"]
     rt = sorted(p["containerPort"] for p in ctr if p["name"].startswith("runtime-") and p["name"] != "runtime-platform")
     plat = [p["containerPort"] for p in ctr if p["name"] == "runtime-platform"]
     check(bool(rt) == bool(plat), f"main: declares runtime ports {rt} but platform listener {plat}")
     rts = [k for k in by if k != (8080,) and k != tuple(plat)]
-    # The providers' native engines make their model calls over ModelService
-    # on the platform listener (#1359 U2) whatever the artifact hop does, so
-    # both are admitted there whenever the listener exists (every composed
-    # install here runs the native engine).
+    # The providers' hosts and engines make every call to elitea-main over
+    # gRPC on the platform listener (#1359 U2/U5): models, artifacts and
+    # Inventory's source tools. Both are admitted there whenever they run.
     want_platform = sorted(([WORKER] if worker else [])
-                           + ([DW] if deepwiki != "none" and plat else [])
+                           + ([DW] if deepwiki and plat else [])
                            + ([INV] if inventory and plat else []))
     if rt and worker:
         check(rts == [tuple(rt)], f"main: runtime rule ports {rts}, want {[tuple(rt)]}")
@@ -291,19 +293,21 @@ run() { # run <name> <worker> <supervisor> <deepwiki> <inventory> -- <helm args>
 }
 
 echo "== profiles =="
-run default      0 0 none 0 --
-run standalone   0 0 none 0 -- "${STANDALONE[@]}"
-run auth-minimal 0 0 none 0 -- -f "$CHART/values-auth-minimal.yaml"
-run staging      0 0 none 0 -- -f "$CHART/values-staging.yaml"
-# values-kind.yaml runs DeepWiki with its callback on elitea-main:8080.
-run kind         0 0 direct 0 -- -f "$REPO/deploy/kind/values-kind.yaml"
+run default      0 0 0 0 --
+run standalone   0 0 0 0 -- "${STANDALONE[@]}"
+run auth-minimal 0 0 0 0 -- -f "$CHART/values-auth-minimal.yaml"
+run staging      0 0 0 0 -- -f "$CHART/values-staging.yaml"
+# values-kind.yaml runs DeepWiki beside the runtime plane (#1359 U5), so the
+# provider pod is admitted on the platform listener and nothing on 8080.
+run kind         0 0 1 0 -- -f "$REPO/deploy/kind/values-kind.yaml"
 echo "== composed installs =="
-run worker       1 0 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
-run full         1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
-run full-via-platform 1 1 platform 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformListener=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
+run worker       1 0 0 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
+run full         1 1 1 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${INVENTORY[@]}"
+run deepwiki-only 0 0 1 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}"
+run inventory-only 0 0 0 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}"
 # The one gRPC port follows platformGrpc.port everywhere it appears.
-EXPECT_GRPC=9555 run deepwiki-grpc-port 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set deepwiki.platformGrpc.port=9555
-EXPECT_INV_GRPC=9555 run inventory-grpc-port 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set inventory.platformGrpc.port=9555
+EXPECT_GRPC=9555 run deepwiki-grpc-port 0 0 1 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" --set deepwiki.platformGrpc.port=9555
+EXPECT_INV_GRPC=9555 run inventory-grpc-port 0 0 0 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set inventory.platformGrpc.port=9555
 
 # ── 2. Guards ────────────────────────────────────────────────────────────────
 echo "== guards =="
@@ -331,7 +335,16 @@ refuses "noExternalIngress with main.ingress.enabled (gateway-api)" "contradicts
   "${STANDALONE[@]}" "${NOEXT[@]}" --set main.ingress.enabled=true --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.x=y --set main.ingress.gatewayApi=true \
   --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system
 refuses "deepwiki without mutual TLS" "deepwiki.mtls.enabled is false, but the provider serves gRPC over mutual TLS only" \
-  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set deepwiki.mtls.enabled=false
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" --set deepwiki.mtls.enabled=false
+# The switch that once moved DeepWiki's artifact hop off 8080 (#1359 U5): the
+# hop is always the platform listener now, so the key is refused, whatever
+# its value, rather than read as "back to 8080".
+refuses "deepwiki.callbackViaPlatformListener=false" "callbackViaPlatformListener was removed" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformListener=false
+refuses "the retired DeepWiki HTTP callback origin" "ELITEA_DEEPWIKI_CALLBACK_BASE_URL was retired" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL=http://elitea-main:8080
+refuses "the retired Inventory HTTP callback origin" "ELITEA_INVENTORY_CALLBACK_BASE_URL was retired" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${INVENTORY[@]}" --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=http://elitea-main:8080
 refuses "inventory without mutual TLS" "inventory.mtls.enabled is false, but the provider serves gRPC over mutual TLS only" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${INVENTORY[@]}" --set inventory.mtls.enabled=false
 refuses "enabled=false without externallyManaged" "networkPolicies.externallyManaged" \

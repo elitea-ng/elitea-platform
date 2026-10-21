@@ -24,12 +24,6 @@
   wrote a value here would stop a default install. See elitea.aiProjectId.
 */ -}}
 {{- /*
-  The DeepWiki callback origin on elitea-main's platform listener (#1359), when
-  deepwiki.callbackViaPlatformListener fills it in; an explicit value wins.
-*/ -}}
-{{- $deepwikiCallback := include "elitea-deepwiki.callbackBaseUrl" . }}
-{{- if and $deepwikiCallback (not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" $deepwikiCallback) }}{{- end }}
-{{- /*
   ELITEA_CLOUD_EXECUTOR_CONFIGURED (ADR-0034) is DERIVED when empty: true
   exactly when this chart runs the workspace-run supervisor
   (sandboxKubernetes.workspaceRuns + supervisor; workspace-profile.yaml has

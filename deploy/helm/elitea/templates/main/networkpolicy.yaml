@@ -1,32 +1,29 @@
 {{- if and .Values.main.enabled .Values.networkPolicies.enabled }}
 {{- $np := .Values.networkPolicies }}
 {{- $worker := .Values.worker.enabled }}
-{{- /* The artifact hop: 8080 unless callbackViaPlatformListener moved it. */ -}}
-{{- $deepwikiViaPlatform := and .Values.deepwiki.enabled .Values.deepwiki.callbackViaPlatformListener .Values.main.runtime.enabled }}
-{{- $deepwiki := and .Values.deepwiki.enabled (not $deepwikiViaPlatform) }}
-{{- $inventory := .Values.inventory.enabled }}
-{{- /* The model hop (#1359 U2): both engines call ModelService on the
-       platform listener whatever the artifact hop does. */ -}}
-{{- $deepwikiPlatform := and .Values.main.runtime.enabled (or (include "elitea-deepwiki.modelCalls" .) $deepwikiViaPlatform) }}
-{{- $inventoryPlatform := and .Values.main.runtime.enabled (include "elitea-inventory.modelCalls" .) }}
+{{- /* The providers reach elitea-main only over gRPC on the platform
+       listener (#1359 U2/U5): their hosts' artifact calls and their engines'
+       model, artifact and source-tool calls. No provider pod is admitted on
+       8080. */ -}}
+{{- $deepwikiPlatform := and .Values.main.runtime.enabled .Values.deepwiki.enabled }}
+{{- $inventoryPlatform := and .Values.main.runtime.enabled .Values.inventory.enabled }}
 {{- $runtimePeers := and .Values.main.runtime.enabled $worker }}
 {{- $platformPeers := or $runtimePeers $deepwikiPlatform $inventoryPlatform }}
 {{- $vectorPeers := and .Values.main.runtime.enabled .Values.vector.enabled }}
 {{- $egressAuditPeers := and .Values.main.runtime.enabled (include "elitea-egress-proxy.auditEnabled" .) }}
-{{- $httpPeers := or $deepwiki $inventory $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
+{{- $httpPeers := or $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
 # Ingress to the elitea-main pods. Only the sources listed here may open a
 # connection; every other in-cluster source is refused.
 #
-#   8080 (HTTP)  the provider pods that call back directly,
-#                networkPolicies.main.ingressFrom / extraIngressFrom (the
+#   8080 (HTTP)  networkPolicies.main.ingressFrom / extraIngressFrom (the
 #                gateway or ingress controller) and networkPolicies.probeFrom.
+#                No provider pod: DeepWiki and Inventory reach elitea-main only
+#                on the platform listener (#1359 U5).
 #   runtime      the worker pods only, on the control / output / content
 #                listeners, when the runtime plane is composed.
 #   platform     the worker pods, DeepWiki and Inventory, on the platform
-#                listener (#1359; it replaced platform-edge). The engines make
-#                their model calls there (ModelService, #1359 U2) whatever
-#                deepwiki.callbackViaPlatformListener says; that flag only
-#                takes DeepWiki's artifact hop off 8080.
+#                listener (#1359; it replaced platform-edge): gRPC only —
+#                ModelService, ArtifactObjectService, InternalToolService.
 #   control      elitea-vector, on the control listener only, for token
 #                introspection (ADR-0031), when vector is enabled.
 #
@@ -53,12 +50,6 @@ spec:
         - port: 8080
           protocol: TCP
       from:
-        {{- if $deepwiki }}
-        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "deepwiki") | nindent 8 }}
-        {{- end }}
-        {{- if $inventory }}
-        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "inventory") | nindent 8 }}
-        {{- end }}
         {{- with $np.main.ingressFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

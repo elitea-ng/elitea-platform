@@ -44,35 +44,12 @@ because the container's own refusal is a CrashLoopBackOff an operator has to
 go read logs for, and this is a message in the terminal that ran the command.
 */}}
 {{/*
-elitea-deepwiki.callbackBaseUrl — the origin the provider calls back to: an
-explicit main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL, else elitea-main's
-platform listener (worker.runtime.platformOrigin) when
-deepwiki.callbackViaPlatformListener is on, else empty (which validateDeepWiki
-refuses for an enabled facade).
-
-Since #1359 U2 this is the ARTIFACT hop's origin only: elitea-main hands it to
-the engine as llm_settings.api_base, where it merely names the route, and the
-engine makes its model calls to ELITEA_DEEPWIKI_MODEL_SERVICE_URL
-(elitea-deepwiki.modelCalls) whatever this says.
-*/}}
-{{- define "elitea-deepwiki.callbackBaseUrl" -}}
-{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
-{{- if $explicit -}}
-{{- $explicit -}}
-{{- else if .Values.deepwiki.callbackViaPlatformListener -}}
-{{- .Values.worker.runtime.platformOrigin -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
 elitea-deepwiki.modelCalls — "true" when this release runs the engine sidecar
 (deepwiki.enabled, ELITEA_DEEPWIKI_RUNNER native) with the native engine
 (deepwiki.engine.runner native; the fixture runner calls no model), the
 container that makes DeepWiki's model calls. Those go over elitea.llm.v1.ModelService on
 elitea-main's platform listener (#1359 U2) — the listener serves no HTTP, and
-the engine refuses a cleartext model origin — so the sidecar always gets the
-runtime CA, the callback client certificate and
-ELITEA_DEEPWIKI_MODEL_SERVICE_URL, whatever callbackViaPlatformListener says.
+the engine refuses a cleartext model origin.
 */}}
 {{- define "elitea-deepwiki.modelCalls" -}}
 {{- if .Values.deepwiki.enabled -}}
@@ -81,12 +58,14 @@ ELITEA_DEEPWIKI_MODEL_SERVICE_URL, whatever callbackViaPlatformListener says.
 {{- end -}}
 
 {{/*
-elitea-deepwiki.callbackMaterial — "true" when the pod mounts the runtime CA
-and the callback client certificate: for the engine's model calls, or for the
-host's artifact hop when callbackViaPlatformListener is on.
+elitea-deepwiki.callbackMaterial — "true" whenever DeepWiki runs: the HOST
+container uploads and reads wiki artifacts over ArtifactObjectService on
+elitea-main's platform listener (#1359 U5) and the engine sidecar makes its
+model calls and artifact-folder reads there, so the pod always mounts the
+runtime CA and the callback client certificate.
 */}}
 {{- define "elitea-deepwiki.callbackMaterial" -}}
-{{- if or (include "elitea-deepwiki.modelCalls" .) .Values.deepwiki.callbackViaPlatformListener -}}true{{- end -}}
+{{- if .Values.deepwiki.enabled -}}true{{- end -}}
 {{- end -}}
 
 {{/* Where both containers find the runtime CA for the callback hop. */}}
@@ -205,55 +184,40 @@ elitea-main
 {{- end -}}
 
 {{/*
-  Guard #0: the callback hop through elitea-main's platform listener (#1359,
-  which replaced platform-edge, ADR-0027). That listener is a runtime-plane
-  listener, so without main.runtime there is nothing to dial; it requires a
-  runtime-CA client certificate, so the hop needs one; and an explicit
-  callback URL that is not the listener would mount material for a hop that
-  never uses it.
-
-  The old key, deepwiki.callbackViaPlatformEdge, is NOT mapped over: the new
-  hop needs a client certificate the old one never had, so a silent rename
-  would render a pod that fails every callback handshake.
+  Guard #0: the callback hop. It is always gRPC on elitea-main's platform
+  listener now (#1359 U5): the host's artifact uploads and reads over
+  ArtifactObjectService, the engine's model calls and artifact-folder reads
+  over ModelService and ArtifactObjectService. The two switches that once
+  chose the hop are refused whatever their value: callbackViaPlatformEdge
+  (ADR-0027, gone with platform-edge) and callbackViaPlatformListener (the
+  only path now, so nothing is left to choose).
 */}}
 {{- if .Values.deepwiki.callbackViaPlatformEdge -}}
-{{- fail "deepwiki.callbackViaPlatformEdge was removed with platform-edge (#1359). Use deepwiki.callbackViaPlatformListener, and mint the callback client certificate into deepwiki.callbackClient.secretName (docs/UPGRADING.md)." -}}
+{{- fail "deepwiki.callbackViaPlatformEdge was removed with platform-edge (#1359). The callback hop is always gRPC on elitea-main's platform listener now: remove the key and mint the callback client certificate into deepwiki.callbackClient.secretName (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if hasKey .Values.deepwiki "callbackViaPlatformListener" -}}
+{{- fail "deepwiki.callbackViaPlatformListener was removed (#1359 U5): DeepWiki's artifact hop is always gRPC (elitea.runtime.v1.ArtifactObjectService) on elitea-main's platform listener, with the runtime CA and deepwiki.callbackClient, so there is nothing left to choose. Remove the key, and remove main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL too (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if .Values.deepwiki.enabled -}}
+{{- if not .Values.main.runtime.enabled -}}
+{{- fail "deepwiki.enabled needs main.runtime.enabled: the provider host uploads and reads wiki artifacts over elitea.runtime.v1.ArtifactObjectService, and the engine makes its model calls over elitea.llm.v1.ModelService, both on elitea-main's platform gRPC listener (#1359 U2/U5), which only the runtime opens. Turn the runtime on (main.runtime.enabled)." -}}
+{{- end -}}
+{{- if not .Values.deepwiki.callbackClient.secretName -}}
+{{- fail "deepwiki.enabled needs deepwiki.callbackClient.secretName: the provider host and engine reach elitea-main's platform listener (#1359 U2/U5), which requires a client certificate the runtime CA signed, admitted as dns:elitea-subapp-callback. Create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key) and name it there." -}}
+{{- end -}}
 {{- end -}}
 {{/*
-  Guard #0a: the engine's model path (#1359 U2). The engine sidecar makes its
-  model calls over ModelService on elitea-main's platform listener whatever
-  callbackViaPlatformListener says, so it needs that listener (main.runtime)
-  and a runtime-CA client certificate to present there. Without either it
-  starts, and every generation fails at its first model call. The chart owns
-  the engine's model-hop settings, so deepwiki.env may not repeat them: a
+  Guard #0a: the platform-listener settings. Guard #0 already requires the
+  listener (main.runtime) and the callback client certificate for any
+  DeepWiki install, sidecar or not. The chart owns the host's artifact-hop
+  and the engine's model-hop settings, so deepwiki.env may not repeat them: a
   name in both is a duplicate env entry whose winner is decided by order.
 */}}
-{{- range $name := list "ELITEA_DEEPWIKI_MODEL_SERVICE_URL" "ELITEA_DEEPWIKI_CALLBACK_CA_FILE" "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE" "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE" -}}
+{{- range $name := list "ELITEA_DEEPWIKI_MODEL_SERVICE_URL" "ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL" "ELITEA_DEEPWIKI_CALLBACK_CA_FILE" "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE" "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE" -}}
 {{- if hasKey $env $name -}}
-{{- fail (printf "deepwiki.env sets %s, which the chart renders itself: the engine's model calls go to elitea-main's platform listener (worker.runtime.platformOrigin) with the runtime CA and deepwiki.callbackClient. Remove it from deepwiki.env." $name) -}}
+{{- fail (printf "deepwiki.env sets %s, which the chart renders itself: the host's artifact calls and the engine's model and artifact calls go to elitea-main's platform listener (worker.runtime.platformOrigin) with the runtime CA and deepwiki.callbackClient. Remove it from deepwiki.env." $name) -}}
 {{- end -}}
 {{- end -}}
-{{- if include "elitea-deepwiki.modelCalls" . -}}
-{{- if not .Values.main.runtime.enabled -}}
-{{- fail "deepwiki.enabled runs the native engine sidecar (ELITEA_DEEPWIKI_RUNNER native, deepwiki.engine.runner native), whose model calls go over elitea.llm.v1.ModelService on elitea-main's platform listener (#1359 U2), but main.runtime.enabled is false, so there is no such listener and every generation would fail at its first model call. Turn the runtime on (main.runtime.enabled)." -}}
-{{- end -}}
-{{- if not .Values.deepwiki.callbackClient.secretName -}}
-{{- fail "deepwiki.enabled runs the engine sidecar, whose model calls go over elitea.llm.v1.ModelService on elitea-main's platform listener (#1359 U2), but deepwiki.callbackClient.secretName is empty. The listener requires a client certificate the runtime CA signed, admitted as dns:elitea-subapp-callback: create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key) and name it there." -}}
-{{- end -}}
-{{- end -}}
-{{- if .Values.deepwiki.callbackViaPlatformListener -}}
-{{- if not .Values.main.runtime.enabled -}}
-{{- fail "deepwiki.callbackViaPlatformListener is on, but main.runtime.enabled is false, so elitea-main opens no platform listener. Turn the runtime on, or leave the callback hop on main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL (cleartext in-cluster)." -}}
-{{- end -}}
-{{- if not .Values.deepwiki.callbackClient.secretName -}}
-{{- fail "deepwiki.callbackViaPlatformListener is on, but deepwiki.callbackClient.secretName is empty. The platform listener requires a client certificate the runtime CA signed: create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key) and name it there." -}}
-{{- end -}}
-{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
-{{- if and $explicit (ne $explicit (.Values.worker.runtime.platformOrigin | toString)) -}}
-{{- fail (printf "deepwiki.callbackViaPlatformListener is on, so the callback hop is %s, but main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL says %q. Leave it unset (the chart fills it in) or turn the flag off." .Values.worker.runtime.platformOrigin $explicit) -}}
-{{- end -}}
-{{- end -}}
-
 {{/*
   Guard #1: the git-host allowlist.
 

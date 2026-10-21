@@ -47,7 +47,7 @@ flowchart TB
 Every first-party image and chart is public on `ghcr.io/elitea-ng`, so no image pull secret is needed.
 
 <Note title="You do not need Traefik">
-The worker (and the DeepWiki and Inventory engines, for their model calls) reaches elitea-main over **gRPC** on a **private** mTLS listener (port 9446) that elitea-main serves itself, admitting only clients with a certificate from the runtime CA, and each gRPC service on it only the workload identities configured for it. It serves no HTTP; check it with gRPC health, not an HTTP probe. There is no internal proxy to run. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
+The worker and the DeepWiki and Inventory pods reach elitea-main over **gRPC** on a **private** mTLS listener (port 9446) that elitea-main serves itself, admitting only clients with a certificate from the runtime CA, and each gRPC service on it only the workload identities configured for it. It serves no HTTP; check it with gRPC health, not an HTTP probe. There is no internal proxy to run. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
 </Note>
 
 ## Before you start: decide these
@@ -305,9 +305,9 @@ openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-agent-worker" \
   -keyout agent-worker-client.key -out agent-worker-client.csr 2>/dev/null
 sign agent-worker-client "subjectAltName=URI:$WORKER_ID\n$CLIENT_EXT"
 
-# The DeepWiki and Inventory engines' client certificate for their model
-# calls (ModelService on 9446): exactly ONE DNS SAN, elitea-subapp-callback,
-# which elitea-main admits by that name.
+# The DeepWiki and Inventory pods' client certificate for their calls on
+# 9446 (models, artifacts, Inventory's source tools): exactly ONE DNS SAN,
+# elitea-subapp-callback, which elitea-main admits by that name.
 openssl req -newkey rsa:2048 -nodes -subj "/CN=elitea-subapp-callback" \
   -keyout subapp-callback-client.key -out subapp-callback-client.csr 2>/dev/null
 sign subapp-callback-client "subjectAltName=DNS:elitea-subapp-callback\n$CLIENT_EXT"
@@ -551,9 +551,8 @@ main:
       enabled: true
       secretName: elitea-main-gateway-client-tls   # issued by the chart
       mountPath: /run/elitea-llm-gateway
-    # Production authentication. Required by the runtime plane, personal
-    # access tokens and the worker's private edge, even when nobody signs
-    # in with a password.
+    # Production authentication. Required by the runtime plane and personal
+    # access tokens, even when nobody signs in with a password.
     authConfig:
       enabled: true
       material:
@@ -561,9 +560,9 @@ main:
         secretName: elitea-main-auth-material
       document:
         schema_version: elitea.auth.form.v2
-        # NOT your public hostname: the origin of the edge that makes the
-        # edge-auth call, which is the worker's platform edge.
-        public_origin: https://elitea-platform-edge
+        # Your public origin, the same as DEPLOYMENT_URL: it scopes the
+        # Form session cookie. No edge authenticates for elitea-main.
+        public_origin: https://elitea.example.com
         trusted_proxy_cidrs:
           - 10.0.0.0/8
           - 172.16.0.0/12
@@ -756,13 +755,11 @@ inventory:
 main:
   env:
     ELITEA_DEEPWIKI_ENABLED: "true"
-    ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
     ELITEA_DEEPWIKI_CLIENT_CERT_FILE: "/run/elitea-deepwiki/tls.crt"
     ELITEA_DEEPWIKI_CLIENT_KEY_FILE: "/run/elitea-deepwiki/tls.key"
     ELITEA_DEEPWIKI_CA_FILE: "/run/elitea-deepwiki/ca.crt"
     ELITEA_INVENTORY_ENABLED: "true"
-    ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
     ELITEA_INVENTORY_CLIENT_CERT_FILE: "/run/elitea-inventory/tls.crt"
     ELITEA_INVENTORY_CLIENT_KEY_FILE: "/run/elitea-inventory/tls.key"
@@ -778,7 +775,7 @@ main:
 
 elitea-main reaches each provider over mTLS gRPC on its platform port; the chart derives `ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` / `ELITEA_INVENTORY_PLATFORM_GRPC_TARGET` (`elitea-<app>-svc:9443`). The old `*_BASE_URL` keys are refused. A provider with more than one replica also needs its NATS client certificate (`elitea-deepwiki` / `elitea-inventory`, issued by the chart when NATS TLS is on) so a cancel reaches the replica running the job.
 
-The engines make their model calls over gRPC on elitea-main's private listener (port 9446, `elitea.llm.v1.ModelService`), so DeepWiki and Inventory need the runtime plane (`main.runtime.enabled`, already on above) and the `elitea-deepwiki-callback-client` Secret from Step 4. The chart mounts it with the runtime CA into each engine, sets `ELITEA_<APP>_MODEL_SERVICE_URL=https://elitea-main:9446`, and adds `dns:elitea-subapp-callback` to the identities elitea-main admits there. `ELITEA_<APP>_CALLBACK_BASE_URL` stays `http://elitea-main:8080`: it carries the artifact uploads. Leave `deepwiki.callbackViaPlatformListener` off; the listener does not serve those yet.
+The providers call elitea-main only over gRPC on its private listener (port 9446): the engines' model calls (`elitea.llm.v1.ModelService`), artifact uploads and reads from both containers (`elitea.runtime.v1.ArtifactObjectService`), and Inventory's `investigate` source-tool calls (`elitea.runtime.v1.InternalToolService`). So DeepWiki and Inventory need the runtime plane (`main.runtime.enabled`, already on above) and the `elitea-deepwiki-callback-client` Secret from Step 4, and the chart refuses to render either one without them. The chart mounts that Secret and the runtime CA into both containers of each provider pod, sets `ELITEA_<APP>_ARTIFACT_SERVICE_URL` and `ELITEA_<APP>_MODEL_SERVICE_URL` to `https://elitea-main:9446`, and adds `dns:elitea-subapp-callback` to the identities elitea-main admits for each service. No provider pod reaches elitea-main on port 8080. The old `ELITEA_<APP>_CALLBACK_BASE_URL` keys and `deepwiki.callbackViaPlatformListener` are refused.
 
 Turn on both halves together. The chart renders `deepwiki.enabled: true` even when elitea-main's facade is off, and you then get a running service that nothing calls.
 </Accordion>

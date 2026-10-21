@@ -11,7 +11,10 @@
 #     certificates issued by cert-manager from one internal CA ClusterIssuer,
 #     exactly as templates/deepwiki/certificates.yaml asks for;
 #   * the engine sidecar runs the FIXTURE runner, so a generation completes
-#     with no LLM and no git host.
+#     with no LLM and no git host;
+#   * the provider uploads its pages over gRPC on elitea-main's platform
+#     listener (#1359 U5), so elitea-main runs its runtime plane, on the
+#     in-repo NATS chart (deploy/helm/nats + deploy/helm/nats-bootstrap).
 #
 #   deploy/kind/kind-stack.sh up       # build, load, install, seed  (~6-9 min cold)
 #   deploy/kind/kind-stack.sh verify   # prove the four claims below
@@ -210,6 +213,31 @@ ensure_runtime_material() {
   # material Secret. Nothing renders a reader for it any more.
   kc -n "$NS" delete secret elitea-runtime-redis-material --ignore-not-found >/dev/null
 
+  # The runtime plane's material (#1359 U5): the platform listener's keypair,
+  # the command-signing keys and the runtime CA, the nine files
+  # values-standalone.yaml lists.
+  local runtime_args=() name
+  for name in runtime-ca.crt command-signing-key.pem command-signing-keyring.json \
+      control-server.crt control-server.key output-server.crt output-server.key \
+      content-server.crt content-server.key; do
+    [ -f "${RUNTIME_MATERIAL_DIR}/${name}" ] || die "missing material: ${RUNTIME_MATERIAL_DIR}/${name}"
+    runtime_args+=("--from-file=${RUNTIME_MATERIAL_DIR}/${name}")
+  done
+  kc -n "$NS" create secret generic elitea-runtime-material "${runtime_args[@]}" \
+    --dry-run=client -o yaml | kc apply -f -
+  # The provider pod reads ONLY runtime-ca.crt from the worker's material
+  # Secret (worker.materialSecretName). No worker runs here, so the Secret
+  # holds that one key and nothing a worker would need.
+  kc -n "$NS" create secret generic elitea-worker-material \
+    --from-file="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
+    --dry-run=client -o yaml | kc apply -f -
+  # The sub-application callback identity (DNS:elitea-subapp-callback), the
+  # same certificate the compose stacks mount.
+  kc -n "$NS" create secret generic elitea-deepwiki-callback-client \
+    --from-file=tls.crt="${RUNTIME_MATERIAL_DIR}/subapp-callback-client.crt" \
+    --from-file=tls.key="${RUNTIME_MATERIAL_DIR}/subapp-callback-client.key" \
+    --dry-run=client -o yaml | kc apply -f -
+
   # The three files internal/authcomposition/material.go opens. Their names are
   # the contract: the chart derives every path in the auth document from them.
   # The Form sign-in state is in PostgreSQL, so the plane needs no store of
@@ -264,6 +292,27 @@ install_infra() {
   kc -n "$NS" wait --for=condition=complete --timeout=180s job/rustfs-bucket-init
 }
 
+# The runtime plane publishes onto the NATS JetStream command bus, so the
+# in-repo NATS chart and its bootstrap Job (which creates the RUNTIME streams
+# and every other account's assets) go in first, in the SAME namespace: the
+# NATS CA is a namespaced Issuer, and the platform chart's client Certificates
+# are issued from it. Release names are the ones the charts' defaults assume
+# (Service elitea-nats).
+install_nats() {
+  say "Installing NATS JetStream and its bootstrap"
+  helm dependency build "${REPO_ROOT}/deploy/helm/nats" >/dev/null
+  helm --kube-context "kind-${CLUSTER}" upgrade --install elitea-nats "${REPO_ROOT}/deploy/helm/nats" \
+    --namespace "$NS" \
+    -f "${REPO_ROOT}/deploy/helm/nats/values-scale1.yaml" \
+    -f "${SCRIPT_DIR}/values-nats-kind.yaml" \
+    --wait --timeout 10m
+  helm --kube-context "kind-${CLUSTER}" upgrade --install elitea-nats-bootstrap "${REPO_ROOT}/deploy/helm/nats-bootstrap" \
+    --namespace "$NS" \
+    --set natsUrl=tls://elitea-nats:4222 \
+    --set replicas=1 \
+    --wait --timeout 10m
+}
+
 install_chart() {
   say "Installing the chart (elitea-main + the DeepWiki provider)"
   # The migration Jobs are pre-install hooks: elitea-main's own -all-tenants
@@ -294,6 +343,7 @@ cmd_up() {
   load_images
   install_cert_manager
   install_infra
+  install_nats
   install_chart
   seed
   say "Up. Next: ${BASH_SOURCE[0]} verify"
@@ -494,8 +544,8 @@ case "${1:-}" in
 usage: $0 {up|verify|down}
 
   up      create the kind cluster, build and side-load the images, install
-          cert-manager and the CA issuer, the infrastructure, the chart, and
-          seed the fixtures
+          cert-manager and the CA issuer, the infrastructure, NATS and its
+          bootstrap, the chart, and seed the fixtures
   verify  prove: every pod Ready; the provider pod is the host + engine
           sidecar; the facade registered the provider; a fixture generation
           completes and its pages land in the artifact bucket

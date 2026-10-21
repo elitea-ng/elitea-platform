@@ -27,7 +27,13 @@
 #   5. ModelService's allowlist (ELITEA_MODEL_SERVICE_CLIENTS, #1359 U2) names
 #      the worker, takes extraClients, and its guards refuse a worker without
 #      a SPIFFE ID, an empty list, a hand-set env value, a malformed entry and
-#      extraClients with the runtime off.
+#      extraClients with the runtime off;
+#   6. the ArtifactObjectService and InternalToolService allowlists (#1359 U5:
+#      ELITEA_ARTIFACT_SERVICE_CLIENTS, ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS)
+#      name the worker, the callback identity exactly when a provider needs
+#      it, take extraClients, and refuse the same mistakes; the retired
+#      internal MCP origin (currentMainBaseUrl, ELITEA_RUNTIME_CURRENT_MAIN_
+#      BASE_URL) is refused with a migration message.
 #
 # Usage: deploy/helm/tests/render-platform-listener.sh
 # Needs: helm, yq. No cluster, no network.
@@ -78,9 +84,11 @@ expect "listener address" "$(cm ELITEA_RUNTIME_PLATFORM_ADDRESS)" ":9446"
 expect "listener certificate (content keypair, SAN elitea-main)" "$(cm ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE)" "/run/elitea-runtime/content-server.crt"
 expect "listener key" "$(cm ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE)" "/run/elitea-runtime/content-server.key"
 expect "listener client CA is the runtime CA" "$(cm ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE)" "/run/elitea-runtime/runtime-ca.crt"
-expect "the internal MCP origin names the listener" "$(cm ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL)" "https://elitea-main:9446"
-# Main no longer calls itself (#1359 H7), so even with that origin on the
-# listener the chart renders no client identity of Main's own.
+# The worker's internal MCP is InternalToolService on this listener (#1359
+# U5), so no HTTP origin for it is rendered any more.
+expect "no internal MCP origin is rendered" "$(cm ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL)" "null"
+# Main no longer calls itself (#1359 H7), so the chart renders no client
+# identity of Main's own.
 expect "no Main client identity is rendered" \
   "$(grep -c 'ELITEA_RUNTIME_PLATFORM_CLIENT_\|main-platform-client' "$WORK/worker.yaml" || true)" "0"
 expect "Deployment exposes runtime-platform" \
@@ -114,6 +122,12 @@ retired() {
 }
 retired "worker.platformEdge.enabled=true" "worker.platformEdge was removed" --set worker.platformEdge.enabled=true
 retired "platformOrigin naming the retired edge" "platform-edge Service was removed" --set-string worker.runtime.platformOrigin=https://elitea-platform-edge
+retired "main.runtime.agentExecutionDispatch.currentMainBaseUrl" "currentMainBaseUrl was retired" \
+  --set-string main.runtime.agentExecutionDispatch.currentMainBaseUrl=https://elitea-main:9446
+retired "an EMPTY currentMainBaseUrl" "currentMainBaseUrl was retired" \
+  --set-string main.runtime.agentExecutionDispatch.currentMainBaseUrl=
+retired "main.env.ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL" "ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL was retired" \
+  --set-string main.env.ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL=https://elitea-main:9446
 
 # ---------------------------------------------------------------------------
 # 3. The HTTPRoute rendered from main.ingress.
@@ -212,6 +226,50 @@ elif grep -q "main.runtime.enabled is false, so elitea-main opens no platform li
 else
   fail "extraClients with the runtime off: refused for another reason: $(tail -1 "$WORK/err.txt")"
 fi
+
+# ---------------------------------------------------------------------------
+# 6. ArtifactObjectService and InternalToolService (#1359 U5).
+# ---------------------------------------------------------------------------
+WORKER_ID="spiffe://elitea.standalone/ns/default/sa/agent-worker"
+# values-standalone states the worker identity as extraClients too; it renders
+# once. No provider runs here, so no callback identity.
+expect "ArtifactObjectService admits the worker" "$(cm ELITEA_ARTIFACT_SERVICE_CLIENTS)" "$WORKER_ID"
+expect "InternalToolService admits the worker" "$(cm ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS)" "$WORKER_ID"
+expect "the default render (runtime off) names no artifact or internal-tool client" \
+  "$(grep -c 'ELITEA_ARTIFACT_SERVICE_CLIENTS\|ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS' "$WORK/default.yaml" || true)" "0"
+# The derivation alone (no extraClients): the worker from its runtime session,
+# nothing else, and an EMPTY list when nothing calls (the service is then
+# left unregistered, which elitea-main accepts).
+helm template "${GATEWAY_RENDER_POSTURE[@]}" "${STANDALONE[@]}" "${WORKER[@]}" t "$CHART" \
+  --set-json 'main.runtime.artifactService.extraClients=[]' --set-json 'main.runtime.internalToolService.extraClients=[]' >"$WORK/derived.yaml"
+dcm() { yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" "$1"; }
+expect "derived: ArtifactObjectService = the worker" "$(dcm "$WORK/derived.yaml" ELITEA_ARTIFACT_SERVICE_CLIENTS)" "$WORKER_ID"
+expect "derived: InternalToolService = the worker" "$(dcm "$WORK/derived.yaml" ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS)" "$WORKER_ID"
+helm template "${GATEWAY_RENDER_POSTURE[@]}" "${STANDALONE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
+  --set-json 'main.runtime.artifactService.extraClients=[]' --set-json 'main.runtime.internalToolService.extraClients=[]' >"$WORK/nobody.yaml"
+expect "nothing calls: ArtifactObjectService is left unregistered (empty)" "$(dcm "$WORK/nobody.yaml" ELITEA_ARTIFACT_SERVICE_CLIENTS)" ""
+expect "nothing calls: InternalToolService is left unregistered (empty)" "$(dcm "$WORK/nobody.yaml" ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS)" ""
+helm template "${GATEWAY_RENDER_POSTURE[@]}" "${STANDALONE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
+  --set-json 'main.runtime.artifactService.extraClients=["dns:a.test","spiffe://x.test/ns/a/sa/b","dns:a.test"]' \
+  --set-json 'main.runtime.internalToolService.extraClients=["spiffe://x.test/ns/a/sa/b"]' >"$WORK/extra-u5.yaml"
+expect "artifact extraClients render as given, without repeats" "$(dcm "$WORK/extra-u5.yaml" ELITEA_ARTIFACT_SERVICE_CLIENTS)" "dns:a.test,spiffe://x.test/ns/a/sa/b"
+expect "internal-tool extraClients render as given" "$(dcm "$WORK/extra-u5.yaml" ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS)" "spiffe://x.test/ns/a/sa/b"
+for pair in ELITEA_ARTIFACT_SERVICE_CLIENTS:artifactService ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS:internalToolService; do
+  var="${pair%%:*}"; key="${pair#*:}"
+  refuses "$var set by hand" "main.env.$var must not be set" --set-string "main.env.$var=dns:someone"
+  refuses "a $key extra client that is not a workload identity" "main.runtime.$key.extraClients entry \"agent-worker\" is not a workload identity" \
+    --set-json "main.runtime.$key.extraClients=[\"agent-worker\"]"
+  refuses "$key extraClients that are not a list" "main.runtime.$key.extraClients must be a list" \
+    --set-string "main.runtime.$key.extraClients=dns:someone"
+  if helm template "${GATEWAY_RENDER_POSTURE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
+    --set-json "main.runtime.$key.extraClients=[\"dns:someone\"]" >/dev/null 2>"$WORK/err.txt"; then
+    fail "$key extraClients with the runtime off: the chart rendered, but must refuse"
+  elif grep -q "main.runtime.$key.extraClients is set but main.runtime.enabled is false" "$WORK/err.txt"; then
+    pass "$key extraClients with the runtime off: refused"
+  else
+    fail "$key extraClients with the runtime off: refused for another reason: $(tail -1 "$WORK/err.txt")"
+  fi
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "render-platform-listener.sh: $failures assertion(s) failed" >&2

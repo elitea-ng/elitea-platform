@@ -107,21 +107,19 @@ spec:
             - name: ELITEA_DEEPWIKI_NATS_TLS_KEY_FILE
               value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
             {{- end }}
-            {{- if .Values.deepwiki.callbackViaPlatformListener }}
-            # The callback hop (artifact uploads) is mTLS to elitea-main's
-            # platform listener: trust the runtime CA there, apart from the
-            # listener's client CA, and present the callback client identity.
-            # KNOWN GAP until #1359 U5: the uploads are HTTP and the listener
-            # serves gRPC only, so with this flag on they fail; leave it off
-            # (callback base http://elitea-main:8080) until ArtifactObjectService
-            # lands. Model calls do not depend on it (the engine below).
+            # The artifact hop (#1359 U5): wiki uploads and reads go over
+            # elitea.runtime.v1.ArtifactObjectService on elitea-main's platform
+            # listener: trust the runtime CA there, apart from the provider's
+            # own client CA, and present the callback client identity
+            # (dns:elitea-subapp-callback).
+            - name: ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
             - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
               value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.crt
             - name: ELITEA_DEEPWIKI_CALLBACK_KEY_FILE
               value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.key
-            {{- end }}
             # Sensitive vars from Kubernetes Secrets, never plaintext in the
             # env map above.
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
@@ -150,14 +148,12 @@ spec:
             {{- if .Values.nats.tls.enabled }}
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
-            {{- if .Values.deepwiki.callbackViaPlatformListener }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
               readOnly: true
             - name: callback-client
               mountPath: {{ include "elitea-deepwiki.callbackClientPath" . }}
               readOnly: true
-            {{- end }}
         {{- if eq $sidecar "native" }}
         # The engine sidecar (ADR-0023 H2, ADR-0026): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
@@ -196,14 +192,13 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             {{- if include "elitea-deepwiki.callbackMaterial" . }}
-            # Model calls go over elitea.llm.v1.ModelService on elitea-main's
-            # platform listener (#1359 U2) ALWAYS, not only with
-            # callbackViaPlatformListener: the listener serves no HTTP and the
-            # engine refuses a cleartext model origin, so an http:// callback
-            # base alone would leave it no model path. llm_settings.api_base
-            # (the callback base) then only names the route. The runtime CA
-            # signs the listener's certificate, and the listener admits the
-            # callback client identity (dns:elitea-subapp-callback).
+            # The engine reaches elitea-main only over gRPC on the platform
+            # listener: model calls (ModelService, #1359 U2) and artifact-folder
+            # reads (ArtifactObjectService, #1359 U5), both at this URL, which
+            # the native engine requires. llm_settings.api_base is a fixed route
+            # name and is never dialed. The runtime CA signs the listener's
+            # certificate, and the listener admits the callback client identity
+            # (dns:elitea-subapp-callback).
             - name: ELITEA_DEEPWIKI_MODEL_SERVICE_URL
               value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE

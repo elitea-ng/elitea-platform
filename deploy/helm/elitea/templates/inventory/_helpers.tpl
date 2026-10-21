@@ -68,7 +68,17 @@ ELITEA_INVENTORY_MODEL_SERVICE_URL.
 {{- end -}}
 {{- end }}
 
-{{/* Where the engine finds the runtime CA for the ModelService hop. */}}
+{{/*
+elitea-inventory.callbackMaterial — "true" whenever Inventory runs: the HOST
+container uploads and reads graph artifacts over ArtifactObjectService on
+elitea-main's platform listener (#1359 U5), so the pod always mounts the
+runtime CA and the callback client certificate, sidecar or not.
+*/}}
+{{- define "elitea-inventory.callbackMaterial" -}}
+{{- if .Values.inventory.enabled -}}true{{- end -}}
+{{- end }}
+
+{{/* Where the host and the engine find the runtime CA for the platform hop. */}}
 {{- define "elitea-inventory.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
 
 {{/* Where the engine's callback client certificate (tls.crt / tls.key of
@@ -209,10 +219,10 @@ elitea-main
 
 {{/*
   Guard #0b: the engine's model path (#1359 U2). The engine sidecar makes its
-  model calls over ModelService on elitea-main's platform listener, so it
-  needs that listener (main.runtime) and a runtime-CA client certificate to
-  present there; without either it starts and every source expansion fails at
-  its first model call. inventory.engine.callbackCa (a private CA for an
+  model calls over ModelService on elitea-main's platform listener; Guard #0c
+  below requires that listener (main.runtime) and the runtime-CA client
+  certificate for every Inventory install, sidecar or not, because the host
+  needs them too. inventory.engine.callbackCa (a private CA for an
   https callback origin) is retired: the model origin is now always the
   platform listener, whose CA is the runtime CA the chart mounts itself. The
   chart owns the model-hop settings, so inventory.env may not repeat them.
@@ -220,17 +230,23 @@ elitea-main
 {{- if hasKey (.Values.inventory.engine | default dict) "callbackCa" -}}
 {{- fail "inventory.engine.callbackCa was removed (#1359 U2): the engine's model calls go over ModelService on elitea-main's platform listener, and the chart mounts the runtime CA (worker.materialSecretName, key runtime-ca.crt) and inventory.callbackClient for that hop itself. Remove inventory.engine.callbackCa and set inventory.callbackClient.secretName (docs/UPGRADING.md)." -}}
 {{- end -}}
-{{- range $name := list "ELITEA_INVENTORY_MODEL_SERVICE_URL" "ELITEA_INVENTORY_CALLBACK_CA_FILE" "ELITEA_INVENTORY_CALLBACK_CERT_FILE" "ELITEA_INVENTORY_CALLBACK_KEY_FILE" -}}
+{{- range $name := list "ELITEA_INVENTORY_MODEL_SERVICE_URL" "ELITEA_INVENTORY_ARTIFACT_SERVICE_URL" "ELITEA_INVENTORY_CALLBACK_CA_FILE" "ELITEA_INVENTORY_CALLBACK_CERT_FILE" "ELITEA_INVENTORY_CALLBACK_KEY_FILE" -}}
 {{- if hasKey $env $name -}}
-{{- fail (printf "inventory.env sets %s, which the chart renders itself: the engine's model calls go to elitea-main's platform listener (worker.runtime.platformOrigin) with the runtime CA and inventory.callbackClient. Remove it from inventory.env." $name) -}}
+{{- fail (printf "inventory.env sets %s, which the chart renders itself: the host's artifact calls and the engine's model and artifact calls go to elitea-main's platform listener (worker.runtime.platformOrigin) with the runtime CA and inventory.callbackClient. Remove it from inventory.env." $name) -}}
 {{- end -}}
 {{- end -}}
-{{- if include "elitea-inventory.modelCalls" . -}}
+{{/*
+  Guard #0c: the host's artifact hop (#1359 U5). The host uploads and reads
+  graph artifacts over ArtifactObjectService on the platform listener whatever
+  runner it uses, so every Inventory install needs the runtime and the
+  callback client certificate.
+*/}}
+{{- if .Values.inventory.enabled -}}
 {{- if not .Values.main.runtime.enabled -}}
-{{- fail "inventory.enabled runs the native engine sidecar (ELITEA_INVENTORY_RUNNER sidecar, inventory.engine.runner native), whose model calls go over elitea.llm.v1.ModelService on elitea-main's platform listener (#1359 U2), but main.runtime.enabled is false, so there is no such listener and every source expansion would fail at its first model call. Turn the runtime on (main.runtime.enabled)." -}}
+{{- fail "inventory.enabled needs main.runtime.enabled: the provider host reads and writes graph artifacts over elitea.runtime.v1.ArtifactObjectService on elitea-main's platform gRPC listener (#1359 U5), which only the runtime opens, so every import and export would fail. Turn the runtime on (main.runtime.enabled)." -}}
 {{- end -}}
 {{- if not (.Values.inventory.callbackClient | default dict).secretName -}}
-{{- fail "inventory.enabled runs the engine sidecar, whose model calls go over elitea.llm.v1.ModelService on elitea-main's platform listener (#1359 U2), but inventory.callbackClient.secretName is empty. The listener requires a client certificate the runtime CA signed, admitted as dns:elitea-subapp-callback: create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key; the Secret DeepWiki's callbackClient names can be reused) and name it there." -}}
+{{- fail "inventory.enabled needs inventory.callbackClient.secretName: the provider host reaches elitea-main's platform listener for its artifacts (ArtifactObjectService, #1359 U5), and the listener requires a client certificate the runtime CA signed, admitted as dns:elitea-subapp-callback. Create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key; DeepWiki's callbackClient Secret can be reused) and name it there." -}}
 {{- end -}}
 {{- end -}}
 
