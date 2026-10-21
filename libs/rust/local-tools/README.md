@@ -58,6 +58,31 @@ workspace sits).
   `search_workspace` is a ranked search over the index; these are exact
   name and text matches over the folder as it is now.
 
+## Edits
+
+Every edit goes through the workspace (`O_NOFOLLOW`, temp file and
+`renameat`) and the read ledger: a file must have been read, and one
+changed since is refused, whatever the format.
+
+* `apply_patch` takes a unified diff (`git diff`) or the Codex envelope
+  GPT-5 and codex-family models write (`*** Begin Patch`, `*** Add File:`,
+  `*** Update File:` with `@@ <anchor>` chunks, `*** Move to:`,
+  `*** Delete File:`, `*** End of File`, `*** End Patch`; a heredoc around
+  it is unwrapped). Envelope paths are workspace-relative: an absolute
+  path, `~` or `..` is refused, and `path_deny`, the deny list and `.git`
+  are checked for every file before anything is written. An add over an
+  existing file needs it read, as `write_file` does; a move onto an
+  existing file is refused. Every file applies or none does.
+* Chunks are located with Codex's `seek_sequence` ladder: exact, then
+  trailing whitespace ignored (`trim_end`), then both ends (`trim`), then
+  typographic dashes, quotes and spaces read as ASCII (`unicode`). The
+  result's `files[].matches` names the pass per chunk and a `note` counts
+  the fuzzy ones: a fuzzy match is never silent, and a fuzzy pass that
+  finds more than one position fails with the candidates' line numbers.
+
+The envelope parser and the ladder are adapted from OpenAI Codex
+(Apache-2.0); see `NOTICE`.
+
 ## Output budgets and spill files
 
 Every result stays within a per-call budget of estimated tokens

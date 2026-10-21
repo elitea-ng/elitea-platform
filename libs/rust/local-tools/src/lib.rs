@@ -13,6 +13,7 @@
 #[cfg(not(unix))]
 compile_error!("elitea-local-tools supports macOS and Linux; Windows is ADR-0029 phase D3");
 
+pub mod apply_patch;
 pub mod approvals;
 pub mod budget;
 pub mod checkpoint;

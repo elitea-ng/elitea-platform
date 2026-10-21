@@ -253,7 +253,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "apply_patch",
         kind: ToolKind::ApplyPatch,
-        description: "Apply a unified diff (git diff format) to files in the workspace. Every hunk must match exactly; nothing is written if one does not.",
+        description: "Apply a patch to files in the workspace: a unified diff (git diff format), or a `*** Begin Patch` envelope (*** Add File / *** Update File with @@ chunks / *** Delete File / *** Move to). Read each file first. Every file applies or none does; the result says how each hunk matched.",
         parameters: || {
             json!({
                 "type": "object",

@@ -10,6 +10,7 @@ use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContex
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::apply_patch::{self, Hunk, Pass};
 use crate::budget::{self, SpillStore};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
@@ -235,6 +236,9 @@ pub(crate) struct PlannedChange {
     /// Permission bits to write with (a renamed file keeps its own, a
     /// created file may name them); `None`: keep the existing or default.
     pub mode: Option<u32>,
+    /// How each hunk was located (a Codex envelope's chunks); empty for a
+    /// create or delete.
+    pub matches: Vec<Pass>,
 }
 
 /// Parse a patch, resolve its paths and compute every result, before
@@ -246,17 +250,10 @@ pub(crate) fn plan_patch(
     ledger: &ReadLedger,
     text: &str,
 ) -> ToolResult<Vec<PlannedChange>> {
+    if apply_patch::is_envelope(text) {
+        return plan_envelope(workspace, ledger, text);
+    }
     let mut planned: Vec<PlannedChange> = Vec::new();
-    let push = |planned: &mut Vec<PlannedChange>, change: PlannedChange| {
-        if planned.iter().any(|done| done.path == change.path) {
-            return Err(ToolError::invalid(format!(
-                "the patch changes `{}` more than once; put all of its hunks in one section",
-                change.path
-            )));
-        }
-        planned.push(change);
-        Ok(())
-    };
     for file in patch::parse(text)? {
         if file.is_rename() {
             let (Some(old), Some(new)) = (&file.old_path, &file.new_path) else {
@@ -274,6 +271,7 @@ pub(crate) fn plan_patch(
                     typed: new_typed,
                     content: Some(content),
                     mode: Some(original.mode),
+                    matches: Vec::new(),
                 },
             )?;
             push(
@@ -283,6 +281,7 @@ pub(crate) fn plan_patch(
                     typed: old_typed,
                     content: None,
                     mode: None,
+                    matches: Vec::new(),
                 },
             )?;
             continue;
@@ -309,8 +308,131 @@ pub(crate) fn plan_patch(
                 typed,
                 content,
                 mode: file.created_mode(),
+                matches: Vec::new(),
             },
         )?;
+    }
+    Ok(planned)
+}
+
+/// Add a file's change to a plan: one change per path (a second section
+/// for a path would silently overwrite the first).
+fn push(planned: &mut Vec<PlannedChange>, change: PlannedChange) -> ToolResult<()> {
+    if planned.iter().any(|done| done.path == change.path) {
+        return Err(ToolError::invalid(format!(
+            "the patch changes `{}` more than once; put all of its hunks in one section",
+            change.path
+        )));
+    }
+    planned.push(change);
+    Ok(())
+}
+
+/// A path a Codex envelope names: workspace-relative only.
+fn envelope_path(argument: &str) -> ToolResult<&str> {
+    let trimmed = argument.trim();
+    if Path::new(trimmed).is_absolute() || trimmed == "~" || trimmed.starts_with("~/") {
+        return Err(ToolError::new(
+            ErrorCode::OutsideWorkspace,
+            format!("`{trimmed}`: patch paths are relative to the workspace root"),
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// A Codex envelope's plan: the same rules as a unified diff's (paths
+/// confined and deny-checked, the read guard, one change per path), every
+/// file computed before anything is written.
+fn plan_envelope(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    text: &str,
+) -> ToolResult<Vec<PlannedChange>> {
+    let mut planned: Vec<PlannedChange> = Vec::new();
+    for hunk in apply_patch::parse_patch(text)? {
+        match hunk {
+            Hunk::AddFile { path, contents } => {
+                let typed = workspace.resolve(envelope_path(&path)?, Intent::Write)?;
+                let target = workspace.final_target(&typed)?;
+                workspace.check(&target, Intent::Write)?;
+                // Replacing a file needs it read first, as write_file does.
+                check_fresh(workspace, ledger, &target)?;
+                push(
+                    &mut planned,
+                    PlannedChange {
+                        path: target,
+                        typed,
+                        content: Some(contents),
+                        mode: None,
+                        matches: Vec::new(),
+                    },
+                )?;
+            }
+            Hunk::DeleteFile { path } => {
+                let (typed, target, _) = existing(workspace, ledger, envelope_path(&path)?)?;
+                push(
+                    &mut planned,
+                    PlannedChange {
+                        path: target,
+                        typed,
+                        content: None,
+                        mode: None,
+                        matches: Vec::new(),
+                    },
+                )?;
+            }
+            Hunk::UpdateFile {
+                path,
+                move_path,
+                chunks,
+            } => {
+                let (typed, target, read) = existing(workspace, ledger, envelope_path(&path)?)?;
+                let derived = apply_patch::derive_new_contents(
+                    text_of(&read)?,
+                    &typed.display_string(),
+                    &chunks,
+                )?;
+                match move_path {
+                    None => push(
+                        &mut planned,
+                        PlannedChange {
+                            path: target,
+                            typed,
+                            content: Some(derived.content),
+                            mode: None,
+                            matches: derived.matches,
+                        },
+                    )?,
+                    Some(to) => {
+                        let (new_typed, new_target) =
+                            absent(workspace, ledger, envelope_path(&to)?)?;
+                        push(
+                            &mut planned,
+                            PlannedChange {
+                                path: new_target,
+                                typed: new_typed,
+                                content: Some(derived.content),
+                                mode: Some(read.mode),
+                                matches: derived.matches,
+                            },
+                        )?;
+                        push(
+                            &mut planned,
+                            PlannedChange {
+                                path: target,
+                                typed,
+                                content: None,
+                                mode: None,
+                                matches: Vec::new(),
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    if planned.is_empty() {
+        return Err(ToolError::invalid("the patch changes no file"));
     }
     Ok(planned)
 }
@@ -403,7 +525,37 @@ pub(crate) fn apply_patch(
         }
         changed.push(change.path.display_string());
     }
-    Ok(json!({ "changed": changed }))
+    let mut result = json!({ "changed": changed });
+    // How each file's hunks matched: a fuzzy location is never silent.
+    let files: Vec<Value> = planned
+        .iter()
+        .filter(|change| !change.matches.is_empty())
+        .map(|change| {
+            json!({
+                "path": change.path.display_string(),
+                "matches": change.matches.iter().map(|pass| pass.as_str()).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let fuzzy = planned
+        .iter()
+        .flat_map(|change| &change.matches)
+        .filter(|pass| **pass != Pass::Exact)
+        .count();
+    if let Value::Object(map) = &mut result {
+        if !files.is_empty() {
+            map.insert("files".to_owned(), Value::Array(files));
+        }
+        if fuzzy > 0 {
+            map.insert(
+                "note".to_owned(),
+                Value::String(format!(
+                    "{fuzzy} hunk(s) matched only after ignoring whitespace or typographic punctuation; check the result"
+                )),
+            );
+        }
+    }
+    Ok(result)
 }
 
 /// What `search_files` answers with.
