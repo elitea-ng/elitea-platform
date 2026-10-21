@@ -67,6 +67,21 @@ impl ModelContextStatus {
         }
     }
 
+    /// The request's estimated input tokens.
+    pub fn estimated_input_tokens(&self) -> u64 {
+        self.estimated_input_tokens
+    }
+
+    /// The combined window the budget uses (input, output and margin).
+    pub fn total_tokens(&self) -> u32 {
+        self.total_tokens
+    }
+
+    /// The input the budget lets a request carry.
+    pub fn usable_input_tokens(&self) -> u32 {
+        self.usable_input_tokens
+    }
+
     pub fn with_provider_usage(mut self, usage: &adk_core::UsageMetadata) -> Option<Self> {
         let input_tokens = u32::try_from(usage.prompt_token_count).ok()?;
         let output_tokens = u32::try_from(usage.candidates_token_count).ok()?;

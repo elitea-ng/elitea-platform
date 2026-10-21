@@ -28,7 +28,9 @@
 //!   [`context_status`], [`context_management`] — the shared assembly
 //!   vocabulary: the native assembly error, skill and project-context
 //!   instruction authority, the request context budget and its status, and
-//!   the compaction plan.
+//!   the compaction plan with the step compaction a host composes around its
+//!   model (`StepCompaction`, #1217: pi's reserve and recent tail, the
+//!   iterative v1 summary, compact-and-retry once).
 //!
 //! The move from `services/elitea-worker-rust` is staged; `EXTRACTION.md`
 //! holds the dependency map and the remaining stages. The worker re-exports
