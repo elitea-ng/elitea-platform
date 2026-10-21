@@ -103,7 +103,7 @@
     "@playwright/test": "1.62.1",
     "@rolldown/plugin-babel": "0.2.4",
     "@storybook/addon-a11y": "10.6.1",
-    "@storybook/addon-vitest": "10.6.1",
+    "@storybook/addon-vitest": "10.6.3",
     "@storybook/react-vite": "10.6.1",
     "@swc/core": "1.16.13",
     "@tanstack/router-plugin": "1.168.42",
