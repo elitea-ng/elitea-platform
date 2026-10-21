@@ -64,11 +64,11 @@ func TestConfigFromEnvDefaultsBoundsAndRefusals(t *testing.T) {
 
 func TestRedirectURIRules(t *testing.T) {
 	accepted := map[string]RedirectKind{
-		"ca.mlops.elitea:/oauth/callback": RedirectPrivateUse,
-		"com.example.app:/cb":             RedirectPrivateUse,
-		"dev.elitea.conformance:/":        RedirectPrivateUse,
-		"http://127.0.0.1/callback":       RedirectLoopback,
-		"http://[::1]/oauth":              RedirectLoopback,
+		"ca.zefir.agent:/oauth/callback": RedirectPrivateUse,
+		"com.example.app:/cb":            RedirectPrivateUse,
+		"dev.elitea.conformance:/":       RedirectPrivateUse,
+		"http://127.0.0.1/callback":      RedirectLoopback,
+		"http://[::1]/oauth":             RedirectLoopback,
 	}
 	for uri, kind := range accepted {
 		got, err := ValidateRedirectURI(uri)
@@ -77,7 +77,7 @@ func TestRedirectURIRules(t *testing.T) {
 		}
 	}
 	for _, uri := range []string{
-		"", "elitea:/cb", "eliteamobile:/cb", "https://app.example/cb", "http://localhost/cb",
+		"", "elitea:/cb", "agentzefir:/cb", "https://app.example/cb", "http://localhost/cb",
 		"http://127.0.0.1:8080/cb", "http://10.0.0.1/cb", "com.example.app://host/cb",
 		"com.example.app:/cb?x=1", "com.example.app:/cb#f", "Com.Example.App:/cb",
 		"com.example.app:cb", "com.example.app:/c%62", "javascript:alert(1)", "data:text/html,x",
