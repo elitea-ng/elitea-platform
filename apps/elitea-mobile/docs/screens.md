@@ -207,7 +207,8 @@ G ──────────────────────────
 - **Avatar:** the agent icon if it has one, else the Elitea mark (with the single-use
   rule, design-system §4.6 and §5), else a monogram.
 - Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename,
-  Archive and Delete. Pin and Rename need client contract 1.4. Archive needs client contract
+  Fork, Archive and Delete. Pin and Rename need client contract 1.4. Fork (client contract
+  1.11) copies the whole chat into a new one and opens it; it needs a connection. Archive needs client contract
   1.10 and the permission the web app checks (`models.chat.conversation.edit`); it is queued
   like Pin (offline too), the row leaves at once and comes back if the workspace refuses it.
 - **Archived chats** (`/archived`, client contract 1.10): a row above the list opens the
@@ -258,6 +259,11 @@ G ──────────────────────────
   glass circle (↓) appears when scrolled up and a new token arrives, with an
   accessibility announcement.
 - **Header "⋯" menu:** Participants, Rename, Share transcript (copy), Delete.
+- **Fork from here** (client contract 1.11): in a settled message's actions sheet (a question
+  or an answer; not while its answer streams or waits for the user). It opens the new chat at
+  once. A fork needs a connection: offline, or when the fork point is not settled yet (409
+  `fork_point_unsettled`), the thread says so above the composer. A fork shows "Forked from
+  <name>" above its transcript, which opens the source while the reader can still see it.
 - **Mentions:** `@` opens the mention picker above the composer, and `/` opens the slash
   picker (existing `SuggestionStrip`).
 - **States:** the thinking indicator (Elitea mark and dots), streaming (caret), error

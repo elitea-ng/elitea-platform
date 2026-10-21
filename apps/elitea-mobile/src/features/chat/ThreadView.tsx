@@ -1,9 +1,10 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { isConversationRef, useConversation } from '@/api/queries/conversation';
+import { runFork } from '@/api/queries/forkConversation';
 import { useModels } from '@/api/queries/models';
 import type { TurnModel } from '@/api/queries/sendMessage';
 import { OfflineNotice } from '@/components/OfflineNotice';
@@ -12,6 +13,8 @@ import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
 import { GlassSurface, headerActionOptions, Icon, IconButton, Text, type HeaderAction } from '@/ui';
 import { PaneHeader } from '@/features/chat/PaneHeader';
+import { ForkedFromLink, forkedFromOf } from '@/features/chat/ForkedFromLink';
+import { selectChat } from '@/features/chats/selectedChat';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import { speaksContract } from '@/api/discovery';
@@ -125,6 +128,7 @@ export function ThreadView({
   });
   const ref = typeof id === 'string' ? id : '';
   const projectId = useSession((s) => s.projectId);
+  const workspaceId = useSession((s) => s.workspaceId);
   const conversation = useConversation(projectId, ref);
   const detail = conversation.data;
   // "Me" (the "who am I" read, made once per session by the app shell).
@@ -134,6 +138,8 @@ export function ThreadView({
   const contract11 = speaksContract(workspace?.discovery, 1, 1);
   // Client contract 1.3: feedback, server stop, export, suggested agents.
   const contract13 = speaksContract(workspace?.discovery, 1, 3);
+  // Client contract 1.11: fork a conversation ("Fork from here", the "Forked from" link).
+  const contract111 = speaksContract(workspace?.discovery, 1, 11);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -296,12 +302,52 @@ export function ThreadView({
     });
     if (problem !== null) setThreadNote(problem);
   };
+  // Fork from here (1.11): a settled message only. While a turn runs or waits for the user, the
+  // newest question and what follows it are not settled (the server answers 409
+  // fork_point_unsettled for a fork point whose copy would hold such a reply). A fork needs a
+  // connection: offered offline too, it then says so instead of sending.
+  const [forking, setForking] = useState(false);
+  const settledBefore = (() => {
+    // A persisted answer still streaming counts too (a turn another device started).
+    if (!turn.busy && pause === null && !(live && !live.settled) && !messages.some((m) => m.isStreaming)) return messages.length;
+    const lastQuestion = messages.map((m) => m.role).lastIndexOf('user');
+    return lastQuestion === -1 ? Math.max(0, messages.length - 1) : lastQuestion;
+  })();
+  const canFork = (message: ChatMessage | null): boolean => {
+    if (message === null || !contract111 || projectId === null || !Number.isSafeInteger(numericId) || numericId <= 0) return false;
+    // A Local work thread's fork is the desktop's (it copies its local turn history itself).
+    if (localWork.thread !== null || message.uuid === null || message.isStreaming || forking) return false;
+    const at = messages.findIndex((m) => m.key === message.key);
+    return at !== -1 && at < settledBefore;
+  };
+  const openConversation = (id: number) => {
+    if (chrome === 'pane') selectChat({ workspaceId, projectId }, id);
+    else router.push({ pathname: '/c/[id]', params: { id: String(id) } });
+  };
+  const forkFrom = async (message: ChatMessage) => {
+    if (!canFork(message) || projectId === null || message.uuid === null) return;
+    setForking(true);
+    setThreadNote(null);
+    try {
+      const result = await runFork(queryClient, projectId, numericId, { messageId: message.uuid });
+      if (!result.ok) {
+        setThreadNote(result.message);
+        return;
+      }
+      // The new chat opens at once.
+      openConversation(result.row.id);
+    } finally {
+      setForking(false);
+    }
+  };
+  const forkedFrom = contract111 ? forkedFromOf(detail) : null;
   const actionPlan = planActions(actionsFor?.message ?? { role: 'user', text: '', uuid: null, isStreaming: false }, {
     shareOut: policy.allow_share_out,
     contract13,
     online: online && !isOfflineCopy(detail),
     canSpeak: canReadAloud(),
     canRegenerate: canRegenerate(actionsFor?.message ?? null),
+    canFork: canFork(actionsFor?.message ?? null),
   });
 
   // Attachments (contract 1.1 limits, else the server defaults): picked and
@@ -692,6 +738,7 @@ export function ThreadView({
         renderTranscript={(composerHeight) => (
           <>
             <OfflineNotice visible={isOfflineCopy(detail)} />
+            <ForkedFromLink forkedFrom={forkedFrom} onOpen={openConversation} />
             {empty ? (
               <ChatEmptyState
                 agentName={targetName ?? 'your agent'}
@@ -725,6 +772,7 @@ export function ThreadView({
                         online: online && !isOfflineCopy(detail),
                         canSpeak: canReadAloud(),
                         canRegenerate: canRegenerate(message),
+                        canFork: canFork(message),
                       });
                       return (
                         <PersistedMessage
@@ -875,6 +923,7 @@ export function ThreadView({
         projectId={projectId}
         onClose={() => setActionsFor(null)}
         onRegenerate={(message) => void regenerate(message)}
+        onFork={(message) => void forkFrom(message)}
         onReadAloud={(message) => readAloud(message.key, message.text)}
       />
     </>

@@ -119,3 +119,10 @@ the on-device FTS5 index (`src/db/search.ts`).
 The app's `changes_since` reads do not send `archived`, so the server answers them in the
 pre-1.10 shape: an archived conversation is an `access_lost` tombstone and leaves the offline
 store, and an unarchived one is a row again.
+
+## Client contract 1.11
+
+| Area | What |
+|---|---|
+| Fork | `forkConversation`: `POST /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}` with `{message_id?, name?}`; 201 answers the new list row. "Fork" on a Chats row (no body: the whole history) and "Fork from here" on a settled message (`message_id`: the group's UUID). Never queued: it needs a connection. 409 `fork_point_unsettled` and `fork_not_supported` are told apart (`src/api/queries/forkConversation.ts`). |
+| Forked from | `ConversationDetail.forked_from`: the thread shows "Forked from <name>" only when `name` is present (the reader can still see the source). |

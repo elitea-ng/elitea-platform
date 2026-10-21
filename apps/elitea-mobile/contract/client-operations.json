@@ -55,6 +55,7 @@
     "requestWorkspaceHandoffReclaim",
     "permissionList",
     "archiveConversation",
-    "unarchiveConversation"
+    "unarchiveConversation",
+    "forkConversation"
   ]
 }

@@ -5,6 +5,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { speaksContract } from '@/api/discovery';
 import { flattenConversationPages, useConversations, useLocalWorkConversations } from '@/api/queries/conversations';
+import { runFork } from '@/api/queries/forkConversation';
+import { queryClient } from '@/api/queryClient';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useDesign } from '@/design/DesignProvider';
@@ -75,6 +77,9 @@ export default function ConversationsScreen() {
   const actionsAvailable = useListActionsAvailable();
   const archivedListAvailable = useArchivedListAvailable();
   const archiveAvailable = useArchiveAvailable(projectId);
+  // Fork (client contract 1.11): the whole history into a new chat, opened at once.
+  const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
+  const [forking, setForking] = useState(false);
   const overlay = useConversationOverlay(projectId);
   const savedPinned = useSavedPinnedRows(projectId, actionsAvailable);
   const hits = useConversationSearch(projectId, query, localWorkOnly ? 'local_work' : 'chat');
@@ -222,12 +227,25 @@ export default function ConversationsScreen() {
             });
           }
         : null,
+    onFork:
+      forkAvailable && !localWorkOnly && projectId !== null
+        ? (row) => {
+            if (forking) return;
+            setForking(true);
+            void runFork(queryClient, projectId, row.id)
+              .then((result) => {
+                if (result.ok) open({ id: result.row.id });
+                else Alert.alert("Couldn't fork the chat", result.message);
+              })
+              .finally(() => setForking(false));
+          }
+        : null,
   };
 
-  const open = (row: ChatListItem) => {
+  function open(row: Pick<ChatListItem, 'id'>) {
     if (twoPane) selectChat(deleteScope, row.id);
     else router.push({ pathname: '/c/[id]', params: { id: String(row.id) } });
-  };
+  }
 
   const list = (
     <>

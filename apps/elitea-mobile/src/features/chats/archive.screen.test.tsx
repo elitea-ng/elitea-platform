@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
-import { Text } from 'react-native';
+import { Alert, Text } from 'react-native';
 
 import { discoveryDocument13 } from '@/api/__fixtures__/nativeClient';
 import { DiscoveryDocumentSchema } from '@/api/discovery';
@@ -10,7 +10,8 @@ import { ARCHIVED_COPY, ArchivedChatsView } from '@/features/chats/ArchivedChats
 import { buildArchivedRows, buildChatRows, buildSearchRows } from '@/features/chats/chatListModel';
 import { ConversationList, type ChatListItem } from '@/features/chats/ConversationList';
 import { __setOnlineForTests } from '@/lib/network';
-import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
+import { getSelectedChat } from '@/features/chats/selectedChat';
+import { __resetSessionForTests, getSession, setCredential, setSession } from '@/state/session';
 import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspaceInfo';
 import { runConversationAction } from '@/sync/appConversationOps';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
@@ -181,6 +182,49 @@ describe('the Chats tab', () => {
     expect(screen.getByRole('button', { name: 'Q3 planning, now' }).props.accessibilityActions).not.toContainEqual({ name: 'archive', label: 'Archive' });
     expect(screen.queryByTestId('archived-chats-link')).toBeNull();
     expect(server.requests.filter((r) => r.url.pathname.includes('/auth/permissions'))).toEqual([]);
+  });
+});
+
+describe('Fork on a Chats row (client contract 1.11)', () => {
+  const FORK = `/elitea_core/conversation_fork/prompt_lib/${P}/11`;
+
+  it('forks the whole chat (no fork point) and opens the new one at once', async () => {
+    speak('1.11');
+    server.on('POST', FORK, { status: 201, body: row(31, 'Q3 planning (fork)') });
+    await openChats();
+    const target = screen.getByRole('button', { name: 'Q3 planning, now' });
+    expect(target.props.accessibilityActions).toContainEqual({ name: 'fork', label: 'Fork' });
+    await act(async () => {
+      await fireEvent(target, 'accessibilityAction', { nativeEvent: { actionName: 'fork' } });
+    });
+    // Opened at once: pushed on a phone, selected in the detail column at regular width.
+    await waitFor(() =>
+      expect(
+        jest.mocked(router.push).mock.calls.some(([to]) => JSON.stringify(to) === JSON.stringify({ pathname: '/c/[id]', params: { id: '31' } })) ||
+          getSelectedChat({ workspaceId: getSession().workspaceId, projectId: P }) === 31,
+      ).toBe(true),
+    );
+    expect(JSON.parse(server.requests.find((r) => r.method === 'POST')!.body!)).toEqual({});
+  });
+
+  it('offline it says a fork needs a connection and sends nothing', async () => {
+    speak('1.11');
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await openChats();
+    __setOnlineForTests(false);
+    await act(async () => {
+      await fireEvent(screen.getByRole('button', { name: 'Q3 planning, now' }), 'accessibilityAction', { nativeEvent: { actionName: 'fork' } });
+    });
+    await waitFor(() => expect(alert).toHaveBeenCalledWith("Couldn't fork the chat", expect.stringMatching(/needs a connection/)));
+    expect(server.requests.filter((r) => r.method === 'POST')).toEqual([]);
+    expect(router.push).not.toHaveBeenCalled();
+    alert.mockRestore();
+  });
+
+  it('is not offered before 1.11', async () => {
+    speak('1.10');
+    await openChats();
+    expect(screen.getByRole('button', { name: 'Q3 planning, now' }).props.accessibilityActions).not.toContainEqual({ name: 'fork', label: 'Fork' });
   });
 });
 

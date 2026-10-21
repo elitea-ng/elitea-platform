@@ -64,6 +64,7 @@ const KIT_ICONS = {
   rename: ['pencil', 'edit'],
   unpin: ['pin.slash', 'keep_off'],
   unarchive: ['tray.and.arrow.up', 'unarchive'],
+  fork: ['arrow.triangle.branch', 'call_split'],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 
 export const ICONS = { ...(tokenIcons as Record<keyof typeof tokenIcons, readonly [SFSymbol, AndroidSymbol]>), ...KIT_ICONS };

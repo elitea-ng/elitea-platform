@@ -62,3 +62,16 @@ describe('planActions', () => {
     expect(planActions({ ...answer, role: 'user' }, all).actions).toEqual(['copy', 'share', 'read_aloud']);
   });
 });
+
+describe('Fork from here (client contract 1.11)', () => {
+  it('is offered on a settled question or answer when the screen allows it', () => {
+    expect(planActions(answer, { ...all, canFork: true }).actions).toContain('fork');
+    expect(planActions({ role: 'user', text: 'hi', uuid: 'q', isStreaming: false }, { ...all, canFork: true }).actions).toContain('fork');
+    expect(planActions(answer, all).actions).not.toContain('fork');
+  });
+
+  it('never on a message still streaming or not persisted', () => {
+    expect(planActions({ ...answer, isStreaming: true }, { ...all, canFork: true }).actions).not.toContain('fork');
+    expect(planActions({ ...answer, uuid: null }, { ...all, canFork: true }).actions).not.toContain('fork');
+  });
+});

@@ -29,6 +29,8 @@ export interface MessageActionsSheetProps {
   onClose: () => void;
   onReadAloud?: (message: ChatMessage) => void;
   onRegenerate?: (message: ChatMessage) => void;
+  /** Fork from here (client contract 1.11): a new chat with the history up to this message. */
+  onFork?: (message: ChatMessage) => void;
   /** Open straight on the dislike comment (the action row's Dislike). */
   startWithDislike?: boolean;
 }
@@ -36,7 +38,7 @@ export interface MessageActionsSheetProps {
 /**
  * The actions of one message, in a bottom sheet: copy (the whole message, or
  * one code block), share, read aloud, like / dislike with an optional
- * comment, regenerate. What is offered comes from `planActions`.
+ * comment, regenerate, fork from here. What is offered comes from `planActions`.
  */
 export function MessageActionsSheet(props: MessageActionsSheetProps) {
   // Keyed by the message, so a sheet opened on another message starts fresh.
@@ -48,6 +50,7 @@ const LABELS: Record<Exclude<MessageActionKey, 'copy_code' | 'like' | 'dislike'>
   share: 'Share…',
   read_aloud: 'Read aloud',
   regenerate: 'Regenerate answer',
+  fork: 'Fork from here',
 };
 
 const ICONS: Record<Exclude<MessageActionKey, 'like' | 'dislike'>, IconName> = {
@@ -56,6 +59,7 @@ const ICONS: Record<Exclude<MessageActionKey, 'like' | 'dislike'>, IconName> = {
   share: 'share',
   read_aloud: 'readAloud',
   regenerate: 'regenerate',
+  fork: 'fork',
 };
 
 /**
@@ -64,7 +68,7 @@ const ICONS: Record<Exclude<MessageActionKey, 'like' | 'dislike'>, IconName> = {
  * regenerate; and, for a persisted answer on client contract 1.3, the rating (Good / Bad) with
  * an optional comment for a Bad one. What is offered comes from `planActions`.
  */
-function SheetBody({ message, plan, projectId, onClose, onReadAloud, onRegenerate, startWithDislike = false }: MessageActionsSheetProps & { message: ChatMessage }) {
+function SheetBody({ message, plan, projectId, onClose, onReadAloud, onRegenerate, onFork, startWithDislike = false }: MessageActionsSheetProps & { message: ChatMessage }) {
   const design = useDesign();
   const { colors, radius } = design;
   const queryClient = useQueryClient();
@@ -168,6 +172,19 @@ function SheetBody({ message, plan, projectId, onClose, onReadAloud, onRegenerat
             icon: ICONS.regenerate,
             onPress: () => {
               onRegenerate(message);
+              onClose();
+            },
+          });
+        }
+        break;
+      case 'fork':
+        if (onFork) {
+          rows.push({
+            key: 'fork',
+            label: LABELS.fork,
+            icon: ICONS.fork,
+            onPress: () => {
+              onFork(message);
               onClose();
             },
           });
