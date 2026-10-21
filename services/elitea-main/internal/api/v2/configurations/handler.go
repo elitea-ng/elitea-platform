@@ -1510,11 +1510,22 @@ func (h *Handler) applyConfigurationUpdate(
 	if reason != "" {
 		return c, &configurationWriteFailure{status: http.StatusBadRequest, message: reason}, nil
 	}
+	// `data` is written whole, so a new plaintext value replaces the stored
+	// reference and the hidden secret it named would stay in the vault with
+	// nothing pointing at it (#1204). The stored references are read under the
+	// row lock before the UPDATE and purged after it, once no row names them.
+	previousSecrets, err := h.storedHiddenSecretReferences(ctx, tx, body, schema, configID)
+	if err != nil {
+		return c, nil, err
+	}
 	failure, err = h.scanUpdatedConfiguration(ctx, tx, q, args, &c)
 	if failure != nil || err != nil {
 		return c, failure, err
 	}
 	if err = h.sealTransactionSecrets(ctx, tx, projectID, secretMutations); err != nil {
+		return c, nil, err
+	}
+	if err = h.purgeOrphanedHiddenSecrets(ctx, tx, schema, int64(projectID), previousSecrets); err != nil {
 		return c, nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -1718,16 +1729,33 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	projectNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
+	if parseErr != nil {
+		apierr.WriteStatus(w, http.StatusBadRequest, "invalid project")
+		return
+	}
+
 	// RETURNING names the deleted row, so a model that some project stored as
 	// its default can be released below (#6826). The id column is unique, so
 	// the statement deletes one row or none.
+	//
+	// It also returns the row's `data`, so the hidden secrets only this row
+	// referenced leave the vault in the SAME transaction (#1204). They used to
+	// stay readable through the secrets API after the row was gone.
 	q := fmt.Sprintf(`DELETE FROM %s.configuration WHERE %s = $1
-		RETURNING id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false)`,
+		RETURNING id, section, COALESCE(elitea_title, ''), COALESCE(data->>'name', ''), COALESCE(shared, false),
+			COALESCE(data, '{}'::jsonb)`,
 		schema, configurationIDColumn(configID))
 	var id int32
 	var section, title, dataName string
 	var shared bool
-	err := h.pool.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared)
+	err := h.inConfigurationTx(ctx, func(tx pgx.Tx) error {
+		var data []byte
+		if err := tx.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared, &data); err != nil {
+			return err
+		}
+		return h.purgeOrphanedHiddenSecrets(ctx, tx, schema, projectNumber, hiddenSecretReferencesIn(data))
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
 		return
@@ -1742,6 +1770,21 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	h.releaseDeletedModelDefault(ctx, projectID, deletedModelRowFrom(id, section, title, dataName, shared))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// inConfigurationTx runs one row write and its vault purge in ONE
+// transaction, so a failed purge keeps the row and a failed delete keeps the
+// secret.
+func (h *Handler) inConfigurationTx(ctx context.Context, write func(pgx.Tx) error) error {
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := write(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // CheckConnection and BatchCheckConnections are implemented in
