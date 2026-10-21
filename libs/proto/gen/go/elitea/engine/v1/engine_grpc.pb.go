@@ -50,7 +50,7 @@ const (
 // EngineService is served by the engine sidecar on its socket.
 type EngineServiceClient interface {
 	// Invoke runs one tool. A tool this engine does not serve is
-	// INVALID_ARGUMENT with the message "Unknown tool: <name>"; an invocation
+	// INVALID_ARGUMENT with the message `Unknown tool: <name>`; an invocation
 	// id already running is ALREADY_EXISTS; arguments that are not a JSON
 	// object are INVALID_ARGUMENT. Everything the tool itself reports —
 	// success, failure, a stop — is in the stream.
@@ -116,7 +116,7 @@ func (c *engineServiceClient) Health(ctx context.Context, in *HealthRequest, opt
 // EngineService is served by the engine sidecar on its socket.
 type EngineServiceServer interface {
 	// Invoke runs one tool. A tool this engine does not serve is
-	// INVALID_ARGUMENT with the message "Unknown tool: <name>"; an invocation
+	// INVALID_ARGUMENT with the message `Unknown tool: <name>`; an invocation
 	// id already running is ALREADY_EXISTS; arguments that are not a JSON
 	// object are INVALID_ARGUMENT. Everything the tool itself reports —
 	// success, failure, a stop — is in the stream.

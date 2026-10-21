@@ -41,7 +41,7 @@ const (
 // TRANSPORT AND AUTHORISATION. It is served on the host's platform gRPC
 // listener, beside PlatformOperations, behind the same TLS configuration
 // (RequireAndVerifyClientCert) and the same caller allowlist
-// (<PREFIX>PLATFORM_CLIENTS): a call whose verified client certificate names
+// (`<PREFIX>PLATFORM_CLIENTS`): a call whose verified client certificate names
 // no allowed identity is refused before it reaches a handler. On top of
 // that, every call except Health carries the caller's signed identity in
 // metadata — the X-Elitea-* identity plane of ADR-0022 decision 5, lower-cased:
@@ -87,7 +87,7 @@ type ProviderServiceClient interface {
 	// NOT_FOUND for an invocation the store does not know.
 	GetInvocation(ctx context.Context, in *GetInvocationRequest, opts ...grpc.CallOption) (*GetInvocationResponse, error)
 	// Cancel requests a cooperative stop. It is recorded in the shared store
-	// and fanned out to every replica (NATS, elitea.subapp.<app>.cancel.<id>),
+	// and fanned out to every replica (NATS, `elitea.subapp.<app>.cancel.<id>`),
 	// so the replica running the invocation stops it wherever the call lands.
 	// NOT_FOUND for an invocation the store does not know.
 	Cancel(ctx context.Context, in *CancelRequest, opts ...grpc.CallOption) (*CancelResponse, error)
@@ -184,7 +184,7 @@ func (c *providerServiceClient) Cancel(ctx context.Context, in *CancelRequest, o
 // TRANSPORT AND AUTHORISATION. It is served on the host's platform gRPC
 // listener, beside PlatformOperations, behind the same TLS configuration
 // (RequireAndVerifyClientCert) and the same caller allowlist
-// (<PREFIX>PLATFORM_CLIENTS): a call whose verified client certificate names
+// (`<PREFIX>PLATFORM_CLIENTS`): a call whose verified client certificate names
 // no allowed identity is refused before it reaches a handler. On top of
 // that, every call except Health carries the caller's signed identity in
 // metadata — the X-Elitea-* identity plane of ADR-0022 decision 5, lower-cased:
@@ -230,7 +230,7 @@ type ProviderServiceServer interface {
 	// NOT_FOUND for an invocation the store does not know.
 	GetInvocation(context.Context, *GetInvocationRequest) (*GetInvocationResponse, error)
 	// Cancel requests a cooperative stop. It is recorded in the shared store
-	// and fanned out to every replica (NATS, elitea.subapp.<app>.cancel.<id>),
+	// and fanned out to every replica (NATS, `elitea.subapp.<app>.cancel.<id>`),
 	// so the replica running the invocation stops it wherever the call lands.
 	// NOT_FOUND for an invocation the store does not know.
 	Cancel(context.Context, *CancelRequest) (*CancelResponse, error)

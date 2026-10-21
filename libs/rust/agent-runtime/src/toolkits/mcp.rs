@@ -508,7 +508,7 @@ fn configured_authorization(headers: &reqwest_mcp::header::HeaderMap) -> bool {
 
 /// MCP connector: ADK's native [`McpToolset`] over a Streamable HTTP
 /// session for a remote server, and the platform's internal tool service
-/// for its internal categories ([`super::mcp_internal`]).
+/// for its internal categories (`toolkits::mcp_internal`).
 #[derive(Default)]
 pub struct AdkHttpMcpConnector {
     internal: Option<InternalToolClient>,

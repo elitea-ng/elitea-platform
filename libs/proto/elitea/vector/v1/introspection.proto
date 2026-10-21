@@ -68,7 +68,7 @@ message IntrospectTokenResponse {
   bool active = 1;
   // project_id is the project the token is bound to.
   int64 project_id = 2;
-  // principal is the token owner, as "user:<id>".
+  // principal is the token owner, as `user:<id>`.
   string principal = 3;
   TokenKind kind = 4;
   // expires_at_unix is the token expiry, in seconds since the Unix epoch.

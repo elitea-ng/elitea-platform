@@ -5,7 +5,7 @@
 //! construction requires the private CA and worker identity, then creates its
 //! own tonic [`Channel`] from the same validated origin used for hostname
 //! verification. Every claim-scoped call carries the claim id and the raw
-//! fence token as gRPC metadata ([`claim_request`]), never in the message.
+//! fence token as gRPC metadata (`claim_request`), never in the message.
 
 use std::fmt;
 use std::time::Duration;

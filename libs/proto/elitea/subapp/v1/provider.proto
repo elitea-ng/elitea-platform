@@ -14,7 +14,7 @@ option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elite
 // TRANSPORT AND AUTHORISATION. It is served on the host's platform gRPC
 // listener, beside PlatformOperations, behind the same TLS configuration
 // (RequireAndVerifyClientCert) and the same caller allowlist
-// (<PREFIX>PLATFORM_CLIENTS): a call whose verified client certificate names
+// (`<PREFIX>PLATFORM_CLIENTS`): a call whose verified client certificate names
 // no allowed identity is refused before it reaches a handler. On top of
 // that, every call except Health carries the caller's signed identity in
 // metadata — the X-Elitea-* identity plane of ADR-0022 decision 5, lower-cased:
@@ -65,7 +65,7 @@ service ProviderService {
   rpc GetInvocation(GetInvocationRequest) returns (GetInvocationResponse);
 
   // Cancel requests a cooperative stop. It is recorded in the shared store
-  // and fanned out to every replica (NATS, elitea.subapp.<app>.cancel.<id>),
+  // and fanned out to every replica (NATS, `elitea.subapp.<app>.cancel.<id>`),
   // so the replica running the invocation stops it wherever the call lands.
   // NOT_FOUND for an invocation the store does not know.
   rpc Cancel(CancelRequest) returns (CancelResponse);
