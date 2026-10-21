@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 
-import { FORK_COPY, forkConversation, forkErrorText, runFork } from '@/api/queries/forkConversation';
+import { FORK_COPY, forkConversation, forkErrorText, forkStillInScope, runFork } from '@/api/queries/forkConversation';
+import { syncManager } from '@/sync/appSync';
 import { queryKeys } from '@/api/queries/keys';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { ApiError, FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
@@ -63,6 +64,18 @@ describe('runFork', () => {
     expect(list?.pages[0].total).toBe(2);
   });
 
+  it('keeps the inserted row and asks the delta sync, without refetching every loaded page', async () => {
+    const server = fakeServer();
+    server.on('POST', FORK, { status: 201, body: made });
+    const client = withList();
+    const invalidate = jest.spyOn(client, 'invalidateQueries');
+    jest.mocked(syncManager.requestSync).mockClear();
+    await runFork(client, 7, 41, {}, server.client, () => true);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(client.getQueryState(queryKeys.conversations(7))?.isInvalidated).toBe(false);
+    expect(syncManager.requestSync).toHaveBeenCalledWith(7);
+  });
+
   it('offline it sends nothing (a fork is never queued) and says it needs a connection', async () => {
     const server = fakeServer();
     expect(await runFork(withList(), 7, 41, {}, server.client, () => false)).toEqual({ ok: false, message: FORK_COPY.offline });
@@ -81,5 +94,14 @@ describe('runFork', () => {
     const server = fakeServer();
     server.on('POST', FORK, 'network_error');
     expect(await runFork(withList(), 7, 41, {}, server.client, () => true)).toEqual({ ok: false, message: FORK_COPY.offline });
+  });
+});
+
+describe('forkStillInScope', () => {
+  it('is true only in the workspace and project the fork started in', () => {
+    const started = { workspaceId: 'w1', projectId: 7 };
+    expect(forkStillInScope(started, { workspaceId: 'w1', projectId: 7 })).toBe(true);
+    expect(forkStillInScope(started, { workspaceId: 'w1', projectId: 8 })).toBe(false);
+    expect(forkStillInScope(started, { workspaceId: 'w2', projectId: 7 })).toBe(false);
   });
 });

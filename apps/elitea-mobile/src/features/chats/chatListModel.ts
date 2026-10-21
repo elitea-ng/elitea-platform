@@ -110,19 +110,19 @@ export function buildSearchRows({
  * The Archived chats list (client contract 1.10): the workspace's `archived=only` rows with the
  * queued actions applied; a chat unarchived (or deleted) on this device leaves it at once. No
  * Pinned section: an archived chat keeps its pin, but it is shown with the other archived ones.
+ * Each row names who archived it, when the row carries it (`archived_by`).
  */
 export function buildArchivedRows({
   loaded,
   overlay,
-  hidden,
-  now,
 }: {
   loaded: readonly ConversationSummary[];
   overlay: ReadonlyMap<number, ConversationOverlay>;
-  hidden?: ReadonlySet<number>;
-  now?: number;
 }): ChatListItem[] {
   return applyOverlay(loaded, overlay)
-    .filter((row) => !hidden?.has(row.id) && row.is_archived !== false)
-    .map((row) => ({ ...toItem({ ...row, is_pinned: false }, now), archived: true }));
+    .filter((row) => row.is_archived !== false)
+    .map((row) => {
+      const by = typeof row.archived_by?.name === 'string' ? row.archived_by.name.trim() : '';
+      return { ...toItem({ ...row, is_pinned: false }), archived: true, ...(by !== '' ? { archivedBy: by } : {}) };
+    });
 }

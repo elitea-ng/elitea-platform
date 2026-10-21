@@ -24,6 +24,8 @@ export interface ChatListItem {
   executor?: WorkspaceExecutor;
   /** A row of the Archived chats list (client contract 1.10): its archive action is Unarchive. */
   archived?: boolean;
+  /** The Archived chats list: who archived it (`archived_by.name`), when the row carries it. */
+  archivedBy?: string;
 }
 
 /** What the rows can do; each is absent when it is not possible (an older server, the offline copy). */
@@ -89,6 +91,8 @@ export function ConversationList({
   selectedId = null,
   opensInPlace = false,
   onLayout,
+  busyId = null,
+  busyText,
 }: {
   rows: readonly ChatListItem[];
   now?: number;
@@ -108,6 +112,10 @@ export function ConversationList({
   /** A tap opens the chat beside the list rather than navigating: no disclosure chevrons. */
   opensInPlace?: boolean;
   onLayout?: (event: LayoutChangeEvent) => void;
+  /** The row an action is running on (a fork waiting on the server): drawn and read as busy. */
+  busyId?: number | null;
+  /** What the busy row says instead of its age ("Forking…"). */
+  busyText?: string;
 }) {
   const { colors, space } = useDesign();
   const rowsActions: ChatRowActions | null = actions ?? (onDelete !== undefined ? { onDelete } : null);
@@ -170,6 +178,9 @@ export function ConversationList({
                       onPress={() => onOpen(row)}
                       onLongPress={hasMenu ? () => setMenu(row) : undefined}
                       a11y={a11y}
+                      archivedBy={row.archivedBy}
+                      busy={busyId === row.id}
+                      busyText={busyText}
                       current={selectedId === row.id}
                       chevron={opensInPlace ? false : undefined}
                     />

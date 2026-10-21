@@ -11,8 +11,9 @@ import { log } from '@/lib/log';
 import { network } from '@/lib/network';
 import { getSession, subscribeSession } from '@/state/session';
 import { bindOutbox } from '@/sync/appOutbox';
+import { reportActionFailure } from '@/sync/actionFailures';
 import { syncManager } from '@/sync/appSync';
-import { ConversationOpsDrainer, enqueueOp, listOps, overlayOf, type ConversationOp, type ConversationOverlay } from '@/sync/conversationOps';
+import { ConversationOpsDrainer, enqueueOp, listOps, overlayOf, settledPagePatch, type ConversationOp, type ConversationOverlay } from '@/sync/conversationOps';
 
 /**
  * The app's Chats-list actions (rename, pin, archive, delete): queued in the encrypted store and
@@ -47,25 +48,7 @@ export function patchConversationPages(client: QueryClient, projectId: number, c
   }
 }
 
-const failureListeners = new Set<(op: Pick<ConversationOp, 'projectId' | 'conversationId' | 'action'>) => void>();
-
-/** Told when the workspace refused an action (the list goes back to what it says). */
-export function subscribeActionFailures(listener: (op: Pick<ConversationOp, 'projectId' | 'conversationId' | 'action'>) => void): () => void {
-  failureListeners.add(listener);
-  return () => {
-    failureListeners.delete(listener);
-  };
-}
-
-function reportFailure(op: Pick<ConversationOp, 'projectId' | 'conversationId' | 'action'>): void {
-  for (const listener of [...failureListeners]) {
-    try {
-      listener(op);
-    } catch (error) {
-      log.warn('action failure listener failed', { error });
-    }
-  }
-}
+export { subscribeActionFailures, type ActionFailureListener } from '@/sync/actionFailures';
 
 export const conversationOpsDrainer = new ConversationOpsDrainer({
   getDb: () => offlineStore.get(),
@@ -76,11 +59,10 @@ export const conversationOpsDrainer = new ConversationOpsDrainer({
     const timer = setTimeout(wake, delayMs);
     return () => clearTimeout(timer);
   },
-  onSettled: (op, outcome) => {
-    if (outcome === 'rejected') reportFailure(op);
-    // A rename or pin of a conversation that is gone: it leaves the list (it was not renamed).
-    else if (outcome === 'gone') patchConversationPages(queryClient, op.projectId, op.conversationId, { kind: 'delete' });
-    else patchConversationPages(queryClient, op.projectId, op.conversationId, op.action);
+  onSettled: (op, outcome, { superseded }) => {
+    if (outcome === 'rejected') reportActionFailure(op);
+    const patch = settledPagePatch(op, outcome, superseded);
+    if (patch !== null) patchConversationPages(queryClient, op.projectId, op.conversationId, patch);
     void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(op.projectId) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.localWork(op.projectId) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.archived(op.projectId) });

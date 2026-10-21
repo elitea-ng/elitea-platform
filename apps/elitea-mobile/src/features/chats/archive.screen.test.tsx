@@ -13,6 +13,7 @@ import { __setOnlineForTests } from '@/lib/network';
 import { getSelectedChat } from '@/features/chats/selectedChat';
 import { __resetSessionForTests, getSession, setCredential, setSession } from '@/state/session';
 import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspaceInfo';
+import { reportActionFailure } from '@/sync/actionFailures';
 import { runConversationAction } from '@/sync/appConversationOps';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 
@@ -39,7 +40,9 @@ jest.mock('@/theme/brandFonts', () => ({ useBrandFontFamily: () => undefined }))
 let mockOverlay = new Map<number, { archived?: boolean; deleted?: boolean }>();
 jest.mock('@/sync/appConversationOps', () => ({
   runConversationAction: jest.fn(async () => 'queued'),
-  subscribeActionFailures: () => () => {},
+  // The real one-owner routing (src/sync/actionFailures.ts): the screens' own listeners decide.
+  subscribeActionFailures: (listener: Parameters<typeof import('@/sync/actionFailures').subscribeActionFailures>[0]) =>
+    jest.requireActual('@/sync/actionFailures').subscribeActionFailures(listener),
   useConversationOverlay: () => mockOverlay,
   conversationOpsDrainer: { subscribe: () => () => {} },
 }));
@@ -207,6 +210,34 @@ describe('Fork on a Chats row (client contract 1.11)', () => {
     expect(JSON.parse(server.requests.find((r) => r.method === 'POST')!.body!)).toEqual({});
   });
 
+  it('shows the row as busy while the fork runs, and does not open it after a project switch', async () => {
+    speak('1.11');
+    server.on('POST', FORK, { status: 201, body: row(32, 'Q3 planning (fork)') });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const serverFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+      if ((init?.method ?? (input as Request).method) === 'POST') await gate;
+      return serverFetch(input, init);
+    }) as typeof fetch;
+    await openChats();
+    await act(async () => {
+      await fireEvent(screen.getByRole('button', { name: 'Q3 planning, now' }), 'accessibilityAction', { nativeEvent: { actionName: 'fork' } });
+    });
+    const busy = await screen.findByRole('button', { name: 'Q3 planning, Forking…' });
+    expect(busy.props.accessibilityState).toMatchObject({ busy: true });
+    expect(screen.getByTestId('chat-row-busy')).toBeTruthy();
+    // The user switches project before the server answers.
+    setSession({ projectId: P + 1 });
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await waitFor(() => expect(screen.queryByTestId('chat-row-busy')).toBeNull());
+    expect(router.push).not.toHaveBeenCalledWith({ pathname: '/c/[id]', params: { id: '32' } });
+    expect(getSelectedChat({ workspaceId: getSession().workspaceId, projectId: P })).not.toBe(32);
+  });
+
   it('offline it says a fork needs a connection and sends nothing', async () => {
     speak('1.11');
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
@@ -229,14 +260,27 @@ describe('Fork on a Chats row (client contract 1.11)', () => {
 });
 
 describe('Archived chats', () => {
-  it('lists the project’s archived chats of the caller (archived=only, mine) and unarchives one (queued)', async () => {
+  it('lists the project’s archived chats (archived=only, as the web page: not only the caller’s), with who archived each', async () => {
+    speak('1.10');
+    server.on('GET', `/elitea_core/conversations/prompt_lib/${P}?archived=only`, {
+      status: 200,
+      body: { total: 2, rows: [row(23, 'Retro', { is_archived: true, archived_by: { id: 4, name: 'Ana Ruiz' }, archived_at: now }), row(24, 'Spike', { is_archived: true, archived_by: { id: 5, name: '' } })] },
+    });
+    await openArchived();
+    expect(await screen.findByRole('button', { name: 'Retro, Archived by Ana Ruiz, now' })).toBeTruthy();
+    expect(screen.getByText('Archived by Ana Ruiz')).toBeTruthy();
+    // A name the server could not resolve is left out.
+    expect(screen.getByRole('button', { name: 'Spike, now' })).toBeTruthy();
+    const list = server.requests.find((r) => r.url.pathname.endsWith(`/conversations/prompt_lib/${P}`))!;
+    expect(list.url.searchParams.get('archived')).toBe('only');
+    expect(list.url.searchParams.has('mine')).toBe(false);
+  });
+
+  it('unarchives one (queued) and opens one', async () => {
     speak('1.10');
     server.on('GET', `/elitea_core/conversations/prompt_lib/${P}?archived=only`, { status: 200, body: { total: 1, rows: [row(21, 'Old plan', { is_archived: true })] } });
     await openArchived();
     const target = await screen.findByRole('button', { name: 'Old plan, now' });
-    const list = server.requests.find((r) => r.url.pathname.endsWith(`/conversations/prompt_lib/${P}`))!;
-    expect(list.url.searchParams.get('archived')).toBe('only');
-    expect(list.url.searchParams.get('mine')).toBe('true');
     // The permission is read before the action shows.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Old plan, now' }).props.accessibilityActions).toEqual([{ name: 'archive', label: 'Unarchive' }]));
     await act(async () => {
@@ -245,6 +289,30 @@ describe('Archived chats', () => {
     expect(runConversationAction).toHaveBeenCalledWith(P, 21, { kind: 'archive', archived: false });
     await fireEvent.press(target);
     expect(router.push).toHaveBeenCalledWith({ pathname: '/c/[id]', params: { id: '21' } });
+  });
+
+  it('a refused queued unarchive is told once, by Archived chats, though the Chats tab underneath listens too', async () => {
+    speak('1.10');
+    server.on('GET', `/elitea_core/conversations/prompt_lib/${P}?archived=only`, { status: 200, body: { total: 1, rows: [row(21, 'Old plan', { is_archived: true })] } });
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    queries = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    // The stack: the Chats tab stays mounted under the pushed Archived chats screen.
+    await render(
+      <QueryClientProvider client={queries}>
+        <ConversationsScreen />
+        <ArchivedChatsView />
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Old plan');
+    await act(async () => reportActionFailure({ projectId: P, conversationId: 21, action: { kind: 'archive', archived: false } }));
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith("Couldn't unarchive the chat", expect.any(String));
+    // Not Archived chats' to tell: the Chats tab says it, once.
+    alert.mockClear();
+    await act(async () => reportActionFailure({ projectId: P, conversationId: 11, action: { kind: 'archive', archived: true } }));
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith("Couldn't archive the chat", expect.any(String));
+    alert.mockRestore();
   });
 
   it('hides Unarchive without the archive permission (a project viewer)', async () => {

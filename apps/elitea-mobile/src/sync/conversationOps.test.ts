@@ -11,6 +11,7 @@ import {
   listOps,
   opBackoffMs,
   overlayOf,
+  settledPagePatch,
   type ConversationOp,
 } from '@/sync/conversationOps';
 
@@ -30,6 +31,7 @@ async function store() {
 function drainer(db: Db | null, answers: ActionOutcome[] | ((op: ConversationOp) => ActionOutcome), extra: { online?: boolean; now?: number } = {}) {
   const sent: ConversationOp[] = [];
   const settled: [string, string][] = [];
+  const superseded: boolean[] = [];
   const wakes: number[] = [];
   const queue = Array.isArray(answers) ? [...answers] : null;
   const d = new ConversationOpsDrainer({
@@ -44,9 +46,12 @@ function drainer(db: Db | null, answers: ActionOutcome[] | ((op: ConversationOp)
       wakes.push(delay);
       return () => {};
     },
-    onSettled: (op, outcome) => settled.push([op.action.kind, outcome]),
+    onSettled: (op, outcome, info) => {
+      settled.push([op.action.kind, outcome]);
+      superseded.push(info.superseded);
+    },
   });
-  return { d, sent, settled, wakes };
+  return { d, sent, settled, superseded, wakes };
 }
 
 describe('enqueueOp', () => {
@@ -267,7 +272,7 @@ describe('ConversationOpsDrainer', () => {
     const db = await store();
     await enqueueOp(db, 7, 41, { kind: 'rename', name: 'First' }, 1);
     let calls = 0;
-    const { d } = drainer(db, () => {
+    const { d, superseded } = drainer(db, () => {
       calls++;
       return { outcome: 'done' };
     });
@@ -279,6 +284,7 @@ describe('ConversationOpsDrainer', () => {
     };
     await d.drain();
     expect(calls).toBe(1);
+    expect(superseded).toEqual([true]);
     expect((await listOps(db)).map((op) => op.action)).toEqual([{ kind: 'rename', name: 'Second' }]);
     // The saved copy is not set to the superseded name.
     expect(await db.get('SELECT name FROM conversations WHERE id = 41')).toEqual({ name: 'Q3 planning' });
@@ -332,5 +338,22 @@ describe('ConversationOpsDrainer', () => {
     const { d, sent } = drainer(null, [{ outcome: 'done' }]);
     await d.drain();
     expect(sent).toEqual([]);
+  });
+});
+
+describe('settledPagePatch (what a settled action does to the loaded pages)', () => {
+  const pin = { action: { kind: 'pin', pinned: true } } as const;
+  it('patches a taken action, removes one answered 404, and leaves a refusal to the refetch', () => {
+    expect(settledPagePatch(pin, 'done', false)).toEqual({ kind: 'pin', pinned: true });
+    expect(settledPagePatch(pin, 'gone', false)).toEqual({ kind: 'delete' });
+    expect(settledPagePatch(pin, 'rejected', false)).toBeNull();
+  });
+
+  it('skips an action a newer one superseded while it was sent (the newer one patches)', () => {
+    expect(settledPagePatch(pin, 'done', true)).toBeNull();
+    expect(settledPagePatch({ action: { kind: 'archive', archived: true } }, 'done', true)).toBeNull();
+    expect(settledPagePatch({ action: { kind: 'rename', name: 'Old' } }, 'done', true)).toBeNull();
+    // A delete is final: nothing supersedes it.
+    expect(settledPagePatch({ action: { kind: 'delete' } }, 'done', true)).toEqual({ kind: 'delete' });
   });
 });

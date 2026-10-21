@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 
 import { CAPTURE, conversationDetail13 } from '@/api/__fixtures__/chat13';
@@ -81,6 +81,28 @@ describe('Fork from here', () => {
     expect(JSON.parse(post.body!)).toEqual({ message_id: CAPTURE.answerUuid });
     const list = queries!.getQueryData<{ pages: { rows: { id: number }[] }[] }>(queryKeys.conversations(P));
     expect(list?.pages[0].rows.map((r) => r.id)).toEqual([77]);
+  });
+
+  it('a fork that lands after a project switch does not open its id in the other project', async () => {
+    server.on('POST', FORK, { status: 201, body: forkedRow });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    globalThis.fetch = (async (input: RequestInfo, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.method === 'POST') await gate;
+      return server.fetch(request);
+    }) as typeof fetch;
+    await open();
+    await forkFromAnswer();
+    await waitFor(() => expect(server.requests.some((r) => r.method === 'POST')).toBe(false));
+    setSession({ projectId: P + 1 });
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await waitFor(() => expect(server.requests.some((r) => r.method === 'POST')).toBe(true));
+    await act(async () => {});
+    expect(router.push).not.toHaveBeenCalledWith({ pathname: '/c/[id]', params: { id: '77' } });
   });
 
   it('a fork point that is not settled (409 fork_point_unsettled) is told in the thread, nothing opens', async () => {

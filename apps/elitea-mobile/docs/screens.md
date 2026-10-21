@@ -212,8 +212,13 @@ G ──────────────────────────
   1.10 and the permission the web app checks (`models.chat.conversation.edit`); it is queued
   like Pin (offline too), the row leaves at once and comes back if the workspace refuses it.
 - **Archived chats** (`/archived`, client contract 1.10): a row above the list opens the
-  caller's chats the project archived (`archived=only`), with Unarchive. Online only: the
-  offline store keeps the default list, which leaves archived chats out.
+  project's archived chats (`archived=only`, as the web app's page: the archive is the
+  project's, like the pin), each with who archived it, and Unarchive (same permission as
+  Archive). Online only. From 1.10 the sync asks the delta with `archived=include`: a chat
+  archived elsewhere stays on the device with its transcript (out of the list, Pinned and
+  search) and comes back with it on unarchive.
+- Fork shows the row as busy ("Forking…", spinner) until the new chat opens; a fork that
+  lands after a workspace or project switch does not open it.
 - Search is over the titles and messages kept on the device (the encrypted store's FTS5
   index), the same online and offline: the workspace offers no conversation search. A message
   hit shows the matched passage under the title.

@@ -6,6 +6,7 @@ import type { ConversationPage, ConversationSummary } from '@/api/queries/conver
 import { queryKeys } from '@/api/queries/keys';
 import { isOfflineError } from '@/features/chats/offlineEmpty';
 import { network } from '@/lib/network';
+import { getSession } from '@/state/session';
 import { syncManager } from '@/sync/appSync';
 
 /**
@@ -27,6 +28,23 @@ export const FORK_COPY = {
   forbidden: "You can't start chats in this project.",
   failed: "Couldn't fork the chat. Try again.",
 } as const;
+
+/** What a Chats row says while its fork runs (instead of its age). */
+export const FORK_BUSY_TEXT = 'Forking…';
+
+/** Where a fork started: conversation ids are per project (and workspace). */
+export interface ForkScope {
+  workspaceId: string | null;
+  projectId: number | null;
+}
+
+/**
+ * True when the session is still in the workspace and project a fork started in. A fork that
+ * lands after a switch must not open its id there: the same id is another project's chat.
+ */
+export function forkStillInScope(started: ForkScope, current: ForkScope = getSession()): boolean {
+  return started.workspaceId === current.workspaceId && started.projectId === current.projectId;
+}
 
 export interface ForkOptions {
   /** The fork point: a message group's UUID or numeric id. Absent forks the whole conversation. */
@@ -68,8 +86,9 @@ export type ForkResult = { ok: true; row: ConversationSummary } | { ok: false; m
 
 /**
  * Forks and brings the Chats list in line: the new row goes on top of the loaded first page
- * (the list shows it before the refetch lands), and the offline copy is asked to sync. Offline
- * (the device knows it), nothing is sent. Never throws.
+ * (the list shows it at once), and the offline copy is asked to sync (its delta delivers the
+ * row too). The loaded pages are not refetched: the inserted row is the server's own answer.
+ * Offline (the device knows it), nothing is sent. Never throws.
  */
 export async function runFork(
   client: QueryClient,
@@ -92,7 +111,6 @@ export async function runFork(
     const [first, ...rest] = data.pages;
     return { ...data, pages: [{ ...first, rows: [row, ...first.rows], total: first.total + 1 }, ...rest] };
   });
-  void client.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
   syncManager.requestSync(projectId);
   return { ok: true, row };
 }

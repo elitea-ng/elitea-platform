@@ -27,8 +27,9 @@ export const ARCHIVED_COPY = {
 } as const;
 
 /**
- * Archived chats (client contract 1.10): the caller's chats the project archived, newest first
- * (`listConversations` with `archived=only`). A tap opens the chat (an archived chat still opens
+ * Archived chats (client contract 1.10): the project's archived chats, newest first, each with
+ * who archived it (`listConversations` with `archived=only`, as the web app's page; the archive
+ * is the project's, like the pin). A tap opens the chat (an archived chat still opens
  * and takes new messages); Unarchive (swipe menu, long press, accessibility action; needs the
  * archive permission) is queued like every list action and the row leaves at once. Online only:
  * the offline store keeps the default list, which leaves archived chats out.
@@ -43,11 +44,15 @@ export function ArchivedChatsView() {
   const overlay = useConversationOverlay(projectId);
   const rows = useMemo(() => buildArchivedRows({ loaded: flattenConversationPages(archived.data?.pages), overlay }), [archived.data, overlay]);
 
-  // A queued unarchive the workspace refused: the row comes back here; say why.
+  // A queued unarchive the workspace refused: the row comes back here; say why. This screen
+  // takes it (the Chats tab underneath, also listening, does not say it again); any other
+  // refusal is left to the Chats tab.
   useEffect(
     () =>
       subscribeActionFailures((op) => {
-        if (op.projectId === projectId && op.action.kind === 'archive' && !op.action.archived) Alert.alert(actionFailedTitle(op.action), ACTION_REFUSED_BODY);
+        if (op.projectId !== projectId || op.action.kind !== 'archive' || op.action.archived) return false;
+        Alert.alert(actionFailedTitle(op.action), ACTION_REFUSED_BODY);
+        return true;
       }),
     [projectId],
   );

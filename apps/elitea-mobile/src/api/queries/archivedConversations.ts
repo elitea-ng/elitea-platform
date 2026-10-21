@@ -7,14 +7,15 @@ import { queryKeys } from '@/api/queries/keys';
 
 /**
  * The Archived chats screen (client contract 1.10): `listConversations` with `archived=only`,
- * the caller's own chats (`mine=true`, as the Chats list) that the project archived. Online
- * only: archived chats are not kept in the offline store (its list is the default one, which
- * leaves them out), so offline the screen says it needs a connection.
+ * as the web app's Archived chats page asks it: every archived chat of the project the caller
+ * can see (the archive is the project's, like the pin; not only the caller's own chats). Each
+ * row names who archived it (`archived_by`). Online only: the offline store keeps the
+ * caller's own list (`mine=true`), so offline the screen says it needs a connection.
  */
 export async function fetchArchivedPage(projectId: number, offset: number, client: ApiClient = sessionApiClient(), signal?: AbortSignal): Promise<ConversationPage> {
   const page = await unwrap(
     client.GET('/elitea_core/conversations/prompt_lib/{project_id}', {
-      params: { path: { project_id: String(projectId) }, query: { mine: true, archived: 'only', limit: CONVERSATIONS_PAGE_SIZE, offset } },
+      params: { path: { project_id: String(projectId) }, query: { archived: 'only', limit: CONVERSATIONS_PAGE_SIZE, offset } },
       signal,
     }),
   );

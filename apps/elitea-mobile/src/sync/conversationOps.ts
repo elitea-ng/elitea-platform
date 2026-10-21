@@ -204,9 +204,9 @@ export async function applyTakenOp(tx: SqlExecutor, op: Pick<ConversationOp, 'pr
       );
       return;
     case 'archive':
-      // The saved Chats list leaves an archived row out at once (src/db/repo.ts); the delta then
-      // tells it as `access_lost` (the app's delta reads carry no `archived`), and an unarchive
-      // re-delivers the row.
+      // The saved Chats list leaves an archived row out at once (src/db/repo.ts), its transcript
+      // kept. From client contract 1.10 the delta (`archived=include`) re-delivers the row with
+      // `is_archived`; before it, an archive came as an `access_lost` tombstone.
       await tx.run(
         `UPDATE conversations SET
            row_json = CASE WHEN row_json IS NOT NULL AND json_valid(row_json) THEN json_set(row_json, '$.is_archived', json(?)) ELSE row_json END
@@ -214,6 +214,20 @@ export async function applyTakenOp(tx: SqlExecutor, op: Pick<ConversationOp, 'pr
         [op.action.archived ? 'true' : 'false', ...key],
       );
   }
+}
+
+/**
+ * What a settled queued action does to the loaded list pages: the action itself once taken,
+ * a removal for one answered 404 (not a delete: it was not taken, the chat is gone), and
+ * nothing for a refusal (the refetch shows what the workspace says) or for an action a newer
+ * one of its kind superseded while it was sent (that one patches when it settles; patching
+ * the old value now would flash it).
+ */
+export function settledPagePatch(op: Pick<ConversationOp, 'action'>, outcome: 'done' | 'gone' | 'rejected', superseded: boolean): ConversationAction | null {
+  if (outcome === 'rejected') return null;
+  if (outcome === 'gone') return op.action.kind === 'delete' ? op.action : { kind: 'delete' };
+  if (superseded && op.action.kind !== 'delete') return null;
+  return op.action;
 }
 
 /** Backoff after `attempts` failed sends: 2 s doubling to 10 min; `Retry-After` wins (1 s to 15 min). */
@@ -235,8 +249,12 @@ export interface OpsDrainerDeps {
   now?: () => number;
   /** Arms a timer for the next due retry; returns its cancel. */
   schedule?: (delayMs: number, wake: () => void) => () => void;
-  /** After an action left the queue: taken (`done`/`gone`) or refused (`rejected`). */
-  onSettled?: (op: ConversationOp, outcome: 'done' | 'gone' | 'rejected') => void;
+  /**
+   * After an action left the queue: taken (`done`/`gone`) or refused (`rejected`).
+   * `superseded`: a newer action of its kind replaced it while it was sent (that one settles
+   * on its own).
+   */
+  onSettled?: (op: ConversationOp, outcome: 'done' | 'gone' | 'rejected', info: { superseded: boolean }) => void;
 }
 
 export class ConversationOpsDrainer {
@@ -340,7 +358,7 @@ export class ConversationOpsDrainer {
         });
       }
       changed = true;
-      this.deps.onSettled?.(op, result.outcome);
+      this.deps.onSettled?.(op, result.outcome, { superseded });
     }
     if (changed) void this.notify();
     this.cancelWake?.();

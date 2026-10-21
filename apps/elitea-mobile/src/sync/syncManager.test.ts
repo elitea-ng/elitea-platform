@@ -403,3 +403,61 @@ describe('SyncManager: the Local work list', () => {
     ]);
   });
 });
+
+describe('SyncManager: archived chats (client contract 1.10)', () => {
+  async function setupArchive(archive: boolean) {
+    const db = new Db(openNodeSqlite());
+    await migrate(db);
+    const server = fakeServer();
+    const manager = new SyncManager({ getDb: () => db, client: () => server.client, localWork: () => false, archive: () => archive });
+    return { db, server, manager };
+  }
+  const archivedParams = (server: FakeServer) =>
+    server.requests.filter((r) => r.url.pathname === `/api/v2${CONV}`).map((r) => r.url.searchParams.get('archived'));
+
+  it('asks every delta call with archived=include; a chat archived elsewhere keeps its transcript, out of the list and search, and comes back without a transcript refetch', async () => {
+    const { db, server, manager } = await setupArchive(true);
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41, { name: 'Budget plan' }), conversationRow(42)], { next: 'conv-1' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([messageRow(1), messageRow(2)], { next: 'm41-1' }) });
+    server.on('GET', msgs(42), { status: 200, body: messageDelta([], { next: 'm42-1' }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    await manager.syncProject(7);
+
+    // Archived elsewhere: the delta re-delivers the row, marked (no tombstone).
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41, { name: 'Budget plan', is_archived: true })], { next: 'conv-2' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41-2' }) });
+    await manager.syncProject(7);
+    expect((await readConversationRows(db, 7, 30, 0)).rows.map((r) => r.id)).toEqual([42]);
+    expect(await searchConversations(db, 7, 'budget')).toEqual([]);
+    expect(await ids(db, 'SELECT id FROM messages WHERE conversation_id = 41 ORDER BY id')).toEqual([1, 2]);
+
+    // Unarchived: back on the list with the transcript it kept; the transcript continues from its cursor.
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41, { name: 'Budget plan', is_archived: false })], { next: 'conv-3' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41-3' }) });
+    await manager.syncProject(7);
+    expect((await readConversationRows(db, 7, 30, 0)).rows.map((r) => r.id).sort()).toEqual([41, 42]);
+    expect(await ids(db, 'SELECT id FROM messages WHERE conversation_id = 41 ORDER BY id')).toEqual([1, 2]);
+    expect(requested(server, msgs(41))).toEqual(['0', 'm41-1', 'm41-2']);
+    expect(archivedParams(server)).toEqual(['include', 'include', 'include']);
+  });
+
+  it('a cursor of the old (pre-1.10) list is refused by the server and the list resyncs under the new mode', async () => {
+    const { db, server, manager } = await setupArchive(true);
+    await db.run('INSERT INTO sync_state (scope, project_id, cursor, gen, full_gen) VALUES (?, 7, ?, 1, NULL)', [conversationsScope(7), 'old-cursor']);
+    server.on('GET', CONV, { status: 400, body: { error: 'invalid_sync_cursor', message: 'x' } }, { status: 200, body: conversationDelta([conversationRow(41, { is_archived: true })], { next: 'conv-1' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41-1' }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    expect((await manager.syncProject(7))?.conversations).toBe('ok');
+    expect(requested(server, CONV)).toEqual(['old-cursor', '0']);
+    expect(await ids(db, 'SELECT id FROM conversations')).toEqual([41]);
+  });
+
+  it('a server before 1.10 is asked without archived (an archive is its access_lost tombstone)', async () => {
+    const { server, manager } = await setupArchive(false);
+    server.on('GET', CONV, { status: 200, body: conversationDelta([conversationRow(41)], { next: 'conv-1' }) });
+    server.on('GET', msgs(41), { status: 200, body: messageDelta([], { next: 'm41' }) });
+    server.on('GET', NOTIF, { status: 200, body: notificationDelta([]) });
+    await manager.syncProject(7);
+    expect(archivedParams(server)).toEqual([null]);
+  });
+});

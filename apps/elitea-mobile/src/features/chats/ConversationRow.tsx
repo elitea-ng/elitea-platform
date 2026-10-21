@@ -1,4 +1,4 @@
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import type { SwipeRowA11y } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
@@ -28,6 +28,9 @@ export function ConversationRow({
   a11y,
   current = false,
   chevron,
+  archivedBy,
+  busy = false,
+  busyText,
 }: {
   title: string | null | undefined;
   age: string;
@@ -42,8 +45,15 @@ export function ConversationRow({
   current?: boolean;
   /** False when a tap opens the chat beside the list instead of navigating (no disclosure chevron). */
   chevron?: boolean;
+  /** The Archived chats list: who archived it, drawn under the title ("Archived by Ana"). */
+  archivedBy?: string;
+  /** An action runs on the row (a fork): a spinner, `busyText` for the age, read as busy. */
+  busy?: boolean;
+  busyText?: string;
 }) {
   const { colors } = useDesign();
+  const archivedLine = archivedBy ? `Archived by ${archivedBy}` : null;
+  const shownAge = busy && busyText ? busyText : age;
   const name = title || UNTITLED;
   const passage = snippet && snippet.length > 0 ? snippet.map((part) => part.text).join('') : null;
   const badge = executor === undefined ? null : executorBadge(executor);
@@ -51,10 +61,11 @@ export function ConversationRow({
     <View style={{ backgroundColor: current ? colors.accentSoft : colors.surface }}>
       <ListRow
         title={name}
-        value={age}
+        value={shownAge}
         leading={pinned ? <Icon name="pin" size={17} tone="secondaryBrand" /> : undefined}
+        trailing={busy ? <ActivityIndicator testID="chat-row-busy" color={colors.accent} /> : undefined}
         footer={
-          badge !== null || (snippet && passage) ? (
+          badge !== null || (snippet && passage) || archivedLine ? (
             <View style={styles.footer}>
               {badge !== null ? (
                 <View
@@ -78,15 +89,20 @@ export function ConversationRow({
                   )}
                 </Text>
               ) : null}
+              {archivedLine ? (
+                <Text variant="footnote" tone="secondary" numberOfLines={1} testID="archived-by">
+                  {archivedLine}
+                </Text>
+              ) : null}
             </View>
           ) : undefined
         }
-        accessibilityLabel={[name, pinned ? 'pinned' : null, badge, age, passage].filter(Boolean).join(', ')}
+        accessibilityLabel={[name, pinned ? 'pinned' : null, badge, archivedLine, shownAge, passage].filter(Boolean).join(', ')}
         onPress={onPress}
         onLongPress={onLongPress}
         accessibilityActions={a11y?.accessibilityActions}
         onAccessibilityAction={a11y?.onAccessibilityAction}
-        busy={a11y?.accessibilityState?.busy === true}
+        busy={busy || a11y?.accessibilityState?.busy === true}
         current={current}
         chevron={chevron}
       />

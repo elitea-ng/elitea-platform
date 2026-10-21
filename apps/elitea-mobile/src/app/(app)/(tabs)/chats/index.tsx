@@ -5,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { speaksContract } from '@/api/discovery';
 import { flattenConversationPages, useConversations, useLocalWorkConversations } from '@/api/queries/conversations';
-import { runFork } from '@/api/queries/forkConversation';
+import { FORK_BUSY_TEXT, forkStillInScope, runFork } from '@/api/queries/forkConversation';
 import { queryClient } from '@/api/queryClient';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
@@ -41,7 +41,6 @@ interface DeleteScope {
   projectId: number | null;
 }
 const sameDeleteScope = (a: DeleteScope, b: DeleteScope) => a.workspaceId === b.workspaceId && a.projectId === b.projectId;
-
 
 /**
  * The signed-in user's conversations in the selected project: Pinned on top, then by day;
@@ -79,7 +78,8 @@ export default function ConversationsScreen() {
   const archiveAvailable = useArchiveAvailable(projectId);
   // Fork (client contract 1.11): the whole history into a new chat, opened at once.
   const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
-  const [forking, setForking] = useState(false);
+  // The row being forked (busy until the new chat opens); one fork at a time.
+  const [forkingId, setForkingId] = useState<number | null>(null);
   const overlay = useConversationOverlay(projectId);
   const savedPinned = useSavedPinnedRows(projectId, actionsAvailable);
   const hits = useConversationSearch(projectId, query, localWorkOnly ? 'local_work' : 'chat');
@@ -128,11 +128,14 @@ export default function ConversationsScreen() {
     [searching, hits, all, query, overlay, hidden, savedPinned, actionsAvailable, localWorkOnly],
   );
 
-  // A queued action the workspace refused: the list goes back to what it says; say why.
+  // A queued action the workspace refused: the list goes back to what it says; say why. A screen
+  // pushed over this one (Archived chats) is asked first and may take it (src/sync/actionFailures.ts).
   useEffect(
     () =>
       subscribeActionFailures((op) => {
-        if (op.projectId === projectId) Alert.alert(actionFailedTitle(op.action), ACTION_REFUSED_BODY);
+        if (op.projectId !== projectId) return false;
+        Alert.alert(actionFailedTitle(op.action), ACTION_REFUSED_BODY);
+        return true;
       }),
     [projectId],
   );
@@ -210,8 +213,9 @@ export default function ConversationsScreen() {
       actionsAvailable && !localWorkOnly && projectId !== null
         ? (row) => {
             haptic('tabOrChipChange');
-            void runConversationAction(projectId, row.id, { kind: 'pin', pinned: row.pinned !== true }).then((result) => {
-              if (result === 'failed') Alert.alert(actionFailedTitle({ kind: 'pin', pinned: true }), ACTION_RETRY_BODY);
+            const action = { kind: 'pin', pinned: row.pinned !== true } as const;
+            void runConversationAction(projectId, row.id, action).then((result) => {
+              if (result === 'failed') Alert.alert(actionFailedTitle(action), ACTION_RETRY_BODY);
             });
           }
         : null,
@@ -230,14 +234,18 @@ export default function ConversationsScreen() {
     onFork:
       forkAvailable && !localWorkOnly && projectId !== null
         ? (row) => {
-            if (forking) return;
-            setForking(true);
+            if (forkingId !== null) return;
+            setForkingId(row.id);
+            // The new chat opens only in the workspace and project the fork started in: ids are
+            // per project, so after a switch the same id is another chat.
+            const scope = deleteScope;
             void runFork(queryClient, projectId, row.id)
               .then((result) => {
-                if (result.ok) open({ id: result.row.id });
-                else Alert.alert("Couldn't fork the chat", result.message);
+                if (!result.ok) Alert.alert("Couldn't fork the chat", result.message);
+                else if (forkStillInScope(scope)) open({ id: result.row.id });
+                else log.info('fork done after a scope switch; not opened', { conversationId: result.row.id });
               })
-              .finally(() => setForking(false));
+              .finally(() => setForkingId(null));
           }
         : null,
   };
@@ -256,6 +264,8 @@ export default function ConversationsScreen() {
         selectedId={twoPane ? selectedId : null}
         opensInPlace={twoPane}
         onLayout={twoPane ? undefined : screen.onLayout}
+        busyId={forkingId}
+        busyText={FORK_BUSY_TEXT}
         // Offline too: the actions are queued on the device and sent on reconnect.
         actions={actions}
         refreshControl={
