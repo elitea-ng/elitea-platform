@@ -21,6 +21,8 @@ const COMMANDS: CustomCommand[] = [
 const SKILLS: ComposerSkill[] = [
   { id: '1', name: 'style' },
   { id: '2', name: 'Review' },
+  { id: '9', name: 'deploy', project: true },
+  { id: '8', name: 'audit', project: true },
 ];
 
 const labels = (query: string): string[] =>
@@ -31,12 +33,12 @@ const labels = (query: string): string[] =>
       case 'custom':
         return `${entry.command.source} /${entry.command.name}`;
       case 'skill':
-        return `skill /${entry.skill.name}`;
+        return `${entry.skill.project === true ? 'project' : 'skill'} /${entry.skill.name}`;
     }
   });
 
 describe('slashMenu', () => {
-  it('orders host commands, then workspace commands, then the person\'s, then skills', () => {
+  it('orders host commands, then workspace commands, then the person\'s, then the version\'s skills, then the project\'s', () => {
     expect(labels('')).toEqual([
       'host /new',
       'host /plan',
@@ -50,6 +52,9 @@ describe('slashMenu', () => {
       'user /standup',
       // "Review" is hidden by the command of its name: the message would run the command.
       'skill /style',
+      // The project's skills after the version's.
+      'project /audit',
+      'project /deploy',
     ]);
   });
 

@@ -179,6 +179,10 @@ pub struct TurnRequest {
     /// thread's model for its next turns. `None`: the thread's kept choice,
     /// else the agent's model.
     pub model: Option<ModelChoice>,
+    /// Project skills the person picked with "/" (their ids, as the UI
+    /// sent them): the host reads each itself and applies it like a
+    /// version skill, within the same limits.
+    pub project_skills: Vec<Value>,
     /// A custom command the person picked with "/": the host reads and
     /// expands it itself, and the expansion is what the model gets; the
     /// prompt becomes the literal `/<name> <arguments>`.
@@ -442,6 +446,32 @@ async fn start_turn(
             }),
         )
         .await?)
+}
+
+/// The project skills `request` picks, read by the host (`getSkill`) and
+/// admitted, in request order. A skill the person cannot read (`403`,
+/// `404`) is `skill_unknown`.
+async fn project_skills(
+    api: &PlatformApi,
+    request: &TurnRequest,
+) -> Result<Vec<InvokedSkill>, TurnError> {
+    let mut out = Vec::new();
+    for id in skills::project_ids(&request.project_skills)? {
+        let skill = api
+            .project_skill(request.project_id, id)
+            .await
+            .map_err(|error| match error.status {
+                Some(403 | 404) => TurnError::new(
+                    "skill_unknown",
+                    format!(
+                        "The project has no skill {id} you can use. Pick one from the / menu, or check the project's skills in the web app."
+                    ),
+                ),
+                _ => TurnError::from(error),
+            })?;
+        out.push(skills::from_project(request.project_id, id, &skill)?);
+    }
+    Ok(out)
 }
 
 /// The platform refused a start for its conversation or participant
@@ -1601,6 +1631,7 @@ impl AgentHost {
             skills: Vec::new(),
             compact: false,
             model: None,
+            project_skills: Vec::new(),
             command: None,
         };
         let need_version = self.caches.version(&version_key).is_none();
@@ -1676,7 +1707,7 @@ impl AgentHost {
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
-        skills::check(&request.skills)?;
+        skills::check(&request.skills, &request.project_skills)?;
         if let Some(pick) = &request.command {
             slash_commands::check(pick)?;
         }
@@ -1818,6 +1849,10 @@ impl AgentHost {
         if resolved_withheld {
             events.status(Phase::Resolving, Some(CONTEXT_WITHHELD));
         }
+        // The project skills picked by id: read by the host under the
+        // person's token, checked with the version's picks before the start.
+        let project_skills = project_skills(&api, request).await?;
+        skills::with_project(&invoked, &project_skills)?;
         let fresh_participant = match looked_up {
             Some(answer) => {
                 let answering = answer?;
@@ -1976,6 +2011,7 @@ impl AgentHost {
         };
         events.timed(Timed::Starting, starting.elapsed());
         memory.retag(&started.execution_id);
+        let invoked = skills::with_project(&invoked, &project_skills)?;
         let (admitted, models) = self
             .thread_model(request, &api, events, admitted, &memory, models)
             .await;

@@ -34,7 +34,7 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import type { ComposerSkill } from './useAgentSkills';
-import type { CustomCommand, TurnCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { Segmented } from '@/widgets/desktop-shell';
 
@@ -74,7 +74,7 @@ export interface WorkspaceComposerProps {
   /** The model chip (`ModelChip`), after the agent picker. */
   modelPicker?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
-  /** The selected agent's skills, offered after the commands in the "/" menu. */
+  /** The selected agent's skills, then the project's (`project`), offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
   /** The custom commands (`commands_list`), offered after the host commands; none for a cloud thread. */
   customCommands: readonly CustomCommand[];
@@ -82,7 +82,7 @@ export interface WorkspaceComposerProps {
    * Resolves `true` once the turn started (the input is then cleared). `skills`: the skill names the message invokes;
    * `command`: the custom command it runs, if any (then no skill).
    */
-  onSend: (prompt: string, mentions: string[], skills: string[], command?: TurnCommand) => Promise<boolean>;
+  onSend: (prompt: string, mentions: string[], skills: TurnStartRequest['skills'], command?: TurnCommand) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
   /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
@@ -132,12 +132,18 @@ function slashItem(entry: SlashEntry): SuggestionItem {
       };
     case 'skill':
       return {
-        key: `skill:${entry.skill.id}`,
+        key: `skill:${entry.skill.project === true ? 'project' : 'version'}:${entry.skill.id}`,
         label: composer.skillToken(entry.skill),
-        section: t('workspace.composer.skills', 'Skills'),
+        section: entry.skill.project === true ? t('workspace.composer.projectSkills', 'Project skills') : t('workspace.composer.skills', 'Skills'),
         ...(entry.skill.description !== undefined ? { description: entry.skill.description } : {}),
       };
   }
+}
+
+/** What the start request names for the skill a message invokes: a version skill by name, a project skill by id. */
+function skillPicks(skill: ComposerSkill | null): TurnStartRequest['skills'] {
+  if (skill === null) return [];
+  return [skill.project === true ? { source: 'project', id: skill.id } : skill.name];
 }
 
 /** What picking a custom command or a skill inserts. */
@@ -293,7 +299,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     // A custom command first: it hides a skill of its name in the menu too.
     const command = composer.invokedCustomCommand(question, customCommands);
     const skill = command === null ? composer.invokedSkill(question, skills) : null;
-    const sending = command === null ? onSend(question, mentions, skill === null ? [] : [skill.name]) : onSend(question, mentions, [], command);
+    const sending = command === null ? onSend(question, mentions, skillPicks(skill)) : onSend(question, mentions, [], command);
     void sending.then((sent) => {
       if (sent) clearInput();
     });

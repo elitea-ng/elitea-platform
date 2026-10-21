@@ -7,7 +7,7 @@
  *   and `.claude/commands`, then the person's own folder) are prompt
  *   templates: picking one inserts `/<name> `, and a message that starts
  *   with it is sent as that command, which the host reads and expands.
- * - The agent's skills (`composerSkills.ts`) come last.
+ * - The agent's skills, then the project's (`composerSkills.ts`), come last.
  *
  * A name is offered once: a host command hides a custom command of its
  * name, and a custom command hides a skill of its name (the message would
@@ -135,8 +135,14 @@ export function slashMenu(query: string, commands: readonly CustomCommand[], ski
   return [
     ...matchingCommands(query).map((command): SlashEntry => ({ kind: 'host', command })),
     ...custom.map((command): SlashEntry => ({ kind: 'custom', command })),
-    ...matchingSkills(skills, query)
-      .filter((skill) => !hidden.has(skill.name.toLowerCase()))
-      .map((skill): SlashEntry => ({ kind: 'skill', skill })),
+    // The version's skills, then the project's.
+    ...[false, true].flatMap((project) =>
+      matchingSkills(
+        skills.filter((skill) => (skill.project === true) === project),
+        query,
+      )
+        .filter((skill) => !hidden.has(skill.name.toLowerCase()))
+        .map((skill): SlashEntry => ({ kind: 'skill', skill })),
+    ),
   ];
 }

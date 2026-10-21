@@ -226,7 +226,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "none" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}}` | `{turn_id, execution_id}` |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
@@ -482,6 +482,27 @@ AGENTS.md section, as one `## Skill for this turn` section with one
 `## End of skill instructions`; the name is escaped as an attribute value
 and the text is framed as AGENTS.md text is (below). Every attached skill
 also stays in the runtime's catalogue, for `load_skill`, as before.
+
+**Project skills.** A `skills` entry `{source: "project", id}` is one of
+the bound project's own skills (the menu's "Project skills": `listSkills`,
+less the names the version carries), by its id (a positive integer, or its
+decimal string; else `invalid_request`). The host never takes its text
+from the UI: after the version is read and before the turn is started, it
+reads the skill itself under the person's token
+(`GET /api/v2/elitea_core/skill/prompt_lib/{project_id}/{id}`, `getSkill`:
+the `base` version's `name` and `instructions`); one the person cannot read
+(`403`, `404`) or without instructions is refused with `skill_unknown`.
+It is admitted with the runtime's own bounds
+(`instruction_authority::check_skills`, as a `project:<project_id>`
+snapshot whose revision is the digest of what was read), else
+`skill_invalid`, and applied exactly like a picked version skill (one more
+`<invoked_skill>` block, after the version's picks; one with a picked
+version skill's name is not applied twice). It counts toward the same
+limits: at most 5 picks of both kinds together (`invalid_request`, before
+any request) and 64 KiB of picked skill text together (`skill_too_large`,
+refused, not cut). It is **not** added to the runtime's `load_skill`
+catalogue: that stays the version's. The cloud web chat's `~` menu still
+offers only the version's skills.
 
 **Custom commands.** `command` is a custom command the person picked in
 the "/" menu (`commands_list`): `name` as listed (`name`, or `folder:name`

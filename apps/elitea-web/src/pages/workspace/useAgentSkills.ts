@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 
 import { composer } from '@/features/workspace';
-import { useListApplicationSkills } from '@/shared/api/generated/skills/skills';
+import { useListApplicationSkills, useListSkills } from '@/shared/api/generated/skills/skills';
 import { unwrapList } from '@/shared/api/unwrap';
 
 interface SkillRow {
@@ -34,4 +34,36 @@ export function useAgentSkills(projectId: number, versionId: string): ComposerSk
       ),
     [query.data],
   );
+}
+
+/** How many of the project's skills the menu reads (one page). */
+const PROJECT_SKILLS_PAGE = 100;
+
+/**
+ * The bound project's skills that the agent version does not carry (by
+ * name, ignoring case), for the menu's "Project skills" (desktop only):
+ * read once `enabled` (the composer was focused on a thread that runs
+ * here), cached 30 s like the version's. The host reads a picked one again
+ * itself, by id, so one listed here and gone by the send is refused there
+ * (`skill_unknown`). `[]` while it loads and when the read fails.
+ */
+export function useProjectSkills(projectId: number, enabled: boolean, attached: readonly ComposerSkill[]): ComposerSkill[] {
+  const on = enabled && Number.isInteger(projectId) && projectId > 0;
+  const query = useListSkills(String(projectId), { page: 1, page_size: PROJECT_SKILLS_PAGE }, { query: { enabled: on, staleTime: 30_000 } });
+  return useMemo(() => {
+    if (!on) return [];
+    const taken = new Set(attached.map((skill) => skill.name.trim().toLowerCase()));
+    return unwrapList<SkillRow>(query.data, 'workspace.projectSkills').flatMap((row) =>
+      typeof row.name === 'string' && row.name.trim() !== '' && !taken.has(row.name.trim().toLowerCase())
+        ? [
+            {
+              id: String(row.id),
+              name: row.name,
+              project: true as const,
+              ...(typeof row.description === 'string' && row.description !== '' ? { description: row.description } : {}),
+            },
+          ]
+        : [],
+    );
+  }, [on, query.data, attached]);
 }

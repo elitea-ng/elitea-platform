@@ -263,6 +263,8 @@ describe('WorkspaceSessionPage', () => {
       http.get(`${BASE}/elitea_core/application_skills/prompt_lib/42/9`, () =>
         HttpResponse.json({ items: skills.map((s) => ({ ...s, project_id: '42', type: 'skill' })), total: skills.length, page: 1, page_size: skills.length, total_pages: 1 }),
       ),
+      // The project's own skills (the "/" menu's "Project skills"): none unless a test serves some.
+      http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, () => HttpResponse.json({ items: [], total: 0, page: 1, page_size: 100, total_pages: 0 })),
       http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
         HttpResponse.json({ rows: [{ id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false }], total: 1 }),
       ),
@@ -1302,6 +1304,46 @@ describe('WorkspaceSessionPage', () => {
       expect(help).toHaveTextContent('/standup — My standup (yours)');
       expect(help).toHaveTextContent('/style — The house style');
       expect(help).toHaveTextContent('/new — Start a new conversation');
+    });
+
+    it('offers the project\'s other skills in their own section and sends a picked one by id', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc, [{ id: '7', name: 'style', description: 'The house style' }]);
+      const listed: URL[] = [];
+      server.use(
+        http.get(`${BASE}/elitea_core/skills/prompt_lib/42`, ({ request }) => {
+          listed.push(new URL(request.url));
+          return HttpResponse.json({
+            items: [
+              { id: '21', project_id: '42', name: 'deploy', description: 'Ship it', type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+              // The version carries it already: offered once, as the version's.
+              { id: '22', project_id: '42', name: 'Style', type: 'skill', is_default: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+            ],
+            total: 2,
+            page: 1,
+            page_size: 100,
+            total_pages: 1,
+          });
+        }),
+      );
+      const input = screen.getByTestId('chat-message-input');
+      // Read only once the composer is used.
+      expect(listed).toHaveLength(0);
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(8));
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label')).slice(6)).toEqual(['/style', '/deploy']);
+      expect(within(menu).getByText('Project skills')).toBeInTheDocument();
+      expect(listed[0]?.searchParams.get('page_size')).toBe('100');
+
+      await user.type(input, 'dep');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('/deploy '));
+      await user.type(input, 'the release{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('/deploy the release');
+      expect(ipc.calls.started[0]?.skills).toEqual([{ source: 'project', id: '21' }]);
     });
 
     it('sends no skill when the message does not start with one', async () => {

@@ -32,14 +32,23 @@ export interface TurnStartRequest {
   plan_mode: boolean;
   /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */
   mentions: string[];
-  /** The agent's skills the person picked with "/" (by name); the host resolves them against the agent version and applies them to this turn. */
-  skills: string[];
+  /**
+   * The skills the person picked with "/": the agent version's by name (resolved against the version), the project's
+   * as `{source: "project", id}` (read by the host itself); applied to this turn.
+   */
+  skills: (string | ProjectSkillPick)[];
   /** `/compact`: the host compacts the conversation's context at the turn's first model call (IPC.md "Context window"). */
   compact?: boolean;
   /** Another chat model of the project for this turn and the thread's next ones (IPC.md "Model per turn"). */
   model?: TurnModelChoice | undefined;
   /** A custom command the person picked with "/": the host reads and expands its file itself, and records the prompt as `/<name> <arguments>`. */
   command?: TurnCommand | undefined;
+}
+
+/** A project skill picked in the "/" menu, by its id only. */
+interface ProjectSkillPick {
+  source: 'project';
+  id: string;
 }
 
 /** `agent_turn_start.command`: the command's name as `commands_list` gave it, and what follows it in the message. */

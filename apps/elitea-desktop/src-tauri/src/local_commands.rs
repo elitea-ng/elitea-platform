@@ -25,6 +25,7 @@ use crate::d0::approvals::UiDecision;
 use crate::d0::definition::ModelChoice;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
+use crate::d0::skills::SkillPick;
 use crate::d0::slash_commands::{CommandPick, ListedCommand};
 use crate::d0::turn::{
     AgentHost, PolicySource, PrewarmRequest, Prewarmed, RestorePreview, TurnError, TurnRequest,
@@ -544,7 +545,7 @@ pub async fn agent_turn_start(
     prompt: String,
     plan_mode: bool,
     mentions: Option<Vec<String>>,
-    skills: Option<Vec<String>>,
+    skills: Option<Vec<SkillPick>>,
     compact: Option<bool>,
     model: Option<TurnModel>,
     command: Option<CommandPick>,
@@ -559,6 +560,7 @@ pub async fn agent_turn_start(
             "This thread is running in the cloud. Take it back to continue here.",
         ));
     }
+    let (skills, project_skills) = crate::d0::skills::split(skills.unwrap_or_default());
     Ok(state
         .agents
         .start(TurnRequest {
@@ -570,7 +572,8 @@ pub async fn agent_turn_start(
             prompt,
             plan_mode,
             mentions: mentions.unwrap_or_default(),
-            skills: skills.unwrap_or_default(),
+            skills,
+            project_skills,
             compact: compact.unwrap_or(false),
             model: model
                 .map(|model| {

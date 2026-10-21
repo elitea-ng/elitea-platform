@@ -16,7 +16,7 @@
  * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
  * a catalogue still loading is said above the composer and sets nothing).
  */
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -27,7 +27,7 @@ import { t } from '@/shared/i18n';
 import { AgentChip, RunLocationChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { firstError, SessionNotices } from './sessionParts';
-import type { ComposerSkill } from './useAgentSkills';
+import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
 import { useCustomCommands } from './useCustomCommands';
 import type { ThreadHandoff } from './useThreadHandoff';
@@ -41,7 +41,7 @@ const ContextMeter = lazy(() => import('./ContextMeter'));
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
   workspaceId: string;
-  /** The folder's project: the model chip offers its chat models. */
+  /** The folder's project: the model chip offers its chat models, and the "/" menu its own skills too. */
   projectId: number;
   conversationId: string;
   session: ThreadSession;
@@ -84,6 +84,14 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
   // A custom command is the local host's: none for the cloud copy.
   const customCommands = useCustomCommands(ipc, workspaceId, !cloudMode);
+  // The project's own skills: read once the composer is used, applied by the local host only.
+  const [focused, setFocused] = useState(false);
+  const projectSkills = useProjectSkills(projectId, focused && !cloudMode, skills);
+  const offered = useMemo(() => [...skills, ...projectSkills], [skills, projectSkills]);
+  const onFocus = (): void => {
+    setFocused(true);
+    session.prewarm();
+  };
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
@@ -102,7 +110,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   return (
     <>
       <HandoffBanner handoff={handoff} />
-      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={skills} />
+      <SessionNotices error={modelNotice ?? firstError(turn.startError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <WorkspaceComposer
         ipc={ipc}
         workspaceId={workspaceId}
@@ -119,10 +127,10 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
           )
         }
         onPlanModeChange={commands.setPlanMode}
-        skills={skills}
+        skills={offered}
         customCommands={customCommands}
         onCommand={session.run}
-        onFocus={session.prewarm}
+        onFocus={onFocus}
         {...(cloudMode ? cloudBinding(cloud) : local)}
       />
     </>

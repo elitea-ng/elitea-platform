@@ -102,6 +102,7 @@
   "workspace.composer.commands": "Commands",
   "workspace.composer.placeholder": "What should the agent do? Type @ to add a file, / for commands and skills",
   "workspace.composer.skills": "Skills",
+  "workspace.composer.projectSkills": "Project skills",
   "workspace.composer.workspaceCommands": "Commands in this workspace",
   "workspace.composer.userCommands": "Your commands",
   "workspace.command.sourceWorkspace": "workspace",

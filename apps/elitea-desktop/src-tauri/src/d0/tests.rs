@@ -377,6 +377,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         skills: Vec::new(),
         compact: false,
         model: None,
+        project_skills: Vec::new(),
         command: None,
     }
 }
@@ -2135,6 +2136,101 @@ async fn unknown_command_is_refused() {
     req.command = Some(command_pick("../evil", ""));
     assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
     assert!(h.server.seen().is_empty(), "refused before any request");
+}
+
+/// The platform with project skills: 12 "Deploy", 13 large, 14 not the person's.
+fn with_project_skills(
+    inner: impl Fn(&Req) -> Res + Send + Sync + 'static,
+) -> impl Fn(&Req) -> Res + Send + Sync + 'static {
+    move |req: &Req| match req.path.as_str() {
+        "/api/v2/elitea_core/skill/prompt_lib/1/12" => Res::json(
+            200,
+            &json!({"id": "12", "project_id": "1", "name": "Deploy", "type": "skill",
+                "is_default": false, "instructions": "Deploy with care.",
+                "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z"}),
+        ),
+        "/api/v2/elitea_core/skill/prompt_lib/1/13" => Res::json(
+            200,
+            &json!({"id": "13", "name": "Huge", "instructions": "h".repeat(super::skills::MAX_SKILL_BYTES)}),
+        ),
+        "/api/v2/elitea_core/skill/prompt_lib/1/14" => {
+            Res::json(403, &json!({"error": "forbidden", "message": "no"}))
+        }
+        _ => inner(req),
+    }
+}
+
+#[tokio::test]
+async fn project_skill_is_fetched_by_host_not_ui() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.prompt = "/Deploy the release".into();
+    // The UI names the skill by id only; whatever text it might hold is not read.
+    req.project_skills = vec![json!("12")];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
+    let fetched = seen(&h.server, "/elitea_core/skill/prompt_lib/1/12");
+    assert_eq!(fetched.len(), 1);
+    assert_eq!(fetched[0].method, "GET");
+    assert_eq!(
+        fetched[0].headers.get("authorization").map(String::as_str),
+        Some("Bearer elnat_test_token")
+    );
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        system.contains("name=\"Deploy\">\nDeploy with care.\n</invoked_skill nonce=\""),
+        "{system}"
+    );
+    // Applied to this turn only: the load_skill catalogue stays the version's.
+    assert!(system.contains("Available skill: Style."), "{system}");
+    assert!(!system.contains("Available skill: Deploy"), "{system}");
+    // A skill the person cannot read is refused before the turn starts.
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let mut req = request(&h.workspace_id);
+    req.project_skills = vec![json!(14)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "skill_unknown");
+    assert!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn project_skill_counts_toward_skill_limits() {
+    let server = serve(with_project_skills(platform(agent_details(), &[]))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    // Five picks at most, version and project skills together: refused
+    // before any request.
+    let mut req = request(&h.workspace_id);
+    req.skills = vec!["style".into()];
+    req.project_skills = vec![json!(12), json!(12), json!(12), json!(12), json!(12)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "invalid_request");
+    assert!(h.server.seen().is_empty(), "refused before any request");
+    // 64 KiB of skill text together: the version's "Style" and the project's
+    // "Huge" are over it, refused (not cut) before the turn starts.
+    let mut req = request(&h.workspace_id);
+    req.skills = vec!["style".into()];
+    req.project_skills = vec![json!(13)];
+    assert_eq!(h.host.start(req).await.unwrap_err().code, "skill_too_large");
+    assert!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty()
+    );
+    // Alone it fits.
+    let mut req = request(&h.workspace_id);
+    req.project_skills = vec![json!(13)];
+    h.host.start(req).await.unwrap();
+    until_done(&h).await;
 }
 
 #[tokio::test]
