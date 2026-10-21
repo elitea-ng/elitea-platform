@@ -365,7 +365,7 @@ impl Transport {
     /// `url`.
     fn model_service(&self, url: &str) -> Result<ModelServiceClient<Channel>, EngineError> {
         Ok(ModelServiceClient::new(self.channel(url)?)
-            .max_decoding_message_size(MAX_MODEL_MESSAGE_BYTES)
+            .max_decoding_message_size(MAX_MODEL_ANSWER_BYTES)
             .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES))
     }
 
@@ -426,8 +426,13 @@ impl Transport {
     }
 }
 
-/// One gRPC message on the platform listener (its own cap).
+/// One gRPC message the platform listener receives (its own cap).
 const MAX_MODEL_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// One gRPC message the platform listener sends: a unary answer
+/// (embeddings, images) up to the gateway's 64 MiB unary cap plus its head
+/// (elitea-main runtimegrpc.PlatformMaxSendMessageBytes).
+const MAX_MODEL_ANSWER_BYTES: usize = 65 * 1024 * 1024;
 
 fn bracket(host: &str) -> String {
     if host.contains(':') && !host.starts_with('[') {

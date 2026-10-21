@@ -61,9 +61,14 @@ const RefusalTrailer = "elitea-model-refusal-bin"
 // maxRefusalBodyBytes caps the refusal body carried in the trailer.
 const maxRefusalBodyBytes = 64 << 10
 
-// maxUnaryBodyBytes caps a unary answer. It must fit one message on the
-// platform listener with room for the head.
-const maxUnaryBodyBytes = runtimegrpc.PlatformMaxMessageBytes - 64<<10
+// maxUnaryBodyBytes caps a unary answer at the gateway's own unary cap
+// (64 MiB), so what the gateway answers passes this hop unchanged. One
+// message of it fits runtimegrpc.PlatformMaxSendMessageBytes with room for
+// the head.
+const maxUnaryBodyBytes = 64 << 20
+
+// A unary answer and its head fit one message on the platform listener.
+var _ = [runtimegrpc.PlatformMaxSendMessageBytes - maxUnaryBodyBytes - 64<<10]struct{}{}
 
 // Request header names the pipeline reads (the /llm caller contract).
 const (

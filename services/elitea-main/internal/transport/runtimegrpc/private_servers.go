@@ -50,7 +50,7 @@ type PrivateServerConfig struct {
 	OutputGRPC                      GRPCServerPolicy
 	// ContentGRPC is the content listener's connection policy. The content
 	// listener is built like the platform listener (newAuthorizedGRPCServer):
-	// PlatformMaxMessageBytes caps, grpc.health.v1, a per-service grpcauth
+	// the platform message caps, grpc.health.v1, a per-service grpcauth
 	// policy (#1359 U4).
 	ContentGRPC     GRPCServerPolicy
 	ShutdownTimeout time.Duration

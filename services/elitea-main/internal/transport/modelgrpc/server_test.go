@@ -46,6 +46,9 @@ var sseFrames = []string{
 	"data: [DONE]\n\n",
 }
 
+// bigAnswerBytes is a unary answer over 16 MiB.
+const bigAnswerBytes = 20 << 20
+
 const budgetBody = `{"error":{"message":"member budget exhausted","type":"budget_exceeded","code":"budget_exceeded","scope":"member"}}`
 
 // fakeGateway is elitea-llm-gateway as the test sees it: an http.Handler
@@ -73,6 +76,10 @@ func (g *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusPaymentRequired)
 		_, _ = io.WriteString(w, budgetBody)
+	case strings.Contains(string(body), `"big"`):
+		// A b64 image answer past the 16 MiB a platform message used to cap.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"b64_json":"`+strings.Repeat("A", bigAnswerBytes)+`"}]}`)
 	case strings.Contains(string(body), `"hang"`):
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
@@ -286,6 +293,30 @@ func TestUnaryAndClientStreamRoutes(t *testing.T) {
 	}
 	if _, body := gateway.last(); body != multipart {
 		t.Errorf("the gateway got multipart %q", body)
+	}
+}
+
+// A unary answer past 16 MiB (a b64 image) reaches a client that reads up to
+// the platform listener's send cap: the gateway's 64 MiB unary cap holds end
+// to end, not the 16 MiB a request message is capped at.
+func TestAUnaryAnswerOver16MiBPasses(t *testing.T) {
+	pki := grpcauthtest.NewPKI(t)
+	address := start(t, pki, pipeline(t, newFakeGateway()))
+	connection, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(credentials.NewTLS(pki.ClientTLS(t, workerName))),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(runtimegrpc.PlatformMaxSendMessageBytes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	models := llmv1.NewModelServiceClient(connection)
+	generated, err := models.ImageGenerate(bearer(context.Background(), goodToken),
+		&llmv1.ImageGenerateRequest{Body: []byte(`{"prompt":"big"}`)})
+	if err != nil {
+		t.Fatalf("ImageGenerate over 16 MiB: %v", err)
+	}
+	if got := len(generated.GetBody()); got <= bigAnswerBytes {
+		t.Fatalf("answer of %d bytes, want over %d", got, bigAnswerBytes)
 	}
 }
 

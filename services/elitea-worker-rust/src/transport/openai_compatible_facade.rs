@@ -48,8 +48,11 @@ use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 
 const MODEL_ROUTE: &str = elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 const MAX_ORIGIN_BYTES: usize = 2_048;
-/// One gRPC message on the platform listener (its own cap).
+/// One gRPC message the platform listener receives (its own cap).
 const MAX_MODEL_MESSAGE_BYTES: usize = 16 * 1_024 * 1_024;
+/// One gRPC message the platform listener sends: up to the gateway's 64 MiB
+/// unary cap plus its head (elitea-main runtimegrpc.PlatformMaxSendMessageBytes).
+const MAX_MODEL_ANSWER_BYTES: usize = 65 * 1_024 * 1_024;
 const MAX_MODEL_NAME_BYTES: usize = 256;
 const MAX_INSTRUCTION_BYTES: usize = crate::agents::request::MAX_AGENT_INSTRUCTION_BYTES;
 const MAX_REQUEST_BYTES: usize = 8 * 1_024 * 1_024;
@@ -313,7 +316,7 @@ impl ModelGatewayClient {
             platform: Some(channel.clone()),
             transport: Arc::new(GrpcModelGatewayTransport {
                 client: elitea_model_rpc::ModelServiceClient::new(channel)
-                    .max_decoding_message_size(MAX_MODEL_MESSAGE_BYTES)
+                    .max_decoding_message_size(MAX_MODEL_ANSWER_BYTES)
                     .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES),
                 max_request_bytes: config.max_request_bytes,
             }),

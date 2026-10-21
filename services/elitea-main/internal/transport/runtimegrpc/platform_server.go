@@ -18,10 +18,19 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 )
 
-// PlatformMaxMessageBytes caps one gRPC message on the platform listener in
-// either direction. Bulk bytes (artifact objects, images) travel as chunked
-// streams, so no single message needs more.
+// PlatformMaxMessageBytes caps one gRPC message the platform listener
+// receives, and every answer but a unary model answer. Bulk uploads
+// (artifact objects, image edit bodies) travel as chunked streams, so no
+// single request message needs more.
 const PlatformMaxMessageBytes = 16 << 20
+
+// PlatformMaxSendMessageBytes caps one gRPC message the platform listener
+// sends. A unary ModelService answer (ImageGenerate, ImageEdit, Embeddings)
+// is the gateway's whole answer in one message: up to the gateway's 64 MiB
+// unary cap plus its head, as the gateway listener sends it
+// (elitea-llm-gateway internal/grpcapi, maxSendMessage). A b64 image answer
+// passes 16 MiB easily. Clients of ModelService read up to this.
+const PlatformMaxSendMessageBytes = 65 << 20
 
 // DefaultPlatformGRPCPolicy is the platform listener's connection policy:
 // the private listeners' keepalive rhythm, with a long connection-age grace
@@ -108,7 +117,7 @@ func newPlatformServer(config PlatformServerConfig, listen func(string, string) 
 // newAuthorizedGRPCServer is the shared construction of elitea-main's
 // internal gRPC listeners that admit callers per service (the platform
 // listener, :9446, and the content listener, :9445): TLS credentials from
-// tlsConfig, PlatformMaxMessageBytes in both directions, the policy's
+// tlsConfig, PlatformMaxMessageBytes in and PlatformMaxSendMessageBytes out, the policy's
 // stream and keepalive limits, grpc.health.v1 open to any verified peer, and
 // a grpcauth.Policy built from services that refuses any registered service
 // without an allowlist. tlsConfig and policy must already be validated.
@@ -136,7 +145,7 @@ func newAuthorizedGRPCServer(tlsConfig *tls.Config, policy GRPCServerPolicy, ser
 	options := append([]grpc.ServerOption{
 		grpc.Creds(credentials.NewTLS(tlsConfig.Clone())),
 		grpc.MaxRecvMsgSize(PlatformMaxMessageBytes),
-		grpc.MaxSendMsgSize(PlatformMaxMessageBytes),
+		grpc.MaxSendMsgSize(PlatformMaxSendMessageBytes),
 		grpc.MaxConcurrentStreams(policy.MaxConcurrentStreams),
 		grpc.KeepaliveEnforcementPolicy(RuntimeKeepaliveEnforcementPolicy()),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
