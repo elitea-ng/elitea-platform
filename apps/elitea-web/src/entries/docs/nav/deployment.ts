@@ -18,6 +18,7 @@ export const deploymentTab: NavTab = {
       title: 'Install',
       pages: [
         { kind: 'page', slug: 'deployment/from-scratch', title: 'Deploy from scratch' },
+        { kind: 'page', slug: 'deployment/gcp', title: 'Deploy on Google Cloud (GKE)' },
         { kind: 'page', slug: 'deployment/helm-install', title: 'Install with Helm' },
         { kind: 'page', slug: 'deployment/argocd', title: 'GitOps with ArgoCD' },
         { kind: 'page', slug: 'deployment/cloud-executor-kubernetes', title: 'Cloud executor on Kubernetes' },

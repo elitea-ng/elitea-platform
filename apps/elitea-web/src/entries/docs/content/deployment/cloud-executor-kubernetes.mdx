@@ -244,7 +244,7 @@ kubectl -n "$NS" create secret generic elitea-egress-proxy-keys --from-file=2026
 shred -u signing.pem workspace-server.key
 ```
 
-The proxy's **audit certificate** (`egressProxy.audit`) is a cert-manager `Certificate` that the chart creates on the `elitea-runtime-ca` ClusterIssuer. You only need that issuer, which [Deploy from scratch](/deployment/from-scratch) already set up.
+The proxy's **audit certificate** (`egressProxy.audit`) is a cert-manager `Certificate` that the chart creates on the runtime CA. The chart's default names a `ClusterIssuer`. [Deploy from scratch](/deployment/from-scratch) creates a namespaced `Issuer` called `elitea-runtime-ca`, so the values below set `egressProxy.audit.issuerRef.kind: Issuer`. Without it the certificate never issues and the proxy never becomes Ready.
 
 The supervisor reads the material once, at start. After a rotation, run `kubectl rollout restart deploy/elitea-sandbox-supervisor`. The material Secret must not contain a key named `workspace.json`: that name is reserved for the profile the chart renders.
 
@@ -305,6 +305,8 @@ egressProxy:
     existingSecret: elitea-egress-token-signing
   publicKeys:
     existingSecret: elitea-egress-proxy-keys
+  audit:
+    issuerRef: {name: elitea-runtime-ca, kind: Issuer}
 ```
 
 Take the digests from the release you install: `crane digest ghcr.io/elitea-ng/elitea-sandbox-supervisor:<version>`, and the same for `elitea-workspace-runner`. From these values the chart renders the supervisor's `workspace` profile into a ConfigMap, projects it beside the material Secret, and creates the `elitea-sandbox-workspace` Service. It also gives the worker its scratch volume and tells Main that an executor exists (`ELITEA_CLOUD_EXECUTOR_CONFIGURED`). The render fails if workspace runs are only partly enabled: without the supervisor, without `worker.runtime.workspaceRuns`, without a RuntimeClass, or with an audience or target that does not match.

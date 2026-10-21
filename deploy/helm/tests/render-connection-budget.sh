@@ -180,6 +180,31 @@ else
   fail "the guard refuses a pooler topology inside both budgets, so it is not a guard"
 fi
 
+# ── the migration keeps the direct DSN when main is pointed at the pooler ────
+#
+# main.secrets.DATABASE_URL is the operator's switch that puts elitea-main's
+# pods behind the pooler. The migrate Job reads main.secrets too, and before
+# this check it followed main through the pooler.
+POOLED=(--set postgresql.existingSecret=direct-db --set postgresql.key=database-url
+        --set main.secrets.DATABASE_URL.secretName=pooled-db
+        --set main.secrets.DATABASE_URL.key=database-url)
+output="$(render "${PB[@]}" "${POOLED[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=4 \
+  --show-only templates/main/migrate-job.yaml 2>&1)" || true
+if [[ "$output" == *"pooled-db"* ]]; then
+  fail "the migrate Job reads the pooled DSN"
+elif [[ "$output" != *"direct-db"* ]]; then
+  fail "the migrate Job does not read postgresql.existingSecret: $output"
+else
+  note "the migrate Job keeps the direct DSN behind a pooled elitea-main"
+fi
+output="$(render "${PB[@]}" "${POOLED[@]}" --set main.env.ELITEA_DATABASE_MAX_CONNS=4 \
+  --show-only templates/main/deployment.yaml 2>&1)" || true
+if [[ "$output" != *"pooled-db"* ]]; then
+  fail "elitea-main's pods lost the pooled DSN"
+else
+  note "elitea-main's pods read the pooled DSN"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "render-connection-budget: $failures assertion(s) failed" >&2
   exit 1
