@@ -633,14 +633,17 @@ pub async fn rules_get(
     .map_err(|_| IpcError::new("internal", "reading the rules stopped unexpectedly"))?
 }
 
-/// `rules_put`: validate `file` and store it as the `scope`'s rules. A file
-/// that does not validate is not written: `{saved: false, error}`.
+/// `rules_put`: validate `file` and store it as the `scope`'s rules, when
+/// the file is still at `version` (from `rules_get`). A file that does not
+/// validate is not written: `{saved: false, error}`; one changed since:
+/// `{saved: false, conflict: true}`.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn rules_put(
     state: State<'_, LocalState>,
     workspace_id: String,
     scope: elitea_local_tools::execpolicy::RuleScope,
     file: Value,
+    version: String,
 ) -> Result<crate::rules::PutOutcome, IpcError> {
     let agents = state.agents.clone();
     tokio::task::spawn_blocking(move || {
@@ -649,18 +652,22 @@ pub async fn rules_put(
             scope,
             &workspace_id,
             &file,
+            &version,
         ))?)
     })
     .await
     .map_err(|_| IpcError::new("internal", "saving the rules stopped unexpectedly"))?
 }
 
-/// `rules_import_proposed`: copy the folder's proposed rules into the
-/// workspace's rules file (the person's explicit import).
+/// `rules_import_proposed`: copy the folder's proposed rules, as
+/// `rules_get` showed them (`digest`), into the workspace's rules file
+/// (the person's explicit import). A proposal changed since:
+/// `{saved: false, conflict: true}`.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn rules_import_proposed(
     state: State<'_, LocalState>,
     workspace_id: String,
+    digest: String,
 ) -> Result<crate::rules::PutOutcome, IpcError> {
     let agents = state.agents.clone();
     tokio::task::spawn_blocking(move || {
@@ -668,7 +675,7 @@ pub async fn rules_import_proposed(
         Ok(crate::rules::PutOutcome::of(
             agents
                 .rule_files()
-                .import_proposed(&workspace_id, &root, &path_deny),
+                .import_proposed(&workspace_id, &root, &path_deny, &digest),
         )?)
     })
     .await

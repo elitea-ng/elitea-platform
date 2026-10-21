@@ -2,13 +2,15 @@
  * A workspace's approval rules (#1216; IPC.md, "Approval rules"): the rules
  * of this workspace and the person's own (every workspace), each with its
  * decision, pattern, justification and examples; add, edit and delete; what
- * the repository proposes in `.elitea/rules.json` (imported only on a
- * click); and "Test a command", which shows the layer and rule that would
- * decide it. Every save is validated by the host first: a rule whose
- * examples disagree with it is refused with the rule and example named, and
- * nothing is written.
+ * the repository proposes in `.elitea/rules.json`, listed rule by rule
+ * (imported only on a click); and "Test a command", which shows the layer
+ * and rule that would decide it. Every save is validated by the host first:
+ * a rule whose examples disagree with it is refused with the rule and
+ * example named, and nothing is written. A save names the file version it
+ * was made from; when the file changed since (another window, an "always
+ * allow"), nothing is written and the panel reloads and says so.
  */
-import { Alert, Box, Button, Chip, CircularProgress, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
 
 import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
@@ -16,45 +18,13 @@ import type { PrefixRule, RuleDecision, RuleExplanation, RuleFile, RuleLoadError
 import { toWorkspaceIpcError } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
-import { exampleCount, formatExample, formatPattern, parseExamples, parsePattern } from '../model/patternText';
+import { formatExample, formatPattern, parseExamples, parsePattern, PatternSyntaxError } from '../model/patternText';
+import { ProposalReview } from './ProposalReview';
+import { decisionLabel, LoadErrorAlert, RuleSummary } from './ruleParts';
 
 export interface RulesPanelProps {
   ipc: RulesIpc;
   workspaceId: string;
-}
-
-const decisionLabel = (decision: RuleDecision | undefined): string => {
-  if (decision === 'forbidden') return t('workspace.rules.decisionForbidden', 'Forbidden');
-  if (decision === 'prompt') return t('workspace.rules.decisionPrompt', 'Ask');
-  return t('workspace.rules.decisionAllow', 'Allow');
-};
-
-const decisionColor = (decision: RuleDecision | undefined): 'error' | 'warning' | 'success' => {
-  if (decision === 'forbidden') return 'error';
-  if (decision === 'prompt') return 'warning';
-  return 'success';
-};
-
-function LoadErrorAlert({ error }: { error: RuleLoadError }): React.JSX.Element {
-  return (
-    <Alert severity="error" data-testid="rules-error">
-      <Typography variant="bodySmall" sx={{ fontWeight: 600 }}>
-        {error.rule_index === undefined ? t('workspace.rules.fileRefused', 'These rules are not used') : t('workspace.rules.ruleRefused', 'Rule {{n}} is refused, so none of these rules are used', { n: error.rule_index })}
-      </Typography>
-      <Typography variant="bodySmall" sx={{ overflowWrap: 'anywhere' }}>
-        {error.message}
-      </Typography>
-      {error.example !== undefined && (
-        <Typography variant="bodySmall" data-testid="rules-error-example">
-          {t('workspace.rules.exampleFailed', 'Example `{{example}}`: expected {{expected}}, but it {{got}}.', {
-            example: error.example,
-            expected: error.expected === 'not_match' ? t('workspace.rules.expectNoMatch', 'no match') : t('workspace.rules.expectMatch', 'a match'),
-            got: error.got ?? '',
-          })}
-        </Typography>
-      )}
-    </Alert>
-  );
 }
 
 const DECISIONS: readonly RuleDecision[] = ['allow', 'prompt', 'forbidden'];
@@ -92,12 +62,32 @@ const ruleOf = (draft: Draft, base: PrefixRule | undefined): PrefixRule => {
   return rule;
 };
 
+/** Why the pattern's text does not parse, or `null`. */
+function patternError(text: string): string | null {
+  try {
+    parsePattern(text);
+    return null;
+  } catch (error) {
+    if (error instanceof PatternSyntaxError) return error.message;
+    throw error;
+  }
+}
+
 function RuleForm({ initial, busy, error, onSave, onCancel }: { initial: Draft; busy: boolean; error: RuleLoadError | null; onSave: (draft: Draft) => void; onCancel: () => void }): React.JSX.Element {
   const [draft, setDraft] = useState(initial);
   const field = (key: keyof Draft) => (event: React.ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, [key]: event.target.value }));
+  const syntax = patternError(draft.pattern);
   return (
-    <Stack spacing={1.5} component="form" data-testid="rule-form" onSubmit={(event) => (event.preventDefault(), onSave(draft))}>
-      <TextField size="small" label={t('workspace.rules.pattern', 'Command pattern')} helperText={t('workspace.rules.patternHelp', 'Words in order, e.g. cargo [test|check]; the command may go on after them.')} value={draft.pattern} onChange={field('pattern')} required />
+    <Stack spacing={1.5} component="form" data-testid="rule-form" onSubmit={(event) => (event.preventDefault(), syntax === null && onSave(draft))}>
+      <TextField
+        size="small"
+        label={t('workspace.rules.pattern', 'Command pattern')}
+        error={syntax !== null}
+        helperText={syntax === null ? t('workspace.rules.patternHelp', "Words in order, e.g. cargo [test|check]; * is any one word; quote a word with spaces, | or * ('My Tools/run', '*'). The command may go on after them.") : t('workspace.rules.patternInvalid', 'The pattern does not parse: {{message}}', { message: syntax })}
+        value={draft.pattern}
+        onChange={field('pattern')}
+        required
+      />
       <TextField size="small" select label={t('workspace.rules.decision', 'Decision')} value={draft.decision} onChange={field('decision')}>
         {DECISIONS.map((decision) => (
           <MenuItem key={decision} value={decision}>
@@ -110,7 +100,7 @@ function RuleForm({ initial, busy, error, onSave, onCancel }: { initial: Draft; 
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.notMatch', 'Examples it must not match (one per line)')} value={draft.notMatch} onChange={field('notMatch')} />
       {error !== null && <LoadErrorAlert error={error} />}
       <Stack direction="row" spacing={1}>
-        <Button type="submit" variant="contained" disabled={busy || draft.pattern.trim() === ''}>
+        <Button type="submit" variant="contained" disabled={busy || draft.pattern.trim() === '' || syntax !== null}>
           {t('workspace.rules.save', 'Save rule')}
         </Button>
         <Button onClick={onCancel} disabled={busy}>
@@ -187,23 +177,9 @@ interface ScopeSectionProps {
 }
 
 function RuleRow({ scope, rule, index, busy, onEdit, onDelete }: { scope: RuleScope; rule: PrefixRule; index: number; busy: boolean; onEdit: () => void; onDelete: () => void }): React.JSX.Element {
-  const examples = exampleCount(rule);
   return (
     <Box component="li" data-testid={`rule-${scope}-${index + 1}`} sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
-      <Chip size="small" color={decisionColor(rule.decision)} label={decisionLabel(rule.decision)} />
-      <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography variant="bodyMedium" sx={{ fontFamily: (theme) => theme.typography.fontFamilyMono, overflowWrap: 'anywhere' }}>
-          {formatPattern(rule.pattern)}
-        </Typography>
-        {rule.justification !== undefined && (
-          <Typography variant="bodySmall" color="text.secondary">
-            {rule.justification}
-          </Typography>
-        )}
-        <Typography variant="bodySmall" color="text.secondary">
-          {examples === 0 ? t('workspace.rules.noExamples', 'No examples') : t('workspace.rules.examplesPass', '{{n}} examples checked', { n: examples })}
-        </Typography>
-      </Box>
+      <RuleSummary rule={rule} />
       <Button size="small" onClick={onEdit} disabled={busy}>
         {t('workspace.rules.edit', 'Edit')}
       </Button>
@@ -279,10 +255,23 @@ export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Ele
     void load();
   }, [load]);
 
+  const [notice, setNotice] = useState<string | null>(null);
+
   const store = async (scope: RuleScope, file: RuleFile): Promise<boolean> => {
     setBusy(true);
+    setNotice(null);
     try {
-      const outcome = await ipc.put(workspaceId, scope, file);
+      const version = view?.scopes.find((state) => state.scope === scope)?.version ?? 'absent';
+      const outcome = await ipc.put(workspaceId, scope, file, version);
+      if (outcome.conflict) {
+        // Saved over nothing: the file changed since it was read. Show it
+        // as it is now; the person makes the change again.
+        setEditing(null);
+        setFormError(null);
+        setNotice(t('workspace.rules.conflict', 'These rules changed somewhere else (another window, or an “always allow”) since they were shown, so nothing was saved. They have been reloaded: make your change again.'));
+        await load();
+        return false;
+      }
       if (!outcome.saved) {
         setFormError(outcome.error);
         return false;
@@ -315,11 +304,13 @@ export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Ele
     await store(scope, { ...file, rules: file.rules.filter((_, position) => position !== index) });
   };
 
-  const importProposed = async (): Promise<void> => {
+  const importProposed = async (digest: string): Promise<void> => {
     setBusy(true);
+    setNotice(null);
     try {
-      const outcome = await ipc.importProposed(workspaceId);
-      if (!outcome.saved && outcome.error !== null) setFailure(outcome.error.message);
+      const outcome = await ipc.importProposed(workspaceId, digest);
+      if (outcome.conflict) setNotice(t('workspace.rules.proposedConflict', 'The repository’s proposal changed since it was shown, so nothing was imported. Review it again below.'));
+      else if (!outcome.saved && outcome.error !== null) setFailure(outcome.error.message);
       await load();
     } catch (error) {
       setFailure(toWorkspaceIpcError(error).message);
@@ -341,23 +332,12 @@ export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Ele
         )}
       </Typography>
       {failure !== null && <Alert severity="error">{failure}</Alert>}
-      {view.proposed !== null && (
-        <Alert
-          severity="info"
-          data-testid="rules-proposed"
-          action={
-            view.proposed.count > 0 ? (
-              <Button size="small" onClick={() => void importProposed()} disabled={busy}>
-                {t('workspace.rules.import', 'Import')}
-              </Button>
-            ) : undefined
-          }
-        >
-          {view.proposed.error === null
-            ? t('workspace.rules.proposed', 'This repository proposes {{n}} rules (.elitea/rules.json). They are not used unless you import them.', { n: view.proposed.count })
-            : t('workspace.rules.proposedBroken', 'This repository proposes rules, but they are not valid: {{message}}', { message: view.proposed.error.message })}
+      {notice !== null && (
+        <Alert severity="warning" data-testid="rules-notice">
+          {notice}
         </Alert>
       )}
+      {view.proposed !== null && <ProposalReview proposal={view.proposed} busy={busy} onImport={(digest) => void importProposed(digest)} />}
       {view.scopes.map((state) => (
         <ScopeSection
           key={state.scope}

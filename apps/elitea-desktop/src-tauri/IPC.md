@@ -160,28 +160,32 @@ type RuleFile = {
   rules: Rule[];
 };
 type Rule = {
-  pattern: (string | string[])[];   // argv prefix; a list = alternatives
+  pattern: (string | string[] | { any: true })[]; // argv prefix; a list = alternatives; {any: true} = any one word ("*" is the literal word)
   decision?: "allow" | "prompt" | "forbidden"; // default "allow"
   justification?: string;           // shown to the person and the model
   match?: (string | string[])[];    // examples that must match (checked at load)
   not_match?: (string | string[])[];// examples that must not match
   sandbox?: "read-only" | "workspace-write" | "full-access"; // widest sandbox an allow covers (default workspace-write)
   network?: boolean;                // whether an allow covers a call asking for the network
+  origin?: "repository";            // imported from a proposal: its justification is shown to the person, never the model
 };
 type LoadError = { file: string; rule_index?: number /* 1-based */; example?: string;
                    expected?: "match" | "not_match"; got?: string; message: string };
-type ScopeState = { scope: "workspace" | "user"; path: string; file: RuleFile | null; error: LoadError | null };
-type Proposal = { path: string; count: number; file: RuleFile | null; error: LoadError | null };
-type PutOutcome = { saved: boolean; file: RuleFile | null; error: LoadError | null };
-type RuleMatch = { scope: "workspace" | "user"; index: number; decision: Rule["decision"]; pattern: string; justification?: string };
+type ScopeState = { scope: "workspace" | "user"; path: string; file: RuleFile | null; error: LoadError | null;
+                    version: string /* the file's digest, "absent" without one */ };
+type Proposal = { path: string; count: number; file: RuleFile | null /* as an import copies it */; error: LoadError | null;
+                  warnings: string[] /* what an import leaves out or narrows */; digest: string };
+type PutOutcome = { saved: boolean; file: RuleFile | null; error: LoadError | null; conflict: boolean };
+type RuleMatch = { scope: "workspace" | "user" | "legacy"; index: number; decision: Rule["decision"]; pattern: string;
+                   justification?: string; origin?: "repository" };
 ```
 
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `rules_get` | `{workspace_id}` | `{scopes: ScopeState[], proposed: Proposal \| null}` — the workspace's then the person's rules, each with the error that keeps it from loading; `proposed` is what the folder's `.elitea/rules.json` proposes (read confined to the folder, `path_deny` honoured), never loaded until imported. Rejects `local_work_disabled`, `workspace_unknown`. |
-| `rules_put` | `{workspace_id, scope: "workspace" \| "user", file: RuleFile}` | `PutOutcome` — validated before anything is written: an unknown field, an empty pattern or a disagreeing example gives `{saved: false, error}` and the file is left as it was. |
+| `rules_put` | `{workspace_id, scope: "workspace" \| "user", file: RuleFile, version}` | `PutOutcome` — validated before anything is written: an unknown field, an empty pattern or a disagreeing example gives `{saved: false, error}` and the file is left as it was. `version` is the `ScopeState.version` the edit was made from; a file changed since gives `{saved: false, conflict: true}` (the panel reloads and says so). |
 | `rules_explain` | `{workspace_id, command}` | `{verdict: "allow" \| "ask" \| "deny", source: "policy" \| "plan_mode" \| "workspace" \| "user" \| "remembered" \| "default", reason, rule: RuleMatch \| null, justification: string \| null}` — how the layers would decide `command` now, as a confined `workspace-write` call without the network (an open session answers with its own engine). Rejects `invalid_request` for an empty command. |
-| `rules_import_proposed` | `{workspace_id}` | `PutOutcome` — copies the folder's proposed rules (and pins) into the workspace's rules file: the person's explicit import. A repository can never grant itself permissions without it. |
+| `rules_import_proposed` | `{workspace_id, digest}` | `PutOutcome` — copies the folder's proposed rules, exactly as `rules_get` listed them (`digest`: a proposal changed since gives `{saved: false, conflict: true}`), into the workspace's rules file: the person's explicit import. A repository can never grant itself permissions without it, and an import is bounded: `host_executables` pins are never imported (a pin widens what an allow matches), an `allow` is narrowed to `workspace-write` without the network, a rule whose examples need the dropped pins is left out (each listed in `warnings`), and every rule is marked `origin: "repository"`. |
 
 Matching: tokens compare in order as an argv prefix. An `allow` covers only
 the first segment of a **simple** command (never a compound one) and never
@@ -202,11 +206,20 @@ sandbox, network}` to the workspace's rules file. Command choices an older
 host kept in `choices.json` are moved into it once; file choices stay in
 `choices.json`.
 
+Rules migrated from an older host's workspace settings are labelled
+`legacy#N` (their own numbering), apart from the workspace file's
+`workspace#N`. A rule that allows a command which would run unconfined does
+not decide it: the defaults ask, with the reason that it would run
+unsandboxed. When the workspace's rules file is refused or broken, "always
+allow" is kept in `choices.json` instead (and moved into the file once it
+loads again).
+
 A `forbidden` rule refuses the call inline (no question) and the model sees
 `{"status": "error", "code": "local_tools.denied", "message": "forbidden by
 workspace#3: …", "error": "forbidden_by_rule", "justification": "…",
 "rule": "workspace#3"}`, so it can take the alternative the justification
-names instead of retrying.
+names instead of retrying. A rule imported from a repository leaves the
+`justification` out (it is the repository's text, not the person's).
 
 ## The local agent turn (D0, `src/d0/`)
 

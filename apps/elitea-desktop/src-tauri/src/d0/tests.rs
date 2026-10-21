@@ -4579,7 +4579,7 @@ async fn repository_rules_are_only_proposed() {
     // The person imports it: copied into the workspace's rules (host data).
     h.host
         .rule_files()
-        .import_proposed(&h.workspace_id, &folder, &deny)
+        .import_proposed(&h.workspace_id, &folder, &deny, &proposal.digest)
         .unwrap();
     assert!(
         h.workspaces

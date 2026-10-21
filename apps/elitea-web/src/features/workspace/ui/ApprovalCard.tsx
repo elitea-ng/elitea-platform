@@ -21,17 +21,10 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
-import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
-
 export interface ApprovalCardProps {
   /** What is asked: the tool's name or the question. */
   title: string;
   detail?: string | undefined;
-  /** A rule's justification for asking (#1216), shown as "Why". */
-  justification?: string | undefined;
-  /** The layer that asks (`workspace`, `user`, `default`, …) and the rule (`workspace#3`), shown as "Asked by". */
-  source?: string | undefined;
-  rule?: string | undefined;
   /** The tool's parameters (shown behind "Parameters"); masked values arrive masked. */
   params?: Readonly<Record<string, unknown>> | undefined;
   /** The default answer. */
@@ -89,9 +82,8 @@ function Params({ params }: { params: Readonly<Record<string, unknown>> }): Reac
   );
 }
 
-export function ApprovalCard({ title, detail, justification, source, rule, params, approveLabel, onApprove, denyLabel, onDeny, disabled = false, testId = 'approval-card' }: ApprovalCardProps): React.JSX.Element {
+export function ApprovalCard({ title, detail, params, approveLabel, onApprove, denyLabel, onDeny, disabled = false, testId = 'approval-card' }: ApprovalCardProps): React.JSX.Element {
   const titleId = useId();
-  const askedBy = ruleSourceLabel(source, rule);
   return (
     <Box
       component="section"
@@ -112,16 +104,6 @@ export function ApprovalCard({ title, detail, justification, source, rule, param
       {detail !== undefined && detail !== '' && (
         <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' })}>
           {detail}
-        </Typography>
-      )}
-      {justification !== undefined && justification !== '' && (
-        <Typography variant="bodySmall" data-testid="approval-justification" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' })}>
-          {t('workspace.approval.reason', 'Why: {{reason}}', { reason: justification })}
-        </Typography>
-      )}
-      {askedBy !== undefined && (
-        <Typography variant="bodySmall" data-testid="approval-rule-source" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}>
-          {t('workspace.approval.source', 'Asked by {{source}}', { source: askedBy })}
         </Typography>
       )}
       {params !== undefined && <Params params={params} />}

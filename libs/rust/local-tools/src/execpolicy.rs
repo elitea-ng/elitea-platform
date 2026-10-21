@@ -25,7 +25,9 @@
 //! ```
 //!
 //! * Tokens match in order, as an argv prefix; an element that is a list
-//!   matches any one of its strings. `decision` defaults to `allow`.
+//!   matches any one of its strings, and the element `{"any": true}`
+//!   matches any one word (the `*` of an older host's command rules; a
+//!   string `"*"` is the literal word `*`). `decision` defaults to `allow`.
 //! * Examples are token arrays or strings split like a shell would
 //!   (`shlex`). Every `match` example must match its rule and no
 //!   `not_match` example may; an unknown field, an empty pattern or a bad
@@ -43,6 +45,9 @@
 //!   network when the rule does not name it is not covered (it falls to the
 //!   defaults, which ask). They are how a remembered "always allow" keeps
 //!   its "never wider" meaning.
+//! * `origin: "repository"` marks a rule imported from a repository's
+//!   proposal: its justification is the repository's text, so the person
+//!   sees it but the model never does.
 //!
 //! Not taken from the upstream design: Starlark, its CLI, policy rewriting
 //! (`amend`) and the sandbox migration helpers.
@@ -51,6 +56,7 @@
 //! advisory: it sees the commands the analysis can find, not what a script
 //! starts. The sandbox is the boundary.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -92,32 +98,93 @@ pub struct HostExecutable {
     pub paths: Vec<String>,
 }
 
-/// One pattern element: a token, or a list of alternatives.
+/// One pattern element: a token, a list of alternatives, or any one word.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum PatternToken {
     One(String),
-    Any(Vec<String>),
+    OneOf(Vec<String>),
+    /// `{"any": true}`: any one word.
+    Wildcard(AnyWord),
+}
+
+/// The wildcard element, `{"any": true}` (`any: false` is refused).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnyWord {
+    pub any: bool,
 }
 
 impl PatternToken {
-    fn alternatives(&self) -> &[String] {
-        match self {
-            Self::One(token) => std::slice::from_ref(token),
-            Self::Any(tokens) => tokens,
+    /// The wildcard element.
+    pub const ANY: Self = Self::Wildcard(AnyWord { any: true });
+
+    /// A word of an older host's command rule ([`crate::command::CommandPattern`]),
+    /// where `*` is any one word.
+    #[must_use]
+    pub fn from_command_word(word: String) -> Self {
+        if word == "*" {
+            Self::ANY
+        } else {
+            Self::One(word)
         }
     }
 
+    fn alternatives(&self) -> &[String] {
+        match self {
+            Self::One(token) => std::slice::from_ref(token),
+            Self::OneOf(tokens) => tokens,
+            Self::Wildcard(_) => &[],
+        }
+    }
+
+    /// Not empty, no empty alternative, not `{"any": false}`.
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::Wildcard(AnyWord { any }) => *any,
+            _ => {
+                !self.alternatives().is_empty() && !self.alternatives().iter().any(String::is_empty)
+            }
+        }
+    }
+
+    const fn is_wildcard(&self) -> bool {
+        matches!(self, Self::Wildcard(_))
+    }
+
     fn matches(&self, word: &str) -> bool {
-        self.alternatives().iter().any(|token| token == word)
+        self.is_wildcard() || self.alternatives().iter().any(|token| token == word)
+    }
+}
+
+/// A word as the panel shows it: quoted like a shell would when it is not
+/// plain (so `*`, the wildcard, and `'*'`, the literal word, differ).
+fn shown(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_alphanumeric() || "_@%+=:,./-".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\"'\"'"))
     }
 }
 
 impl fmt::Display for PatternToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::One(token) => formatter.write_str(token),
-            Self::Any(tokens) => write!(formatter, "[{}]", tokens.join("|")),
+            Self::One(token) => formatter.write_str(&shown(token)),
+            Self::OneOf(tokens) => write!(
+                formatter,
+                "[{}]",
+                tokens
+                    .iter()
+                    .map(|token| shown(token))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
+            Self::Wildcard(_) => formatter.write_str("*"),
         }
     }
 }
@@ -194,7 +261,22 @@ pub struct PrefixRule {
     /// Whether an `allow` covers a call that asks for the network.
     #[serde(default, skip_serializing_if = "is_false")]
     pub network: bool,
+    /// Where the rule came from, when not the person (`repository`: an
+    /// imported proposal; its justification never reaches the model).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RuleOrigin>,
 }
+
+/// Where a rule came from, when it was not written by the person.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleOrigin {
+    /// Imported from a repository's `.elitea/rules.json`.
+    Repository,
+}
+
+/// The most `match` (or `not_match`) examples a remembered rule collects.
+pub const MAX_EXAMPLES: usize = 8;
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
 const fn is_false(value: &bool) -> bool {
@@ -202,18 +284,41 @@ const fn is_false(value: &bool) -> bool {
 }
 
 impl PrefixRule {
-    /// An `allow` of exactly `tokens` (one token per element), no examples.
+    /// An `allow` of the words of an older host's command rule, one
+    /// element per word (`*`: any one word), no examples.
     #[must_use]
-    pub fn allow(tokens: Vec<String>) -> Self {
+    pub fn from_command_pattern(tokens: Vec<String>) -> Self {
         Self {
-            pattern: tokens.into_iter().map(PatternToken::One).collect(),
+            pattern: tokens
+                .into_iter()
+                .map(PatternToken::from_command_word)
+                .collect(),
             decision: RuleDecision::Allow,
             justification: None,
             matches: Vec::new(),
             not_match: Vec::new(),
             sandbox: None,
             network: false,
+            origin: None,
         }
+    }
+
+    /// Whether `other` is the same rule but for its justification and
+    /// examples (what "always allow" merges into instead of adding).
+    #[must_use]
+    pub fn same_scope(&self, other: &Self) -> bool {
+        self.pattern == other.pattern
+            && self.decision == other.decision
+            && self.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
+                == other.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
+            && self.network == other.network
+    }
+
+    /// Whether the person wrote it (or vouched for it): its justification
+    /// may reach the model.
+    #[must_use]
+    pub const fn trusted(&self) -> bool {
+        self.origin.is_none()
     }
 
     /// The pattern, as the panel shows it (`cargo [test|check]`).
@@ -242,6 +347,9 @@ pub enum RuleScope {
     Workspace,
     /// The person's rules for every workspace.
     User,
+    /// Command rules of an older host's workspace settings, migrated (not
+    /// a file: they are numbered on their own, `legacy#1`).
+    Legacy,
 }
 
 impl RuleScope {
@@ -250,7 +358,38 @@ impl RuleScope {
         match self {
             Self::Workspace => "workspace",
             Self::User => "user",
+            Self::Legacy => "legacy",
         }
+    }
+}
+
+impl RuleFile {
+    /// Add `rule`, or merge it into the rule of the same scope
+    /// ([`PrefixRule::same_scope`]): its new examples are appended there
+    /// (at most [`MAX_EXAMPLES`] each), its justification and origin are
+    /// the existing rule's. Returns whether the file changed.
+    pub fn add_rule(&mut self, rule: PrefixRule) -> bool {
+        let Some(existing) = self
+            .rules
+            .iter_mut()
+            .find(|current| current.same_scope(&rule))
+        else {
+            self.rules.push(rule);
+            return true;
+        };
+        let mut changed = false;
+        for (have, add) in [
+            (&mut existing.matches, rule.matches),
+            (&mut existing.not_match, rule.not_match),
+        ] {
+            for example in add {
+                if have.len() < MAX_EXAMPLES && !have.contains(&example) {
+                    have.push(example);
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 }
 
@@ -284,11 +423,46 @@ impl fmt::Display for LoadError {
 impl std::error::Error for LoadError {}
 
 /// How an `allow` checks a program given by path at run time: from the
-/// command's working directory, through the absolute `PATH` entries.
+/// command's working directory, through the absolute `PATH` entries. Each
+/// program is looked up once per resolver's cache (one decision), however
+/// many rules and segments ask.
 #[derive(Clone, Copy, Debug)]
 pub struct Resolver<'a> {
     pub cwd: &'a Path,
     pub search: &'a [PathBuf],
+    pub cache: &'a ResolveCache,
+}
+
+/// The files programs resolved to, for one decision.
+#[derive(Debug, Default)]
+pub struct ResolveCache(RefCell<HashMap<String, Option<PathBuf>>>);
+
+impl ResolveCache {
+    /// How many programs were looked up (tests).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.borrow().is_empty()
+    }
+}
+
+impl Resolver<'_> {
+    /// The file `program` runs, looked up once.
+    fn resolve(&self, program: &str) -> Option<PathBuf> {
+        if let Some(found) = self.cache.0.borrow().get(program) {
+            return found.clone();
+        }
+        let found = resolve_program(program, self.cwd, self.search);
+        self.cache
+            .0
+            .borrow_mut()
+            .insert(program.to_owned(), found.clone());
+        found
+    }
 }
 
 /// A validated rule file, ready to match.
@@ -381,10 +555,11 @@ impl RuleSet {
             if rule.pattern.is_empty() {
                 return Err(refuse(Some(index), "the pattern is empty".to_owned()));
             }
-            if rule.pattern.iter().any(|token| {
-                token.alternatives().is_empty() || token.alternatives().iter().any(String::is_empty)
-            }) {
-                return Err(refuse(Some(index), "a pattern element is empty".to_owned()));
+            if !rule.pattern.iter().all(PatternToken::is_valid) {
+                return Err(refuse(
+                    Some(index),
+                    "a pattern element is empty (or `{\"any\": false}`)".to_owned(),
+                ));
             }
             for (examples, expected) in [(&rule.matches, true), (&rule.not_match, false)] {
                 for example in examples {
@@ -463,10 +638,10 @@ impl RuleSet {
                 .iter()
                 .zip(words)
                 .all(|(want, word)| want.matches(word))
-            && program
-                .alternatives()
-                .iter()
-                .any(|want| self.program_matches(want, have, rule.decision.tightens(), resolver))
+            && (program.is_wildcard()
+                || program.alternatives().iter().any(|want| {
+                    self.program_matches(want, have, rule.decision.tightens(), resolver)
+                }))
     }
 
     fn program_matches(
@@ -479,13 +654,11 @@ impl RuleSet {
         if want == have {
             return true;
         }
-        let same_file = |resolver: Resolver<'_>| match (
-            resolve_program(want, resolver.cwd, resolver.search),
-            resolve_program(have, resolver.cwd, resolver.search),
-        ) {
-            (Some(want), Some(have)) => want == have,
-            _ => false,
-        };
+        let same_file =
+            |resolver: Resolver<'_>| match (resolver.resolve(want), resolver.resolve(have)) {
+                (Some(want), Some(have)) => want == have,
+                _ => false,
+            };
         if want.contains('/') {
             // A path pattern names that file only.
             return resolver.is_some_and(same_file);
@@ -502,10 +675,10 @@ impl RuleSet {
             }
             // The listed file, spelled another way.
             return resolver.is_some_and(|resolver| {
-                resolve_program(have, resolver.cwd, resolver.search).is_some_and(|file| {
+                resolver.resolve(have).is_some_and(|file| {
                     paths
                         .iter()
-                        .any(|path| std::fs::canonicalize(path).is_ok_and(|listed| listed == file))
+                        .any(|path| resolver.resolve(path).is_some_and(|listed| listed == file))
                 })
             });
         }
@@ -534,16 +707,14 @@ impl RuleSet {
             })
     }
 
-    /// This file with `rule` appended, validated.
+    /// This file with `rule` added ([`RuleFile::add_rule`]), validated.
     ///
     /// # Errors
     ///
     /// The new rule's examples disagree with it.
     pub fn with_rule(&self, file: &str, rule: PrefixRule) -> Result<Self, Box<LoadError>> {
         let mut next = self.file.clone();
-        if !next.rules.contains(&rule) {
-            next.rules.push(rule);
-        }
+        next.add_rule(rule);
         Self::compile(file, next)
     }
 }
@@ -745,7 +916,7 @@ mod tests {
     #[test]
     fn appended_rules_are_validated_and_not_duplicated() {
         let set = RuleSet::default();
-        let mut rule = PrefixRule::allow(vec!["cargo".into(), "test".into()]);
+        let mut rule = PrefixRule::from_command_pattern(vec!["cargo".into(), "test".into()]);
         rule.matches = vec![Example::Tokens(vec![
             "cargo".into(),
             "test".into(),
@@ -757,8 +928,115 @@ mod tests {
         rule.matches = vec![Example::Line("cargo build".into())];
         assert!(set.with_rule("r", rule).is_err());
         assert_eq!(
-            PatternToken::Any(vec!["a".into(), "b".into()]).to_string(),
+            PatternToken::OneOf(vec!["a".into(), "b".into()]).to_string(),
             "[a|b]"
+        );
+    }
+
+    /// The same prefix remembered again (another justification, another
+    /// example) merges into the rule it already has, examples bounded.
+    #[test]
+    fn the_same_prefix_merges_instead_of_piling_up() {
+        let remembered = |example: &str, justification: &str| {
+            let mut rule = PrefixRule::from_command_pattern(vec!["git".into(), "reset".into()]);
+            rule.justification = Some(justification.to_owned());
+            rule.matches = vec![Example::Line(example.to_owned())];
+            rule
+        };
+        let mut set = RuleSet::default();
+        for day in 0..20 {
+            set = set
+                .with_rule(
+                    "r",
+                    remembered(&format!("git reset --hard v{day}"), &format!("day {day}")),
+                )
+                .expect("valid");
+        }
+        assert_eq!(set.rules().len(), 1, "one rule for one prefix");
+        let rule = &set.rules()[0];
+        assert_eq!(rule.justification.as_deref(), Some("day 0"));
+        assert_eq!(rule.matches.len(), super::MAX_EXAMPLES);
+        assert_eq!(rule.matches[1], Example::Line("git reset --hard v1".into()));
+        // Another bound is another rule.
+        let mut network = remembered("git reset x", "net");
+        network.network = true;
+        let set = set.with_rule("r", network).expect("valid");
+        assert_eq!(set.rules().len(), 2);
+        let mut forbidden = remembered("git reset x", "no");
+        forbidden.decision = RuleDecision::Forbidden;
+        assert_eq!(
+            set.with_rule("r", forbidden).expect("valid").rules().len(),
+            3
+        );
+    }
+
+    /// `{"any": true}` is any one word; `"*"` is the word `*`; an older
+    /// host's `*` becomes the wildcard.
+    #[test]
+    fn wildcard_elements() {
+        let set = RuleSet::parse(
+            "r",
+            br#"{"version":1,"rules":[
+              {"pattern":["git",{"any":true},"--force"],"decision":"forbidden",
+               "match":["git push --force","git reset --force x"],"not_match":["git push origin"]},
+              {"pattern":["echo","*"],"match":["echo '*'"],"not_match":["echo hi"]},
+              {"pattern":[{"any":true},"--version"],"match":["/usr/bin/anything --version"]}]}"#,
+        )
+        .expect("loads");
+        assert_eq!(set.rules()[0].display_pattern(), "git * --force");
+        assert_eq!(set.rules()[1].display_pattern(), "echo '*'");
+        let migrated =
+            PrefixRule::from_command_pattern(vec!["git".into(), "*".into(), "--force".into()]);
+        assert_eq!(migrated.pattern, set.rules()[0].pattern);
+        let text = serde_json::to_string(&migrated.pattern).expect("json");
+        assert_eq!(text, r#"["git",{"any":true},"--force"]"#);
+        assert!(
+            RuleSet::parse(
+                "r",
+                br#"{"version":1,"rules":[{"pattern":["git",{"any":false}]}]}"#
+            )
+            .is_err()
+        );
+        assert!(
+            RuleSet::parse(
+                "r",
+                br#"{"version":1,"rules":[{"pattern":["git",{"any":true,"x":1}]}]}"#
+            )
+            .is_err()
+        );
+        assert_eq!(
+            PatternToken::One("a b|c".into()).to_string(),
+            "'a b|c'",
+            "a word that is not plain is shown quoted"
+        );
+    }
+
+    /// One decision looks each program up once, however many rules ask.
+    #[test]
+    fn a_resolver_looks_each_program_up_once() {
+        let set = RuleSet::parse(
+            "r",
+            br#"{"version":1,"rules":[{"pattern":["sh","a"]},{"pattern":["sh","b"]},{"pattern":["sh","c"]}]}"#,
+        )
+        .expect("loads");
+        let cache = super::ResolveCache::default();
+        let search = vec![
+            std::path::PathBuf::from("/bin"),
+            std::path::PathBuf::from("/usr/bin"),
+        ];
+        let resolver = super::Resolver {
+            cwd: std::path::Path::new("/"),
+            search: &search,
+            cache: &cache,
+        };
+        let argv = argv("/bin/sh a");
+        for _ in 0..3 {
+            let _ = set.hits(&argv, Some(resolver)).count();
+        }
+        assert!(
+            cache.len() <= 2,
+            "sh and /bin/sh, once each: {}",
+            cache.len()
         );
     }
 }
