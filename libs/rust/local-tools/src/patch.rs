@@ -1,9 +1,14 @@
-//! Unified diffs: parse one (`diff -u`, `git diff`) and apply it exactly.
+//! Unified diffs: parse one (`diff -u`, `git diff`) and apply it.
 //!
 //! A hunk applies where its context and removed lines match the file
 //! exactly (line endings aside), searching outward from the line numbers
-//! the header states, so a hunk whose numbers drifted still lands. There is
-//! no fuzz: a hunk whose context does not match anywhere fails the whole
+//! the header states, so a hunk whose numbers drifted still lands. When
+//! they match exactly nowhere, the Codex ladder
+//! ([`crate::apply_patch::seek_sequence`]) is tried after the previous
+//! hunk: trailing whitespace ignored, then both ends, then typographic
+//! punctuation read as ASCII. A fuzzy pass must find one position (more
+//! fail with their line numbers), and the pass is reported
+//! ([`Applied::matches`]). A hunk that matches nowhere fails the whole
 //! patch, and nothing is written.
 //!
 //! Every line keeps its own line ending: context lines stay as they are in
@@ -17,6 +22,7 @@
 //! patch is refused ([`ErrorCode::Unsupported`]) before anything is
 //! written; it is never applied with that section left out.
 
+use crate::apply_patch::seek_sequence::{self, Pass};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 
 /// One line of a hunk.
@@ -494,10 +500,90 @@ fn replacement(hunk: &Hunk, matched: &[String], usual: &str) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// [`ErrorCode::Conflict`] when a hunk's context is not in the file.
+/// As [`apply_reported`].
 pub fn apply(original: &str, patch: &FilePatch) -> ToolResult<Option<String>> {
+    apply_reported(original, patch).map(|applied| applied.content)
+}
+
+/// What applying one file's hunks gave.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Applied {
+    /// The new content; `None` when the patch deletes the file.
+    pub content: Option<String>,
+    /// How each hunk was located.
+    pub matches: Vec<Pass>,
+    /// The new text's changed lines, 0-based `[start, end)` per hunk.
+    pub changed: Vec<(usize, usize)>,
+}
+
+/// The exact position of a hunk's old side nearest `expected`, at or after
+/// `cursor`.
+fn exact_position(lines: &[String], old: &[&str], expected: usize, cursor: usize) -> Option<usize> {
+    let matches_at = |at: usize| {
+        at + old.len() <= lines.len()
+            && old
+                .iter()
+                .zip(&lines[at..at + old.len()])
+                .all(|(want, have)| *want == strip_ending(have))
+    };
+    (0..=lines.len())
+        .flat_map(|distance| {
+            [
+                expected.checked_add(distance),
+                expected.checked_sub(distance),
+            ]
+        })
+        .flatten()
+        .filter(|at| *at >= cursor && *at <= lines.len())
+        .take(2 * (lines.len() + 1))
+        .find(|at| matches_at(*at))
+}
+
+/// Where a hunk's old side lies when no exact position does: the first
+/// fuzzy pass that finds it, which must find it once.
+fn fuzzy_position(
+    lines: &[String],
+    old: &[&str],
+    cursor: usize,
+    number: usize,
+    target: &str,
+) -> ToolResult<Option<(usize, Pass)>> {
+    let stripped: Vec<&str> = lines.iter().map(|line| strip_ending(line)).collect();
+    for pass in &Pass::LADDER[1..] {
+        let found = seek_sequence::positions(&stripped, old, cursor, *pass);
+        match found.as_slice() {
+            [] => {}
+            [one] => return Ok(Some((*one, *pass))),
+            several => {
+                return Err(ToolError::new(
+                    ErrorCode::Conflict,
+                    format!(
+                        "hunk {number} of `{target}` matches only after normalisation ({}), at lines {}; add context to make it unique",
+                        pass.as_str(),
+                        several
+                            .iter()
+                            .map(|at| (at + 1).to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// [`apply`], with how each hunk matched and where the new text changed.
+///
+/// # Errors
+///
+/// [`ErrorCode::Conflict`] when a hunk's context is not in the file, or
+/// only a fuzzy pass finds it, more than once.
+pub fn apply_reported(original: &str, patch: &FilePatch) -> ToolResult<Applied> {
     let mut lines: Vec<String> = original.split_inclusive('\n').map(str::to_owned).collect();
     let usual = usual_ending(&lines);
+    let mut matches = Vec::new();
+    let mut changed = Vec::new();
     // `cursor`: hunks apply in order and never overlap the previous one.
     let mut cursor = 0usize;
     let mut delta: isize = 0;
@@ -516,35 +602,23 @@ pub fn apply(original: &str, patch: &FilePatch) -> ToolResult<Option<String>> {
             hunk.old_start.saturating_sub(1)
         };
         let expected = stated.saturating_add_signed(delta).max(cursor);
-        let matches_at = |at: usize| {
-            at + old.len() <= lines.len()
-                && old
-                    .iter()
-                    .zip(&lines[at..at + old.len()])
-                    .all(|(want, have)| *want == strip_ending(have))
+        let (position, pass) = match exact_position(&lines, &old, expected, cursor) {
+            Some(at) => (at, Pass::Exact),
+            None => fuzzy_position(&lines, &old, cursor, number + 1, patch.target())?.ok_or_else(
+                || {
+                    ToolError::new(
+                        ErrorCode::Conflict,
+                        format!(
+                            "hunk {} of `{}` does not match the file (stated at line {})",
+                            number + 1,
+                            patch.target(),
+                            hunk.old_start
+                        ),
+                    )
+                },
+            )?,
         };
-        let position = (0..=lines.len())
-            .flat_map(|distance| {
-                [
-                    expected.checked_add(distance),
-                    expected.checked_sub(distance),
-                ]
-            })
-            .flatten()
-            .filter(|at| *at >= cursor && *at <= lines.len())
-            .take(2 * (lines.len() + 1))
-            .find(|at| matches_at(*at))
-            .ok_or_else(|| {
-                ToolError::new(
-                    ErrorCode::Conflict,
-                    format!(
-                        "hunk {} of `{}` does not match the file (stated at line {})",
-                        number + 1,
-                        patch.target(),
-                        hunk.old_start
-                    ),
-                )
-            })?;
+        matches.push(pass);
         let replacement = replacement(hunk, &lines[position..position + old.len()], usual);
         let replaced_tail = position + old.len() == lines.len();
         if hunk.old_no_newline && !replaced_tail {
@@ -568,12 +642,17 @@ pub fn apply(original: &str, patch: &FilePatch) -> ToolResult<Option<String>> {
             *last = trimmed;
         }
         cursor = position + added;
+        changed.push((position, cursor));
         // Where the original's lines now sit relative to their numbers.
         delta = signed(position) - signed(stated) + signed(added) - signed(old.len());
     }
     if patch.is_delete() {
         if lines.is_empty() {
-            return Ok(None);
+            return Ok(Applied {
+                content: None,
+                matches,
+                changed: Vec::new(),
+            });
         }
         return Err(ToolError::new(
             ErrorCode::Conflict,
@@ -583,7 +662,11 @@ pub fn apply(original: &str, patch: &FilePatch) -> ToolResult<Option<String>> {
             ),
         ));
     }
-    Ok(Some(lines.concat()))
+    Ok(Applied {
+        content: Some(lines.concat()),
+        matches,
+        changed,
+    })
 }
 
 #[cfg(test)]
@@ -793,6 +876,51 @@ mod tests {
                 .expect("apply")
                 .as_deref(),
             Some("a\r\nb\r\nc\r\n")
+        );
+    }
+
+    /// A context line that differs only by trailing whitespace or a
+    /// typographic dash applies, and the pass is reported.
+    #[test]
+    fn fuzzy_unified_hunk_is_reported() {
+        use crate::apply_patch::Pass;
+        let original = "fn main() {  \n    let a = \u{201C}x \u{2013} y\u{201D};\n}\n";
+        let diff = "--- f\n+++ f\n@@ -1,3 +1,3 @@\n fn main() {\n-    let a = \"x - y\";\n+    let a = 1;\n }\n";
+        let patches = parse(diff).expect("parse");
+        let applied = super::apply_reported(original, &patches[0]).expect("apply");
+        assert_eq!(
+            applied.content.as_deref(),
+            Some("fn main() {  \n    let a = 1;\n}\n")
+        );
+        assert_eq!(applied.matches, [Pass::Unicode]);
+        assert_eq!(applied.changed, [(0, 3)]);
+        let trailing = "--- f\n+++ f\n@@ -1,2 +1,2 @@\n a\n-b\n+B\n";
+        let applied =
+            super::apply_reported("a \nb\t\n", &parse(trailing).expect("parse")[0]).expect("apply");
+        assert_eq!(applied.content.as_deref(), Some("a \nB\n"));
+        assert_eq!(applied.matches, [Pass::TrimEnd]);
+        // An exact match is reported as such.
+        let exact =
+            super::apply_reported("a\nb\n", &parse(trailing).expect("parse")[0]).expect("apply");
+        assert_eq!(exact.matches, [Pass::Exact]);
+    }
+
+    /// A fuzzy location found twice is not guessed: it fails with the
+    /// candidates' line numbers.
+    #[test]
+    fn fuzzy_unified_hunk_ambiguous_fuzzy_fails() {
+        let diff = "--- f\n+++ f\n@@ -1,2 +1,2 @@\n x\n-y\n+Y\n";
+        let error = apply_one("x \ny\nz\nx\t\ny\n", diff).expect_err("ambiguous");
+        assert_eq!(error.code(), ErrorCode::Conflict);
+        assert!(
+            error.message().contains("lines 1, 4"),
+            "{}",
+            error.message()
+        );
+        // An exact match wins over fuzzy ones elsewhere.
+        assert_eq!(
+            apply_one("x \ny\nx\ny\n", diff).expect("exact").as_deref(),
+            Some("x \ny\nx\nY\n")
         );
     }
 

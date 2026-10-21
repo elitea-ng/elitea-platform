@@ -79,6 +79,10 @@ changed since is refused, whatever the format.
   result's `files[].matches` names the pass per chunk and a `note` counts
   the fuzzy ones: a fuzzy match is never silent, and a fuzzy pass that
   finds more than one position fails with the candidates' line numbers.
+* A unified diff's hunk is placed exactly first, searching outward from
+  the header's line numbers; only when its context matches exactly
+  nowhere is the same fuzzy ladder tried (after the previous hunk), with
+  the same uniqueness rule and the same report.
 
 The envelope parser and the ladder are adapted from OpenAI Codex
 (Apache-2.0); see `NOTICE`.

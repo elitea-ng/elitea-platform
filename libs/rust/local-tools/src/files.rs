@@ -261,7 +261,8 @@ pub(crate) fn plan_patch(
             };
             let (old_typed, old_target, original) = existing(workspace, ledger, old)?;
             let (new_typed, new_target) = absent(workspace, ledger, new)?;
-            let content = patch::apply(text_of(&original)?, &file)?.ok_or_else(|| {
+            let applied = patch::apply_reported(text_of(&original)?, &file)?;
+            let content = applied.content.ok_or_else(|| {
                 ToolError::invalid(format!("the rename of `{old_typed}` deletes it"))
             })?;
             push(
@@ -271,7 +272,7 @@ pub(crate) fn plan_patch(
                     typed: new_typed,
                     content: Some(content),
                     mode: Some(original.mode),
-                    matches: Vec::new(),
+                    matches: applied.matches,
                 },
             )?;
             push(
@@ -294,12 +295,18 @@ pub(crate) fn plan_patch(
                 "a section names two different paths; a rename needs git's `rename from` / `rename to` lines",
             ));
         }
-        let (typed, target, content) = if file.is_create() {
+        let (typed, target, content, matches) = if file.is_create() {
             let (typed, target) = absent(workspace, ledger, file.target())?;
-            (typed, target, patch::apply("", &file)?)
+            (typed, target, patch::apply("", &file)?, Vec::new())
         } else {
             let (typed, target, read) = existing(workspace, ledger, file.target())?;
-            (typed, target, patch::apply(text_of(&read)?, &file)?)
+            let applied = patch::apply_reported(text_of(&read)?, &file)?;
+            let matches = if applied.content.is_some() {
+                applied.matches
+            } else {
+                Vec::new()
+            };
+            (typed, target, applied.content, matches)
         };
         push(
             &mut planned,
@@ -308,7 +315,7 @@ pub(crate) fn plan_patch(
                 typed,
                 content,
                 mode: file.created_mode(),
-                matches: Vec::new(),
+                matches,
             },
         )?;
     }
@@ -1644,6 +1651,26 @@ mod tests {
                 .err()
                 .map(|error| error.code()),
             Some(ErrorCode::OutsideWorkspace)
+        );
+    }
+
+    /// A unified hunk located by a fuzzy pass says so in the result.
+    #[test]
+    fn a_fuzzy_unified_hunk_is_reported_in_the_result() {
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "a.txt", "one  \ntwo\n");
+        read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
+        let diff = "--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
+        let planned = plan_patch(&ws, &ledger, diff).expect("plan");
+        let result = apply_patch(&ws, &ledger, &planned).expect("apply");
+        assert_eq!(
+            result["files"],
+            json!([{ "path": "a.txt", "matches": ["trim_end"] }])
+        );
+        assert!(result["note"].is_string());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
+            "one  \nTWO\n"
         );
     }
 
