@@ -202,8 +202,8 @@ if main:
     # output and content admit the worker only; the platform listener admits
     # the worker, DeepWiki and Inventory.
     ctr = deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0]["ports"]
-    rt = sorted(p["containerPort"] for p in ctr if p["name"].startswith("runtime-") and p["name"] != "runtime-platform")
-    plat = [p["containerPort"] for p in ctr if p["name"] == "runtime-platform"]
+    rt = sorted(p["containerPort"] for p in ctr if p["name"].startswith("runtime-") and p["name"] != "runtime-plat")
+    plat = [p["containerPort"] for p in ctr if p["name"] == "runtime-plat"]
     check(bool(rt) == bool(plat), f"main: declares runtime ports {rt} but platform listener {plat}")
     rts = [k for k in by if k != (8080,) and k != tuple(plat)]
     # The providers' hosts and engines make every call to elitea-main over

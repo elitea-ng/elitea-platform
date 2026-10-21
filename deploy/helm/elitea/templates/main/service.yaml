@@ -30,9 +30,9 @@ spec:
       name: runtime-content
     # The platform listener (#1359), which replaced the platform-edge Service.
     - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
-      targetPort: runtime-platform
+      targetPort: runtime-plat
       protocol: TCP
-      name: runtime-platform
+      name: runtime-plat
     {{- end }}
   selector:
     {{- include "elitea-main.selectorLabels" . | nindent 4 }}

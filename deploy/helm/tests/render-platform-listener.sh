@@ -91,10 +91,16 @@ expect "no internal MCP origin is rendered" "$(cm ELITEA_RUNTIME_CURRENT_MAIN_BA
 # identity of Main's own.
 expect "no Main client identity is rendered" \
   "$(grep -c 'ELITEA_RUNTIME_PLATFORM_CLIENT_\|main-platform-client' "$WORK/worker.yaml" || true)" "0"
-expect "Deployment exposes runtime-platform" \
-  "$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-main") | .spec.template.spec.containers[].ports[] | select(.name == "runtime-platform") | .containerPort' "$WORK/worker.yaml")" "9446"
-expect "Service exposes runtime-platform" \
-  "$(yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-main") | .spec.ports[] | select(.name == "runtime-platform") | .port' "$WORK/worker.yaml")" "9446"
+expect "Deployment exposes runtime-plat" \
+  "$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-main") | .spec.template.spec.containers[].ports[] | select(.name == "runtime-plat") | .containerPort' "$WORK/worker.yaml")" "9446"
+expect "Service exposes runtime-plat" \
+  "$(yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-main") | .spec.ports[] | select(.name == "runtime-plat") | .port' "$WORK/worker.yaml")" "9446"
+# Kubernetes refuses a port name longer than 15 characters (IANA_SVC_NAME)
+# at apply time, which `helm template` never checks: "runtime-platform" (16)
+# rendered here and failed only on the kind install. Every named port of
+# every container and Service in this render must fit.
+expect "every port name is at most 15 characters" \
+  "$(yq eval-all '(.spec.template.spec.containers[]?.ports[]?.name, .spec.template.spec.initContainers[]?.ports[]?.name, .spec.ports[]?.name, .spec.ports[]?.targetPort) | select(tag == "!!str" and length > 15)' "$WORK/worker.yaml" | grep -v '^---$' | sort -u)" ""
 expect "worker platform_origin" \
   "$(yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-worker-runtime") | .data["runtime.json"]' "$WORK/worker.yaml" | yq -p=json '.platform_origin')" "https://elitea-main:9446"
 edge="$(yq eval-all 'select(.metadata.name | test("platform-edge")) | .kind + "/" + .metadata.name' "$WORK/worker.yaml")"
