@@ -586,13 +586,15 @@ reads, which looks configured and does nothing.
   "ELITEA_DEEPWIKI_CLIENT_CERT_FILE" (get $env "ELITEA_DEEPWIKI_CLIENT_CERT_FILE" | toString)
   "ELITEA_DEEPWIKI_CLIENT_KEY_FILE" (get $env "ELITEA_DEEPWIKI_CLIENT_KEY_FILE" | toString)
   "ELITEA_DEEPWIKI_CA_FILE" (get $env "ELITEA_DEEPWIKI_CA_FILE" | toString) -}}
+{{- if get $env "ELITEA_DEEPWIKI_BASE_URL" -}}
+{{- fail "env.ELITEA_DEEPWIKI_BASE_URL was retired with the provider's HTTPS SPI (#1359): elitea-main reaches it over gRPC at env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET (host:port, derived by the chart when deepwiki.enabled). Remove BASE_URL; cmd/elitea-main refuses it at boot too (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
 {{- fail (printf "env.ELITEA_DEEPWIKI_ENABLED is %q, which is neither true nor false. internal/api/v2/deepwiki/config.go refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
 {{- end -}}
 {{- if $on -}}
-{{- $url := get $env "ELITEA_DEEPWIKI_BASE_URL" | toString -}}
-{{- if not (hasPrefix "https://" $url) -}}
-{{- fail (printf "env.ELITEA_DEEPWIKI_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; NewProxy catches it at startup." $url) -}}
+{{- if not (or (get $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET") (include "elitea-deepwiki.platformGrpcTarget" .)) -}}
+{{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, but there is no provider to dial: deepwiki.enabled is false here, so the chart derives no env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET. Turn deepwiki.enabled on, or set the target to the host:port of a provider deployed elsewhere (#1359)." -}}
 {{- end -}}
 {{- if not (include "elitea-deepwiki.callbackBaseUrl" .) -}}
 {{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL must name the origin the PROVIDER calls back to for artifacts and models. Without it a generation runs to completion and then cannot hand back what it produced — the failure arrives at the end of the most expensive operation the facade offers. Set it to this deployment's own in-cluster origin, e.g. http://elitea-main:8080." -}}
@@ -738,13 +740,15 @@ reads, which looks configured and does nothing.
   "ELITEA_INVENTORY_CLIENT_CERT_FILE" (get $env "ELITEA_INVENTORY_CLIENT_CERT_FILE" | toString)
   "ELITEA_INVENTORY_CLIENT_KEY_FILE" (get $env "ELITEA_INVENTORY_CLIENT_KEY_FILE" | toString)
   "ELITEA_INVENTORY_CA_FILE" (get $env "ELITEA_INVENTORY_CA_FILE" | toString) -}}
+{{- if get $env "ELITEA_INVENTORY_BASE_URL" -}}
+{{- fail "env.ELITEA_INVENTORY_BASE_URL was retired with the provider's HTTPS SPI (#1359): elitea-main reaches it over gRPC at env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET (host:port, derived by the chart when inventory.enabled). Remove BASE_URL; cmd/elitea-main refuses it at boot too (docs/UPGRADING.md)." -}}
+{{- end -}}
 {{- if and $enabled (not $on) (not (has (lower $enabled) (list "0" "false" "no" "off"))) -}}
 {{- fail (printf "env.ELITEA_INVENTORY_ENABLED is %q, which is neither true nor false. facade.ConfigFromEnv refuses an unrecognised spelling rather than reading it as off, so a typo here is a boot failure and never a quietly disabled feature." $enabled) -}}
 {{- end -}}
 {{- if $on -}}
-{{- $url := get $env "ELITEA_INVENTORY_BASE_URL" | toString -}}
-{{- if not (hasPrefix "https://" $url) -}}
-{{- fail (printf "env.ELITEA_INVENTORY_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; proxy.New catches it at startup." $url) -}}
+{{- if not (or (get $env "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET") (include "elitea-inventory.platformGrpcTarget" .)) -}}
+{{- fail "env.ELITEA_INVENTORY_ENABLED is on, but there is no provider to dial: inventory.enabled is false here, so the chart derives no env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET. Turn inventory.enabled on, or set the target to the host:port of a provider deployed elsewhere (#1359)." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
 {{- if not (hasKey (.Values.main.secrets | default dict) "ELITEA_INVENTORY_IDENTITY_SECRET") -}}

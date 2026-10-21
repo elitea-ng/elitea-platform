@@ -7,6 +7,5 @@
       "selectorLabels" (include "elitea-inventory.selectorLabels" .)
       "title" "Inventory"
       "key" "inventory"
-      "grpcPort" (.Values.inventory.platformGrpc | default dict).port
-      "platformGrpc" (include "elitea-inventory.platformGrpc" .)) }}
+      "grpcPort" (.Values.inventory.platformGrpc | default dict).port) }}
 {{- end }}

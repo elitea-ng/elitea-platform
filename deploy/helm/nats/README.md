@@ -1,6 +1,6 @@
 # NATS JetStream — the platform's shared NATS
 
-One NATS JetStream server (or 3-node cluster) serves three clients:
+One NATS JetStream server (or 3-node cluster) serves these clients:
 
 | Client | Uses |
 |--------|------|
@@ -9,6 +9,7 @@ One NATS JetStream server (or 3-node cluster) serves three clients:
 | `elitea-main` | the project SSE relay (`gateway.events.project.>`) and canvas presence (KV + `canvas.editors` rosters) |
 | `elitea-main-runtime` | elitea-main's runtime plane: PRODUCES the runtime command bus (`elitea.rt.v1.<route>.d.*`, `../../../docs/runtime-command-bus.md`) and the execution-replay wake-up |
 | `elitea-worker` | the Rust and Python workers: CONSUME the command bus (pull, +WPI, ack, nak-with-delay) and record dead letters |
+| `elitea-deepwiki`, `elitea-inventory` | the sub-application hosts' cancellation fan-out (#1359): core NATS on `elitea.subapp.<app>.cancel.<invocation>`, so a cancel that lands on one host replica stops the run on the replica that holds it |
 
 and one owner: the `nats-bootstrap` hook Job (`../nats-bootstrap`), which
 creates every asset, connecting to each plane's account as that account's own
@@ -132,7 +133,7 @@ writer is its owner**: MAIN's assets are written by elitea-main alone,
 GATEWAY's by the gateway alone (its bootstrap creates them and publishes no
 data), RUNTIME's command streams by its producer (the workers only pull,
 ack and nak them, from WORKER), WORKER's dead-letter bucket by the workers;
-SCHEDULER stores nothing.
+SCHEDULER and SUBAPP store nothing.
 
 | Account | Identities | Assets |
 |---|---|---|
@@ -141,6 +142,7 @@ SCHEDULER stores nothing.
 | `SCHEDULER` | `elitea-scheduler` | none — no JetStream, no bootstrap |
 | `RUNTIME` | `elitea-main-runtime`, `elitea-nats-bootstrap-runtime` | the command bus: `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` streams, their worker durables, the replay wake-up |
 | `WORKER` | `elitea-worker`, `elitea-nats-bootstrap-worker` | `ELITEA_RT_V1_DEADLETTER` (KV) — and nothing else (`jetstream.max_streams: 1`) |
+| `SUBAPP` | `elitea-deepwiki`, `elitea-inventory` | none — no JetStream, no bootstrap |
 
 Why accounts and not only per-user permissions: a JetStream **push
 consumer's deliver subject is not checked against its creator's publish
@@ -258,6 +260,8 @@ subject), and the gateway holds no consumer grant at all.
 | RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
 | WORKER | `elitea-worker` | `JS.RUNTIME.API.CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on its three durables only — the nine imported services, nothing else in RUNTIME; `$KV.ELITEA_RT_V1_DEADLETTER.>` + its `STREAM.INFO` (dead letters, WORKER's own JetStream). Denied: `elitea.rt.v1.>`, stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
 | WORKER | `elitea-nats-bootstrap-worker` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on `KV_ELITEA_RT_V1_DEADLETTER` | `_INBOX_elitea-nats-bootstrap-worker.>` |
+| SUBAPP | `elitea-deepwiki` | `elitea.subapp.deepwiki.cancel.*` — its own application's cancels, nothing else | `elitea.subapp.deepwiki.cancel.*`, `_INBOX_elitea-deepwiki.>` |
+| SUBAPP | `elitea-inventory` | `elitea.subapp.inventory.cancel.*` | `elitea.subapp.inventory.cancel.*`, `_INBOX_elitea-inventory.>` |
 
 The RUNTIME and WORKER rows are the runtime command bus (`../../../docs/runtime-command-bus.md`):
 elitea-main presents `elitea-main-runtime` with `ELITEA_RUNTIME_NATS_URL` and
@@ -288,8 +292,9 @@ ELITEA_TEST_NATS_CLI_BIN=$(command -v nats) \
 NetworkPolicy or route TLS off, points route TLS at the client certificate or
 the client CA, or turns route verification off; sets `no_auth_user`, `allow_non_tls` or a
 top-level `authorization` block; declares accounts other than exactly `MAIN`,
-`GATEWAY`, `SCHEDULER`, `RUNTIME` and `WORKER`, MAIN/GATEWAY/RUNTIME without
-JetStream, SCHEDULER with it, or WORKER's without `max_streams: 1`; puts
+`GATEWAY`, `SCHEDULER`, `RUNTIME`, `WORKER` and `SUBAPP`, MAIN/GATEWAY/RUNTIME
+without JetStream, SCHEDULER or SUBAPP with it, SUBAPP with anyone but the two
+hosts or with any subject beyond the host's own application's cancels, or WORKER's without `max_streams: 1`; puts
 `elitea-scheduler` anywhere but SCHEDULER, `elitea-worker` anywhere but
 WORKER, or anyone else in either; declares an identity twice, a non-URI, password, nkey or
 token user, or a JetStream account without exactly its own bootstrap; lets a

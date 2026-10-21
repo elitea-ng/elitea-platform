@@ -28,7 +28,7 @@ import (
 // flag; a deployment that sets none simply does not serve DeepWiki.
 const (
 	EnabledEnv        = "ELITEA_DEEPWIKI_ENABLED"
-	BaseURLEnv        = "ELITEA_DEEPWIKI_BASE_URL"
+	TargetEnv         = "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET" // host:port (#1359); BASE_URL is refused
 	ClientCertEnv     = "ELITEA_DEEPWIKI_CLIENT_CERT_FILE"
 	ClientKeyEnv      = "ELITEA_DEEPWIKI_CLIENT_KEY_FILE"
 	CAFileEnv         = "ELITEA_DEEPWIKI_CA_FILE"
@@ -58,8 +58,8 @@ var ErrIncompleteConfig = errors.New("incomplete DeepWiki facade configuration")
 type Config struct {
 	Enabled bool
 
-	// BaseURL is the provider service's origin, e.g. https://deepwiki:8080.
-	BaseURL string
+	// Target is the provider's gRPC listener, e.g. elitea-deepwiki:9443.
+	Target string
 
 	// mTLS material. The provider requires a client certificate, so these are
 	// mandatory whenever the facade is enabled — see Validate.
@@ -145,7 +145,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 
 	return Config{
 		Enabled:        enabled,
-		BaseURL:        get(BaseURLEnv),
+		Target:         get(TargetEnv),
 		ClientCertFile: get(ClientCertEnv),
 		ClientKeyFile:  get(ClientKeyEnv),
 		CAFile:         get(CAFileEnv),
@@ -156,7 +156,7 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		CallbackBaseURL:  get(CallbackBaseURLEnv),
 		CallbackTokenTTL: callbackTTL,
 		GitEgress:        ParseGitEgressPolicy(get(GitAllowlistEnv)),
-	}, nil
+	}, facade.RefuseRetiredBaseURL("ELITEA_DEEPWIKI_BASE_URL", TargetEnv, lookup)
 }
 
 // Validate reports whether an ENABLED config can actually reach the provider.
@@ -170,8 +170,8 @@ func (c Config) Validate() error {
 	}
 
 	var missing []string
-	if c.BaseURL == "" {
-		missing = append(missing, BaseURLEnv)
+	if c.Target == "" {
+		missing = append(missing, TargetEnv)
 	}
 	// The provider terminates mTLS with CERT_REQUIRED. Without all three of
 	// these the hop cannot be established at all.

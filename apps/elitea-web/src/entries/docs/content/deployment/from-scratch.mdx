@@ -735,14 +735,12 @@ inventory:
 main:
   env:
     ELITEA_DEEPWIKI_ENABLED: "true"
-    ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki-svc:8443"
     ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,gitlab.example.com"
     ELITEA_DEEPWIKI_CLIENT_CERT_FILE: "/run/elitea-deepwiki/tls.crt"
     ELITEA_DEEPWIKI_CLIENT_KEY_FILE: "/run/elitea-deepwiki/tls.key"
     ELITEA_DEEPWIKI_CA_FILE: "/run/elitea-deepwiki/ca.crt"
     ELITEA_INVENTORY_ENABLED: "true"
-    ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory-svc:8443"
     ELITEA_INVENTORY_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,gitlab.example.com"
     ELITEA_INVENTORY_CLIENT_CERT_FILE: "/run/elitea-inventory/tls.crt"
@@ -756,6 +754,8 @@ main:
       enabled: true
       secretName: elitea-main-inventory-client-tls   # issued by the chart
 ```
+
+elitea-main reaches each provider over mTLS gRPC on its platform port; the chart derives `ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET` / `ELITEA_INVENTORY_PLATFORM_GRPC_TARGET` (`elitea-<app>-svc:9443`). The old `*_BASE_URL` keys are refused. A provider with more than one replica also needs its NATS client certificate (`elitea-deepwiki` / `elitea-inventory`, issued by the chart when NATS TLS is on) so a cancel reaches the replica running the job.
 
 Turn on both halves together. The chart renders `deepwiki.enabled: true` even when elitea-main's facade is off, and you then get a running service that nothing calls.
 </Accordion>

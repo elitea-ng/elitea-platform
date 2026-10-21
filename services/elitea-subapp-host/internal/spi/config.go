@@ -63,17 +63,23 @@ type Settings struct {
 	CallbackKeyFile  string
 	IdentitySecret   string
 	// PlatformClients are the certificate identities (common name or DNS
-	// SAN) allowed to call the platform gRPC service (platform.go), from
-	// <PREFIX>PLATFORM_CLIENTS. Empty keeps the service off: no listener is
-	// opened for it.
+	// SAN) allowed to call the host's gRPC listener — the provider service
+	// and the platform operations — from <PREFIX>PLATFORM_CLIENTS. The host
+	// refuses to start without one: a listener that admits nobody serves
+	// nothing, and one that admits anyone the CA signed is not authorised.
 	PlatformClients []string
-	// PlatformGRPCAddr is where the platform gRPC service listens
-	// (<PREFIX>PLATFORM_GRPC_ADDR). It is a listener of its own, separate
-	// from ListenAddr, behind the same TLS configuration. Empty means the
-	// default (DefaultPlatformGRPCAddr) when PlatformClients is set.
+	// PlatformGRPCAddr is where the host's one listener (gRPC over mutual
+	// TLS) listens (<PREFIX>PLATFORM_GRPC_ADDR); empty is
+	// DefaultPlatformGRPCAddr. Since #1359 it is the only listener: the
+	// SPI's HTTP listener (<PREFIX>LISTEN_ADDR) is gone.
 	PlatformGRPCAddr string
 	GitAllowlist     string
-	ListenAddr       string
+	// NATSURL is the NATS server the host fans cancels out over
+	// (<PREFIX>NATS_URL, cancelbus.go); its TLS material is
+	// <PREFIX>NATS_TLS_{CA,CERT,KEY}_FILE (libs/go/natsconn). Empty keeps
+	// cancels local to the replica they land on, which is right for one
+	// replica and wrong for more.
+	NATSURL string
 	// DatabaseURL selects the durable invocation store (ADR-0023 H2b); empty
 	// keeps invocations in memory, and /health says so.
 	DatabaseURL string
@@ -157,9 +163,17 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		PlatformClients:    PlatformClients(raw("PLATFORM_CLIENTS", "")),
 		PlatformGRPCAddr:   raw("PLATFORM_GRPC_ADDR", ""),
 		GitAllowlist:       raw("GIT_ALLOWLIST", ""),
-		ListenAddr:         raw("LISTEN_ADDR", ":8080"),
+		NATSURL:            strings.TrimSpace(raw("NATS_URL", "")),
 		EngineSocket:       raw("ENGINE_SOCKET", ""),
 		DatabaseURL:        raw("DATABASE_URL", ""),
+	}
+	if _, set := lookup(prefix + "LISTEN_ADDR"); set {
+		// A setting silently ignored is worse than a refusal: an operator
+		// who set it expects a listener there.
+		return Settings{}, fmt.Errorf("%w: %sLISTEN_ADDR is retired (#1359): the host serves gRPC only, on %sPLATFORM_GRPC_ADDR (default %s); unset it", ErrConfig, prefix, prefix, DefaultPlatformGRPCAddr)
+	}
+	if s.PlatformGRPCAddr == "" {
+		s.PlatformGRPCAddr = DefaultPlatformGRPCAddr
 	}
 	var err error
 	if s.JobsEnabled, err = boolean("SLOTS_MODE", false); err != nil {
@@ -186,16 +200,13 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	return s, nil
 }
 
-// TerminatesMTLS reports whether this process is the mutual-TLS terminus: a
-// server certificate and a client CA, which is the condition under which the
-// listener requires and verifies a client certificate at the handshake.
+// TerminatesMTLS reports whether this process can be the mutual-TLS
+// terminus its listener must be: a server certificate and a client CA, the
+// condition under which the listener requires and verifies a client
+// certificate at the handshake. The host refuses to start otherwise.
 func (s Settings) TerminatesMTLS() bool {
 	return s.TLSCertFile != "" && s.TLSKeyFile != "" && s.TLSCAFile != ""
 }
-
-// MTLSRequired reports whether the SPI routes refuse a hop that is not
-// mutually authenticated — on whenever a client CA is configured.
-func (s Settings) MTLSRequired() bool { return s.TLSCAFile != "" }
 
 // CallbackCA is the bundle the callback hop trusts: CALLBACK_CA_FILE when
 // set, else TLS_CA_FILE, which is what the hop trusted before the two were

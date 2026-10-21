@@ -19,6 +19,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 const identitySecret = "test-identity-secret"
@@ -87,21 +88,25 @@ func TestTheHostStampsTheVerifiedProjectOverACallersOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(t.Context())
+	if err := server.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(server.Stop)
+	wire := spitest.Handler(t, server)
+	signed := spi.Identity{ProjectID: "17", UserID: "5"}
 
 	encoded, _ := json.Marshal(forgedAsk("90200"))
 	request := httptest.NewRequest(http.MethodPost, "/tools/Wikis/ask/invoke", bytes.NewReader(encoded))
 	spi.SignHeaders(request.Header, spi.Identity{ProjectID: "17", UserID: "5"}, []byte(identitySecret))
 	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, request)
+	wire.ServeHTTP(recorder, request)
 	var accepted map[string]any
 	_ = json.Unmarshal(recorder.Body.Bytes(), &accepted)
 	id, _ := accepted["invocation_id"].(string)
 	if id == "" {
 		t.Fatalf("not accepted: %d %s", recorder.Code, recorder.Body.String())
 	}
-	body := pollUntilTerminal(t, server, "/tools/Wikis/ask/invocations/"+id)
+	body := pollUntilTerminal(t, wire, signed, "/tools/Wikis/ask/invocations/"+id)
 	if body["status"] != "Completed" {
 		t.Fatalf("%v", body)
 	}
@@ -114,18 +119,15 @@ func TestTheHostStampsTheVerifiedProjectOverACallersOwn(t *testing.T) {
 		t.Fatalf("override %v", arguments["repo_identifier_override"])
 	}
 
-	// A forged, UNSIGNED project header is stripped, and with no valid
-	// signature on a verifying host the index tool is refused before the
-	// engine is called.
+	// A forged, UNSIGNED project header: a verifying host refuses the call
+	// itself (UNAUTHENTICATED, the facade's 401) before anything runs, so
+	// the engine is never called.
 	forged := httptest.NewRequest(http.MethodPost, "/tools/Wikis/ask/invoke", bytes.NewReader(encoded))
 	forged.Header.Set(spi.HeaderProjectID, "999")
 	recorder = httptest.NewRecorder()
-	server.ServeHTTP(recorder, forged)
-	_ = json.Unmarshal(recorder.Body.Bytes(), &accepted)
-	id, _ = accepted["invocation_id"].(string)
-	body = pollUntilTerminal(t, server, "/tools/Wikis/ask/invocations/"+id)
-	if body["status"] != "Error" || body["error_category"] != "invalid_input" {
-		t.Fatalf("an unsigned hop reached the index: %v", body)
+	wire.ServeHTTP(recorder, forged)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("an unsigned hop was accepted: %d %s", recorder.Code, recorder.Body.String())
 	}
 	sidecar.mu.Lock()
 	calls := len(sidecar.requests)
@@ -135,12 +137,14 @@ func TestTheHostStampsTheVerifiedProjectOverACallersOwn(t *testing.T) {
 	}
 }
 
-func pollUntilTerminal(t *testing.T, server *spi.Server, path string) map[string]any {
+func pollUntilTerminal(t *testing.T, wire http.Handler, identity spi.Identity, path string) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		recorder := httptest.NewRecorder()
-		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		spi.SignHeaders(request.Header, identity, []byte(identitySecret))
+		wire.ServeHTTP(recorder, request)
 		raw, _ := io.ReadAll(recorder.Body)
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
@@ -149,7 +153,7 @@ func pollUntilTerminal(t *testing.T, server *spi.Server, path string) map[string
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("%s never terminated", path)
+	t.Fatalf("%s never reached a terminal state", path)
 	return nil
 }
 

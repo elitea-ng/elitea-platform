@@ -7,6 +7,5 @@
       "selectorLabels" (include "elitea-deepwiki.selectorLabels" .)
       "title" "DeepWiki"
       "key" "deepwiki"
-      "grpcPort" (.Values.deepwiki.platformGrpc | default dict).port
-      "platformGrpc" (include "elitea-deepwiki.platformGrpc" .)) }}
+      "grpcPort" (.Values.deepwiki.platformGrpc | default dict).port) }}
 {{- end }}

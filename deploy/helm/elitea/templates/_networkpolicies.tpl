@@ -55,10 +55,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
   elitea.netpol.providerIngress — the ingress NetworkPolicy of a sub-application
   provider (templates/deepwiki/networkpolicy.yaml, templates/inventory/
-  networkpolicy.yaml), which is the same policy for both: the SPI port admits
-  elitea-main (and the probe peers), and, when the platform gRPC service is on,
-  its port admits elitea-main alone. One helper, so the two providers cannot
-  drift apart.
+  networkpolicy.yaml), which is the same policy for both: the one gRPC port
+  admits elitea-main (and the probe peers). One helper, so the two providers
+  cannot drift apart.
 
   Takes a dict:
     ctx            the chart context
@@ -67,9 +66,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     selectorLabels the provider's pod selector block (the Deployment's)
     title          the provider's name in the comment (DeepWiki, Inventory)
     key            the provider's values key (deepwiki, inventory)
-    grpcPort       the platform gRPC port (<key>.platformGrpc.port)
-    platformGrpc   non-empty when the platform gRPC service is on
-                   (elitea-<key>.platformGrpc)
+    grpcPort       the provider's one port (<key>.platformGrpc.port)
 */}}
 {{- define "elitea.netpol.providerIngress" -}}
 {{- $np := .ctx.Values.networkPolicies }}
@@ -78,12 +75,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 # internal CA, and this policy keeps every other pod from even attempting the
 # handshake.
 #
-#   8080 (http)         the SPI, over mutual TLS: elitea-main's facade.
-{{- if .platformGrpc }}
-#   {{ .grpcPort }} (platform-grpc)  the platform service
-#                       ({{ .key }}.platformGrpc): elitea-main, and only the
-#                       identities in platformGrpc.clients may call it.
-{{- end }}
+#   {{ .grpcPort }} (platform-grpc)  the provider SPI and the platform service,
+#                       gRPC over mutual TLS (#1359): elitea-main, and only
+#                       the identities in {{ .key }}.platformGrpc.clients may
+#                       call it.
 #
 # The engine sidecar has no port: it answers on a Unix socket in the pod.
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
@@ -104,20 +99,13 @@ spec:
     - Ingress
   ingress:
     - ports:
-        - port: 8080
+        - port: {{ .grpcPort }}
           protocol: TCP
       from:
         {{- include "elitea.netpol.mainPeer" .ctx | nindent 8 }}
         {{- with $np.probeFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-    {{- if .platformGrpc }}
-    - ports:
-        - port: {{ .grpcPort }}
-          protocol: TCP
-      from:
-        {{- include "elitea.netpol.mainPeer" .ctx | nindent 8 }}
-    {{- end }}
 {{- end }}
 
 {{- /*

@@ -13,7 +13,8 @@ import (
 
 var names = facade.EnvNames{
 	Enabled:        "P_ENABLED",
-	BaseURL:        "P_BASE_URL",
+	Target:         "P_TARGET",
+	RetiredBaseURL: "P_BASE_URL",
 	ClientCertFile: "P_CERT",
 	ClientKeyFile:  "P_KEY",
 	CAFile:         "P_CA",
@@ -50,9 +51,21 @@ func TestEveryMissingVariableIsNamedAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("an enabled facade with nothing configured was accepted")
 	}
-	for _, want := range []string{"P_BASE_URL", "P_CERT", "P_KEY", "P_CA", "P_SECRET"} {
+	for _, want := range []string{"P_TARGET", "P_CERT", "P_KEY", "P_CA", "P_SECRET"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message does not name %s: %v", want, err)
+		}
+	}
+}
+
+// The retired HTTPS origin is refused by name, with the variable that
+// replaced it, whether the facade is on or off: an operator who set it meant
+// it, and reading it as nothing leaves them guessing why nothing answers.
+func TestTheRetiredBaseURLIsRefusedByName(t *testing.T) {
+	for _, enabled := range []string{"true", "false"} {
+		_, err := facade.ConfigFromEnv(names, env(map[string]string{"P_ENABLED": enabled, "P_BASE_URL": "https://provider:8080"}))
+		if err == nil || !strings.Contains(err.Error(), "P_BASE_URL") || !strings.Contains(err.Error(), "P_TARGET") {
+			t.Errorf("enabled=%s: %v", enabled, err)
 		}
 	}
 }

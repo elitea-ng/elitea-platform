@@ -1001,10 +1001,6 @@ services:
       # resolution, the callback bearer; what is canned is the provider's
       # ENGINE (ELITEA_DEEPWIKI_RUNNER=fixture on the service below).
       ELITEA_DEEPWIKI_ENABLED: "true"
-      # 8080 is the port the provider LISTENS on (uvicorn in __main__.py, the
-      # EXPOSE in its Containerfile, the Helm chart); docker-compose.yml said
-      # 8443 and the hop was refused on connect.
-      ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki:8080"
       ELITEA_DEEPWIKI_SERVER_NAME: "elitea-deepwiki"
       # The gateway's client material, issued by the same deploy/certs CA that
       # gen-deepwiki-certs.sh reuses — one trust root for both hops.
@@ -1037,7 +1033,6 @@ services:
       # (ELITEA_INVENTORY_RUNNER=fixture on the engine sidecar below);
       # everything on this side is the production path.
       ELITEA_INVENTORY_ENABLED: "true"
-      ELITEA_INVENTORY_BASE_URL: "https://elitea-inventory:8080"
       ELITEA_INVENTORY_SERVER_NAME: "elitea-inventory"
       # The same client material and the same CA as the DeepWiki hop: one
       # trust root out of elitea-main, issued by deploy/scripts/
@@ -1447,15 +1442,17 @@ services:
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
-      ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
-      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
-      # project deprovisioning, authorised by the verified client certificate
-      # alone. The certificate elitea-main presents is CN=elitea-main
-      # (gen-deepwiki-certs.sh). A second listener behind the same TLS
-      # configuration, reachable on the compose network only (no published
-      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "grpcs://elitea-deepwiki:9443"
+      # The provider service (elitea.subapp.v1.ProviderService, the SPI) and
+      # the platform service (elitea.subapp.v1.PlatformOperations) on ONE gRPC
+      # listener with mutual TLS (#1359), authorised by the verified client
+      # certificate against PLATFORM_CLIENTS — which is required: the host
+      # serves nothing without it. The certificate elitea-main presents is
+      # CN=elitea-main. Reachable on the compose network only.
       ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+      # Cancellation fan-out between replicas (elitea.subapp.deepwiki.cancel.<id>).
+      ELITEA_DEEPWIKI_NATS_URL: "nats://nats:4222"
     expose:
       - "9443"
     volumes:
@@ -1465,6 +1462,8 @@ services:
       - ./certs/ca.crt:/certs/ca.crt:ro
     depends_on:
       elitea-deepwiki-engine:
+        condition: service_healthy
+      nats-health:
         condition: service_healthy
     healthcheck:
       # Distroless; the binary's own probe is a TCP accept (the listener is
@@ -1540,7 +1539,7 @@ services:
         condition: service_completed_successfully
     healthcheck:
       # Distroless: no shell, no python. The binary probes its own socket
-      # with GET /engine/health.
+      # with the engine's gRPC Health (elitea.engine.v1).
       test: ["CMD", "/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
       interval: 5s
       timeout: 3s
@@ -1591,16 +1590,17 @@ services:
       # Must equal elitea-main's ELITEA_INVENTORY_IDENTITY_SECRET.
       ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
-      ELITEA_INVENTORY_SERVICE_LOCATION_URL: "https://elitea-inventory:8080"
-      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
-      # deleting an Inventory toolkit's graph and a project's graphs (issue
-      # #1244), authorised by the verified client certificate alone. The
-      # certificate elitea-main presents is CN=elitea-main
-      # (gen-inventory-certs.sh). A second listener behind the same TLS
-      # configuration, reachable on the compose network only (no published
-      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_INVENTORY_SERVICE_LOCATION_URL: "grpcs://elitea-inventory:9443"
+      # The provider service (elitea.subapp.v1.ProviderService, the SPI) and
+      # the platform service (elitea.subapp.v1.PlatformOperations) on ONE gRPC
+      # listener with mutual TLS (#1359), authorised by the verified client
+      # certificate against PLATFORM_CLIENTS — which is required: the host
+      # serves nothing without it. The certificate elitea-main presents is
+      # CN=elitea-main. Reachable on the compose network only.
       ELITEA_INVENTORY_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
+      # Cancellation fan-out between replicas (elitea.subapp.inventory.cancel.<id>).
+      ELITEA_INVENTORY_NATS_URL: "nats://nats:4222"
     expose:
       - "9443"
     volumes:
@@ -1610,6 +1610,8 @@ services:
       - ./certs/ca.crt:/certs/ca.crt:ro
     depends_on:
       elitea-inventory-engine:
+        condition: service_healthy
+      nats-health:
         condition: service_healthy
     healthcheck:
       # A TCP accept is the liveness signal: the listener requires a verified

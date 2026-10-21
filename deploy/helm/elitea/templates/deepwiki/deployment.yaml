@@ -57,14 +57,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-            {{- if include "elitea-deepwiki.platformGrpc" . }}
+            # The one listener (#1359): the provider SPI
+            # (elitea.subapp.v1.ProviderService, elitea-main's facade) and the
+            # platform operations, both gRPC behind the mTLS terminus below.
             - name: platform-grpc
               containerPort: {{ .Values.deepwiki.platformGrpc.port }}
               protocol: TCP
-            {{- end }}
           env:
             {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
@@ -86,15 +84,28 @@ spec:
             - name: ELITEA_DEEPWIKI_TLS_CA_FILE
               value: {{ .Values.deepwiki.mtls.mountPath }}/ca.crt
             {{- end }}
-            {{- if include "elitea-deepwiki.platformGrpc" . }}
-            # The platform gRPC service: a second listener behind the TLS
-            # configuration above. Only the identities listed may call it, by
-            # their verified client certificate. Absent when the allowlist is
-            # empty, which keeps the service off.
+            # The listener's allowlist: only the identities listed may call
+            # it, by their verified client certificate (elitea-main's facade
+            # client certificate, by default).
             - name: ELITEA_DEEPWIKI_PLATFORM_CLIENTS
               value: {{ join "," .Values.deepwiki.platformGrpc.clients | quote }}
             - name: ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR
               value: {{ printf ":%d" (.Values.deepwiki.platformGrpc.port | int) | quote }}
+            {{- if not (hasKey $env "ELITEA_DEEPWIKI_NATS_URL") }}
+            # The cancellation fan-out (#1359): a cancel that lands on one
+            # replica stops the run on the replica that holds it. Core NATS,
+            # the SUBAPP account, this application's subjects only.
+            - name: ELITEA_DEEPWIKI_NATS_URL
+              value: {{ include "elitea.natsUrl" . | quote }}
+            {{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            # Its NATS identity, elitea-deepwiki (templates/natsClient.yaml).
+            - name: ELITEA_DEEPWIKI_NATS_TLS_CA_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+            - name: ELITEA_DEEPWIKI_NATS_TLS_CERT_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+            - name: ELITEA_DEEPWIKI_NATS_TLS_KEY_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
             {{- end }}
             {{- if .Values.deepwiki.callbackViaPlatformListener }}
             # The callback hop (artifact uploads) is mTLS to elitea-main's
@@ -110,40 +121,20 @@ spec:
             # Sensitive vars from Kubernetes Secrets, never plaintext in the
             # env map above.
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
-          # tcpSocket, not httpGet, and for the reason the gateway's deployment
-          # spells out at length: with mTLS on, this listener requires and
-          # verifies a client certificate, and the kubelet presents none. An
-          # httpGet probe fails every time, readiness never passes, and the
-          # liveness probe restarts a process that is working correctly.
-          #
-          # /health and /ready still exist and still answer. Reaching them from
-          # a probe needs a second cleartext listener or a probe that can
-          # present a certificate; both are larger changes than this file.
-          {{- if .Values.deepwiki.mtls.enabled }}
+          # tcpSocket on the gRPC listener: it requires and verifies a client
+          # certificate, and the kubelet presents none, so a probe that speaks
+          # the protocol would fail every time. The SPI's own Health is what
+          # elitea-main's registrar polls.
           livenessProbe:
             tcpSocket:
-              port: http
+              port: platform-grpc
             periodSeconds: {{ .Values.deepwiki.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.deepwiki.probes.liveness.failureThreshold }}
           readinessProbe:
             tcpSocket:
-              port: http
+              port: platform-grpc
             periodSeconds: {{ .Values.deepwiki.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.deepwiki.probes.readiness.failureThreshold }}
-          {{- else }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.deepwiki.probes.liveness.path }}
-              port: http
-            periodSeconds: {{ .Values.deepwiki.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.deepwiki.probes.liveness.failureThreshold }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.deepwiki.probes.readiness.path }}
-              port: http
-            periodSeconds: {{ .Values.deepwiki.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.deepwiki.probes.readiness.failureThreshold }}
-          {{- end }}
           resources:
             {{- toYaml .Values.deepwiki.resources | nindent 12 }}
           volumeMounts:
@@ -152,6 +143,9 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
             {{- if .Values.deepwiki.callbackViaPlatformListener }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
@@ -212,7 +206,7 @@ spec:
             # reads (validateGuards refuses a native runner without one).
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
           # Distroless: no shell, no python. The binary connects to its own
-          # socket and asks GET /engine/health.
+          # socket and calls the engine's gRPC Health (elitea.engine.v1).
           livenessProbe:
             exec:
               command: ["/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
@@ -277,6 +271,9 @@ spec:
                 path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 8 }}{{- end }}
+        {{- if .Values.nats.tls.enabled }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-deepwiki.fullname" .))) | nindent 8 }}
+        {{- end }}
       {{- with .Values.deepwiki.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

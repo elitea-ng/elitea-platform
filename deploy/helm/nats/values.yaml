@@ -21,7 +21,8 @@
 #     of the `accounts` below, and the user's permissions decide what it may
 #     publish and subscribe to. There is no `no_auth_user` and no
 #     `allow_non_tls`: a connection without a mapped certificate is refused.
-#   * One account per plane (MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER), each
+#   * One account per plane (MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER,
+#     SUBAPP), each
 #     with its own subject space, so nothing one plane's identities can do —
 #     including a consumer's deliver subject or a request's reply subject,
 #     neither of which the server checks against permissions — reaches
@@ -142,6 +143,11 @@ networkPolicy:
       namespace: ""
     - name: elitea-scheduler
       namespace: ""
+    # The sub-application hosts' cancellation fan-out (#1359), SUBAPP.
+    - name: elitea-deepwiki
+      namespace: ""
+    - name: elitea-inventory
+      namespace: ""
     - name: nats-bootstrap
       namespace: ""
   # Raw NetworkPolicyPeer entries appended to the 4222 rule, for a client the
@@ -259,6 +265,13 @@ nats:
       #            streams, their durable pull consumers and the
       #            execution-replay wake-up. elitea-main's producer identity
       #            (and its bootstrap) only.
+      #   SUBAPP   the sub-application hosts' cancellation fan-out (#1359):
+      #            core NATS only, elitea.subapp.<app>.cancel.<invocation>, so
+      #            a cancel that lands on one host replica stops the run on the
+      #            replica that holds it. elitea-deepwiki and elitea-inventory,
+      #            each confined to its own application's subjects. No
+      #            JetStream, no streams, no bootstrap — like SCHEDULER, a
+      #            reply subject a client names lands where nothing stores it.
       #   WORKER   the command bus CONSUMER, both workers' elitea-worker
       #            identity, for the same reason SCHEDULER exists: in RUNTIME
       #            a pull or info request whose reply named a command subject
@@ -648,6 +661,32 @@ nats:
                 subscribe:
                   allow:
                     - "_INBOX_elitea-nats-bootstrap-runtime.>"
+
+        SUBAPP:
+          # NO JetStream and no streams (#1359): the cancellation fan-out is
+          # core NATS, at most once — a host that misses a cancel still sees
+          # the stop flag on the invocation row. Each host may publish and
+          # subscribe its OWN application's cancel subjects and its own inbox:
+          # DeepWiki cannot cancel an Inventory run, nor read its cancels.
+          users:
+            - user: "spiffe://elitea.internal/nats/elitea-deepwiki"
+              permissions:
+                publish:
+                  allow:
+                    - "elitea.subapp.deepwiki.cancel.*"
+                subscribe:
+                  allow:
+                    - "elitea.subapp.deepwiki.cancel.*"
+                    - "_INBOX_elitea-deepwiki.>"
+            - user: "spiffe://elitea.internal/nats/elitea-inventory"
+              permissions:
+                publish:
+                  allow:
+                    - "elitea.subapp.inventory.cancel.*"
+                subscribe:
+                  allow:
+                    - "elitea.subapp.inventory.cancel.*"
+                    - "_INBOX_elitea-inventory.>"
 
         WORKER:
           # The command bus CONSUMER's own account. Its JetStream holds ONE

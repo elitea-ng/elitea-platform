@@ -14,11 +14,11 @@
 #                    platform-edge policy is rendered any more.
 #   worker           no inbound traffic at all; egress is not restricted.
 #   sandbox          the supervisor ports admit the worker and elitea-main only.
-#   deepwiki         the SPI port admits elitea-main only; the platform gRPC
-#                    port (deepwiki.platformGrpc.clients) is declared, served
-#                    and admitted if and only if the allowlist names a client,
-#                    and admits elitea-main only.
-#   inventory        the same shape as deepwiki, with inventory.platformGrpc.
+#   deepwiki         one port (#1359), the gRPC listener that serves the
+#                    provider SPI and the platform service: declared, served,
+#                    exposed and admitted together, to elitea-main only; no
+#                    HTTP SPI port is left.
+#   inventory        the same shape as deepwiki.
 #
 # A policy is only as good as the labels it selects, so every selector here is
 # matched against the labels of the pod templates the chart ACTUALLY renders:
@@ -62,7 +62,6 @@ DEEPWIKI=(--set deepwiki.enabled=true
   --set main.fileConfig.deepwikiClientMaterial.enabled=true
   --set main.fileConfig.deepwikiClientMaterial.secretName=elitea-main-deepwiki-client-tls
   --set main.env.ELITEA_DEEPWIKI_ENABLED=true
-  --set main.env.ELITEA_DEEPWIKI_BASE_URL=https://elitea-deepwiki-svc:8443
   --set main.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com
   --set main.env.ELITEA_DEEPWIKI_CLIENT_CERT_FILE=/run/elitea-deepwiki/tls.crt
   --set main.env.ELITEA_DEEPWIKI_CLIENT_KEY_FILE=/run/elitea-deepwiki/tls.key
@@ -75,7 +74,6 @@ INVENTORY=(--set inventory.enabled=true
   --set main.fileConfig.inventoryClientMaterial.enabled=true
   --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls
   --set main.env.ELITEA_INVENTORY_ENABLED=true
-  --set main.env.ELITEA_INVENTORY_BASE_URL=https://elitea-inventory-svc:8443
   --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=http://elitea-main:8080
   --set main.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com
   --set main.env.ELITEA_INVENTORY_CLIENT_CERT_FILE=/run/elitea-inventory/tls.crt
@@ -223,65 +221,33 @@ if main:
     check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else []) + (plat if want_platform else [])),
           "main: ports admitted are not exactly 8080 + runtime + platform")
 
-# ── deepwiki ─────────────────────────────────────────────────────────────────
-dp = policies.get("elitea-deepwiki-netpol")
-if dp:
-    spec = dp["spec"]
-    check(spec["policyTypes"] == ["Ingress"], "deepwiki: policyTypes must be Ingress only")
-    by = rules_by_ports(spec["ingress"], "deepwiki")
-    ctr = deployments["elitea-deepwiki"]["spec"]["template"]["spec"]["containers"][0]
+# ── the providers (deepwiki, inventory) ─────────────────────────────────────
+# One port each (#1359): the gRPC listener (provider SPI + platform service),
+# declared, configured, exposed and admitted together, to elitea-main only.
+for key, want_port in (("deepwiki", expect_grpc), ("inventory", expect_inv_grpc)):
+    pol = policies.get(f"elitea-{key}-netpol")
+    if not pol:
+        continue
+    spec = pol["spec"]
+    check(spec["policyTypes"] == ["Ingress"], f"{key}: policyTypes must be Ingress only")
+    by = rules_by_ports(spec["ingress"], key)
+    ctr = deployments[f"elitea-{key}"]["spec"]["template"]["spec"]["containers"][0]
     declared = {p["name"]: p["containerPort"] for p in ctr["ports"]}
     grpc_port = declared.get("platform-grpc")
-    check(declared.get("http") == 8080, f"deepwiki: the SPI port is {declared.get('http')}, not 8080")
-    want = [(8080,)] + ([(grpc_port,)] if grpc_port else [])
-    check(sorted(by) == sorted(want), f"deepwiki: ports admitted {sorted(by)}, want {sorted(want)}")
-    for key, rule in by.items():
-        check(peer_targets(rule, f"deepwiki:{key}") == [MAIN], f"deepwiki:{key} must admit elitea-main only")
-    # The platform gRPC port is declared, configured, exposed and admitted
-    # together, or not at all.
+    check(list(declared) == ["platform-grpc"], f"{key}: container ports {declared}, want the gRPC listener only (no HTTP SPI)")
+    check(sorted(by) == [(grpc_port,)], f"{key}: ports admitted {sorted(by)}, want [({grpc_port},)]")
+    for k, rule in by.items():
+        check(peer_targets(rule, f"{key}:{k}") == [MAIN], f"{key}:{k} must admit elitea-main only")
     env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
-    service = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "elitea-deepwiki-svc"][0]
+    service = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == f"elitea-{key}-svc"][0]
     service_ports = {p["name"]: p for p in service["spec"]["ports"]}
-    if grpc_port:
-        check(env.get("ELITEA_DEEPWIKI_PLATFORM_CLIENTS"), "deepwiki: the gRPC port is declared with no allowed clients")
-        check(env.get("ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") == f":{grpc_port}", f"deepwiki: the gRPC address is {env.get('ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR')}")
-        check("platform-grpc" in service_ports and service_ports["platform-grpc"]["targetPort"] == "platform-grpc", "deepwiki: the Service does not expose the gRPC port")
-    else:
-        check("ELITEA_DEEPWIKI_PLATFORM_CLIENTS" not in env and "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR" not in env,
-              "deepwiki: the gRPC service is configured with no port")
-        check("platform-grpc" not in service_ports, "deepwiki: the Service exposes a gRPC port nothing listens on")
-    if expect_grpc:
-        check(bool(grpc_port) == (expect_grpc == "1"), f"deepwiki: gRPC port declared={bool(grpc_port)}, expected {expect_grpc}")
-
-# ── inventory ────────────────────────────────────────────────────────────────
-ip = policies.get("elitea-inventory-netpol")
-if ip:
-    spec = ip["spec"]
-    check(spec["policyTypes"] == ["Ingress"], "inventory: policyTypes must be Ingress only")
-    by = rules_by_ports(spec["ingress"], "inventory")
-    ctr = deployments["elitea-inventory"]["spec"]["template"]["spec"]["containers"][0]
-    declared = {p["name"]: p["containerPort"] for p in ctr["ports"]}
-    grpc_port = declared.get("platform-grpc")
-    check(declared.get("http") == 8080, f"inventory: the SPI port is {declared.get('http')}, not 8080")
-    want = [(8080,)] + ([(grpc_port,)] if grpc_port else [])
-    check(sorted(by) == sorted(want), f"inventory: ports admitted {sorted(by)}, want {sorted(want)}")
-    for key, rule in by.items():
-        check(peer_targets(rule, f"inventory:{key}") == [MAIN], f"inventory:{key} must admit elitea-main only")
-    # The platform gRPC port is declared, configured, exposed and admitted
-    # together, or not at all; and only the HOST container carries it.
-    env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
-    service = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == "elitea-inventory-svc"][0]
-    service_ports = {p["name"]: p for p in service["spec"]["ports"]}
-    if grpc_port:
-        check(env.get("ELITEA_INVENTORY_PLATFORM_CLIENTS"), "inventory: the gRPC port is declared with no allowed clients")
-        check(env.get("ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") == f":{grpc_port}", f"inventory: the gRPC address is {env.get('ELITEA_INVENTORY_PLATFORM_GRPC_ADDR')}")
-        check("platform-grpc" in service_ports and service_ports["platform-grpc"]["targetPort"] == "platform-grpc", "inventory: the Service does not expose the gRPC port")
-    else:
-        check("ELITEA_INVENTORY_PLATFORM_CLIENTS" not in env and "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR" not in env,
-              "inventory: the gRPC service is configured with no port")
-        check("platform-grpc" not in service_ports, "inventory: the Service exposes a gRPC port nothing listens on")
-    if expect_inv_grpc:
-        check(bool(grpc_port) == (expect_inv_grpc == "1"), f"inventory: gRPC port declared={bool(grpc_port)}, expected {expect_inv_grpc}")
+    K = key.upper()
+    check(env.get(f"ELITEA_{K}_PLATFORM_CLIENTS"), f"{key}: the gRPC port is declared with no allowed clients")
+    check(env.get(f"ELITEA_{K}_PLATFORM_GRPC_ADDR") == f":{grpc_port}", f"{key}: the gRPC address is {env.get(f'ELITEA_{K}_PLATFORM_GRPC_ADDR')}")
+    check(list(service_ports) == ["platform-grpc"] and service_ports["platform-grpc"]["targetPort"] == "platform-grpc",
+          f"{key}: the Service ports are {list(service_ports)}, want platform-grpc only")
+    if want_port:
+        check(str(grpc_port) == want_port, f"{key}: gRPC port {grpc_port}, expected {want_port}")
 
 # ── worker ───────────────────────────────────────────────────────────────────
 wp = policies.get("elitea-worker-netpol")
@@ -329,12 +295,9 @@ echo "== composed installs =="
 run worker       1 0 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
 run full         1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
 run full-via-platform 1 1 platform 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformListener=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
-# The platform gRPC service: declared, configured, exposed and admitted together.
-EXPECT_GRPC=0 run deepwiki-no-grpc 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}"
-EXPECT_GRPC=1 run deepwiki-grpc 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}'
-
-EXPECT_INV_GRPC=0 run inventory-no-grpc 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}"
-EXPECT_INV_GRPC=1 run inventory-grpc 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}'
+# The one gRPC port follows platformGrpc.port everywhere it appears.
+EXPECT_GRPC=9555 run deepwiki-grpc-port 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set deepwiki.platformGrpc.port=9555
+EXPECT_INV_GRPC=9555 run inventory-grpc-port 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set inventory.platformGrpc.port=9555
 
 # ── 2. Guards ────────────────────────────────────────────────────────────────
 echo "== guards =="
@@ -361,10 +324,10 @@ refuses "a values file that still turns platform-edge on" "worker.platformEdge w
 refuses "noExternalIngress with main.ingress.enabled (gateway-api)" "contradicts main.ingress.enabled" \
   "${STANDALONE[@]}" "${NOEXT[@]}" --set main.ingress.enabled=true --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.x=y --set main.ingress.gatewayApi=true \
   --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system
-refuses "platform gRPC clients without mutual TLS" "deepwiki.platformGrpc.clients is set, but deepwiki.mtls.enabled is false" \
-  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.mtls.enabled=false
-refuses "inventory platform gRPC clients without mutual TLS" "inventory.platformGrpc.clients is set, but inventory.mtls.enabled is false" \
-  "${STANDALONE[@]}" "${NOEXT[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.mtls.enabled=false
+refuses "deepwiki without mutual TLS" "deepwiki.mtls.enabled is false, but the provider serves gRPC over mutual TLS only" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set deepwiki.mtls.enabled=false
+refuses "inventory without mutual TLS" "inventory.mtls.enabled is false, but the provider serves gRPC over mutual TLS only" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${INVENTORY[@]}" --set inventory.mtls.enabled=false
 refuses "enabled=false without externallyManaged" "networkPolicies.externallyManaged" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.enabled=false
 if render off-managed "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" --set networkPolicies.enabled=false --set networkPolicies.externallyManaged=true; then

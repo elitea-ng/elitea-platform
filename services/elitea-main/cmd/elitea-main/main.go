@@ -1495,7 +1495,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		inventoryConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"inventory", inventoryConfig, v2inventory.EnvNames.BaseURL))
+				"inventory", inventoryConfig, v2inventory.EnvNames.Target))
 		// The source expander (ADR-0023 H4c I2). Built only where BOTH halves
 		// exist: the Configurations graph that can claim a credential, and a
 		// callback origin the provider can reach back on. Where either is
@@ -1619,14 +1619,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
 				"deepwiki", facade.Config{
 					Enabled:        true,
-					BaseURL:        deepwikiConfig.BaseURL,
+					Target:         deepwikiConfig.Target,
 					ClientCertFile: deepwikiConfig.ClientCertFile,
 					ClientKeyFile:  deepwikiConfig.ClientKeyFile,
 					CAFile:         deepwikiConfig.CAFile,
 					ServerName:     deepwikiConfig.ServerName,
 					IdentitySecret: deepwikiConfig.IdentitySecret,
 					Timeout:        deepwikiConfig.Timeout,
-				}, v2deepwiki.BaseURLEnv))
+				}, v2deepwiki.TargetEnv))
 
 		// The application-toolkit reader, for the `wikis_query` rewrite: a
 		// query toolkit names a Wikis toolkit, and its OWN code toolkit is

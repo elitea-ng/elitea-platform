@@ -128,6 +128,21 @@ elitea-main
 {{- end -}}
 
 {{- define "elitea-inventory.validateGuards" -}}
+{{- /*
+  The provider's one listener is gRPC over mutual TLS (#1359): the SPI and the
+  platform operations, every caller authorised by its verified client
+  certificate. So mtls is mandatory, the allowlist cannot be empty, and the
+  HTTPS SPI port is gone.
+*/ -}}
+{{- if hasKey (.Values.inventory.service | default dict) "port" -}}
+{{- fail "inventory.service.port was removed with the HTTPS SPI (#1359): the provider serves gRPC only, on inventory.platformGrpc.port. Remove service.port (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if not .Values.inventory.mtls.enabled -}}
+{{- fail "inventory.mtls.enabled is false, but the provider serves gRPC over mutual TLS only (#1359) and refuses to start without its server certificate and client CA. Enable mtls." -}}
+{{- end -}}
+{{- if not (include "elitea-inventory.platformGrpc" .) -}}
+{{- fail "inventory.platformGrpc.clients is empty, so the provider's one listener admits nobody and elitea-main's facade is refused on every call (#1359). The default is [elitea-main]." -}}
+{{- end -}}
 {{- $env := .Values.inventory.env | default dict -}}
 {{- $runner := get $env "ELITEA_INVENTORY_RUNNER" | toString -}}
 {{- $hostSidecar := has $runner (list "sidecar" "legacy") -}}
@@ -140,9 +155,6 @@ elitea-main
 {{- if include "elitea-inventory.platformGrpc" . -}}
 {{- if not .Values.inventory.mtls.enabled -}}
 {{- fail "inventory.platformGrpc.clients is set, but inventory.mtls.enabled is false: the platform service authorises a caller by its verified client certificate and refuses to start without mutual TLS. Enable mtls, or empty platformGrpc.clients." -}}
-{{- end -}}
-{{- if eq (.Values.inventory.platformGrpc.port | int) 8080 -}}
-{{- fail "inventory.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
 {{- end -}}
 {{- /*
   The allowlist must name the identity elitea-main presents on this hop. When

@@ -432,8 +432,8 @@ export const LIVE_ENV_DEPENDENT = Object.freeze([
   // UI-ENV-1: the stand-in Aha host is refused by the deployment egress allowlist
   'journeys/toolkits/toolkits.aha.spec.ts',
   // UI-ENV-2: no Inventory or DeepWiki provider is configured
-  // (ELITEA_INVENTORY_BASE_URL, ELITEA_DEEPWIKI_BASE_URL empty), and every
-  // DeepWiki journey reads the seeded wiki toolkit
+  // (ELITEA_INVENTORY_PLATFORM_GRPC_TARGET, ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET
+  // empty), and every DeepWiki journey reads the seeded wiki toolkit
   'journeys/inventory/',
   'journeys/deepwiki/',
 ]);

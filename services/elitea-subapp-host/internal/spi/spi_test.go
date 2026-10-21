@@ -132,7 +132,7 @@ func TestSettingsAreStrictAndPrefixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.MaxParallelWorkers != 3 || !s.JobsEnabled || !s.TerminatesMTLS() || !s.MTLSRequired() || s.InvocationRetentionSeconds != 3600 {
+	if s.MaxParallelWorkers != 3 || !s.JobsEnabled || !s.TerminatesMTLS() || s.InvocationRetentionSeconds != 3600 {
 		t.Fatalf("settings %+v", s)
 	}
 	for name, pairs := range map[string]map[string]string{

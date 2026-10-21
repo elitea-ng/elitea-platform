@@ -1512,8 +1512,6 @@ main:
     # and would refuse every request, so a facade that came up anyway would be
     # four routes answering 503 while the flag says the feature is on.
     ELITEA_DEEPWIKI_ENABLED: ""
-    # The provider's origin. Must be https: it serves nothing over plain HTTP.
-    ELITEA_DEEPWIKI_BASE_URL: ""
     # Client certificate material for the hop, mounted from a Secret by the
     # operator (see mTLS mounts for the gateway hop, which these mirror).
     # These are PATHS, not key material, so they belong in env and not in
@@ -1522,7 +1520,7 @@ main:
     ELITEA_DEEPWIKI_CLIENT_KEY_FILE: ""
     ELITEA_DEEPWIKI_CA_FILE: ""
     # Overrides the SNI/verification name when the Service DNS name differs
-    # from the certificate's subject. Empty means "use the base URL's host",
+    # from the certificate's subject. Empty means "use the target's host",
     # which is right whenever the certificate was issued for that name.
     ELITEA_DEEPWIKI_SERVER_NAME: ""
     ELITEA_DEEPWIKI_TIMEOUT_SECONDS: ""
@@ -1545,13 +1543,14 @@ main:
     # (so the credential is never written into one). Two allowlists that could
     # disagree would mean an invocation that starts and then fails.
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: ""
-    # Where elitea-main deletes a project's wiki search indexes when the project
-    # is deprovisioned (#1243): the engine's platform gRPC listener, host:port.
-    # Normally LEFT EMPTY and derived by the chart as <deepwiki.service.name>:
-    # <deepwiki.platformGrpc.port> whenever deepwiki.platformGrpc.clients is
-    # set and this facade is on — the three are one feature. The hop presents
-    # the facade's client certificate (the three files above), so a target
-    # beside a facade that is off is refused, here and at boot.
+    # The provider's one listener, host:port (#1359): the facade's SPI calls
+    # and the project-deprovision deletions (#1243) are gRPC to it. Normally
+    # LEFT EMPTY and derived by the chart as <deepwiki.service.name>:
+    # <deepwiki.platformGrpc.port> whenever deepwiki.enabled and this facade
+    # is on; set it for a provider deployed elsewhere. The hop presents the
+    # facade's client certificate (the three files above), so a target beside
+    # a facade that is off is refused, here and at boot. The old
+    # ELITEA_DEEPWIKI_BASE_URL is refused by name.
     ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: ""
 
     # --- Inventory facade (ADR-0023 H4c) -----------------------------------
@@ -1564,8 +1563,6 @@ main:
     # request, so a facade that came up anyway would be three routes answering
     # 503 while the flag says the feature is on.
     ELITEA_INVENTORY_ENABLED: ""
-    # The provider's origin. Must be https: it serves nothing over plain HTTP.
-    ELITEA_INVENTORY_BASE_URL: ""
     # Client certificate material for the hop, mounted from a Secret by
     # fileConfig.inventoryClientMaterial above. These are PATHS, not key
     # material, so they belong in env and not in `secrets:` below.
@@ -1573,17 +1570,17 @@ main:
     ELITEA_INVENTORY_CLIENT_KEY_FILE: ""
     ELITEA_INVENTORY_CA_FILE: ""
     # Overrides the SNI/verification name when the Service DNS name differs
-    # from the certificate's subject. Empty means "use the base URL's host".
+    # from the certificate's subject. Empty means "use the target's host".
     ELITEA_INVENTORY_SERVER_NAME: ""
     ELITEA_INVENTORY_TIMEOUT_SECONDS: ""
-    # Where elitea-main deletes an Inventory toolkit's graph when the toolkit is
-    # deleted, and every graph of a project when the project is deprovisioned
-    # (#1244): the engine's platform gRPC listener, host:port. Normally LEFT
-    # EMPTY and derived by the chart as <inventory.service.name>:
-    # <inventory.platformGrpc.port> whenever inventory.platformGrpc.clients is
-    # set and this facade is on. The hop presents the facade's client
-    # certificate, so a target beside a facade that is off is refused, here and
-    # at boot.
+    # The provider's one listener, host:port (#1359): the facade's SPI calls
+    # and the toolkit/project graph deletions (#1244) are gRPC to it. Normally
+    # LEFT EMPTY and derived by the chart as <inventory.service.name>:
+    # <inventory.platformGrpc.port> whenever inventory.enabled and this facade
+    # is on; set it for a provider deployed elsewhere. The hop presents the
+    # facade's client certificate, so a target beside a facade that is off is
+    # refused, here and at boot. The old ELITEA_INVENTORY_BASE_URL is refused
+    # by name.
     ELITEA_INVENTORY_PLATFORM_GRPC_TARGET: ""
     # The toolkit-deletion reconciler (#1244): the loop on every elitea-main
     # replica that drains centry.toolkit_deletions — the engine-side deletion
@@ -3324,27 +3321,25 @@ deepwiki:
     # Named explicitly, not release-derived: the server certificate's SANs name
     # this Service and elitea-main verifies exactly that name.
     name: elitea-deepwiki-svc
-    port: 8443
+    # No `port` (#1359): the one port is platformGrpc.port below.
     annotations: {}
 
-  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
-  # operations that are not a user's to run, such as deleting everything a
-  # project owns here when the project is deprovisioned. It is a second
-  # listener of the host container, behind the SAME server certificate and
-  # client CA as the SPI (mutual TLS is mandatory), and every call is
-  # authorised by the verified client certificate alone: its subject common
-  # name or a DNS SAN must be in `clients`.
+  # The provider's one listener (#1359): the provider SPI
+  # (elitea.subapp.v1.ProviderService — elitea-main's facade, its descriptor
+  # and health) and the platform operations (elitea.subapp.v1.
+  # PlatformOperations — deletions that are not a user's to run), both gRPC
+  # over mutual TLS behind the server certificate and client CA in `mtls`.
+  # Every call is authorised by the verified client certificate: its subject
+  # common name or a DNS SAN must be in `clients`.
   #
-  #   clients  certificate identities allowed to call it. EMPTY (the default)
-  #            keeps the service OFF: no port is opened, rendered or admitted.
-  #            The facade client certificate this chart issues has the common
-  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
-  #            mtls.enabled (the chart refuses it otherwise).
+  #   clients  certificate identities allowed to call it. Cannot be empty (the
+  #            chart refuses it). The facade client certificate this chart
+  #            issues has the common name elitea-main.
   #   port     the container and Service port, exposed as `platform-grpc`.
   #
-  # The NetworkPolicy admits elitea-main only on both ports.
+  # The NetworkPolicy admits elitea-main only.
   platformGrpc:
-    clients: []
+    clients: [elitea-main]
     port: 9443
 
   env:
@@ -3372,9 +3367,9 @@ deepwiki:
     ELITEA_DEEPWIKI_SLOTS_MODE: "false"
     ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS: "1"
     ELITEA_DEEPWIKI_SCRATCH_PATH: /var/scratch/deepwiki
-    # The origin elitea-main proxies to. Must agree with
-    # main.env.ELITEA_DEEPWIKI_BASE_URL.
-    ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: https://elitea-deepwiki-svc:8443
+    # The location this host reports in its descriptor: the gRPC listener
+    # elitea-main dials (main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET).
+    ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: grpcs://elitea-deepwiki-svc:9443
 
   # Sensitive values from Kubernetes Secrets. ELITEA_DEEPWIKI_DATABASE_URL
   # defaults to the chart-wide postgresql secret when one is set, exactly as
@@ -3438,16 +3433,13 @@ deepwiki:
       kind: ClusterIssuer
     mountPath: /etc/deepwiki/tls
 
-  # probes: with mtls.enabled (the default) these paths are NOT used — the
-  # listener requires a verified client certificate, which a kubelet probe
-  # cannot present, so the Deployment probes the socket instead.
+  # probes: tcpSocket on the gRPC listener (it requires a client certificate
+  # a kubelet probe cannot present).
   probes:
     liveness:
-      path: /health
       periodSeconds: 10
       failureThreshold: 3
     readiness:
-      path: /ready
       periodSeconds: 5
       failureThreshold: 2
 
@@ -3547,7 +3539,7 @@ inventory:
     # Named explicitly, not release-derived: the server certificate's SANs name
     # this Service and elitea-main verifies exactly that name.
     name: elitea-inventory-svc
-    port: 8443
+    # No `port` (#1359): the one port is platformGrpc.port below.
     annotations: {}
 
   env:
@@ -3565,9 +3557,9 @@ inventory:
     ELITEA_INVENTORY_RUNNER: "sidecar"
     ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
     ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
-    # The origin elitea-main proxies to. Must agree with
-    # main.env.ELITEA_INVENTORY_BASE_URL.
-    ELITEA_INVENTORY_SERVICE_LOCATION_URL: https://elitea-inventory-svc:8443
+    # The location this host reports in its descriptor: the gRPC listener
+    # elitea-main dials (main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET).
+    ELITEA_INVENTORY_SERVICE_LOCATION_URL: grpcs://elitea-inventory-svc:9443
     # The git hosts the ENGINE may clone from. FAIL-CLOSED, and the chart
     # refuses to render a native engine while it is empty. The engine clones
     # repositories itself (a shallow clone per ingestion), so unlike the Python
@@ -3633,26 +3625,22 @@ inventory:
     mountPath: /var/scratch/inventory
     sizeLimit: 20Gi
 
-  # The platform gRPC service (elitea.subapp.v1.PlatformOperations, libs/proto):
-  # operations that are not a user's to run - deleting an Inventory toolkit's
-  # graph when the toolkit is deleted (DeleteToolkit), and every graph of a
-  # project when the project is deprovisioned (DeleteProject). They are not
-  # toolkit tools: no user or agent is offered them. It is a second listener of
-  # the host container, behind the SAME server certificate and client CA as the
-  # SPI (mutual TLS is mandatory), and every call is authorised by the verified
-  # client certificate alone: its subject common name or a DNS SAN must be in
-  # `clients`.
+  # The provider's one listener (#1359): the provider SPI
+  # (elitea.subapp.v1.ProviderService — elitea-main's facade, its descriptor
+  # and health) and the platform operations (elitea.subapp.v1.
+  # PlatformOperations — deletions that are not a user's to run), both gRPC
+  # over mutual TLS behind the server certificate and client CA in `mtls`.
+  # Every call is authorised by the verified client certificate: its subject
+  # common name or a DNS SAN must be in `clients`.
   #
-  #   clients  certificate identities allowed to call it. EMPTY (the default)
-  #            keeps the service OFF: no port is opened, rendered or admitted.
-  #            The facade client certificate this chart issues has the common
-  #            name elitea-main, so `[elitea-main]` is the usual value. Needs
-  #            mtls.enabled (the chart refuses it otherwise).
+  #   clients  certificate identities allowed to call it. Cannot be empty (the
+  #            chart refuses it). The facade client certificate this chart
+  #            issues has the common name elitea-main.
   #   port     the container and Service port, exposed as `platform-grpc`.
   #
-  # The NetworkPolicy admits elitea-main only on both ports.
+  # The NetworkPolicy admits elitea-main only.
   platformGrpc:
-    clients: []
+    clients: [elitea-main]
     port: 9443
 
   # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
@@ -3672,16 +3660,13 @@ inventory:
       kind: ClusterIssuer
     mountPath: /etc/inventory/tls
 
-  # probes: with mtls.enabled (the default) these paths are NOT used — the
-  # listener requires a verified client certificate, which a kubelet probe
-  # cannot present, so the Deployment probes the socket instead.
+  # probes: tcpSocket on the gRPC listener (it requires a client certificate
+  # a kubelet probe cannot present).
   probes:
     liveness:
-      path: /health
       periodSeconds: 10
       failureThreshold: 3
     readiness:
-      path: /ready
       periodSeconds: 5
       failureThreshold: 2
 

@@ -2,10 +2,12 @@ package deepwiki_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 )
 
 func env(pairs map[string]string) func(string) (string, bool) {
@@ -58,7 +60,7 @@ func TestAnAbsentFlagLeavesTheFacadeOffAndNeedsNothingElse(t *testing.T) {
 func TestEnabledWithoutMTLSMaterialIsRefused(t *testing.T) {
 	complete := map[string]string{
 		deepwiki.EnabledEnv:         "true",
-		deepwiki.BaseURLEnv:         "https://deepwiki:8443",
+		deepwiki.TargetEnv:          "elitea-deepwiki:9443",
 		deepwiki.ClientCertEnv:      "/tls/tls.crt",
 		deepwiki.ClientKeyEnv:       "/tls/tls.key",
 		deepwiki.CAFileEnv:          "/tls/ca.crt",
@@ -71,7 +73,7 @@ func TestEnabledWithoutMTLSMaterialIsRefused(t *testing.T) {
 	}
 
 	for _, missing := range []string{
-		deepwiki.BaseURLEnv,
+		deepwiki.TargetEnv,
 		deepwiki.ClientCertEnv,
 		deepwiki.ClientKeyEnv,
 		deepwiki.CAFileEnv,
@@ -118,5 +120,18 @@ func TestTheTimeoutIsParsedStrictlyAndDefaults(t *testing.T) {
 		})); err == nil {
 			t.Fatalf("timeout %q was accepted", raw)
 		}
+	}
+}
+
+// The retired HTTPS origin is a boot error naming its replacement (#1359):
+// the provider serves no HTTP any more, and reading the old value as nothing
+// would leave the operator with a facade that cannot say why.
+func TestTheRetiredBaseURLIsRefused(t *testing.T) {
+	_, err := deepwiki.ConfigFromEnv(env(map[string]string{
+		deepwiki.EnabledEnv:        "true",
+		"ELITEA_DEEPWIKI_BASE_URL": "https://elitea-deepwiki:8080",
+	}))
+	if !errors.Is(err, facade.ErrIncompleteConfig) || !strings.Contains(err.Error(), deepwiki.TargetEnv) {
+		t.Fatalf("the retired ELITEA_DEEPWIKI_BASE_URL was not refused by name: %v", err)
 	}
 }

@@ -167,7 +167,9 @@ steps.
 ### DeepWiki and Inventory — canned data, or the real engines
 
 Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
-engine SIDECAR over a shared Unix socket — the socket hop this stack exists
+engine SIDECAR over a shared Unix socket (gRPC, `elitea.engine.v1`, no TLS),
+and elitea-main reaches each host over mTLS gRPC
+(`elitea.subapp.v1.ProviderService` on the host's platform port) — the socket hop this stack exists
 to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
 and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
 with its migration service); Inventory's host runs `RUNNER=sidecar` (the host's
@@ -300,8 +302,11 @@ ingest through the agent worker, on the same command stream.
 
 One component is off by default and needs TWO settings, not one. `deepwiki`
 is the DeepWiki provider service (ADR-0022). Turning it on is the `deepwiki`
-block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its base URL, callback
-origin, git allowlist and the three client-certificate paths — elitea-main is
+block AND `main.env.ELITEA_DEEPWIKI_ENABLED` with its callback origin, git
+allowlist and the three client-certificate paths (elitea-main reaches the
+provider over gRPC, `elitea.subapp.v1.ProviderService`, at
+`ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET`, which the chart derives; the old
+`ELITEA_DEEPWIKI_BASE_URL` is refused, #1359) — elitea-main is
 the only door to it, so a provider nobody can reach is a Deployment doing
 nothing. Both halves refuse to render while half configured
 (`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the

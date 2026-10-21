@@ -38,7 +38,6 @@ COMPLETE="\
 --set main.fileConfig.inventoryClientMaterial.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls \
 --set main.env.ELITEA_INVENTORY_ENABLED=true \
---set main.env.ELITEA_INVENTORY_BASE_URL=https://elitea-inventory-svc:8443 \
 --set main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL=http://elitea-main:8080 \
 --set main.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
 --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
@@ -258,7 +257,8 @@ refuses() {
   fi
 }
 
-refuses "facade with a plain-http base URL"     --set main.env.ELITEA_INVENTORY_BASE_URL=http://elitea-inventory-svc:8443
+refuses "the retired base URL (#1359)"         --set main.env.ELITEA_INVENTORY_BASE_URL=https://elitea-inventory-svc:8443
+refuses "facade with no provider to dial"       --set inventory.enabled=false
 refuses "facade with no client certificate"     --set main.env.ELITEA_INVENTORY_CLIENT_CERT_FILE=
 refuses "facade with no key"                    --set main.env.ELITEA_INVENTORY_CLIENT_KEY_FILE=
 refuses "facade with no CA"                     --set main.env.ELITEA_INVENTORY_CA_FILE=
@@ -363,14 +363,28 @@ fi
 # elitea-main only. Refused: the allowlist without mutual TLS, a port that
 # collides with the SPI's, and the two settings written by hand.
 
-echo "== the platform gRPC service is off unless clients are named =="
+echo "== the provider serves one port: gRPC over mutual TLS (#1359) =="
 expect() { # expect <what> <got> <want>
   if [ "$2" = "$3" ]; then note "$1"; else fail "$1: got '$2', want '$3'"; fi
 }
-expect "off: no gRPC container port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[0].ports[].name' - | tr '\n' ' ')" "http "
-expect "off: no gRPC env" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-inventory") | .spec.template.spec.containers[].env[].name' - | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
-expect "off: the Service exposes the SPI only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[].name' - | tr '\n' ' ')" "https "
-expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress | length' -)" "1"
+dep() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-inventory\") | $1" -; }
+expect "one container port, the gRPC listener" "$(dep '.spec.template.spec.containers[0].ports[].name' | tr '\n' ' ')" "platform-grpc "
+expect "the default allowlist is elitea-main" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_CLIENTS") | .value')" "elitea-main"
+expect "the listener address" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") | .value')" ":9443"
+for probe in livenessProbe readinessProbe; do
+  expect "host $probe: tcpSocket on the gRPC port" "$(dep ".spec.template.spec.containers[0].$probe.tcpSocket.port")" "platform-grpc"
+  expect "host $probe: no httpGet (the listener needs a client certificate)" "$(dep ".spec.template.spec.containers[0].$probe.httpGet")" "null"
+done
+expect "the Service exposes the gRPC port only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | .name + ":" + (.port | tostring)' - | tr '\n' ' ')" "platform-grpc:9443 "
+expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9443 "
+
+echo "== the cancellation fan-out: the host dials NATS as elitea-inventory (#1359) =="
+expect "NATS URL" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_NATS_URL") | .value')" "tls://elitea-nats.default.svc.cluster.local:4222"
+for f in CA:ca.crt CERT:tls.crt KEY:tls.key; do
+  expect "NATS ${f%%:*} file in the mount" "$(dep ".spec.template.spec.containers[0].env[] | select(.name == \"ELITEA_INVENTORY_NATS_TLS_${f%%:*}_FILE\") | .value")" "$(dep '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "nats-client-tls") | .mountPath')/${f#*:}"
+done
+expect "the NATS client Secret is mounted" "$(dep '.spec.template.spec.volumes[] | select(.name == "nats-client-tls") | .secret.secretName')" "elitea-inventory-nats-client-tls"
+expect "its Certificate names the SUBAPP user" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Certificate" and .metadata.name == "elitea-inventory-nats-client") | .spec.uris[0]' -)" "spiffe://elitea.internal/nats/elitea-inventory"
 
 echo "== the platform gRPC service is configured, exposed and admitted together =="
 grpc="$(render $COMPLETE --set 'inventory.platformGrpc.clients={elitea-main,elitea-main.ns.svc}' --set inventory.platformGrpc.port=9555)" \
@@ -382,10 +396,11 @@ expect "gRPC address" "$(gp '.spec.template.spec.containers[0].env[] | select(.n
 expect "the engine container gets neither" "$(gp '.spec.template.spec.containers[1].env[].name' | grep -c 'PLATFORM_CLIENTS\|PLATFORM_GRPC_ADDR' || true)" "0"
 expect "the Service port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .port' -)" "9555"
 expect "the Service targets the named port" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-inventory-svc") | .spec.ports[] | select(.name == "platform-grpc") | .targetPort' -)" "platform-grpc"
-expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "8080 9555 "
+expect "NetworkPolicy ports" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9555 "
 expect "NetworkPolicy peers on the gRPC port: elitea-main only" "$(printf '%s' "$grpc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-inventory-netpol") | .spec.ingress[] | select(.ports[0].port == 9555) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | tr '\n' ' ')" "elitea-main "
-refuses "platform clients without mutual TLS" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.mtls.enabled=false
-refuses "a platform port that is the SPI's" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.platformGrpc.port=8080
+refuses "the provider without mutual TLS" --set inventory.mtls.enabled=false
+refuses "an empty allowlist: a listener that admits nobody" --set 'inventory.platformGrpc.clients={}'
+refuses "the retired HTTPS service port" --set inventory.service.port=8443
 refuses "the platform env set by hand beside the values" --set 'inventory.platformGrpc.clients={elitea-main}' --set inventory.env.ELITEA_INVENTORY_PLATFORM_CLIENTS=elitea-main
 refuses "an allowlist that does not name elitea-main" --set 'inventory.platformGrpc.clients={someone-else}'
 # The expected name follows the client material. Chart-issued (the default):
@@ -408,7 +423,7 @@ expect "operator material: the allowlist carries the operator's name" "$(printf 
 
 echo "== elitea-main is told where the platform service is =="
 main_env() { printf '%s' "$1" | yq eval-all "select(.kind == \"ConfigMap\" and .metadata.name == \"elitea-main-config\") | .data.$2" -; }
-expect "off: the shipped empty default, nothing derived" "$(main_env "$manifest" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" ""
+expect "the default: derived from the Service and the gRPC port" "$(main_env "$manifest" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-svc:9443"
 expect "on: the target is the Service and the platform port" "$(main_env "$grpc" ELITEA_INVENTORY_PLATFORM_GRPC_TARGET)" "elitea-inventory-svc:9555"
 explicit="$(render $COMPLETE --set 'inventory.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET=inventory.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"

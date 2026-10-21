@@ -43,6 +43,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 )
 
 // ---------------------------------------------------------------------------
@@ -879,7 +880,7 @@ func provider(t *testing.T, status int) (*[]string, facade.Config) {
 	pool.AddCert(ca)
 
 	var bodies []string
-	server := httptest.NewUnstartedServer(http.HandlerFunc(
+	target := providertest.Start(t, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			var buffer bytes.Buffer
 			_, _ = buffer.ReadFrom(r.Body)
@@ -887,15 +888,12 @@ func provider(t *testing.T, status int) (*[]string, facade.Config) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"invocation_id":"inv-1","status":"Started"}`))
-		}))
-	server.TLS = &tls.Config{
+		}), &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		ClientCAs:    pool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS12,
-	}
-	server.StartTLS()
-	t.Cleanup(server.Close)
+	})
 
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -907,7 +905,7 @@ func provider(t *testing.T, status int) (*[]string, facade.Config) {
 
 	return &bodies, facade.Config{
 		Enabled:        true,
-		BaseURL:        server.URL,
+		Target:         target,
 		ClientCertFile: certFile,
 		ClientKeyFile:  keyFile,
 		CAFile:         caFile,

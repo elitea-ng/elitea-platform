@@ -31,6 +31,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 )
 
 // silent is the logger every case here builds with: a facade that logged to
@@ -65,24 +66,21 @@ func recordingProvider(t *testing.T) (*[]recordedRequest, facade.Config) {
 	pool.AddCert(ca)
 
 	var seen []recordedRequest
-	server := httptest.NewUnstartedServer(http.HandlerFunc(
+	target := providertest.Start(t, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			seen = append(seen, recordedRequest{
 				method: r.Method, path: r.URL.Path, host: r.Host, header: r.Header.Clone(),
 			})
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true}`))
-		}))
-	server.TLS = &tls.Config{
+		}), &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		ClientCAs:    pool,
 		// The provider refuses anything it cannot authenticate. A facade that
 		// presented no certificate must FAIL here, not be waved through.
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-	}
-	server.StartTLS()
-	t.Cleanup(server.Close)
+	})
 
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -94,7 +92,7 @@ func recordingProvider(t *testing.T) (*[]recordedRequest, facade.Config) {
 
 	return &seen, facade.Config{
 		Enabled:        true,
-		BaseURL:        server.URL,
+		Target:         target,
 		ClientCertFile: certFile,
 		ClientKeyFile:  keyFile,
 		CAFile:         caFile,
@@ -150,7 +148,7 @@ func TestEachFacadePathMapsToItsProviderPath(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		response := request(t, handler, testCase.method, testCase.facadePath)
-		if response.Code != http.StatusOK {
+		if response.Code != successFor(testCase.method) {
 			t.Fatalf("%s %s: %d %s", testCase.method, testCase.facadePath,
 				response.Code, response.Body.String())
 		}
@@ -199,7 +197,7 @@ func TestReadingIsNotInvoking(t *testing.T) {
 		t.Fatalf("the invoke grant alone read capacity: %d", response.Code)
 	}
 	if response := request(t, invoker, http.MethodDelete,
-		"/api/v2/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusOK {
+		"/api/v2/inventory/invocations/7/inventory/get_stats/abc"); response.Code != http.StatusNoContent {
 		t.Fatalf("the invoke grant could not cancel: %d", response.Code)
 	}
 	if len(*seen) != before+1 {
@@ -371,12 +369,12 @@ func TestAnUnusableTransportRefusesToCompose(t *testing.T) {
 	_, working := provider(t, http.StatusOK)
 
 	cases := map[string]func(facade.Config) facade.Config{
-		"a plain-HTTP base URL": func(cfg facade.Config) facade.Config {
-			cfg.BaseURL = "http://elitea-inventory:8080"
+		"a URL target (the retired BASE_URL's shape)": func(cfg facade.Config) facade.Config {
+			cfg.Target = "https://elitea-inventory:8080"
 			return cfg
 		},
-		"no base URL": func(cfg facade.Config) facade.Config {
-			cfg.BaseURL = ""
+		"no target": func(cfg facade.Config) facade.Config {
+			cfg.Target = ""
 			return cfg
 		},
 		"a client certificate that is not there": func(cfg facade.Config) facade.Config {
@@ -431,7 +429,8 @@ func TestAnUnmountedFacadeAnswers503RatherThanPanicking(t *testing.T) {
 func TestTheEnvNamesAreTheOnesTheChartSets(t *testing.T) {
 	want := facade.EnvNames{
 		Enabled:        "ELITEA_INVENTORY_ENABLED",
-		BaseURL:        "ELITEA_INVENTORY_BASE_URL",
+		Target:         "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET",
+		RetiredBaseURL: "ELITEA_INVENTORY_BASE_URL",
 		ClientCertFile: "ELITEA_INVENTORY_CLIENT_CERT_FILE",
 		ClientKeyFile:  "ELITEA_INVENTORY_CLIENT_KEY_FILE",
 		CAFile:         "ELITEA_INVENTORY_CA_FILE",
@@ -478,7 +477,7 @@ func TestAdmissionGatesTheInvokeAndNotTheReads(t *testing.T) {
 		{http.MethodGet, "/api/v2/inventory/invocations/7/inventory/get_stats/abc"},
 		{http.MethodDelete, "/api/v2/inventory/invocations/7/inventory/get_stats/abc"},
 	} {
-		if response := request(t, handler, testCase.method, testCase.path); response.Code != http.StatusOK {
+		if response := request(t, handler, testCase.method, testCase.path); response.Code != successFor(testCase.method) {
 			t.Errorf("%s %s was refused by the admission gate: %d",
 				testCase.method, testCase.path, response.Code)
 		}
@@ -508,12 +507,12 @@ func TestAdmissionGatesTheInvokeAndNotTheReads(t *testing.T) {
 // slow ingestion.
 func TestTheTransportSettingsAreReadAsWritten(t *testing.T) {
 	complete := map[string]string{
-		"ELITEA_INVENTORY_ENABLED":          "true",
-		"ELITEA_INVENTORY_BASE_URL":         "https://elitea-inventory:8080",
-		"ELITEA_INVENTORY_CLIENT_CERT_FILE": "/certs/client.crt",
-		"ELITEA_INVENTORY_CLIENT_KEY_FILE":  "/certs/client.key",
-		"ELITEA_INVENTORY_CA_FILE":          "/certs/ca.crt",
-		"ELITEA_INVENTORY_IDENTITY_SECRET":  "shared-with-the-provider",
+		"ELITEA_INVENTORY_ENABLED":              "true",
+		"ELITEA_INVENTORY_PLATFORM_GRPC_TARGET": "elitea-inventory:9443",
+		"ELITEA_INVENTORY_CLIENT_CERT_FILE":     "/certs/client.crt",
+		"ELITEA_INVENTORY_CLIENT_KEY_FILE":      "/certs/client.key",
+		"ELITEA_INVENTORY_CA_FILE":              "/certs/ca.crt",
+		"ELITEA_INVENTORY_IDENTITY_SECRET":      "shared-with-the-provider",
 	}
 	read := func(overrides map[string]string) (facade.Config, error) {
 		values := map[string]string{}
@@ -536,7 +535,7 @@ func TestTheTransportSettingsAreReadAsWritten(t *testing.T) {
 	if cfg.Timeout != 45*time.Second {
 		t.Errorf("timeout %v, want the 45 seconds the operator wrote", cfg.Timeout)
 	}
-	if cfg.BaseURL != complete["ELITEA_INVENTORY_BASE_URL"] ||
+	if cfg.Target != complete["ELITEA_INVENTORY_PLATFORM_GRPC_TARGET"] ||
 		cfg.IdentitySecret != complete["ELITEA_INVENTORY_IDENTITY_SECRET"] {
 		t.Errorf("%+v", cfg)
 	}
@@ -552,4 +551,13 @@ func TestTheTransportSettingsAreReadAsWritten(t *testing.T) {
 			t.Errorf("%s was accepted", name)
 		}
 	}
+}
+
+// successFor is the SPI's success status for a facade method: a cancel is a
+// 204 (the provider service's Cancel carries no body), everything else a 200.
+func successFor(method string) int {
+	if method == http.MethodDelete {
+		return http.StatusNoContent
+	}
+	return http.StatusOK
 }

@@ -637,7 +637,7 @@ func TestTheProviderReceivesTheRewrittenBody(t *testing.T) {
 func TestARefusedInvocationRevokesItsCallbackToken(t *testing.T) {
 	_, cfg := provider(t)
 	// A port nothing listens on: the hop fails, the proxy answers 503.
-	cfg.BaseURL = "https://127.0.0.1:1"
+	cfg.Target = "127.0.0.1:1"
 	minter := &recordingMinter{}
 	handler := routeWith(t, cfg, testCredentialResolver(t), minter)
 

@@ -7,18 +7,25 @@
 //	                                engine runner is sidecar (legacy = alias)
 //	ELITEA_<APP>_ENGINE_SOCKET      the engine sidecar's Unix socket (native, sidecar)
 //	ELITEA_<APP>_DATABASE_URL       the durable invocation store (else in memory)
+//	ELITEA_<APP>_TLS_CERTFILE, _TLS_KEYFILE, _TLS_CA_FILE
+//	                                the listener's mutual TLS (required)
 //	ELITEA_<APP>_PLATFORM_CLIENTS   certificate identities allowed to call the
-//	                                platform gRPC service (empty: service off)
-//	ELITEA_<APP>_PLATFORM_GRPC_ADDR where that service listens (default :9443)
+//	                                listener (required; elitea-main)
+//	ELITEA_<APP>_PLATFORM_GRPC_ADDR where it listens (default :9443)
+//	ELITEA_<APP>_NATS_URL, _NATS_TLS_{CA,CERT,KEY}_FILE
+//	                                the cancel fan-out across replicas
 //	ELITEA_<APP>_*                  the host settings under the app's prefix
 //
 // One binary, one application per process; the prefix keeps each
 // application's settings in its own namespace, exactly as the Python shell
-// did for DeepWiki. Mutual TLS is on whenever a client CA is configured:
-// the listener then requires and verifies a client certificate at the
-// handshake, and the host trusts its own handshake (ADR-0023 H1 — the
-// Python shell looked for an ASGI extension uvicorn never populated, and
-// refused every authenticated hop until the standalone stack found it).
+// did for DeepWiki.
+//
+// ONE LISTENER, gRPC OVER MUTUAL TLS (#1359). The provider service (the SPI:
+// descriptor, health, slots, invoke, poll, cancel) and the platform
+// operations are served on it together, behind a TLS configuration that
+// requires and verifies a client certificate at the handshake and an
+// allowlist of the certificate identities that may call. The SPI's HTTP
+// listener is gone: internal service-to-service traffic is gRPC over mTLS.
 package main
 
 import (
@@ -27,17 +34,17 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/cancelbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 	"google.golang.org/grpc"
 )
@@ -48,9 +55,8 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		// The container probe. The image is distroless — no shell, no curl —
 		// and the listener requires a client certificate at the handshake, so
-		// an HTTP probe from inside the container would need a certificate
-		// it does not have. A TCP connect is what the Python shell's probe
-		// did, and it is what "the listener is up" means.
+		// a gRPC probe from inside the container would need a certificate it
+		// does not have. A TCP connect is what "the listener is up" means.
 		if err := healthcheck(os.LookupEnv); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -71,13 +77,22 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The listener's configuration is checked before anything is started:
+	// a host that cannot serve must not reconcile rows or dial NATS first.
+	tlsConfig, err := listenerTLS(settings)
+	if err != nil {
+		return err
+	}
+	if len(settings.PlatformClients) == 0 {
+		return fmt.Errorf("%w: %sPLATFORM_CLIENTS must name the certificate identities allowed to call this host (elitea-main)", spi.ErrConfig, settings.Prefix)
+	}
 	var options []spi.Option
 	if settings.DatabaseURL != "" {
-		// The durable store (ADR-0023 H2b): the rows the Python migrations
-		// own. Orphans of a previous process are reconciled before the first
-		// request, so no poll answers InProgress for work nobody is doing. A
-		// database that is configured and unreachable is a boot failure, not
-		// a host that silently runs in memory.
+		// The durable store (ADR-0023 H2b): the rows the engine's migrations
+		// own, shared by every replica. Orphans of a process that is gone are
+		// reconciled before the first call, so no poll answers InProgress for
+		// work nobody is doing. A database that is configured and unreachable
+		// is a boot failure, not a host that silently runs in memory.
 		store, err := spi.NewPostgresStore(ctx, settings.DatabaseURL, "", logger)
 		if err != nil {
 			return err
@@ -86,109 +101,117 @@ func run(logger *slog.Logger) error {
 		if reconciled, err := store.Reconcile(ctx); err != nil {
 			return fmt.Errorf("reconcile the invocation store: %w", err)
 		} else if reconciled > 0 {
-			logger.Warn("invocations orphaned by a previous process were terminated", "count", reconciled)
+			logger.Warn("invocations orphaned by a process that is gone were terminated", "count", reconciled)
 		}
 		options = append(options, spi.WithStore(store))
+	}
+	bus, closeBus, err := composeCancelBus(settings, os.LookupEnv, logger)
+	if err != nil {
+		return err
+	}
+	defer closeBus()
+	if bus != nil {
+		options = append(options, spi.WithCancelBus(bus))
 	}
 	server, err := spi.NewServer(settings, app, logger, options...)
 	if err != nil {
 		return err
 	}
-	server.Start(ctx)
+	if err := server.Start(ctx); err != nil {
+		return err
+	}
 	defer server.Stop()
 
-	httpServer := &http.Server{
-		Addr:              settings.ListenAddr,
-		Handler:           server,
-		ReadHeaderTimeout: 10 * time.Second,
-		// net/http reports every aborted handshake at error level, and the
-		// container probe aborts one every few seconds by design (see
-		// healthcheck). Those lines are dropped; everything else the server
-		// reports still reaches the log.
-		ErrorLog: log.New(probeNoiseFilter{logger: logger}, "", 0),
-		// No WriteTimeout: a poll is short, but an invoke may hold a long
-		// body, and a deadline here would truncate it with nothing logged.
-	}
-	if settings.TLSCertFile != "" {
-		tlsConfig, err := listenerTLS(settings)
-		if err != nil {
-			return err
-		}
-		httpServer.TLSConfig = tlsConfig
-	}
-	errs := make(chan error, 2)
-	platform, err := startPlatformGRPC(server, settings, httpServer.TLSConfig, logger, errs)
+	grpcServer, listener, err := listen(server, settings, tlsConfig, logger)
 	if err != nil {
 		return err
 	}
+	errs := make(chan error, 1)
 	go func() {
 		logger.Info("elitea-subapp-host listening",
-			"app", app.Name, "runner", app.Runner.Name(), "addr", settings.ListenAddr,
-			"tls", settings.TLSCertFile != "", "mtls", settings.MTLSRequired(), "identity_verified", settings.IdentitySecret != "")
-		if httpServer.TLSConfig != nil {
-			errs <- httpServer.ListenAndServeTLS("", "")
-		} else {
-			errs <- httpServer.ListenAndServe()
-		}
+			"app", app.Name, "runner", app.Runner.Name(), "addr", listener.Addr().String(),
+			"clients", len(settings.PlatformClients), "identity_verified", settings.IdentitySecret != "",
+			"cancel_fanout", bus != nil)
+		errs <- grpcServer.Serve(listener)
 	}()
 	select {
 	case <-ctx.Done():
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
-		if platform != nil {
-			stopGRPC(platform, shutdownCtx)
-		}
-		return httpServer.Shutdown(shutdownCtx)
+		stopGRPC(grpcServer, shutdownCtx)
+		return nil
 	case err := <-errs:
-		if platform != nil {
-			platform.Stop()
-		}
-		if errors.Is(err, http.ErrServerClosed) {
+		if errors.Is(err, grpc.ErrServerStopped) {
 			return nil
 		}
 		return err
 	}
 }
 
-// startPlatformGRPC serves the platform operations (spi/platform.go) on a
-// listener of its own, behind the SPI listener's TLS configuration, when the
-// runner has any AND <PREFIX>PLATFORM_CLIENTS names who may call them. With
-// no clients it does nothing: the service is off, no port is opened.
-//
-// Clients configured without mutual TLS is a boot failure, not a service that
-// silently refuses everyone or, worse, accepts anyone.
-func startPlatformGRPC(server *spi.Server, settings spi.Settings, tlsConfig *tls.Config, logger *slog.Logger, errs chan<- error) (*grpc.Server, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	addr := settings.PlatformGRPCAddr
-	if len(settings.PlatformClients) == 0 {
-		if addr != "" {
-			logger.Warn("the platform gRPC service is off: no platform clients are allowed (set PLATFORM_CLIENTS)", "addr", addr)
-		}
-		return nil, nil
-	}
-	ops, ok := server.PlatformOps()
-	if !ok {
-		logger.Warn("platform clients are configured but this application has no platform operations; the service is off")
-		return nil, nil
-	}
-	if addr == "" {
-		addr = spi.DefaultPlatformGRPCAddr
-	}
-	platform, err := spi.NewPlatformGRPCServer(ops, settings.PlatformClients, tlsConfig, logger)
+// listen builds the host's gRPC listener (spi.NewGRPCServer) and opens its
+// port.
+func listen(server *spi.Server, settings spi.Settings, tlsConfig *tls.Config, logger *slog.Logger) (*grpc.Server, net.Listener, error) {
+	grpcServer, err := spi.NewGRPCServer(server, settings.PlatformClients, tlsConfig, logger)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", settings.PlatformGRPCAddr)
 	if err != nil {
-		return nil, fmt.Errorf("listen for the platform gRPC service on %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("listen for gRPC on %s: %w", settings.PlatformGRPCAddr, err)
 	}
-	go func() {
-		logger.Info("platform gRPC service listening", "addr", listener.Addr().String(), "clients", len(settings.PlatformClients))
-		errs <- platform.Serve(listener)
-	}()
-	return platform, nil
+	return grpcServer, listener, nil
+}
+
+// composeCancelBus connects the cancel fan-out when <PREFIX>NATS_URL is set.
+// Without it cancels stay on the replica they land on, which is correct for
+// one replica and is logged, because with more a cancel can miss its run.
+func composeCancelBus(settings spi.Settings, lookup spi.Lookup, logger *slog.Logger) (spi.CancelBus, func(), error) {
+	if settings.NATSURL == "" {
+		logger.Warn("the cancel fan-out is off (no NATS_URL): a cancel reaches only the replica it lands on; set it when running more than one replica",
+			"set", settings.Prefix+"NATS_URL")
+		return nil, func() {}, nil
+	}
+	app := appKey(settings.Prefix)
+	env := func(name string) (string, bool) { return lookup(name) }
+	var material natsconn.Material
+	var err error
+	// One literal prefix per application that has a NATS identity, so the
+	// chart's render test (deploy/helm/tests/render-nats-security.sh) can read
+	// which <PREFIX>_NATS_TLS_* names the code builds.
+	switch app {
+	case "deepwiki":
+		material, err = natsconn.FromEnv(deepwikiNATSPrefix, env)
+	case "inventory":
+		material, err = natsconn.FromEnv(inventoryNATSPrefix, env)
+	default:
+		err = fmt.Errorf("%s has no NATS identity; unset %sNATS_URL", app, settings.Prefix)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", spi.ErrConfig, err)
+	}
+	conn, err := cancelbus.Connect(cancelbus.Config{URL: settings.NATSURL, Material: material, App: app}, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	bus, err := cancelbus.New(conn, app, logger)
+	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	return bus, func() { _ = conn.Drain() }, nil
+}
+
+// The NATS environment prefixes of the two applications with a NATS
+// identity (natsconn.SubappIdentity).
+const (
+	deepwikiNATSPrefix  = "ELITEA_DEEPWIKI"
+	inventoryNATSPrefix = "ELITEA_INVENTORY"
+)
+
+// appKey is the application's subject token, from its settings prefix:
+// ELITEA_DEEPWIKI_ → deepwiki.
+func appKey(prefix string) string {
+	return strings.ToLower(strings.Trim(strings.TrimPrefix(prefix, "ELITEA_"), "_"))
 }
 
 // stopGRPC drains a gRPC server, then stops it at the deadline.
@@ -202,33 +225,15 @@ func stopGRPC(server *grpc.Server, ctx context.Context) {
 	}
 }
 
-// probeNoiseFilter forwards net/http's server errors to the structured log,
-// minus the handshake abort the TCP probe causes.
-type probeNoiseFilter struct{ logger *slog.Logger }
-
-func (f probeNoiseFilter) Write(p []byte) (int, error) {
-	line := strings.TrimSpace(string(p))
-	if !isProbeNoise(line) {
-		f.logger.Warn("http server", "message", line)
-	}
-	return len(p), nil
-}
-
-// isProbeNoise is the exact shape of a connection opened and closed without
-// a handshake: a TLS handshake error from loopback ending in EOF.
-func isProbeNoise(line string) bool {
-	return strings.HasPrefix(line, "http: TLS handshake error from 127.0.0.1:") && strings.HasSuffix(line, ": EOF")
-}
-
-// healthcheck dials the configured listen port on loopback.
+// healthcheck dials the configured gRPC port on loopback.
 func healthcheck(lookup spi.Lookup) error {
 	_, settings, err := compose(lookup)
 	if err != nil {
 		return err
 	}
-	_, port, err := net.SplitHostPort(settings.ListenAddr)
+	_, port, err := net.SplitHostPort(settings.PlatformGRPCAddr)
 	if err != nil {
-		return fmt.Errorf("listen address %q: %w", settings.ListenAddr, err)
+		return fmt.Errorf("listen address %q: %w", settings.PlatformGRPCAddr, err)
 	}
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 2*time.Second)
 	if err != nil {
@@ -272,25 +277,30 @@ func compose(lookup spi.Lookup) (spi.App, spi.Settings, error) {
 	return entry.Compose(runner), settings, nil
 }
 
-// listenerTLS builds the listener's TLS: the server certificate, and — with
-// a client CA — RequireAndVerifyClientCert, the mutual-TLS terminus.
+// listenerTLS builds the listener's TLS: the server certificate and, from
+// the client CA, RequireAndVerifyClientCert — the mutual-TLS terminus. All
+// three files are required: the listener serves nothing in the clear.
 func listenerTLS(settings spi.Settings) (*tls.Config, error) {
+	if !settings.TerminatesMTLS() {
+		return nil, fmt.Errorf("%w: %sTLS_CERTFILE, %sTLS_KEYFILE and %sTLS_CA_FILE are required: the host serves gRPC over mutual TLS only",
+			spi.ErrConfig, settings.Prefix, settings.Prefix, settings.Prefix)
+	}
 	certificate, err := tls.LoadX509KeyPair(settings.TLSCertFile, settings.TLSKeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load the server certificate: %w", err)
 	}
-	cfg := &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
-	if settings.TLSCAFile != "" {
-		pem, err := os.ReadFile(settings.TLSCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read the client CA: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("%w: %s holds no certificate", spi.ErrConfig, settings.TLSCAFile)
-		}
-		cfg.ClientCAs = pool
-		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	pem, err := os.ReadFile(settings.TLSCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read the client CA: %w", err)
 	}
-	return cfg, nil
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("%w: %s holds no certificate", spi.ErrConfig, settings.TLSCAFile)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }

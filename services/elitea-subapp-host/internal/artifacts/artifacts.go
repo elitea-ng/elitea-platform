@@ -8,6 +8,10 @@
 // way. What stayed behind in DeepWiki's package is the part that is not
 // generic — deriving these settings from the legacy llm_settings dict, and
 // deciding when there is no transport at all.
+//
+// TODO(#1359 U2/U5): this is still an HTTP callback into elitea-main's
+// artifact API (cleartext in compose). It moves to gRPC over mTLS with the
+// rest of the engine → main hops (/llm, artifacts).
 package artifacts
 
 import (

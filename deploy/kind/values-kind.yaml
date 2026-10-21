@@ -139,7 +139,7 @@ main:
 
     # ── The DeepWiki facade ──────────────────────────────────────────────────
     ELITEA_DEEPWIKI_ENABLED: "true"
-    ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki-svc:8443"
+    ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "elitea-deepwiki-svc:9443"
     ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
     ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /run/elitea-deepwiki/tls.crt
@@ -181,7 +181,7 @@ deepwiki:
     ELITEA_DEEPWIKI_MODEL_ALLOWLIST: "*"
     ELITEA_DEEPWIKI_RUNNER: "native"
     ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "1"
-    ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: https://elitea-deepwiki-svc:8443
+    ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: grpcs://elitea-deepwiki-svc:9443
   resources:
     requests:
       cpu: 100m

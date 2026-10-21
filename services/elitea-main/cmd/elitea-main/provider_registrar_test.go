@@ -19,7 +19,7 @@ import (
 // database the admission migration has not reached — the provider keeps
 // serving and nothing is registered. Nothing here panics on a nil pool.
 func TestProviderRegistrarSkipsWhatItCannotRegisterWith(t *testing.T) {
-	cfg := facade.Config{BaseURL: "https://elitea-deepwiki:8443"}
+	cfg := facade.Config{Target: "elitea-deepwiki:9443"}
 	if startProviderRegistrar(context.Background(), nil, nil, 1, "deepwiki", cfg, "X") != nil {
 		t.Fatal("started with no database")
 	}
@@ -41,7 +41,7 @@ func TestProviderRegistrarSkipsWhatItCannotRegisterWith(t *testing.T) {
 	// only because the client certificate does not exist, which proves the
 	// plane check was passed rather than short-circuited.
 	if startProviderRegistrar(context.Background(), nil, pool, 1, "deepwiki",
-		facade.Config{BaseURL: "https://elitea-deepwiki:8443", ClientCertFile: "/nonexistent/tls.crt", ClientKeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt"}, "X") != nil {
+		facade.Config{Target: "elitea-deepwiki:9443", ClientCertFile: "/nonexistent/tls.crt", ClientKeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt"}, "X") != nil {
 		t.Fatal("started without a client certificate")
 	}
 }

@@ -54,7 +54,8 @@ const (
 // are searched by the literal string.
 var EnvNames = facade.EnvNames{
 	Enabled:        "ELITEA_INVENTORY_ENABLED",
-	BaseURL:        "ELITEA_INVENTORY_BASE_URL",
+	Target:         "ELITEA_INVENTORY_PLATFORM_GRPC_TARGET",
+	RetiredBaseURL: "ELITEA_INVENTORY_BASE_URL",
 	ClientCertFile: "ELITEA_INVENTORY_CLIENT_CERT_FILE",
 	ClientKeyFile:  "ELITEA_INVENTORY_CLIENT_KEY_FILE",
 	CAFile:         "ELITEA_INVENTORY_CA_FILE",
@@ -105,7 +106,7 @@ func NewRoute(
 	if !facade.Composable(authConfig, permissions) {
 		return nil, ErrInvalidRoute
 	}
-	hop, err := proxy.New(cfg, EnvNames.BaseURL, logger)
+	hop, err := proxy.New(cfg, EnvNames.Target, logger)
 	if err != nil {
 		return nil, err
 	}

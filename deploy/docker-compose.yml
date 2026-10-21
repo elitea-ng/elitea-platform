@@ -241,11 +241,6 @@ services:
       #     ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki:9443 \
       #     podman compose --profile deepwiki up -d
       ELITEA_DEEPWIKI_ENABLED: "${ELITEA_DEEPWIKI_ENABLED:-false}"
-      # 8080: the port the provider listens on (the sub-application host's
-      # default, EXPOSE in its Containerfile, the Helm chart). This said 8443 and nothing checked
-      # it — the hop was refused on connect, before any of the mTLS refusals
-      # this file documents could happen.
-      ELITEA_DEEPWIKI_BASE_URL: "https://elitea-deepwiki:8080"
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
@@ -256,14 +251,13 @@ services:
       ELITEA_DEEPWIKI_CALLBACK_BASE_URL: "http://elitea-main:8080"
       ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
-      # The engine's platform gRPC listener (#1243): where this service deletes
-      # a project's wiki search indexes when the project is deprovisioned. Set
-      # it to elitea-deepwiki:9443 TOGETHER with ELITEA_DEEPWIKI_ENABLED=true
-      # (see above): the hop presents the same client certificate as the
-      # facade, so a target beside a disabled facade is a boot error, and a
-      # facade without the target deletes projects while the engine keeps
-      # their indexes (logged at boot). The server certificate's SANs name
-      # elitea-deepwiki (gen-deepwiki-certs.sh), which is what this verifies.
+      # The provider's gRPC listener (#1359): the facade's SPI calls and the
+      # project deletion (#1243) both go there, over mutual TLS with the
+      # client material above. Set it to elitea-deepwiki:9443 TOGETHER with
+      # ELITEA_DEEPWIKI_ENABLED=true (see above): an enabled facade without it
+      # refuses to boot, and a target beside a disabled facade is a boot error.
+      # The server certificate's SANs name elitea-deepwiki
+      # (gen-deepwiki-certs.sh), which is what this verifies.
       ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET: "${ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET:-}"
       # The toolkit-deletion reconciler (#1244): drains centry.toolkit_deletions,
       # the engine-side deletion an Inventory toolkit's delete owes. On by
@@ -341,15 +335,21 @@ services:
       # an invocation that starts and then fails.
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
-      ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "https://elitea-deepwiki:8080"
-      # The platform gRPC service (elitea.subapp.v1.PlatformOperations):
-      # project deprovisioning, authorised by the verified client certificate
-      # alone. The certificate elitea-main presents is CN=elitea-main
-      # (gen-deepwiki-certs.sh). A second listener behind the same TLS
-      # configuration, reachable on the compose network only (no published
-      # port). Remove PLATFORM_CLIENTS to turn the service off.
+      ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "grpcs://elitea-deepwiki:9443"
+      # The provider service (elitea.subapp.v1.ProviderService, the SPI) and
+      # the platform service (elitea.subapp.v1.PlatformOperations) on ONE gRPC
+      # listener with mutual TLS (#1359), authorised by the verified client
+      # certificate against PLATFORM_CLIENTS — which is required: the host
+      # serves nothing without it. The certificate elitea-main presents is
+      # CN=elitea-main. Reachable on the compose network only.
       ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+      # Cancellation fan-out between replicas (core NATS,
+      # elitea.subapp.deepwiki.cancel.<id>): a cancel that lands on a replica
+      # not running the invocation reaches the one that is. Plaintext like the
+      # rest of compose's NATS; docker-compose.nats-secure.yml presents the
+      # elitea-deepwiki identity instead.
+      ELITEA_DEEPWIKI_NATS_URL: "nats://nats:4222"
     expose:
       - "9443"
     volumes:
@@ -358,9 +358,11 @@ services:
     depends_on:
       elitea-deepwiki-engine:
         condition: service_healthy
+      nats-health:
+        condition: service_healthy
     healthcheck:
-      # Distroless; the binary's own probe is a TCP accept (the listener is
-      # TLS, so a plain HTTP GET would not be one).
+      # Distroless; the binary's own probe is a TCP accept on the gRPC
+      # listener (TLS, so a plain HTTP GET would not be one).
       test: ["CMD", "/elitea-subapp-host", "healthcheck"]
       interval: 5s
       timeout: 3s

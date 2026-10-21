@@ -21,6 +21,13 @@ import (
 // events drained with a single DELETE … RETURNING so two pollers cannot
 // interleave, rows owned by the process that accepted them.
 //
+// Every replica of a host shares the tables (issue #1359): an invocation is
+// read and cancelled through whichever replica a call lands on. A row's
+// owner is the process running it, and that process holds a session
+// advisory lock named after itself for as long as it lives (claim), so a
+// replica that starts can tell a row whose owner is gone — orphaned, to be
+// terminated — from one a sibling replica is running right now.
+//
 // Durable is true, and that is not decoration: /health reports it, and an
 // operator uses it to tell a compliant deployment from a dev one.
 type PostgresStore struct {
@@ -28,7 +35,15 @@ type PostgresStore struct {
 	dsn    string
 	owner  string
 	logger *slog.Logger
+	// claim is the connection that holds this owner's liveness lock.
+	claim *pgxpool.Conn
 }
+
+// ownerLockClass is the first key of every owner's liveness lock
+// (pg_advisory_lock(int4, int4)); the second is hashtext(owner). A constant
+// of its own, so the locks cannot meet any other advisory lock in the
+// database.
+const ownerLockClass = 0x53_41_48_31 // "SAH1"
 
 // OwnerID is hostname plus pid: in Kubernetes the hostname is the pod name,
 // so a restarted pod has a new one, and a restarted process in the same pod
@@ -58,14 +73,49 @@ func NewPostgresStore(ctx context.Context, dsn, owner string, logger *slog.Logge
 		pool.Close()
 		return nil, fmt.Errorf("invocation store: %w", err)
 	}
-	return &PostgresStore{pool: pool, dsn: dsn, owner: owner, logger: logger}, nil
+	store := &PostgresStore{pool: pool, dsn: dsn, owner: owner, logger: logger}
+	if err := store.takeClaim(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("invocation store: claim the owner %q: %w", owner, err)
+	}
+	return store, nil
+}
+
+// takeClaim takes this owner's liveness lock on a connection of its own and
+// keeps it until Close. A session lock dies with its session, so when this
+// process dies (or its database connection does) the lock is free and the
+// next replica to start reconciles its rows.
+func (s *PostgresStore) takeClaim(ctx context.Context) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	var held bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, hashtext($2))`, ownerLockClass, s.owner).Scan(&held); err != nil {
+		conn.Release()
+		return err
+	}
+	if !held {
+		conn.Release()
+		return errors.New("another live process holds this owner id")
+	}
+	s.claim = conn
+	return nil
 }
 
 // DSN is the connection string the store was built with.
 func (s *PostgresStore) DSN() string { return s.dsn }
 
-// Close releases the pool.
-func (s *PostgresStore) Close() { s.pool.Close() }
+// Close releases the claim and the pool.
+func (s *PostgresStore) Close() {
+	if s.claim != nil {
+		// Hijacked and closed rather than released: the session must END for
+		// its lock to go, and a connection back in the pool keeps it.
+		_ = s.claim.Hijack().Close(context.Background())
+		s.claim = nil
+	}
+	s.pool.Close()
+}
 
 // Owner is the id this process writes on the rows it accepts.
 func (s *PostgresStore) Owner() string { return s.owner }
@@ -110,8 +160,10 @@ func (s *PostgresStore) Get(ctx context.Context, toolkit, tool, id string) (*Inv
 }
 
 // Update persists status, the stop flag, the result and — once terminal —
-// finished_at. Unlike the in-memory store, where the struct IS the state,
-// this is the only thing that persists a change.
+// finished_at. The stop flag is only ever raised here: a request another
+// replica recorded (RequestStop) is not cleared by the owner's next write.
+// Unlike the in-memory store, where the struct IS the state, this is the
+// only thing that persists a change.
 func (s *PostgresStore) Update(ctx context.Context, invocation *Invocation) error {
 	var result []byte
 	if invocation.Result != nil {
@@ -122,10 +174,18 @@ func (s *PostgresStore) Update(ctx context.Context, invocation *Invocation) erro
 		result = encoded
 	}
 	_, err := s.pool.Exec(ctx,
-		`UPDATE invocations SET status = $1, stop_requested = $2, result = $3,
+		`UPDATE invocations SET status = $1, stop_requested = stop_requested OR $2, result = $3,
 		        finished_at = CASE WHEN $4 THEN now() ELSE finished_at END
 		  WHERE invocation_id = $5`,
 		invocation.Status, invocation.StopRequest, result, invocation.Terminal(), invocation.ID)
+	return err
+}
+
+// RequestStop records a stop request on the row, and nothing else: the
+// replica that owns the run may be writing its terminal body at the same
+// moment (Manager.Cancel).
+func (s *PostgresStore) RequestStop(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE invocations SET stop_requested = true WHERE invocation_id = $1`, id)
 	return err
 }
 
@@ -178,13 +238,70 @@ func (s *PostgresStore) Prune(ctx context.Context, olderThan time.Duration) (int
 	return int(tag.RowsAffected()), nil
 }
 
-// Reconcile terminates in-flight rows left behind by a previous owner.
-// Called at startup: a row still pending/running under a different owner
-// is work no live process is doing; leaving it would make a poll return
-// InProgress forever. It becomes a terminal error whose message says what
-// happened, which is an answer the caller can act on.
+// Reconcile terminates in-flight rows left behind by an owner that is gone.
+// Called at startup: a row still pending/running whose owner no longer
+// holds its liveness lock is work no live process is doing; leaving it
+// would make a poll return InProgress forever. It becomes a terminal error
+// whose message says what happened, which is an answer the caller can act
+// on. A row whose owner still holds its lock is a sibling replica's running
+// invocation and is left alone — before #1359 every other owner counted as
+// gone, and a second replica starting killed the first one's work.
 func (s *PostgresStore) Reconcile(ctx context.Context) (int, error) {
-	rows, err := s.pool.Query(ctx, `SELECT invocation_id, tool_name FROM invocations WHERE finished_at IS NULL AND owner IS DISTINCT FROM $1`, s.owner)
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Release()
+	rows, err := conn.Query(ctx, `SELECT DISTINCT owner FROM invocations WHERE finished_at IS NULL AND owner IS DISTINCT FROM $1`, s.owner)
+	if err != nil {
+		return 0, err
+	}
+	var owners []*string
+	for rows.Next() {
+		var owner *string
+		if err := rows.Scan(&owner); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		owners = append(owners, owner)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	reconciled := 0
+	for _, owner := range owners {
+		if owner != nil {
+			// The lock is free only when its owner's session is gone. Taken
+			// for the instant of the check and given back on the same
+			// session, so a dead owner's id is never held by this one.
+			var free bool
+			if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, hashtext($2))`, ownerLockClass, *owner).Scan(&free); err != nil {
+				return reconciled, err
+			}
+			if !free {
+				continue
+			}
+			if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1, hashtext($2))`, ownerLockClass, *owner); err != nil {
+				return reconciled, err
+			}
+		}
+		n, err := s.terminateOrphans(ctx, owner)
+		reconciled += n
+		if err != nil {
+			return reconciled, err
+		}
+	}
+	if reconciled > 0 {
+		s.logger.Warn("reconciled invocations orphaned by a process that is gone", "count", reconciled)
+	}
+	return reconciled, nil
+}
+
+// terminateOrphans ends every in-flight row of owner (nil: rows with no
+// owner at all) with the restart error.
+func (s *PostgresStore) terminateOrphans(ctx context.Context, owner *string) (int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT invocation_id, tool_name FROM invocations WHERE finished_at IS NULL AND owner IS NOT DISTINCT FROM $1`, owner)
 	if err != nil {
 		return 0, err
 	}
@@ -202,17 +319,14 @@ func (s *PostgresStore) Reconcile(ctx context.Context) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	for _, o := range orphans {
+	for i, o := range orphans {
 		body := ToolError(s.logger, o.id, o.tool, Failf(KindRuntime, "The service restarted while this invocation was running, so it did not complete. Start it again."))
 		encoded, _ := json.Marshal(body)
 		if _, err := s.pool.Exec(ctx,
-			`UPDATE invocations SET status = $1, result = $2, finished_at = now(), owner = $3 WHERE invocation_id = $4`,
+			`UPDATE invocations SET status = $1, result = $2, finished_at = now(), owner = $3 WHERE invocation_id = $4 AND finished_at IS NULL`,
 			statusStopped, encoded, s.owner, o.id); err != nil {
-			return 0, err
+			return i, err
 		}
-	}
-	if len(orphans) > 0 {
-		s.logger.Warn("reconciled invocations orphaned by a previous process", "count", len(orphans))
 	}
 	return len(orphans), nil
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/echo"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi/spitest"
 )
 
 const migration = "../../../elitea-deepwiki-engine/migrations/0002_invocations.sql"
@@ -149,6 +150,20 @@ func TestPostgresStoreReconcilesAnotherOwnersOrphans(t *testing.T) {
 	if err := fresh.Create(ctx, mine); err != nil {
 		t.Fatal(err)
 	}
+	// The old owner is ALIVE (its session holds the owner lock): another
+	// replica's running row is not an orphan, and reconcile leaves it be.
+	if n, err := fresh.Reconcile(ctx); err != nil || n != 0 {
+		t.Fatalf("a live sibling's row was reconciled: %d %v", n, err)
+	}
+	if live, _ := fresh.Get(ctx, "Wikis", "generate_wiki", "invocation_orphan"); live.Status != "running" {
+		t.Fatalf("a live sibling's row was touched: %+v", live)
+	}
+	// A second process cannot claim a live owner id.
+	if _, err := spi.NewPostgresStore(ctx, dsnOf(t, old), "pod-old/1", nil); err == nil {
+		t.Fatal("a live owner id was claimed twice")
+	}
+	// The old owner dies: now its running row IS an orphan.
+	old.Close()
 	n, err := fresh.Reconcile(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("reconciled %d %v", n, err)
@@ -176,18 +191,21 @@ func TestTheServerServesTheSPIOverTheDurableStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Start(context.Background())
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	defer server.Stop()
+	wire := spitest.Handler(t, server)
 
-	if _, health := do(server, http.MethodGet, "/health", nil); health["extra_info"].(map[string]any)["durable_invocations"] != true {
+	if _, health := do(wire, http.MethodGet, "/health", nil); health["extra_info"].(map[string]any)["durable_invocations"] != true {
 		t.Fatalf("health does not report durability: %v", health)
 	}
-	recorder, accepted := do(server, http.MethodPost, "/tools/Echo/echo/invoke", []byte(`{"parameters":{"query":"hi"}}`))
+	recorder, accepted := do(wire, http.MethodPost, "/tools/Echo/echo/invoke", []byte(`{"parameters":{"query":"hi"}}`))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("invoke %d %s", recorder.Code, recorder.Body.String())
 	}
 	id := accepted["invocation_id"].(string)
-	body := pollUntilTerminal(t, server, "/tools/Echo/echo/invocations/"+id)
+	body := pollUntilTerminal(t, wire, "/tools/Echo/echo/invocations/"+id)
 	if body["status"] != "Completed" {
 		t.Fatalf("%v", body)
 	}
@@ -205,16 +223,16 @@ func TestTheServerServesTheSPIOverTheDurableStore(t *testing.T) {
 
 	// A stop lands on the running call through the live struct, and is
 	// persisted.
-	recorder, accepted = do(server, http.MethodPost, "/tools/Echo/echo/invoke", []byte(`{"parameters":{"query":"slow"}}`))
+	recorder, accepted = do(wire, http.MethodPost, "/tools/Echo/echo/invoke", []byte(`{"parameters":{"query":"slow"}}`))
 	if recorder.Code != http.StatusOK {
 		t.Fatal(recorder.Code)
 	}
 	id = accepted["invocation_id"].(string)
 	time.Sleep(20 * time.Millisecond)
-	if recorder, _ := do(server, http.MethodDelete, "/tools/Echo/echo/invocations/"+id, nil); recorder.Code != http.StatusNoContent {
+	if recorder, _ := do(wire, http.MethodDelete, "/tools/Echo/echo/invocations/"+id, nil); recorder.Code != http.StatusNoContent {
 		t.Fatalf("cancel %d", recorder.Code)
 	}
-	body = pollUntilTerminal(t, server, "/tools/Echo/echo/invocations/"+id)
+	body = pollUntilTerminal(t, wire, "/tools/Echo/echo/invocations/"+id)
 	if body["status"] != "Error" || body["error_category"] != "runtime_error" {
 		t.Fatalf("a stopped run ended as %v", body)
 	}

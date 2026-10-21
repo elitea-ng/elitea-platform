@@ -121,6 +121,21 @@ elitea-main
 {{- end -}}
 
 {{- define "elitea-deepwiki.validateGuards" -}}
+{{- /*
+  The provider's one listener is gRPC over mutual TLS (#1359): the SPI and the
+  platform operations, every caller authorised by its verified client
+  certificate. So mtls is mandatory, the allowlist cannot be empty, and the
+  HTTPS SPI port is gone.
+*/ -}}
+{{- if hasKey (.Values.deepwiki.service | default dict) "port" -}}
+{{- fail "deepwiki.service.port was removed with the HTTPS SPI (#1359): the provider serves gRPC only, on deepwiki.platformGrpc.port. Remove service.port (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if not .Values.deepwiki.mtls.enabled -}}
+{{- fail "deepwiki.mtls.enabled is false, but the provider serves gRPC over mutual TLS only (#1359) and refuses to start without its server certificate and client CA. Enable mtls." -}}
+{{- end -}}
+{{- if not (include "elitea-deepwiki.platformGrpc" .) -}}
+{{- fail "deepwiki.platformGrpc.clients is empty, so the provider's one listener admits nobody and elitea-main's facade is refused on every call (#1359). The default is [elitea-main]." -}}
+{{- end -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
 
 {{/*
@@ -131,9 +146,6 @@ elitea-main
 {{- if include "elitea-deepwiki.platformGrpc" . -}}
 {{- if not .Values.deepwiki.mtls.enabled -}}
 {{- fail "deepwiki.platformGrpc.clients is set, but deepwiki.mtls.enabled is false: the platform service authorises a caller by its verified client certificate and refuses to start without mutual TLS. Enable mtls, or empty platformGrpc.clients." -}}
-{{- end -}}
-{{- if eq (.Values.deepwiki.platformGrpc.port | int) 8080 -}}
-{{- fail "deepwiki.platformGrpc.port is 8080, the SPI's port: the platform service is a listener of its own." -}}
 {{- end -}}
 {{- /*
   The allowlist must name the identity elitea-main presents on this hop. When

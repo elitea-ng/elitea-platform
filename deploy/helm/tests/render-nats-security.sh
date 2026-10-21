@@ -50,6 +50,13 @@ NS=elitea
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
+# The sub-application hosts on (#1359): their cancellation fan-out identities.
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
+  --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
+  --set inventory.enabled=true --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
+  --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.key=url \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-subapp.yaml"
 # The standalone profile: the runtime plane on, so the command bus's
 # identities (elitea-main-runtime, elitea-worker) render too.
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
@@ -104,10 +111,13 @@ refuse "nats: TLS off"                        "tls.enabled is false"         "${
 refuse "nats: no_auth_user"                   "no_auth_user"                 "${NA[@]}" --set nats.config.merge.no_auth_user=anyone
 refuse "nats: allow_non_tls"                  "allow_non_tls"                "${NA[@]}" --set nats.config.merge.allow_non_tls=true
 refuse "nats: users in the global account"    "authorization is set"         "${NA[@]}" --set 'nats.config.merge.authorization.users[0].user=spiffe://elitea.internal/nats/elitea-main'
-refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
-refuse "nats: the scheduler's account removed" "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER=null
-refuse "nats: the worker's account removed"   "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.WORKER=null
-refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
+refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
+refuse "nats: the scheduler's account removed" "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP" "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER=null
+refuse "nats: the sub-app hosts' account removed" "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP" "${NA[@]}" --set nats.config.merge.accounts.SUBAPP=null
+refuse "nats: SUBAPP gets JetStream"          "holds NO streams"             "${NA[@]}" --set nats.config.merge.accounts.SUBAPP.jetstream=enabled
+refuse "nats: SUBAPP exports"                 "account SUBAPP exports"       "${NA[@]}" --set 'nats.config.merge.accounts.SUBAPP.exports[0].stream=elitea.>'
+refuse "nats: the worker's account removed"   "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP" "${NA[@]}" --set nats.config.merge.accounts.WORKER=null
+refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
 refuse "nats: WORKER JetStream unbounded"     "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream=enabled
 refuse "nats: WORKER JetStream widened"       "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream.max_streams=5
 refuse "nats: WORKER exports"                 "account WORKER exports"       "${NA[@]}" --set 'nats.config.merge.accounts.WORKER.exports[0].stream=elitea.>'
@@ -174,6 +184,16 @@ mutate "$TMP/m-wimp-other.yaml" 'accts["WORKER"]["imports"].append({"service": {
 refuse "nats: WORKER imports a command subject" "WORKER import"             "${NA[@]}" -f "$TMP/m-wimp-other.yaml"
 mutate "$TMP/m-main-consumer.yaml" 'user("MAIN","elitea-main")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.KV_OTHER.>")'
 refuse "nats: main may create a consumer off its bucket" "only the account's bootstrap creates consumers" "${NA[@]}" -f "$TMP/m-main-consumer.yaml"
+# The sub-application hosts (#1359): each its own application's cancel
+# subjects and inbox, nothing else, and only these two users in SUBAPP.
+mutate "$TMP/m-subapp-wide.yaml" 'user("SUBAPP","elitea-deepwiki")["permissions"]["publish"]["allow"].append("elitea.subapp.inventory.cancel.*")'
+refuse "nats: DeepWiki may cancel Inventory's runs" "nothing else"           "${NA[@]}" -f "$TMP/m-subapp-wide.yaml"
+mutate "$TMP/m-subapp-sub.yaml" 'user("SUBAPP","elitea-inventory")["permissions"]["subscribe"]["allow"].append("elitea.subapp.>")'
+refuse "nats: Inventory may watch every app's cancels" "nothing else"       "${NA[@]}" -f "$TMP/m-subapp-sub.yaml"
+mutate "$TMP/m-subapp-extra.yaml" 'accts["SUBAPP"]["users"].append({"user": "spiffe://elitea.internal/nats/elitea-other"})'
+refuse "nats: another user in SUBAPP"         "holds elitea-deepwiki and elitea-inventory only" "${NA[@]}" -f "$TMP/m-subapp-extra.yaml"
+mutate "$TMP/m-subapp-moved.yaml" 'accts["MAIN"]["users"].append(dict(user("SUBAPP","elitea-deepwiki"))); accts["SUBAPP"]["users"] = [u for u in accts["SUBAPP"]["users"] if not u["user"].endswith("/elitea-deepwiki")]'
+refuse "nats: a sub-app host outside SUBAPP"  "A sub-application host belongs in SUBAPP" "${NA[@]}" -f "$TMP/m-subapp-moved.yaml"
 mutate "$TMP/m-dup.yaml" 'accts["RUNTIME"]["users"].append(dict(user("MAIN","elitea-main")))'
 refuse "nats: one identity in two accounts"   "is declared in accounts"      "${NA[@]}" -f "$TMP/m-dup.yaml"
 mutate "$TMP/m-wrong-bootstrap.yaml" 'accts["MAIN"]["users"].append({"user": "spiffe://elitea.internal/nats/elitea-nats-bootstrap-extra"})'
@@ -280,6 +300,7 @@ IDS = {
     "SCHEDULER": ["elitea-scheduler"],
     "RUNTIME": ["elitea-main-runtime", "elitea-nats-bootstrap-runtime"],
     "WORKER": ["elitea-worker", "elitea-nats-bootstrap-worker"],
+    "SUBAPP": ["elitea-deepwiki", "elitea-inventory"],
 }
 ALL = [i for ids in IDS.values() for i in ids]
 URI = lambda i: f"spiffe://elitea.internal/nats/{i}"
@@ -306,11 +327,11 @@ for label, c in (("scale-1", c1), ("HA", c3)):
     check(f"{label}: http monitor stays on 8222 (exporter over localhost, kubelet probes)", c.get("http_port") == 8222)
 check("both profiles carry the SAME accounts and permission table", c1["accounts"] == c3["accounts"])
 accts = c1["accounts"]
-check("one account per plane: exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER", set(accts) == set(IDS), sorted(accts))
+check("one account per plane: exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP", set(accts) == set(IDS), sorted(accts))
 users = {}
 for acct, a in accts.items():
-    if acct == "SCHEDULER":
-        check("SCHEDULER: no JetStream (it holds no stream a reply subject could land in)", a.get("jetstream") in (None, "disabled"), a.get("jetstream"))
+    if acct in ("SCHEDULER", "SUBAPP"):
+        check(f"{acct}: no JetStream (it holds no stream a reply subject could land in)", a.get("jetstream") in (None, "disabled"), a.get("jetstream"))
     elif acct == "WORKER":
         check("WORKER: JetStream bounded to one stream (its dead-letter bucket)", isinstance(a.get("jetstream"), dict) and a["jetstream"].get("max_streams") == 1, a.get("jetstream"))
     else:
@@ -325,6 +346,13 @@ for i in ALL:
     check(f"{i} subscribes to its own inbox prefix", f"_INBOX_{i}.>" in sub, sub)
     others = [s for s in sub if s.startswith("_INBOX")  and s != f"_INBOX_{i}.>"]
     check(f"{i} subscribes to no other inbox", not others, others)
+for app, other in (("deepwiki", "inventory"), ("inventory", "deepwiki")):
+    perms = users.get(URI(f"elitea-{app}"), {})
+    own = f"elitea.subapp.{app}.cancel.*"
+    check(f"elitea-{app} publishes exactly its own cancel subjects", perms.get("publish", {}).get("allow") == [own], perms.get("publish"))
+    check(f"elitea-{app} subscribes its own cancel subjects and inbox only",
+          sorted(perms.get("subscribe", {}).get("allow", [])) == sorted([own, f"_INBOX_elitea-{app}.>"]), perms.get("subscribe"))
+check("SUBAPP exports and imports nothing", not accts.get("SUBAPP", {}).get("exports") and not accts.get("SUBAPP", {}).get("imports"))
 destroy = re.compile(r"^\$JS\.API\.(STREAM\.(DELETE|PURGE|MSG\.DELETE)|ACCOUNT\.PURGE)")
 admin = re.compile(r"^\$JS\.API\.STREAM\.(CREATE|UPDATE)")
 for i in ALL:
@@ -457,7 +485,7 @@ for label, d in (("scale-1", scale1), ("HA", ha)):
     check(f"{label}: it selects the NATS pods", all(pod_labels.get(k) == v for k, v in sel.items()))
     rules = {r["ports"][0]["port"]: r for r in np["ingress"]}
     names = {p["podSelector"]["matchLabels"]["app.kubernetes.io/name"] for p in rules.get(4222, {}).get("from", []) if "podSelector" in p}
-    check(f"{label}: 4222 admits exactly the five client workloads", names == {"elitea-main", "elitea-llm-gateway", "elitea-scheduler", "nats-bootstrap", "elitea-worker-python"}, sorted(names))
+    check(f"{label}: 4222 admits exactly the seven client workloads", names == {"elitea-main", "elitea-llm-gateway", "elitea-scheduler", "nats-bootstrap", "elitea-worker-python", "elitea-deepwiki", "elitea-inventory"}, sorted(names))
     mon = [p.get("podSelector", {}).get("matchLabels", {}) for p in rules.get(8222, {}).get("from", [])]
     check(f"{label}: 8222 (monitoring) admits the KEDA operator only", mon == [{"app": "keda-operator"}], mon)
     if label == "HA":
@@ -560,6 +588,33 @@ for ident, (pfx, cm, urlvar) in prefix.items():
     url = envmap.get(urlvar, "")
     check(f"{ident}: {urlvar} is tls://{fqdn}:4222, no credential", url == f"tls://{fqdn}:4222", url)
 
+# ── the sub-application hosts' identities (#1359) ─────────────────────────
+sa = docs("elitea-subapp.yaml")
+sacerts = {c["spec"]["commonName"]: c for c in kinds(sa, "Certificate") if c["spec"].get("uris")}
+sadeps = {d["metadata"]["name"]: d for d in kinds(sa, "Deployment")}
+sa_np = {p["podSelector"]["matchLabels"]["app.kubernetes.io/name"]
+         for r in kinds(scale1, "NetworkPolicy")[0]["spec"]["ingress"] if r["ports"][0]["port"] == 4222
+         for p in r["from"] if "podSelector" in p}
+for app in ("deepwiki", "inventory"):
+    ident, pfx = f"elitea-{app}", f"ELITEA_{app.upper()}"
+    c = sacerts.get(ident)
+    check(f"{ident}: gets its NATS certificate, its URI SAN a SUBAPP user", c is not None and c["spec"]["uris"] == [URI(ident)] and URI(ident) in users, sorted(sacerts))
+    d = sadeps.get(ident)
+    if not (c and d):
+        continue
+    check(f"{ident}: issued by the NATS CA Issuer", c["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
+    check(f"{ident}: pod label is one the NATS NetworkPolicy admits", d["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") in sa_np)
+    spec = d["spec"]["template"]["spec"]
+    ctr = spec["containers"][0]
+    vol = [v for v in spec.get("volumes", []) if v["name"] == "nats-client-tls"]
+    mnt = [m for m in ctr.get("volumeMounts", []) if m["name"] == "nats-client-tls"]
+    check(f"{ident}: the host mounts the Secret its Certificate writes", vol and vol[0]["secret"]["secretName"] == c["spec"]["secretName"] and mnt)
+    envmap = {e["name"]: e.get("value") for e in ctr.get("env", [])}
+    base = mnt[0]["mountPath"] if mnt else "<unmounted>"
+    files = [envmap.get(f"{pfx}_NATS_TLS_{k}_FILE") for k in ("CA", "CERT", "KEY")]
+    check(f"{ident}: {pfx}_NATS_TLS_* point into the mount", files == [f"{base}/ca.crt", f"{base}/tls.crt", f"{base}/tls.key"], files)
+    check(f"{ident}: {pfx}_NATS_URL is tls://{fqdn}:4222, no credential", envmap.get(f"{pfx}_NATS_URL") == f"tls://{fqdn}:4222", envmap.get(f"{pfx}_NATS_URL"))
+
 # ── the runtime command bus's identities (standalone profile) ─────────────
 rt = docs("elitea-runtime.yaml")
 rtcerts = {c["spec"]["commonName"]: c for c in kinds(rt, "Certificate") if c["spec"].get("uris")}
@@ -637,10 +692,13 @@ for d in kinds(docs("elitea-runtime.yaml"), "Deployment"):
         rendered_env |= {e["name"] for e in c.get("env", [])}
 for d in kinds(docs("elitea-runtime.yaml"), "ConfigMap"):
     rendered_env |= set(d.get("data", {}) or {})
+for d in kinds(docs("elitea-subapp.yaml"), "Deployment"):
+    for c in d["spec"]["template"]["spec"]["containers"]:
+        rendered_env |= {e["name"] for e in c.get("env", [])}
 for p in sorted(prefixes):
     names = [f"{p}_NATS_TLS_{k}_FILE" for k in ("CA", "CERT", "KEY")]
     check(f"the chart renders all three of {p}_NATS_TLS_*_FILE the code builds", all(n in rendered_env for n in names), [n for n in names if n not in rendered_env])
-check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY", "ELITEA_RUNTIME"}, sorted(prefixes))
+check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY", "ELITEA_RUNTIME", "ELITEA_DEEPWIKI", "ELITEA_INVENTORY"}, sorted(prefixes))
 # The scheduler opens JetStream with natsconn.SchedulerGatewayJSAPIPrefix; the
 # SCHEDULER imports must map GATEWAY's consumer API under that same prefix,
 # or every bind answers "JetStream not enabled for account".

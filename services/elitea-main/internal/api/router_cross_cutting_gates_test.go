@@ -300,7 +300,7 @@ func gateFacadeConfig(t *testing.T) facade.Config {
 	certificate := write("client.pem", "CERTIFICATE", der)
 	return facade.Config{
 		Enabled:        true,
-		BaseURL:        "https://gates.internal:1",
+		Target:         "gates.internal:1",
 		ClientCertFile: certificate,
 		ClientKeyFile:  write("client-key.pem", "EC PRIVATE KEY", keyDER),
 		CAFile:         certificate,

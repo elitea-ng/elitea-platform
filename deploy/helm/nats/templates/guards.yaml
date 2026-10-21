@@ -20,7 +20,7 @@ value and says why.
 {{- $merge := $n.config.merge | default dict -}}
 {{- range $k := list "no_auth_user" "allow_non_tls" "authorization" -}}
 {{- if hasKey $merge $k -}}
-{{- fail (printf "nats.config.merge.%s is set. no_auth_user and allow_non_tls let a connection in without a mapped certificate, and a top-level authorization block puts users in the global account, outside the per-plane accounts that keep one plane's streams out of another's reach (#1076). Users belong in nats.config.merge.accounts.<MAIN|GATEWAY|SCHEDULER|RUNTIME|WORKER>.users." $k) -}}
+{{- fail (printf "nats.config.merge.%s is set. no_auth_user and allow_non_tls let a connection in without a mapped certificate, and a top-level authorization block puts users in the global account, outside the per-plane accounts that keep one plane's streams out of another's reach (#1076). Users belong in nats.config.merge.accounts.<MAIN|GATEWAY|SCHEDULER|RUNTIME|WORKER|SUBAPP>.users." $k) -}}
 {{- end -}}
 {{- end -}}
 {{- /* The planes, each its own account (#1076 F1). */ -}}
@@ -28,12 +28,12 @@ value and says why.
 {{- range $k, $v := (get $merge "accounts" | default dict) -}}
 {{- if $v }}{{ $_ := set $accounts $k $v }}{{ end -}}
 {{- end -}}
-{{- $want := list "GATEWAY" "MAIN" "RUNTIME" "SCHEDULER" "WORKER" -}}
+{{- $want := list "GATEWAY" "MAIN" "RUNTIME" "SCHEDULER" "SUBAPP" "WORKER" -}}
 {{- if ne (keys $accounts | sortAlpha | join ",") ($want | join ",") -}}
-{{- fail (printf "nats.config.merge.accounts must declare exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER, and declares [%s]. Each plane is its own account so that a consumer's deliver subject or a request's reply subject (which the server does not check against permissions) can only land inside its sender's own plane (#1076)." (keys $accounts | sortAlpha | join ", ")) -}}
+{{- fail (printf "nats.config.merge.accounts must declare exactly MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER and SUBAPP, and declares [%s]. Each plane is its own account so that a consumer's deliver subject or a request's reply subject (which the server does not check against permissions) can only land inside its sender's own plane (#1076)." (keys $accounts | sortAlpha | join ", ")) -}}
 {{- end -}}
-{{- /* SCHEDULER holds no streams: it has no JetStream, and so no bootstrap. */ -}}
-{{- $streamless := list "SCHEDULER" -}}
+{{- /* SCHEDULER and SUBAPP hold no streams: no JetStream, and so no bootstrap. */ -}}
+{{- $streamless := list "SCHEDULER" "SUBAPP" -}}
 {{- $seen := dict -}}
 {{- range $acct := $want -}}
 {{- $a := get $accounts $acct | default dict -}}
@@ -76,6 +76,26 @@ value and says why.
 {{- if and (hasSuffix "/nats/elitea-worker" $name) (ne $acct "WORKER") -}}
 {{- fail (printf "user %q is declared in account %s. The worker belongs in WORKER, which holds no command stream: in RUNTIME, a pull or info request whose reply subject names elitea.rt.v1.<route>.d.<token> makes the server store the answer in that command stream, because a reply subject is not checked against permissions (#1081)." $name $acct) -}}
 {{- end -}}
+{{- /* SUBAPP (#1359): the sub-application hosts, each confined to its own
+       application's cancel subjects and its own inbox. */ -}}
+{{- $subapp := "" -}}
+{{- range $app := list "deepwiki" "inventory" -}}
+{{- if hasSuffix (printf "/nats/elitea-%s" $app) $name }}{{ $subapp = $app }}{{ end -}}
+{{- end -}}
+{{- if and $subapp (ne $acct "SUBAPP") -}}
+{{- fail (printf "user %q is declared in account %s. A sub-application host belongs in SUBAPP, which holds no streams, so the reply subject of anything it sends lands where nothing is stored (#1359)." $name $acct) -}}
+{{- end -}}
+{{- if eq $acct "SUBAPP" -}}
+{{- if not $subapp -}}
+{{- fail (printf "user %q is declared in account SUBAPP, which holds elitea-deepwiki and elitea-inventory only." $name) -}}
+{{- end -}}
+{{- $own := printf "elitea.subapp.%s.cancel.*" $subapp -}}
+{{- $pubs := (($u.permissions | default dict).publish | default dict).allow | default list -}}
+{{- $subs := (($u.permissions | default dict).subscribe | default dict).allow | default list -}}
+{{- if or (ne ($pubs | join ",") $own) (ne ($subs | sortAlpha | join ",") (list $own (printf "_INBOX_elitea-%s.>" $subapp) | sortAlpha | join ",")) -}}
+{{- fail (printf "user %q may publish %v and subscribe %v. A sub-application host publishes and subscribes its own %s and nothing else (plus its own inbox), so one application can neither cancel nor watch another's runs (#1359)." $name $pubs $subs $own) -}}
+{{- end -}}
+{{- end -}}
 {{- if and (eq $acct "WORKER") (not (hasSuffix "/nats/elitea-worker" $name)) (not (hasSuffix "/nats/elitea-nats-bootstrap-worker" $name)) -}}
 {{- fail (printf "user %q is declared in account WORKER, which holds elitea-worker and its bootstrap only." $name) -}}
 {{- end -}}
@@ -110,7 +130,10 @@ value and says why.
 {{- if and (eq $acct "WORKER") (ne (len $users) 2) -}}
 {{- fail (printf "account WORKER must declare exactly elitea-worker and elitea-nats-bootstrap-worker, and declares %d users." (len $users)) -}}
 {{- end -}}
-{{- if and (not $hasJS) (ne (len $users) 1) -}}
+{{- if and (eq $acct "SUBAPP") (ne (len $users) 2) -}}
+{{- fail (printf "account SUBAPP must declare exactly elitea-deepwiki and elitea-inventory, and declares %d users." (len $users)) -}}
+{{- end -}}
+{{- if and (eq $acct "SCHEDULER") (ne (len $users) 1) -}}
 {{- fail (printf "account %s must declare exactly one user, elitea-scheduler, and declares %d." $acct (len $users)) -}}
 {{- end -}}
 {{- if and (not $hasJS) (ne $bootstraps 0) -}}
@@ -128,12 +151,12 @@ The two cross-account flows, and nothing else (#1076):
 {{- $wb := "GATEWAY_BUDGET_DELTAS.budget-writeback" -}}
 {{- $services := dict (printf "$JS.API.CONSUMER.INFO.%s" $wb) "" (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $wb) "stream" (printf "$JS.ACK.%s.>" $wb) "" -}}
 {{- $serviceTo := dict (printf "$JS.API.CONSUMER.INFO.%s" $wb) (printf "JS.GATEWAY.API.CONSUMER.INFO.%s" $wb) (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $wb) (printf "JS.GATEWAY.API.CONSUMER.MSG.NEXT.%s" $wb) (printf "$JS.ACK.%s.>" $wb) "" -}}
-{{- range $acct := list "MAIN" "SCHEDULER" "WORKER" -}}
+{{- range $acct := list "MAIN" "SCHEDULER" "WORKER" "SUBAPP" -}}
 {{- if get (get $accounts $acct) "exports" -}}
 {{- fail (printf "account %s exports subjects. GATEWAY (its soft alerts to MAIN, its budget-writeback drain to SCHEDULER) and RUNTIME (its worker durables to WORKER) are the only exporters; any other export turns a plane boundary back into a shared subject space (#1076)." $acct) -}}
 {{- end -}}
 {{- end -}}
-{{- range $acct := list "GATEWAY" "RUNTIME" -}}
+{{- range $acct := list "GATEWAY" "RUNTIME" "SUBAPP" -}}
 {{- if get (get $accounts $acct) "imports" -}}
 {{- fail (printf "account %s imports subjects. The only imports are MAIN's of GATEWAY's %s, SCHEDULER's of GATEWAY's budget-writeback services and WORKER's of RUNTIME's worker-durable services (#1076)." $acct $alerts) -}}
 {{- end -}}

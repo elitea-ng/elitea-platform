@@ -38,6 +38,7 @@ import (
 	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 )
 
 const identitySecret = "shared-with-the-provider"
@@ -80,7 +81,7 @@ func provider(t *testing.T) (*[]received, deepwiki.Config) {
 	pool.AddCert(ca)
 
 	var log []received
-	server := httptest.NewUnstartedServer(http.HandlerFunc(
+	target := providertest.Start(t, http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			body := make([]byte, r.ContentLength)
 			if r.ContentLength > 0 {
@@ -95,17 +96,14 @@ func provider(t *testing.T) (*[]received, deepwiki.Config) {
 			})
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true}`))
-		}))
-	server.TLS = &tls.Config{
+		}), &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		ClientCAs:    pool,
 		// The provider refuses anything it cannot authenticate. A facade that
 		// presents no certificate must FAIL here, not be waved through.
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS12,
-	}
-	server.StartTLS()
-	t.Cleanup(server.Close)
+	})
 
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "tls.crt")
@@ -117,7 +115,7 @@ func provider(t *testing.T) (*[]received, deepwiki.Config) {
 
 	return &log, deepwiki.Config{
 		Enabled:        true,
-		BaseURL:        server.URL,
+		Target:         target,
 		ClientCertFile: certFile,
 		ClientKeyFile:  keyFile,
 		CAFile:         caFile,
@@ -281,7 +279,9 @@ func TestEachFacadePathMapsToItsProviderPath(t *testing.T) {
 
 	for _, testCase := range cases {
 		response := call(t, handler, testCase.method, testCase.facade, testCase.body)
-		if response.Code != http.StatusOK {
+		// A cancel is the SPI's 204 whatever the double wrote: the provider
+		// service's Cancel carries no body.
+		if want := successFor(testCase.method); response.Code != want {
 			t.Fatalf("%s %s: status %d body %s",
 				testCase.method, testCase.facade, response.Code, response.Body.String())
 		}
@@ -426,7 +426,7 @@ func TestAGeneratorMayStartAndCancel(t *testing.T) {
 		t.Fatalf("start refused: %d %s", response.Code, response.Body.String())
 	}
 	if response := call(t, generator, http.MethodDelete,
-		"/api/v2/deepwiki/invocations/7/Wikis/generate_wiki/abc", ""); response.Code != http.StatusOK {
+		"/api/v2/deepwiki/invocations/7/Wikis/generate_wiki/abc", ""); response.Code != http.StatusNoContent {
 		t.Fatalf("cancel refused: %d", response.Code)
 	}
 	if len(*log) != 2 {
@@ -507,14 +507,15 @@ func TestCompositionRefusesAHalfWiredAuthenticationChain(t *testing.T) {
 	}
 }
 
-// A plain-HTTP base URL cannot work — the provider serves nothing there — so
-// it is a startup failure rather than four routes that fail per call.
-func TestAPlainHTTPProviderURLIsRefusedAtComposition(t *testing.T) {
+// A URL target cannot work — the provider serves gRPC on a host:port, and
+// the retired BASE_URL is what an operator is likeliest to carry over — so it
+// is a startup failure rather than four routes that fail per call.
+func TestAURLProviderTargetIsRefusedAtComposition(t *testing.T) {
 	_, cfg := provider(t)
-	cfg.BaseURL = strings.Replace(cfg.BaseURL, "https://", "http://", 1)
+	cfg.Target = "https://" + cfg.Target
 
 	if _, err := deepwiki.NewRoute(cfg, authConfig(), resolver(), testCredentialResolver(t), nil, &recordingMinter{}, nil); !errors.Is(err, deepwiki.ErrInvalidProxy) {
-		t.Fatalf("a plain-HTTP provider URL was accepted: %v", err)
+		t.Fatalf("a URL provider target was accepted: %v", err)
 	}
 }
 
@@ -543,7 +544,7 @@ func TestAnUnreachableProviderIsAReadable503(t *testing.T) {
 	_, cfg := provider(t)
 	// A port nothing listens on. The certificates are still valid, so this
 	// isolates reachability from the mTLS material.
-	cfg.BaseURL = "https://127.0.0.1:1"
+	cfg.Target = "127.0.0.1:1"
 
 	handler := route(t, cfg, deepwiki.ReadPermission)
 	response := call(t, handler, http.MethodGet, "/api/v2/deepwiki/slots/7", "")
@@ -573,4 +574,13 @@ type stubTokenValidator struct{}
 
 func (stubTokenValidator) ValidateToken(context.Context, string) (auth.User, error) {
 	return auth.User{ID: "7"}, nil
+}
+
+// successFor is the SPI's success status for a facade method: a cancel is a
+// 204, everything else a 200.
+func successFor(method string) int {
+	if method == http.MethodDelete {
+		return http.StatusNoContent
+	}
+	return http.StatusOK
 }

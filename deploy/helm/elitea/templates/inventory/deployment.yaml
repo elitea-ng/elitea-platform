@@ -54,14 +54,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: 8080
-              protocol: TCP
-            {{- if include "elitea-inventory.platformGrpc" . }}
+            # The one listener (#1359): the provider SPI
+            # (elitea.subapp.v1.ProviderService, elitea-main's facade) and the
+            # platform operations, both gRPC behind the mTLS terminus below.
             - name: platform-grpc
               containerPort: {{ .Values.inventory.platformGrpc.port }}
               protocol: TCP
-            {{- end }}
           env:
             {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
@@ -82,47 +80,44 @@ spec:
             - name: ELITEA_INVENTORY_TLS_CA_FILE
               value: {{ .Values.inventory.mtls.mountPath }}/ca.crt
             {{- end }}
-            {{- if include "elitea-inventory.platformGrpc" . }}
-            # The platform gRPC service: a second listener behind the TLS
-            # configuration above. Only the identities listed may call it, by
-            # their verified client certificate. Absent when the allowlist is
-            # empty, which keeps the service off.
+            # The listener's allowlist: only the identities listed may call
+            # it, by their verified client certificate (elitea-main's facade
+            # client certificate, by default).
             - name: ELITEA_INVENTORY_PLATFORM_CLIENTS
               value: {{ join "," .Values.inventory.platformGrpc.clients | quote }}
             - name: ELITEA_INVENTORY_PLATFORM_GRPC_ADDR
               value: {{ printf ":%d" (.Values.inventory.platformGrpc.port | int) | quote }}
+            {{- if not (hasKey $env "ELITEA_INVENTORY_NATS_URL") }}
+            # The cancellation fan-out (#1359): a cancel that lands on one
+            # replica stops the run on the replica that holds it. Core NATS,
+            # the SUBAPP account, this application's subjects only.
+            - name: ELITEA_INVENTORY_NATS_URL
+              value: {{ include "elitea.natsUrl" . | quote }}
+            {{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            # Its NATS identity, elitea-inventory (templates/natsClient.yaml).
+            - name: ELITEA_INVENTORY_NATS_TLS_CA_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+            - name: ELITEA_INVENTORY_NATS_TLS_CERT_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+            - name: ELITEA_INVENTORY_NATS_TLS_KEY_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
             {{- end }}
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
-          # tcpSocket, not httpGet, for the reason DeepWiki's deployment spells
-          # out: with mTLS on, this listener requires and verifies a client
-          # certificate, and the kubelet presents none. An httpGet probe fails
-          # every time, readiness never passes, and the liveness probe restarts
-          # a process that is working correctly.
-          {{- if .Values.inventory.mtls.enabled }}
+          # tcpSocket on the gRPC listener: it requires and verifies a client
+          # certificate, and the kubelet presents none, so a probe that speaks
+          # the protocol would fail every time. The SPI's own Health is what
+          # elitea-main's registrar polls.
           livenessProbe:
             tcpSocket:
-              port: http
+              port: platform-grpc
             periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
           readinessProbe:
             tcpSocket:
-              port: http
+              port: platform-grpc
             periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
-          {{- else }}
-          livenessProbe:
-            httpGet:
-              path: {{ .Values.inventory.probes.liveness.path }}
-              port: http
-            periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
-          readinessProbe:
-            httpGet:
-              path: {{ .Values.inventory.probes.readiness.path }}
-              port: http
-            periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
-          {{- end }}
           resources:
             {{- toYaml .Values.inventory.resources | nindent 12 }}
           volumeMounts:
@@ -131,6 +126,9 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.inventory.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 12 }}{{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
         {{- if include "elitea-inventory.sidecar" . }}
         # The engine sidecar (ADR-0023 H2, ADR-0027): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
@@ -214,6 +212,9 @@ spec:
                 path: {{ .Values.inventory.engine.callbackCa.key }}
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 8 }}{{- end }}
+        {{- if .Values.nats.tls.enabled }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-inventory.fullname" .))) | nindent 8 }}
+        {{- end }}
       {{- with .Values.inventory.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

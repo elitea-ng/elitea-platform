@@ -32,7 +32,7 @@ func NewProxy(cfg Config, logger *slog.Logger) (*Proxy, error) {
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("%w: not enabled", ErrInvalidProxy)
 	}
-	hop, err := proxy.New(cfg.hop(), BaseURLEnv, logger)
+	hop, err := proxy.New(cfg.hop(), TargetEnv, logger)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidProxy, err)
 	}
@@ -59,7 +59,7 @@ func (p *Proxy) Forward(
 func (c Config) hop() facade.Config {
 	return facade.Config{
 		Enabled:        c.Enabled,
-		BaseURL:        c.BaseURL,
+		Target:         c.Target,
 		ClientCertFile: c.ClientCertFile,
 		ClientKeyFile:  c.ClientKeyFile,
 		CAFile:         c.CAFile,

@@ -19,8 +19,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -67,6 +69,23 @@ func ParseTarget(raw string, opts TargetOptions) (*url.URL, error) {
 		return nil, fmt.Errorf("%w: %s must be https, got %q", ErrInvalidTarget, setting, raw)
 	}
 	return target, nil
+}
+
+// ParseGRPCTarget validates a provider's gRPC target: a host:port with both
+// halves, which is what the provider service listens on (#1359). A URL is
+// refused with the setting named — it is what the retired BASE_URL held,
+// and the likeliest thing an operator carries over.
+func ParseGRPCTarget(raw, envName string) error {
+	setting := envName
+	if setting == "" {
+		setting = "the provider target"
+	}
+	host, port, err := net.SplitHostPort(raw)
+	if err != nil || host == "" || port == "" || strings.Contains(raw, "/") {
+		return fmt.Errorf("%w: %s must be a host:port (the provider's gRPC listener), got %q",
+			ErrInvalidTarget, setting, raw)
+	}
+	return nil
 }
 
 // ClearWriteDeadline removes the per-connection write deadline before a hop
