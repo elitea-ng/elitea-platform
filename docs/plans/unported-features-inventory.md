@@ -232,21 +232,21 @@ test bar below.
 
 | Issue | What |
 |---|---|
-| [#616](https://github.com/EliteaAI/elitea-platform/issues/616) | MCP `tools/call` — the TOOLKIT half. A full vertical slice: proto capability, worker handler, and durable effect identity, because running a toolkit tool writes Jira tickets and pushes commits |
-| [#617](https://github.com/EliteaAI/elitea-platform/issues/617) | Agent Evaluation — the run engine, results and scorecard. Three hard prerequisites, none of them UI |
-| [#618](https://github.com/EliteaAI/elitea-platform/issues/618) | Analytics by TOOL. Blocked on a missing EVENT, not a missing column — sequence after #616 |
-| [#619](https://github.com/EliteaAI/elitea-platform/issues/619) | Audit-event retention. The writer landed here deliberately without a sweeper |
-| [#620](https://github.com/EliteaAI/elitea-platform/issues/620) | The Form plane still issues no actor PAT — the last install step needing seeded SQL |
-| [#621](https://github.com/EliteaAI/elitea-platform/issues/621) | The spec and two comments describe refusals that no longer happen, plus a CI check for the whole class |
-| [#622](https://github.com/EliteaAI/elitea-platform/issues/622) | Canvas presence over the EXISTING SSE plane — explicitly **not** a rebuilt socket server |
-| [#623](https://github.com/EliteaAI/elitea-platform/issues/623) | SCIM compound filters. Recorded, not scheduled: the trigger is a named IdP actually sending one |
-| [#624](https://github.com/EliteaAI/elitea-platform/issues/624) | **Decisions.** Three defaults that keep a stock install from configuring itself. Nothing should be built against these until they are answered |
-| [#625](https://github.com/EliteaAI/elitea-platform/issues/625) | TTS highlight, support-assistant attachments, and the skill-hub attach dialog |
+| [#616](https://github.com/elitea-ng/elitea-platform/issues/616) | MCP `tools/call` — the TOOLKIT half. A full vertical slice: proto capability, worker handler, and durable effect identity, because running a toolkit tool writes Jira tickets and pushes commits |
+| [#617](https://github.com/elitea-ng/elitea-platform/issues/617) | Agent Evaluation — the run engine, results and scorecard. Three hard prerequisites, none of them UI |
+| [#618](https://github.com/elitea-ng/elitea-platform/issues/618) | Analytics by TOOL. Blocked on a missing EVENT, not a missing column — sequence after #616 |
+| [#619](https://github.com/elitea-ng/elitea-platform/issues/619) | Audit-event retention. The writer landed here deliberately without a sweeper |
+| [#620](https://github.com/elitea-ng/elitea-platform/issues/620) | The Form plane still issues no actor PAT — the last install step needing seeded SQL |
+| [#621](https://github.com/elitea-ng/elitea-platform/issues/621) | The spec and two comments describe refusals that no longer happen, plus a CI check for the whole class |
+| [#622](https://github.com/elitea-ng/elitea-platform/issues/622) | Canvas presence over the EXISTING SSE plane — explicitly **not** a rebuilt socket server |
+| [#623](https://github.com/elitea-ng/elitea-platform/issues/623) | SCIM compound filters. Recorded, not scheduled: the trigger is a named IdP actually sending one |
+| [#624](https://github.com/elitea-ng/elitea-platform/issues/624) | **Decisions.** Three defaults that keep a stock install from configuring itself. Nothing should be built against these until they are answered |
+| [#625](https://github.com/elitea-ng/elitea-platform/issues/625) | TTS highlight, support-assistant attachments, and the skill-hub attach dialog |
 
 Two existing issues gained evidence rather than duplicates:
-[#545](https://github.com/EliteaAI/elitea-platform/issues/545) (J28 is a seventh
+[#545](https://github.com/elitea-ng/elitea-platform/issues/545) (J28 is a seventh
 journey of its class, with the diagnosis recorded) and
-[#323](https://github.com/EliteaAI/elitea-platform/issues/323) (its premise has
+[#323](https://github.com/elitea-ng/elitea-platform/issues/323) (its premise has
 landed; the voices listing landed on 2026-09-07 — see the struck C1 row).
 
 ## The evidence bar every one of those carries

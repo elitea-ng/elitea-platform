@@ -120,7 +120,7 @@ PY
 # One container on the stack's network with the runtime CA mounted. The mock
 # image is the only one in the stack with a python runtime; --user 0:0 so it can
 # read the 0600 signing material. The same pattern `check` uses.
-MOCK_IMAGE="ghcr.io/eliteaai/elitea-mock-llm:standalone"
+MOCK_IMAGE="ghcr.io/elitea-ng/elitea-mock-llm:standalone"
 probe_py() {
   $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
     --entrypoint python3 "$MOCK_IMAGE" -c "$1" 2>&1 || true

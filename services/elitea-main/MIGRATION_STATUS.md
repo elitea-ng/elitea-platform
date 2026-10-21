@@ -214,7 +214,7 @@ CANARY_WEIGHT=0.1                     # fraction of canary traffic to Go (0.0-1.
 
 ### Image
 ```bash
-docker build -t ghcr.io/eliteaai/elitea-main:shadow-v0.1 .
+docker build -t ghcr.io/elitea-ng/elitea-main:shadow-v0.1 .
 ```
 
 ---

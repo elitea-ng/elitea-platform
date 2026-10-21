@@ -220,7 +220,7 @@ services:
     restart: "no"
 
   elitea-main:
-    image: ghcr.io/eliteaai/elitea-main:${E2E_IMAGE_TAG:-e2e}
+    image: ghcr.io/elitea-ng/elitea-main:${E2E_IMAGE_TAG:-e2e}
     # `image:` alone made compose PULL when the tag was absent locally, and the
     # tag has never been published — so CI died at bring-up with
     # `Head https://ghcr.io/v2/eliteaai/elitea-main/manifests/e2e: denied`
@@ -446,7 +446,7 @@ services:
     # The Go sub-application host (ADR-0023 H1.1) serving DeepWiki's SPI in
     # the Python shell's place: same ELITEA_DEEPWIKI_* settings, same fixture
     # runner, one static binary. ELITEA_SUBAPP names the application.
-    image: ghcr.io/eliteaai/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
+    image: ghcr.io/elitea-ng/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
     build:
       context: ..
       dockerfile: services/elitea-subapp-host/Containerfile
@@ -500,7 +500,7 @@ services:
   # fixtures/inventory). The host's runner that dials a sidecar is `sidecar`
   # (not used on this stack).
   elitea-inventory:
-    image: ghcr.io/eliteaai/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
+    image: ghcr.io/elitea-ng/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
     build:
       context: ..
       dockerfile: services/elitea-subapp-host/Containerfile
@@ -540,7 +540,7 @@ services:
       start_period: 10s
 
   elitea-web:
-    image: ghcr.io/eliteaai/elitea-web:${E2E_IMAGE_TAG:-e2e}
+    image: ghcr.io/elitea-ng/elitea-web:${E2E_IMAGE_TAG:-e2e}
     # See the elitea-main `build:` comment above (issue #154).
     build:
       context: ..

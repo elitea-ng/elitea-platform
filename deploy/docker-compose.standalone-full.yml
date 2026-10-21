@@ -697,7 +697,7 @@ services:
   # /v1/chat/completions to the credential's api_base, which is therefore
   # http://llm-mock:8090 with no path.
   llm-mock:
-    image: ghcr.io/eliteaai/elitea-mock-llm:standalone
+    image: ghcr.io/elitea-ng/elitea-mock-llm:standalone
     build:
       context: ./mock-llm
       dockerfile: Containerfile
@@ -745,7 +745,7 @@ services:
   # the journal and state reads a test makes from the host, the same reason
   # llm-mock publishes one.
   qtest-mock:
-    image: ghcr.io/eliteaai/elitea-mock-qtest:standalone
+    image: ghcr.io/elitea-ng/elitea-mock-qtest:standalone
     build:
       context: ./qtest-mock
       dockerfile: Containerfile
@@ -786,7 +786,7 @@ services:
   # published port below exists for the journal and state reads a test makes
   # from the host, the same reason llm-mock and qtest-mock publish one.
   ado-mock:
-    image: ghcr.io/eliteaai/elitea-mock-ado:standalone
+    image: ghcr.io/elitea-ng/elitea-mock-ado:standalone
     build:
       context: ./ado-mock
       dockerfile: Containerfile
@@ -2031,7 +2031,7 @@ services:
   # tenant credential's api_base. The worker's MCP egress has no allowlist at
   # all — the endpoint is constrained by scheme and syntax only.
   mcp-mock:
-    image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
+    image: ghcr.io/elitea-ng/elitea-mock-mcp:standalone
     build:
       context: ./mock-mcp
       dockerfile: Containerfile
@@ -2064,7 +2064,7 @@ services:
   mcp-mock-trust:
     # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
     # the trust anchor written here can only come from the mint being served.
-    image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
+    image: ghcr.io/elitea-ng/elitea-mock-mcp:standalone
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:

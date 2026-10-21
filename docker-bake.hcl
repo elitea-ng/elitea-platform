@@ -16,7 +16,7 @@ variable "TAG" {
 }
 
 variable "REGISTRY" {
-  default = "ghcr.io/eliteaai"
+  default = "ghcr.io/elitea-ng"
 }
 
 group "default" {

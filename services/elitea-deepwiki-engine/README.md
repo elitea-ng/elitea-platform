@@ -1707,7 +1707,7 @@ What the run uses:
 - `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
   standalone stack. The overlay runs the prebuilt image
   (`DEEPWIKI_ENGINE_IMAGE`, default
-  `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
+  `ghcr.io/elitea-ng/elitea-deepwiki-engine-native:local`, the bake target
   `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and
   the engine, forces `runner native`, and puts the deterministic LLM stub
   (`services/elitea-deepwiki-engine/testdata/llm_stub.py`) at `llm-mock:8090`.
