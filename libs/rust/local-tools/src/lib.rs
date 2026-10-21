@@ -19,6 +19,7 @@ pub mod classify;
 pub mod command;
 pub mod deny;
 pub mod error;
+pub mod execpolicy;
 pub mod files;
 pub mod find;
 pub mod git;
