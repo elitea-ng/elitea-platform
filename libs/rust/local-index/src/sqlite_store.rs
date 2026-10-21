@@ -1326,7 +1326,9 @@ fn encode(vector: &[f64]) -> Vec<u8> {
 
 fn decode(bytes: &[u8]) -> Vec<f64> {
     bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut word = [0_u8; 8];
             word.copy_from_slice(chunk);

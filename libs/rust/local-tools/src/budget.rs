@@ -475,8 +475,10 @@ fn read_index(dir: &OwnedFd, id: &str, text: &mut File) -> ToolResult<(usize, Ve
         let mut bytes = Vec::new();
         file.take(64 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
         let mut words = bytes
-            .chunks_exact(8)
-            .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap_or([0; 8])));
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| u64::from_le_bytes(*chunk));
         let total = usize::try_from(words.next()?).ok()?;
         let offsets: Vec<u64> = words.collect();
         (!offsets.is_empty()).then_some((total, offsets))

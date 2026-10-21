@@ -102,7 +102,7 @@ impl Llm for SummaryModel {
             ..GenerateContentConfig::default()
         });
         self.calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.max_calls).then_some(current + 1)
             })
             .map_err(|_| invalid_summary("context_summary_call_limit"))?;

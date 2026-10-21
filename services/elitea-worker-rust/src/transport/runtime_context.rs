@@ -1693,7 +1693,7 @@ impl<'de> Deserialize<'de> for OptionalFrozenDefinitionDigest {
             }
         };
         let mut digest = [0_u8; 32];
-        for (output, pair) in digest.iter_mut().zip(bytes.chunks_exact(2)) {
+        for (output, pair) in digest.iter_mut().zip(bytes.as_chunks::<2>().0) {
             *output = (nibble(pair[0]) << 4) | nibble(pair[1]);
         }
         Ok(Self(Some(digest)))

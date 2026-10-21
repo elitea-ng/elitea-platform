@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-
 use super::*;
 use crate::transport::runtime_context::{AttachmentTextLayout, AttachmentTextUnit};
 

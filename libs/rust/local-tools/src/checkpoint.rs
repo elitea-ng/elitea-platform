@@ -1192,10 +1192,7 @@ impl CopyCheckpoints {
             let unchanged = self
                 .restorer
                 .read(&path, MAX_COPY_FILE_BYTES)
-                .ok()
-                .is_some_and(|read| {
-                    read.mode == file.mode && hex(&read.stamp.sha256) == file.sha256
-                });
+                .is_ok_and(|read| read.mode == file.mode && hex(&read.stamp.sha256) == file.sha256);
             if unchanged {
                 continue;
             }

@@ -127,7 +127,7 @@ fn utf16_text(bytes: &[u8]) -> Option<String> {
         [0xFE, 0xFF, rest @ ..] => (false, rest),
         _ => return None,
     };
-    let units = body.chunks_exact(2).map(|pair| {
+    let units = body.as_chunks::<2>().0.iter().map(|pair| {
         if little {
             u16::from_le_bytes([pair[0], pair[1]])
         } else {

@@ -174,7 +174,7 @@ fn hex_bytes(value: &str) -> Result<[u8; 32], WorkspaceContentError> {
         return Err(WorkspaceContentError::Integrity);
     }
     let mut out = [0u8; 32];
-    for (i, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (i, chunk) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         out[i] = u8::from_str_radix(
             std::str::from_utf8(chunk).map_err(|_| WorkspaceContentError::Integrity)?,
             16,

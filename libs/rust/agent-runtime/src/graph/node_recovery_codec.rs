@@ -406,7 +406,7 @@ pub mod hex_id {
             return Err(serde::de::Error::custom("invalid recovery identity"));
         }
         let mut value = [0; 32];
-        for (index, part) in text.as_bytes().chunks_exact(2).enumerate() {
+        for (index, part) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let digit = |c: u8| if c <= b'9' { c - b'0' } else { c - b'a' + 10 };
             value[index] = (digit(part[0]) << 4) | digit(part[1]);
         }

@@ -198,7 +198,7 @@ fn parse_step(raw: &[u8]) -> Result<CodePlatformStep, InputContentError> {
         return Err(invalid());
     }
     let mut digest = [0; 32];
-    for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in text.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let number = |v: u8| {
             if v.is_ascii_digit() {
                 v - b'0'

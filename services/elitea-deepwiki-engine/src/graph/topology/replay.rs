@@ -31,7 +31,9 @@ pub const STANDIN_DIM: usize = 16;
 pub fn standin_embedding(text: &str) -> Vec<f64> {
     let digest = sha256(text.as_bytes());
     let vector: Vec<f64> = digest
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .take(STANDIN_DIM)
         .map(|word| f64::from(u16::from_be_bytes([word[0], word[1]])) / 65535.0 - 0.5)
         .collect();

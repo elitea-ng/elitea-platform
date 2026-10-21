@@ -24,7 +24,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use base64::Engine as _;
 use fancy_regex::Regex as PythonRegex;
 use regex::Regex;
 use serde_json::{Value, json};

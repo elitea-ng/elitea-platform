@@ -2318,7 +2318,7 @@ fn check_large_tool_result(is_error: bool) {
         return;
     }
     let mut output = String::new();
-    for pair in finish.chunks_exact(2) {
+    for pair in finish.as_chunks::<2>().0 {
         assert_eq!(pair[0]["type"], "partial_message");
         let metadata = &pair[1]["response_metadata"];
         let final_error = is_error && metadata["tool_output_chunk_v1"]["final"] == true;

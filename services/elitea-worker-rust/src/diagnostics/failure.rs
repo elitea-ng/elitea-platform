@@ -42,7 +42,7 @@ pub(crate) fn capture() -> Option<String> {
 }
 
 fn admit(next: &AtomicU64, seconds: u64) -> bool {
-    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |deadline| {
+    next.try_update(Ordering::Relaxed, Ordering::Relaxed, |deadline| {
         (seconds >= deadline).then(|| seconds.saturating_add(1))
     })
     .is_ok()
