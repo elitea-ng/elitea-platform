@@ -247,7 +247,8 @@ target "elitea-doc-extractor" {
 # /workspace. Debian 13 (trixie-slim) with git and a build toolchain, because
 # the agent's `run_command` builds the user's project: a Debian userland, so
 # its scan is exempt (.github/image-scan-exempt.txt), not distroless.
-# Repo-root context: the Containerfile COPYs libs/rust.
+# Repo-root context: the Containerfile COPYs libs/rust and the contracts
+# under libs/proto/elitea that platform-rpc compiles.
 #
 # Not in `group "default"`: it compiles from source.
 target "elitea-workspace-runner" {

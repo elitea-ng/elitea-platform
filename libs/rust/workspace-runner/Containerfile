@@ -24,6 +24,9 @@ ENV CARGO_NET_RETRY=10 \
     CARGO_NET_GIT_FETCH_WITH_CLI=true
 WORKDIR /src
 COPY libs/rust/ libs/rust/
+# The runner links the agent runtime, whose platform-rpc build.rs compiles
+# the elitea.runtime.v1 contracts at ../../proto (#1359).
+COPY libs/proto/elitea/ libs/proto/elitea/
 # /src/libs/rust/target is shared with every other build on the host, and
 # cargo judges a path crate fresh by mtime, so a context older than another
 # checkout's build would ship that build's binary. Touching /src under the
