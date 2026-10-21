@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rules-import-proposed"
+description = "Enables the rules_import_proposed command without any pre-configured scope."
+commands.allow = ["rules_import_proposed"]
+
+[[permission]]
+identifier = "deny-rules-import-proposed"
+description = "Denies the rules_import_proposed command without any pre-configured scope."
+commands.deny = ["rules_import_proposed"]
