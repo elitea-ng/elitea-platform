@@ -6,9 +6,8 @@ package admin
 //
 // legacy/plugins/admin's Tasks page reads an in-process Arbiter `task_node`
 // (api/v2/tasks.py, gated `runtime.plugins` in `administration` mode). That
-// surface has no equivalent here and `/admin/tasks/{mode}` keeps answering 501
-// — see arbiterTaskNodeUnavailable in handler.go. This is NOT that surface
-// under a new name.
+// surface has no equivalent here and no route for it is mounted. This is NOT
+// that surface under a new name.
 //
 // It answers the QUESTION that page answered: what is running on this platform,
 // who started it, when, and can it be stopped. The rows come from the
@@ -71,8 +70,7 @@ type EvalRunCanceller interface {
 
 // WithBackgroundJobs supplies the Tasks page's store. Unassigned, the two
 // routes answer 503 rather than an empty list: "nothing is running" and "this
-// deployment cannot see what is running" must not render identically, which is
-// the exact correction handler.go's arbiterTaskNodeUnavailable records.
+// deployment cannot see what is running" must not render identically.
 func WithBackgroundJobs(store BackgroundJobsStore) Option {
 	return func(h *Handler) { h.backgroundJobs = store }
 }

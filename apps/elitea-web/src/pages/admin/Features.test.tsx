@@ -72,7 +72,7 @@ const SECTIONS = [
   {
     id: 'guardrails',
     title: 'Guardrails',
-    unavailable_reason: 'these settings configure Pylon plugin runtimes',
+    unavailable_reason: 'these settings have no equivalent on this platform',
     fields: [{ key: 'blocked_toolkits', type: 'array', title: 'Blocked Toolkits' }],
   },
   {

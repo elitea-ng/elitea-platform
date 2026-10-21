@@ -26,9 +26,6 @@ import {
 /** The permission the (hardcoded) admin-panel config advertises for editing. */
 const PERMISSION_SCHEDULES_EDIT = 'configuration.scheduling.schedules.edit';
 
-/** The three tabs of the reference page, in its order. */
-type ScheduleTabKey = 'schedules' | 'tasks' | 'active-tasks';
-
 export type ScheduleSortField = 'name' | 'rpc_func' | 'last_run';
 type SortDirection = 'asc' | 'desc';
 
@@ -38,7 +35,6 @@ export interface ScheduleSort {
 }
 
 export interface AdminSchedulesPageState {
-  readonly activeTab: ScheduleTabKey;
   readonly search: string;
   readonly rows: readonly AdminScheduleRow[] | undefined;
   readonly sort: ScheduleSort;
@@ -56,7 +52,6 @@ export interface AdminSchedulesPageState {
   /** The schedule whose execution history is open, or `null`. */
   readonly historySchedule: AdminScheduleRow | null;
 
-  readonly onTabChange: (next: ScheduleTabKey) => void;
   readonly onSearchChange: (value: string) => void;
   readonly onSort: (field: ScheduleSortField) => void;
   readonly onDismissError: () => void;
@@ -87,7 +82,6 @@ function compareRows(
 }
 
 export function useAdminSchedulesPage(): AdminSchedulesPageState {
-  const [activeTab, setActiveTab] = useState<ScheduleTabKey>('schedules');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<ScheduleSort>({ field: 'name', direction: 'asc' });
   const [errorMessage, setErrorMessage] = useState('');
@@ -157,15 +151,7 @@ export function useAdminSchedulesPage(): AdminSchedulesPageState {
     );
   }, []);
 
-  const onTabChange = useCallback((next: ScheduleTabKey) => {
-    setActiveTab(next);
-    // The search box only filters schedules; carrying a stale needle onto a tab
-    // that does not use it would leave the control looking active and inert.
-    setSearch('');
-  }, []);
-
   return {
-    activeTab,
     search,
     rows,
     sort,
@@ -177,7 +163,6 @@ export function useAdminSchedulesPage(): AdminSchedulesPageState {
     savedMessage,
     canEdit,
     historySchedule,
-    onTabChange,
     onSearchChange: setSearch,
     onSort,
     onDismissError: useCallback(() => setErrorMessage(''), []),

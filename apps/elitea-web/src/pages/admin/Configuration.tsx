@@ -108,9 +108,9 @@
  *
  * ## What is deliberately absent
  *
- * The reference's **restart bar**. `requires_restart` names the pylons whose
- * plugins must reload; there are none, `plugin_config_restart` answers 501, and
- * the one writable section declares no field carrying the flag. A reload button
+ * The reference's **restart bar**. `requires_restart` names the runtimes whose
+ * plugins must reload; there are none, no reload route exists, and the one
+ * writable section declares no field carrying the flag. A reload button
  * with nothing behind it is the control this unit exists to remove.
  *
  * ## Authorisation

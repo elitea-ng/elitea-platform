@@ -419,7 +419,7 @@ func realtimeForwardedQuery(in url.Values) url.Values {
 	return out
 }
 
-// Realtime handles GET (and POST) /llm/v1/realtime.
+// Realtime handles GET /llm/v1/realtime.
 //
 // The whole admission sequence runs while an http.ResponseWriter still exists,
 // because after websocket.Accept there is no way left to write a status line or

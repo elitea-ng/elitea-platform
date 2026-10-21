@@ -584,8 +584,8 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
  *
  *  - Every dialog and drawer (`admin-secret-dialog`, `ProjectMemberDialog`,
  *    `ProjectActivityDrawer`, `ScheduleHistoryDrawer`) and the non-default tabs
- *    (`System Users`, `Internal` secrets, `Tasks`/`Active Tasks`, the three
- *    non-`Pending` App Requests tabs, the three non-default Roles scopes).
+ *    (`System Users`, `Internal` secrets, the three non-`Pending` App
+ *    Requests tabs, the three non-default Roles scopes).
  *    Reachable and worth covering eventually; each is another PNG against the
  *    12MB budget and none is covered by a claim made here.
  */

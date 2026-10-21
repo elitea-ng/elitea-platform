@@ -477,7 +477,7 @@ func TestCostEstimateReportsEvaluationSpend(t *testing.T) {
 	router := costAttributionRouter(pool, now)
 
 	plantModelPrice(t, pool, "openai", "gpt-4o", "1.00000000", "1.00000000")
-	seedPylonApplicationsTable(t, pool)
+	seedApplicationsTable(t, pool)
 	_, err := pool.Exec(context.Background(),
 		`INSERT INTO p_1.applications (id, name, owner_id) VALUES (4001, 'Graded Agent', 1)`)
 	require.NoError(t, err)

@@ -15190,8 +15190,7 @@ paths:
         The admin Tasks page. It unions the runtime plane
         (elitea_runtime.execution_jobs, whose capability_id gives the kind),
         the scheduler's due work (elitea_runtime.scheduled_occurrences) and
-        every project's evaluation runs. It is NOT the pylon Arbiter task node
-        that /admin/tasks/{mode} answers 501 for. The rows keep the legacy
+        every project's evaluation runs. The rows keep the legacy
         listing's task_id, status, started_at and user keys. `truncated`
         reports that the per-source scan window was full, so older rows exist
         that this page cannot reach.

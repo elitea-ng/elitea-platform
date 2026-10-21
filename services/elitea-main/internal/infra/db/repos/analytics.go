@@ -587,11 +587,9 @@ WHERE l.project_id = $1
 //
 // # A MISS IS NOT A FAILURE
 //
-// p_<id>.applications is pylon-owned and a Go-bootstrapped database
-// legitimately has none, exactly as userIdentities documents for
-// public.auth_core__user. The relations are probed BEFORE the statement runs,
-// never caught after: this read is on a snapshot transaction, and a failed
-// statement poisons the whole transaction rather than just itself.
+// The chat projection is probed BEFORE the statement runs, never caught after:
+// this read is on a snapshot transaction, and a failed statement poisons the
+// whole transaction rather than just itself.
 //
 // When the chat projection is absent the breakdown is EMPTY rather than
 // refused: the window's attributed count is still a true measurement, and the
@@ -600,43 +598,16 @@ func agentUsage(ctx context.Context, q analyticsQuerier, id int64, params analyt
 	schema := pgx.Identifier{"p_" + strconv.FormatInt(id, 10)}.Sanitize()
 
 	// The chat projection is REQUIRED — without it there is no execution-to-agent
-	// mapping at all — and the name is not.
-	//
-	// They are probed separately because they belong to different corpora.
-	// chat_message_group and chat_participants are created by this service's
-	// tenant history (0123), so a migrated database always has them.
-	// `applications` is PYLON-OWNED, and a Go-bootstrapped database
-	// legitimately has none — the same split userIdentities documents for
-	// public.auth_core__user.
-	//
-	// So an absent applications table costs the DISPLAY NAME and nothing else.
-	// Dropping the rows instead would silently shrink the breakdown, and
-	// refusing the whole read because a decoration is unavailable is the
-	// "absence reads as failure" defect this repository has met before.
+	// mapping at all. chat_message_group and chat_participants are created by
+	// this service's tenant history (0123). `applications` is created with the
+	// tenant schema itself (internal/infra/db/migrations/001_initial.sql), so
+	// the name join needs no probe of its own.
 	present, err := checkRelations(ctx, q, schema+".chat_message_group", schema+".chat_participants")
 	if err != nil {
 		return nil, false, err
 	}
 	if !present {
 		return nil, false, nil
-	}
-	named, err := checkRelations(ctx, q, schema+".applications")
-	if err != nil {
-		return nil, false, err
-	}
-	// A fixed fragment chosen from two constants, never assembled from request
-	// data — the shape usageScopeFilter uses for the same reason.
-	// nameGroup is separate from nameSelect because a literal cannot appear in
-	// GROUP BY — PostgreSQL reads a bare constant there as an ordinal and
-	// refuses a string outright (42601). The unnamed form groups on the id
-	// alone, which is the same grouping: one constant cannot split a group.
-	nameSelect, nameJoin, nameGroup := `''`, ``, ``
-	if named {
-		nameSelect = `coalesce(app.name, '')`
-		nameJoin = `
-LEFT JOIN ` + schema + `.applications AS app
-       ON app.id = agent.application_id::integer`
-		nameGroup = `, coalesce(app.name, '')`
 	}
 
 	// attributed: one row per EXECUTION, so the per-agent fold below cannot be
@@ -695,7 +666,7 @@ WITH attributed AS (
     ORDER BY g.task_id, g.id
 )
 SELECT agent.application_id,
-       ` + nameSelect + `,
+       coalesce(app.name, ''),
        sum(attributed.requests)::bigint,
        sum(attributed.tokens)::bigint,
        sum(attributed.duration_ms)::bigint,
@@ -705,8 +676,10 @@ SELECT agent.application_id,
        round(sum(attributed.output_cost), ` + agentCostScale + `)::text,
        round(sum(attributed.input_cost) + sum(attributed.output_cost), ` + agentCostScale + `)::text
 FROM agent
-JOIN attributed ON attributed.execution_id = agent.execution_id` + nameJoin + `
-GROUP BY agent.application_id` + nameGroup + `
+JOIN attributed ON attributed.execution_id = agent.execution_id
+LEFT JOIN ` + schema + `.applications AS app
+       ON app.id = agent.application_id::integer
+GROUP BY agent.application_id, coalesce(app.name, '')
 ORDER BY sum(attributed.requests) DESC, agent.application_id ASC
 LIMIT $4`
 

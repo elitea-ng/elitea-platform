@@ -3,10 +3,8 @@
  *
  * One read and one write, both real. The reference page (`admin_ui`'s
  * `SchedulesTasksPage`) has five reads and five mutations; the other four of
- * each belong to its Tasks and Active Tasks tabs, which are Pylon/Arbiter
- * runtime introspection with no endpoint to call here. They are not declared in
- * this module at all — see `../SchedulesTasks.tsx` for why those tabs render
- * unavailable instead.
+ * each belong to its Tasks and Active Tasks tabs, which have no endpoint here
+ * and are not ported — see `../SchedulesTasks.tsx`.
  *
  * Not generated: `orval` builds from `v2.yaml`, which does not describe the
  * admin-panel routes. Handwritten in the same shape as `./adminProjectsApi.ts`.

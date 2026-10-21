@@ -2237,8 +2237,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			}
 			// auth_users.py, user_suspend.py
 			requireAdminUsers := central("admin.auth.users")
-			// system_info.py, plugin_config_*.py, maintenance.py, runtime_*.py,
-			// tasks.py, active_tasks.py — all declare ["runtime.plugins"].
+			// System info, plugin config, maintenance and background jobs —
+			// all declare ["runtime.plugins"].
 			requireRuntimePlugins := central("runtime.plugins")
 			// moderation_status.py / moderation_statuses.py. The queue itself is
 			// registered further down, next to the three other moderation routes
@@ -2582,7 +2582,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireBranding).Get("/branding/package/administration/versions", adminHandler.BrandingPackageVersions)
 				r.With(requireBranding).Post("/branding/package/administration/versions/{digest}/restore", adminHandler.BrandingPackageRestore)
 				r.With(requireRuntimePlugins).Get("/plugin_config_suggestions/{mode}/{key}", adminHandler.PluginConfigSuggestions)
-				r.With(requireRuntimePlugins).Post("/plugin_config_restart/{mode}/{pylonID}", adminHandler.PluginConfigRestart)
 				// `/moderation_statuses/…` is NOT registered here. #209 gated the
 				// stub that used to sit on this line; this unit replaced the stub
 				// with a real handler, registered below on a static
@@ -2592,29 +2591,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// thing that would answer is a constant nobody asked for.
 				r.With(requireRuntimePlugins).Get("/maintenance/{mode}", adminHandler.Maintenance)
 				r.With(requireRuntimePlugins).Put("/maintenance/{mode}", adminHandler.Maintenance)
-				r.With(requireRuntimePlugins).Get("/runtime_remote/{mode}", adminHandler.RuntimeRemote)
-				r.With(requireRuntimePlugins).Get("/runtime_remote_config/{mode}/{pluginID}", adminHandler.RuntimeRemoteConfig)
-				r.With(requireRuntimePlugins).Post("/runtime_remote_config/{mode}/{pluginID}", adminHandler.RuntimeRemoteConfig)
-				r.With(requireRuntimePlugins).Get("/runtime_plugin/{mode}/{pluginName}", adminHandler.RuntimePlugin)
-				r.With(requireRuntimePlugins).Put("/runtime_plugin/{mode}/{pluginName}", adminHandler.RuntimePlugin)
-				r.With(requireRuntimePlugins).Post("/runtime_pylons/{mode}", adminHandler.RuntimePylonLogs)
-				r.With(requireRuntimePlugins).Get("/tasks/{mode}/", adminHandler.Tasks)
-				r.With(requireRuntimePlugins).Get("/tasks/{mode}", adminHandler.Tasks)
-				r.With(requireRuntimePlugins).Get("/active_tasks/{mode}", adminHandler.ActiveTasks)
-				// Admin › Tasks — the PLATFORM's own background jobs, not
-				// pylon's Arbiter task node. The two routes above keep
-				// answering 501 (arbiterTaskNodeUnavailable); these two answer
-				// the question that page asked, from this platform's tables.
+				// Admin › Tasks — the platform's own background jobs, read
+				// from this platform's tables.
 				//
-				// Same `runtime.plugins` gate in administration mode, because
-				// that is what the legacy Tasks page declares
-				// (legacy/plugins/admin/api/v2/tasks.py:43). No new permission
-				// string arrives, so the grant gate stays untripped and every
-				// operator who could open the legacy page can open this one.
+				// Gated on `runtime.plugins` in administration mode, the
+				// permission the admin Tasks page has always declared. No new
+				// permission string arrives, so the grant gate stays untripped.
 				//
-				// A STATIC `administration` segment, not `{mode}`: pylon reaches
-				// this surface only through its administration AdminAPI, so a
-				// mode variable would name a resolution this router does not
+				// A STATIC `administration` segment, not `{mode}`: a mode
+				// variable would name a resolution this router does not
 				// perform — the same argument the moderation routes below make.
 				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
 				r.With(requireRuntimePlugins).Post(
