@@ -100,17 +100,9 @@ func Refuse(ctx context.Context, trailer string, httpStatus int, refusal proto.M
 	return status.Errorf(CodeForHTTPStatus(httpStatus), "the %s was refused (HTTP %d)", what, httpStatus)
 }
 
-// HeaderSafe reports whether value can stand as one header value: printable
-// ASCII and tabs, nothing a header could be split on.
-func HeaderSafe(value string) bool {
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if (c < 0x20 && c != '\t') || c >= 0x7f {
-			return false
-		}
-	}
-	return true
-}
+// HeaderSafe reports whether value can stand as one header value: the
+// ModelService rule (modelgrpc.HeaderSafe), so the two cannot drift.
+func HeaderSafe(value string) bool { return modelgrpc.HeaderSafe(value) }
 
 // Buffer is the http.ResponseWriter of an RPC whose answer is read whole. A
 // success body beyond limit marks the answer too large (the handler's write

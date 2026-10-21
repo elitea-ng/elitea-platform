@@ -121,13 +121,13 @@ func (s *Server) ChatCompletions(request *llmv1.ChatCompletionsRequest, stream g
 func (s *Server) Messages(request *llmv1.MessagesRequest, stream grpc.ServerStreamingServer[llmv1.MessagesResponse]) error {
 	extra := http.Header{}
 	if version := request.GetAnthropicVersion(); version != "" {
-		if !headerSafe(version) {
+		if !HeaderSafe(version) {
 			return status.Error(codes.InvalidArgument, "anthropic_version is not a header value")
 		}
 		extra.Set(headerAnthropicVersion, version)
 	}
 	for _, beta := range request.GetAnthropicBeta() {
-		if !headerSafe(beta) {
+		if !HeaderSafe(beta) {
 			return status.Error(codes.InvalidArgument, "anthropic_beta is not a header value")
 		}
 		extra.Add(headerAnthropicBeta, beta)
@@ -174,7 +174,7 @@ func (s *Server) ImageEdit(stream grpc.ClientStreamingServer[llmv1.ImageEditRequ
 		return status.Error(codes.InvalidArgument, "an ImageEdit call starts with its head")
 	}
 	contentType := open.GetContentType()
-	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/form-data") || !headerSafe(contentType) {
+	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/form-data") || !HeaderSafe(contentType) {
 		return status.Error(codes.InvalidArgument, "an ImageEdit body is multipart/form-data")
 	}
 	body, writer := io.Pipe()
@@ -216,10 +216,10 @@ func (s *Server) ImageEdit(stream grpc.ClientStreamingServer[llmv1.ImageEditRequ
 func newRequest(ctx context.Context, path string, call *llmv1.ModelCall, contentType, accept string, body io.Reader, extra http.Header) (*http.Request, error) {
 	projectID := call.GetProjectId()
 	executionID := call.GetExecutionId()
-	if len(projectID) > maxSelectorBytes || !headerSafe(projectID) {
+	if len(projectID) > maxSelectorBytes || !HeaderSafe(projectID) {
 		return nil, status.Error(codes.InvalidArgument, "project_id is not a project selector")
 	}
-	if len(executionID) > maxSelectorBytes || !headerSafe(executionID) {
+	if len(executionID) > maxSelectorBytes || !HeaderSafe(executionID) {
 		return nil, status.Error(codes.InvalidArgument, "execution_id is not an execution id")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, path, body)
@@ -254,9 +254,10 @@ func newRequest(ctx context.Context, path string, call *llmv1.ModelCall, content
 	return request, nil
 }
 
-// headerSafe reports whether value can stand as one header value: printable
-// ASCII and spaces/tabs, nothing a header could be split on.
-func headerSafe(value string) bool {
+// HeaderSafe reports whether value can stand as one header value: printable
+// ASCII and spaces/tabs, nothing a header could be split on. It is the one
+// copy; internal/transport/platformcall re-exports it.
+func HeaderSafe(value string) bool {
 	for i := 0; i < len(value); i++ {
 		c := value[i]
 		if (c < 0x20 && c != '\t') || c >= 0x7f {
