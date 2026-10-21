@@ -644,6 +644,26 @@ impl Graph {
         orphaned.len()
     }
 
+    /// Forget what the files `withdrawn` says yes to contributed to the
+    /// edges discovered in them (an edge goes when no other file or source
+    /// found it too), keeping their citations: for files read again
+    /// unchanged, which cite the same nodes again, so none of them goes
+    /// and neither do the edges other files hold into them (as
+    /// [`Graph::remove_file`] would drop). One pass over the edges.
+    pub fn withdraw_relations(&mut self, source_toolkit: &str, withdrawn: impl Fn(&str) -> bool) {
+        let discovered_here = |entry: &Map<String, Value>| {
+            entry.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+                && entry
+                    .get("discovered_in_file")
+                    .and_then(Value::as_str)
+                    .is_some_and(&withdrawn)
+        };
+        for targets in self.edges.values_mut() {
+            targets.retain(|_, edge| withdraw(edge, discovered_here));
+        }
+        self.edges.retain(|_, targets| !targets.is_empty());
+    }
+
     /// Forget everything one source said: every file it cited
     /// ([`Graph::remove_file`]) and its contribution to every edge. Entities
     /// other sources still cite, and edges other sources also found, stay. Returns the number of entities removed.
@@ -1176,6 +1196,29 @@ mod tests {
         assert!(graph.node("uncited").is_some());
         let edges: Vec<(&str, &str)> = graph.edges().map(|(s, t, _)| (s, t)).collect();
         assert_eq!(edges, [("other_source", "shared")]);
+    }
+
+    #[test]
+    fn withdraw_relations_keeps_the_files_nodes_and_the_edges_into_them() {
+        let cite = |file: &str| Citation {
+            file_path: file.into(),
+            source_toolkit: Some("repo".into()),
+            ..Citation::default()
+        };
+        let mut graph = Graph::new();
+        graph.add_entity("only_a", "OnlyA", "class", Some(&cite("a.py")), None);
+        graph.add_entity("only_b", "OnlyB", "class", Some(&cite("b.py")), None);
+        let found_in = |file: &str| json!({"discovered_in_file": file, "source_toolkit": "repo"});
+        graph.add_relation("only_a", "only_b", "uses", found_in("a.py").as_object());
+        graph.add_relation("only_b", "only_a", "uses", found_in("b.py").as_object());
+
+        graph.withdraw_relations("repo", |file| file == "a.py");
+        assert_eq!(
+            graph.node("only_a").and_then(|n| n.get("citations")),
+            Some(&json!([cite("a.py").to_value()]))
+        );
+        let edges: Vec<(&str, &str)> = graph.edges().map(|(s, t, _)| (s, t)).collect();
+        assert_eq!(edges, [("only_b", "only_a")]);
     }
 
     /// Two sources (`repo`, `mirror`) that read the same file: same ids,

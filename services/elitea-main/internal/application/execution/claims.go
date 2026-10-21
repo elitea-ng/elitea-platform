@@ -328,20 +328,25 @@ func claimCapabilityAllowed(capabilityID string) bool {
 }
 
 func (s *ClaimService) VerifyActive(ctx context.Context, fence runtimedomain.Fence) error {
+	_, err := s.verifyActive(ctx, fence)
+	return err
+}
+
+func (s *ClaimService) verifyActive(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.ActiveLease, error) {
 	if err := fence.Validate(); err != nil {
-		return err
+		return runtimedomain.ActiveLease{}, err
 	}
 	lease, observedAt, err := s.repository.CurrentLease(ctx, fence.ExecutionID, fence.Generation)
 	if err != nil {
-		return fmt.Errorf("load current execution lease: %w", err)
+		return runtimedomain.ActiveLease{}, fmt.Errorf("load current execution lease: %w", err)
 	}
 	if observedAt.IsZero() {
-		return ErrInvalidClaim
+		return runtimedomain.ActiveLease{}, ErrInvalidClaim
 	}
 	if err := lease.Verify(observedAt.UTC(), fence); err != nil {
-		return err
+		return runtimedomain.ActiveLease{}, err
 	}
-	return nil
+	return lease, nil
 }
 
 func (s *ClaimService) Renew(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.ActiveLease, error) {
@@ -387,16 +392,17 @@ func (s *ClaimService) Abort(ctx context.Context, fence runtimedomain.Fence, dis
 	return nil
 }
 
-func (s *ClaimService) ObserveDesiredState(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.DesiredState, error) {
-	if err := s.VerifyActive(ctx, fence); err != nil {
-		return "", err
+func (s *ClaimService) ObserveDesiredState(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.ObservedExecution, error) {
+	lease, err := s.verifyActive(ctx, fence)
+	if err != nil {
+		return runtimedomain.ObservedExecution{}, err
 	}
 	state, err := s.repository.DesiredState(ctx, fence.ExecutionID, fence.Generation)
 	if err != nil {
-		return "", fmt.Errorf("observe desired execution state: %w", err)
+		return runtimedomain.ObservedExecution{}, fmt.Errorf("observe desired execution state: %w", err)
 	}
 	if !state.Valid() {
-		return "", errors.New("repository returned invalid desired state")
+		return runtimedomain.ObservedExecution{}, errors.New("repository returned invalid desired state")
 	}
-	return state, nil
+	return runtimedomain.ObservedExecution{DesiredState: state, CapabilityID: lease.CapabilityID}, nil
 }

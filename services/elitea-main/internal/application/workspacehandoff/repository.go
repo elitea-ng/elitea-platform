@@ -95,6 +95,15 @@ type EraseResult struct {
 	Changed  bool
 }
 
+// TransitionResult answers a transition a retry may replay (a retried take
+// back or release, a repeated claim redemption). Changed is false when the
+// call found the thread where it would have put it and wrote nothing a reader
+// can see; the live event is sent only on a change.
+type TransitionResult struct {
+	Handoff Handoff
+	Changed bool
+}
+
 // TimedTransition is one sweeper-driven transition the repository performs by
 // epoch compare-and-set.
 type TimedTransition struct {
@@ -116,10 +125,10 @@ type Repository interface {
 	Complete(ctx context.Context, record CompleteRecord) (Handoff, error)
 	// Reclaim takes the thread back: CLOUD_IDLE → RECLAIMING (epoch + 1), or
 	// CLOUD_RUNNING → reclaim_pending. Replayed answers a retried reclaim.
-	Reclaim(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (Handoff, error)
-	Release(ctx context.Context, record ReleaseRecord) (Handoff, error)
+	Reclaim(ctx context.Context, thread Thread, actorUserID, epoch int64, deviceID string) (TransitionResult, error)
+	Release(ctx context.Context, record ReleaseRecord) (TransitionResult, error)
 	Erase(ctx context.Context, record EraseRecord) (EraseResult, error)
-	StartCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID, responseMessageID string) (Handoff, error)
+	StartCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID, responseMessageID string) (TransitionResult, error)
 	FinishCloudTurn(ctx context.Context, thread Thread, epoch int64, executionID string, message *EventMessage) (Handoff, error)
 	// NotifyReclaimRequest writes the owner's notification (deduplicated per
 	// thread, epoch and hour).

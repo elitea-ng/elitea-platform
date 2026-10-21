@@ -503,6 +503,10 @@ func (a *testAttachmentStore) RequireAttachmentBucket(ctx context.Context, proje
 	return 0, err
 }
 
+func (a *testAttachmentStore) ReserveAttachmentObject(ctx context.Context, bucketID int64, key string, mediaType string, expiresAt *time.Time) (bool, error) {
+	return a.objects.ReserveObjectKey(ctx, bucketID, key, mediaType, expiresAt)
+}
+
 func (a *testAttachmentStore) RecordAttachmentObject(ctx context.Context, bucketID int64, key string, byteLength int64, mediaType string, expiresAt *time.Time) error {
 	_, err := a.objects.UpsertObject(ctx, repos.NewObjectInput{
 		BucketID: bucketID, Key: key, ByteLength: byteLength, MediaType: mediaType, ExpiresAt: expiresAt,

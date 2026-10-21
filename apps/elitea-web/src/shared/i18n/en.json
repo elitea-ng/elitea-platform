@@ -3372,6 +3372,7 @@
   "pages.admin.branding.reset.cancel": "Cancel",
   "pages.admin.branding.reset.confirm": "Reset to defaults",
   "pages.admin.branding.reset.title": "Reset branding to defaults?",
+  "pages.admin.branding.schemeTokens.cleared": "This brand has colour schemes from an imported package. Saving a new brand colour replaces them with schemes derived from it, as the preview shows. The package stays in the kept versions if you want them back.",
   "pages.admin.branding.source.database": "Set here",
   "pages.admin.branding.source.default": "Product default",
   "pages.admin.branding.source.file": "Mounted file pack",

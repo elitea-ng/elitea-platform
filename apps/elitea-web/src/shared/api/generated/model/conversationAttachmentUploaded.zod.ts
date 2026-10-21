@@ -45,11 +45,13 @@ export const ConversationAttachmentUploaded = zod
   .object({
     filepath: zod
       .string()
-      .describe("`/{bucket}/{conversation_uuid}/{file name}`."),
+      .describe(
+        "`/{bucket}/{conversation_uuid}/{file name}`. The file name is the uploaded one, numbered (`name (1).ext`) when the conversation already holds that name (client contract 1.13).",
+      ),
     file_size: zod.int(),
   })
   .describe(
-    "One stored file. Send `filepath` back verbatim in the chat send's `payload.attachments`. NOTE(W2): internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`).\n",
+    "One stored file. Send `filepath` back verbatim in the chat send's `payload.attachments`. NOTE(W2): internal/api/v2/conversations/attachments.go:234 (`attachmentCreated`).\n",
   );
 
 export type ConversationAttachmentUploaded = zod.input<

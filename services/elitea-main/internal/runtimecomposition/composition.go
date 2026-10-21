@@ -370,6 +370,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, fmt.Errorf("construct runtime configuration targets: %w", err)
 	}
+	// Every dispatch policy above admits under config.MaxOutstanding; say so
+	// next to what is persisted before the first start can meet a mismatch.
+	logAdmissionCaps(ctx, dependencies.Logger, dependencies.AdmissionPool, config.MaxOutstanding)
 	bundles, err := executionapp.NewValidationInputBundleFactory(executionapp.ValidationInputProfile{
 		SemanticRole:          "configuration.settings",
 		Classification:        inputClassification,
@@ -2166,6 +2169,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if clientApplicationVersions != nil {
 		publicRoutes.ClientApplicationVersions = clientApplicationVersions
+	}
+	if attachmentObjects != nil {
+		publicRoutes.AttachmentExtraction = attachmentObjects
 	}
 
 	closeNATS = false

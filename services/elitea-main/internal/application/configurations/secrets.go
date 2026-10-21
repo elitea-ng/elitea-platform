@@ -359,3 +359,39 @@ func IsCurrentSecretReference(value string) bool {
 	_, ok := currentSecretReferenceName(value)
 	return ok
 }
+
+// CurrentHiddenSecretReferences returns the hidden-secret names a stored
+// configuration or toolkit value references, sorted and without duplicates.
+//
+// Only a WHOLE string of the exact `{{secret.NAME}}` shape whose NAME has the
+// 32-hex shape a seal mints is counted. That is the only form the seal path
+// writes, so it is the only form whose hidden secret a row can own. A
+// user-named secret (any other NAME) belongs to the project's secret list, not
+// to the row, and is never reported here.
+func CurrentHiddenSecretReferences(value any) []string {
+	seen := map[string]struct{}{}
+	collectCurrentHiddenSecretReferences(value, seen)
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func collectCurrentHiddenSecretReferences(value any, seen map[string]struct{}) {
+	switch typed := value.(type) {
+	case string:
+		if name, ok := currentSecretReferenceName(typed); ok && currentSecretIDValid(name) {
+			seen[name] = struct{}{}
+		}
+	case map[string]any:
+		for _, nested := range typed {
+			collectCurrentHiddenSecretReferences(nested, seen)
+		}
+	case []any:
+		for _, nested := range typed {
+			collectCurrentHiddenSecretReferences(nested, seen)
+		}
+	}
+}

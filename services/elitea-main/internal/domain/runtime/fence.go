@@ -61,6 +61,18 @@ type ActiveLease struct {
 	Fence        Fence
 	ExpiresAt    time.Time
 	DesiredState DesiredState
+	// CapabilityID is the claimed job's capability, as the store read it with
+	// the lease (empty where a store did not report it). It is not authority:
+	// Verify ignores it. The lease poll uses it to skip lookups that only
+	// one kind of execution needs (the cloud executor's take-back signal).
+	CapabilityID string
+}
+
+// ObservedExecution is a desired-state observation of a claimed execution,
+// with the job's capability (as ActiveLease.CapabilityID).
+type ObservedExecution struct {
+	DesiredState DesiredState
+	CapabilityID string
 }
 
 func (l ActiveLease) Verify(now time.Time, fence Fence) error {

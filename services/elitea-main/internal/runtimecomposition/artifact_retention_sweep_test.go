@@ -631,6 +631,33 @@ type artifactRetentionFakeGrantsRepo struct {
 	pending    []repos.ExpiredTransferGrantRow
 	claimCalls []time.Time
 	claimErr   error
+
+	// staged is what ListExpiredGrantStaging answers until ClearGrantStaging
+	// removes a row, as the real query stops matching a cleared key.
+	staged       []repos.GrantStagingRow
+	stagingCalls []time.Time
+	cleared      []string
+}
+
+func (r *artifactRetentionFakeGrantsRepo) ListExpiredGrantStaging(_ context.Context, olderThan time.Time, limit int32) ([]repos.GrantStagingRow, error) {
+	r.stagingCalls = append(r.stagingCalls, olderThan)
+	batch := r.staged
+	if int32(len(batch)) > limit {
+		batch = batch[:limit]
+	}
+	return append([]repos.GrantStagingRow(nil), batch...), nil
+}
+
+func (r *artifactRetentionFakeGrantsRepo) ClearGrantStaging(_ context.Context, id, key string) error {
+	r.cleared = append(r.cleared, id)
+	kept := r.staged[:0]
+	for _, row := range r.staged {
+		if row.ID != id || row.Key != key {
+			kept = append(kept, row)
+		}
+	}
+	r.staged = kept
+	return nil
 }
 
 func (r *artifactRetentionFakeGrantsRepo) ClaimExpiredTransferGrants(_ context.Context, olderThan time.Time, limit int32) ([]repos.ExpiredTransferGrantRow, error) {
@@ -803,5 +830,58 @@ func TestArtifactRetentionSweepTreatsAnUnusedGrantAsReclaimed(t *testing.T) {
 	outcome, err := sweep.Execute(context.Background(), artifactRetentionOccurrence(time.Now()))
 	if err != nil || outcome != schedulingapp.OutcomeLocalCompleted {
 		t.Fatalf("outcome=%q error=%v", outcome, err)
+	}
+}
+
+// A staged grant's URL stays valid after its commit, so a PUT then
+// recreates the staging object under a consumed grant that
+// sweepExpiredGrants never claims. sweepGrantStaging deletes it once the URL
+// has expired, and clears the marker only after the delete succeeded.
+func TestArtifactRetentionSweepReclaimsCommittedGrantStaging(t *testing.T) {
+	sweep, _, buckets, _, store, grants := newArtifactRetentionSweepFixtureWithGrants(t)
+	buckets.buckets[7] = repos.BucketRow{ID: 7, ProjectID: 5, Name: "reports"}
+	grants.staged = []repos.GrantStagingRow{{ID: "grant-1", ProjectID: 5, BucketID: 7, Key: "grant-1.upload"}}
+
+	store.deleteErr = errors.New("simulated backend outage")
+	before := time.Now()
+	if _, err := sweep.Execute(context.Background(), artifactRetentionOccurrence(time.Now())); err == nil {
+		t.Fatal("expected the storage error to surface")
+	}
+	if len(grants.cleared) != 0 {
+		t.Fatalf("a failed delete cleared the staging marker: %v", grants.cleared)
+	}
+	if len(grants.stagingCalls) == 0 || !grants.stagingCalls[0].Before(before.Add(-artifactRetentionGrantGrace+time.Second)) {
+		t.Fatalf("staging cutoff %v does not lag by the grant grace", grants.stagingCalls)
+	}
+
+	store.deleteErr = nil
+	store.deleted = nil
+	outcome, err := sweep.Execute(context.Background(), artifactRetentionOccurrence(time.Now()))
+	if err != nil || outcome != schedulingapp.OutcomeLocalCompleted {
+		t.Fatalf("outcome=%q error=%v", outcome, err)
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != "grant-1.upload" {
+		t.Fatalf("Delete calls = %v, want exactly [grant-1.upload]", store.deleted)
+	}
+	if len(grants.cleared) != 1 || grants.cleared[0] != "grant-1" || len(grants.staged) != 0 {
+		t.Fatalf("cleared = %v, staged = %v", grants.cleared, grants.staged)
+	}
+}
+
+// An uncommitted staged grant can also hold a copy at its final key: a commit
+// copies before it verifies, and a commit that failed after the copy leaves
+// it. The claim reclaims both.
+func TestArtifactRetentionSweepReclaimsBothKeysOfAnUncommittedStagedGrant(t *testing.T) {
+	sweep, _, buckets, _, store, grants := newArtifactRetentionSweepFixtureWithGrants(t)
+	buckets.buckets[7] = repos.BucketRow{ID: 7, ProjectID: 5, Name: "reports"}
+	grants.pending = []repos.ExpiredTransferGrantRow{
+		{ID: "grant-2", ProjectID: 5, BucketID: 7, Key: "grant-2.upload", Method: "PUT"},
+	}
+
+	if _, err := sweep.Execute(context.Background(), artifactRetentionOccurrence(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.deleted) != 2 || store.deleted[0] != "grant-2.upload" || store.deleted[1] != "grant-2" {
+		t.Fatalf("Delete calls = %v, want [grant-2.upload grant-2]", store.deleted)
 	}
 }

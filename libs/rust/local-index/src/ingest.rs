@@ -21,21 +21,113 @@
 //! made from the name and type, not the path) is merged in batch order, so
 //! its first citation and name casing come from the earlier language's
 //! file — on a 13.8k-file repository, 3 nodes and 17 of 512k relations.
+//!
+//! **Dependents.** Removing a changed file from the graph removes the nodes
+//! only it cites, and with them every edge into them — including the edges
+//! unchanged files contributed (a call from another file). Parsing the file
+//! again brings its nodes back, not those edges: the unchanged files are
+//! skipped. So before anything is removed, the unchanged files with an
+//! edge into a node a changed or deleted file cites (`dependents`) are
+//! read again too, up to [`MAX_DEPENDENTS`]; past that none is, and the
+//! refresh says so ([`Expansion::capped`]) for a full rebuild to follow.
+//! A dependent is not removed before it is read again: only its
+//! contributions to edges are ([`Graph::withdraw_relations`]), and its
+//! citations stay — it is unchanged, so its reading cites the same nodes
+//! again. None of its nodes goes, so neither does an edge a third,
+//! unchanged file holds into one, and one level of dependents is enough.
+//! (A dependent read back at another version, changed since the listing,
+//! may leave its old citations behind: the refresh asks for a full
+//! rebuild then too; one no longer readable is removed.)
 
 use crate::source::LocalFolderSource;
 use elitea_content_source::{ContentSource, Document, DocumentRef, SourceError};
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::Context;
-use elitea_inventory_core::graph::Graph;
+use elitea_inventory_core::graph::{Graph, relation_provenance};
 use elitea_inventory_core::ingest::{
     Outcome, SourceSelection, add_parser_relations, assemble, parse, parse_files, prepare,
     quality_pass,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use serde_json::{Map, Value};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 /// Files no parser reads, per batch.
 pub const PLAIN_BATCH: usize = 512;
+
+/// The most unchanged files one refresh reads again for their edges into
+/// changed files' nodes; past it, none is (a full rebuild restores them).
+pub const MAX_DEPENDENTS: usize = 2_000;
+
+/// What the dependents expansion of one ingestion did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Expansion {
+    /// Unchanged files read again for their edges.
+    pub files: usize,
+    /// More than [`MAX_DEPENDENTS`] were needed (none was read, and edges
+    /// from unchanged files into the changed files' nodes may be lost), or
+    /// a dependent read back changed (its old citations may stay): until a
+    /// full rebuild.
+    pub capped: bool,
+}
+
+/// The files `source` cites `node` in.
+fn cited_in<'a>(node: &'a Map<String, Value>, source: &'a str) -> impl Iterator<Item = &'a str> {
+    node.get("citations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(move |citation| {
+            citation.get("source_toolkit").and_then(Value::as_str) == Some(source)
+        })
+        .filter_map(|citation| citation.get("file_path").and_then(Value::as_str))
+}
+
+/// The files other than `changed` that hold an edge into a node one of
+/// `changed` cites: the files citing the edge's source node, and the files
+/// the edge was discovered in. Removing `changed` from the graph removes
+/// such edges; reading these files again restores them.
+///
+/// One pass over the nodes and one over the edges (a hash lookup each; an
+/// edge's provenance is read only when it ends in one of those nodes), run
+/// once per refresh that changed or deleted a file: never for one that
+/// did not, and never again for the dependents (one level is enough, see
+/// the module doc). At 110k nodes and 512k edges it costs less than the
+/// copy of the graph the refresh starts from (`IndexService::starting_graph`),
+/// and an index of it kept per revision would be rebuilt by every refresh
+/// it could serve: each commits a new revision.
+fn dependents(graph: &Graph, source: &str, changed: &HashSet<&str>) -> BTreeSet<String> {
+    if changed.is_empty() {
+        return BTreeSet::new();
+    }
+    let defined: HashSet<&str> = graph
+        .nodes()
+        .filter(|(_, node)| cited_in(node, source).any(|file| changed.contains(file)))
+        .map(|(id, _)| id)
+        .collect();
+    let mut out = BTreeSet::new();
+    if defined.is_empty() {
+        return out;
+    }
+    for (from, to, edge) in graph.edges() {
+        if !defined.contains(to) {
+            continue;
+        }
+        if let Some(node) = graph.node(from) {
+            out.extend(cited_in(node, source).map(str::to_owned));
+        }
+        for entry in relation_provenance(edge) {
+            if entry.get("source_toolkit").and_then(Value::as_str) == Some(source)
+                && let Some(file) = entry.get("discovered_in_file").and_then(Value::as_str)
+            {
+                out.insert(file.to_owned());
+            }
+        }
+    }
+    out.retain(|file| !changed.contains(file.as_str()));
+    out
+}
 
 /// Some of the listing: what `prepare` sees for one batch.
 struct Subset<'a> {
@@ -84,8 +176,83 @@ fn merge(total: &mut Outcome, batch: Outcome) {
     total.documents.extend(batch.documents);
 }
 
+/// `previous` without the dependents of what changed or went since the
+/// last build, so each is fetched and parsed again as a new file is (not
+/// removed from the graph first), and those dependents (`previous`
+/// unchanged and none when there are none, or more than
+/// [`MAX_DEPENDENTS`]).
+fn expand<'a>(
+    graph: &Graph,
+    source: &str,
+    listed: &[DocumentRef],
+    previous: &'a BTreeMap<String, String>,
+) -> (
+    Cow<'a, BTreeMap<String, String>>,
+    BTreeMap<String, String>,
+    Expansion,
+) {
+    let versions: HashMap<&str, &str> = listed
+        .iter()
+        .map(|reference| (reference.key.as_str(), reference.version.as_str()))
+        .collect();
+    let changed: HashSet<&str> = previous
+        .iter()
+        .filter(|(key, version)| versions.get(key.as_str()) != Some(&version.as_str()))
+        .map(|(key, _)| key.as_str())
+        .collect();
+    let found = dependents(graph, source, &changed);
+    if found.is_empty() {
+        return (
+            Cow::Borrowed(previous),
+            BTreeMap::new(),
+            Expansion::default(),
+        );
+    }
+    if found.len() > MAX_DEPENDENTS {
+        let capped = Expansion {
+            files: 0,
+            capped: true,
+        };
+        return (Cow::Borrowed(previous), BTreeMap::new(), capped);
+    }
+    let mut forced = previous.clone();
+    let rereads: BTreeMap<String, String> = found
+        .into_iter()
+        .filter_map(|file| forced.remove_entry(&file))
+        .collect();
+    let expansion = Expansion {
+        files: rereads.len(),
+        capped: false,
+    };
+    (Cow::Owned(forced), rereads, expansion)
+}
+
+/// After the dependents were read again: one no longer read is gone, as a
+/// changed file would be; one read back changed may leave old citations
+/// behind, so the refresh asks for a full rebuild.
+fn settle(
+    graph: &mut Graph,
+    source: &str,
+    rereads: &BTreeMap<String, String>,
+    total: &mut Outcome,
+    expansion: &mut Expansion,
+) {
+    for (file, version) in rereads {
+        match total.hashes.get(file) {
+            None => {
+                graph.remove_file(source, file);
+                total.removed_files += 1;
+            }
+            Some(read) if read != version => expansion.capped = true,
+            Some(_) => {}
+        }
+    }
+}
+
 /// Ingest `source` into `graph` batch by batch; `stage` is called after
 /// each batch is read (to move the chunks the reads staged into the store).
+/// The unchanged files with edges into what changed are read again too
+/// (see the module doc).
 ///
 /// # Errors
 ///
@@ -98,10 +265,17 @@ pub async fn ingest(
     previous: &BTreeMap<String, String>,
     context: &Context,
     mut stage: impl FnMut() -> Result<(), EngineError>,
-) -> Result<Outcome, EngineError> {
+) -> Result<(Outcome, Expansion), EngineError> {
     let listed = source
         .list_now()
         .map_err(|error| EngineError::new(ErrorType::Runtime, error.to_string()))?;
+    let (previous, rereads, mut expansion) = expand(graph, &selection.name, &listed, previous);
+    let previous: &BTreeMap<String, String> = &previous;
+    // Read again as they are: what they said about edges goes, what they
+    // cite stays (the module doc).
+    if !rereads.is_empty() {
+        graph.withdraw_relations(&selection.name, |file| rereads.contains_key(file));
+    }
     let mut total = Outcome::default();
     // Each listed file's place in the listing: the order a single pass
     // adds files in (restored at the end).
@@ -188,6 +362,7 @@ pub async fn ingest(
             }
         }
     }
+    settle(graph, &selection.name, &rereads, &mut total, &mut expansion);
     // Back in single-pass order: the batches added languages one after
     // another, and the parser relations resolve names over node order.
     graph.sort_ranked_last(&added);
@@ -200,7 +375,7 @@ pub async fn ingest(
     add_parser_relations(graph, &relations, selection, &mut total, context);
     drop(relations);
     total.pruned_edges += quality_pass(graph);
-    Ok(total)
+    Ok((total, expansion))
 }
 
 #[cfg(test)]

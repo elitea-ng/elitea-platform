@@ -32,7 +32,7 @@ type ClaimController interface {
 	Abort(ctx context.Context, fence runtimedomain.Fence, disposition executionapp.ClaimAbortDisposition) error
 	Renew(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.ActiveLease, error)
 	VerifyActive(ctx context.Context, fence runtimedomain.Fence) error
-	ObserveDesiredState(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.DesiredState, error)
+	ObserveDesiredState(ctx context.Context, fence runtimedomain.Fence) (runtimedomain.ObservedExecution, error)
 }
 
 const (
@@ -120,8 +120,14 @@ func (s *Server) WithWorkspaceWrapUps(wrapUps WorkspaceWrapUps) *Server {
 
 // wrapUp is best effort: a failed read never fails a renewal (the 60 s
 // grace and the hard cancel remain the fallback).
-func (s *Server) wrapUp(ctx context.Context, executionID string) bool {
-	if s.wrapUps == nil {
+//
+// Only an agent execution can be a cloud turn (a turn binds to a chat
+// response), so every other kind (index jobs, toolkit calls, validations)
+// is answered false without asking the store: the lease poll is hot, and
+// the lookup would otherwise cost one round trip per renewal of every
+// execution (#1311).
+func (s *Server) wrapUp(ctx context.Context, capabilityID, executionID string) bool {
+	if s.wrapUps == nil || !cloudTurnCapability(capabilityID) {
 		return false
 	}
 	requested, err := s.wrapUps.WrapUpRequested(ctx, executionID)
@@ -130,6 +136,13 @@ func (s *Server) wrapUp(ctx context.Context, executionID string) bool {
 		return false
 	}
 	return requested
+}
+
+// cloudTurnCapability: the capabilities whose executions can run a cloud
+// turn (ADR-0034), the agent executions.
+func cloudTurnCapability(capabilityID string) bool {
+	return capabilityID == executiondomain.AgentApplicationCapability ||
+		capabilityID == executiondomain.AgentAdhocCapability
 }
 
 func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier CommandVerifier, claims ClaimController, inputs ClaimInputResolver, settlements SettlementController) (*Server, error) {
@@ -411,7 +424,7 @@ func (s *Server) RenewLease(ctx context.Context, request *runtimev1.RenewLeaseRe
 	return &runtimev1.RenewLeaseResponseV1{
 		LeaseExpiresAtUnixMillis: lease.ExpiresAt.UTC().UnixMilli(),
 		DesiredState:             desiredState,
-		WorkspaceWrapUp:          lease.DesiredState == runtimedomain.DesiredRunning && s.wrapUp(ctx, fence.ExecutionID),
+		WorkspaceWrapUp:          lease.DesiredState == runtimedomain.DesiredRunning && s.wrapUp(ctx, lease.CapabilityID, fence.ExecutionID),
 	}, nil
 }
 
@@ -430,18 +443,18 @@ func (s *Server) ObserveDesiredState(ctx context.Context, request *runtimev1.Obs
 	if err != nil {
 		return observeRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The execution fence is malformed.", false), nil
 	}
-	state, err := s.claims.ObserveDesiredState(ctx, fence)
+	observed, err := s.claims.ObserveDesiredState(ctx, fence)
 	if err != nil {
 		code, message, retryable := safeRuntimeError(err)
 		return observeRejection(code, message, retryable), nil
 	}
-	desiredState, err := desiredStateProto(state)
+	desiredState, err := desiredStateProto(observed.DesiredState)
 	if err != nil {
 		return observeRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The execution desired state is unavailable.", false), nil
 	}
 	return &runtimev1.ObserveDesiredStateResponseV1{
 		DesiredState:    desiredState,
-		WorkspaceWrapUp: state == runtimedomain.DesiredRunning && s.wrapUp(ctx, fence.ExecutionID),
+		WorkspaceWrapUp: observed.DesiredState == runtimedomain.DesiredRunning && s.wrapUp(ctx, observed.CapabilityID, fence.ExecutionID),
 	}, nil
 }
 

@@ -12,8 +12,12 @@
  * rendering, and on save sends the MERGED record of the keys it edits. The PUT
  * is a per-key UPSERT, not a replace: a key the payload omits keeps its stored
  * value. A save relies on that to leave the keys this page does not edit
- * (`scheme_tokens`, `sender_name`, `support_email`) alone; a reset must
- * therefore name them explicitly — see `resetBrandingPayload`.
+ * (`scheme_tokens`, `sender_name`, `support_email`) alone — with one
+ * exception: a save that changes the brand colour while imported scheme
+ * tokens are stored sends `scheme_tokens: {}`, because the resolver applies
+ * stored tokens after the hue and the new colour would otherwise not show
+ * (`clearsSchemeTokens`; the page says so before the save). A reset is the
+ * server's own `DELETE`, which removes every row of the section (issue 1057).
  *
  * ## The preview pack
  *
@@ -30,6 +34,7 @@ import { t } from '@/shared/i18n';
 import {
   brandingFailureReason,
   useBrandingSettings,
+  useResetBrandingSettings,
   useSaveBrandingSettings,
   useUploadBrandingAsset,
   type BrandingAssetKind,
@@ -42,7 +47,7 @@ import {
   effectiveFontFaces,
   effectiveLogoEmail,
   emptyBrandingValues,
-  resetBrandingPayload,
+  hasStoredSchemeTokens,
   parseBrandingValues,
   withDerivedSchemes,
   type BrandingAssetKey,
@@ -88,6 +93,12 @@ export interface AdminBrandingPageState {
   readonly effectiveLogoEmail: string;
   readonly previewPack: BrandPack;
   readonly isDirty: boolean;
+  /**
+   * The draft changes the brand colour while imported scheme tokens are
+   * stored: the save clears them (`scheme_tokens: {}`) so the live app
+   * re-derives from the new colour as the preview does, and the page warns.
+   */
+  readonly clearsSchemeTokens: boolean;
   readonly isSaving: boolean;
   readonly fieldError: BrandingFieldError | undefined;
   readonly onFieldChange: <K extends BrandingScalarKey>(key: K, value: BrandingValues[K]) => void;
@@ -129,6 +140,7 @@ function writeUploadedPath(
 export function useAdminBrandingPage(): AdminBrandingPageState {
   const query = useBrandingSettings();
   const save = useSaveBrandingSettings();
+  const reset = useResetBrandingSettings();
   const upload = useUploadBrandingAsset();
 
   const [draft, setDraft] = useState<Partial<BrandingValues>>({});
@@ -154,6 +166,10 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
   const isDirty = useMemo(
     () => JSON.stringify(values) !== JSON.stringify(serverValues),
     [values, serverValues],
+  );
+  const clearsSchemeTokens = useMemo(
+    () => values.brand_hue !== serverValues.brand_hue && hasStoredSchemeTokens(query.data?.values),
+    [values.brand_hue, serverValues.brand_hue, query.data],
   );
 
   // The guard reads this flag live (`brandingDirty.store.ts`); the effect keeps
@@ -196,7 +212,12 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
   }, [save]);
 
   const onSave = useCallback(() => {
-    const payload: BrandingValues = { ...values, font_faces: withoutBlankFaces(values.font_faces) };
+    const edited: BrandingValues = { ...values, font_faces: withoutBlankFaces(values.font_faces) };
+    // Stored scheme tokens win over the hue in the resolver; clearing them is
+    // what makes a new brand colour reach the live app (issue 1057).
+    const payload: Record<string, unknown> = clearsSchemeTokens
+      ? { ...edited, scheme_tokens: {} }
+      : edited;
     save.mutate(payload, {
       onSuccess: () => {
         setDraft({});
@@ -217,13 +238,14 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
         });
       },
     });
-  }, [save, values]);
+  }, [save, values, clearsSchemeTokens]);
 
   const onRequestReset = useCallback(() => setResetOpen(true), []);
   const onCancelReset = useCallback(() => setResetOpen(false), []);
   const onConfirmReset = useCallback(() => {
     setResetOpen(false);
-    save.mutate(resetBrandingPayload(query.data?.values), {
+    save.reset();
+    reset.mutate(undefined, {
       onSuccess: () => {
         setDraft({});
         setToast({
@@ -243,7 +265,7 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
         });
       },
     });
-  }, [save, query.data]);
+  }, [save, reset]);
 
   const onUploadAsset = useCallback(
     (kind: BrandingAssetKind, file: File, target: BrandingUploadTarget) => {
@@ -289,7 +311,8 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
     effectiveLogoEmail: logoEmail,
     previewPack,
     isDirty,
-    isSaving: save.isPending,
+    clearsSchemeTokens,
+    isSaving: save.isPending || reset.isPending,
     fieldError,
     onFieldChange,
     onFontFacesChange,

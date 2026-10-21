@@ -4900,6 +4900,205 @@ export function useSaveBrandingSettings<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type resetBrandingSettingsResponse200 = {
+  data: BrandingSettings;
+  status: 200;
+};
+
+export type resetBrandingSettingsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type resetBrandingSettingsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type resetBrandingSettingsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type resetBrandingSettingsResponseSuccess =
+  resetBrandingSettingsResponse200 & {
+    headers: Headers;
+  };
+export type resetBrandingSettingsResponseError = (
+  | resetBrandingSettingsResponse401
+  | resetBrandingSettingsResponse403
+  | resetBrandingSettingsResponse500
+) & {
+  headers: Headers;
+};
+
+export type resetBrandingSettingsResponse =
+  resetBrandingSettingsResponseSuccess | resetBrandingSettingsResponseError;
+
+export const getResetBrandingSettingsUrl = () => {
+  return `/admin/branding/administration`;
+};
+
+/**
+ * Deletes every stored row of the `branding` section in one statement,
+ * so every key, including ones the editor does not render, inherits
+ * from the layer below again. Invalidates the resolver's cache, collects
+ * unreferenced brand assets older than the upload grace period, and
+ * answers with a fresh read of the same shape as GET with `saved: true`.
+ * @summary Reset the brand pack's database layer
+ */
+export const resetBrandingSettings = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<resetBrandingSettingsResponse> => {
+  return eliteaFetch<resetBrandingSettingsResponse>(
+    getResetBrandingSettingsUrl(),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getResetBrandingSettingsQueryKey = () => {
+  return ["DELETE", `/admin/branding/administration`] as const;
+};
+
+export const getResetBrandingSettingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
+  TError = N401Response | N403Response | N500Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof resetBrandingSettings>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getResetBrandingSettingsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof resetBrandingSettings>>
+  > = ({ signal }) => resetBrandingSettings({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof resetBrandingSettings>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ResetBrandingSettingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof resetBrandingSettings>>
+>;
+export type ResetBrandingSettingsQueryError =
+  N401Response | N403Response | N500Response;
+
+export function useResetBrandingSettings<
+  TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resetBrandingSettings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resetBrandingSettings>>,
+          TError,
+          Awaited<ReturnType<typeof resetBrandingSettings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResetBrandingSettings<
+  TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resetBrandingSettings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resetBrandingSettings>>,
+          TError,
+          Awaited<ReturnType<typeof resetBrandingSettings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResetBrandingSettings<
+  TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resetBrandingSettings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reset the brand pack's database layer
+ */
+
+export function useResetBrandingSettings<
+  TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
+  TError = N401Response | N403Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resetBrandingSettings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getResetBrandingSettingsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type uploadBrandingAssetResponse200 = {
   data: BrandingAsset;
   status: 200;

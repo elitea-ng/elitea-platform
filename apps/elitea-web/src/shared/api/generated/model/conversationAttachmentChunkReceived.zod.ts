@@ -50,7 +50,7 @@ export const ConversationAttachmentChunkReceived = zod
     message: zod.string(),
   })
   .describe(
-    "A chunk of a chunked upload was stored; the file is assembled when the last chunk arrives, and that request answers 201. NOTE(W2): internal/api/v2/conversations/attachments.go:409.\n",
+    "A chunk of a chunked upload was stored; the file is assembled when the last chunk arrives, and that request answers 201. NOTE(W2): internal/api/v2/conversations/attachments.go:425.\n",
   );
 
 export type ConversationAttachmentChunkReceived = zod.input<

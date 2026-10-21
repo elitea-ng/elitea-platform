@@ -520,7 +520,8 @@ type RouterConfig struct {
 	ProductionRuntime             *ProductionRuntimeRoutes
 	CurrentProjectInfo            *v2projectinfo.CurrentProjectInfoRoute
 	CurrentIndexTypes             *v2indextypes.CurrentIndexTypesRoute
-	AttachmentExtensions          []string // discovery's accepted_extensions (client contract 1.1); empty = the web default list
+	AttachmentExtensions          []string                           // discovery's accepted_extensions (client contract 1.1); empty = the web default list
+	AttachmentExtractionWarmer    v2convs.AttachmentExtractionWarmer // upload-time extraction warm-up (issue 1062); nil = the first turn extracts
 	CurrentApplicationSkills      *v2applicationskills.CurrentApplicationSkillsRoute
 	CurrentPromptContextReads     *v2promptcontextreads.CurrentRoutes
 	CurrentProjectList            *v2projects.CurrentProjectListRoute
@@ -1829,7 +1830,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithContextManagementGate(defaults).
 			WithReasoningModels(defaults).
 			WithEvents(cfg.DomainEvents).
-			WithReadEvents(cfg.ConversationActivity)
+			WithReadEvents(cfg.ConversationActivity).
+			WithAttachmentExtractionWarmer(cfg.AttachmentExtractionWarmer)
 		if cfg.Pool != nil {
 			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
 		}
@@ -2496,6 +2498,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				requireBranding := central("configuration.branding")
 				r.With(requireBranding).Get("/branding/administration", adminHandler.BrandingRead)
 				r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSave)
+				r.With(requireBranding).Delete("/branding/administration", adminHandler.BrandingReset)
 				r.With(requireBranding).Post("/branding/assets/{kind}", adminHandler.BrandingAssetUpload)
 				r.With(requireBranding).Post("/branding/test_email/administration", adminHandler.BrandingTestEmail)
 				// OUTBOUND E-MAIL — the real surface behind the Configuration
@@ -3602,6 +3605,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Get)
 					r.With(projectPermission("models.chat.conversation.update")).
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
+					// Client contract 1.15: `meta.internal_tools` alone, in one
+					// statement, under the PUT's permission (internal_tools.go).
+					r.With(projectPermission("models.chat.conversation.update")).
+						Patch("/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateInternalTools)
 					r.With(projectPermission("models.chat.conversations.delete")).
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
 					// Conversation archive (client contract 1.10), shared by
@@ -3732,6 +3739,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.AddAttachments)
 					r.With(projectPermission("models.chat.attachments.delete")).
 						Delete("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteAttachments)
+					// Client contract 1.14: ONE stored file, addressed like the
+					// download below, under the conversation-wide delete's
+					// permission (attachment_delete.go).
+					r.With(projectPermission("models.chat.attachments.delete")).
+						Delete("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DeleteAttachment)
 					// Client contract 1.1: one attachment's bytes, scoped by the
 					// conversation (attachment_download.go). It takes the
 					// conversation READ, like getConversation — reading a file

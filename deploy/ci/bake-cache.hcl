@@ -97,7 +97,7 @@ target "llm-mock" {
 target "mcp-mock" {
   cache-from = ["type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-mock-mcp:linux-amd64"]
 }
-// `mcp-mock-trust` and `worker-trust` deliberately have NO target: they reuse
+// `mcp-mock-trust` deliberately has NO target: it reuses
 // mcp-mock's image (compose `image:` only, no `build:`), so the mock is built
 // exactly once per run and every consumer carries the same TLS mint.
 target "qtest-mock" {

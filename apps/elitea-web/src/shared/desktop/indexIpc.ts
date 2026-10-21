@@ -36,6 +36,8 @@ export interface IndexStatus {
   policy_off: boolean;
   /** An index exists on this computer. */
   on_disk: boolean;
+  /** The host watches the folder: changes made outside the app refresh the index a few seconds after they stop. */
+  watching: boolean;
 }
 
 /** `queued`: waiting for another folder's refresh (one runs at a time). */
@@ -184,6 +186,7 @@ export const OFF_STATUS: IndexStatus = Object.freeze({
   error: null,
   policy_off: false,
   on_disk: false,
+  watching: false,
 });
 
 /** `index://event` carries three payloads: a build's (no `kind`), a model download's and a workspace's embedding. */

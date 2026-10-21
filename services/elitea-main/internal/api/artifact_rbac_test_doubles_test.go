@@ -215,6 +215,14 @@ func (alwaysSucceedsArtifactRepo) MarkTransferGrantConsumed(context.Context, str
 	return nil
 }
 
+func (alwaysSucceedsArtifactRepo) ClaimTransferGrant(context.Context, string) (time.Time, error) {
+	return time.Now(), nil
+}
+
+func (alwaysSucceedsArtifactRepo) ReleaseTransferGrantClaim(context.Context, string, time.Time) (bool, error) {
+	return true, nil
+}
+
 // GetTransferGrantByID (S16) returns the same fixed grant as
 // GetTransferGrant, ignoring the projectID scoping GetTransferGrant applies
 // — router-level tests exercising the multipart continuation routes rely on

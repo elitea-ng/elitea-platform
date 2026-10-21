@@ -36,7 +36,9 @@ func (r *bindingResolver) ResolveDelegatedAuthToolkitSettings(
 	for key, value := range r.settings {
 		copied[key] = value
 	}
-	return toolkitexecutionapp.DelegatedAuthToolkitSettings{ToolkitType: r.toolType, Settings: copied}, true, nil
+	return toolkitexecutionapp.DelegatedAuthToolkitSettings{
+		ToolkitType: r.toolType, Settings: copied, ProjectOwnedSettings: copied,
+	}, true, nil
 }
 
 func (r *bindingResolver) setURL(value string) {

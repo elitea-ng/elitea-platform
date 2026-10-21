@@ -1,7 +1,7 @@
 /**
  * A workspace's local index at a glance: Off / Building n/m / Ready · N
- * entities / Stale / Policy changed / Error. Clicking it opens the index
- * settings.
+ * entities (· Watching, while the host watches the folder) / Stale / Policy
+ * changed / Error. Clicking it opens the index settings.
  */
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import Chip from '@mui/material/Chip';
@@ -36,11 +36,30 @@ function describeNoStatus(view: IndexView | undefined, loadError: unknown): Chip
   return { label: t('workspace.index.chip.error', 'Error'), color: 'error', hint: describeIndexError(loadError) };
 }
 
-/** When a stale index refreshes: after the agent's changes, or when the folder is opened. */
+/** When a stale index refreshes: after the agent's changes (or any change, while the folder is watched), or when the folder is opened. */
 function staleHint(status: IndexStatus): string {
+  if (status.watching) {
+    return t('workspace.index.chip.staleWatchingHint', 'Files changed since the last build. The folder is watched: it refreshes a few seconds after files stop changing, or when you refresh it.');
+  }
   return status.changed_files > 0
     ? t('workspace.index.chip.staleChangedHint', 'Files changed since the last build. It refreshes a few seconds after the agent’s changes, or when you refresh it.')
     : t('workspace.index.chip.staleHint', 'Not checked since the app started. It is checked when you open this folder, or when you refresh it.');
+}
+
+/** A ready index, and whether the host watches its folder. */
+function readyChip(status: IndexStatus): ChipLook {
+  const entities = compact(status.entities);
+  return status.watching
+    ? {
+        label: t('workspace.index.chip.readyWatching', 'Ready · {{entities}} entities · Watching', { entities }),
+        color: 'success',
+        hint: t('workspace.index.chip.readyWatchingHint', 'Agents can search this folder’s code structure. The folder is watched: changes made outside the app refresh it a few seconds after they stop.'),
+      }
+    : {
+        label: t('workspace.index.chip.ready', 'Ready · {{entities}} entities', { entities }),
+        color: 'success',
+        hint: t('workspace.index.chip.readyHint', 'Agents can search this folder’s code structure.'),
+      };
 }
 
 /** The label, colour and longer explanation for one view of the index. */
@@ -60,11 +79,7 @@ function describeChip(view: IndexView | undefined, loadError: unknown, progress:
         hint: t('workspace.index.chip.buildingHint', 'Indexing the code structure of this folder.'),
       };
     case 'ready':
-      return {
-        label: t('workspace.index.chip.ready', 'Ready · {{entities}} entities', { entities: compact(status.entities) }),
-        color: 'success',
-        hint: t('workspace.index.chip.readyHint', 'Agents can search this folder’s code structure.'),
-      };
+      return readyChip(status);
     case 'stale':
       return { label: t('workspace.index.chip.stale', 'Stale'), color: 'warning', hint: staleHint(status) };
     case 'stale_policy':

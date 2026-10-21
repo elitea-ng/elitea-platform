@@ -1,6 +1,7 @@
 package runtimecomposition
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -461,6 +462,24 @@ func TestConfigNATSURLAndIdentityContract(t *testing.T) {
 	config, err := ConfigFromEnv(mapLookup(environment))
 	if err != nil || config.NATSMaterial.Enabled() {
 		t.Fatalf("the plaintext compose posture: enabled=%t err=%v", config.NATSMaterial.Enabled(), err)
+	}
+}
+
+// #966: the env parse follows the repository ceiling (4096), not the former
+// 1024, and still refuses anything above it.
+func TestConfigMaxOutstandingAcceptsCapsAboveTheFormer1024Ceiling(t *testing.T) {
+	for _, raw := range []string{"1025", "2048", "4096"} {
+		env := validEnvironment()
+		env["ELITEA_RUNTIME_MAX_OUTSTANDING"] = raw
+		config, err := ConfigFromEnv(mapLookup(env))
+		if err != nil || fmt.Sprint(config.MaxOutstanding) != raw {
+			t.Fatalf("ELITEA_RUNTIME_MAX_OUTSTANDING=%s: config=%d err=%v", raw, config.MaxOutstanding, err)
+		}
+	}
+	env := validEnvironment()
+	env["ELITEA_RUNTIME_MAX_OUTSTANDING"] = "4097"
+	if _, err := ConfigFromEnv(mapLookup(env)); err == nil {
+		t.Fatal("accepted ELITEA_RUNTIME_MAX_OUTSTANDING=4097")
 	}
 }
 

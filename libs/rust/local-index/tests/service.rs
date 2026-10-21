@@ -144,8 +144,11 @@ async fn a_build_then_an_incremental_refresh_reads_only_what_changed() {
     write(root, "pkg/audit.py", "def audit():\n    return True\n");
     let status = service.refresh(false).await.unwrap();
     let report = service.last_report().unwrap();
-    assert_eq!(report.read, 2, "the edited and the added file");
-    assert_eq!(report.unchanged, 2);
+    // The edited and the added file, and users.py, whose edges into
+    // store.py's nodes are restored by reading it again.
+    assert_eq!(report.read, 3, "{report:?}");
+    assert_eq!(report.dependents, 1, "{report:?}");
+    assert_eq!(report.unchanged, 1);
     assert_eq!(report.removed, 1);
     assert_eq!(report.hashed, 2);
     assert_eq!(status.files, 4);
@@ -674,4 +677,191 @@ async fn the_toolset_is_read_only_and_named_as_the_cloud_tools() {
         let schema = adk_core::Tool::parameters_schema(tool.as_ref()).unwrap();
         assert_eq!(schema["type"], "object");
     }
+}
+
+/// The edges into the nodes named `target`, as `(source name, relation)`.
+fn edges_into(service: &Arc<IndexService>, target: &str) -> Vec<(String, String)> {
+    let (view, _) = service.view().unwrap();
+    let name = |id: &str| {
+        view.graph
+            .node(id)
+            .and_then(|node| node.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or(id)
+            .to_owned()
+    };
+    view.graph
+        .edges()
+        .filter(|(_, to, _)| name(to) == target)
+        .map(|(from, _, edge)| {
+            (
+                name(from),
+                edge.get("relation_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// #1219 regression: editing the file that defines a function keeps the
+/// `calls` edge from an unchanged caller in another file. Re-reading `b.rs`
+/// removes `f` (and every edge into it) before parsing it again; without
+/// the dependents expansion `a.rs` is skipped (stat cache) and its edge is
+/// lost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dependents_expansion_keeps_cross_file_calls_edge() {
+    let folder = tempfile::tempdir().unwrap();
+    write(
+        folder.path(),
+        "src/a.rs",
+        "use crate::b::f;\n\npub fn run() {\n    f();\n}\n",
+    );
+    write(folder.path(), "src/b.rs", "pub fn f() {}\n");
+    let data = tempfile::tempdir().unwrap();
+    let service = IndexService::open(
+        "ws1",
+        folder.path(),
+        &[],
+        &data.path().join("index"),
+        Arc::new(NoEvents),
+    )
+    .unwrap();
+    service.refresh(false).await.unwrap();
+    let before = edges_into(&service, "f");
+    assert!(
+        before
+            .iter()
+            .any(|(from, kind)| from == "run" && kind == "calls"),
+        "{before:?}"
+    );
+
+    write(
+        folder.path(),
+        "src/b.rs",
+        "/// Edited.\npub fn f() {}\n\npub fn g() {}\n",
+    );
+    service.refresh(false).await.unwrap();
+    let report = service.last_report().unwrap();
+    let after = edges_into(&service, "f");
+    assert!(
+        after
+            .iter()
+            .any(|(from, kind)| from == "run" && kind == "calls"),
+        "{after:?} ({report:?})"
+    );
+    // The caller was read again for it; only the edited file drifts.
+    assert_eq!(
+        (report.read, report.unchanged, report.dependents),
+        (2, 0, 1),
+        "{report:?}"
+    );
+    assert_eq!(service.store().drift_files().unwrap(), 1);
+
+    // Editing the caller alone re-reads nothing else (`f` is not its).
+    write(
+        folder.path(),
+        "src/a.rs",
+        "use crate::b::f;\n\n/// Runs.\npub fn run() {\n    f();\n}\n",
+    );
+    service.refresh(false).await.unwrap();
+    let report = service.last_report().unwrap();
+    assert_eq!((report.read, report.dependents), (1, 0), "{report:?}");
+    assert!(
+        edges_into(&service, "f")
+            .iter()
+            .any(|(from, kind)| from == "run" && kind == "calls")
+    );
+}
+
+/// #1219 review: a dependent read again keeps the edges into its own
+/// nodes. `c.rs` calls `b::helper`, `b.rs` calls `a::f`; editing `a.rs`
+/// reads `b.rs` again, and `c.rs`'s call into `helper` (a node only `b.rs`
+/// cites) survives though `c.rs` is not read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dependent_read_again_keeps_the_edges_into_its_nodes() {
+    let folder = tempfile::tempdir().unwrap();
+    write(folder.path(), "src/a.rs", "pub fn f() {}\n");
+    write(
+        folder.path(),
+        "src/b.rs",
+        "use crate::a::f;\n\npub fn helper() {\n    f();\n}\n",
+    );
+    write(
+        folder.path(),
+        "src/c.rs",
+        "use crate::b::helper;\n\npub fn run() {\n    helper();\n}\n",
+    );
+    let data = tempfile::tempdir().unwrap();
+    let service = IndexService::open(
+        "ws1",
+        folder.path(),
+        &[],
+        &data.path().join("index"),
+        Arc::new(NoEvents),
+    )
+    .unwrap();
+    service.refresh(false).await.unwrap();
+    let calls = |edges: &[(String, String)], caller: &str| {
+        edges
+            .iter()
+            .any(|(from, kind)| from == caller && kind == "calls")
+    };
+    let before = edges_into(&service, "helper");
+    assert!(calls(&before, "run"), "{before:?}");
+
+    write(folder.path(), "src/a.rs", "/// Edited.\npub fn f() {}\n");
+    service.refresh(false).await.unwrap();
+    let report = service.last_report().unwrap();
+    // `b.rs` is read again for its call into `f`; `c.rs` is not.
+    assert_eq!(
+        (report.read, report.unchanged, report.dependents),
+        (2, 1, 1),
+        "{report:?}"
+    );
+    let into_f = edges_into(&service, "f");
+    assert!(calls(&into_f, "helper"), "{into_f:?}");
+    let after = edges_into(&service, "helper");
+    assert!(calls(&after, "run"), "{after:?} ({report:?})");
+
+    // The same graph a full build makes.
+    let graph = || {
+        let (view, _) = service.view().unwrap();
+        let mut nodes: Vec<String> = view.graph.nodes().map(|(id, _)| id.to_owned()).collect();
+        let mut edges: Vec<(String, String)> = view
+            .graph
+            .edges()
+            .map(|(from, to, _)| (from.to_owned(), to.to_owned()))
+            .collect();
+        nodes.sort();
+        edges.sort();
+        (nodes, edges)
+    };
+    let incremental = graph();
+    service.refresh(true).await.unwrap();
+    assert_eq!(incremental, graph());
+}
+
+/// Files changed since the last full build add up; past the threshold the
+/// index asks for a full rebuild, and one resets the count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drift_past_the_threshold_asks_for_a_full_rebuild() {
+    use elitea_local_index::service::DRIFT_REBUILD;
+    let opened = open();
+    let service = &opened.service;
+    service.refresh(false).await.unwrap();
+    // The first build is a full one.
+    assert_eq!(service.store().drift_files().unwrap(), 0);
+    write(opened.folder.path(), "notes.txt", "changed\n");
+    fs::remove_file(opened.folder.path().join("README.md")).unwrap();
+    service.refresh(false).await.unwrap();
+    assert_eq!(service.store().drift_files().unwrap(), 2);
+    assert!(!service.wants_full_rebuild());
+
+    service.store().set_drift_files(DRIFT_REBUILD + 1).unwrap();
+    assert!(service.wants_full_rebuild());
+    service.refresh(true).await.unwrap();
+    assert_eq!(service.store().drift_files().unwrap(), 0);
+    assert!(!service.wants_full_rebuild());
 }

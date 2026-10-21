@@ -172,6 +172,66 @@ func (r *CurrentSecretVaultRepository) SealProjectHiddenSecrets(
 	return vault.mutate(ctx, executor, r.masterKey, vaultMutations)
 }
 
+// PurgeProjectHiddenSecrets deletes hidden secrets from one project vault
+// inside the transaction the caller owns (#1204).
+//
+// It is the inverse of SealProjectHiddenSecrets: a configuration delete
+// removes the row and the secrets only that row referenced, and both commit
+// together. The caller decides which names are no longer referenced; this
+// method only removes them, and only from the hidden collection, so a
+// user-named secret of the same name in the visible list is never touched.
+//
+// A project with no vault holds no secret to remove, so that answer is nil.
+// No vault is created for a purge. The caller commits or rolls back.
+func (r *CurrentSecretVaultRepository) PurgeProjectHiddenSecrets(
+	ctx context.Context,
+	tx pgx.Tx,
+	projectID int64,
+	names []string,
+) error {
+	if r == nil {
+		return ErrCurrentVaultUnavailable
+	}
+	if ctx == nil || tx == nil || projectID <= 0 {
+		return ErrInvalidCurrentVaultMutation
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	if len(names) > maxCurrentVaultMutations {
+		return ErrInvalidCurrentVaultMutation
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	vaultMutations := make([]centrysecrets.Mutation, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			return ErrInvalidCurrentVaultMutation
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		vaultMutations = append(vaultMutations, centrysecrets.Mutation{
+			Collection: centrysecrets.HiddenSecrets,
+			Name:       name,
+			Delete:     true,
+		})
+	}
+	executor := pgxExecutor{queryer: tx}
+	vault, err := lockCurrentSecretVault(ctx, executor, "project-"+strconv.FormatInt(projectID, 10))
+	if errors.Is(err, errCurrentVaultAbsent) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer vault.destroy()
+	return vault.mutate(ctx, executor, r.masterKey, vaultMutations)
+}
+
 // createAbsentProjectVault gives a project its empty vault, so that the seal
 // above can lock one.
 //

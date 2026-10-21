@@ -656,7 +656,8 @@ func (r *recordingStateEvents) HandoffChanged(_ context.Context, projectID int64
 }
 
 // Scope B: every committed transition, request-driven or the sweeper's, is
-// one live event to the thread's owner; a refused transition is none.
+// one live event to the thread's owner; a refused transition is none, and so
+// is a replayed one (#1311).
 func TestPostgresEveryHandoffTransitionPublishesOneLiveEvent(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	seedCurrentAgentContinuationSchema(t, pool)
@@ -702,15 +703,29 @@ func TestPostgresEveryHandoffTransitionPublishesOneLiveEvent(t *testing.T) {
 		ProjectID: 1, ConversationUUID: executorConversation}); err != nil || !ok {
 		t.Fatalf("claim = %v %v", ok, err)
 	}
-	if _, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 2, DeviceID: "device-1"}); err != nil {
-		t.Fatal(err)
+	// #1311: a replay changes nothing and publishes nothing; each retry
+	// below sits right after the call it repeats.
+	if _, ok, err := adapter.ResolveCloudTurn(ctx, workspaceruntime.TurnClaim{ExecutionID: "exec-live", Generation: 1,
+		ProjectID: 1, ConversationUUID: executorConversation}); err != nil || !ok {
+		t.Fatalf("repeated redemption = %v %v", ok, err)
+	}
+	for range 2 {
+		if _, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 2, DeviceID: "device-1"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := adapter.FinishExecution(ctx, "exec-live"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.service.Release(ctx, workspacehandoff.ReleaseRequest{Thread: thread, ActorUserID: owner, Epoch: 3,
-		Outcome: "discarded"}); err != nil {
+	// The take back the finish completed, retried (RECLAIMING one epoch on).
+	if _, err := h.service.Reclaim(ctx, workspacehandoff.ReclaimRequest{Thread: thread, ActorUserID: owner, Epoch: 2, DeviceID: "device-1"}); err != nil {
 		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := h.service.Release(ctx, workspacehandoff.ReleaseRequest{Thread: thread, ActorUserID: owner, Epoch: 3,
+			Outcome: "discarded"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	type step struct {
 		state   workspacestore.State

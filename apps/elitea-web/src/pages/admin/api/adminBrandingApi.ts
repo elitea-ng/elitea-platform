@@ -3,13 +3,14 @@
  * `/api/v2/admin/branding/administration` and `/api/v2/admin/branding/assets/{kind}`.
  *
  * Generated, unlike the other files in this directory: `v2.yaml` describes
- * these three operations, so the fetchers come from `shared/api/generated/
+ * these four operations, so the fetchers come from `shared/api/generated/
  * admin/admin.ts`. What this module adds is the shape orval cannot: the
- * read is a `useQuery` over the generated fetcher, and the two writes are
+ * read is a `useQuery` over the generated fetcher, and the three writes are
  * locally-owned `useMutation`s over the generated `saveBrandingSettings` /
- * `uploadBrandingAsset` — NOT the generated `useSaveBrandingSettings` /
- * `useUploadBrandingAsset`, which orval emits query-shaped for a PUT and a
- * POST (the same generated-shape mismatch `features/apps/api/
+ * `resetBrandingSettings` / `uploadBrandingAsset` — NOT the generated
+ * `useSaveBrandingSettings` / `useResetBrandingSettings` /
+ * `useUploadBrandingAsset`, which orval emits query-shaped for a PUT, a
+ * DELETE and a POST (the same generated-shape mismatch `features/apps/api/
  * useModerationRequests.ts` documents). A query-shaped write would dedupe an
  * unchanged resubmission against its cache and auto-retry a transient
  * failure; `useMutation` does neither.
@@ -29,6 +30,7 @@ import {
 import {
   getBrandingSettings,
   getGetBrandingSettingsQueryKey,
+  resetBrandingSettings,
   saveBrandingSettings,
   uploadBrandingAsset,
 } from '@/shared/api/generated/admin/admin';
@@ -86,6 +88,28 @@ export function useSaveBrandingSettings(): UseMutationResult<
     // The save answers the re-read state (`saved: true`), so it IS the fresh
     // read; setting it avoids a second round trip and a flash of the old
     // values, and the invalidation keeps any other observer honest.
+    onSuccess: (settings) => {
+      queryClient.setQueryData(getGetBrandingSettingsQueryKey(), settings);
+      return queryClient.invalidateQueries({ queryKey: getGetBrandingSettingsQueryKey() });
+    },
+  });
+}
+
+/**
+ * `DELETE /admin/branding/administration`: the server deletes every row of
+ * the section, so every key inherits again — the keys this page never
+ * renders (a package import's `scheme_tokens`, the sender fields, any key
+ * added later) included (issue 1057). It answers the re-read state, as the
+ * save does.
+ */
+export function useResetBrandingSettings(): UseMutationResult<BrandingSettings, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<BrandingSettings> => {
+      const response = await resetBrandingSettings();
+      if (response.status !== 200) throw new Error(`branding reset answered ${response.status}`);
+      return response.data;
+    },
     onSuccess: (settings) => {
       queryClient.setQueryData(getGetBrandingSettingsQueryKey(), settings);
       return queryClient.invalidateQueries({ queryKey: getGetBrandingSettingsQueryKey() });

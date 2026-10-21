@@ -61,7 +61,22 @@ export const ConversationMessage = zod
     author_participant_id: zod.int().optional(),
     sent_to_id: zod.int().optional(),
     reply_to_id: zod.int().optional(),
-    metadata: zod.record(zod.string(), zod.unknown()).optional(),
+    metadata: zod
+      .object({
+        mentioned_user_ids: zod
+          .array(zod.int())
+          .optional()
+          .describe(
+            "Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender.",
+          ),
+        mentions_everyone: zod
+          .boolean()
+          .optional()
+          .describe(
+            "Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise.",
+          ),
+      })
+      .optional(),
     message_items: zod
       .array(AttachmentMessageItem)
       .optional()

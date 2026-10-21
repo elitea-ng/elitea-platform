@@ -761,12 +761,24 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	// rename never touches the column while a settings write replaces the
 	// whole document — which is what the client sends (it PUTs the previous
 	// document plus its one change).
+	//
+	// EXCEPT `internal_tools` when the stated document has no such key
+	// (issue 1060): the stored list is kept, read from the row inside this
+	// same UPDATE, so a client that writes other settings and never sends
+	// the list cannot erase it, nor undo a concurrent
+	// updateConversationInternalTools. A document that states the key
+	// (the web's settings write always does) still replaces it.
 	if conv.Meta != nil {
 		encodedMeta, err := json.Marshal(conv.Meta)
 		if err != nil {
 			return conversations.Conversation{}, fmt.Errorf("conversations: update: encode meta: %w", err)
 		}
-		setClauses += fmt.Sprintf(", meta = $%d::jsonb", argIdx)
+		if _, stated := conv.Meta[internalToolsMetaKey]; stated {
+			setClauses += fmt.Sprintf(", meta = $%d::jsonb", argIdx)
+		} else {
+			setClauses += fmt.Sprintf(`, meta = $%d::jsonb || CASE WHEN meta ? 'internal_tools'
+				THEN jsonb_build_object('internal_tools', meta -> 'internal_tools') ELSE '{}'::jsonb END`, argIdx)
+		}
 		args = append(args, encodedMeta)
 		argIdx++
 	}
@@ -814,6 +826,69 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	}
 	return c, nil
 }
+
+// internalToolsMetaKey is the conversation meta key that lists the internal
+// tools a turn may use (agent_chat.sql's admission reads it).
+const internalToolsMetaKey = "internal_tools"
+
+// UpdateInternalTools replaces `meta.internal_tools` and nothing else
+// (updateConversationInternalTools, issue 1060). One statement: jsonb_set
+// over the row's current meta, so a concurrent write of any other meta key
+// is neither lost nor undone. Every name must be in the internal-tools
+// catalogue the agent admission applies (currentAuthorableInternalTools,
+// equal to the list in agent_chat.sql), so the write can never store a list
+// that refuses every later send.
+func (r *ConversationsRepo) UpdateInternalTools(ctx context.Context, projectID, conversationID string, tools []string) (conversations.Conversation, error) {
+	for _, name := range tools {
+		if !currentAuthorableInternalTools[name] {
+			return conversations.Conversation{}, apierr.BadRequest("unknown internal tool " + strconv.Quote(name))
+		}
+	}
+	// The UPDATE addresses the row by whichever id form the route carries
+	// and returns everything the answer needs: no read before the write.
+	predicate, ok := idPredicate(conversationID)
+	if !ok {
+		return conversations.Conversation{}, apierr.NotFound("conversation not found")
+	}
+	if tools == nil {
+		tools = []string{}
+	}
+	encoded, err := json.Marshal(tools)
+	if err != nil {
+		return conversations.Conversation{}, fmt.Errorf("conversations: update internal tools: encode: %w", err)
+	}
+	q := fmt.Sprintf(`UPDATE %s.chat_conversations c
+		SET meta = jsonb_set(COALESCE(c.meta, '{}'::jsonb), '{internal_tools}', $2::jsonb, true),
+		    updated_at = (now() AT TIME ZONE 'UTC')
+		WHERE %s
+		RETURNING c.id::text, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id::text, c.created_at, COALESCE(c.updated_at, c.created_at), c.meta, c.is_private, COALESCE(c.instructions,''), COALESCE(c.source,'')`,
+		schema(projectID), predicate)
+	var c conversations.Conversation
+	var authorID int
+	var folderID *string
+	var metaBytes []byte
+	var isPrivate bool
+	var source string
+	if err := r.pool.QueryRow(ctx, q, conversationID, encoded).Scan(
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Instructions, &source,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return conversations.Conversation{}, apierr.NotFound("conversation not found")
+		}
+		return conversations.Conversation{}, fmt.Errorf("conversations: update internal tools: %w", err)
+	}
+	c.ProjectID = projectID
+	c.CreatedBy = fmt.Sprintf("%d", authorID)
+	c.FolderID = folderID
+	c.Meta = decodeConversationMeta(metaBytes)
+	c.IsPrivate = &isPrivate
+	if source == conversations.EditorTestSource {
+		c.Source = source
+	}
+	return c, nil
+}
+
+var _ conversations.ConversationInternalToolsWriter = (*ConversationsRepo)(nil)
 
 // attachmentQuerier is the part of pgx.Tx the attachment collection needs.
 // Stated as an interface so the two delete paths share one scan without either
@@ -891,6 +966,26 @@ func collectConversationAttachments(ctx context.Context, q attachmentQuerier, s 
 		      AND other_group.conversation_id <> $1)
 		ORDER BY mi.message_group_id, mi.order_index`, s), conversationID)
 }
+
+// AttachmentReferenced reports whether any attachment row in the project's
+// schema names the stored object (bucket, name) — any message of any
+// conversation, a fork's shared copy included. The per-file attachment
+// delete refuses such a file (issue 1062). Served by the (bucket, name)
+// index of tenant/0152.
+func (r *ConversationsRepo) AttachmentReferenced(ctx context.Context, projectID, bucket, name string) (bool, error) {
+	var referenced bool
+	err := r.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT EXISTS (
+		    SELECT 1 FROM %[1]s.chat_messages_attachment att
+		    JOIN %[1]s.chat_message_items mi ON mi.id = att.id
+		    WHERE att.bucket = $1 AND att.name = $2)`, schema(projectID)), bucket, name).Scan(&referenced)
+	if err != nil {
+		return false, fmt.Errorf("conversations: read attachment references: %w", err)
+	}
+	return referenced, nil
+}
+
+var _ conversations.AttachmentReferenceReader = (*ConversationsRepo)(nil)
 
 func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationID string) ([]conversations.AttachmentRef, error) {
 	s := schema(projectID)

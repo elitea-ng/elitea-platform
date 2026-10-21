@@ -449,3 +449,23 @@ func mutationName(mutations []HiddenSecretMutation) string {
 	}
 	return mutations[0].Name
 }
+
+// #1204: only whole-string references with the minted 32-hex shape name a
+// hidden secret a row owns. A user-named secret, an embedded reference and a
+// malformed one are never reported, so a delete never purges them.
+func TestCurrentHiddenSecretReferencesNamesOnlyMintedReferences(t *testing.T) {
+	data := map[string]any{
+		"api_key":  "{{secret." + currentSecretIDTwo + "}}",
+		"named":    "{{secret.my_github_token}}",
+		"embedded": "Bearer {{secret." + currentSecretIDOne + "}}",
+		"upper":    "{{secret.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}}",
+		"nested": map[string]any{
+			"list": []any{"{{secret." + currentSecretIDOne + "}}", "{{secret." + currentSecretIDTwo + "}}"},
+		},
+	}
+	got := CurrentHiddenSecretReferences(data)
+	want := []string{currentSecretIDOne, currentSecretIDTwo}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CurrentHiddenSecretReferences = %v, want %v", got, want)
+	}
+}

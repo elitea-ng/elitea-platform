@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.12
+ * client contract:    1.15
  * operations sha256:  0bab2b4bd6cd24ca017d9e6eb5912bbe131568de50fa8a3a1aa0d4fd5d748563
  */
 export interface paths {
@@ -386,6 +386,22 @@ export interface paths {
          *     `payload.attachments`. Size limits are the project's storage policy
          *     (images and documents have separate ceilings); one chunk is at most a
          *     few MB.
+         *
+         *     Client contract 1.13: a name already stored in this conversation is
+         *     never overwritten. The file is stored under a numbered name instead:
+         *     the number after the highest one the conversation holds for that name
+         *     (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
+         *     before the extension), and two concurrent uploads of one name always
+         *     get two different names, the loser of a race possibly a random
+         *     suffix such as `photo (3f9c01ab).jpg`. However many files of one name
+         *     a conversation holds, the upload is never refused for it. Always send
+         *     the returned `filepath`, never one built from the local file name.
+         *
+         *     Client contract 1.14: a stored document's text is extracted in the
+         *     background as soon as it is uploaded, so the first turn that carries
+         *     it does not wait for the extraction. This never delays or fails the
+         *     upload. A file uploaded and never sent can be removed with
+         *     deleteConversationAttachment.
          */
         post: operations["uploadConversationAttachment"];
         delete?: never;
@@ -1211,7 +1227,9 @@ export interface paths {
          *     NOT stop the run; it keeps spending the budget.
          *
          *     What happens to the answer: a turn stopped before any output is
-         *     removed together with its question; a turn with partial output keeps
+         *     removed together with its question; a regeneration stopped before
+         *     any output keeps its question and its answer, settled empty (the
+         *     previous text is not restored); a turn with partial output keeps
          *     what was written. After a 204, close the stream and reload the
          *     transcript rather than waiting for a terminal frame.
          *
@@ -2212,7 +2230,7 @@ export interface components {
             id: number;
             name: string;
         };
-        /** @description A chunk of a chunked upload was stored; the file is assembled when the last chunk arrives, and that request answers 201. NOTE(W2): internal/api/v2/conversations/attachments.go:409. */
+        /** @description A chunk of a chunked upload was stored; the file is assembled when the last chunk arrives, and that request answers 201. NOTE(W2): internal/api/v2/conversations/attachments.go:425. */
         ConversationAttachmentChunkReceived: {
             chunk_index: number;
             file_id: string;
@@ -2221,11 +2239,11 @@ export interface components {
             status: string;
             total_chunks: number;
         };
-        /** @description One stored file. Send `filepath` back verbatim in the chat send's `payload.attachments`. NOTE(W2): internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`). */
+        /** @description One stored file. Send `filepath` back verbatim in the chat send's `payload.attachments`. NOTE(W2): internal/api/v2/conversations/attachments.go:234 (`attachmentCreated`). */
         ConversationAttachmentUploaded: {
             /** Format: int64 */
             file_size: number;
-            /** @description `/{bucket}/{conversation_uuid}/{file name}`. */
+            /** @description `/{bucket}/{conversation_uuid}/{file name}`. The file name is the uploaded one, numbered (`name (1).ext`) when the conversation already holds that name (client contract 1.13). */
             filepath: string;
         };
         /** @description NOTE(W2): read key by key from a free JSON body by internal/api/v2/conversations/handler.go:653 (`Create`). Unknown keys are ignored. */
@@ -2359,6 +2377,11 @@ export interface components {
             /** @description Omitted, not empty, for a group with no attachments. */
             message_items?: components["schemas"]["AttachmentMessageItem"][];
             metadata?: {
+                /** @description Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender. */
+                mentioned_user_ids?: number[];
+                /** @description Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise. */
+                mentions_everyone?: boolean;
+            } & {
                 [key: string]: unknown;
             };
             reply_to_id?: number;
@@ -3244,7 +3267,7 @@ export interface components {
             instructions?: string;
             /** @description `false` publishes the conversation in its project. Making a public conversation private is the author's alone. */
             is_private?: boolean;
-            /** @description Replaces the whole settings document when present. */
+            /** @description Replaces the whole settings document when present, except `internal_tools`: a document without that key keeps the stored list (client contract 1.15). To change the list alone, use updateConversationInternalTools. */
             meta?: {
                 [key: string]: unknown;
             };
@@ -4087,6 +4110,15 @@ export interface operations {
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            /** @description The project's attachment bucket name is held by a bucket a person created; rename or delete that bucket. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };

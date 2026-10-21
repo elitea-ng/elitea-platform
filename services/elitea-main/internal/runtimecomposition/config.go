@@ -17,14 +17,17 @@ import (
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 const (
-	maxConfigPathBytes    = 4096
-	maxNATSURLBytes       = 2048
-	maxRuntimeOutstanding = 1024
+	maxConfigPathBytes = 4096
+	maxNATSURLBytes    = 2048
+	// maxRuntimeOutstanding is the repository's admission ceiling, so the env
+	// parse and the CHECKs in shared/0170 cannot drift apart (#966).
+	maxRuntimeOutstanding = repos.MaxSupportedOutstandingJobs
 	// productionTransportMessageBytes is the validation route's message
 	// bound: max_transport_message_bytes, the streams' MaxMsgSize.
 	productionTransportMessageBytes = commandbus.MaxMessageBytes

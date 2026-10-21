@@ -26,6 +26,12 @@ type Querier interface {
 	// owner's access to project_user_<userID>.
 	CanManageCurrentTracingConfiguration(ctx context.Context, arg CanManageCurrentTracingConfigurationParams) (bool, error)
 	CancelCurrentAgentExecution(ctx context.Context, arg CancelCurrentAgentExecutionParams) (CancelCurrentAgentExecutionRow, error)
+	// The same single-use stamp as MarkArtifactTransferGrantConsumed, taken
+	// BEFORE a single-shot commit touches the grant's final key, and returning
+	// the stamp so a failed commit can hand the grant back
+	// (ReleaseArtifactTransferGrantClaim). No row means already consumed (or
+	// claimed by a commit in flight).
+	ClaimArtifactTransferGrantForCommit(ctx context.Context, id string) (pgtype.Timestamptz, error)
 	// Claim only the oldest unfinished revision for each configuration. A lower
 	// pending, retrying, processing, or dead revision remains an explicit ordering
 	// barrier. Expired processing rows are reclaimed with a new caller-owned lease
@@ -61,6 +67,10 @@ type Querier interface {
 	ClaimPendingIndexMetaInitializations(ctx context.Context, arg ClaimPendingIndexMetaInitializationsParams) ([]ClaimPendingIndexMetaInitializationsRow, error)
 	ClaimScheduledJobCursor(ctx context.Context, arg ClaimScheduledJobCursorParams) (int64, error)
 	ClaimScheduledOccurrence(ctx context.Context, arg ClaimScheduledOccurrenceParams) (int64, error)
+	// Run after the staging object is gone. The row is kept (a late commit still
+	// answers 409), with key reset to the grant id, which drops it from
+	// ListExpiredArtifactGrantStaging.
+	ClearArtifactGrantStaging(ctx context.Context, arg ClearArtifactGrantStagingParams) error
 	CompareAndSwapCurrentConfigurationRenameToolkit(ctx context.Context, arg CompareAndSwapCurrentConfigurationRenameToolkitParams) (int64, error)
 	CompleteScheduledOccurrence(ctx context.Context, arg CompleteScheduledOccurrenceParams) (int64, error)
 	// The tenant executor installs a transaction-local search_path. These queries
@@ -461,6 +471,19 @@ type Querier interface {
 	ListCurrentToolkitTypes(ctx context.Context, arg ListCurrentToolkitTypesParams) ([]string, error)
 	ListCurrentUserProjects(ctx context.Context, arg ListCurrentUserProjectsParams) ([]ListCurrentUserProjectsRow, error)
 	ListExpectedIndexIngestEntries(ctx context.Context, arg ListExpectedIndexIngestEntriesParams) ([]ListExpectedIndexIngestEntriesRow, error)
+	// The presigned single-shot grants whose staging object may still exist
+	// after they stopped being usable (api/v2/artifacts grants.go,
+	// grantStagingKey). Such a grant's URL addresses key = id || '.upload', not
+	// the object a commit serves, and a commit deletes it — but the URL stays
+	// valid until expires_at, so a PUT after the commit recreates it, with no
+	// metadata row to count or expire it. Once the URL has expired nothing can
+	// write there again, so the sweeper deletes the object and then clears the
+	// marker (ClearArtifactGrantStaging).
+	//
+	// The key predicate is EXACT on purpose: other writers record consumed
+	// grants whose key differs from their id (toolkit discovery inventory), and
+	// those keys name live objects.
+	ListExpiredArtifactGrantStaging(ctx context.Context, arg ListExpiredArtifactGrantStagingParams) ([]ListExpiredArtifactGrantStagingRow, error)
 	ListExpiredArtifactObjects(ctx context.Context, arg ListExpiredArtifactObjectsParams) ([]EliteaStorageObject, error)
 	// The LEFT JOIN onto elitea_identity.token_project_binding is what lets a user
 	// see which project a key bills (ADR-0018, spec-llm-project-scope §4). It is a
@@ -543,12 +566,22 @@ type Querier interface {
 	// unmaterialized row is released, so this is a no-op after a successful
 	// materialize and safe to run on every non-created outcome.
 	ReleaseAgentAdmissionReservation(ctx context.Context, arg ReleaseAgentAdmissionReservationParams) (int64, error)
+	// Undoes ClaimArtifactTransferGrantForCommit after a commit that did not
+	// complete, so the caller can retry on the same grant. The stamp match makes
+	// it a no-op on anything but this commit's own claim.
+	ReleaseArtifactTransferGrantClaim(ctx context.Context, arg ReleaseArtifactTransferGrantClaimParams) (int64, error)
 	ReleaseIndexMetaInitialization(ctx context.Context, arg ReleaseIndexMetaInitializationParams) (int64, error)
 	ReleaseScheduledOccurrenceForRetry(ctx context.Context, arg ReleaseScheduledOccurrenceForRetryParams) (int64, error)
 	ReplaceCurrentConfiguration(ctx context.Context, arg ReplaceCurrentConfigurationParams) (ReplaceCurrentConfigurationRow, error)
 	ReplaceCurrentDeletedLLMApplicationReferences(ctx context.Context, arg ReplaceCurrentDeletedLLMApplicationReferencesParams) (ReplaceCurrentDeletedLLMApplicationReferencesRow, error)
 	RequestCurrentIndexIngestCancellation(ctx context.Context, arg RequestCurrentIndexIngestCancellationParams) (bool, error)
 	ReserveAgentAdmission(ctx context.Context, arg ReserveAgentAdmissionParams) (string, error)
+	// Claims (bucket_id, key) for a write that has not happened yet, and never
+	// touches a row that already holds the key: objects_bucket_key_uniq decides
+	// between two concurrent claims, so exactly one of them affects a row. The
+	// placeholder is overwritten by UpsertArtifactObject once the bytes are
+	// stored (#1059).
+	ReserveArtifactObjectKey(ctx context.Context, arg ReserveArtifactObjectKeyParams) (int64, error)
 	ResetCurrentAgentResponse(ctx context.Context, arg ResetCurrentAgentResponseParams) (ResetCurrentAgentResponseRow, error)
 	// Chat history for this turn: one entry per prior message group, whose
 	// `content` is the group's items flattened into ONE LangChain content array.

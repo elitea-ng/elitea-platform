@@ -839,3 +839,98 @@ WHERE execution_id = $2`, currentAgentStopConversationID, executionID); err != n
 	}
 	settled("after the worker's CANCELLED terminal")
 }
+
+// TestPostgresCurrentAgentStopOfARegenerationBeforeOutputKeepsTheTurn pins
+// #1093: a regeneration rewrites an answered turn in place
+// (ResetCurrentAgentResponse), so its question is the ORIGINAL question. A
+// Stop before the first chunk saw an empty answer with no trace, read it as a
+// fresh send that never produced output, and deleted the answer together with
+// the question. The pair must survive, the answer settled (not streaming,
+// `is_error: false`). An ordinary send stopped before output still loses its
+// own new question (TestPostgresCurrentAgentCancelReplayAcceptsConversationAuthor).
+func TestPostgresCurrentAgentStopOfARegenerationBeforeOutputKeepsTheTurn(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+
+	const (
+		conversationUUID = "10000000-0000-4000-8000-000000000031"
+		questionID       = "20000000-0000-4000-8000-000000000201"
+		questionItem     = "40000000-0000-4000-8000-000000000201"
+		responseID       = "30000000-0000-4000-8000-000000000201"
+		regenerationID   = "50000000-0000-4000-8000-000000000201"
+		executionID      = "execution-stop-regeneration-before-output"
+	)
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	queries := sqlcgen.New(tx)
+	responseMessageID := insertPostgresCurrentApplicationTurn(
+		t, queries, mustCurrentPGUUID(t, conversationUUID),
+		questionID, questionItem, responseID, "Remove me when stopped", "execution-original-answer",
+	)
+	completePostgresCurrentApplicationTurn(t, tx, responseMessageID, "the original answer")
+	if _, err := queries.ResetCurrentAgentResponse(t.Context(), sqlcgen.ResetCurrentAgentResponseParams{
+		ActorUserID: 11, TargetParticipantID: 21,
+		ConversationUuid: mustCurrentPGUUID(t, conversationUUID), QuestionID: mustCurrentPGUUID(t, questionID),
+		ResponseMessageID: responseMessageID, RegenerationKind: "application",
+		ApplicationID: 31, ApplicationVersionID: 41,
+		ExecutionGeneration: regenerationID, ExecutionID: executionID,
+		ProjectID: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	insertPostgresCurrentAgentCancelBinding(
+		t, tx, responseMessageID, regenerationID, executionID,
+		"agent.execute.application.v1", "RUNNING", "RUNNING",
+	)
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewCurrentAgentCancelRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel := func() (agentexecutionapp.CurrentAgentCancelOutcome, error) {
+		return repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+			ProjectID:         1,
+			ActorUserID:       11,
+			ResponseMessageID: uuid.UUID(responseMessageID.Bytes).String(),
+		})
+	}
+	outcome, err := cancel()
+	if err != nil || outcome.Deleted || outcome.Replay || outcome.Salvaged {
+		t.Fatalf("stop: outcome=%+v err=%v, want the regenerated turn kept", outcome, err)
+	}
+
+	assertKept := func(stage string) {
+		t.Helper()
+		var questions, responses int
+		var isStreaming bool
+		var isError *string
+		if err := pool.QueryRow(t.Context(), `
+SELECT (SELECT count(*) FROM p_1.chat_message_group WHERE uuid = $1::uuid),
+       (SELECT count(*) FROM p_1.chat_message_group WHERE uuid = $2),
+       COALESCE((SELECT is_streaming FROM p_1.chat_message_group WHERE uuid = $2), TRUE),
+       (SELECT meta ->> 'is_error' FROM p_1.chat_message_group WHERE uuid = $2)`,
+			questionID, responseMessageID).Scan(&questions, &responses, &isStreaming, &isError); err != nil {
+			t.Fatal(err)
+		}
+		if questions != 1 || responses != 1 || isStreaming || isError == nil || *isError != "false" {
+			t.Fatalf("%s: questions=%d responses=%d is_streaming=%t is_error=%v, want the pair kept and the answer settled",
+				stage, questions, responses, isStreaming, isError)
+		}
+	}
+	assertKept("after the stop")
+
+	// A repeated stop re-settles the same row and still deletes nothing.
+	if again, err := cancel(); err != nil || again.Deleted {
+		t.Fatalf("repeated stop: outcome=%+v err=%v", again, err)
+	}
+	assertKept("after the repeated stop")
+}

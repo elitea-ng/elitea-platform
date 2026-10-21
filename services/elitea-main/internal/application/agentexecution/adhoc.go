@@ -203,10 +203,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	input.ContextSettings = contextSettings
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
-	questionMeta := json.RawMessage(`{}`)
-	if request.InteractionUUID != "" {
-		questionMeta, _ = json.Marshal(map[string]string{"interaction_uuid": request.InteractionUUID})
-	}
+	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{

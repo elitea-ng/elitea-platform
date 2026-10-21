@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.12"
+  x-elitea-client-contract: "1.15"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -3047,12 +3047,32 @@ components:
         meta:
           type: object
           additionalProperties: true
-          description: Replaces the whole settings document when present.
+          description: >-
+            Replaces the whole settings document when present, except
+            `internal_tools`: a document without that key keeps the stored
+            list (client contract 1.15). To change the list alone, use
+            updateConversationInternalTools.
           x-elitea-passthrough: >-
             NOTE(W2): the `chat_conversations.meta` jsonb column, written whole
             (internal/infra/db/repos/conversations.go:768). Several writers own
             keys in it (steps_limit, internal_tools, is_hidden,
             single_participant), so its key set is not fixed by this route.
+
+    UpdateConversationInternalToolsRequest:
+      type: object
+      description: >
+        The body of updateConversationInternalTools. NOTE(W2):
+        internal/api/v2/conversations/internal_tools.go:67 (the decoded
+        body; unknown keys are refused).
+      required: [internal_tools]
+      additionalProperties: false
+      properties:
+        internal_tools:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+          description: The whole new list of internal tool names; `[]` clears it.
 
     UpdatedConversation:
       type: object
@@ -3268,6 +3288,23 @@ components:
             what a turn produced (`is_error`, `finish_reason`, tool and HITL
             state) and the key set grows with the runtime, so it is not closed
             here.
+          properties:
+            mentioned_user_ids:
+              type: array
+              items: { type: integer, format: int64 }
+              description: >-
+                Client contract 1.14. On a user's message: the user ids the
+                sender tagged (the send's `user_ids`), deduplicated, in the
+                order sent, at most 64. Absent when the message tags nobody
+                and on messages sent before 1.14. These are who was TAGGED,
+                not who was notified: notification only reaches project
+                members other than the sender.
+            mentions_everyone:
+              type: boolean
+              description: >-
+                Client contract 1.14. On a user's message: true when it
+                tagged `@everyone` (the send's `sending_to_everyone`); absent
+                otherwise.
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -3322,12 +3359,15 @@ components:
       description: >
         One stored file. Send `filepath` back verbatim in the chat send's
         `payload.attachments`. NOTE(W2):
-        internal/api/v2/conversations/attachments.go:217 (`attachmentCreated`).
+        internal/api/v2/conversations/attachments.go:234 (`attachmentCreated`).
       required: [filepath, file_size]
       properties:
         filepath:
           type: string
-          description: '`/{bucket}/{conversation_uuid}/{file name}`.'
+          description: >-
+            `/{bucket}/{conversation_uuid}/{file name}`. The file name is the
+            uploaded one, numbered (`name (1).ext`) when the conversation
+            already holds that name (client contract 1.13).
         file_size: { type: integer, format: int64 }
 
     ConversationAttachmentChunkReceived:
@@ -3335,7 +3375,7 @@ components:
       description: >
         A chunk of a chunked upload was stored; the file is assembled when the
         last chunk arrives, and that request answers 201. NOTE(W2):
-        internal/api/v2/conversations/attachments.go:409.
+        internal/api/v2/conversations/attachments.go:425.
       required: [status, file_id, chunk_index, total_chunks, message]
       properties:
         status:
@@ -15275,6 +15315,26 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: resetBrandingSettings
+      summary: Reset the brand pack's database layer
+      description: |
+        Deletes every stored row of the `branding` section in one statement,
+        so every key, including ones the editor does not render, inherits
+        from the layer below again. Invalidates the resolver's cache, collects
+        unreferenced brand assets older than the upload grace period, and
+        answers with a fresh read of the same shape as GET with `saved: true`.
+      tags: [admin]
+      responses:
+        '200':
+          description: The branding state after the reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrandingSettings'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
 
   /admin/branding/assets/{kind}:
     post:
@@ -17280,6 +17340,88 @@ paths:
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
+  /elitea_core/conversation_internal_tools/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    patch:
+      operationId: updateConversationInternalTools
+      summary: Replace a conversation's internal tools and nothing else
+      description: |
+        Client contract 1.15. Sets the conversation's `meta.internal_tools`
+        (the built-in tools a turn may use, such as `attachments` or
+        `ask_user`) and no other key, in one statement, so it never loses or
+        undoes a concurrent write of other settings, from this client or
+        another. updateConversation replaces the whole settings document and
+        keeps the stored list only when its document has no
+        `internal_tools` key.
+
+        The body is `{"internal_tools": [names]}`, the whole new list (an
+        empty list clears it); repeated names are stored once. Every name
+        must be in the internal-tools catalogue the agent turn admits:
+        `ask_user`, `attachments`, `data_analysis`, `image_generation`,
+        `internal_mcp`, `lazy_tools_mode`, `planner`,
+        `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
+        name outside it, a missing or non-array `internal_tools`, or any
+        other key answers 400 and writes nothing. Whether the configured
+        worker runs a tool is a separate question (runtime capabilities).
+
+        Needs `models.chat.conversation.update` (the PUT's permission) and
+        access to the conversation (the chat authority's detail rule); a
+        conversation the caller cannot see answers 404. The answer is the
+        conversation as updateConversation answers it. NOTE(W2):
+        internal/api/v2/conversations/internal_tools.go:53
+        (`UpdateInternalTools`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConversationInternalToolsRequest"
+      responses:
+        "200":
+          description: The updated conversation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdatedConversation"
+        "400":
+          description: >
+            A body that is not `{"internal_tools": [names]}`, a name outside
+            the catalogue, or a native client version that does not parse
+            (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+        "501":
+          description: A composition without a conversation database.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -19939,7 +20081,9 @@ paths:
         NOT stop the run; it keeps spending the budget.
 
         What happens to the answer: a turn stopped before any output is
-        removed together with its question; a turn with partial output keeps
+        removed together with its question; a regeneration stopped before
+        any output keeps its question and its answer, settled empty (the
+        previous text is not restored); a turn with partial output keeps
         what was written. After a 204, close the stream and reload the
         transcript rather than waiting for a terminal frame.
 
@@ -20334,6 +20478,22 @@ paths:
         `payload.attachments`. Size limits are the project's storage policy
         (images and documents have separate ceilings); one chunk is at most a
         few MB.
+
+        Client contract 1.13: a name already stored in this conversation is
+        never overwritten. The file is stored under a numbered name instead:
+        the number after the highest one the conversation holds for that name
+        (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
+        before the extension), and two concurrent uploads of one name always
+        get two different names, the loser of a race possibly a random
+        suffix such as `photo (3f9c01ab).jpg`. However many files of one name
+        a conversation holds, the upload is never refused for it. Always send
+        the returned `filepath`, never one built from the local file name.
+
+        Client contract 1.14: a stored document's text is extracted in the
+        background as soon as it is uploaded, so the first turn that carries
+        it does not wait for the extraction. This never delays or fails the
+        upload. A file uploaded and never sent can be removed with
+        deleteConversationAttachment.
       tags: [chat, client]
       requestBody:
         required: true
@@ -20379,6 +20539,12 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The project's attachment bucket name is held by a bucket a person created; rename or delete that bucket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}:
@@ -20466,6 +20632,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition with no object store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteConversationAttachment
+      summary: Delete one file uploaded to a conversation that no message carries
+      description: |
+        Client contract 1.14. Removes one stored file: the one a user uploaded
+        in the composer and took back before sending. Needs
+        `models.chat.attachments.delete` (the permission of the
+        conversation-wide attachment delete) and access to the conversation;
+        a caller who cannot see the conversation gets 404, as for a file that
+        does not exist. Address it as for downloadConversationAttachment. The
+        bytes go first, then the file's record, so a 500 can be retried.
+
+        A file a message carries answers 409 with
+        `{"error": "attachment_in_use"}` and nothing is deleted: the
+        transcript, the download and every later turn read it from the
+        message. Delete the message with its attachments to remove such a
+        file. A file named by a message of another conversation (a fork
+        that shares it) counts too.
+        NOTE(W2): internal/api/v2/conversations/attachment_delete.go:47
+        (`DeleteAttachment`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204': { description: Deleted. }
+        '400':
+          description: >-
+            A numeric conversation id, an invalid file name, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
         '500': { $ref: '#/components/responses/500' }
         '501':
           description: A composition with no object store.

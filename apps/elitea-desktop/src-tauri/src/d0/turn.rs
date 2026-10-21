@@ -721,27 +721,28 @@ pub fn with_project_instructions(
 }
 
 /// A turn's system prompt, in the order of authority: the agent's
-/// instructions, the host's environment section (trusted: not framed),
-/// the skills picked for the turn and the workspace's AGENTS.md (both
-/// untrusted, framed under `nonce`), then the memory recall.
+/// instructions, the stable part of the host's environment section
+/// (trusted: not framed), the skills picked for the turn and the
+/// workspace's AGENTS.md (both untrusted, framed under `nonce`), then the
+/// environment's volatile part (`current`: the date and the git line, last
+/// so a prompt cache keeps everything before it) and the memory recall.
 #[must_use]
 pub fn system_instruction(
     agent: &str,
     environment: &str,
     invoked: &[InvokedSkill],
     project: &ProjectInstructions,
+    current: &str,
     recall: &str,
     nonce: &str,
 ) -> String {
     let authored = splice_memory(agent, environment);
-    splice_memory(
-        &with_project_instructions(
-            &skills::with_invoked_skills(&authored, invoked, nonce),
-            project,
-            nonce,
-        ),
-        recall,
-    )
+    let stable = with_project_instructions(
+        &skills::with_invoked_skills(&authored, invoked, nonce),
+        project,
+        nonce,
+    );
+    splice_memory(&splice_memory(&stable, current), recall)
 }
 
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
@@ -1449,12 +1450,9 @@ impl AgentHost {
         // for (that turn's conversation is read after it, below).
         let claim =
             WorkspaceClaim::take_for_turn(&self.busy, &request.workspace_id, TURN_RUNNING).await?;
-        // The index's background embedding waits while the turn runs.
-        let _embedding_held = self
-            .deps
-            .index
-            .as_ref()
-            .and_then(|index| index.pause_embedding());
+        // The index's background embedding, and any idle rebuild, wait
+        // while the turn runs.
+        let _index_held = self.deps.index.as_ref().map(|index| index.hold_for_turn());
         // Read again under the claim: the workspace may have been removed or
         // re-bound while the version and the conversation were read (neither
         // can happen from here on, both take the claim).
@@ -2035,6 +2033,7 @@ impl AgentHost {
                     &environment::preamble(&facts),
                     invoked,
                     project,
+                    &environment::current(&facts),
                     &started.memory_recall.text,
                     &nonce,
                 ),
@@ -2866,6 +2865,12 @@ impl crate::doctor::DoctorHooks for AgentHost {
 
     fn signed_out(&self) {
         self.forget_identity();
+        // The indexes stay; their folders are no longer watched.
+        if let Some(index) = &self.deps.index
+            && let Err(error) = drive(index.stop_watching())
+        {
+            log::warn!("the folder watches did not stop: {error}");
+        }
     }
 
     fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
@@ -2888,6 +2893,22 @@ impl crate::doctor::DoctorHooks for AgentHost {
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
         match &self.deps.index {
             Some(index) => drive(index.enable(workspace_id))?
+                .map(|_| ())
+                .map_err(|error| error.message),
+            None => Err("the local index is not available".into()),
+        }
+    }
+
+    fn index_watching(&self, workspace_id: &str) -> bool {
+        self.deps
+            .index
+            .as_ref()
+            .is_some_and(|index| index.is_watching(workspace_id))
+    }
+
+    fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
+        match &self.deps.index {
+            Some(index) => drive(index.refresh(workspace_id, false))?
                 .map(|_| ())
                 .map_err(|error| error.message),
             None => Err("the local index is not available".into()),
@@ -3330,9 +3351,10 @@ mod tests {
         }];
         let assembled = system_instruction(
             "Be brief.",
-            "## Environment\n- Today: 2026-10-10",
+            "## Environment\n- OS: macOS",
             &skill,
             &project,
+            "## Environment (this turn)\n- Today: 2026-10-10",
             "Memory: tea.",
             NONCE,
         );
@@ -3343,7 +3365,7 @@ mod tests {
         };
         let order = [
             at("Be brief."),
-            at("## Environment"),
+            at("## Environment\n"),
             at(skills::SKILLS_HEADING),
             at(skills::SKILLS_PRECEDENCE),
             at("Write tersely."),
@@ -3352,6 +3374,7 @@ mod tests {
             at(PROJECT_PRECEDENCE),
             at("Run task test."),
             at(END_OF_PROJECT_INSTRUCTIONS),
+            at("## Environment (this turn)\n- Today: 2026-10-10"),
             at("Memory: tea."),
         ];
         assert!(order.windows(2).all(|w| w[0] < w[1]), "{assembled}");
@@ -3369,6 +3392,77 @@ mod tests {
         assert!(PROJECT_PRECEDENCE.contains(
             "the environment section and any skill picked for this turn, all above, outrank them"
         ));
+    }
+
+    /// #1314: two turns whose facts differ only in the date and the git line
+    /// assemble byte-identical prompts up to the environment's volatile part,
+    /// so a provider prompt cache keeps the skills and AGENTS.md text.
+    #[test]
+    fn the_date_and_git_line_leave_the_cached_prefix_unchanged() {
+        use elitea_local_tools::project_instructions::InstructionFile;
+        let project = ProjectInstructions {
+            files: vec![InstructionFile {
+                path: "AGENTS.md".into(),
+                text: "Run task test.".into(),
+                truncated: false,
+            }],
+            skipped: Vec::new(),
+        };
+        let skill = [InvokedSkill {
+            name: "Style".into(),
+            instructions: "Write tersely.".into(),
+        }];
+        let monday = environment::Facts {
+            os: "macOS 26.0 (arm64)".into(),
+            today: "2026-10-12".into(),
+            folder: "repo".into(),
+            git: environment::Git::Repo {
+                branch: Some("main".into()),
+                changed: 0,
+            },
+            sandbox: environment::Sandbox::NoCommands,
+            network: false,
+            plan_mode: false,
+            tools: vec!["read_file".into(), "search_files".into()],
+        };
+        let mut tuesday = monday.clone();
+        tuesday.today = "2026-10-13".into();
+        tuesday.git = environment::Git::Repo {
+            branch: Some("main".into()),
+            changed: 4,
+        };
+        let assemble = |facts: &environment::Facts| {
+            system_instruction(
+                "Be brief.",
+                &environment::preamble(facts),
+                &skill,
+                &project,
+                &environment::current(facts),
+                "Memory: tea.",
+                NONCE,
+            )
+        };
+        let (one, two) = (assemble(&monday), assemble(&tuesday));
+        assert_ne!(one, two);
+        let split = |text: &str| -> usize {
+            text.find(environment::CURRENT_HEADING)
+                .unwrap_or_else(|| panic!("{text}"))
+        };
+        assert_eq!(split(&one), split(&two));
+        let prefix = &one[..split(&one)];
+        assert_eq!(prefix, &two[..split(&two)]);
+        // The prefix carries the stable environment, the skill and AGENTS.md.
+        for needle in [
+            "## Environment\n",
+            "Write tersely.",
+            END_OF_PROJECT_INSTRUCTIONS,
+        ] {
+            assert!(prefix.contains(needle), "{needle}: {prefix}");
+        }
+        assert!(!prefix.contains("2026-10-1"), "{prefix}");
+        assert!(
+            two.ends_with("- Workspace: repo (git: branch main, 4 changed files)\n\nMemory: tea.")
+        );
     }
 
     #[test]

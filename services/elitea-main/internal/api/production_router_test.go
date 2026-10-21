@@ -1747,6 +1747,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	got := routeSet.Patterns()
 
 	want := []string{
+		"DELETE /api/v2/admin/branding/administration",
 		"DELETE /api/v2/admin/gateway/default_model/",
 		"DELETE /api/v2/admin/gateway/governance/{id}",
 		"DELETE /api/v2/admin/gateway/models/{id}",
@@ -1773,6 +1774,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/context_manager/summary/{projectID}/{conversationID}/{summaryID}",
 		"DELETE /api/v2/elitea_core/application/prompt_lib/{projectID}/{applicationID}",
 		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}",
+		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"DELETE /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/conversation_archive/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
@@ -2051,6 +2053,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"HEAD /artifacts/s3/{bucket}/*",
 		"PATCH /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"PATCH /api/v2/elitea_core/application_relation/prompt_lib/{projectID}/{appID}/{versionID}",
+		"PATCH /api/v2/elitea_core/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}",
 		"PATCH /api/v2/elitea_core/default_version/prompt_lib/{projectID}/{applicationID}/{versionID}",
 		"PATCH /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}",
 		"PATCH /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",

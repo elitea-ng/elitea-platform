@@ -459,6 +459,7 @@ type IndexStatus = {
   error: string | null;   // why the last refresh failed
   policy_off: boolean;    // the policy turns the index off (state "off")
   on_disk: boolean;       // an index exists on this computer
+  watching: boolean;      // the folder is watched (below): outside changes refresh it
 };
 ```
 
@@ -501,9 +502,13 @@ refresh runs under the policy then, as after a turn (no event is sent for
 the watch itself; the refresh reports as any other). A change only counts
 where a build would look: not under `.git`, not denied (`path_deny`, the
 host's deny list), not ignored by a `.gitignore` (or `.git/info/exclude`);
-a changed `.gitignore` always counts. Turning the index off, closing it,
-or a policy change stops (or restarts) the watch. The watch never reads a
-file.
+a changed `.gitignore` always counts. When the system drops events (an
+inotify overflow, FSEvents asking for a rescan) the refresh that follows
+stat-walks the whole folder (never a rebuild). Turning the index off,
+removing or closing it, a policy change and sign-out stop the watch
+(sign-out keeps the index); opening the index again, or signing in while
+it is still open, restarts it. `watching` says whether it runs. The watch
+never reads a file.
 
 | Command | Arguments | Result |
 | --- | --- | --- |
@@ -896,7 +901,7 @@ type Check = {
                          // | sessions.move_aside | workspaces.drop_missing
                          // | workspaces.move_aside | revokes.retry
                          // | index.tighten:<workspace id> | index.move_aside:<workspace id>
-                         // | index.rebuild:<workspace id>
+                         // | index.rebuild:<workspace id> | index.refresh:<workspace id>
   fix_label?: string;
   fix_confirm?: string;  // what the repair deletes; ask before passing `confirm: true`
 };
@@ -923,7 +928,9 @@ owner-only, not a symlink; `PRAGMA quick_check`; schema version) is checked
 when the workspace has one: `index.tighten` restricts it to you,
 `index.move_aside` closes it and moves its directory aside (it is off until
 turned on again), `index.rebuild` (only with `confirm`) closes it, deletes it
-and turns it on again so it is built from nothing. One written by a newer app
+and turns it on again so it is built from nothing. One turned on whose last
+build is more than 24 h old while its folder is not watched is a warning,
+and `index.refresh` refreshes it (as `index_refresh`). One written by a newer app
 asks for an update and has no repair. The workspace id after the `:` must
 name a workspace in the list.
 

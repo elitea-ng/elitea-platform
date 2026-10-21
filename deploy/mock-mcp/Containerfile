@@ -71,9 +71,9 @@ RUN useradd --system --uid 10102 --home-dir /nonexistent --shell /usr/sbin/nolog
 # worker fails as native_agent.dependency_unavailable (2026-10-13: main and
 # PR #1269, same tree as a green run). One COPY is one cache record, so the
 # three files always come from one mint. The image itself is also built ONCE
-# per stack (mcp-mock-trust and worker-trust reuse it by `image:`, with no build
-# of their own), and each trust one-shot verifies its bundle against the live
-# mock (verify-trust.py). ca.crt is the ANCHOR the consumer must
+# per stack (mcp-mock-trust reuses it by `image:`, with no build of its own),
+# and the trust one-shot verifies its bundle against the live mock
+# (verify-trust.py). ca.crt is the ANCHOR the consumer must
 # trust — the CA, not the leaf — and mcp-mock-trust publishes it.
 COPY --from=tls /pub/ /opt/mock-mcp/tls/
 COPY server.py verify-trust.py /opt/mock-mcp/

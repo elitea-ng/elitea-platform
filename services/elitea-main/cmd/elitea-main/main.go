@@ -577,6 +577,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
+	// The caller-address resolver every plane keys its limiters on: the SCIM
+	// token endpoint, the native endpoints and the single-sign-on attempt
+	// limiter below. Built here, before the single-sign-on block, because
+	// that block attaches it.
+	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
+	if err != nil {
+		return fmt.Errorf("load SCIM caller-address settings: %w", err)
+	}
+
 	// Wire OIDC browser-session authentication when OIDC_ISSUER_URL is set.
 	// SessionHandler and OIDCHandler are independent of the FormGraph path and
 	// can coexist with it (both populate RouterConfig.Auth) — but only because
@@ -701,6 +710,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		).WithFirstLoginPolicy(firstLoginPolicy).WithSessionManager(sessionManager)
 		if storedSAMLProvider {
 			logger.Info("SAML authentication enabled from an authored identity provider")
+		}
+
+		// The begin/callback attempt limiter for both planes (#1078).
+		if err := composeSingleSignOnAttempts(
+			pool, appSecretKey, scimClientAddresses, oidcOIDCHandler, oidcSAMLHandler, logger,
+		); err != nil {
+			return err
 		}
 	}
 
@@ -1134,9 +1150,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Assigned through the concrete value, never a typed nil: the handler's
 		// only fallback is a nil-interface check.
 		toolkitSettingsValidator = toolkitSettingsResolver
+		// The provenance twin (#1286): the same graph without the admin-vault
+		// fallback, so the OAuth proxy can tell a global secret from a
+		// project one before it binds an editor-written token endpoint.
+		projectOwnedToolkitSettings, err := currentConfigurationsRoot.NewProjectOwnedToolkitSettingsResolver(pool)
+		if err != nil {
+			return fmt.Errorf("compose project-owned toolkit settings: %w", err)
+		}
 		delegatedAuthToolkitSettings, err = runtimecomposition.NewCurrentDelegatedAuthToolkitSettings(
 			pool,
 			toolkitSettingsResolver,
+			projectOwnedToolkitSettings,
 		)
 		if err != nil {
 			return fmt.Errorf("compose delegated authorization toolkit settings: %w", err)
@@ -1769,6 +1793,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
 	// under the same guard so an absent agent plane leaves a NIL interface.
 	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// The upload-time attachment extraction warm-up (issue 1062), assigned
+	// only under the same guard so an absent reader leaves a NIL interface.
+	var attachmentExtractionWarmer v2convs.AttachmentExtractionWarmer
 	// The remote toolkit call's authorizer: the SAME service, under the same
 	// guard, so an absent agent plane leaves a NIL interface and the route
 	// answers 501.
@@ -1960,6 +1987,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.ClientApplicationVersions != nil {
 			clientApplicationVersions = publicRoutes.ClientApplicationVersions
 			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
+		}
+		if publicRoutes.AttachmentExtraction != nil {
+			attachmentExtractionWarmer = publicRoutes.AttachmentExtraction
 		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
@@ -2463,11 +2493,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		patSigner = formGraph
 	}
 
-	scimClientAddresses, err := scimClientAddressesFromConfig(os.Getenv, authDocumentTrustedProxyCIDRs, logger)
-	if err != nil {
-		return fmt.Errorf("load SCIM caller-address settings: %w", err)
-	}
-
 	// One native policy reader for the router (discovery, token responses,
 	// the 426 gate, the admin save's invalidation) AND the local turn start,
 	// so a save that turns local work off is seen by both at once.
@@ -2573,6 +2598,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentProjectInfo:            currentProjectInfo,
 		CurrentIndexTypes:             currentIndexTypes,
 		AttachmentExtensions:          attachmentExtensions,
+		AttachmentExtractionWarmer:    attachmentExtractionWarmer,
 		CurrentApplicationSkills:      currentApplicationSkills,
 		CurrentPromptContextReads:     currentPromptContextReads,
 		CurrentProjectList:            currentProjectList,

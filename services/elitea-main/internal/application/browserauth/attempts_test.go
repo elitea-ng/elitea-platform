@@ -13,6 +13,11 @@ func TestBrowserAttemptValidateAcceptsExactStageShapes(t *testing.T) {
 		{ClientKey: "192.0.2.7", Stage: BrowserAttemptFormBegin},
 		{ClientKey: "2001:db8::7", Stage: BrowserAttemptFormBegin},
 		{ClientKey: "192.0.2.7", Stage: BrowserAttemptFormCredential, LoginDigest: digest},
+		// The single-sign-on stages (#1078) take a client key only.
+		{ClientKey: "192.0.2.7", Stage: BrowserAttemptOIDCBegin},
+		{ClientKey: "2001:db8::/64", Stage: BrowserAttemptOIDCCallback},
+		{ClientKey: "192.0.2.7", Stage: BrowserAttemptSAMLBegin},
+		{ClientKey: "192.0.2.7", Stage: BrowserAttemptSAMLACS},
 	} {
 		if err := attempt.Validate(); err != nil {
 			t.Fatalf("attempt %+v: %v", attempt, err)
@@ -29,10 +34,10 @@ func TestBrowserAttemptValidateRejectsAmbiguousOrUnboundedShapes(t *testing.T) {
 		"unknown stage":        {ClientKey: "192.0.2.7", Stage: "future"},
 		"missing login digest": {ClientKey: "192.0.2.7", Stage: BrowserAttemptFormCredential},
 		"unexpected digest":    {ClientKey: "192.0.2.7", Stage: BrowserAttemptFormBegin, LoginDigest: digest},
-		// The OIDC stages served only a handler that nothing composed. They
-		// are gone, so an attempt naming one is an unknown stage.
-		"retired OIDC begin":    {ClientKey: "192.0.2.7", Stage: "oidc_begin"},
-		"retired OIDC callback": {ClientKey: "192.0.2.7", Stage: "oidc_callback"},
+		// The single-sign-on stages (#1078) are client-only, like a begin.
+		"digest on SSO begin":   {ClientKey: "192.0.2.7", Stage: BrowserAttemptOIDCBegin, LoginDigest: digest},
+		"digest on SAML ACS":    {ClientKey: "192.0.2.7", Stage: BrowserAttemptSAMLACS, LoginDigest: digest},
+		"missing client on ACS": {Stage: BrowserAttemptSAMLACS},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := attempt.Validate(); !errors.Is(err, ErrInvalidBrowserAttempt) {

@@ -116,10 +116,7 @@ func (r *ToolkitAvailableToolsJobsRepository) AdmitToolkitAvailableTools(
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("lock toolkit discovery admission policy: %w", err)
 	}
 	if persistedMax != r.policy.MaxOutstanding {
-		return executionapp.AdmissionOutcome{}, fmt.Errorf(
-			"%w: capability %q configured=%d persisted=%d",
-			ErrAdmissionPolicyMismatch, capabilityID, r.policy.MaxOutstanding, persistedMax,
-		)
+		return executionapp.AdmissionOutcome{}, admissionPolicyMismatchError(capabilityID, r.policy.MaxOutstanding, persistedMax)
 	}
 
 	existing, digest, err = loadDiscoveryAdmission(

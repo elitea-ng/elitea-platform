@@ -71,7 +71,8 @@ func (s *Server) AuthorizeSandboxJob(ctx context.Context, request *runtimev1.Aut
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "The execution fence is malformed.")
 	}
-	desired, err := s.claims.ObserveDesiredState(ctx, fence)
+	observed, err := s.claims.ObserveDesiredState(ctx, fence)
+	desired := observed.DesiredState
 	if err != nil || (desired != runtimedomain.DesiredRunning && (!request.GetCancelOnly() || desired != runtimedomain.DesiredCancelled)) {
 		return nil, status.Error(codes.PermissionDenied, "The execution is no longer authorized to start sandbox work.")
 	}
