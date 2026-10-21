@@ -51,6 +51,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/policy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/server"
+	"github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/internal/workloadidentity"
 )
 
 func main() {
@@ -144,6 +145,17 @@ func main() {
 	hopMarker := hopmarker.New([]byte(cfg.HopSecret))
 	logHopMarkerMode(logger, hopMarker.Armed())
 
+	// Keyless PLATFORM credentials (GATEWAY_WORKLOAD_IDENTITY_ENABLED). ONE
+	// token source serves both halves — the Account for /llm traffic and the
+	// Handler for the probe routes — so a token cached for an audience is
+	// cached once, and neither half can be armed with a different source. nil
+	// when the mode is off: nothing can then mint a platform token.
+	var identityTokens workloadidentity.Tokens
+	if cfg.WorkloadIdentityEnabled {
+		identityTokens = workloadidentity.NewADC()
+	}
+	logWorkloadIdentityMode(logger, cfg.WorkloadIdentityEnabled, cfg.PublicProjectIDString())
+
 	// BFF.6: assemble the vault-backed Account (BF0.2-account) so bifrost can
 	// resolve real per-project provider credentials. Without a pool the
 	// gateway keeps the zero-provider bootstrap account — it will start, but
@@ -177,7 +189,11 @@ func main() {
 			EgressAllowlist:     cfg.EgressAllowlist,
 			PublicProjectID:     cfg.PublicProjectIDString(),
 			HopMarker:           hopMarker,
-			Logger:              logger,
+			// The flag AND the source: the Account refuses every keyless row
+			// unless both are set (internal/account/workload_identity.go).
+			WorkloadIdentityEnabled: cfg.WorkloadIdentityEnabled,
+			IdentityTokens:          identityTokens,
+			Logger:                  logger,
 		})
 		if aerr != nil {
 			slog.Error("FATAL: vault-backed Account init failed", "err", aerr)
@@ -400,7 +416,7 @@ func main() {
 
 	// The operator's answer to "is the rule I saved actually in force?".
 	mux.HandleFunc("/governance/status",
-		makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), eliteaAccount))
+		makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), cfg.WorkloadIdentityEnabled, eliteaAccount))
 
 	// The soft-alert event publisher (gateway.events.*, spec §8.3) rides the
 	// same NATS connection as the budget counters; without NATS the alert
@@ -461,6 +477,7 @@ func main() {
 			llmproxy.WithStreamGrace(cfg.StreamGrace),
 			llmproxy.WithStreamDrainLimit(cfg.StreamDrainLimit),
 			llmproxy.WithEgressPolicy(egressPolicy),
+			llmproxy.WithWorkloadIdentity(cfg.WorkloadIdentityEnabled, cfg.PublicProjectIDString(), identityTokens),
 			llmproxy.WithRealtimeDialer(llmproxy.NewBifrostRealtimeDialer(srv.Core(), logger)),
 			llmproxy.WithRealtimeBudgetRecheck(cfg.RealtimeBudgetRecheck),
 			llmproxy.WithRealtimeSessionLimit(cfg.RealtimeMaxSessions),
@@ -725,6 +742,26 @@ func logHopMarkerMode(logger *slog.Logger, armed bool) {
 		"request that already carries this deployment's marker is refused with 400 circular_routing_detected. "+
 		"A routing loop is contained on its first re-entry (issue #164)",
 		"header", hopmarker.Header)
+}
+
+// logWorkloadIdentityMode states, once at startup, whether the pod lends its
+// own Google identity to keyless platform credentials. The mode is the one
+// deliberate exception to "never use ambient identity", so it is logged like
+// the other guards: an operator must see it from the log alone.
+func logWorkloadIdentityMode(logger *slog.Logger, enabled bool, publicProjectID string) {
+	if !enabled {
+		logger.Info("WORKLOAD IDENTITY OFF: every credential with auth_mode=workload_identity is refused " +
+			"(WORKLOAD_IDENTITY_NOT_ALLOWED). Set GATEWAY_WORKLOAD_IDENTITY_ENABLED=true to arm it")
+		return
+	}
+	if publicProjectID == "" {
+		logger.Warn("WORKLOAD IDENTITY ARMED BUT INERT: ELITEA_AI_PROJECT_ID is unset, so no credential is a " +
+			"platform credential and every auth_mode=workload_identity row is still refused")
+		return
+	}
+	logger.Info("WORKLOAD IDENTITY ARMED: shared credentials of the public project with "+
+		"auth_mode=workload_identity authenticate with this pod's Google identity (ADC). Tenant credentials "+
+		"are still refused", "public_project_id", publicProjectID)
 }
 
 // logLoopBreakerMode states, once at startup, whether the per-(project, model)

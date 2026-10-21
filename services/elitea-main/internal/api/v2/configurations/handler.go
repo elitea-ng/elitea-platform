@@ -1122,6 +1122,20 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The keyless mode (keyless_credentials.go) runs BEFORE the required-field
+	// walk: that walk reads the mode to decide whether the key is required,
+	// so a project body must be refused for the mode and not for the key.
+	if keylessData, isObject := body["data"].(map[string]any); isObject {
+		if failure := refuseKeylessCredentialWrite(ctx, keylessData); failure != nil {
+			failure.write(w)
+			return
+		}
+		if failure := admitKeylessCredentialData(strVal(body, "type"), keylessData); failure != nil {
+			failure.write(w)
+			return
+		}
+	}
+
 	// The type's own schema decides which fields a create must carry
 	// (required_fields.go). It runs FIRST, on the body as sent: a row with no
 	// label and no data used to be stored with a 201 and could then be
@@ -1377,6 +1391,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		failure.write(w)
 		return
 	}
+	// The mode is checked before the database is read, like the guard above.
+	// The type-dependent half runs in applyConfigurationUpdate.
+	if keylessData, isObject := body["data"].(map[string]any); isObject {
+		if failure := refuseKeylessCredentialWrite(ctx, keylessData); failure != nil {
+			failure.write(w)
+			return
+		}
+	}
 	pID, convErr := strconv.Atoi(projectID)
 	if convErr != nil {
 		apierr.WriteStatus(w, http.StatusBadRequest, "invalid project")
@@ -1467,6 +1489,13 @@ func (h *Handler) applyConfigurationUpdate(
 	}
 	if failure := refuseInvalidDialProtocol(configType, body); failure != nil {
 		return c, failure, nil
+	}
+	// A switch to the keyless mode clears the stored key fields here, before
+	// sealing, because `data` is written whole.
+	if keylessData, isObject := body["data"].(map[string]any); isObject {
+		if failure := admitKeylessCredentialData(configType, keylessData); failure != nil {
+			return c, failure, nil
+		}
 	}
 	secretMutations, failure := h.sealConfigurationBodyData(ctx, body, configType)
 	if failure != nil {

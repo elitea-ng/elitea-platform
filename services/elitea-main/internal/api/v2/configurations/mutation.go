@@ -543,6 +543,8 @@ func writeCurrentConfigurationMutationServiceError(w http.ResponseWriter, err er
 			)
 		case configurationapp.CurrentConfigurationMutationImmutable:
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, "Configuration field is immutable", field)
+		case configurationapp.CurrentConfigurationMutationPlatformOnly:
+			writeCurrentConfigurationMutationError(w, http.StatusBadRequest, keylessCredentialPlatformOnlyMessage, field)
 		default:
 			writeCurrentConfigurationMutationError(w, http.StatusInternalServerError, "Unexpected error", "unknown")
 		}

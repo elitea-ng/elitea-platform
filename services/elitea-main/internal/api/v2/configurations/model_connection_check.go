@@ -215,6 +215,8 @@ func gatewayCredentialRequestBody(configType string, data map[string]any) checkC
 		VertexLocation:        strVal(data, "vertex_location"),
 		VertexCredentials:     data["vertex_credentials"],
 		UseAnthropicEndpoints: useAnthropic,
+		AuthMode:              strVal(data, "auth_mode"),
+		TokenAudience:         strVal(data, "token_audience"),
 	}
 }
 

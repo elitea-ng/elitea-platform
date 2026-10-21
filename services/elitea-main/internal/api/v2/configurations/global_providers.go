@@ -328,6 +328,14 @@ type GlobalProvider struct {
 	// Endpoint is `api_base` — not a secret, and the field an operator most
 	// often needs to check.
 	Endpoint string `json:"endpoint"`
+	// AuthMode is "key" or "workload_identity" (keyless_credentials.go). It is
+	// always set, so a client does not have to know that an absent field is
+	// the key mode. An unreadable stored value is reported as it is stored:
+	// the gateway refuses that row, and the screen must not call it "key".
+	AuthMode string `json:"auth_mode"`
+	// TokenAudience is the AI DIAL ID-token audience, empty for the default
+	// (the api_base origin). Not a secret.
+	TokenAudience string `json:"token_audience,omitempty"`
 	// Settings are the remaining NON-SECRET fields, by provider: api_version for
 	// Azure/DIAL, the AWS region and access-key id for Bedrock, the Vertex
 	// project and location. An allowlist rather than "data minus the secrets",
@@ -370,6 +378,7 @@ var globalProviderSecretFields = []string{
 var globalProviderSettingFields = []string{
 	"api_version", "aws_access_key_id", "aws_region_name",
 	"vertex_project", "vertex_location", "use_anthropic_endpoints",
+	"auth_mode", "token_audience",
 }
 
 // listGlobalProvidersSQL reads the public project's shared credential rows.
@@ -460,6 +469,8 @@ func scanGlobalProvider(scan func(...any) error) (GlobalProvider, error) {
 	_ = json.Unmarshal(data, &decoded)
 
 	item.Endpoint = globalProviderString(decoded, "api_base")
+	item.AuthMode = globalProviderAuthMode(decoded)
+	item.TokenAudience = globalProviderString(decoded, configurationapp.CredentialTokenAudienceField)
 	item.Settings = map[string]string{}
 	for _, field := range globalProviderSettingFields {
 		if value := globalProviderString(decoded, field); value != "" {
@@ -489,6 +500,19 @@ func scanGlobalProvider(scan func(...any) error) (GlobalProvider, error) {
 		item.UpdatedAt = updatedAt.Format(time.RFC3339)
 	}
 	return item, nil
+}
+
+// globalProviderAuthMode reports the row's keyless mode. A stored value that is
+// not a known mode is reported verbatim (or as "invalid" when it is not even a
+// string), never as "key": the gateway refuses that row.
+func globalProviderAuthMode(data map[string]any) string {
+	if mode, ok := configurationapp.CredentialAuthMode(data); ok {
+		return mode
+	}
+	if raw := globalProviderString(data, configurationapp.CredentialAuthModeField); raw != "" {
+		return raw
+	}
+	return "invalid"
 }
 
 // globalProviderString reads one `data` key as a string.
@@ -606,7 +630,14 @@ func (h *Handler) rewriteGlobalProviderBody(
 	if creating {
 		completeGlobalRowLabel(body)
 	}
-	return encodeGlobalBody(w, r, body)
+	request, ok := encodeGlobalBody(w, r, body)
+	if !ok {
+		return nil, false
+	}
+	// The ONLY place that may arm the keyless `auth_mode`: this request is
+	// pinned to the public project and forced to shared, which is exactly the
+	// row the gateway accepts as a platform credential (keyless_credentials.go).
+	return request.WithContext(withPlatformCredentialWrite(request.Context())), true
 }
 
 // completeGlobalRowLabel gives a CREATE the display label the row contract

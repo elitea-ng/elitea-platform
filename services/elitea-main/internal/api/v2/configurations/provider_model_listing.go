@@ -141,6 +141,9 @@ func (c *GatewayConnectionChecker) ListProviderModels(
 		// document is an escaped JSON string on one screen and a nested object
 		// on another, and the gateway accepts both.
 		VertexCredentials: data["vertex_credentials"],
+
+		AuthMode:      strVal(data, "auth_mode"),
+		TokenAudience: strVal(data, "token_audience"),
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

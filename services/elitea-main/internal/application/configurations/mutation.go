@@ -28,6 +28,9 @@ const (
 	CurrentConfigurationMutationUnknownType           CurrentConfigurationMutationErrorCode = "unknown_type"
 	CurrentConfigurationMutationNormalizationRequired CurrentConfigurationMutationErrorCode = "normalization_required"
 	CurrentConfigurationMutationImmutable             CurrentConfigurationMutationErrorCode = "immutable"
+	// CurrentConfigurationMutationPlatformOnly refuses a value that only the
+	// admin platform surface may store (a keyless `auth_mode`).
+	CurrentConfigurationMutationPlatformOnly CurrentConfigurationMutationErrorCode = "platform_only"
 )
 
 // CurrentConfigurationMutationError is safe to return through the API. Field
@@ -502,6 +505,13 @@ func (s *CurrentConfigurationMutationService) normalizeData(
 ) (map[string]any, error) {
 	if data == nil {
 		return nil, currentMutationFieldError(CurrentConfigurationMutationInvalid, "data")
+	}
+	// Before the normalizer, for every type and both operations: the create
+	// normalizers rebuild `data` from known fields and would DROP the mode,
+	// which stores a key-mode row with no key — a silent fallback. An update
+	// keeps `data` as sent, so without this a project PUT could arm the mode.
+	if err := refuseCurrentKeylessCredential(data); err != nil {
+		return nil, err
 	}
 	result, err := s.normalizer.Normalize(ctx, CurrentConfigurationNormalizationRequest{
 		Operation:  operation,

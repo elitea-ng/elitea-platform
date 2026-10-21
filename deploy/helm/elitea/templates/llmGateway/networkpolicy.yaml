@@ -71,5 +71,26 @@ spec:
       ports:
         {{- toYaml .Values.llmGateway.networkPolicy.publicEgressPorts | nindent 8 }}
     {{- end }}
+    {{- if dig "workloadIdentity" "enabled" false .Values.llmGateway }}
+    # Keyless platform credentials (llmGateway.workloadIdentity.enabled): the
+    # GKE metadata server, which serves the pod's Google tokens. Port 80 is the
+    # metadata address; 169.254.169.252:988 is the GKE metadata server on
+    # Dataplane V2. Only these two /32s and ports: the rule above still
+    # excludes the rest of 169.254.0.0/16. Only the gateway's own token clients
+    # dial these addresses. The provider dialer refuses a link-local target
+    # for every api_base, so a tenant-authored endpoint cannot reach them.
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
 {{- end }}
 {{- end }}
