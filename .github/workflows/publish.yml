@@ -260,16 +260,16 @@ jobs:
           # The Rust-native Inventory engine (ADR-0027): the only Inventory
           # engine sidecar. It replaced the Python elitea-inventory image,
           # which is no longer published. Repo ROOT context: the
-          # Containerfile COPYs services/elitea-inventory-engine and the
-          # shared libs/rust crates from there.
+          # Containerfile COPYs services/elitea-inventory-engine, libs/proto and
+          # the shared libs/rust crates from there.
           - name: elitea-inventory-engine
             context: .
             dockerfile: ./services/elitea-inventory-engine/Containerfile
           # The Rust-native DeepWiki engine (ADR-0026 phase 7): the only
           # engine sidecar the chart runs. It replaced the Python
           # elitea-deepwiki image, which is no longer published. Repo ROOT
-          # context: the Containerfile COPYs services/elitea-deepwiki-engine
-          # from there. No `target:` — the shipping stage is the last one.
+          # context: the Containerfile COPYs services/elitea-deepwiki-engine,
+          # libs/proto and libs/rust from there. No `target:` — the shipping stage is the last one.
           - name: elitea-deepwiki-engine-native
             context: .
             dockerfile: ./services/elitea-deepwiki-engine/Containerfile

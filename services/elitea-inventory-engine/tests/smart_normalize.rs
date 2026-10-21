@@ -6,6 +6,7 @@
 
 mod common;
 
+use elitea_engine_sidecar::client::EngineClient;
 use elitea_engine_sidecar::server;
 use elitea_inventory_engine::config::Settings;
 use elitea_inventory_engine::graph::Graph;
@@ -19,11 +20,9 @@ use elitea_inventory_engine::store::{self, GraphKey};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 const GRAPH: &str = include_str!("fixtures/smart_normalize/graph.json");
 const GOLDENS: &str = include_str!("fixtures/smart_normalize/goldens.json");
@@ -253,27 +252,16 @@ fn mapper(prompt: &str) -> String {
     format!("```json\n{}\n```", json!({ "mappings": mappings }))
 }
 
-async fn invoke(socket: &PathBuf, tool: &str, arguments: &Value) -> Value {
-    let mut stream = UnixStream::connect(socket).await.expect("connect");
-    let payload =
-        json!({"invocation_id": format!("i-{tool}"), "tool": tool, "arguments": arguments})
-            .to_string();
-    let request = format!(
-        "POST /engine/invoke HTTP/1.1\r\nhost: engine\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    stream.write_all(request.as_bytes()).await.expect("write");
-    let mut raw = Vec::new();
-    tokio::time::timeout(Duration::from_mins(1), stream.read_to_end(&mut raw))
-        .await
-        .expect("an answer in time")
-        .expect("read");
-    String::from_utf8_lossy(&raw)
-        .lines()
-        .filter(|line| line.starts_with('{'))
-        .map(|line| serde_json::from_str::<Value>(line).expect("NDJSON"))
-        .next_back()
-        .unwrap_or_default()
+async fn invoke(socket: &Path, tool: &str, arguments: &Value) -> Value {
+    let mut client = EngineClient::connect(socket).await.expect("connect");
+    let lines = tokio::time::timeout(
+        Duration::from_mins(1),
+        client.invoke(&format!("i-{tool}"), tool, arguments),
+    )
+    .await
+    .expect("an answer in time")
+    .expect("a stream");
+    lines.into_iter().next_back().unwrap_or_default()
 }
 
 #[tokio::test]

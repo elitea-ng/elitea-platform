@@ -36,6 +36,8 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
+      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      - "libs/proto/elitea/engine/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The agent runtime's SDK schema gate reads both
@@ -57,6 +59,8 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
+      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      - "libs/proto/elitea/engine/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The agent runtime's SDK schema gate reads both

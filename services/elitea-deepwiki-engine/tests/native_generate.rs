@@ -32,9 +32,7 @@ use elitea_deepwiki_engine::server;
 use elitea_deepwiki_engine::storage::build::WikiRecord;
 use elitea_deepwiki_engine::storage::search::IndexReader;
 use elitea_deepwiki_engine::wiki::parity::stub_answer;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Bytes;
-use hyper_util::rt::TokioIo;
+use elitea_engine_sidecar::client::{EngineClient, event_json};
 use serde_json::{Map, Value, json};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -45,7 +43,6 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -445,56 +442,32 @@ impl Engine {
         }
     }
 
-    async fn post(&self, path: &str, body: &Value) -> hyper::Response<hyper::body::Incoming> {
-        self.send("POST", path, body).await
+    async fn client(&self) -> EngineClient {
+        EngineClient::connect(&self.socket).await.unwrap()
     }
 
-    async fn send(
-        &self,
-        method: &str,
-        path: &str,
-        body: &Value,
-    ) -> hyper::Response<hyper::body::Incoming> {
-        let stream = UnixStream::connect(&self.socket).await.unwrap();
-        let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+    async fn health(&self) -> Value {
+        self.client().await.health().await.unwrap()
+    }
+
+    async fn stop(&self, id: &str) -> bool {
+        self.client().await.stop(id).await.unwrap()
+    }
+
+    /// Invoke, streaming each event (as its JSON document) into the returned
+    /// channel.
+    async fn invoke(&self, id: &str, arguments: &Value) -> mpsc::UnboundedReceiver<Value> {
+        let mut stream = self
+            .client()
+            .await
+            .start(id, "generate_wiki", arguments)
             .await
             .unwrap();
-        tokio::spawn(connection);
-        let request = hyper::Request::builder()
-            .method(method)
-            .uri(path)
-            .header("host", "engine")
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body.to_string())))
-            .unwrap();
-        sender.send_request(request).await.unwrap()
-    }
-
-    /// Invoke, streaming each NDJSON line into the returned channel.
-    async fn invoke(&self, id: &str, arguments: &Value) -> mpsc::UnboundedReceiver<Value> {
-        let response = self
-            .post(
-                "/engine/invoke",
-                &json!({"invocation_id": id, "tool": "generate_wiki", "arguments": arguments}),
-            )
-            .await;
-        assert_eq!(response.status().as_u16(), 200);
         let (sender, receiver) = mpsc::unbounded_channel();
-        let mut body = response.into_body();
         tokio::spawn(async move {
-            let mut pending = Vec::new();
-            while let Some(frame) = body.frame().await {
-                let Ok(frame) = frame else { return };
-                let Ok(data) = frame.into_data() else {
-                    continue;
-                };
-                pending.extend_from_slice(&data);
-                while let Some(end) = pending.iter().position(|b| *b == b'\n') {
-                    let line: Vec<u8> = pending.drain(..=end).collect();
-                    let value: Value = serde_json::from_slice(&line).unwrap();
-                    if sender.send(value).is_err() {
-                        return;
-                    }
+            while let Ok(Some(event)) = stream.message().await {
+                if sender.send(event_json(&event)).is_err() {
+                    return;
                 }
             }
         });
@@ -582,10 +555,8 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     let git_port = serve_git(served).await;
     let (gateway_port, gateway) = serve_gateway(false).await;
     let engine = Engine::start(&root, "native_generate");
-    let health = engine.send("GET", "/engine/health", &Value::Null).await;
-    let health = health.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
-        serde_json::from_slice::<Value>(&health).unwrap(),
+        engine.health().await,
         json!({
             "status": "UP",
             "runner": "native",
@@ -1018,15 +989,7 @@ async fn a_stop_kills_the_worker_and_leaves_no_staging_rows() {
     );
 
     let started = Instant::now();
-    let stopped = engine
-        .post("/engine/invocations/inv-native-stop/stop", &json!({}))
-        .await;
-    assert_eq!(stopped.status().as_u16(), 202);
-    let body = stopped.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"stopped": true})
-    );
+    assert!(engine.stop("inv-native-stop").await);
     let mut last = None;
     while let Some(line) = tokio::time::timeout(Duration::from_secs(30), lines.recv())
         .await
@@ -1123,10 +1086,7 @@ async fn stop_while_publishing(
     }
     // The publish is now queued behind the held lock.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let stopped = engine
-        .post(&format!("/engine/invocations/{id}/stop"), &json!({}))
-        .await;
-    assert_eq!(stopped.status().as_u16(), 202);
+    assert!(engine.stop(&id).await);
     (engine, lines, pid.expect("the worker's pid"))
 }
 

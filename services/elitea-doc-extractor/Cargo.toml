@@ -17,7 +17,7 @@ description = "The document extraction sidecar of the Rust indexing worker: PDF 
 # spreadsheets, e-mail, e-books). No `html`: HTML is text to the worker.
 elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["documents"] }
 # The socket binder and the cgroup reader only. NO default features: the
-# sidecar's NDJSON server (axum) and the OTLP exporter (reqwest) stay out of
+# sidecar's engine server (tonic) and the OTLP exporter (reqwest) stay out of
 # this binary, so nothing in it can open a network connection — it reads
 # untrusted documents and should have nowhere to send anything.
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar", default-features = false }

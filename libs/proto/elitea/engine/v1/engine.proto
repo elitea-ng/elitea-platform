@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+// elitea.engine.v1 is the contract between a sub-application host
+// (services/elitea-subapp-host, ADR-0023) and the engine sidecar beside it in
+// the same pod: the DeepWiki engine and the Inventory engine, both of which
+// embed libs/rust/engine-sidecar. It replaced the sidecar's NDJSON-over-HTTP
+// protocol (POST /engine/invoke, POST /engine/invocations/{id}/stop,
+// GET /engine/health) in issue #1359.
+//
+// TRANSPORT. Local only: gRPC over a Unix domain socket in a directory the two
+// containers share (an emptyDir, a compose volume). No TLS and no network
+// listener: the socket directory is the only way in. This is the pod-local
+// Unix-socket sidecar exception to the platform's gRPC-over-mTLS rule
+// (AGENTS.md), the same one elitea.extract.v1 takes.
+//
+// FLOW. The host runs one tool per Invoke and reads its stream: progress
+// (`thinking`) and answer fragments (`token`) interleaved IN THE ORDER THE
+// TOOL PRODUCED THEM, then exactly one `result` or `error`. A stream the host
+// drops before its end is a stop: nothing will read the result. Stop is the
+// explicit, cooperative one the host sends when the invocation is cancelled.
+
+package elitea.engine.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1;enginev1";
+
+// EngineService is served by the engine sidecar on its socket.
+service EngineService {
+  // Invoke runs one tool. A tool this engine does not serve is
+  // INVALID_ARGUMENT with the message "Unknown tool: <name>"; an invocation
+  // id already running is ALREADY_EXISTS; arguments that are not a JSON
+  // object are INVALID_ARGUMENT. Everything the tool itself reports —
+  // success, failure, a stop — is in the stream.
+  rpc Invoke(InvokeRequest) returns (stream InvokeEvent);
+
+  // Stop asks a running invocation to stop at its next checkpoint.
+  rpc Stop(StopRequest) returns (StopResponse);
+
+  // Health reports that the engine serves, what it is running and which
+  // tools it serves.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message InvokeRequest {
+  // The host's invocation id; the key Stop names.
+  string invocation_id = 1;
+  string tool = 2;
+  // The arguments the host derived: a JSON object.
+  bytes arguments_json = 3;
+}
+
+message InvokeEvent {
+  oneof event {
+    // Progress text.
+    string thinking = 1;
+    // One fragment of the answer (issue #701).
+    string token = 2;
+    // The tool's result dict as JSON — success or not; the host maps a
+    // failed one. Ends the stream.
+    bytes result_json = 3;
+    // A failure the host classifies. Ends the stream.
+    EngineError error = 4;
+  }
+}
+
+// EngineError is a tool's failure, in the legacy vocabulary the host's
+// classifier reads.
+message EngineError {
+  string message = 1;
+  // The Python exception class name the failure stands for (RuntimeError,
+  // ValueError, FileNotFoundError, KeyError, MemoryError, Exception).
+  string error_type = 2;
+  // The legacy error category.
+  string error_category = 3;
+  // A machine-readable code (e.g. service_busy); empty on most failures.
+  string code = 4;
+}
+
+message StopRequest {
+  string invocation_id = 1;
+}
+
+message StopResponse {
+  // False when no invocation with that id was running.
+  bool stopped = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  // "UP" while the engine serves.
+  string status = 1;
+  // The runner: native, fixture, unavailable, …
+  string runner = 2;
+  // Invocations running now.
+  int64 active = 3;
+  // The tools this engine serves. Empty when the engine does not list them.
+  repeated string tools = 4;
+}

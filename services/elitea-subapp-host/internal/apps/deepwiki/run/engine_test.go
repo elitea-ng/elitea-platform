@@ -1,28 +1,26 @@
 package run_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	enginev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/deepwiki/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
 // A fake sidecar on a Unix socket: it records the request, streams the
-// scripted lines with a pause between them, and honours a stop by ending
-// the stream early.
+// scripted lines (one event each) with a pause between them, and honours a
+// stop by ending the stream early.
 type fakeSidecar struct {
+	enginev1.UnimplementedEngineServiceServer
 	socket   string
-	server   *httptest.Server
 	lines    []string
 	pause    time.Duration
 	mu       sync.Mutex
@@ -30,93 +28,67 @@ type fakeSidecar struct {
 	stops    []string
 	// byTool scripts a tool's own stream; a tool not in it streams lines.
 	byTool map[string][]string
-	// tools is what GET /engine/health lists; nil leaves the field out, as
-	// an engine of an older release does.
+	// tools is what Health lists; nil lists none, as an engine that does not
+	// list its tools answers.
 	tools []string
-	// healthCalls counts GET /engine/health.
+	// healthCalls counts Health.
 	healthCalls int
 }
 
 func newFakeSidecar(t *testing.T, lines []string, pause time.Duration) *fakeSidecar {
 	t.Helper()
-	dir := t.TempDir()
-	// macOS caps a Unix socket path at 104 bytes; t.TempDir is long.
-	socket := filepath.Join(dir, "e.sock")
-	if len(socket) > 100 {
-		short, err := os.MkdirTemp("/tmp", "eng")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(short) })
-		socket = filepath.Join(short, "e.sock")
-	}
-	f := &fakeSidecar{socket: socket, lines: lines, pause: pause}
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.server = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
-	f.server.Listener = listener
-	f.server.Start()
-	t.Cleanup(f.server.Close)
+	f := &fakeSidecar{lines: lines, pause: pause}
+	f.socket = enginetest.Serve(t, f)
 	return f
 }
 
-func (f *fakeSidecar) handle(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(r.URL.Path, "/stop") {
-		f.mu.Lock()
-		f.stops = append(f.stops, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/engine/invocations/"), "/stop"))
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	if r.URL.Path == "/engine/health" {
-		f.mu.Lock()
-		f.healthCalls++
-		tools := append([]string(nil), f.tools...)
-		f.mu.Unlock()
-		body := map[string]any{"status": "UP", "runner": "native", "active": 0}
-		if tools != nil {
-			body["tools"] = tools
-		}
-		_ = json.NewEncoder(w).Encode(body)
-		return
-	}
-	if r.URL.Path != "/engine/invoke" {
-		http.NotFound(w, r)
-		return
-	}
-	var request map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&request)
+func (f *fakeSidecar) Stop(_ context.Context, request *enginev1.StopRequest) (*enginev1.StopResponse, error) {
 	f.mu.Lock()
-	f.requests = append(f.requests, request)
+	defer f.mu.Unlock()
+	f.stops = append(f.stops, request.GetInvocationId())
+	return &enginev1.StopResponse{Stopped: true}, nil
+}
+
+func (f *fakeSidecar) Health(context.Context, *enginev1.HealthRequest) (*enginev1.HealthResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.healthCalls++
+	return &enginev1.HealthResponse{Status: "UP", Runner: "native", Tools: append([]string(nil), f.tools...)}, nil
+}
+
+func (f *fakeSidecar) Invoke(request *enginev1.InvokeRequest, stream enginev1.EngineService_InvokeServer) error {
+	var arguments map[string]any
+	_ = json.Unmarshal(request.GetArgumentsJson(), &arguments)
+	recorded := map[string]any{"invocation_id": request.GetInvocationId(), "tool": request.GetTool(), "arguments": arguments}
+	f.mu.Lock()
+	f.requests = append(f.requests, recorded)
 	lines := f.lines
-	if scripted, ok := f.byTool[str(request["tool"])]; ok {
+	if scripted, ok := f.byTool[request.GetTool()]; ok {
 		lines = scripted
 	}
 	f.mu.Unlock()
-	invocation := str(request["invocation_id"])
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
 	for _, line := range lines {
 		f.mu.Lock()
 		stopped := false
 		for _, id := range f.stops {
-			stopped = stopped || id == invocation
+			stopped = stopped || id == request.GetInvocationId()
 		}
 		f.mu.Unlock()
 		if stopped {
-			return
+			return nil
 		}
-		_, _ = fmt.Fprintln(w, line)
-		if flusher != nil {
-			flusher.Flush()
+		event, err := enginetest.Event(line)
+		if err != nil {
+			return err
+		}
+		if err := stream.Send(event); err != nil {
+			return err
 		}
 		if f.pause > 0 {
 			time.Sleep(f.pause)
 		}
 	}
+	return nil
 }
 
 func engineRunner(f *fakeSidecar, client run.ArtifactClient) *run.Runner {

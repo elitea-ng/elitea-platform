@@ -19,6 +19,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "libs/rust/**"
+      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      - "libs/proto/elitea/engine/**"
       # What the workspace's tests read from outside it: the /llm caller
       # contract, the agent runtime's SDK schema gate, and the office
       # extraction fixtures.
@@ -36,6 +38,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "libs/rust/**"
+      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      - "libs/proto/elitea/engine/**"
       # What the workspace's tests read from outside it: the /llm caller
       # contract, the agent runtime's SDK schema gate, and the office
       # extraction fixtures.

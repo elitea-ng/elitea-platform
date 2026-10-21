@@ -5,6 +5,7 @@
 
 mod common;
 
+use elitea_engine_sidecar::client::EngineClient;
 use elitea_engine_sidecar::server;
 use elitea_inventory_engine::config::Settings;
 use elitea_inventory_engine::graph::{Citation, Graph};
@@ -13,11 +14,9 @@ use elitea_inventory_engine::runner::Runner;
 use elitea_inventory_engine::store::{GraphKey, sources};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
 type Seen = Arc<Mutex<Vec<Value>>>;
 
@@ -72,25 +71,15 @@ async fn test_tool(
     )
 }
 
-async fn invoke(socket: &PathBuf, arguments: &Value) -> Vec<Value> {
-    let mut stream = UnixStream::connect(socket).await.expect("connect");
-    let payload =
-        json!({"invocation_id": "i", "tool": "investigate", "arguments": arguments}).to_string();
-    let request = format!(
-        "POST /engine/invoke HTTP/1.1\r\nhost: engine\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    stream.write_all(request.as_bytes()).await.expect("write");
-    let mut raw = Vec::new();
-    tokio::time::timeout(Duration::from_mins(1), stream.read_to_end(&mut raw))
-        .await
-        .expect("in time")
-        .expect("read");
-    String::from_utf8_lossy(&raw)
-        .lines()
-        .filter(|line| line.starts_with('{'))
-        .map(|line| serde_json::from_str(line).expect("NDJSON"))
-        .collect()
+async fn invoke(socket: &Path, arguments: &Value) -> Vec<Value> {
+    let mut client = EngineClient::connect(socket).await.expect("connect");
+    tokio::time::timeout(
+        Duration::from_mins(1),
+        client.invoke("i", "investigate", arguments),
+    )
+    .await
+    .expect("an answer in time")
+    .expect("a stream")
 }
 
 #[tokio::test]

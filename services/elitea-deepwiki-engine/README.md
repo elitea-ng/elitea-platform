@@ -40,12 +40,16 @@ engine's `runner::Runner` implements its `Engine` trait (the six tools in
 `ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
 the protocol below.
 
+gRPC over the Unix socket, no TLS (the socket directory is the only way
+in): `elitea.engine.v1.EngineService`, `libs/proto/elitea/engine/v1/engine.proto`
+(#1359 replaced the former NDJSON-over-HTTP protocol).
+
 ```
-POST /engine/invoke                  {invocation_id, tool, arguments}
-  → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
-    then {"result": {…}} | {"error": {message, error_type, error_category}}
-POST /engine/invocations/{id}/stop   a cooperative stop → 202 {"stopped": bool}
-GET  /engine/health                  {"status": "UP", "runner": …, "active": n, "tools": […]}
+Invoke(invocation_id, tool, arguments_json)
+  → stream: thinking and token events interleaved,
+    then result_json | error {message, error_type, error_category, code}
+Stop(invocation_id)   a cooperative stop → {stopped}
+Health()              {status: "UP", runner, active, tools: […]}
 ```
 
 `tools` lists the tools this engine serves (`runner::ENGINE_TOOLS`). The host
@@ -106,7 +110,7 @@ engine's artifacts are bytes a reader downloads.
 `ELITEA_DEEPWIKI_DATABASE_URL`: the engine has no index storage but
 PostgreSQL. Model settings are per invocation (`llm_settings`,
 `embedding_model`); a request without them is refused with the Python
-messages (`llm_settings.api_base is required`). `GET /engine/health` reports
+messages (`llm_settings.api_base is required`). Health reports
 `runner: native`.
 
 ### The pipeline

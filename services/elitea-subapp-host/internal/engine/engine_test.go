@@ -2,15 +2,17 @@ package engine
 
 import (
 	"errors"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	enginev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/engine/v1"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/engine/enginetest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -39,40 +41,43 @@ func TestExportBoundMirrorsTheEngine(t *testing.T) {
 	}
 }
 
-// An engine of an older release answers HTTP 400 "Unknown tool" for a tool it
-// does not serve; the host tells that apart from every other refusal.
-func TestAnUnknownToolIsRecognisedAndOtherRefusalsAreNot(t *testing.T) {
-	status, body := http.StatusBadRequest, `{"detail":"Unknown tool: delete_wiki_index"}`
-	dir, err := os.MkdirTemp("/tmp", "eng")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "e.sock")
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	server.Listener = listener
-	server.Start()
-	t.Cleanup(server.Close)
+// refusingEngine refuses every Invoke with the status it holds.
+type refusingEngine struct {
+	enginev1.UnimplementedEngineServiceServer
+	refusal error
+}
 
-	client := NewClient(socket, "DeepWiki")
+func (r *refusingEngine) Invoke(*enginev1.InvokeRequest, enginev1.EngineService_InvokeServer) error {
+	return r.refusal
+}
+
+// An engine of an older release refuses a tool it does not serve with
+// INVALID_ARGUMENT "Unknown tool: …"; the host tells that apart from every
+// other refusal.
+func TestAnUnknownToolIsRecognisedAndOtherRefusalsAreNot(t *testing.T) {
+	engine := &refusingEngine{refusal: status.Error(codes.InvalidArgument, "Unknown tool: delete_wiki_index")}
+	client := NewClient(enginetest.Serve(t, engine), "DeepWiki")
 	tc := spi.DetachedContext("test")
-	_, err = client.Invoke(t.Context(), "delete_wiki_index", map[string]any{}, tc)
+	_, err := client.Invoke(t.Context(), "delete_wiki_index", map[string]any{}, tc)
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Fatalf("an unknown tool was not recognised: %v", err)
 	}
-	status, body = http.StatusBadRequest, `{"detail":"arguments must be an object"}`
+	engine.refusal = status.Error(codes.InvalidArgument, "arguments must be an object")
 	if _, err = client.Invoke(t.Context(), "x", map[string]any{}, tc); err == nil || errors.Is(err, ErrUnknownTool) {
-		t.Fatalf("another 400 was taken for an unknown tool: %v", err)
+		t.Fatalf("another refusal was taken for an unknown tool: %v", err)
 	}
-	status, body = http.StatusInternalServerError, `Unknown tool`
+	engine.refusal = status.Error(codes.Internal, "Unknown tool")
 	if _, err = client.Invoke(t.Context(), "x", map[string]any{}, tc); err == nil || errors.Is(err, ErrUnknownTool) {
-		t.Fatalf("a 500 was taken for an unknown tool: %v", err)
+		t.Fatalf("an internal error was taken for an unknown tool: %v", err)
+	}
+}
+
+// An engine that is not there is a runtime error naming the socket, not a
+// hang: the dial fails fast.
+func TestAnAbsentEngineIsNotReachable(t *testing.T) {
+	client := NewClient(filepath.Join(t.TempDir(), "absent.sock"), "DeepWiki")
+	_, err := client.Invoke(t.Context(), "ask", map[string]any{}, spi.DetachedContext("test"))
+	if err == nil || !regexp.MustCompile(`The DeepWiki engine is not reachable at .*absent\.sock`).MatchString(err.Error()) {
+		t.Fatalf("%v", err)
 	}
 }

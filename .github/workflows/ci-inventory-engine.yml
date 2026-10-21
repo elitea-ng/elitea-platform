@@ -30,6 +30,8 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-inventory-engine/**"
       - "libs/rust/**"
+      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      - "libs/proto/elitea/engine/**"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/inventory/**"
       - "conformance/provider/fixtures/inventory/**"
@@ -44,6 +46,8 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-inventory-engine/**"
       - "libs/rust/**"
+      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      - "libs/proto/elitea/engine/**"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/inventory/**"
       - "conformance/provider/fixtures/inventory/**"

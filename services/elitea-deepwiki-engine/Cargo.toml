@@ -66,11 +66,9 @@ tracing = "=0.1.44"
 unicode-normalization = "=0.1.25"
 
 [dev-dependencies]
-# The sidecar tests' HTTP/1 client over the Unix socket.
-http-body-util = "=0.1.5"
-hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
-hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
+# The sidecar's refusals (tests/sidecar.rs): a status code and message.
+tonic = { version = "=0.14.6", default-features = false }
 
 [features]
 # TEST ONLY. In a debug build, a `repo_config` base URL of

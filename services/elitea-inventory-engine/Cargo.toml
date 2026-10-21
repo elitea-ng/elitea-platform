@@ -15,8 +15,8 @@ adk-core = { version = "=2.2.0", default-features = false }
 adk-runner = { version = "=2.2.0", default-features = false }
 adk-session = { version = "=2.2.0", default-features = false }
 # The engine sidecars' shared crates (ADR-0027): the error contract, the
-# NDJSON stream and stop flag, Python-compatible text; the socket server, the
-# container probe and process tracing.
+# NDJSON stream and stop flag, Python-compatible text; the socket's gRPC
+# server, the container probe and process tracing.
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 # Leiden for the communities stage.
@@ -79,6 +79,8 @@ elitea-inventory-core = { path = "../../libs/rust/inventory-core", features = ["
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "=1.53.2", features = ["test-util"] }
+# The sidecar's refusals (tests/sidecar.rs): a status code and message.
+tonic = { version = "=0.14.6", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"

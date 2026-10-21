@@ -58,7 +58,9 @@ WORKDIR /src/services/elitea-deepwiki-engine
 # drift apart.
 FROM scratch AS sources
 # The shared engine crates are path dependencies at ../../libs/rust, so the
-# repository layout is kept under /src (ADR-0027).
+# repository layout is kept under /src (ADR-0027); the engine sidecar's
+# build.rs reads ../../libs/proto (elitea.engine.v1, #1359).
+COPY libs/proto /src/libs/proto
 COPY libs/rust /src/libs/rust
 COPY services/elitea-deepwiki-engine /src/services/elitea-deepwiki-engine
 

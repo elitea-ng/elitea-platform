@@ -1,44 +1,30 @@
 //! `import_graph` / `export_graph` as socket tools (descriptor revision
 //! `legacy-v2`), over a REAL Unix socket and PostgreSQL (needs
-//! `INVENTORY_TEST_DSN`). The document is larger than axum's default body
-//! limit, as a real graph is: the sidecar must read it.
+//! `INVENTORY_TEST_DSN`). The document is larger than the sidecar's default
+//! Invoke limit, as a real graph is: the engine's raised limit must admit it.
 
 mod common;
 
+use elitea_engine_sidecar::client::EngineClient;
 use elitea_engine_sidecar::server;
 use elitea_inventory_engine::config::Settings;
 use elitea_inventory_engine::native::NativeRunner;
 use elitea_inventory_engine::runner::Runner;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
 
-async fn invoke(socket: &PathBuf, tool: &str, arguments: &Value) -> Value {
-    let mut stream = UnixStream::connect(socket).await.expect("connect");
-    let payload =
-        json!({"invocation_id": format!("i-{tool}"), "tool": tool, "arguments": arguments})
-            .to_string();
-    let request = format!(
-        "POST /engine/invoke HTTP/1.1\r\nhost: engine\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-        payload.len()
-    );
-    stream.write_all(request.as_bytes()).await.expect("write");
-    stream.write_all(payload.as_bytes()).await.expect("write");
-    let mut raw = Vec::new();
-    tokio::time::timeout(Duration::from_mins(1), stream.read_to_end(&mut raw))
-        .await
-        .expect("an answer in time")
-        .expect("read");
-    let text = String::from_utf8_lossy(&raw);
-    assert!(text.starts_with("HTTP/1.1 200"), "{text:.300}");
-    text.lines()
-        .rev()
-        .find(|line| line.starts_with('{'))
-        .map(|line| serde_json::from_str::<Value>(line).expect("NDJSON"))
-        .unwrap_or_default()
+async fn invoke(socket: &Path, tool: &str, arguments: &Value) -> Value {
+    let mut client = EngineClient::connect(socket).await.expect("connect");
+    let lines = tokio::time::timeout(
+        Duration::from_mins(1),
+        client.invoke(&format!("i-{tool}"), tool, arguments),
+    )
+    .await
+    .expect("an answer in time")
+    .expect("a stream");
+    lines.into_iter().next_back().unwrap_or_default()
 }
 
 /// A Python-shaped node-link document of `n` nodes in a chain.
@@ -83,7 +69,7 @@ async fn a_bucket_graph_is_imported_and_exported_through_the_socket() {
     let text = document(10_000);
     assert!(
         text.len() > 2 << 20,
-        "the document must exceed axum's default limit"
+        "the document must exceed the sidecar's default limit"
     );
     let call = |tool: &str, params: Value| json!({"family": "inventory", "tool": tool, "project_id": 7, "application_id": 71, "params": params});
 
