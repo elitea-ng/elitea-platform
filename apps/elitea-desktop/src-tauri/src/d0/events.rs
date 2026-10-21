@@ -124,6 +124,40 @@ pub struct TurnEvents {
     emitter: Arc<dyn EventEmitter>,
     seq: Mutex<u64>,
     clock: Mutex<Clock>,
+    context: Mutex<Option<ContextMeter>>,
+}
+
+/// The request occupancy the next `usage` event carries (#1217): the step
+/// compaction's estimate of what the model call sends, never its content.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContextMeter {
+    /// The request's estimated input tokens.
+    pub used_tokens: u64,
+    /// The window the budget uses (the model's, at most 272k).
+    pub window_tokens: u32,
+    /// `measured`, `compacting` or `compacted`.
+    pub phase: &'static str,
+    /// The window is the desktop's conservative default: the catalogue did
+    /// not name the model's.
+    pub window_fallback: bool,
+    /// When this turn last compacted (RFC 3339, UTC).
+    pub compacted_at: Option<String>,
+}
+
+impl ContextMeter {
+    fn payload(&self) -> Value {
+        let mut value = json!({
+            "used_tokens": self.used_tokens,
+            "window_tokens": self.window_tokens,
+            "phase": self.phase,
+            "compacted": self.compacted_at.is_some(),
+            "window_fallback": self.window_fallback,
+        });
+        if let Some(at) = &self.compacted_at {
+            value["compacted_at"] = json!(at);
+        }
+        value
+    }
 }
 
 impl TurnEvents {
@@ -144,7 +178,32 @@ impl TurnEvents {
                 tools_busy: Duration::ZERO,
                 tools_ran: false,
             }),
+            context: Mutex::new(None),
         }
+    }
+
+    /// The occupancy of the model call about to be made; a `compacted`
+    /// phase stamps the compaction time, which later steps keep.
+    pub fn context(&self, mut meter: ContextMeter) {
+        let mut slot = self
+            .context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if meter.phase == "compacted" {
+            meter.compacted_at =
+                Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        } else if meter.compacted_at.is_none() {
+            meter.compacted_at = slot.as_ref().and_then(|last| last.compacted_at.clone());
+        }
+        *slot = Some(meter);
+    }
+
+    fn context_payload(&self) -> Option<Value> {
+        self.context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(ContextMeter::payload)
     }
 
     fn clock(&self) -> std::sync::MutexGuard<'_, Clock> {
@@ -314,16 +373,18 @@ impl TurnEvents {
     /// One model call's token usage, as the gateway reported it (`prompt_tokens`
     /// is what that call sent: the context in use; `completion_tokens` what it
     /// produced). Sent once the call's stream has ended, only when the gateway
-    /// reported usage.
+    /// reported usage. `context` is the call's request occupancy when the
+    /// step compaction measured it (#1217): the composer's context meter.
     pub fn usage(&self, prompt_tokens: u32, completion_tokens: u32, total_tokens: u32) {
-        self.send(
-            "usage",
-            json!({
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }),
-        );
+        let mut payload = json!({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        });
+        if let Some(context) = self.context_payload() {
+            payload["context"] = context;
+        }
+        self.send("usage", payload);
     }
 
     pub fn error(&self, code: &str, message: &str) {

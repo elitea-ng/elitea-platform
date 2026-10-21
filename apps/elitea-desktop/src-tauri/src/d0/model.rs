@@ -47,6 +47,7 @@ const TOOL_CALL_LIMITS: ToolCallLimits = ToolCallLimits {
 };
 
 /// The models of one local turn.
+#[derive(Clone)]
 pub struct GatewayTransport {
     pub http: reqwest::Client,
     pub credentials: Arc<dyn Credentials>,
@@ -54,6 +55,9 @@ pub struct GatewayTransport {
     pub project_id: i64,
     pub execution_id: String,
     pub events: Arc<TurnEvents>,
+    /// A model bound to report nothing to the webview (no text deltas, no
+    /// usage, no first-token time): the summary model of a compaction.
+    pub quiet: bool,
 }
 
 impl ModelTransport for GatewayTransport {
@@ -71,6 +75,7 @@ impl ModelTransport for GatewayTransport {
                 project_id: self.project_id,
                 execution_id: self.execution_id.clone(),
                 events: self.events.clone(),
+                quiet: self.quiet,
                 request,
                 completed: Mutex::new(None),
             }),
@@ -106,6 +111,7 @@ pub struct GatewayModel {
     project_id: i64,
     execution_id: String,
     events: Arc<TurnEvents>,
+    quiet: bool,
     request: ModelRequest,
     /// The last answer that ended the model's turn (no tool calls).
     completed: Mutex<Option<String>>,
@@ -153,10 +159,14 @@ impl Llm for GatewayModel {
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {
             let body = response.bytes().await.unwrap_or_default();
-            let code = refusal_code(status, &body);
+            let code = if context_length_exceeded(status, &body) {
+                CONTEXT_LENGTH_EXCEEDED
+            } else {
+                refusal_code(status, &body)
+            };
             return Err(model_error(code, refusal_message(code)));
         }
-        let mut reader = StreamReader::new(&self.events);
+        let mut reader = StreamReader::new((!self.quiet).then_some(&*self.events));
         let mut bytes = response.bytes_stream();
         while let Some(chunk) = bytes.next().await {
             let chunk = chunk.map_err(|_| {
@@ -165,7 +175,9 @@ impl Llm for GatewayModel {
                     "the model stream was cut off",
                 )
             })?;
-            self.events.first_token();
+            if !self.quiet {
+                self.events.first_token();
+            }
             if reader.push(&chunk)? {
                 break;
             }
@@ -182,8 +194,42 @@ impl Llm for GatewayModel {
     }
 }
 
+/// The code of a provider's "the prompt is too long" refusal: the step
+/// compaction compacts and retries once on it
+/// (`elitea_agent_runtime::context_management::is_overflow`).
+pub const CONTEXT_LENGTH_EXCEEDED: &str = "model_gateway.context_length_exceeded";
+
+/// A 400 or 413 whose error names the context length (OpenAI's
+/// `context_length_exceeded` code, or a provider's message that says so).
+/// Read by value lookups only, never echoed.
+fn context_length_exceeded(status: u16, body: &[u8]) -> bool {
+    if !matches!(status, 400 | 413) {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let error = value.get("error").unwrap_or(&value);
+    let field = |key: &str| {
+        error
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    };
+    let code = field("code");
+    let message = field("message");
+    code == "context_length_exceeded"
+        || field("type") == "context_length_exceeded"
+        || message.contains("context_length_exceeded")
+        || message.contains("maximum context length")
+        || message.contains("context window")
+        || message.contains("prompt is too long")
+}
+
 fn refusal_message(code: &str) -> &'static str {
     match code {
+        CONTEXT_LENGTH_EXCEEDED => "the conversation is longer than the model's context window",
         "model_gateway.member_budget_exhausted" => "your budget for this period is used up",
         "model_gateway.project_budget_exhausted" => {
             "the project's budget for this period is used up"
@@ -199,7 +245,7 @@ fn refusal_message(code: &str) -> &'static str {
 }
 
 /// The OpenAI-compatible body: the worker facade's shape.
-fn request_body(model: &ModelRequest, request: &LlmRequest) -> adk_core::Result<Value> {
+pub(super) fn request_body(model: &ModelRequest, request: &LlmRequest) -> adk_core::Result<Value> {
     let invalid = || {
         model_error(
             "model_gateway.invalid_request",
@@ -351,7 +397,8 @@ fn tools(declarations: &HashMap<String, Value>) -> Option<Value> {
 
 /// Reads one streamed completion.
 struct StreamReader<'a> {
-    events: &'a TurnEvents,
+    /// `None` for a quiet model.
+    events: Option<&'a TurnEvents>,
     splitter: SseSplitter,
     text: String,
     reasoning: String,
@@ -362,7 +409,7 @@ struct StreamReader<'a> {
 }
 
 impl<'a> StreamReader<'a> {
-    fn new(events: &'a TurnEvents) -> Self {
+    fn new(events: Option<&'a TurnEvents>) -> Self {
         Self {
             events,
             splitter: SseSplitter::new(SseOptions::default()),
@@ -428,7 +475,9 @@ impl<'a> StreamReader<'a> {
             }
             if let Some(text) = delta.get("content").and_then(Value::as_str) {
                 self.text.push_str(text);
-                self.events.text_delta(text);
+                if let Some(events) = self.events {
+                    events.text_delta(text);
+                }
             }
             if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
@@ -494,9 +543,9 @@ impl<'a> StreamReader<'a> {
             openai::FinishReason::Other => FinishReason::Other,
             _ => FinishReason::Stop,
         };
-        if let Some(usage) = &self.usage {
+        if let (Some(usage), Some(events)) = (&self.usage, self.events) {
             let count = |n: i32| u32::try_from(n).unwrap_or_default();
-            self.events.usage(
+            events.usage(
                 count(usage.prompt_token_count),
                 count(usage.candidates_token_count),
                 count(usage.total_token_count),
@@ -578,7 +627,7 @@ mod tests {
     fn a_stream_of_text_and_a_tool_call_reads_into_one_response() {
         let emitter = Arc::new(VecEmitter::default());
         let events = TurnEvents::new("t".into(), emitter.clone());
-        let mut reader = StreamReader::new(&events);
+        let mut reader = StreamReader::new(Some(&events));
         let stream = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"Let me \"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{\"content\":\"look.\"}}]}\n\n",
@@ -622,7 +671,7 @@ mod tests {
     fn a_stream_without_a_finish_is_incomplete() {
         let emitter = Arc::new(VecEmitter::default());
         let events = TurnEvents::new("t".into(), emitter);
-        let mut reader = StreamReader::new(&events);
+        let mut reader = StreamReader::new(Some(&events));
         reader
             .push(b"data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")
             .unwrap();

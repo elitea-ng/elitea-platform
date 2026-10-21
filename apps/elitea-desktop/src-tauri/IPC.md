@@ -225,7 +225,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[]}` | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: string[], compact?: boolean}` | `{turn_id, execution_id}` |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
@@ -336,6 +336,10 @@ described as the Codex `*** Begin Patch` envelope; every other model
 unified diff first). The agent's `version_details.meta.edit_format`
 (`"auto"`, `"str_replace"`, `"patch"`) overrides the model. Tool names never
 change, and `apply_patch` accepts both formats whatever its description.
+
+`compact: true` (the composer's `/compact`) compacts the session's context
+at the turn's first model call, whatever its size (**Context window**,
+below).
 
 `mentions` are the workspace-relative paths the person referenced with "@"
 (a folder may end with `/`; at most 50). Each must resolve inside the
@@ -1238,7 +1242,7 @@ order. Kinds and payloads:
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
+| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, context?: ContextMeter}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
@@ -1301,8 +1305,61 @@ the tool results older than the newest 6 are sent to the model as short
 notes naming the tool, its arguments and any `output_id`
 (`elitea-agent-runtime` `context::ToolResultElision`); the session and the
 committed transcript keep them whole. The window is the turn's model
-limits; the desktop resolves none yet (#1217 resolves them from the model
-catalogue), so it is the runtime's 128k-token fallback.
+limits (**Context window**, below).
+
+**Context window** (#1217). The turn's model limits are the resolved
+version's frozen `model_context_limits` when it carries them, else the
+model catalogue's row for the model
+(`GET /api/v2/configurations/models/{project_id}?section=llm&include_shared=true`:
+`context_window`, `max_output_tokens`, `max_input_tokens`; the turn's
+project's own row before a shared one), read once per app session (a
+sign-out, sign-in or deployment switch reads again; a catalogue that could
+not be reached is asked again next turn). A model the catalogue does not
+describe runs on a 32k window with 4k output, marked
+`window_fallback: true`. The order inside a long session: the older tool
+results are elided first (above); then, before every model call, the step
+compaction (`elitea-agent-runtime` `context_management::StepCompaction`)
+measures the provider body the host will send (messages, system
+instruction, tool declarations; `ceil(bytes / 4)` tokens) and, once it
+passes the window minus a reserve of 16k tokens (at most a quarter of the
+window; the request's output reservation when larger), folds everything
+before a cut point into a `context_summary` v1 record, keeping about the
+newest 20k tokens (at most half the trigger) verbatim. A cut is at a turn's
+start or at a step with no tool call open (a call and its result are never
+parted). The summary is asked of the agent's own model through the same
+`/llm` route and execution id (its spend is the turn's), without tools and
+without prompt-cache directives, and streams nothing to the UI; it carries
+the previous summary's objective and a cumulative `files_touched` entry
+(`[{path, op: read|edit|write|delete}]`, in `key_facts`). A summary that
+ignores the template is asked for once more without tools, then kept as a
+plain-text v1 record (≤ 32 KiB). When even the kept tail does not fit, the
+step starts from the summary, the last user message and the last tool
+result cut short. A model refusal for a too-long request
+(`context_length_exceeded`, or a `length` finish with almost no output and no tool call) compacts and
+retries the step once; a second one fails the turn with `context_overflow`
+("… Start a new thread to continue."). After a compaction the host appends
+an adk `EventCompaction` marker to the turn's session after the last event
+it folds, so the next turn's history starts from the summary instead of
+summarising the thread again; the turn's commit carries the latest summary
+as `context_summary` (the shared v1 record, never a host format; a server
+that does not know the field ignores it). An agent version whose
+`context_settings` say `enabled: false`, `enable_summarization: false` or
+`session_compaction: false` runs without compaction; `session_compaction:
+{reserve_tokens?, keep_recent_tokens?, fresh_window?}` tunes it and
+`summary_instructions` guide the summary.
+
+```ts
+type ContextMeter = {
+  used_tokens: number;      // the request's estimated input tokens
+  window_tokens: number;    // the window the budget uses (the model's, at most 272k)
+  phase: "measured" | "compacting" | "compacted";
+  compacted: boolean;       // this turn compacted
+  compacted_at?: string;    // when it last did (RFC 3339, UTC)
+  window_fallback: boolean; // the 32k default: the catalogue did not name the model's
+};
+```
+
+It carries estimates and budget arithmetic only, never model content.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.
