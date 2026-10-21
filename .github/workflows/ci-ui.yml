@@ -44,7 +44,7 @@ jobs:
         with:
           node-version: "26"
           # Stated, not defaulted: automatic caching would save from every
-          # ref (scripts/ci/check_workflow_cache_writes.py).
+          # ref (scripts/ci/check-workflow-cache-writes.mjs).
           package-manager-cache: false
 
       - name: Install dependencies

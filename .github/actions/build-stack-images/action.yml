@@ -93,7 +93,7 @@ inputs:
       the cargo/Go/pip mounts. Defaults to "a push to main"; every other run
       (a pull request, a schedule or a dispatch on the main ref) reads main's
       caches and writes none. A caller may pass "false" to state that intent
-      itself; scripts/ci/check_workflow_cache_writes.py fails a caller that
+      itself; scripts/ci/check-workflow-cache-writes.mjs fails a caller that
       passes anything else.
     required: false
     default: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
@@ -105,7 +105,7 @@ inputs:
       save the same run-scoped key, five failed with "Unable to reserve" after
       ~5.7 min each extracting ~3.5 GB out of the builder. A non-writer skips
       that extraction entirely. It never widens `cache-write`: a pull request
-      still writes nothing (scripts/ci/check_workflow_cache_writes.py also
+      still writes nothing (scripts/ci/check-workflow-cache-writes.mjs also
       holds "at most one writer per suffix in a workflow").
     required: false
     default: "false"
@@ -304,7 +304,7 @@ runs:
     - name: Restore and later save BuildKit cache mounts (writers)
       # The ref/event half restates the cache-write default literally, so a
       # caller that passed `cache-write: true` from a pull request still
-      # cannot save (scripts/ci/check_workflow_cache_writes.py reads it).
+      # cannot save (scripts/ci/check-workflow-cache-writes.mjs reads it).
       if: steps.policy.outputs.write-mounts == 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: mounts-rw
       uses: actions/cache@v4
@@ -471,7 +471,7 @@ runs:
         # Targets are compose SERVICE names, comma- or space-separated.
         read -r -a targets <<< "${TARGETS//,/ }"
         [ "${#targets[@]}" -gt 0 ] || { echo "::error::push mode needs explicit targets"; exit 1; }
-        python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" plan \
+        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" plan \
           "${RUNNER_TEMP}/stack-config.json" "$GITHUB_WORKSPACE" "$PREFIX" "$TAG" \
           "${RUNNER_TEMP}/stack-push-plan.json" "${targets[@]}" > "${RUNNER_TEMP}/stack-push-set.txt"
         {
@@ -543,14 +543,14 @@ runs:
         plan="${RUNNER_TEMP}/stack-push-plan.json"
         meta="${RUNNER_TEMP}/stack-pushed-digests.json"
         echo '{}' > "$meta"
-        python3 -c 'import json,sys; [print(e["service"], e["ref"] + ":" + e["tag"]) for e in json.load(open(sys.argv[1]))]' "$plan" \
+        node -e 'const fs = require("fs"); for (const e of JSON.parse(fs.readFileSync(process.argv[1], "utf8"))) console.log(e.service, e.ref + ":" + e.tag)' "$plan" \
           | while read -r service image; do
               digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-              python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m[sys.argv[2]]={"containerimage.digest": sys.argv[3]}; json.dump(m, open(sys.argv[1], "w"))' \
+              node -e 'const fs = require("fs"); const [file, service, digest] = process.argv.slice(1); const m = JSON.parse(fs.readFileSync(file, "utf8")); m[service] = { "containerimage.digest": digest }; fs.writeFileSync(file, JSON.stringify(m))' \
                 "$meta" "$service" "$digest"
             done
         mkdir -p "$(dirname "$DIGESTS_FILE")"
-        python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" record "$plan" "$meta" > "$DIGESTS_FILE"
+        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" record "$plan" "$meta" > "$DIGESTS_FILE"
         cat "$DIGESTS_FILE"
 
     # A fork's pull request builds in its job and reads this cache with no

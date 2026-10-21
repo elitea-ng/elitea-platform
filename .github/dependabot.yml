@@ -173,11 +173,14 @@ updates:
       # gen/. It moves with protobuf 7 and a regeneration, not on its own.
       - dependency-name: grpcio-tools
 
+  # /scripts/ci is the CI checks' one dependency (`yaml`, exact pin), installed
+  # with `npm ci --prefix scripts/ci` for the runner's node.
   - package-ecosystem: npm
     directories:
       - /apps/elitea-web
       - /apps/elitea-desktop
       - /tools/parity-extract
+      - /scripts/ci
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:

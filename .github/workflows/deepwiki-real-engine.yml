@@ -45,7 +45,7 @@ name: CI — DeepWiki real engine
 #   gh workflow run deepwiki-real-engine.yml --ref <branch>
 #
 # There is no push arm at all, which the workflow-branch-coverage gate
-# (scripts/ci/check_workflow_branch_coverage.py) requires to be a recorded
+# (scripts/ci/check-workflow-branch-coverage.mjs) requires to be a recorded
 # decision rather than a silence — the entry for this file is in that script's
 # EXEMPT_WORKFLOWS table.
 
@@ -198,7 +198,7 @@ jobs:
         # `*.cache-to=` (empty) keeps this a reader even if docker-bake.hcl
         # ever declares an export again (it declares none today): this
         # workflow never runs on a push to main, so it reads the shared
-        # cache and writes nothing (scripts/ci/check_workflow_cache_writes.py).
+        # cache and writes nothing (scripts/ci/check-workflow-cache-writes.mjs).
         run: docker buildx bake --set '*.platform=linux/amd64' --set '*.cache-to=' --load elitea-deepwiki-engine-native
 
       - name: Pull the supplied engine image
