@@ -314,13 +314,14 @@ main:
     agentExecutionDispatch:
       enabled: true
       commandStream: "ELITEA_RT_V1_AGENT"
-      # DELIBERATELY empty. elitea-main calls itself for the next-input-suggestion
-      # policy, and it serves cleartext, so the origin is derived from its own
-      # listener: http://127.0.0.1:<port>. This used to be
-      # "https://elitea-main:8080", which aimed TLS at that cleartext port and
-      # made every chat turn log a failed policy call. Set it only where another
-      # server answers the path.
-      currentMainBaseUrl: ""
+      # elitea-main's own platform listener (listeners.platformAddress, #1359),
+      # as the compose stack sets it. It is the self call's origin AND the
+      # internal MCP origin handed to the worker, which a loopback address
+      # cannot serve. The listener requires a client certificate, so the
+      # runtime material Secret must also carry main-platform-client.crt /
+      # .key (gen-runtime-certs.sh mints them). Never "https://elitea-main:8080":
+      # that port is cleartext and boot refuses it.
+      currentMainBaseUrl: "https://elitea-main:9446"
 
     # Index start, index cancel and index metadata.
     #

@@ -1537,8 +1537,8 @@ SQL
     # so that list adds two assertions per extra target. Both lists are
     # declared here, and counted here, so the lists and the floor cannot
     # disagree. Read scripts/lib/assertion-floor.sh.
-    RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445")
-    IDENTITY_PROBE_TARGETS=("https://elitea-platform-edge/api/v2/social/author"
+    RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445" "platform 9446")
+    IDENTITY_PROBE_TARGETS=("https://elitea-main:9446/api/v2/social/author"
                             "http://elitea-main:8080/api/v2/social/author")
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
@@ -1878,19 +1878,21 @@ sys.stdout.write(reply)
         ;;
     esac
 
-    # The worker's platform_origin must terminate TLS with the runtime CA's
-    # edge certificate; the SDK verifies it against that CA alone. A plain
-    # connect would pass against any TLS listener, so verify the chain.
-    edge="$(probe "openssl s_client -connect elitea-platform-edge:443 -CAfile /m/runtime-ca.crt -servername elitea-platform-edge </dev/null")"
-    case "$edge" in
-      *"Verify return code: 0"*) ok "platform-edge TLS verifies against the runtime CA" ;;
-      *) fail "platform-edge did not present a runtime-CA certificate for elitea-platform-edge" ;;
+    # The worker's platform_origin is elitea-main's platform listener (#1359,
+    # it replaced the platform-edge Traefik). The listener loop above proves it
+    # refuses a client with no certificate; this proves the worker's own
+    # identity is ADMITTED and the chain verifies for elitea-main against the
+    # runtime CA alone, which is exactly what the worker's transport checks.
+    platform="$(probe "printf 'GET /healthz HTTP/1.1\\r\\nHost: elitea-main\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -quiet -verify_return_error -connect elitea-main:9446 -CAfile /m/runtime-ca.crt -servername elitea-main -verify_hostname elitea-main -cert /m/agent-worker-client.crt -key /m/agent-worker-client.key -alpn http/1.1")"
+    case "$platform" in
+      *"HTTP/1.1 200"*) ok "platform listener :9446 admits the worker identity and verifies as elitea-main" ;;
+      *) fail "platform listener :9446 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$platform" | tail -1)" ;;
     esac
 
     # ── Edge identity projection, from inside the network ───────────────────
     # elitea-main accepts X-Auth-* only with EdgeAuth's signature over the
     # identity, method and request URI. These probes run where the worker
-    # runs: through the platform edge, and straight at elitea-main:8080, which
+    # runs: through the platform listener, and straight at elitea-main:8080, which
     # compose cannot make unreachable. Each unsigned projection must be refused,
     # and the same request with a real PAT must still answer as the PAT's own
     # user — so a down edge or an unmounted route cannot pass for a refusal.
@@ -1906,6 +1908,7 @@ sys.stdout.write(reply)
           --entrypoint python3 ghcr.io/eliteaai/elitea-mock-llm:standalone -c "
 import ssl, sys, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 headers = dict(item.split(': ', 1) for item in sys.argv[2:])
 request = urllib.request.Request(sys.argv[1], headers=headers)
 try:
@@ -2101,10 +2104,11 @@ PY
           WRITE_LLM_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 body = json.dumps({'model': '${WRITE_MODEL}',
                    'messages': [{'role': 'user', 'content': 'api-created credential check'}]}).encode()
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/chat/completions', data=body,
+    'https://elitea-main:9446/llm/v1/chat/completions', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     print('OK', urllib.request.urlopen(request, context=context, timeout=30).read().decode())
@@ -2211,10 +2215,11 @@ except Exception as error:
       LLM_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 body = json.dumps({'model': '${CHAT_MODEL_NAME}',
                    'messages': [{'role': 'user', 'content': 'standalone check'}]}).encode()
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/chat/completions', data=body,
+    'https://elitea-main:9446/llm/v1/chat/completions', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2252,11 +2257,12 @@ except Exception as error:
       EMB_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 body = json.dumps({'model': '${EMB_MODEL_NAME}',
                    'encoding_format': 'float',
                    'input': 'standalone embedding check'}).encode()
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/embeddings', data=body,
+    'https://elitea-main:9446/llm/v1/embeddings', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2300,8 +2306,9 @@ except Exception as error:
       MODELS_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/models',
+    'https://elitea-main:9446/llm/v1/models',
     headers={'Authorization': 'Bearer ${LLM_JWT}'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2477,11 +2484,11 @@ except Exception as error:
         skip "no PAT to drive the turn (run: $0 seed-runtime)"
       else
         # Run INSIDE the compose network, not from the host: the events stream
-        # is only reachable through platform-edge (#289), and the edge's
-        # certificate has exactly one SAN — elitea-platform-edge — so a host
-        # client would fail hostname verification even if the name resolved.
-        # The mock image is used purely as a python runtime with the runtime CA
-        # available; --user 0:0 so it can read the 0600 signing key.
+        # is only reachable through elitea-main's platform listener (#289,
+        # #1359), which requires a runtime-CA client certificate and serves
+        # DNS:elitea-main — a host client has neither. The mock image is used
+        # purely as a python runtime with the runtime material available;
+        # --user 0:0 so it can read the 0600 signing key and client key.
         # Drive the turn with the model THIS STACK holds, not chat-smoke.py's
         # compiled-in default.
         #
@@ -2515,8 +2522,10 @@ except Exception as error:
           -v "${REPO_ROOT}/deploy/scripts/chat-smoke.py:/opt/chat-smoke.py:ro" \
           --user 0:0 --entrypoint python3 \
           ghcr.io/eliteaai/elitea-mock-llm:standalone /opt/chat-smoke.py \
-          --base-url "https://elitea-platform-edge" \
+          --base-url "https://elitea-main:9446" \
           --ca /m/runtime-ca.crt \
+          --cert /m/agent-worker-client.crt \
+          --key /m/agent-worker-client.key \
           --pat-uuid "$CHAT_PAT" \
           --signing-key /m/auth-pat-signing-key \
           --user-id "$CHAT_USER" \

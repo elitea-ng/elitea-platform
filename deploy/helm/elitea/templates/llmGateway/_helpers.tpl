@@ -5,8 +5,8 @@
 {{/*
 Release-INDEPENDENT on purpose. These names are certificate material: the
 runtime mTLS server certificates carry DNS SANs for them, the worker dials
-control/output/content on `elitea-main`, and platform_origin is pinned to a
-certificate whose only SAN is `elitea-platform-edge`. Helm's usual
+control/output/content/platform on `elitea-main` (platform_origin is
+`https://elitea-main:9446`). Helm's usual
 "<release>-<chart>" would rename them per release and fail every handshake with
 an error that reads like a trust problem, nowhere near the rename.
 

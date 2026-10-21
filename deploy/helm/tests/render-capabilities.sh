@@ -464,8 +464,8 @@ else
   fail "the pod declares no runtime-material volume source"
 fi
 
-# The three listeners must be reachable: the agent worker dials all of them.
-for port in 9443 9444 9445; do
+# The four listeners must be reachable: the agent worker dials all of them.
+for port in 9443 9444 9445 9446; do
   if yq eval-all \
     "select(.kind == \"Service\") | .spec.ports[] | select(.port == $port) | .name" \
     "$WORK/standalone.yaml" | grep -q runtime; then

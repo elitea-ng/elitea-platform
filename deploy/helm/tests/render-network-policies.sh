@@ -5,12 +5,13 @@
 #
 # What is enforced, asserted on the RENDERED manifests:
 #
-#   elitea-main      HTTP 8080 admits only the platform edge, the provider pods
-#                    that call back directly, and the operator-declared
-#                    peers; the runtime listeners admit the worker pods only.
-#   platform edge    ingress 443 from the worker, elitea-main and (when the
-#                    callback hop goes through the edge) DeepWiki; egress only
-#                    to elitea-main's HTTP port and cluster DNS.
+#   elitea-main      HTTP 8080 admits only the provider pods that call back
+#                    directly and the operator-declared peers; the control,
+#                    output and content listeners admit the worker pods only;
+#                    the platform listener (#1359, which replaced the
+#                    platform-edge Traefik) admits the worker and, when its
+#                    callback hop uses it, DeepWiki — and no edge pod or
+#                    platform-edge policy is rendered any more.
 #   worker           no inbound traffic at all; egress is not restricted.
 #   sandbox          the supervisor ports admit the worker and elitea-main only.
 #   deepwiki         the SPI port admits elitea-main only; the platform gRPC
@@ -92,15 +93,15 @@ render() { # render <name> <args...> -> $WORK/<name>.yaml
 }
 
 # ── 1. The policies, against the pods the chart renders ──────────────────────
-# check <name> <edge> <worker> <supervisor> <deepwiki: none|direct|edge> <inventory: 0|1>
+# check <name> <worker> <supervisor> <deepwiki: none|direct|platform> <inventory: 0|1>
 check() {
-  python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "$6" "${EXPECT_GRPC:-}" "${EXPECT_INV_GRPC:-}" <<'PY'
+  python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "${EXPECT_GRPC:-}" "${EXPECT_INV_GRPC:-}" <<'PY'
 import sys, yaml
 
-path, name, edge, worker, sup, deepwiki, inventory = sys.argv[1:8]
-expect_grpc = sys.argv[8] if len(sys.argv) > 8 else ""
-expect_inv_grpc = sys.argv[9] if len(sys.argv) > 9 else ""
-edge, worker, sup, inventory = edge == "1", worker == "1", sup == "1", inventory == "1"
+path, name, worker, sup, deepwiki, inventory = sys.argv[1:7]
+expect_grpc = sys.argv[7] if len(sys.argv) > 7 else ""
+expect_inv_grpc = sys.argv[8] if len(sys.argv) > 8 else ""
+worker, sup, inventory = worker == "1", sup == "1", inventory == "1"
 docs = [d for d in yaml.safe_load_all(open(path)) if d]
 bad = []
 count = 0
@@ -129,14 +130,12 @@ policies = {d["metadata"]["name"]: d for d in docs if d["kind"] == "NetworkPolic
             and d["metadata"]["name"].endswith("-netpol")}
 deployments = {d["metadata"]["name"]: d for d in docs if d["kind"] == "Deployment"}
 
-MAIN, WORKER, EDGE, SUP = "Deployment/elitea-main", "Deployment/elitea-worker", "Deployment/elitea-platform-edge", "Deployment/elitea-sandbox-supervisor"
+MAIN, WORKER, SUP = "Deployment/elitea-main", "Deployment/elitea-worker", "Deployment/elitea-sandbox-supervisor"
 DW, INV = "Deployment/elitea-deepwiki", "Deployment/elitea-inventory"
 
 expected = {"elitea-main-netpol": MAIN}
 if worker:
     expected["elitea-worker-netpol"] = WORKER
-if edge:
-    expected["elitea-platform-edge-netpol"] = EDGE
 if sup:
     expected["elitea-sandbox-supervisor-netpol"] = SUP
 if deepwiki != "none":
@@ -187,7 +186,10 @@ if main:
     spec = main["spec"]
     check(spec["policyTypes"] == ["Ingress"], "main: policyTypes must be Ingress only")
     by = rules_by_ports(spec.get("ingress") or [], "main")
-    want_http = sorted(([EDGE] if edge else []) + ([DW] if deepwiki == "direct" else []) + ([INV] if inventory else []))
+    # No platform-edge pod exists any more (#1359): nothing named after it
+    # may render, and nothing reaches 8080 on its behalf.
+    check(not any("platform-edge" in n for n in pods), "a platform-edge workload is still rendered")
+    want_http = sorted(([DW] if deepwiki == "direct" else []) + ([INV] if inventory else []))
     http = by.get((8080,))
     check(http is not None or not want_http, "main: no rule for 8080")
     check(http is None or want_http, "main: 8080 rule without a peer")
@@ -195,40 +197,31 @@ if main:
         got = peer_targets(http, "main:8080")
         check(got == want_http, f"main:8080 admits {got}, want {want_http}")
         check(WORKER not in got, "main:8080 must not admit the worker")
-    # runtime listeners: exactly the ports the Deployment declares, worker only
+    # runtime listeners: exactly the ports the Deployment declares. control,
+    # output and content admit the worker only; the platform listener admits
+    # the worker and, when its callback uses it, DeepWiki.
     ctr = deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0]["ports"]
-    rt = sorted(p["containerPort"] for p in ctr if p["name"].startswith("runtime-"))
-    rts = [k for k in by if k != (8080,)]
+    rt = sorted(p["containerPort"] for p in ctr if p["name"].startswith("runtime-") and p["name"] != "runtime-platform")
+    plat = [p["containerPort"] for p in ctr if p["name"] == "runtime-platform"]
+    check(bool(rt) == bool(plat), f"main: declares runtime ports {rt} but platform listener {plat}")
+    rts = [k for k in by if k != (8080,) and k != tuple(plat)]
+    want_platform = sorted(([WORKER] if worker else []) + ([DW] if deepwiki == "platform" else []))
     if rt and worker:
         check(rts == [tuple(rt)], f"main: runtime rule ports {rts}, want {[tuple(rt)]}")
         if rts:
             check(peer_targets(by[rts[0]], "main:runtime") == [WORKER], "main: runtime listeners must admit the worker only")
     else:
         check(not rts, f"main: unexpected rules for ports {rts} (runtime={rt}, worker={worker})")
-    check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else [])), "main: ports admitted are not exactly 8080 + runtime")
-
-# ── platform edge ────────────────────────────────────────────────────────────
-ep = policies.get("elitea-platform-edge-netpol")
-if ep:
-    spec = ep["spec"]
-    check(spec["policyTypes"] == ["Ingress", "Egress"], "edge: policyTypes must be Ingress+Egress")
-    by = rules_by_ports(spec["ingress"], "edge")
-    check(list(by) == [(443,)], f"edge: ingress ports {list(by)}, want only 443")
-    if (443,) in by:
-        got = peer_targets(by[(443,)], "edge:443")
-        want = sorted([WORKER, MAIN] + ([DW] if deepwiki == "edge" else []))
-        check(got == want, f"edge:443 admits {got}, want {want}")
-    eg = spec["egress"]
-    check(len(eg) == 2, f"edge: {len(eg)} egress rules, want main + DNS only")
-    to_main = [r for r in eg if (r.get("ports") or [{}])[0].get("port") == 8080]
-    dns = [r for r in eg if (r.get("ports") or [{}])[0].get("port") == 53]
-    check(len(to_main) == 1 and len(dns) == 1, "edge: egress must be exactly main:8080 and DNS:53")
-    if to_main:
-        check(peer_targets({"from": to_main[0]["to"]}, "edge egress") == [MAIN], "edge: egress must reach elitea-main only")
-        check([p["port"] for p in to_main[0]["ports"]] == [8080], "edge: egress to main limited to the http port")
-    if dns:
-        check(sorted((p["protocol"], p["port"]) for p in dns[0]["ports"]) == [("TCP", 53), ("UDP", 53)], "edge: DNS ports")
-        check(dns[0]["to"] == [{"namespaceSelector": {}, "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}], "edge: DNS peer shape")
+    platform_rule = by.get(tuple(plat)) if plat else None
+    if want_platform:
+        check(platform_rule is not None, f"main: no rule for the platform listener {plat}")
+        if platform_rule:
+            got = peer_targets(platform_rule, "main:platform")
+            check(got == want_platform, f"main:platform admits {got}, want {want_platform}")
+    else:
+        check(platform_rule is None, f"main: platform listener rule without a peer")
+    check(sorted(k for r in by for k in r) == sorted(([8080] if want_http else []) + (rt if worker else []) + (plat if want_platform else [])),
+          "main: ports admitted are not exactly 8080 + runtime + platform")
 
 # ── deepwiki ─────────────────────────────────────────────────────────────────
 dp = policies.get("elitea-deepwiki-netpol")
@@ -318,30 +311,30 @@ print(f"{name}: {count} assertions, {len(policies)} policies")
 PY
 }
 
-run() { # run <name> <edge> <worker> <supervisor> <deepwiki> <inventory> -- <helm args>
-  local name="$1" e="$2" w="$3" s="$4" d="$5" i="$6"; shift 7
+run() { # run <name> <worker> <supervisor> <deepwiki> <inventory> -- <helm args>
+  local name="$1" w="$2" s="$3" d="$4" i="$5"; shift 6
   # values-kind.yaml states the decision itself; every other profile does not.
   if [ "$name" = kind ]; then render "$name" "$@" || return 0; else render "$name" "${NOEXT[@]}" "$@" || return 0; fi
-  if out="$(check "$name" "$e" "$w" "$s" "$d" "$i" 2>&1)"; then pass "$out"; else fail "$out"; fi
+  if out="$(check "$name" "$w" "$s" "$d" "$i" 2>&1)"; then pass "$out"; else fail "$out"; fi
 }
 
 echo "== profiles =="
-run default      0 0 0 none 0 --
-run standalone   0 0 0 none 0 -- "${STANDALONE[@]}"
-run auth-minimal 0 0 0 none 0 -- -f "$CHART/values-auth-minimal.yaml"
-run staging      0 0 0 none 0 -- -f "$CHART/values-staging.yaml"
+run default      0 0 none 0 --
+run standalone   0 0 none 0 -- "${STANDALONE[@]}"
+run auth-minimal 0 0 none 0 -- -f "$CHART/values-auth-minimal.yaml"
+run staging      0 0 none 0 -- -f "$CHART/values-staging.yaml"
 # values-kind.yaml runs DeepWiki with its callback on elitea-main:8080.
-run kind         0 0 0 direct 0 -- -f "$REPO/deploy/kind/values-kind.yaml"
+run kind         0 0 direct 0 -- -f "$REPO/deploy/kind/values-kind.yaml"
 echo "== composed installs =="
-run worker-edge  1 1 0 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
-run full         1 1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
-run full-via-edge 1 1 1 edge 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
+run worker       1 0 none 0 -- "${STANDALONE[@]}" "${WORKER[@]}"
+run full         1 1 direct 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" "${INVENTORY[@]}"
+run full-via-platform 1 1 platform 1 -- "${STANDALONE[@]}" "${WORKER[@]}" "${SUPERVISOR[@]}" "${DEEPWIKI[@]}" --set deepwiki.callbackViaPlatformListener=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL= "${INVENTORY[@]}"
 # The platform gRPC service: declared, configured, exposed and admitted together.
-EXPECT_GRPC=0 run deepwiki-no-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}"
-EXPECT_GRPC=1 run deepwiki-grpc 0 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}'
+EXPECT_GRPC=0 run deepwiki-no-grpc 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}"
+EXPECT_GRPC=1 run deepwiki-grpc 0 0 direct 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" "${DEEPWIKI_DIRECT[@]}" --set 'deepwiki.platformGrpc.clients={elitea-main}'
 
-EXPECT_INV_GRPC=0 run inventory-no-grpc 0 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}"
-EXPECT_INV_GRPC=1 run inventory-grpc 0 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}'
+EXPECT_INV_GRPC=0 run inventory-no-grpc 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}"
+EXPECT_INV_GRPC=1 run inventory-grpc 0 0 none 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set 'inventory.platformGrpc.clients={elitea-main}'
 
 # ── 2. Guards ────────────────────────────────────────────────────────────────
 echo "== guards =="
@@ -363,8 +356,8 @@ refuses "default values without the ingress decision" "explicit decision about w
   "${STANDALONE[@]}" --set networkPolicies.main.noExternalIngress=false
 refuses "an unfilled placeholder peer" "unfilled placeholder" "${STANDALONE[@]}" \
   -f <(printf 'networkPolicies:\n  main:\n    extraIngressFrom:\n      - namespaceSelector:\n          matchLabels:\n            kubernetes.io/metadata.name: ""\n')
-refuses "platform edge pointed at another Main Service" "worker.platformEdge.mainService is" \
-  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.platformEdge.mainService=elsewhere
+refuses "a values file that still turns platform-edge on" "worker.platformEdge was removed" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.platformEdge.enabled=true
 refuses "noExternalIngress with main.ingress.enabled (gateway-api)" "contradicts main.ingress.enabled" \
   "${STANDALONE[@]}" "${NOEXT[@]}" --set main.ingress.enabled=true --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.x=y --set main.ingress.gatewayApi=true \
   --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system
@@ -422,10 +415,10 @@ probe = {"ipBlock": {"cidr": "198.51.100.0/24"}}
 http = next(r for r in pols["elitea-main-netpol"]["spec"]["ingress"] if [p["port"] for p in r["ports"]] == [8080])
 assert gw in http["from"] and extra in http["from"] and probe in http["from"], http["from"]
 rt = [r for r in pols["elitea-main-netpol"]["spec"]["ingress"] if r is not http]
-assert rt and all(gw not in r["from"] and extra not in r["from"] for r in rt), "operator peers must not reach the runtime listeners"
-for n in ("elitea-platform-edge-netpol", "elitea-sandbox-supervisor-netpol"):
+assert rt and all(gw not in r["from"] and extra not in r["from"] for r in rt), "operator peers must not reach the runtime or platform listeners"
+for n in ("elitea-sandbox-supervisor-netpol",):
     assert any(probe in r["from"] for r in pols[n]["spec"]["ingress"]), n + " lacks probeFrom"
-print("peers present: 8080 admits gateway, extra and probe peers; runtime listeners do not; edge and supervisor admit probeFrom")
+print("peers present: 8080 admits gateway, extra and probe peers; runtime and platform listeners do not; supervisor admits probeFrom")
 PY
 )"; then pass "ingress ($variant) with ingressFrom: $out"; else fail "ingress ($variant) peers: $out"; fi
   fi

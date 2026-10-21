@@ -165,9 +165,9 @@ spec:
               containerPort: 8080
               protocol: TCP
             {{- if .Values.main.runtime.enabled }}
-            # The runtime plane's three listeners (issue #382). The agent
-            # worker dials all three, so they must be reachable on the Service
-            # as well as declared here.
+            # The runtime plane's listeners (issue #382). The agent worker
+            # dials all of them, so they must be reachable on the Service as
+            # well as declared here.
             - name: runtime-control
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
               protocol: TCP
@@ -176,6 +176,11 @@ spec:
               protocol: TCP
             - name: runtime-content
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.contentAddress }}
+              protocol: TCP
+            # The platform listener (#1359): the product API over mTLS, the
+            # worker's platform_origin and the sub-application callback.
+            - name: runtime-platform
+              containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
               protocol: TCP
             {{- end }}
           envFrom:

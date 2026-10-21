@@ -441,7 +441,7 @@ class Installer(unittest.TestCase):
             'auth-pat-signing-key auth-form-users.json vault-master-key '
             'agent-worker-client.crt agent-worker-client.key '
             'worker-output-spool-key agent-checkpoint-connection '
-            'platform-edge.crt platform-edge.key'
+            'main-platform-client.crt main-platform-client.key'
         ).split()
         for name in names:
             (source / name).write_bytes(b'synthetic-test-material')

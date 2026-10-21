@@ -5,8 +5,8 @@
 {{/*
 Release-INDEPENDENT on purpose. These names are certificate material: the
 runtime mTLS server certificates carry DNS SANs for them, the worker dials
-control/output/content on `elitea-main`, and platform_origin is pinned to a
-certificate whose only SAN is `elitea-platform-edge`. Helm's usual
+control/output/content/platform on `elitea-main` (platform_origin is
+`https://elitea-main:9446`). Helm's usual
 "<release>-<chart>" would rename them per release and fail every handshake with
 an error that reads like a trust problem, nowhere near the rename.
 
@@ -1051,15 +1051,20 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.enabled=true needs runtime.signingKeyId (ELITEA_RUNTIME_SIGNING_KEY_ID). It must equal the key id inside command-signing-keyring.json, or startup fails on the mismatch." -}}
 {{- end -}}
 
-{{/* Three listeners, three distinct addresses. */}}
-{{- $addresses := list ($listeners.controlAddress | toString) ($listeners.outputAddress | toString) ($listeners.contentAddress | toString) -}}
+{{/* Four listeners, four distinct addresses: control, output, content and
+     the platform listener (#1359), which serves the product API over mTLS to
+     the worker and the sub-applications. */}}
+{{- $addresses := list ($listeners.controlAddress | toString) ($listeners.outputAddress | toString) ($listeners.contentAddress | toString) ($listeners.platformAddress | toString) -}}
 {{- range $address := $addresses -}}
 {{- if not $address -}}
-{{- fail "runtime.enabled=true needs runtime.listeners.controlAddress, runtime.listeners.outputAddress and runtime.listeners.contentAddress, each with a numeric TCP port." -}}
+{{- fail "runtime.enabled=true needs runtime.listeners.controlAddress, runtime.listeners.outputAddress, runtime.listeners.contentAddress and runtime.listeners.platformAddress, each with a numeric TCP port." -}}
 {{- end -}}
 {{- end -}}
-{{- if ne (len ($addresses | uniq)) 3 -}}
-{{- fail (printf "runtime.listeners needs three distinct addresses. internal/runtimecomposition/config.go refuses a repeat: \"runtime listeners require distinct addresses\". Got %v." $addresses) -}}
+{{- if ne (len ($addresses | uniq)) 4 -}}
+{{- fail (printf "runtime.listeners needs four distinct addresses. internal/runtimecomposition/config.go refuses a repeat: \"runtime listeners require distinct addresses\". Got %v." $addresses) -}}
+{{- end -}}
+{{- if eq (include "elitea-main.runtimePort" $listeners.platformAddress) "8080" -}}
+{{- fail "runtime.listeners.platformAddress uses port 8080, the public HTTP listener's port. config.go refuses it: the platform listener serves TLS." -}}
 {{- end -}}
 
 {{/* The material volume. Every remaining runtime name is a FILE PATH, and the
@@ -1250,6 +1255,13 @@ ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
 {{- if $agent.currentMainBaseUrl }}
 ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
+{{- if include "elitea-main.currentMainViaPlatformListener" . }}
+{{/* The self call (and the internal MCP origin handed to the worker) names
+     the platform listener, which requires a runtime-CA client certificate:
+     Main presents main-platform-client.crt from the same material. */}}
+ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE: {{ printf "%s/main-platform-client.crt" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE: {{ printf "%s/main-platform-client.key" $dir | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if $ingest.enabled }}
@@ -1284,6 +1296,14 @@ ELITEA_RUNTIME_CONTENT_ADDRESS: {{ $listeners.contentAddress | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
 ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* The platform listener (#1359): the product API over mTLS, the worker's
+     platform_origin. It reuses the content listener's keypair (its SAN is
+     this Service's name) and, like every runtime listener, requires a client
+     certificate the runtime CA signed. */}}
+ELITEA_RUNTIME_PLATFORM_ADDRESS: {{ $listeners.platformAddress | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
+ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
 {{- if .Values.vector.enabled }}
 {{/* ADR-0031: the client identities admitted to TokenIntrospectionService on
      the control listener above — elitea-vector's client certificate, whose
@@ -1389,3 +1409,20 @@ elitea-llm-gateway.masterKeyRef).
 {{- fail "elitea-main has no SECRETS_MASTER_KEY source and refuses to start without one: it will not store project vault keys unwrapped. Set main.secrets.SECRETS_MASTER_KEY.secretName / .key (a Secret holding a base64url 32-byte Fernet key; the gateway must carry the same value), or, for a throwaway local install only, set main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\"." -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+elitea-main.currentMainViaPlatformListener — "true" when
+main.runtime.agentExecutionDispatch.currentMainBaseUrl is an https origin on
+the platform listener's port, so Main must present its own client certificate
+(main-platform-client.crt / .key in the runtime material). Empty otherwise.
+*/}}
+{{- define "elitea-main.currentMainViaPlatformListener" -}}
+{{- $runtime := .Values.main.runtime -}}
+{{- $url := $runtime.agentExecutionDispatch.currentMainBaseUrl | default "" | toString -}}
+{{- if and $runtime.enabled $runtime.agentExecutionDispatch.enabled (hasPrefix "https://" $url) -}}
+{{- $host := (urlParse $url).host -}}
+{{- if hasSuffix (printf ":%s" (include "elitea-main.runtimePort" $runtime.listeners.platformAddress)) $host -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end -}}

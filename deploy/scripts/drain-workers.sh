@@ -55,9 +55,9 @@ RESTORE_REPLICAS="${DRAIN_RESTORE_REPLICAS:-1}"
 TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-300}"
 DRY_RUN=0
 
-# Pod label from the worker Deployment's selector. The platform-edge pods
-# share the name/instance labels but not this one, so this selects the
-# worker pods exactly.
+# Pod label from the worker Deployment's selector. Other chart pods share
+# the name/instance labels but not this one, so this selects the worker
+# pods exactly.
 POD_LABEL="app.kubernetes.io/component=worker"
 
 abort() { echo "ERROR: $1" >&2; exit 1; }

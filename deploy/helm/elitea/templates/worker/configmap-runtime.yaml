@@ -47,7 +47,7 @@ data:
       "limits" $r.limits
     }}
     {{- /* The deployment's PUBLIC base URL, for links the Rust worker puts in an
-    answer (a chart's Markdown image): platformOrigin is the in-cluster edge,
+    answer (a chart's Markdown image): platformOrigin is elitea-main's in-cluster platform listener,
     which a browser cannot open. Written only when set. Links are
     root-relative without it. */}}
     {{- if $r.publicBaseUrl }}

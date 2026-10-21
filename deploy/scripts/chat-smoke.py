@@ -94,10 +94,17 @@ def mint_pat(uuid: str, signing_key: bytes) -> str:
 
 
 class Client:
-    def __init__(self, base: str, token: str, ca: str | None) -> None:
+    def __init__(self, base: str, token: str, ca: str | None,
+                 cert: str | None = None, key: str | None = None) -> None:
         self.base = base.rstrip("/")
         self.token = token
         self.context = ssl.create_default_context(cafile=ca) if ca else None
+        if cert:
+            # elitea-main's platform listener (:9446) requires a runtime-CA
+            # client certificate (#1359).
+            if self.context is None:
+                self.context = ssl.create_default_context()
+            self.context.load_cert_chain(cert, key)
 
     def request(self, method: str, path: str, body: object = None, stream: bool = False):
         data = json.dumps(body).encode() if body is not None else None
@@ -281,6 +288,9 @@ def main() -> int:
     parser.add_argument("--project", type=int, default=1)
     parser.add_argument("--model", default="vllm/E2E-MOCK-MODEL")
     parser.add_argument("--ca", default=None)
+    parser.add_argument("--cert", default=None,
+                        help="client certificate for an mTLS origin such as https://elitea-main:9446")
+    parser.add_argument("--key", default=None, help="private key for --cert")
     parser.add_argument("--timeout", type=int, default=90)
     parser.add_argument(
         "--capture", type=pathlib.Path, default=None,
@@ -291,7 +301,8 @@ def main() -> int:
     # Deterministic but unique per run: the mock echoes it back, so finding it in
     # the stream proves this run produced it rather than a leftover message.
     prompt = f"chat smoke {int(time.time())}"
-    client = Client(args.base_url, mint_pat(args.pat_uuid, args.signing_key.read_bytes()), args.ca)
+    client = Client(args.base_url, mint_pat(args.pat_uuid, args.signing_key.read_bytes()), args.ca,
+                    args.cert, args.key)
 
     try:
         conversation_id, conversation = create_conversation(client, args.project)

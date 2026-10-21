@@ -22,8 +22,15 @@
 #     runtime-ca.{crt,key}            trust root for everything below
 #     control-server.{crt,key}        elitea-main control gRPC   :9443
 #     output-server.{crt,key}         elitea-main output gRPC    :9444
-#     content-server.{crt,key}        elitea-main content HTTPS  :9445
-#     platform-edge.{crt,key}         TLS front for the worker's platform_origin
+#     content-server.{crt,key}        elitea-main content HTTPS  :9445, and the
+#                                     platform listener :9446 (the worker's
+#                                     platform_origin, #1359)
+#     main-platform-client.{crt,key}  elitea-main's own client identity for its
+#                                     platform listener (the self call)
+#     subapp-callback-client.{crt,key} a sub-application's (DeepWiki,
+#                                     Inventory) callback identity for the
+#                                     platform listener (Helm:
+#                                     deepwiki.callbackClient.secretName)
 #     agent-worker-client.{crt,key}   presented by the selected agent worker
 #     agent-checkpoint-connection     DSN for native agent session checkpoints
 #     command-signing-key.pem         Ed25519 PKCS#8, signs dispatch envelopes
@@ -73,7 +80,8 @@ material=(
   control-server.crt control-server.key
   output-server.crt output-server.key
   content-server.crt content-server.key
-  platform-edge.crt platform-edge.key
+  main-platform-client.crt main-platform-client.key
+  subapp-callback-client.crt subapp-callback-client.key
   agent-worker-client.crt agent-worker-client.key
   agent-checkpoint-connection
   command-signing-key.pem command-signing-keyring.json
@@ -90,18 +98,21 @@ done
 # more, so drop just those files in place and leave everything else alone: a
 # full rotation would also rotate vault-master-key, auth-pat-signing-key and
 # the Form users, and every vault secret already stored would become
-# unreadable. Idempotent: a tree without them is left alone.
+# unreadable. Idempotent: a tree without them is left alone. The retired
+# platform-edge keypair (#1359) goes the same way.
 for retired in redis-server.crt redis-server.key redis-users.acl \
                redis-producer-password redis-worker-password \
-               redis-bootstrap-password redis-auth-password; do
+               redis-bootstrap-password redis-auth-password \
+               platform-edge.crt platform-edge.key; do
   if [ -e "$RUNTIME_DIR/$retired" ]; then
     rm -f "$RUNTIME_DIR/$retired"
-    echo "→ Removed retired runtime-Redis material: $RUNTIME_DIR/$retired"
+    echo "→ Removed retired runtime material: $RUNTIME_DIR/$retired"
   fi
 done
 if [ "$needs_regen" -eq 0 ]; then
   for name in runtime-ca.crt control-server.crt output-server.crt \
-              content-server.crt platform-edge.crt agent-worker-client.crt; do
+              content-server.crt main-platform-client.crt \
+              subapp-callback-client.crt agent-worker-client.crt; do
     openssl x509 -checkend 86400 -noout -in "$RUNTIME_DIR/$name" >/dev/null 2>&1 || needs_regen=1
   done
 fi
@@ -140,12 +151,26 @@ issue_server() {
 issue_server control-server elitea-main   "DNS:elitea-main"
 issue_server output-server  elitea-main   "DNS:elitea-main"
 issue_server content-server elitea-main   "DNS:elitea-main"
-# The worker's platform_origin. elitea-main has no TLS listener of its own for
-# its ordinary /api/v2 + /llm surface, and the worker refuses a plaintext origin
-# outright (config.py:187), so a TLS front terminates for it. Its own hostname,
-# not elitea-main's: the edge is a distinct hop and its certificate must not be
-# interchangeable with the three private listener certificates.
-issue_server platform-edge  elitea-platform-edge "DNS:elitea-platform-edge"
+# The platform listener (:9446, the worker's platform_origin, #1359) serves
+# with content-server's keypair: same process, same DNS:elitea-main.
+
+# Client identities for the platform listener, which requires a client
+# certificate the runtime CA signed. elitea-main's own (the self call to
+# ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL) and the sub-applications' callback hop.
+# Neither is the worker's: the worker's identity authorizes runtime gRPC calls
+# by its SPIFFE SAN, and these must not be interchangeable with it.
+issue_client() {
+  local name="$1" cn="$2" sans="$3"
+  openssl req -newkey rsa:2048 -nodes \
+    -keyout "$RUNTIME_DIR/$name.key" -out "$RUNTIME_DIR/$name.csr" \
+    -subj "/CN=$cn" 2>/dev/null
+  openssl x509 -req -in "$RUNTIME_DIR/$name.csr" \
+    -CA "$RUNTIME_DIR/runtime-ca.crt" -CAkey "$RUNTIME_DIR/runtime-ca.key" -CAcreateserial \
+    -out "$RUNTIME_DIR/$name.crt" -days "$DAYS" \
+    -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature\n' "$sans") 2>/dev/null
+}
+issue_client main-platform-client   elitea-main            "DNS:elitea-main"
+issue_client subapp-callback-client elitea-subapp-callback "DNS:elitea-subapp-callback"
 
 # ── worker client cert: exactly one SPIFFE URI SAN, nothing else ─────────────
 openssl req -newkey rsa:2048 -nodes \

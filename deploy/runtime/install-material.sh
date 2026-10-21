@@ -82,13 +82,18 @@ install_files() {
 MAIN=/dst/main
 mkdir -p "$MAIN"; chown 65532:65532 "$MAIN"; chmod 755 "$MAIN"
 # PublicMaterial: readable by anyone, writable by nobody but the owner.
+# main-platform-client.crt is Main's own client identity for its platform
+# listener (#1359): ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL names that listener,
+# which requires a runtime-CA client certificate even for a self call.
 install_files "$MAIN" 65532:65532 0644 \
   runtime-ca.crt \
   control-server.crt output-server.crt content-server.crt \
+  main-platform-client.crt \
   command-signing-keyring.json
 # PrivateMaterial: owner-only, no exceptions.
 install_files "$MAIN" 65532:65532 0600 \
   control-server.key output-server.key content-server.key \
+  main-platform-client.key \
   command-signing-key.pem \
   auth-attempt-key auth-pat-signing-key auth-form-users.json \
   vault-master-key
@@ -106,14 +111,9 @@ install_files "$WORKER" 10001:10001 0600 \
   worker-output-spool-key \
   agent-checkpoint-connection
 
-# ── platform-edge (traefik, root) ────────────────────────────────────────────
-# Only the edge certificate and its key. The edge terminates TLS for the
-# worker's platform_origin and has no part in the runtime's own trust decisions,
-# so it must not hold the runtime CA key, the signing key or any password.
-EDGE=/dst/edge
-mkdir -p "$EDGE"; chown 0:0 "$EDGE"; chmod 755 "$EDGE"
-install_files "$EDGE" 0:0 0644 platform-edge.crt
-install_files "$EDGE" 0:0 0600 platform-edge.key
+# There is no platform-edge volume any more (#1359): elitea-main serves the
+# worker's platform_origin itself, on its mTLS platform listener (:9446), with
+# the content listener's keypair above.
 
 if [ "$COMPILED_ENABLED" = true ]; then
   install_files "$MAIN" 65532:65532 0644 rust-compiled-profiles.json

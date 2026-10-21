@@ -21,10 +21,11 @@
 #   NATS                `nats` names it. Commodity infrastructure. It is
 #                       also the runtime command bus; there is no Redis.
 #   Object storage      An S3-compatible endpoint, configured under `main.env`.
-#   Ingress             The cluster's own edge. `worker.platformEdge` is NOT it:
-#                       that one is internal, has no route from any gateway, and
-#                       exists only because the worker refuses a plaintext
-#                       platform_origin.
+#   Ingress             The cluster's own edge. elitea-main's platform listener
+#                       (main.runtime.listeners.platformAddress, :9446) is NOT
+#                       it: that one is internal mTLS for the worker, has no
+#                       route from any gateway, and admits only runtime-CA
+#                       client certificates.
 #
 # THE ARTIFACT BUCKET MUST EXIST BEFORE THE FIRST SYNC, and this one bites
 # early, but NOT the way it looks at first read. The readiness probe
@@ -489,11 +490,11 @@ platform:
 # need a CNI that enforces NetworkPolicy (Calico, Cilium, etc.); on one that does
 # not, the objects are inert.
 #
-#   elitea-main     HTTP 8080 admits the platform edge, the provider pods that
-#                   call back directly, main.ingressFrom / extraIngressFrom and
-#                   probeFrom. The runtime listeners admit the worker pods only.
-#   platform edge   443 from the worker, elitea-main and (callbackViaPlatformEdge)
-#                   DeepWiki; egress to elitea-main's HTTP port and cluster DNS.
+#   elitea-main     HTTP 8080 admits the provider pods that call back directly,
+#                   main.ingressFrom / extraIngressFrom and probeFrom. The
+#                   runtime listeners (9443-9446) admit the worker pods only;
+#                   the platform listener (9446) also admits DeepWiki when
+#                   deepwiki.callbackViaPlatformListener is set.
 #   worker          no inbound connections. Worker egress is NOT restricted (the
 #                   worker reaches NATS, PostgreSQL, elitea-main, the sandbox
 #                   supervisors and, through toolkits, external hosts); egress
@@ -506,12 +507,12 @@ platform:
 networkPolicies:
   enabled: true
   # Set true ONLY when `enabled` is false because your own NetworkPolicy already
-  # limits who may reach elitea-main, the worker, the platform edge and the
+  # limits who may reach elitea-main, the worker and the
   # sandbox supervisor. templates/guards.yaml refuses `enabled: false` without
   # it: the chart cannot see your policy, so this is a statement, not a probe.
   externallyManaged: false
   # Optional NetworkPolicyPeer entries admitted on the probe ports of
-  # elitea-main (8080), the platform edge (443) and the sandbox supervisor, for a
+  # elitea-main (8080) and the sandbox supervisor, for a
   # CNI that applies policy to kubelet probes. Kubelet probes are not subject to
   # policy on the CNIs this chart is tested with, so this is normally empty
   # (the same assumption as the NATS chart's networkPolicy).
@@ -1955,15 +1956,19 @@ main:
       # ELITEA_RT_V1_AGENT. Its durable consumer is fixed by the stream.
       commandStream: ""
       # OPTIONAL. The origin elitea-main calls for the next-input-suggestion
-      # policy. Empty is the normal value: the call is a SELF call and this
-      # process serves cleartext, so the origin is derived from its own listener
-      # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>).
+      # policy, and the internal MCP origin it hands the worker. Empty derives
+      # the self call from the cleartext listener
+      # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>), which the worker
+      # cannot reach, so internal MCP toolkits stay unavailable.
       #
-      # Set it only where another server answers that path (the retired
-      # centry-hybrid stack aimed it at an edge that routed it to legacy Centry). It must then be
-      # an https ORIGIN, with no path, query or fragment, on an address that
-      # TERMINATES TLS. An https origin on elitea-main's own cleartext port is
-      # refused at boot.
+      # The recommended value is the platform listener,
+      # "https://elitea-main:9446" (listeners.platformAddress), as
+      # values-standalone.yaml sets it. That listener requires a client
+      # certificate, so the chart then adds main-platform-client.crt / .key
+      # to the runtime material contract below. Otherwise it must be an https
+      # ORIGIN, with no path, query or fragment, on an address that TERMINATES
+      # TLS. An https origin on elitea-main's own cleartext port is refused at
+      # boot.
       currentMainBaseUrl: ""
 
     # Index start, index cancel and index metadata. NEEDS
@@ -2037,14 +2042,22 @@ main:
       publishingTtlSeconds: 60
       readyTtlSeconds: 3600
 
-    # Three listeners, three DISTINCT addresses. The agent worker dials all three
+    # Four listeners, four DISTINCT addresses. The agent worker dials all of them
     # on this Service, so the server certificates must carry the Service name.
     # The chart opens the ports on the container and the Service when the runtime
     # is enabled.
+    #
+    # platformAddress (#1359) serves elitea-main's ordinary product API (the
+    # same handler as :8080) over mutual TLS: the worker's platform_origin
+    # (worker.runtime.platformOrigin), the internal MCP origin, and the DeepWiki
+    # callback (deepwiki.callbackViaPlatformListener). It reuses the content
+    # listener's keypair and requires a client certificate the runtime CA
+    # signed. It replaced the platform-edge Traefik. Not 8080.
     listeners:
       controlAddress: ":9443"
       outputAddress: ":9444"
       contentAddress: ":9445"
+      platformAddress: ":9446"
 
     # Where the runtime keys, passwords and certificates come from, and where the
     # service reads them.
@@ -2054,12 +2067,16 @@ main:
     # deploy/scripts/gen-runtime-certs.sh writes:
     #
     #   runtime-ca.crt                the trust root: the client CA of all
-    #                                 three listeners
+    #                                 four listeners
     #   command-signing-key.pem       Ed25519 PKCS#8, signs dispatch envelopes
     #   command-signing-keyring.json  its public half, keyed by signingKeyId
     #   control-server.crt / .key     the control listener keypair
     #   output-server.crt / .key      the output listener keypair
-    #   content-server.crt / .key     the content listener keypair
+    #   content-server.crt / .key     the content AND platform listener keypair
+    #   main-platform-client.crt/.key Main's own client identity for the
+    #                                 platform listener, required only when
+    #                                 agentExecutionDispatch.currentMainBaseUrl
+    #                                 names that listener
     #
     # The server certificates must carry the Service name, because the agent
     # worker dials all three listeners on this Service.
@@ -3215,22 +3232,38 @@ deepwiki:
   enabled: false
   replicaCount: 1
 
-  # ADR-0027: the provider's CALLBACK hop — its model calls through the /llm
-  # edge and its artifact uploads, both to main.env
-  # ELITEA_DEEPWIKI_CALLBACK_BASE_URL — over TLS through worker.platformEdge,
-  # as the agent worker reaches elitea-main, instead of cleartext to
-  # elitea-main:8080. Needs worker.enabled and worker.platformEdge.enabled.
-  # When on:
+  # The provider's CALLBACK hop — its model calls through /llm and its
+  # artifact uploads, both to main.env ELITEA_DEEPWIKI_CALLBACK_BASE_URL — over
+  # mutual TLS to elitea-main's platform listener
+  # (main.runtime.listeners.platformAddress, #1359), as the agent worker
+  # reaches it, instead of cleartext to elitea-main:8080. Needs
+  # main.runtime.enabled. When on:
   #   * an unset main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL becomes
   #     worker.runtime.platformOrigin (a different explicit value is refused);
-  #   * both containers trust the runtime CA, which signs the edge's
-  #     certificate, through ELITEA_DEEPWIKI_CALLBACK_CA_FILE — the
-  #     runtime-ca.crt key of worker.materialSecretName and NOTHING else from
-  #     that Secret.
-  # The edge terminates TLS and forwards to elitea-main over cleartext; it does
-  # not check client certificates. What this adds is TLS on the pod-to-edge
-  # hop, the same posture the worker has.
-  callbackViaPlatformEdge: false
+  #   * both containers trust the runtime CA through
+  #     ELITEA_DEEPWIKI_CALLBACK_CA_FILE — the runtime-ca.crt key of
+  #     worker.materialSecretName and NOTHING else from that Secret;
+  #   * both containers present callbackClient below through
+  #     ELITEA_DEEPWIKI_CALLBACK_CERT_FILE / _KEY_FILE, because the listener
+  #     requires a runtime-CA client certificate;
+  #   * elitea-main's NetworkPolicy admits these pods on the platform port
+  #     instead of 8080.
+  #
+  # This replaced callbackViaPlatformEdge (ADR-0027), which went with the
+  # platform-edge Traefik. Setting the old key to true fails the render with a
+  # migration message rather than mapping over: the new hop needs the client
+  # certificate the old one never had.
+  callbackViaPlatformListener: false
+  callbackClient:
+    # A Secret with tls.crt / tls.key: a client certificate (extendedKeyUsage
+    # clientAuth) the runtime CA signed. deploy/scripts/gen-runtime-certs.sh
+    # mints one as subapp-callback-client.crt / .key:
+    #
+    #   kubectl create secret generic elitea-deepwiki-callback-client \
+    #     --from-file=tls.crt=subapp-callback-client.crt \
+    #     --from-file=tls.key=subapp-callback-client.key
+    secretName: elitea-deepwiki-callback-client
+    defaultMode: 0440
 
   # The provider pod is TWO containers (ADR-0023 H2): the Go sub-application
   # host, which serves the SPI, composes and uploads, and the Rust-native
@@ -4473,20 +4506,21 @@ worker:
     natsUrl: ""
     natsStream: "ELITEA_RT_V1_AGENT"
     natsConsumer: "elitea-agent-worker-v1"
-    # The three mTLS listeners, dialled through elitea-main's Service. These
-    # names must appear as SANs on control/output/content-server.crt.
+    # The mTLS listeners, dialled through elitea-main's Service. These names
+    # must appear as SANs on control/output/content-server.crt.
     controlTarget: "elitea-main:9443"
     outputTarget: "elitea-main:9444"
     contentOrigin: "https://elitea-main:9445"
-    # The SDK refuses a plaintext platform origin (config.py:187), and
-    # elitea-main serves its product API over cleartext HTTP inside the cluster.
-    # platformEdge below bridges that.
-    platformOrigin: "https://elitea-platform-edge"
+    # elitea-main's platform listener (main.runtime.listeners.platformAddress):
+    # the product API over mutual TLS. The worker presents its runtime client
+    # certificate there, as on the three listeners above. It replaced the
+    # platform-edge Traefik (#1359).
+    platformOrigin: "https://elitea-main:9446"
     # The deployment's public base URL (an http(s) origin a browser opens), for
     # links the Rust worker puts in answers such as a chart's Markdown image.
     # Set it to the same value as main.env.DEPLOYMENT_URL. Empty, links are
     # root-relative and the chat UI resolves them against its own origin.
-    # Never platformOrigin: that is the in-cluster edge.
+    # Never platformOrigin: that is the in-cluster platform listener.
     publicBaseUrl: ""
     spoolRoot: /var/lib/elitea-worker/output-spool
     spoolSizeLimit: 2Gi
@@ -4634,27 +4668,7 @@ worker:
       lease_poll_interval_millis: 10000
       shutdown_timeout_millis: 30000
 
-  # The worker's platform_origin. A one-route Traefik whose only job is to
-  # terminate TLS with a certificate the worker trusts (the runtime CA) and
-  # forward to elitea-main, plus edge-auth on the execution-events stream —
-  # the one route that accepts no credential a client can present.
-  #
-  # It is NOT the public edge. It has no route from the Gateway and is reachable
-  # only in-cluster.
-  platformEdge:
-    enabled: true
-    image:
-      repository: docker.io/library/traefik
-      tag: "v3.4"
-      pullPolicy: IfNotPresent
-    # Service name AND the only SAN on platform-edge.crt. Both must match
-    # runtime.platformOrigin.
-    serviceName: elitea-platform-edge
-    # Secret with keys tls.crt / tls.key — the runtime CA's platform-edge pair.
-    tlsSecretName: elitea-platform-edge-tls
-    mainService: elitea-main
-    mainPort: 8080
-    resources:
+  resources:
       requests:
         cpu: 20m
         memory: 64Mi

@@ -40,10 +40,9 @@ spec:
   selector:
     matchLabels:
       {{- include "elitea-worker.selectorLabels" . | nindent 6 }}
-      # The component label is part of the SELECTOR, not decoration: the
-      # platform-edge pods carry the same name/instance labels, so without it
-      # this Deployment's selector is a subset of theirs and the two overlap —
-      # which Kubernetes documents as undefined behaviour.
+      # The component label is part of the SELECTOR, which is immutable after
+      # install. It once kept this selector apart from the retired
+      # platform-edge pods (#1359), and it stays so upgrades keep working.
       app.kubernetes.io/component: worker
   template:
     metadata:

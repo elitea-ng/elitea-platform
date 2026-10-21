@@ -96,11 +96,16 @@ spec:
             - name: ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR
               value: {{ printf ":%d" (.Values.deepwiki.platformGrpc.port | int) | quote }}
             {{- end }}
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
-            # The callback hop (artifact uploads) is TLS through platform-edge:
-            # trust the runtime CA there, apart from the listener's client CA.
+            {{- if .Values.deepwiki.callbackViaPlatformListener }}
+            # The callback hop (artifact uploads) is mTLS to elitea-main's
+            # platform listener: trust the runtime CA there, apart from the
+            # listener's client CA, and present the callback client identity.
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_KEY_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.key
             {{- end }}
             # Sensitive vars from Kubernetes Secrets, never plaintext in the
             # env map above.
@@ -147,9 +152,12 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            {{- if .Values.deepwiki.callbackViaPlatformListener }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
+              readOnly: true
+            - name: callback-client
+              mountPath: {{ include "elitea-deepwiki.callbackClientPath" . }}
               readOnly: true
             {{- end }}
         {{- if eq $sidecar "native" }}
@@ -189,11 +197,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            {{- if .Values.deepwiki.callbackViaPlatformListener }}
             # Model calls and artifact-folder reads go to the callback origin,
-            # platform-edge: the runtime CA signs its certificate.
+            # elitea-main's platform listener: the runtime CA signs its
+            # certificate, and it requires the callback client identity.
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_DEEPWIKI_CALLBACK_KEY_FILE
+              value: {{ include "elitea-deepwiki.callbackClientPath" . }}/tls.key
             {{- end }}
             # ELITEA_DEEPWIKI_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).
@@ -222,9 +235,12 @@ spec:
               mountPath: {{ .Values.deepwiki.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
-            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            {{- if .Values.deepwiki.callbackViaPlatformListener }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
+              readOnly: true
+            - name: callback-client
+              mountPath: {{ include "elitea-deepwiki.callbackClientPath" . }}
               readOnly: true
             {{- end }}
         {{- end }}
@@ -238,7 +254,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+        {{- if .Values.deepwiki.callbackViaPlatformListener }}
         # ONLY the runtime CA from the worker's material Secret: the Secret
         # also holds the worker's client key and signing keys, none of which
         # this pod may read.
@@ -248,6 +264,17 @@ spec:
             items:
               - key: runtime-ca.crt
                 path: runtime-ca.crt
+        # The callback hop's own client identity, which the platform listener
+        # requires: a runtime-CA certificate that is NOT the worker's.
+        - name: callback-client
+          secret:
+            secretName: {{ .Values.deepwiki.callbackClient.secretName }}
+            defaultMode: {{ .Values.deepwiki.callbackClient.defaultMode }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 8 }}{{- end }}
       {{- with .Values.deepwiki.nodeSelector }}

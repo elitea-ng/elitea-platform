@@ -1,21 +1,25 @@
 {{- if and .Values.main.enabled .Values.networkPolicies.enabled }}
 {{- $np := .Values.networkPolicies }}
 {{- $worker := .Values.worker.enabled }}
-{{- $edge := and $worker .Values.worker.platformEdge.enabled }}
-{{- $deepwiki := and .Values.deepwiki.enabled (not .Values.deepwiki.callbackViaPlatformEdge) }}
+{{- $deepwikiViaPlatform := and .Values.deepwiki.enabled .Values.deepwiki.callbackViaPlatformListener .Values.main.runtime.enabled }}
+{{- $deepwiki := and .Values.deepwiki.enabled (not $deepwikiViaPlatform) }}
 {{- $inventory := .Values.inventory.enabled }}
 {{- $runtimePeers := and .Values.main.runtime.enabled $worker }}
+{{- $platformPeers := or $runtimePeers $deepwikiViaPlatform }}
 {{- $vectorPeers := and .Values.main.runtime.enabled .Values.vector.enabled }}
 {{- $egressAuditPeers := and .Values.main.runtime.enabled (include "elitea-egress-proxy.auditEnabled" .) }}
-{{- $httpPeers := or $edge $deepwiki $inventory $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
+{{- $httpPeers := or $deepwiki $inventory $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
 # Ingress to the elitea-main pods. Only the sources listed here may open a
 # connection; every other in-cluster source is refused.
 #
-#   8080 (HTTP)  the platform edge, the provider pods that call back directly,
+#   8080 (HTTP)  the provider pods that call back directly,
 #                networkPolicies.main.ingressFrom / extraIngressFrom (the
 #                gateway or ingress controller) and networkPolicies.probeFrom.
 #   runtime      the worker pods only, on the control / output / content
 #                listeners, when the runtime plane is composed.
+#   platform     the worker pods, and DeepWiki when its callback hop uses the
+#                platform listener (deepwiki.callbackViaPlatformListener), on
+#                the platform listener (#1359; it replaced platform-edge).
 #   control      elitea-vector, on the control listener only, for token
 #                introspection (ADR-0031), when vector is enabled.
 #
@@ -34,7 +38,7 @@ spec:
       {{- include "elitea-main.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
-  {{- if or $httpPeers $runtimePeers $vectorPeers $egressAuditPeers }}
+  {{- if or $httpPeers $runtimePeers $platformPeers $vectorPeers $egressAuditPeers }}
   ingress:
   {{- end }}
     {{- if $httpPeers }}
@@ -42,9 +46,6 @@ spec:
         - port: 8080
           protocol: TCP
       from:
-        {{- if $edge }}
-        {{- include "elitea.netpol.edgePeer" . | nindent 8 }}
-        {{- end }}
         {{- if $deepwiki }}
         {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "deepwiki") | nindent 8 }}
         {{- end }}
@@ -71,6 +72,18 @@ spec:
           protocol: TCP
       from:
         {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
+    {{- end }}
+    {{- if and .Values.main.runtime.enabled $platformPeers }}
+    - ports:
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
+          protocol: TCP
+      from:
+        {{- if $runtimePeers }}
+        {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
+        {{- end }}
+        {{- if $deepwikiViaPlatform }}
+        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "deepwiki") | nindent 8 }}
+        {{- end }}
     {{- end }}
     {{- if $vectorPeers }}
     - ports:

@@ -316,35 +316,53 @@ else
   fail "runner=fixture is refused for a missing database URL, which the fixture never reads"
 fi
 
-# ── The callback hop through platform-edge (ADR-0027) ────────────────────────
+# ── The callback hop to elitea-main's platform listener (#1359) ─────────────
 #
-# On: elitea-main's callback origin becomes the edge, and BOTH containers trust
-# the runtime CA — that one key of the worker's material Secret and nothing
-# else. Refused: the flag without the edge, and the flag beside an explicit
-# origin that is not the edge. Off (every render above): neither appears.
+# On: elitea-main's callback origin becomes the platform listener, BOTH
+# containers trust the runtime CA — that one key of the worker's material
+# Secret and nothing else — and BOTH present the callback client certificate
+# the listener requires. Refused: the flag without the runtime plane, the flag
+# beside an explicit origin that is not the listener, and the retired
+# callbackViaPlatformEdge key. Off (every render above): none of it appears.
 
-echo "== deepwiki.callbackViaPlatformEdge routes the callback hop through the edge =="
-EDGE="-f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
-edge="$(render $COMPLETE $EDGE)" || fail "the callback hop through the edge does not render: $edge"
+echo "== deepwiki.callbackViaPlatformListener routes the callback hop over mTLS =="
+VIA="-f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformListener=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
+via="$(render $COMPLETE $VIA)" || fail "the callback hop to the platform listener does not render: $via"
 expect "callback origin in elitea-main" \
-  "$(printf '%s' "$edge" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
-  "https://elitea-platform-edge"
-ed() { printf '%s' "$edge" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
-expect "host callback CA" "$(ed '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
-expect "engine callback CA" "$(ed '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
+  "$(printf '%s' "$via" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
+  "https://elitea-main:9446"
+expect "the callback origin is the port elitea-main serves its platform listener on" \
+  "$(printf '%s' "$via" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_RUNTIME_PLATFORM_ADDRESS' -)" \
+  ":9446"
+ed() { printf '%s' "$via" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+for c in 0 1; do
+  label="$([ "$c" = 0 ] && echo host || echo engine)"
+  expect "$label callback CA" "$(ed ".spec.template.spec.containers[$c].env[] | select(.name == \"ELITEA_DEEPWIKI_CALLBACK_CA_FILE\") | .value")" "/run/elitea-runtime-ca/runtime-ca.crt"
+  expect "$label callback client certificate" "$(ed ".spec.template.spec.containers[$c].env[] | select(.name == \"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE\") | .value")" "/run/elitea-callback-client/tls.crt"
+  expect "$label callback client key" "$(ed ".spec.template.spec.containers[$c].env[] | select(.name == \"ELITEA_DEEPWIKI_CALLBACK_KEY_FILE\") | .value")" "/run/elitea-callback-client/tls.key"
+done
 expect "runtime CA mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "runtime-ca") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-runtime-ca "
+expect "callback client mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "callback-client") | .mountPath' | tr '\n' ' ')" "/run/elitea-callback-client /run/elitea-callback-client "
 expect "only runtime-ca.crt leaves the worker Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
-expect "the flag off mounts nothing" "$(printf '%s' "$manifest" | grep -c 'runtime-ca\|CALLBACK_CA_FILE')" "0"
-if render $COMPLETE --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
-  fail "callbackViaPlatformEdge renders with no platform-edge to dial"
+expect "the callback client comes from its own Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "callback-client") | .secret.secretName')" "elitea-deepwiki-callback-client"
+expect "the flag off mounts nothing" "$(printf '%s' "$manifest" | grep -c 'runtime-ca\|CALLBACK_CA_FILE\|CALLBACK_CERT_FILE\|callback-client')" "0"
+if render $COMPLETE --set deepwiki.callbackViaPlatformListener=true --set main.runtime.enabled=false >/dev/null 2>&1; then
+  fail "callbackViaPlatformListener renders with no runtime plane, so no platform listener to dial"
 else
-  note "refused without worker.platformEdge"
+  note "refused without main.runtime"
 fi
-if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
-  fail "callbackViaPlatformEdge renders beside an explicit non-edge callback origin"
+if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= --set deepwiki.callbackViaPlatformListener=true >/dev/null 2>&1; then
+  fail "callbackViaPlatformListener renders beside an explicit non-listener callback origin"
 else
   note "refused beside http://elitea-main:8080"
 fi
+out="$(render $COMPLETE $VIA --set deepwiki.callbackViaPlatformEdge=true)" && fail "the retired callbackViaPlatformEdge key still renders" || {
+  if printf '%s' "$out" | grep -q 'callbackViaPlatformEdge was removed'; then
+    note "the retired callbackViaPlatformEdge key is refused with a migration message"
+  else
+    fail "the retired callbackViaPlatformEdge key is refused for another reason: $(printf '%s' "$out" | tail -1)"
+  fi
+}
 
 # ── The platform gRPC service (elitea.subapp.v1.PlatformOperations) ─────────
 #

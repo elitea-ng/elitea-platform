@@ -45,21 +45,26 @@ go read logs for, and this is a message in the terminal that ran the command.
 */}}
 {{/*
 elitea-deepwiki.callbackBaseUrl — the origin the provider calls back to: an
-explicit main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL, else platform-edge when
-deepwiki.callbackViaPlatformEdge is on, else empty (which validateDeepWiki
+explicit main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL, else elitea-main's
+platform listener (worker.runtime.platformOrigin) when
+deepwiki.callbackViaPlatformListener is on, else empty (which validateDeepWiki
 refuses for an enabled facade).
 */}}
 {{- define "elitea-deepwiki.callbackBaseUrl" -}}
 {{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
 {{- if $explicit -}}
 {{- $explicit -}}
-{{- else if .Values.deepwiki.callbackViaPlatformEdge -}}
+{{- else if .Values.deepwiki.callbackViaPlatformListener -}}
 {{- .Values.worker.runtime.platformOrigin -}}
 {{- end -}}
 {{- end -}}
 
 {{/* Where both containers find the runtime CA for the callback hop. */}}
 {{- define "elitea-deepwiki.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
+
+{{/* Where the callback hop's client certificate (tls.crt / tls.key of
+     deepwiki.callbackClient.secretName) is mounted. */}}
+{{- define "elitea-deepwiki.callbackClientPath" -}}/run/elitea-callback-client{{- end -}}
 
 {{/*
 elitea-deepwiki.platformGrpc — "true" when the platform gRPC service is on:
@@ -158,18 +163,30 @@ elitea-main
 {{- end -}}
 
 {{/*
-  Guard #0: the callback hop through platform-edge (ADR-0027). The edge is a
-  worker component, so without the worker there is nothing to dial; and an
-  explicit callback URL that is not the edge would leave the runtime CA
-  mounted for a hop that never uses it.
+  Guard #0: the callback hop through elitea-main's platform listener (#1359,
+  which replaced platform-edge, ADR-0027). That listener is a runtime-plane
+  listener, so without main.runtime there is nothing to dial; it requires a
+  runtime-CA client certificate, so the hop needs one; and an explicit
+  callback URL that is not the listener would mount material for a hop that
+  never uses it.
+
+  The old key, deepwiki.callbackViaPlatformEdge, is NOT mapped over: the new
+  hop needs a client certificate the old one never had, so a silent rename
+  would render a pod that fails every callback handshake.
 */}}
 {{- if .Values.deepwiki.callbackViaPlatformEdge -}}
-{{- if not (and .Values.worker.enabled .Values.worker.platformEdge.enabled) -}}
-{{- fail "deepwiki.callbackViaPlatformEdge is on, but platform-edge is not rendered: it needs worker.enabled and worker.platformEdge.enabled. Turn those on, or leave the callback hop on main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL (cleartext in-cluster)." -}}
+{{- fail "deepwiki.callbackViaPlatformEdge was removed with platform-edge (#1359). Use deepwiki.callbackViaPlatformListener, and mint the callback client certificate into deepwiki.callbackClient.secretName (docs/UPGRADING.md)." -}}
+{{- end -}}
+{{- if .Values.deepwiki.callbackViaPlatformListener -}}
+{{- if not .Values.main.runtime.enabled -}}
+{{- fail "deepwiki.callbackViaPlatformListener is on, but main.runtime.enabled is false, so elitea-main opens no platform listener. Turn the runtime on, or leave the callback hop on main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL (cleartext in-cluster)." -}}
+{{- end -}}
+{{- if not .Values.deepwiki.callbackClient.secretName -}}
+{{- fail "deepwiki.callbackViaPlatformListener is on, but deepwiki.callbackClient.secretName is empty. The platform listener requires a client certificate the runtime CA signed: create a Secret with tls.crt and tls.key (deploy/scripts/gen-runtime-certs.sh mints subapp-callback-client.crt/.key) and name it there." -}}
 {{- end -}}
 {{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
 {{- if and $explicit (ne $explicit (.Values.worker.runtime.platformOrigin | toString)) -}}
-{{- fail (printf "deepwiki.callbackViaPlatformEdge is on, so the callback hop is %s, but main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL says %q. Leave it unset (the chart fills it in) or turn the flag off." .Values.worker.runtime.platformOrigin $explicit) -}}
+{{- fail (printf "deepwiki.callbackViaPlatformListener is on, so the callback hop is %s, but main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL says %q. Leave it unset (the chart fills it in) or turn the flag off." .Values.worker.runtime.platformOrigin $explicit) -}}
 {{- end -}}
 {{- end -}}
 

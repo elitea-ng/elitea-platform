@@ -13,9 +13,9 @@ spec:
       protocol: TCP
       name: http
     {{- if .Values.main.runtime.enabled }}
-    # The runtime plane's three listeners (issue #382). The agent worker dials
-    # them through this Service, so the server certificates in the runtime
-    # material must carry this Service name.
+    # The runtime plane's listeners (issue #382). The agent worker dials them
+    # through this Service, so the server certificates in the runtime material
+    # must carry this Service name.
     - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
       targetPort: runtime-control
       protocol: TCP
@@ -28,6 +28,11 @@ spec:
       targetPort: runtime-content
       protocol: TCP
       name: runtime-content
+    # The platform listener (#1359), which replaced the platform-edge Service.
+    - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
+      targetPort: runtime-platform
+      protocol: TCP
+      name: runtime-platform
     {{- end }}
   selector:
     {{- include "elitea-main.selectorLabels" . | nindent 4 }}

@@ -24,8 +24,8 @@
   wrote a value here would stop a default install. See elitea.aiProjectId.
 */ -}}
 {{- /*
-  The DeepWiki callback origin through platform-edge (ADR-0027), when
-  deepwiki.callbackViaPlatformEdge fills it in; an explicit value wins.
+  The DeepWiki callback origin on elitea-main's platform listener (#1359), when
+  deepwiki.callbackViaPlatformListener fills it in; an explicit value wins.
 */ -}}
 {{- $deepwikiCallback := include "elitea-deepwiki.callbackBaseUrl" . }}
 {{- if and $deepwikiCallback (not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" $deepwikiCallback) }}{{- end }}

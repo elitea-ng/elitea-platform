@@ -149,8 +149,9 @@ llm_post() {
   probe_py "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/$1', data=json.dumps($2).encode(),
+    'https://elitea-main:9446/llm/v1/$1', data=json.dumps($2).encode(),
     headers={'Authorization': 'Bearer ${DRIVER_JWT}', 'Content-Type': 'application/json'})
 try:
     print('OK', urllib.request.urlopen(request, context=context, timeout=30).read().decode()[:400])
@@ -165,8 +166,9 @@ llm_models() {
   probe_py "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 request = urllib.request.Request(
-    'https://elitea-platform-edge/llm/v1/models',
+    'https://elitea-main:9446/llm/v1/models',
     headers={'Authorization': 'Bearer ${DRIVER_JWT}'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())

@@ -4,6 +4,51 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## The platform-edge Traefik is gone; elitea-main serves the worker over mTLS on :9446
+
+**Affects:** every install that runs the agent worker (`worker.enabled=true`),
+sets `main.runtime.currentMainBaseUrl` to an https origin, or sets
+`deepwiki.callbackViaPlatformEdge`. Compose: `docker-compose.standalone-full.yml`
+(#1359).
+
+**What changed.** The worker's `platform_origin` (its `/api/v2` + `/llm` calls,
+the Office host, indexing artifact reads and internal MCP tools) used to go
+through `elitea-platform-edge`, a second Traefik with its own certificate.
+elitea-main now serves that surface itself on an internal **platform
+listener**, `main.runtime.listeners.platformAddress` (default `:9446`), the
+same handler as port 8080 over TLS 1.3 that **requires a client certificate
+signed by the runtime CA**. It reuses the content listener's keypair
+(`content-server.crt`, SAN `elitea-main`). The NetworkPolicy admits the worker
+(and, with the new flag below, DeepWiki) to 9446. Caller-supplied identity
+headers are stripped and `/internal/*` answers 404 on that port.
+
+**What to do.**
+
+1. Delete `worker.platformEdge` from your values. The chart refuses to render
+   while `worker.platformEdge.enabled` is true, or while
+   `worker.runtime.platformOrigin` still names `elitea-platform-edge`.
+2. Set `worker.runtime.platformOrigin: https://elitea-main:9446` (the new
+   default) if you override it.
+3. Delete the `elitea-platform-edge-tls` Secret; nothing reads it.
+4. If `main.runtime.currentMainBaseUrl` names the platform listener
+   (`https://elitea-main:9446`, as in `values-standalone.yaml`), mint
+   `main-platform-client.crt` / `.key` (runtime CA, clientAuth EKU,
+   `DNS:elitea-main`) into the runtime material Secret. elitea-main presents it
+   for its own self call and refuses to start without it.
+   `deploy/scripts/gen-runtime-certs.sh` issues it.
+5. `deepwiki.callbackViaPlatformEdge` was removed and now fails the render; it
+   is not mapped onto the new key because the new hop needs a client
+   certificate you have to mint. Use `deepwiki.callbackViaPlatformListener:
+   true` and create the `deepwiki.callbackClient.secretName` Secret
+   (default `elitea-deepwiki-callback-client`, keys `tls.crt` / `tls.key`) from
+   `subapp-callback-client.crt` / `.key` (runtime CA, clientAuth EKU).
+6. If `GATEWAY_SELF_LLM_ORIGINS` lists the worker's model origin, replace
+   `https://elitea-platform-edge/llm/v1` with `https://elitea-main:9446/llm/v1`.
+7. Compose: re-run `deploy/scripts/gen-runtime-certs.sh` (it removes the
+   retired `platform-edge.*` files and issues the two client identities), then
+   recreate the stack. The `standalone_runtime_edge` volume is unused and can
+   be removed.
+
 ## Default-deny NetworkPolicies; an ingress decision is required
 
 **Affects:** every install of the `deploy/helm/elitea` chart. A CNI that

@@ -23,13 +23,9 @@
 {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-main.selectorLabels" .)) -}}
 {{- end }}
 
-{{/* The worker Deployment's pods. The component label is what separates them from the platform edge, which shares name and instance. */}}
+{{/* The worker Deployment's pods, by name, instance and component (the component label is part of the immutable selector; it once separated them from the retired platform edge). */}}
 {{- define "elitea.netpol.workerPeer" -}}
 {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (printf "%s\napp.kubernetes.io/component: worker" (include "elitea-worker.selectorLabels" .))) -}}
-{{- end }}
-
-{{- define "elitea.netpol.edgePeer" -}}
-{{- include "elitea.netpol.peer" (dict "ctx" . "labels" (printf "%s\napp.kubernetes.io/component: platform-edge" (include "elitea-worker.selectorLabels" .))) -}}
 {{- end }}
 
 {{- define "elitea.netpol.providerPeer" -}}

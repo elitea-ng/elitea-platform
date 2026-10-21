@@ -45,8 +45,9 @@
 #     * The runtime command bus: NATS JetStream on the `nats` service, streams
 #       and durables created by `nats-bootstrap` (docs/runtime-command-bus.md).
 #       There is no Redis (Form auth is on PostgreSQL).
-#     * Three mTLS listeners, not one: control gRPC :9443, output gRPC :9444,
-#       content HTTPS :9445, each with its own cert/key/client-CA.
+#     * Four mTLS listeners, not one: control gRPC :9443, output gRPC :9444,
+#       content HTTPS :9445, and the platform listener :9446 (the product API
+#       for the worker, #1359), each requiring a runtime-CA client certificate.
 #     * An Ed25519 command-signing keypair whose public half must appear in the
 #       verification keyring under ELITEA_RUNTIME_SIGNING_KEY_ID.
 #     * Production auth. cmd/elitea-main/main.go:686-688 refuses to boot the
@@ -67,9 +68,11 @@
 #   elitea-worker is the NodeEvent producer — Go admits and projects executions
 #   but has no agent-token producer of its own. Two things it needs are not
 #   obvious:
-#     * platform_origin must be an https origin and elitea-main has no TLS
-#       listener for its /api/v2 + /llm surface, so `platform-edge` terminates
-#       TLS for it with a runtime-CA certificate.
+#     * platform_origin must be an https origin. elitea-main serves its
+#       /api/v2 + /llm surface over mTLS on its platform listener,
+#       https://elitea-main:9446 (#1359; it replaced the `platform-edge`
+#       Traefik), and the worker presents its runtime client certificate there
+#       as on the other three listeners.
 #     * the native worker hands the runtime CA to every internal client in
 #       code; its process-wide trust store (SSL_CERT_FILE, set by
 #       docker-compose.standalone-rust-agent.yml) covers only outbound clients
@@ -318,7 +321,6 @@ services:
       - ./certs/runtime:/src:ro
       - standalone_runtime_main:/dst/main
       - standalone_runtime_worker:/dst/worker
-      - standalone_runtime_edge:/dst/edge
     restart: "no"
 
   # ── Schema bootstrap ────────────────────────────────────────────────────────
@@ -1195,10 +1197,14 @@ services:
       # refuses sharing the configuration-validation stream.
       ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
       ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
-      # Workers use this HTTPS origin for internal MCP tools.
-      # The platform edge terminates TLS and forwards requests to Main.
-      # Main also uses this origin for next-input-suggestion policy calls.
-      ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: https://elitea-platform-edge
+      # Workers use this HTTPS origin for internal MCP tools, and Main uses it
+      # for its own next-input-suggestion policy calls: Main's platform
+      # listener (ELITEA_RUNTIME_PLATFORM_ADDRESS below, #1359). That listener
+      # requires a runtime-CA client certificate, so Main presents
+      # main-platform-client.crt (DNS:elitea-main) for the self call.
+      ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: https://elitea-main:9446
+      ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE: /run/elitea-runtime/main-platform-client.crt
+      ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE: /run/elitea-runtime/main-platform-client.key
 
       # Index-ingest dispatch: the toolkit `index_data` path behind
       # POST /api/v2/elitea_core/test_toolkit_tool/prompt_lib/{projectID}
@@ -1243,9 +1249,9 @@ services:
       ELITEA_RUNTIME_SIGNING_KEY_FILE: /run/elitea-runtime/command-signing-key.pem
       ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE: /run/elitea-runtime/command-signing-keyring.json
 
-      # Three listeners, three certs. They must be distinct addresses; the
-      # worker dials them as elitea-main:9443/9444/9445, which is why the certs
-      # carry DNS:elitea-main.
+      # Four listeners. They must be distinct addresses; the worker dials them
+      # as elitea-main:9443/9444/9445/9446, which is why the certs carry
+      # DNS:elitea-main.
       ELITEA_RUNTIME_CONTROL_ADDRESS: ":9443"
       ELITEA_RUNTIME_CONTROL_TLS_CERT_FILE: /run/elitea-runtime/control-server.crt
       ELITEA_RUNTIME_CONTROL_TLS_KEY_FILE: /run/elitea-runtime/control-server.key
@@ -1258,6 +1264,15 @@ services:
       ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
       ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
       ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
+      # The platform listener (#1359): the SAME handler as :8080 — the product
+      # API — over mutual TLS, for the worker's platform_origin and the
+      # internal MCP origin. It replaced the `platform-edge` Traefik. Same
+      # keypair as the content listener (same process, same SAN); a client
+      # without a runtime-CA certificate is refused at the handshake.
+      ELITEA_RUNTIME_PLATFORM_ADDRESS: ":9446"
+      ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
+      ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
+      ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
 
       # ── elitea-vector token introspection (ADR-0031 V0) ─────────────────
       # The client identities admitted to TokenIntrospectionService on the
@@ -1802,31 +1817,6 @@ services:
 
   # ── Agent execution worker (issue #282) ─────────────────────────────────────
 
-  # TLS front for the worker's platform_origin. See deploy/runtime/
-  # platform-edge.yml for why elitea-main cannot serve this itself and why this
-  # is not the browser-facing `traefik` service below.
-  platform-edge:
-    image: traefik:v3.4
-    command: ["--configfile=/etc/traefik/traefik.yml"]
-    volumes:
-      - ./runtime/platform-edge.yml:/etc/traefik/traefik.yml:ro
-      - ./runtime/platform-edge-dynamic.yml:/etc/traefik/dynamic.yml:ro
-      - standalone_runtime_edge:/run/elitea-runtime:ro
-    networks:
-      default:
-        aliases:
-          # The certificate's only SAN, and the host in worker-runtime.json's
-          # platform_origin. The compose service name already resolves, but the
-          # alias is declared so renaming the service cannot silently break
-          # hostname verification.
-          - elitea-platform-edge
-    depends_on:
-      runtime-material:
-        condition: service_completed_successfully
-      elitea-main:
-        condition: service_healthy
-    restart: unless-stopped
-
   # Authorizes the worker's certificate identity by upserting the row
   # elitea_runtime.workload_sessions that every runtime control-plane call is
   # checked against. Without this row every chat turn dies in the worker with
@@ -1919,8 +1909,6 @@ services:
         condition: service_completed_successfully
       elitea-main:
         condition: service_healthy
-      platform-edge:
-        condition: service_started
     restart: unless-stopped
 
   worker-spool-init:
@@ -2034,7 +2022,6 @@ volumes:
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:
   standalone_runtime_worker:
-  standalone_runtime_edge:
   # The worker's output spool. Private (0700, uid 10001) — prepared by
   # worker-spool-init because a fresh named volume starts 0755 root-owned.
   standalone_worker_spool:
