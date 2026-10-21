@@ -13,6 +13,14 @@ inputs:
   cache-dependency-path:
     description: The package-lock.json the cache is keyed on.
     required: true
+  prefix-fallback:
+    description: >-
+      'false' restores the exact key only. On a miss the default falls back to
+      ANY npm cache on this OS and arch, usually the web app's much larger one; a
+      small lockfile (scripts/ci) would then restore it, and main would save
+      all of it again under its own key.
+    required: false
+    default: "true"
 outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
@@ -46,5 +54,4 @@ runs:
       with:
         path: ${{ steps.npm.outputs.dir }}
         key: node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-${{ hashFiles(inputs.cache-dependency-path) }}
-        restore-keys: |
-          node-cache-${{ runner.os }}-${{ steps.npm.outputs.arch }}-npm-
+        restore-keys: ${{ inputs.prefix-fallback == 'true' && format('node-cache-{0}-{1}-npm-', runner.os, steps.npm.outputs.arch) || '' }}

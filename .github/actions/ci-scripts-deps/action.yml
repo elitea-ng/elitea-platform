@@ -3,8 +3,8 @@ description: >-
   Installs scripts/ci's npm dependencies (the `yaml` package, pinned in
   scripts/ci/package-lock.json) with `npm ci --prefix scripts/ci`, for the
   runner's preinstalled node. The npm download cache is the shared one
-  (.github/actions/npm-cache), keyed on scripts/ci/package-lock.json:
-  restored on every run, saved only on a push to main.
+  (.github/actions/npm-cache), keyed on scripts/ci/package-lock.json
+  with no prefix fallback: restored on every run, saved only on a push to main.
 #
 # Why the runner's node and no setup-node (owner decision 2026-10-20): the CI
 # scripts are native to GitHub Actions. They are written for Node 20 and need
@@ -19,6 +19,7 @@ runs:
       uses: ./.github/actions/npm-cache
       with:
         cache-dependency-path: scripts/ci/package-lock.json
+        prefix-fallback: "false"
     - name: Install scripts/ci dependencies
       shell: bash
       run: npm ci --prefix "${GITHUB_WORKSPACE}/scripts/ci" --no-audit --no-fund --ignore-scripts
