@@ -221,6 +221,13 @@ fn describe(request: &ApprovalRequest) -> Value {
             payload["command"] =
                 json!(shlex::split(command).unwrap_or_else(|| vec![command.clone()]));
         }
+        // Which layer asks (`workspace`, `user`, `default`, …) and, for a
+        // rule, which one and its justification (the card shows them).
+        for key in ["source", "rule", "justification"] {
+            if let Some(text) = request.payload.get(key).and_then(Value::as_str) {
+                payload[key] = Value::String(cut(text, 4096));
+            }
+        }
         return payload;
     }
     if let Some(question) = request.payload.get(CONTINUE_PAYLOAD_KEY) {
@@ -390,6 +397,21 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, ApprovalOutcome::Decided { action, .. } if action == "reject"));
+    }
+
+    /// A rule's ask shows which rule and its justification (#1216).
+    #[test]
+    fn a_rules_question_names_the_rule_and_its_justification() {
+        let mut request = command_request(&["approve", "reject"]);
+        request.payload["source"] = json!("user");
+        request.payload["rule"] = json!("user#2");
+        request.payload["justification"] = json!("Deletes go through review.");
+        let described = describe(&request);
+        assert_eq!(described["source"], "user");
+        assert_eq!(described["rule"], "user#2");
+        assert_eq!(described["justification"], "Deletes go through review.");
+        let plain = describe(&command_request(&["approve", "reject"]));
+        assert!(plain.get("rule").is_none() && plain.get("justification").is_none());
     }
 
     #[tokio::test]

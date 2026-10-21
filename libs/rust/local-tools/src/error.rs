@@ -72,6 +72,9 @@ impl ErrorCode {
 pub struct ToolError {
     code: ErrorCode,
     message: String,
+    /// More fields of the tool result the model sees (a rule's refusal:
+    /// `error`, `rule`, `justification`).
+    details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl ToolError {
@@ -80,7 +83,22 @@ impl ToolError {
         Self {
             code,
             message: message.into(),
+            details: None,
         }
+    }
+
+    /// This error with more fields in its tool result (never `status`,
+    /// `code` or `message`).
+    #[must_use]
+    pub fn with_details(mut self, details: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    /// The extra fields of its tool result.
+    #[must_use]
+    pub fn details(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        self.details.as_ref()
     }
 
     #[must_use]
@@ -108,11 +126,17 @@ impl ToolError {
     /// The tool result the model sees for this failure.
     #[must_use]
     pub fn to_result(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut result = serde_json::json!({
             "status": "error",
             "code": self.code.as_str(),
             "message": self.message,
-        })
+        });
+        if let (Some(details), serde_json::Value::Object(fields)) = (&self.details, &mut result) {
+            for (key, value) in details {
+                fields.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+        result
     }
 }
 
@@ -122,6 +146,7 @@ impl fmt::Debug for ToolError {
             .debug_struct("ToolError")
             .field("code", &self.code)
             .field("message", &self.message)
+            .field("details", &self.details)
             .finish()
     }
 }

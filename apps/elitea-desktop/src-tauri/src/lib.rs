@@ -29,6 +29,7 @@ mod models;
 mod net;
 mod pkce;
 mod platform;
+mod rules;
 mod seed;
 mod sessions;
 mod settings;
@@ -334,6 +335,7 @@ pub fn run() {
                     // every local tool's reach.
                     sandbox_deny,
                     app_id,
+                    user_rules_dir: Some(config_dir.clone()),
                 })
                 .map_err(|error| error.message)?,
             );
@@ -415,6 +417,10 @@ pub fn run() {
             local_commands::workspace_agent_settings_get,
             local_commands::workspace_agent_settings_set,
             local_commands::workspace_files,
+            local_commands::rules_get,
+            local_commands::rules_put,
+            local_commands::rules_explain,
+            local_commands::rules_import_proposed,
             local_commands::agent_turn_start,
             local_commands::agent_prewarm,
             local_commands::turn_commit_retry,

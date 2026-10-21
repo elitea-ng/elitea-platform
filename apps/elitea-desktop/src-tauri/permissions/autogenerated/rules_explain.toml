@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rules-explain"
+description = "Enables the rules_explain command without any pre-configured scope."
+commands.allow = ["rules_explain"]
+
+[[permission]]
+identifier = "deny-rules-explain"
+description = "Denies the rules_explain command without any pre-configured scope."
+commands.deny = ["rules_explain"]

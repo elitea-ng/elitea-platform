@@ -130,7 +130,7 @@ type Workspace = {
 | --- | --- | --- |
 | `workspace_open` | — | `Workspace \| null` — the native folder dialog; `null` when cancelled. Opening a folder that is already a workspace returns that workspace. |
 | `workspace_list` | — | `Workspace[]` |
-| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
+| `workspace_remove` | `{id}` | `null` — forgets the workspace, its host data (remembered approvals, its approval rules, copy checkpoints, its local index), its turns and its thread history; the folder is never touched. Rejects with `workspace_busy` while a turn runs in it. |
 | `workspace_bind_project` | `{id, project_id}` | `Workspace` — rejects with `workspace_busy` while a turn (or an undo) runs in it, `workspace_unknown` for an id it does not know. |
 | `workspace_agent_settings_get` | `{id}` | `{step_limit: number \| null}` — the workspace's agent settings: `step_limit` is the model steps per run of its turns, and it wins over the agent's `meta.step_limit` (`null`: the agent's value, else the default, 100). Kept in the workspace's host data (`workspaces/<id>/agent_settings.json`, owner-only), never in the folder; a file that is not private to the user is refused (`storage`). |
 | `workspace_agent_settings_set` | `{id, settings: {step_limit: number \| null}}` | the stored settings — they apply from the next turn. Rejects `invalid_request` for a step limit outside 10 to 200, `storage` for an id it does not know. |
@@ -138,6 +138,88 @@ type Workspace = {
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
+
+## Approval rules (`src/rules.rs`, `libs/rust/local-tools/src/execpolicy.rs`)
+
+The person's command rules, layer 3 of the approvals engine
+(`libs/rust/local-tools/src/approvals.rs`): ordered **prefix rules** in a
+JSON form of the `codex-rs/execpolicy` design. **User rules** live in
+`<app config>/rules.json` (every workspace), **workspace rules** in
+`<app data>/workspaces/<id>/rules.json`; both owner-only (`0600` in `0700`),
+opened without following a symlink, and refused when another user's or
+readable/writable by others. Layer 3 reads the workspace's rules, then the
+person's; a `forbidden` beats a `prompt` beats an `allow` across both. A
+file that is refused or fails validation loads **no** rules (the error says
+why; the defaults still apply). A session loads both when it opens and
+again at a turn's start when either file changed.
+
+```ts
+type RuleFile = {
+  version: 1;
+  host_executables?: { name: string; paths: string[] }[]; // absolute paths a program name may be given as
+  rules: Rule[];
+};
+type Rule = {
+  pattern: (string | string[] | { any: true })[]; // argv prefix; a list = alternatives; {any: true} = any one word ("*" is the literal word)
+  decision?: "allow" | "prompt" | "forbidden"; // default "allow"
+  justification?: string;           // shown to the person and the model
+  match?: (string | string[])[];    // examples that must match (checked at load)
+  not_match?: (string | string[])[];// examples that must not match
+  sandbox?: "read-only" | "workspace-write" | "full-access"; // widest sandbox an allow covers (default workspace-write)
+  network?: boolean;                // whether an allow covers a call asking for the network
+  origin?: "repository";            // imported from a proposal: its justification is shown to the person, never the model
+};
+type LoadError = { file: string; rule_index?: number /* 1-based */; example?: string;
+                   expected?: "match" | "not_match"; got?: string; message: string };
+type ScopeState = { scope: "workspace" | "user"; path: string; file: RuleFile | null; error: LoadError | null;
+                    version: string /* the file's digest, "absent" without one */ };
+type Proposal = { path: string; count: number; file: RuleFile | null /* as an import copies it */; error: LoadError | null;
+                  warnings: string[] /* what an import leaves out or narrows */; digest: string };
+type PutOutcome = { saved: boolean; file: RuleFile | null; error: LoadError | null; conflict: boolean };
+type RuleMatch = { scope: "workspace" | "user" | "legacy"; index: number; decision: Rule["decision"]; pattern: string;
+                   justification?: string; origin?: "repository" };
+```
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `rules_get` | `{workspace_id}` | `{scopes: ScopeState[], proposed: Proposal \| null}` — the workspace's then the person's rules, each with the error that keeps it from loading; `proposed` is what the folder's `.elitea/rules.json` proposes (read confined to the folder, `path_deny` honoured), never loaded until imported. Rejects `local_work_disabled`, `workspace_unknown`. |
+| `rules_put` | `{workspace_id, scope: "workspace" \| "user", file: RuleFile, version}` | `PutOutcome` — validated before anything is written: an unknown field, an empty pattern or a disagreeing example gives `{saved: false, error}` and the file is left as it was. `version` is the `ScopeState.version` the edit was made from; a file changed since gives `{saved: false, conflict: true}` (the panel reloads and says so). |
+| `rules_explain` | `{workspace_id, command}` | `{verdict: "allow" \| "ask" \| "deny", source: "policy" \| "plan_mode" \| "workspace" \| "user" \| "remembered" \| "default", reason, rule: RuleMatch \| null, justification: string \| null}` — how the layers would decide `command` now, as a confined `workspace-write` call without the network (an open session answers with its own engine). Rejects `invalid_request` for an empty command. |
+| `rules_import_proposed` | `{workspace_id, digest}` | `PutOutcome` — copies the folder's proposed rules, exactly as `rules_get` listed them (`digest`: a proposal changed since gives `{saved: false, conflict: true}`), into the workspace's rules file: the person's explicit import. A repository can never grant itself permissions without it, and an import is bounded: `host_executables` pins are never imported (a pin widens what an allow matches), an `allow` is narrowed to `workspace-write` without the network, a rule whose examples need the dropped pins is left out (each listed in `warnings`), and every rule is marked `origin: "repository"`. |
+
+Matching: tokens compare in order as an argv prefix. An `allow` covers only
+the first segment of a **simple** command (never a compound one) and never
+a call asking for a wider sandbox or the network than it names; a `prompt`
+or `forbidden` matches any segment, the inner command of `sh -c`, `env`,
+`sudo` included. A program name matches the same bare name; a path matches
+a pinned name only when `host_executables` lists it, and an unpinned one
+when it is the file the bare name runs (`prompt`/`forbidden` match any path
+with that base name). Rules never lift the `local_work` policy ceiling,
+plan mode, or the rule that every command is asked on an unconfined
+machine. `forbidden` rules are advisory: they see the commands the analysis
+can find, not what a script starts; the sandbox is the boundary.
+
+"Always allow" (`approval_respond` with `allow_always`) for a command appends
+`{pattern: <resolved program + argv prefix>, decision: "allow", justification:
+"Allowed from the approval dialog on <date>", match: [<the approved argv>],
+sandbox, network}` to the workspace's rules file. Command choices an older
+host kept in `choices.json` are moved into it once; file choices stay in
+`choices.json`.
+
+Rules migrated from an older host's workspace settings are labelled
+`legacy#N` (their own numbering), apart from the workspace file's
+`workspace#N`. A rule that allows a command which would run unconfined does
+not decide it: the defaults ask, with the reason that it would run
+unsandboxed. When the workspace's rules file is refused or broken, "always
+allow" is kept in `choices.json` instead (and moved into the file once it
+loads again).
+
+A `forbidden` rule refuses the call inline (no question) and the model sees
+`{"status": "error", "code": "local_tools.denied", "message": "forbidden by
+workspace#3: …", "error": "forbidden_by_rule", "justification": "…",
+"rule": "workspace#3"}`, so it can take the alternative the justification
+names instead of retrying. A rule imported from a repository leaves the
+`justification` out (it is the repository's text, not the person's).
 
 ## The local agent turn (D0, `src/d0/`)
 
@@ -1102,7 +1184,7 @@ order. Kinds and payloads:
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
 | `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
-| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
+| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |

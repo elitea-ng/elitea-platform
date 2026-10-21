@@ -24,6 +24,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/workspaceIpc';
 
+import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
+
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */
   request: ApprovalRequestPayload | undefined;
@@ -96,6 +98,7 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
   if (request === undefined) return null;
   const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
   if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
+  const decidedBy = ruleSourceLabel(request.source, request.rule);
   return (
     <Dialog
       open
@@ -127,8 +130,13 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
           </Box>
         )}
         <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
-          {t('workspace.approval.reason', 'Why: {{reason}}', { reason: request.reason })}
+          {t('workspace.approval.reason', 'Why: {{reason}}', { reason: request.justification ?? request.reason })}
         </Typography>
+        {decidedBy !== undefined && (
+          <Typography variant="bodySmall" data-testid="approval-rule-source" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+            {t('workspace.approval.source', 'Asked by {{source}}', { source: decidedBy })}
+          </Typography>
+        )}
         {queued > 0 && (
           <Typography variant="bodySmall" component="output">
             {t('workspace.approval.queued', '{{n}} more waiting', { n: queued })}

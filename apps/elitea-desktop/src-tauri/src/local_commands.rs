@@ -613,6 +613,113 @@ pub async fn workspace_files(
     .map_err(IpcError::from)
 }
 
+/// `rules_get`: the workspace's and the person's approval rules (each with
+/// the error that keeps it from loading, if any), and the rules the folder
+/// proposes in `.elitea/rules.json` (never loaded until imported).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_get(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+) -> Result<crate::rules::RulesView, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        let (root, path_deny) = agents.rules_folder(&workspace_id)?;
+        Ok(crate::rules::RulesView {
+            scopes: agents.rule_files().states(&workspace_id),
+            proposed: crate::rules::RuleFiles::proposed(&root, &path_deny),
+        })
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "reading the rules stopped unexpectedly"))?
+}
+
+/// `rules_put`: validate `file` and store it as the `scope`'s rules, when
+/// the file is still at `version` (from `rules_get`). A file that does not
+/// validate is not written: `{saved: false, error}`; one changed since:
+/// `{saved: false, conflict: true}`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_put(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    scope: elitea_local_tools::execpolicy::RuleScope,
+    file: Value,
+    version: String,
+) -> Result<crate::rules::PutOutcome, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        agents.rules_folder(&workspace_id)?;
+        Ok(crate::rules::PutOutcome::of(agents.rule_files().put(
+            scope,
+            &workspace_id,
+            &file,
+            &version,
+        ))?)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "saving the rules stopped unexpectedly"))?
+}
+
+/// `rules_import_proposed`: copy the folder's proposed rules, as
+/// `rules_get` showed them (`digest`), into the workspace's rules file
+/// (the person's explicit import). A proposal changed since:
+/// `{saved: false, conflict: true}`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_import_proposed(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    digest: String,
+) -> Result<crate::rules::PutOutcome, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || {
+        let (root, path_deny) = agents.rules_folder(&workspace_id)?;
+        Ok(crate::rules::PutOutcome::of(
+            agents
+                .rule_files()
+                .import_proposed(&workspace_id, &root, &path_deny, &digest),
+        )?)
+    })
+    .await
+    .map_err(|_| IpcError::new("internal", "importing the rules stopped unexpectedly"))?
+}
+
+/// `rules_explain`'s answer: the verdict, the layer that decided it, and
+/// the rule (with its justification) when a rule did.
+#[derive(Serialize)]
+pub struct Explained {
+    verdict: elitea_local_tools::approvals::Verdict,
+    source: elitea_local_tools::approvals::Source,
+    reason: String,
+    rule: Option<elitea_local_tools::approvals::RuleMatch>,
+    justification: Option<String>,
+}
+
+/// `rules_explain`: which layer and rule would decide `command` here now.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn rules_explain(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    command: String,
+) -> Result<Explained, IpcError> {
+    if command.trim().is_empty() || command.len() > 16 * 1024 {
+        return Err(IpcError::new("invalid_request", "Type a command to test."));
+    }
+    let agents = state.agents.clone();
+    let decision =
+        tokio::task::spawn_blocking(move || agents.explain_command(&workspace_id, &command))
+            .await
+            .map_err(|_| IpcError::new("internal", "the explanation stopped unexpectedly"))??;
+    Ok(Explained {
+        justification: decision
+            .rule
+            .as_ref()
+            .and_then(|rule| rule.justification.clone()),
+        verdict: decision.verdict,
+        source: decision.source,
+        reason: decision.reason,
+        rule: decision.rule,
+    })
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
     Ok(state.agents.cancel(&turn_id)?)

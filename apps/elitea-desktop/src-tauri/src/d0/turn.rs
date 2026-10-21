@@ -75,6 +75,7 @@ use crate::history::{
     HistoryStore, NewTurn, Owner, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
 };
 use crate::index::IndexRegistry;
+use crate::rules::{RuleFiles, WorkspaceRuleSink};
 use crate::sessions::DesktopStateStore;
 use crate::workspaces::{Workspace, WorkspaceStore};
 
@@ -217,6 +218,10 @@ pub struct HostDeps {
     /// The app's identifier from its Tauri config: the library derives the
     /// default directories under it (a fallback to `sandbox_deny`).
     pub app_id: Option<String>,
+    /// The app config directory, which holds the person's approval rules
+    /// for every workspace (`rules.json`, src/rules.rs); `None`: no user
+    /// rules.
+    pub user_rules_dir: Option<PathBuf>,
 }
 
 /// The app's resolved directories as deny entries, as given (the deny list
@@ -239,6 +244,27 @@ struct WorkspaceSession {
     session: Arc<LocalSession>,
     prompt: Arc<UiPrompt>,
     policy: LocalWorkPolicy,
+    /// When the approval rule files it loaded last changed.
+    rules_stamp: Mutex<crate::rules::Stamp>,
+}
+
+impl WorkspaceSession {
+    /// Load the rule files into the session's engine again when either
+    /// changed since it last did (checked at a turn's start).
+    fn refresh_rules(&self, files: &RuleFiles, workspace_id: &str) {
+        let Ok(mut stamp) = self.rules_stamp.lock() else {
+            return;
+        };
+        if *stamp == files.stamp(workspace_id) {
+            return;
+        }
+        let loaded = files.load(workspace_id);
+        for error in &loaded.errors {
+            log::warn!("approval rules not loaded: {error}");
+        }
+        self.session.rules().set_command_rules(loaded.rules);
+        *stamp = loaded.stamp;
+    }
 }
 
 /// What holds a workspace now.
@@ -650,6 +676,8 @@ pub struct AgentHost {
     /// Whose history the signed-in session writes: the session's identity
     /// (origin and sign-in) and the owner it resolved to.
     owner: Mutex<Option<(String, Owner)>>,
+    /// The approval rule files (user and per workspace).
+    rules: Arc<RuleFiles>,
     /// The agent versions and answering participants read this session.
     caches: TurnCaches,
     /// The commits after `done`, one lane per conversation.
@@ -799,9 +827,14 @@ impl AgentHost {
             deps.credentials.clone(),
             &deps.client_version,
         ));
+        let rules = Arc::new(RuleFiles::new(
+            deps.user_rules_dir.clone(),
+            deps.workspaces.clone(),
+        ));
         Ok(Self {
             deps,
             api,
+            rules,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
             busy: BusySet::default(),
@@ -859,6 +892,7 @@ impl AgentHost {
         if let Some(existing) = sessions.get(workspace_id)
             && &existing.policy == policy
         {
+            existing.refresh_rules(&self.rules, workspace_id);
             return Ok(existing.clone());
         }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
@@ -870,6 +904,11 @@ impl AgentHost {
                 format!("could not prepare the workspace data: {e}"),
             )
         })?;
+        // Command choices an older host remembered become workspace rules
+        // (once); the file choices stay in choices.json.
+        if let Err(error) = self.rules.migrate_choices(workspace_id) {
+            log::warn!("remembered choices were not migrated: {error}");
+        }
         let choices = JsonFileChoices::open(data_dir.join("choices.json"))
             .map_err(|e| TurnError::new("storage", e.message().to_owned()))?;
         let prompt = Arc::new(UiPrompt::new(self.broker.clone()));
@@ -886,10 +925,24 @@ impl AgentHost {
             app_id: self.deps.app_id.clone(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
+        // Layer 3: the workspace's rules, then the person's (a broken file
+        // loads none; its error is logged and shown in the rules panel).
+        let loaded = self.rules.load(workspace_id);
+        for error in &loaded.errors {
+            log::warn!("approval rules not loaded: {error}");
+        }
+        session.rules().set_command_rules(loaded.rules);
+        session
+            .rules()
+            .set_rule_sink(Some(Arc::new(WorkspaceRuleSink::new(
+                self.rules.clone(),
+                workspace_id,
+            ))));
         let entry = Arc::new(WorkspaceSession {
             session,
             prompt,
             policy: policy.clone(),
+            rules_stamp: Mutex::new(loaded.stamp),
         });
         sessions.insert(workspace_id.to_owned(), entry.clone());
         Ok(entry)
@@ -909,6 +962,20 @@ impl AgentHost {
             .session
             .sandbox_request(SandboxMode::WorkspaceWrite, false)
             .expect("request")
+    }
+
+    /// The workspace's local session, opened as a turn opens it (tests).
+    #[cfg(test)]
+    pub(super) fn local_session_for_tests(
+        &self,
+        workspace_id: &str,
+        root: PathBuf,
+    ) -> Arc<LocalSession> {
+        let policy = self.policy().expect("policy");
+        self.session(workspace_id, root, &policy)
+            .expect("session")
+            .session
+            .clone()
     }
 
     /// The step limit the workspace's settings set, if any (unreadable
@@ -1061,6 +1128,84 @@ impl AgentHost {
             .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
         let folder = mentions::open(Path::new(&workspace.path), &policy.path_deny)?;
         mentions::files(&folder, query, limit)
+    }
+
+    /// The approval rule files (IPC `rules_*`, src/rules.rs).
+    pub fn rule_files(&self) -> &Arc<RuleFiles> {
+        &self.rules
+    }
+
+    /// A workspace's folder and the `path_deny` its proposal is read under
+    /// (IPC `rules_*`).
+    ///
+    /// # Errors
+    ///
+    /// `local_work_disabled`, `workspace_unknown`, `storage`.
+    pub fn rules_folder(&self, workspace_id: &str) -> Result<(PathBuf, Vec<String>), TurnError> {
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        Ok((PathBuf::from(workspace.path), policy.path_deny))
+    }
+
+    /// `rules_explain`: how the approval layers would decide `command` in
+    /// the workspace now, as a confined `workspace-write` call without the
+    /// network. A session that is open answers with its own engine (its
+    /// rules reloaded if a file changed); otherwise an engine of the same
+    /// layers is built for the question, and no session is opened.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rules_folder`]; `workspace_unavailable` when the folder
+    /// cannot be opened.
+    pub fn explain_command(
+        &self,
+        workspace_id: &str,
+        command: &str,
+    ) -> Result<elitea_local_tools::approvals::Decision, TurnError> {
+        use elitea_local_tools::approvals::{RulesEngine, ToolCall, ToolKind};
+        let policy = self.policy()?;
+        let (root, _) = self.rules_folder(workspace_id)?;
+        let call = ToolCall {
+            command: Some(command.to_owned()),
+            ..ToolCall::new(ToolKind::RunCommand)
+        };
+        let existing = self
+            .sessions
+            .lock()
+            .map_err(|_| TurnError::new("internal", "session table poisoned"))?
+            .get(workspace_id)
+            .filter(|existing| existing.policy == policy)
+            .cloned();
+        if let Some(existing) = existing {
+            existing.refresh_rules(&self.rules, workspace_id);
+            return Ok(existing.session.rules().decide(&call));
+        }
+        let unavailable = |e: elitea_local_tools::error::ToolError| {
+            TurnError::new("workspace_unavailable", e.message().to_owned())
+        };
+        let folder = elitea_local_tools::workspace::Workspace::open(&root, &policy.path_deny)
+            .map_err(unavailable)?;
+        let choices = JsonFileChoices::open(
+            self.deps
+                .workspaces
+                .data_dir(workspace_id)
+                .join("choices.json"),
+        )
+        .map_err(|e| TurnError::new("storage", e.message().to_owned()))?;
+        let engine = RulesEngine::new(
+            policy,
+            &folder,
+            WorkspaceSettings::default(),
+            Arc::new(choices),
+        )
+        .map_err(unavailable)?;
+        engine.set_command_rules(self.rules.load(workspace_id).rules);
+        Ok(engine.decide(&call))
     }
 
     /// `reveal_path` / `open_path`: a workspace-relative path, resolved and

@@ -278,6 +278,7 @@ fn build_host(
             index: Some(index.clone()),
             sandbox_deny,
             app_id: Some(TEST_APP_ID.to_owned()),
+            user_rules_dir: Some(app.join("config")),
         })
         .unwrap(),
     );
@@ -2980,6 +2981,7 @@ fn no_store_host(h: &Harness) -> Arc<AgentHost> {
             index: None,
             sandbox_deny: super::turn::app_dirs_for_sandbox([Some(h.app.path().to_owned())]),
             app_id: Some(TEST_APP_ID.to_owned()),
+            user_rules_dir: None,
         })
         .unwrap(),
     )
@@ -4453,4 +4455,239 @@ async fn a_failed_commit_releases_the_workspace() {
     let events = until_done(&h).await;
     assert_eq!(of_kind(&events, "commit_failed").len(), 1);
     assert!(h.host.claim_workspace(&h.workspace_id, "busy").is_ok());
+}
+
+// ---- Approval rule files (#1216) ----
+
+/// A private rules file (`0600` in a `0700` directory), as the host writes.
+fn write_rules(path: &std::path::Path, text: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = path.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(path, text).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// A rules file in the workspace's data dir (and the person's in the app
+/// config) decides the session's calls; a change is picked up at the next
+/// look (a turn's start). On main the session ran on
+/// `WorkspaceSettings::default()` and ignored both.
+#[tokio::test]
+async fn workspace_rules_are_loaded() {
+    use elitea_local_tools::approvals::{Source, Verdict};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let root = h.folder.path().to_owned();
+    // Open the workspace's session, as a turn does.
+    let _ = h.host.sandbox_request(&h.workspace_id, root.clone());
+    let before = h.host.explain_command(&h.workspace_id, "echo hi").unwrap();
+    assert_eq!(
+        (before.verdict, before.source),
+        (Verdict::Allow, Source::Default)
+    );
+
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["echo"],"decision":"forbidden",
+            "justification":"Print with printf instead.","match":["echo hi"]}]}"#,
+    );
+    write_rules(
+        &h.app.path().join("config/rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["cargo",["test","check"]],"match":["cargo test"]},
+            {"pattern":["git","reset"],"decision":"prompt"}]}"#,
+    );
+    let forbidden = h.host.explain_command(&h.workspace_id, "echo hi").unwrap();
+    assert_eq!(
+        (forbidden.verdict, forbidden.source),
+        (Verdict::Deny, Source::Workspace)
+    );
+    assert_eq!(forbidden.reason, "Print with printf instead.");
+    assert_eq!(forbidden.rule.unwrap().label(), "workspace#1");
+    let user = h
+        .host
+        .explain_command(&h.workspace_id, "git reset --soft HEAD~1")
+        .unwrap();
+    assert_eq!((user.verdict, user.source), (Verdict::Ask, Source::User));
+    assert_eq!(user.rule.unwrap().label(), "user#2");
+
+    // A broken workspace file loads nothing; the user's rules still apply.
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["echo"],"decision":"forbidden","match":["printf x"]}]}"#,
+    );
+    let after = h.host.explain_command(&h.workspace_id, "echo hi").unwrap();
+    assert_eq!(
+        (after.verdict, after.source),
+        (Verdict::Allow, Source::Default)
+    );
+    let states = h.host.rule_files().states(&h.workspace_id);
+    let error = states[0].error.as_ref().expect("the error is shown");
+    assert_eq!(error.rule_index, Some(1));
+    assert_eq!(error.example.as_deref(), Some("printf x"));
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "git reset x")
+            .unwrap()
+            .source,
+        Source::User
+    );
+}
+
+/// A repository's `.elitea/rules.json` is a proposal: never loaded into a
+/// session until the person imports it into the workspace's rules.
+#[tokio::test]
+async fn repository_rules_are_only_proposed() {
+    use elitea_local_tools::approvals::{Source, Verdict};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let root = h.folder.path().to_owned();
+    std::fs::create_dir_all(root.join(".elitea")).unwrap();
+    // The repository tries to grant itself `rm -rf` and to forbid `ls`.
+    std::fs::write(
+        root.join(".elitea/rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["git","reset"]},{"pattern":["ls"],"decision":"forbidden"}]}"#,
+    )
+    .unwrap();
+    let _ = h.host.sandbox_request(&h.workspace_id, root.clone());
+    let reset = h
+        .host
+        .explain_command(&h.workspace_id, "git reset --hard")
+        .unwrap();
+    assert_eq!(
+        (reset.verdict, reset.source),
+        (Verdict::Ask, Source::Default)
+    );
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "ls")
+            .unwrap()
+            .source,
+        Source::Default
+    );
+    let (folder, deny) = h.host.rules_folder(&h.workspace_id).unwrap();
+    let proposal = crate::rules::RuleFiles::proposed(&folder, &deny).unwrap();
+    assert_eq!(proposal.count, 2);
+    assert!(
+        h.host.rule_files().states(&h.workspace_id)[0]
+            .file
+            .as_ref()
+            .unwrap()
+            .rules
+            .is_empty()
+    );
+    // The person imports it: copied into the workspace's rules (host data).
+    h.host
+        .rule_files()
+        .import_proposed(&h.workspace_id, &folder, &deny, &proposal.digest)
+        .unwrap();
+    assert!(
+        h.workspaces
+            .data_dir(&h.workspace_id)
+            .join("rules.json")
+            .is_file()
+    );
+    let reset = h
+        .host
+        .explain_command(&h.workspace_id, "git reset --hard")
+        .unwrap();
+    assert_eq!(
+        (reset.verdict, reset.source),
+        (Verdict::Allow, Source::Workspace)
+    );
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "ls")
+            .unwrap()
+            .verdict,
+        Verdict::Deny
+    );
+}
+
+/// "Always allow" in the dialog appends a prefix rule to the workspace's
+/// rules file, with the approved command as its `match` example.
+#[tokio::test]
+async fn always_allow_appends_a_workspace_prefix_rule() {
+    use elitea_local_tools::approvals::{Source, ToolCall, ToolKind};
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let root = h.folder.path().to_owned();
+    let session = h.host.local_session_for_tests(&h.workspace_id, root);
+    let call = ToolCall {
+        command: Some("git reset --hard v1".into()),
+        ..ToolCall::new(ToolKind::RunCommand)
+    };
+    session.rules().remember(&call, Some("git reset")).unwrap();
+    let path = h.workspaces.data_dir(&h.workspace_id).join("rules.json");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let rule = &file["rules"][0];
+    assert_eq!(rule["decision"], "allow");
+    assert_eq!(rule["pattern"].as_array().unwrap().len(), 2);
+    assert_eq!(rule["match"][0].as_array().unwrap().len(), 4, "{rule}");
+    assert!(
+        rule["justification"]
+            .as_str()
+            .unwrap()
+            .starts_with("Allowed from the approval dialog on ")
+    );
+    assert_eq!(
+        h.host
+            .explain_command(&h.workspace_id, "git reset --hard x")
+            .unwrap()
+            .source,
+        Source::Workspace
+    );
+}
+
+/// A workspace `forbidden` rule refuses the model's command with the
+/// rule's justification in the tool result, so the model can take the
+/// alternative instead of retrying; no approval is asked.
+#[tokio::test]
+async fn a_forbidden_rule_reaches_the_model_with_its_justification() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-publish",
+                    "run_command",
+                    &json!({"command": "sh -c 'npm publish --tag next'"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Opened a PR instead."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["npm","publish"],"decision":"forbidden",
+            "justification":"Publishing goes through the release pipeline; open a PR instead.",
+            "match":["npm publish --tag next"]}]}"#,
+    );
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "refused inline"
+    );
+    let bodies = llm_bodies(&h.server);
+    let second = bodies[1].to_string();
+    assert!(second.contains("forbidden_by_rule"), "{second}");
+    assert!(second.contains("workspace#1"), "{second}");
+    assert!(
+        second.contains("Publishing goes through the release pipeline; open a PR instead."),
+        "{second}"
+    );
 }

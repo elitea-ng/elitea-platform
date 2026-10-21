@@ -884,6 +884,9 @@ impl LocalSession {
                     .get("reason")
                     .and_then(Value::as_str)
                     .unwrap_or("the person rejected it");
+                if let Some(refusal) = forbidden_by_rule(&value, reason) {
+                    return Err(refusal);
+                }
                 Err(ToolError::new(
                     ErrorCode::Rejected,
                     format!("not allowed: {reason}"),
@@ -1249,6 +1252,28 @@ impl LocalSession {
     }
 }
 
+/// A `forbidden` prefix rule's refusal, as the model sees it:
+/// `{"error": "forbidden_by_rule", "justification": "…", "rule":
+/// "workspace#3"}` beside the usual fields, so it can take the suggested
+/// alternative instead of retrying.
+fn forbidden_by_rule(value: &Value, reason: &str) -> Option<ToolError> {
+    if value.get("decision").and_then(Value::as_str) != Some("forbidden") {
+        return None;
+    }
+    let rule = value.get("rule").and_then(Value::as_str)?;
+    let mut details = serde_json::Map::new();
+    details.insert("error".to_owned(), json!("forbidden_by_rule"));
+    details.insert("rule".to_owned(), json!(rule));
+    let justification = value.get("justification").and_then(Value::as_str);
+    if let Some(justification) = justification {
+        details.insert("justification".to_owned(), json!(justification));
+    }
+    let message = match justification {
+        Some(justification) => format!("forbidden by {rule}: {justification}"),
+        None => format!("forbidden by {rule}: {reason}"),
+    };
+    Some(ToolError::new(ErrorCode::Denied, message).with_details(details))
+}
 #[cfg(test)]
 mod tests {
     use std::path::Path;

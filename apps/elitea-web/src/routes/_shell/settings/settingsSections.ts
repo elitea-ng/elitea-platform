@@ -89,7 +89,12 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
         { id: 'notifications', label: 'Notifications' },
         // ADR-0029: the desktop app's Doctor. `MODE` is a build-time literal,
         // so the web build drops the row (and its label) entirely.
-        ...(import.meta.env.MODE === 'desktop' ? [{ id: 'troubleshoot', label: 'Troubleshoot' }] : []),
+        ...(import.meta.env.MODE === 'desktop'
+          ? [
+              { id: 'approval-rules', label: 'Approval rules' },
+              { id: 'troubleshoot', label: 'Troubleshoot' },
+            ]
+          : []),
       ],
     },
   ];
