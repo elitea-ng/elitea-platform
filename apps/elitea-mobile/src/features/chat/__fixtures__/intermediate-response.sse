@@ -1,0 +1,22 @@
+: fixture intermediate-response.sse: an agent_response without finish_reason is intermediate and does not end the turn
+
+id: 1
+event: execution.node_event
+data: {"type":"agent_start","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:00Z","response_metadata":{}}
+
+id: 2
+event: execution.node_event
+data: {"type":"agent_response","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:01Z","content":"Step one done.","response_metadata":{}}
+
+id: 3
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:02Z","content":"Final "}
+
+id: 4
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:03Z","content":"answer."}
+
+id: 5
+event: execution.node_event
+data: {"type":"pipeline_finish","stream_id":"stream-01","message_id":"msg-7d2e","question_id":"3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b","created_at":"2026-10-04T12:00:04Z","response_metadata":{}}
+

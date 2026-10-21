@@ -56,6 +56,16 @@ export const PERMANENT_BRANCHES = new Set(["main", "next"]);
 // Workflows that must NOT carry the staging arm, each with the reason. An entry
 // here is a decision, not a silence.
 export const EXEMPT_WORKFLOWS = {
+  "mobile-eas-build.yml":
+    "No push arm and no pull_request arm, deliberately: it queues an EAS " +
+    "build of apps/elitea-mobile on Expo's servers (store-signed binaries) " +
+    "and runs only when dispatched by hand. The per-change gate for the " +
+    "app is ci-mobile.yml.",
+  "mobile-eas-submit.yml":
+    "No push arm and no pull_request arm, deliberately: it submits a " +
+    "finished EAS build of apps/elitea-mobile to TestFlight / Play " +
+    "internal testing and runs only when dispatched by hand. The " +
+    "per-change gate for the app is ci-mobile.yml.",
   "publish.yml":
     "It cuts a release: it tags, builds and pushes images, and writes to " +
     "the registry. A staging arm would publish release artifacts from a " +

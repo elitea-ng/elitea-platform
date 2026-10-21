@@ -32,6 +32,7 @@ CONFIG=.github/dependabot.yml
 # 3.2, `declare -A` is a syntax error there, and a gate that only runs on the CI
 # runner cannot be checked by the person writing it.
 EXEMPT=$(cat <<'EXEMPTIONS'
+apps/elitea-mobile/package.json Expo SDK app: its versions are chosen by `npx expo install` against the SDK version table (apps/elitea-mobile/AGENTS.md), and an SDK moves as one reviewed upgrade; a version bump outside that table breaks native builds that no Linux CI job compiles. Security alerts still come from the dependency graph
 apps/elitea-web/tools/lint-rules/fixtures/knip/bad/package.json  knip lint-rule fixture: its dependencies are deliberately wrong, and bumping them breaks the rule it exercises
 apps/elitea-web/tools/lint-rules/fixtures/knip/good/package.json knip lint-rule fixture, same reason
 conformance/provider/pyproject.toml              test harness: a pytest runner and an HTTP client, shipping in no image, run in CI against a container someone else built
