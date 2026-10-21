@@ -300,6 +300,14 @@ install_infra() {
 # (Service elitea-nats).
 install_nats() {
   say "Installing NATS JetStream and its bootstrap"
+  # The chart wraps the upstream nats subchart (Chart.lock pins it), and
+  # `helm dependency build` refuses an http(s) repository it has no
+  # definition for on a fresh helm (a CI runner): register each one the
+  # chart names first, as publish.yml does.
+  local repo
+  for repo in $(awk '$1 == "repository:" { gsub(/"/, "", $2); print $2 }' "${REPO_ROOT}/deploy/helm/nats/Chart.yaml" | grep -E '^https?://' | sort -u); do
+    helm repo add "dep-$(printf '%s' "$repo" | sha256sum | cut -c1-12)" "$repo" --force-update >/dev/null
+  done
   helm dependency build "${REPO_ROOT}/deploy/helm/nats" >/dev/null
   helm --kube-context "kind-${CLUSTER}" upgrade --install elitea-nats "${REPO_ROOT}/deploy/helm/nats" \
     --namespace "$NS" \

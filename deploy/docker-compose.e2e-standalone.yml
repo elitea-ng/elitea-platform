@@ -199,6 +199,26 @@ services:
 
   # ── Application services ────────────────────────────────────────────────────
 
+  # Installs elitea-main's platform-listener material into a named volume
+  # (#1359 U5). securefile requires a private key to carry owner-only bits
+  # AND be readable by the reading uid (distroless nonroot, 65532); the
+  # generated deploy/certs/platform-server.key is 0644 for the hosts' sake,
+  # and a bind mount cannot change owner or mode per consumer
+  # (deploy/runtime/install-material.sh explains the same split for the
+  # standalone stack). The image is nats-health's, already pulled.
+  platform-material:
+    image: docker.io/library/python:3.12.14-slim-trixie
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - install -o 65532 -g 65532 -m 0600 /src/platform-server.key /dst/platform-server.key
+        && install -o 0 -g 0 -m 0644 /src/platform-server.crt /dst/platform-server.crt
+        && install -o 0 -g 0 -m 0644 /src/ca.crt /dst/ca.crt
+    volumes:
+      - ./certs:/src:ro
+      - e2e_platform_main:/dst
+    restart: "no"
+
   elitea-main:
     image: ghcr.io/eliteaai/elitea-main:${E2E_IMAGE_TAG:-e2e}
     # `image:` alone made compose PULL when the tag was absent locally, and the
@@ -373,9 +393,10 @@ services:
       # required whenever the listener opens; the fixture runners never call
       # it.
       ELITEA_RUNTIME_PLATFORM_ADDRESS: ":9446"
-      ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /certs/platform-server.crt
-      ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /certs/platform-server.key
-      ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: /certs/ca.crt
+      # Installed by platform-material (owner 65532, key 0600).
+      ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /run/elitea-platform/platform-server.crt
+      ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /run/elitea-platform/platform-server.key
+      ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: /run/elitea-platform/ca.crt
       ELITEA_MODEL_SERVICE_CLIENTS: "dns:elitea-subapp-callback"
       ELITEA_ARTIFACT_SERVICE_CLIENTS: "dns:elitea-subapp-callback"
       # ── The Inventory facade, on the same OIDC-only stack ────────────────
@@ -392,7 +413,10 @@ services:
       ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
     volumes:
       - ./certs:/certs:ro
+      - e2e_platform_main:/run/elitea-platform:ro
     depends_on:
+      platform-material:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       nats-health:
@@ -542,3 +566,7 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+volumes:
+  # elitea-main's platform-listener material, written by platform-material.
+  e2e_platform_main:
