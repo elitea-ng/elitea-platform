@@ -195,7 +195,7 @@ fn an_invalid_byte_fails_the_whole_file_with_the_cpython_message() {
     let dir = write_tree("strict", &[("Bad.java", b"class A {}\n// \xff\n")]);
     let results = parse_tree(&dir, &["Bad.java", "Missing.java"]);
     let bad = &results[&dir.join("Bad.java").to_string_lossy().into_owned()];
-    assert!(bad.symbols.is_empty());
+    assert_eq!(bad.symbols, []);
     assert_eq!(
         bad.errors,
         ["'utf-8' codec can't decode byte 0xff in position 14: invalid start byte"]

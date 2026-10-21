@@ -336,12 +336,9 @@ async fn delete_selectors_count_and_list() {
         (listed[0].namespace_id.as_str(), listed[0].point_count),
         (NS, 4)
     );
-    assert!(
-        client
-            .list_indexes(&token(TOKEN_B), None)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        client.list_indexes(&token(TOKEN_B), None).await.unwrap(),
+        []
     );
 
     client

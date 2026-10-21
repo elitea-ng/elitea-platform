@@ -211,7 +211,10 @@ mod tests {
                 "size {size}"
             );
         }
-        assert!(split_exact("", Encoding::Cl100k, 4).unwrap().is_empty());
+        assert_eq!(
+            split_exact("", Encoding::Cl100k, 4).unwrap(),
+            [] as [String; 0]
+        );
     }
 
     #[test]

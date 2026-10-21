@@ -1411,7 +1411,7 @@ mod tests {
         assert!(spill.read(&a1).is_err());
         forget_conversation_outputs(&dir.path().join("data"), "ws-1", "a");
         spill.forget_conversation("a");
-        assert!(spill.ids().is_empty());
+        assert_eq!(spill.ids(), [] as [String; 0]);
         assert!(!spill.conversation_dir().exists());
         assert_eq!(
             spill.read(&a2).expect_err("forgotten").code(),

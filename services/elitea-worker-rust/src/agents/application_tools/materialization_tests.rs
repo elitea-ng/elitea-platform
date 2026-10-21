@@ -364,7 +364,7 @@ async fn saved_agent_materialization_retains_sealed_identity_and_definition_dige
         .build(reference((32, 42), "agent", "worker alias"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = materialized.unwrap();
     assert_eq!(runtime.tools.len(), 1);
     assert_eq!(runtime.tools[0].alias, "worker alias");
@@ -446,7 +446,7 @@ async fn saved_graph_entry_builds_descendant_catalog_and_real_nested_static_tool
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     let graph = runtime
         .presentations
@@ -482,7 +482,7 @@ async fn ordinary_agent_entry_materializes_its_frozen_pipeline_attachments() {
         .build(reference((32, 42), "agent", "worker"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     assert!(
         runtime
@@ -516,7 +516,7 @@ async fn saved_graph_entry_keeps_actual_descendant_presentations_across_graph_wr
         .build(reference((30, 40), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     let catalog = runtime
         .presentations
@@ -591,7 +591,7 @@ async fn second_ordinary_graph_scope_produces_bounded_exact_activation_chain() {
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     let (paused, events) = execute(&runtime).await;
     assert_eq!(nested_application_interrupt_ids(&paused).unwrap().len(), 1);
@@ -742,7 +742,7 @@ async fn legacy_plain_saved_graph_remains_materialized_without_scoped_activation
         .build(reference((33, 43), "pipeline", "plain"), false)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     assert!(runtime.is_some());
     assert!(fixture.models.lock().unwrap().is_empty());
 }
@@ -762,7 +762,7 @@ async fn rebuilt_saved_graph_entry_consumes_real_static_family_without_replaying
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (paused, events) = execute(&runtime.unwrap()).await;
     let ids = nested_application_interrupt_ids(&paused).unwrap();
     let pause = events
@@ -784,7 +784,7 @@ async fn rebuilt_saved_graph_entry_consumes_real_static_family_without_replaying
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     install_static_application_resume(&events, decisions, &runtime.presentations, &runtime.resume)
         .await
@@ -834,7 +834,7 @@ async fn second_scope_fresh_builder_resumes_exact_static_leaf_and_reuses_complet
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (paused, events) = execute(&runtime.unwrap()).await;
     let ids = nested_application_interrupt_ids(&paused).unwrap();
     let pause = events
@@ -862,7 +862,7 @@ async fn second_scope_fresh_builder_resumes_exact_static_leaf_and_reuses_complet
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     install_static_application_resume(&events, decisions, &runtime.presentations, &runtime.resume)
         .await
@@ -922,7 +922,7 @@ async fn second_scope_proof_refuses_changed_start_child_edge_and_frame_order() {
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (_, events) = execute(&runtime.unwrap()).await;
     let before = serde_json::to_vec(&events).unwrap();
     let pause = events
@@ -1020,7 +1020,7 @@ async fn second_scope_resume_refuses_inner_frozen_graph_drift_before_leaf_execut
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let (paused, events) = execute(&runtime.unwrap()).await;
     let ids = nested_application_interrupt_ids(&paused).unwrap();
     let pause = events
@@ -1059,7 +1059,7 @@ async fn second_scope_resume_refuses_inner_frozen_graph_drift_before_leaf_execut
         .build(reference((31, 41), "pipeline", "outer"), true)
         .await
         .unwrap();
-    assert!(skipped.is_empty());
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
     install_static_application_resume(&events, decisions, &runtime.presentations, &runtime.resume)
         .await

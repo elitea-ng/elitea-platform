@@ -210,7 +210,10 @@ fn includes_outside_a_function_are_dropped_as_orphans() {
     let result = parse_one("#include <vector>\n#include \"a.h\"\n");
     let includes: Vec<&str> = result.symbols.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(includes, ["include::vector", "include::a.h"]);
-    assert!(rels(&result, RelationshipType::Imports).is_empty());
+    assert_eq!(
+        rels(&result, RelationshipType::Imports),
+        [] as [(String, String); 0]
+    );
     assert_eq!(result.warnings.len(), 2);
 }
 

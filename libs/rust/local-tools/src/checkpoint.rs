@@ -1365,7 +1365,7 @@ mod tests {
         );
         // Other sessions are separate.
         let other = Checkpoints::open(&workspace, "s2", data.path()).expect("other");
-        assert!(other.list().expect("list").is_empty());
+        assert_eq!(other.list().expect("list"), []);
         assert!(other.restore(1).is_err());
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
             checkpoints.create("turn").expect_err("too large").code(),
             ErrorCode::TooLarge
         );
-        assert!(checkpoints.list().expect("list").is_empty());
+        assert_eq!(checkpoints.list().expect("list"), []);
     }
 
     #[test]

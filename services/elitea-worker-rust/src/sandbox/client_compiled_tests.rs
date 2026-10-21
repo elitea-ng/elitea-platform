@@ -278,11 +278,11 @@ impl SandboxSupervisorService for SupervisorFixture {
             );
             if input.reconcile_only {
                 assert!(input.read_grant.is_none() && input.dependency_content_grant.is_none());
-                assert!(input.dependency_bundle_json.is_empty());
+                assert_eq!(input.dependency_bundle_json, [] as [u8; 0]);
             } else {
                 assert_eq!(input.read_grant.is_some(), cold.purpose == Purpose::Execute);
                 assert!(input.dependency_content_grant.is_some());
-                assert!(!input.dependency_bundle_json.is_empty());
+                assert_ne!(input.dependency_bundle_json, [] as [u8; 0]);
             }
             if input.reconcile_only && !cold.recorded {
                 return Ok(Response::new(SubmitRustCompiledSnapshotResponseV1 {
@@ -706,7 +706,7 @@ async fn cold_native_indices_renew_both_roles_and_preserve_original_compiler_int
     assert_eq!(calls.len(), bundle.file_count() + 3);
     assert!(calls[0].reconcile_only);
     assert!(calls[0].dependency_content_grant.is_none());
-    assert!(calls[0].dependency_bundle_json.is_empty());
+    assert_eq!(calls[0].dependency_bundle_json, [] as [u8; 0]);
     let indices = &calls[1..=bundle.file_count() + 1];
     assert_eq!(
         indices

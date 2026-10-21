@@ -747,7 +747,7 @@ async fn every_call_carries_the_claim_token_only() {
     tools.get_memory(&gm("k")).await.expect("g");
     tools.delete_memory("k").await.expect("d");
     let bearers = fake.bearers();
-    assert!(!bearers.is_empty());
+    assert_ne!(bearers, [] as [String; 0]);
     assert!(
         bearers
             .iter()

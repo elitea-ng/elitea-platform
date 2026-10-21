@@ -2249,7 +2249,7 @@ mod family_tests {
         let decoded: PipelinePendingEnvelope = serde_json::from_str(&raw).unwrap();
         decoded.validate().unwrap();
         let completed = decoded.checkpoint("call-root/completed").unwrap();
-        assert!(completed.pending_nodes.is_empty());
+        assert_eq!(completed.pending_nodes, [] as [String; 0]);
         assert_eq!(completed.state.get("receipt"), Some(&json!("one")));
         let checkpointer = MemoryCheckpointer::new();
         checkpointer.save(completed).await.unwrap();
@@ -2318,7 +2318,7 @@ mod family_tests {
         let decoded: PipelinePendingEnvelope = serde_json::from_value(raw).unwrap();
         decoded.validate().unwrap();
         // Structural decoding is insufficient to resume; resolver checks exact after frontier.
-        assert!(decoded.root().pending_nodes.is_empty());
+        assert_eq!(decoded.root().pending_nodes, [] as [String; 0]);
         let mut dynamic = family();
         dynamic.checkpoint.pending_nodes.clear();
         assert!(PipelinePendingEnvelope::Family(dynamic).validate().is_err());

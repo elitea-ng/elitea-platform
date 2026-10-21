@@ -484,7 +484,7 @@ mod tests {
             .map(|n| n.node_id.as_str())
             .collect();
         assert_eq!(ids, ["b", "a", "c"]);
-        assert!(index.resolve_exact("X", Some(2)).is_empty());
+        assert_eq!(index.resolve_exact("X", Some(2)), [] as [&IndexNode; 0]);
     }
 
     #[test]

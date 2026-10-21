@@ -601,6 +601,6 @@ mod tests {
         let report = FileRedactor::new(&SecretEnv::default())
             .redact_tree(dir.path(), &Parent(BTreeMap::new()))
             .expect("scan");
-        assert!(report.is_empty());
+        assert_eq!(report, []);
     }
 }

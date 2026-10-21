@@ -142,7 +142,7 @@ mod tests {
         }))
         .expect("parse");
         assert!(embeddings.index_local_embeddings && embeddings.index_remote_embeddings);
-        assert!(embeddings.index_model_mirror_url.is_empty());
+        assert_eq!(embeddings.index_model_mirror_url, "");
         let mirror: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
             "index_model_mirror_url": "https://mirror.example.com/hf"
         }))

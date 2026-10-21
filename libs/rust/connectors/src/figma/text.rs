@@ -378,7 +378,7 @@ mod tests {
         assert!(extract(&nest(MAX_TREE_DEPTH + 1), NODES).is_empty());
         let mut found = Vec::new();
         texts(&nest(MAX_TREE_DEPTH + 1), NODES, &mut found);
-        assert!(found.is_empty());
+        assert_eq!(found, [] as [String; 0]);
         // The node cap stops a walk.
         let wide = json!({"type": "FRAME", "children": [text("a", "one", 14.0, 400.0), text("b", "two", 14.0, 400.0)]});
         assert_eq!(extract(&wide, 2).body, vec!["one"]);

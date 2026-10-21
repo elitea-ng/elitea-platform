@@ -917,6 +917,6 @@ async fn an_all_zero_test_case_id_is_invalid_arguments_and_nothing_is_read_or_se
             "{id}"
         );
     }
-    assert!(transport.targets().is_empty());
+    assert_eq!(transport.targets(), [] as [String; 0]);
     assert_eq!(platform.read_count(), 0);
 }

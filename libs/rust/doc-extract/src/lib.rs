@@ -1705,7 +1705,7 @@ mod documents {
             document.content = "text".to_owned();
             document.images = Some(vec![mask, png_image(1, 1)]);
             let (kept, skipped) = embedded_images(&document, &bounds, 1);
-            assert!(kept.is_empty());
+            assert_eq!(kept, []);
             assert_eq!(
                 skipped,
                 ImagesSkipped {

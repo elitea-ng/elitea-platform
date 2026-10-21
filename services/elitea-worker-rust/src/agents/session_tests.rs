@@ -1431,7 +1431,7 @@ async fn assert_blocked_direct_replay(action: &str, value: &str, expected_reason
     .expect("blocked replay assembly");
     let (mut run, _projector, completion) = assembled.start().expect("blocked replay run");
     while let Some(event) = run.next_event().await.expect("blocked replay event") {
-        assert!(event.tool_results().is_empty());
+        assert_eq!(event.tool_results(), []);
     }
     completion
         .select()

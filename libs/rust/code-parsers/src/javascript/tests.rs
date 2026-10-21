@@ -221,7 +221,7 @@ fn an_invalid_or_missing_file_is_an_error_result() {
         results[&bad].errors,
         ["'utf-8' codec can't decode byte 0xff in position 11: invalid start byte"]
     );
-    assert!(results[&bad].symbols.is_empty());
+    assert_eq!(results[&bad].symbols, []);
     assert_eq!(
         results[&missing].errors,
         [format!("[Errno 2] No such file or directory: '{missing}'")]
@@ -262,7 +262,10 @@ fn only_a_destructured_require_binds_names() {
         .collect();
     assert_eq!(bound, [("A", Some("A")), ("C", Some("B"))]);
     // A require binds no `imports` relationship; the plain one is a constant.
-    assert!(targets(&output.result, RelationshipType::Imports).is_empty());
+    assert_eq!(
+        targets(&output.result, RelationshipType::Imports),
+        [] as [(String, String); 0]
+    );
     let names: Vec<&str> = output
         .result
         .symbols
@@ -350,7 +353,10 @@ fn jsx_references_capitalised_tags_once_per_scope() {
         [pair("m.V", "A.B"), pair("m.V", "C")]
     );
     // Attributes of an element are not visited: `f()` is no call.
-    assert!(targets(&result, RelationshipType::Calls).is_empty());
+    assert_eq!(
+        targets(&result, RelationshipType::Calls),
+        [] as [(String, String); 0]
+    );
 }
 
 #[test]

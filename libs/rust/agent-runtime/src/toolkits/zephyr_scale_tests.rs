@@ -71,7 +71,7 @@ fn configuration_uses_only_the_token_against_the_cloud_api() {
     },"max_results":100});
     let config = ZephyrScaleToolkitConfig::parse(settings.as_object().expect("settings"))
         .expect("token configuration");
-    assert!(config.selected_tools().is_empty());
+    assert_eq!(config.selected_tools(), []);
     for invalid in [
         json!({"zephyr_configuration":{"base_url":"https://jira.example.test","username":"u","password":"p"}}),
         json!({"zephyr_configuration":{"cookies":"a=b"}}),

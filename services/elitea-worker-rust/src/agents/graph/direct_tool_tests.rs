@@ -1045,7 +1045,7 @@ async fn direct_delegated_authorization_skip_reaches_end_with_sdk_terminal_state
             .await
             .expect("load terminal checkpoint")
             .expect("terminal checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         assert_eq!(checkpoint.state.get("report"), Some(&Value::Null));
         assert!(
             checkpoint
@@ -1393,7 +1393,7 @@ async fn main_wire_mcp_authorization_resumes_direct_pipeline_node_through_routin
             .await
             .expect("load terminal checkpoint")
             .expect("terminal checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         if action == "authorize" {
             assert_eq!(
                 checkpoint.state.get("report"),
@@ -1536,7 +1536,7 @@ async fn sensitive_approval_then_mcp_authorization_on_same_direct_node() {
             .await
             .expect("load terminal checkpoint")
             .expect("terminal checkpoint");
-        assert!(checkpoint.pending_nodes.is_empty());
+        assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
         let expected_report = if action == "authorize" {
             json!({"authorized": true})
         } else {
@@ -1757,7 +1757,7 @@ async fn assert_whole_pipeline_stopped(
         .await
         .expect("load terminal checkpoint")
         .expect("terminal checkpoint");
-    assert!(checkpoint.pending_nodes.is_empty());
+    assert_eq!(checkpoint.pending_nodes, [] as [String; 0]);
     assert!(
         checkpoint
             .state

@@ -170,7 +170,10 @@ async fn empty_store_reads_nothing<S: GraphStore>(store: &S, key: GraphKey) {
     assert!(ok("load", store.load(key).await).is_none(), "no graph yet");
     assert_eq!(ok("revision", store.revision(key).await), None);
     assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
-    assert!(ok("restricted", store.restricted_documents(key).await).is_empty());
+    assert_eq!(
+        ok("restricted", store.restricted_documents(key).await),
+        [] as [(String, String, elitea_content_source::Acl); 0]
+    );
     let document = ok("status", store.status_document(key).await);
     assert_eq!(document["sources"], json!({}), "no source status yet");
     assert_eq!(
@@ -265,7 +268,10 @@ async fn revisions_documents_and_status<S: GraphStore>(store: &S, key: GraphKey)
         ok("versions", store.document_versions(key, "repo").await),
         BTreeMap::from([("src/b.py".to_owned(), "v2".to_owned())])
     );
-    assert!(ok("restricted", store.restricted_documents(key).await).is_empty());
+    assert_eq!(
+        ok("restricted", store.restricted_documents(key).await),
+        [] as [(String, String, elitea_content_source::Acl); 0]
+    );
 
     // A failed run says why, and keeps the graph.
     ok("start", store.start(key, &status("repo")).await);
@@ -683,7 +689,10 @@ async fn a_delete_waits_for_no_one<S: GraphStore>(store: &S, key: GraphKey) {
     assert_eq!(delete_once_free(store, key).await, Some(true));
     assert!(ok("load", store.load(key).await).is_none());
     assert!(ok("versions", store.document_versions(key, "repo").await).is_empty());
-    assert!(ok("restricted", store.restricted_documents(key).await).is_empty());
+    assert_eq!(
+        ok("restricted", store.restricted_documents(key).await),
+        [] as [(String, String, elitea_content_source::Acl); 0]
+    );
     assert_eq!(
         ok("status", store.status_document(key).await)["sources"],
         json!({})

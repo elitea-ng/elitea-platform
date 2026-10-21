@@ -666,7 +666,7 @@ async fn unretired_command_redelivery_reuses_exact_bytes_and_capacity_until_reti
     );
     assert_eq!(processor.maximum_active.load(Ordering::Acquire), 1);
     assert_eq!(naks(&connection), [(sequence, RETRY_DELAY)]);
-    assert!(terms(&connection).is_empty());
+    assert_eq!(terms(&connection), [] as [u64; 0]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -797,7 +797,7 @@ async fn a_failed_dead_letter_write_retries_the_poison_instead_of_parking_it() {
         [(5, RETRY_DELAY)],
         "no poison is parked without its record: the next delivery retries it"
     );
-    assert!(terms(&connection).is_empty());
+    assert_eq!(terms(&connection), [] as [u64; 0]);
     assert!(dead_letter_write_failed_total() > before);
 }
 
@@ -829,7 +829,7 @@ async fn a_failed_dead_letter_write_never_terminates_the_poison() {
     stop.send(true).expect("request runtime stop");
     task.await.expect("runtime task").expect("runtime drain");
     assert_eq!(naks(&connection), [(6, RETRY_DELAY)]);
-    assert!(terms(&connection).is_empty());
+    assert_eq!(terms(&connection), [] as [u64; 0]);
 }
 
 #[test]
@@ -1016,7 +1016,7 @@ async fn cancelling_the_runtime_owner_cannot_detach_a_processing_task() {
     tokio::task::yield_now().await;
     assert_eq!(processor.active.load(Ordering::Acquire), 0);
     assert_eq!(processor.completed.load(Ordering::Acquire), 0);
-    assert!(naks(&connection).is_empty());
+    assert_eq!(naks(&connection), [] as [(u64, std::time::Duration); 0]);
 }
 
 #[test]
@@ -1207,7 +1207,7 @@ async fn a_slow_answer_does_not_block_a_concurrent_heartbeat_round() {
     answer_pause.add_permits(1);
     assert_eq!(dispose.await.expect("disposition"), "retry_later");
     assert_eq!(naks(&connection), [(7, RETRY_DELAY)]);
-    assert!(wpi_after_nak(&connection, 7).is_empty());
+    assert_eq!(wpi_after_nak(&connection, 7), []);
     drop(other);
 }
 

@@ -1920,7 +1920,7 @@ mod tests {
         assert!(
             matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
         );
-        assert!(engine.choices.list().is_empty());
+        assert_eq!(engine.choices.list(), []);
     }
 
     /// Policy, plan mode and workspace rules only tighten the defaults.
@@ -3024,7 +3024,7 @@ mod tests {
             verdict(&engine, &shell("git status")),
             (Verdict::Allow, Source::Workspace)
         );
-        assert!(engine.choices.list().is_empty());
+        assert_eq!(engine.choices.list(), []);
     }
 
     struct BrokenSink;

@@ -499,7 +499,7 @@ mod tests {
         assert_eq!(seam.accept("кі").unwrap(), "");
         assert_eq!(seam.accept("нець ").unwrap(), "");
         assert_eq!(seam.accept("🦀 ending").unwrap(), " ending");
-        assert!(seam.finish().unwrap().is_empty());
+        assert_eq!(seam.finish().unwrap(), "");
     }
 
     #[test]
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(seam.accept(line).unwrap(), "");
         assert_eq!(seam.accept(line).unwrap(), "");
         assert_eq!(seam.accept(&format!("{line}new text")).unwrap(), "new text");
-        assert!(seam.finish().unwrap().is_empty());
+        assert_eq!(seam.finish().unwrap(), "");
     }
 
     #[test]

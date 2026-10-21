@@ -741,7 +741,7 @@ mod tests {
         );
         assert_eq!(tables.max_pattern_hops, 5);
         assert_eq!(tables.community_type_priority.get("class"), Some(&10));
-        assert!(!tables.canonical_types.is_empty());
+        assert_ne!(tables.canonical_types, [] as [String; 0]);
     }
 
     #[test]

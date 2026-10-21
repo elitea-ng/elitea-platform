@@ -533,11 +533,11 @@ mod map_catalog_tests {
     fn map_state_modifier_has_no_synthetic_application_authority() {
         let paths = BTreeSet::from(["ordinary_agent"]);
         let catalog = ApplicationBranchCatalog::from_admitted_paths("root", &paths);
-        assert!(
+        assert_eq!(
             catalog
                 .for_map_worker("root", "render", MapWorkerKind::StateModifier)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [String; 0]
         );
         assert!(
             catalog

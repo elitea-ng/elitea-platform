@@ -186,7 +186,7 @@ fn configuration_normalizes_origin_project_and_selection_without_network() {
     let parsed = config();
     let rendered = format!("{:?}", CarrierToolkitConfig::parse(&settings()).err());
     assert!(!rendered.contains("carrier-super-secret"));
-    assert!(parsed.selected_tools().is_empty());
+    assert_eq!(parsed.selected_tools(), []);
 
     let mut numeric = settings();
     numeric.insert("project_id".to_owned(), json!(12));
@@ -233,10 +233,9 @@ fn selection_serves_every_sdk_name_and_refuses_the_rest() {
             .map(|value| Box::<str>::from(*value))
             .collect::<Vec<_>>()
     };
-    assert!(
-        test_served_selection(&[])
-            .expect("empty selection")
-            .is_empty()
+    assert_eq!(
+        test_served_selection(&[]).expect("empty selection"),
+        [] as [String; 0]
     );
     assert_eq!(
         test_served_selection(&names(&[

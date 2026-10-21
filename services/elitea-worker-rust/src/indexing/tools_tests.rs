@@ -373,7 +373,7 @@ async fn remove_index_takes_the_index_out_of_the_shared_catalog_for_the_rest_of_
         searched.as_str().expect("text").contains("not found"),
         "a removed index is not searched: {searched}"
     );
-    assert!(shared.snapshot().entries().is_empty());
+    assert_eq!(shared.snapshot().entries(), []);
 
     // Main's NotFound (removed or recreated since the freeze) drops the
     // stale entry too.
@@ -391,7 +391,7 @@ async fn remove_index_takes_the_index_out_of_the_shared_catalog_for_the_rest_of_
         text.as_str().expect("text").contains("no longer exists"),
         "{text}"
     );
-    assert!(shared.snapshot().entries().is_empty());
+    assert_eq!(shared.snapshot().entries(), []);
 
     // A refusal keeps the catalog as it was.
     removal.answer(Ok(IndexRemovalOutcome::Forbidden));
@@ -607,7 +607,7 @@ async fn the_five_tools_answer_in_the_sdk_shapes_over_the_fake_store() {
     );
     // Every call carried the claim's bearer and nothing else.
     let bearers = harness.fake.bearers();
-    assert!(!bearers.is_empty());
+    assert_ne!(bearers, [] as [String; 0]);
     assert!(
         bearers
             .iter()

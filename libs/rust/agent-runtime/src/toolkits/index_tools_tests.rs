@@ -264,11 +264,9 @@ fn the_catalog_is_read_strictly() {
             embedding_dimension: 1536,
         }
     );
-    assert!(
-        IndexCatalog::parse(&json!([]))
-            .expect("empty")
-            .entries()
-            .is_empty()
+    assert_eq!(
+        IndexCatalog::parse(&json!([])).expect("empty").entries(),
+        []
     );
     for invalid in [
         json!({}),

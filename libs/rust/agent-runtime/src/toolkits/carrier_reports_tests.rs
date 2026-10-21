@@ -375,7 +375,7 @@ fn thresholds_and_the_build_status_sentence_follow_the_sdk() {
         ..Parameters::defaults()
     };
     let verdicts = perf_report::thresholds(&summary, &unknown);
-    assert!(verdicts.is_empty());
+    assert_eq!(verdicts, []);
     assert_eq!(
         perf_report::build_status(&verdicts, "99Pct"),
         ("SUCCESS", String::new())

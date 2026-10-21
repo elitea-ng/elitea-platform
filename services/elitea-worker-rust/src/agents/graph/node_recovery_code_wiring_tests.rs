@@ -944,7 +944,7 @@ async fn takeover_with_an_unresolved_journal_call_reconciles() {
             effect_id: run.dispatch_activation
         }
     );
-    assert!(run.events().await.is_empty());
+    assert_eq!(run.events().await, [] as [String; 0]);
     assert_eq!(h.main.lock().unwrap().effects, 1);
 }
 

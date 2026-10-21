@@ -259,7 +259,7 @@ async fn real_remote_changed_dispatch_or_config_is_denied_before_visit_or_debug_
             RecoverableNode::new(body, digest, policy, store, None).with_legacy_first_attempt();
         node.clock = Arc::new(Clock(AtomicU64::new(100)));
         assert!(node.execute(&context).await.is_err());
-        assert!(calls.lock().unwrap().order.is_empty());
+        assert_eq!(calls.lock().unwrap().order, [] as [&str; 0]);
         assert_eq!(context.state, before);
         let stored = journal.load().await.unwrap();
         assert!(matches!(

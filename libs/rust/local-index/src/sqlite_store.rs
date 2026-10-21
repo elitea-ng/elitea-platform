@@ -2459,8 +2459,17 @@ mod tests {
     fn a_bad_expression_finds_nothing_and_a_good_one_runs() {
         let dir = tempfile::tempdir().unwrap();
         let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
-        assert!(store.search_fts("\"unterminated", 10).unwrap().is_empty());
-        assert!(store.search_fts("AND OR (", 10).unwrap().is_empty());
-        assert!(store.search_fts("\"word\"", 10).unwrap().is_empty());
+        assert_eq!(
+            store.search_fts("\"unterminated", 10).unwrap(),
+            [] as [(i64, f64); 0]
+        );
+        assert_eq!(
+            store.search_fts("AND OR (", 10).unwrap(),
+            [] as [(i64, f64); 0]
+        );
+        assert_eq!(
+            store.search_fts("\"word\"", 10).unwrap(),
+            [] as [(i64, f64); 0]
+        );
     }
 }

@@ -419,7 +419,7 @@ async fn malformed_arguments_fail_before_api_dispatch() {
     ] {
         assert!(tool.execute(context(), arguments).await.is_err());
     }
-    assert!(api.calls().is_empty());
+    assert_eq!(api.calls(), [] as [serde_json::Value; 0]);
 }
 
 #[test]

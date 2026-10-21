@@ -216,7 +216,7 @@ fn row(doc_id: &str, views: &str) -> Value {
 #[test]
 fn configuration_is_nested_strict_and_redacted() {
     let config = config();
-    assert!(config.selected_tools().is_empty());
+    assert_eq!(config.selected_tools(), []);
     for (configuration, expected) in [
         (
             json!({"project": "p"}),

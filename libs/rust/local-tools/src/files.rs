@@ -2684,8 +2684,8 @@ mod tests {
             found.sort();
             found
         };
-        assert!(files(json!({ "pattern": "*.log" })).is_empty());
-        assert!(files(json!({ "pattern": "gen/*.rs" })).is_empty());
+        assert_eq!(files(json!({ "pattern": "*.log" })), [] as [String; 0]);
+        assert_eq!(files(json!({ "pattern": "gen/*.rs" })), [] as [String; 0]);
         assert_eq!(
             files(json!({ "pattern": "!*.md" })),
             [".gitignore", "src/deep/a.rs"]
@@ -2698,7 +2698,7 @@ mod tests {
             files(json!({ "pattern": "src/deep/*.rs", "path": "src" })),
             ["src/deep/a.rs"]
         );
-        assert!(files(json!({ "pattern": "deep/*.rs" })).is_empty());
+        assert_eq!(files(json!({ "pattern": "deep/*.rs" })), [] as [String; 0]);
         for bad in ["!", "!!*.rs", "["] {
             assert_eq!(
                 find_files(&ws, json!({ "pattern": bad }))

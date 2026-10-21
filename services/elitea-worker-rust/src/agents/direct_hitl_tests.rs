@@ -874,7 +874,7 @@ async fn a_second_sensitive_call_keeps_the_first_decision_and_is_offered_on_its_
     .into_direct_replay(&sensitive_catalog_for(&["double", "triple"], true))
     .expect("first replay");
     assert_eq!(replay.replay_call_ids(), vec!["call-1", "call-2"]);
-    assert!(replay.blocked_calls().is_empty());
+    assert_eq!(replay.blocked_calls(), [] as [(&str, &str); 0]);
     assert_eq!(
         replay.approved_call_ids(),
         vec!["call-1"],

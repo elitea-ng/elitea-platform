@@ -192,7 +192,7 @@ mod tests {
         }
         let none = tempfile::tempdir().unwrap();
         fs::write(none.path().join("AGENTS.txt"), "no").unwrap();
-        assert!(load(&open(&none, &[]), &[]).files.is_empty());
+        assert_eq!(load(&open(&none, &[]), &[]).files, []);
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "secret").unwrap();
         let found = load(&open(&dir, &["AGENTS.md"]), &[]);
-        assert!(found.files.is_empty());
+        assert_eq!(found.files, []);
         assert_eq!(found.skipped.len(), 1);
         assert!(found.skipped[0].1.starts_with("denied by"), "{found:?}");
     }

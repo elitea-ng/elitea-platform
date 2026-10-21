@@ -439,7 +439,7 @@ async fn authentication_failure_never_reaches_claim_or_retirement() {
             .await,
         Err(AgentDeliveryError::Protocol(_))
     ));
-    assert!(events(&state).is_empty());
+    assert_eq!(events(&state), [] as [&str; 0]);
     assert_eq!(
         *state
             .retirement_requests

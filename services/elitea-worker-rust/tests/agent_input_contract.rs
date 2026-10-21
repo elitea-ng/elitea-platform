@@ -125,7 +125,10 @@ fn python_generated_application_fixture_maps_all_current_fields() {
     assert_eq!(payload.exception_handling_enabled, Some(true));
     assert_eq!(payload.debug_mode, Some(false));
     assert!(payload.parallel_reconcile.is_none());
-    assert!(payload.parallel_terminal_errors.is_empty());
+    assert_eq!(
+        payload.parallel_terminal_errors,
+        [] as [serde_json::Value; 0]
+    );
     assert_eq!(payload.internal_tools, ["lazy_tools_mode"]);
     assert_eq!(payload.chat_history.len(), 1);
     assert_eq!(payload.tools.len(), 1);

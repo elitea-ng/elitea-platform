@@ -5615,7 +5615,7 @@ mod internal_tools_graph {
                 Arc::new(InMemorySessionService::new()),
             );
             run(&assembler, &with_toggles(kind, &[])).await;
-            assert!(tool_names(&requests(&captured)[0]).is_empty());
+            assert_eq!(tool_names(&requests(&captured)[0]), [] as [String; 0]);
         }
     }
 

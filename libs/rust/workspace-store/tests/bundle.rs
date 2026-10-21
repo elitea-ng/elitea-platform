@@ -27,7 +27,7 @@ fn a_compact_bundle_round_trips_and_its_refs_and_trees_are_equal() {
     assert_eq!(written.commits, 2);
     assert_eq!(written.blobs, 5);
     let header = bundle::parse_header(&written.bytes).unwrap();
-    assert!(header.prerequisites.is_empty());
+    assert_eq!(header.prerequisites, [] as [objects::ObjectId; 0]);
     assert_eq!(header.refs, refs);
 
     let quarantine = dir.path().join("q");

@@ -376,13 +376,13 @@ mod tests {
         // A rule outside the high-confidence set stays quiet in a binary.
         let mut weak = vec![0_u8, 0];
         weak.extend_from_slice(join(&["\0Password=", "Hunter2Hunter2;"]).as_bytes());
-        assert!(scan("w.bin", &weak).expect("scan").is_empty());
+        assert_eq!(scan("w.bin", &weak).expect("scan"), []);
     }
 
     #[test]
     fn a_plain_binary_has_no_finding() {
         let blob: Vec<u8> = (0..=255_u8).cycle().take(4096).collect();
-        assert!(scan("plain.bin", &blob).expect("scan").is_empty());
-        assert!(scan("p.bin", &[0, 0, 0, 0]).expect("scan").is_empty());
+        assert_eq!(scan("plain.bin", &blob).expect("scan"), []);
+        assert_eq!(scan("p.bin", &[0, 0, 0, 0]).expect("scan"), []);
     }
 }

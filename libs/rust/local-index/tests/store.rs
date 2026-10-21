@@ -469,9 +469,9 @@ async fn a_rebuild_replaces_unchanged_chunks_and_an_unstaged_new_version_drops_t
     // Committed at a new version with nothing staged (too large, not
     // decodable): the old chunks go.
     commit_chunks(&store, "v2", None, false).await;
-    assert!(texts(&store).is_empty());
+    assert_eq!(texts(&store), [] as [String; 0]);
     // A rebuild that stages nothing for a document drops its chunks too.
     commit_chunks(&store, "v3", Some(("v3", "third")), false).await;
     commit_chunks(&store, "v3", None, true).await;
-    assert!(texts(&store).is_empty());
+    assert_eq!(texts(&store), [] as [String; 0]);
 }

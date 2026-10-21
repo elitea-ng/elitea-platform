@@ -179,7 +179,7 @@ async fn assert_sees_only(pool: &PgPool, project: i32, tag: &str, other: &str, c
 
     // The branch searches, each with the other project's word.
     let reader = IndexReader::new(pool.clone(), common::key_in(project, WIKI));
-    assert!(reader.search_fts(other, 10).await.expect("fts").is_empty());
+    assert_eq!(reader.search_fts(other, 10).await.expect("fts"), []);
     assert_eq!(reader.search_fts(tag, 50).await.expect("fts").len(), count);
     let dense = reader.search_dense(&embedding, 50).await.expect("dense");
     assert_eq!(dense.len(), count, "{project}: dense hits of one project");
@@ -229,7 +229,7 @@ async fn two_projects_with_one_wiki_id_each_read_only_their_own_index() {
         )
         .await
         .expect("hybrid");
-    assert!(hybrid.is_empty());
+    assert_eq!(hybrid, []);
     assert!(!PgIndex::new(none).wiki_exists().await.expect("exists"));
 }
 

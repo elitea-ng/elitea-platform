@@ -469,7 +469,7 @@ mod tests {
         let html = "<script>x</script>".repeat(30_000);
         let started = std::time::Instant::now();
         let page = parse_page(&html);
-        assert!(page.chunks.is_empty());
+        assert_eq!(page.chunks, []);
         assert!(
             started.elapsed() < std::time::Duration::from_secs(2),
             "quadratic scan: {:?}",

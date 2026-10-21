@@ -379,7 +379,7 @@ async fn a_name_with_a_non_ascii_capital_is_found() {
     let wildcard = index.name_rows("Ä_ger", false, 5).await.expect("wildcard");
     assert_eq!(ids(&wildcard), ["n-arger"]);
     let backslash = index.name_rows("\\", false, 5).await.expect("backslash");
-    assert!(backslash.is_empty());
+    assert_eq!(backslash, []);
 }
 
 #[tokio::test(flavor = "multi_thread")]

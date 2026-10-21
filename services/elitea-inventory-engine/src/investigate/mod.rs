@@ -790,7 +790,7 @@ mod tests {
         };
         assert_eq!(result.answer, LIMIT_MESSAGE);
         assert_eq!(result.tool_calls.len(), 50, "the 50th round's tools ran");
-        assert!(result.citations.is_empty());
+        assert_eq!(result.citations, [] as [serde_json::Value; 0]);
         assert_eq!((result.tokens_in, result.tokens_out), (500, 250));
         assert_eq!(result.error, None);
     }
@@ -813,7 +813,7 @@ mod tests {
         );
         assert_eq!(result.tool_calls.len(), 2);
         assert_eq!(result.tokens_in, 20);
-        assert!(result.answer.is_empty());
+        assert_eq!(result.answer, "");
     }
 
     #[tokio::test]

@@ -520,7 +520,7 @@ mod tests {
             refused.to_string().contains("credential cannot be used"),
             "{refused}"
         );
-        assert!(transport.seen().is_empty());
+        assert_eq!(transport.seen(), [] as [String; 0]);
     }
 
     #[tokio::test]
@@ -671,7 +671,7 @@ mod tests {
         );
         let closed = GitHubSource::new(config(), HostAllowlist::default(), transport.clone());
         assert!(closed.is_err(), "an empty allowlist refuses everything");
-        assert!(transport.seen().is_empty());
+        assert_eq!(transport.seen(), [] as [String; 0]);
     }
 
     #[tokio::test]

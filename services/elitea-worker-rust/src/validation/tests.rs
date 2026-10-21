@@ -260,7 +260,7 @@ fn settings_documents_are_refused_like_the_python_loader_refuses_them() {
     let long = format!("{{\"base_url\":\"{}\"}}", "a".repeat(MAX_STRING_BYTES + 1));
     assert_eq!(invalid(long.as_bytes()), SettingsRefusal::ResourceExhausted);
     let ok_long = format!("{{\"base_url\":\"{}\"}}", "a".repeat(MAX_STRING_BYTES));
-    assert!(rules.evaluate(ok_long.as_bytes()).unwrap().is_empty());
+    assert_eq!(rules.evaluate(ok_long.as_bytes()).unwrap(), []);
     assert!(rules.evaluate(nested(62).as_bytes()).is_ok());
     assert_eq!(
         invalid(nested(64).as_bytes()),
@@ -329,19 +329,19 @@ fn model_validator_hooks_replace_field_errors_with_one_root_issue() {
         issues_of(github, &json!({"base_url": 5, "username": "u"})),
         [("INVALID_CONFIGURATION".to_owned(), String::new())]
     );
-    assert!(
+    assert_eq!(
         issues_of(
             github,
             &json!({"base_url": "b", "username": "u", "password": "p"})
-        )
-        .is_empty()
+        ),
+        [] as [(String, String); 0]
     );
     let openapi = catalog().bind(&command_for("openapi")).unwrap();
     assert_eq!(
         issues_of(openapi, &json!({"client_id": "c"})),
         [("INVALID_CONFIGURATION".to_owned(), String::new())]
     );
-    assert!(issues_of(openapi, &json!({})).is_empty());
+    assert_eq!(issues_of(openapi, &json!({})), [] as [(String, String); 0]);
 }
 
 #[test]
@@ -399,19 +399,37 @@ fn integer_strings_obey_pydantic_s_digit_limit() {
     };
     let invalid = vec![("INVALID_VALUE".to_owned(), "/port".to_owned())];
     let nines = |count: usize| "9".repeat(count);
-    assert!(port(nines(4300)).is_empty());
+    assert_eq!(port(nines(4300)), [] as [(String, String); 0]);
     assert_eq!(port(nines(4301)), invalid);
-    assert!(port(format!("+{}", nines(4300))).is_empty());
+    assert_eq!(
+        port(format!("+{}", nines(4300))),
+        [] as [(String, String); 0]
+    );
     assert_eq!(port(format!("+{}", nines(4301))), invalid);
     // The sign counts toward the limit only when it is `-`.
-    assert!(port(format!("-{}", nines(4299))).is_empty());
+    assert_eq!(
+        port(format!("-{}", nines(4299))),
+        [] as [(String, String); 0]
+    );
     assert_eq!(port(format!("-{}", nines(4300))), invalid);
     // Whitespace, a zero fraction, leading zeros and underscores do not count.
-    assert!(port(format!(" {} ", nines(4300))).is_empty());
-    assert!(port(format!("{}.000", nines(4300))).is_empty());
+    assert_eq!(
+        port(format!(" {} ", nines(4300))),
+        [] as [(String, String); 0]
+    );
+    assert_eq!(
+        port(format!("{}.000", nines(4300))),
+        [] as [(String, String); 0]
+    );
     assert_eq!(port(format!("{}.0", nines(4301))), invalid);
-    assert!(port(format!("{}{}", "0".repeat(5000), nines(4300))).is_empty());
-    assert!(port(format!("{}_{}", nines(2000), nines(2300))).is_empty());
+    assert_eq!(
+        port(format!("{}{}", "0".repeat(5000), nines(4300))),
+        [] as [(String, String); 0]
+    );
+    assert_eq!(
+        port(format!("{}_{}", nines(2000), nines(2300))),
+        [] as [(String, String); 0]
+    );
     assert_eq!(port(format!("{}_{}", nines(2000), nines(2301))), invalid);
 }
 
@@ -645,7 +663,7 @@ fn lexical_rules_follow_python_s_strict_decoder() {
         rules.evaluate(hosting.as_bytes()).unwrap()
     };
     // `Cloud` decodes to the enum member `Cloud`.
-    assert!(decoded(r#""Cloud""#).is_empty());
+    assert_eq!(decoded(r#""Cloud""#), []);
     assert_eq!(decoded(r#""Cloud\u0000""#).len(), 1);
     // Structure: JSON whitespace only, no trailing commas or data, no BOM.
     assert_eq!(

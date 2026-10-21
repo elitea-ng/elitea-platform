@@ -738,7 +738,7 @@ mod tests {
             ..Fake::default()
         };
         let mut p = plan();
-        assert!(search_documents(&fake, &p).await.unwrap().is_empty());
+        assert_eq!(search_documents(&fake, &p).await.unwrap(), []);
         p.rerank = rerank::parse(&json!({"kind": {"weight": 1.0, "rules": {"priority": "spec"}}}))
             .unwrap();
         let hits = search_documents(&fake, &p).await.unwrap();

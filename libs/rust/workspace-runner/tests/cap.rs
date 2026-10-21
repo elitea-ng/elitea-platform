@@ -88,8 +88,8 @@ async fn over_the_cap_growth_is_refused_and_nothing_is_packed() {
         pack_capped(workspace.path(), &mut archive, LIMITS, Some(&cap)).unwrap_err(),
         "runner.workspace_too_large"
     );
-    assert!(archive.is_empty());
+    assert_eq!(archive, [] as [u8; 0]);
     fs::remove_file(workspace.path().join("big.txt")).unwrap();
     pack_capped(workspace.path(), &mut archive, LIMITS, Some(&cap)).unwrap();
-    assert!(!archive.is_empty());
+    assert_ne!(archive, [] as [u8; 0]);
 }

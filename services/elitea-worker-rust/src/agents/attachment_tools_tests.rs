@@ -152,7 +152,7 @@ fn bad_arguments_are_answered_not_raised() {
 fn search_finds_the_page_that_holds_the_term() {
     let answer = library(16_000).search("quokkaword warranty", None, Some(3));
     let results = answer["results"].as_array().expect("results");
-    assert!(!results.is_empty());
+    assert_ne!(results.as_slice(), [] as [serde_json::Value; 0]);
     assert_eq!(results[0]["attachment_id"], "att1");
     assert!(
         results[0]["location"].as_str().unwrap_or("").contains("13"),
@@ -570,7 +570,10 @@ async fn unreadable_files_never_starve_a_later_searchs_window_and_are_named_once
             .len(),
         8
     );
-    assert!(first["results"].as_array().expect("results").is_empty());
+    assert_eq!(
+        first["results"].as_array().expect("results").as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     assert_eq!(read_count(&source), 8);
 
     let second = search

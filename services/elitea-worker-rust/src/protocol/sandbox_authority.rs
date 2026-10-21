@@ -739,8 +739,8 @@ mod tests {
             "workload-1"
         );
         assert_eq!(request.activation_id, "07".repeat(32));
-        assert!(request.request_digest.is_empty());
-        assert!(request.audience.is_empty());
+        assert_eq!(request.request_digest, [] as [u8; 0]);
+        assert_eq!(request.audience, "");
         assert!(owner.take_sandbox_authority(&command).is_err());
         assert_eq!(
             owner.redemption_binding().execution_id,
