@@ -74,6 +74,28 @@ describe('IndexStatusChip states', () => {
     expect(screen.getByRole('tooltip')).not.toHaveTextContent('when it is next used');
   });
 
+  it('shows a watched folder on the chip and says what refreshes it', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeIndexIpc({ statuses: { w1: { ...READY, watching: true } } });
+    mount(ipc);
+    await waitFor(() => expect(chip()).toHaveTextContent(/Ready · 12(\.4)?K entities · Watching/));
+    await user.hover(chip());
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('changes made outside the app refresh it');
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    // The watch stopped (signed out, turned off): the chip says so with the next event.
+    act(() => ipc.emit({ workspace_id: 'w1', phase: 'ready', message: null, status: { ...OFF_STATUS, ...READY, watching: false } }));
+    await waitFor(() => expect(chip()).not.toHaveTextContent('Watching'));
+    expect(chip()).toHaveTextContent(/Ready · 12(\.4)?K entities/);
+  });
+
+  it('says a stale watched index refreshes once files stop changing', async () => {
+    const user = userEvent.setup();
+    mount(createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale', changed_files: 2, watching: true } } }));
+    await waitFor(() => expect(chip()).toHaveTextContent('Stale'));
+    await user.hover(chip());
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('The folder is watched');
+  });
+
   it('only reads the status on a row, and opens the index on the session page', async () => {
     const listed = createFakeIndexIpc({ statuses: { w1: { ...READY, state: 'stale' } } });
     mount(listed);

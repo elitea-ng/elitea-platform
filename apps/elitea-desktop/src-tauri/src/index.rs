@@ -39,7 +39,10 @@
 //! `git pull`): once the folder has been quiet for 3 s, and at most every
 //! 30 s, the index refreshes incrementally — under the policy then, as
 //! after a turn. Changes to ignored, denied or `.git` paths are not
-//! changes (`elitea_local_index::watch`).
+//! changes (`elitea_local_index::watch`). The watch stops when the index
+//! is turned off, removed or closed (the policy turned it off or changed)
+//! and at sign-out; it starts again when the index opens, and at sign-in
+//! for an index still open. `IndexStatus::watching` says whether it runs.
 //!
 //! **Rebuilt when idle.** Incremental refreshes drift from what a full
 //! build makes; once more than `DRIFT_REBUILD` files changed since the last
@@ -48,7 +51,8 @@
 //! turn running.
 //!
 //! Indexes are kept across sign-out and `host_wipe`: they hold code
-//! structure parsed from the person's own folders, no account data. The
+//! structure parsed from the person's own folders, no account data (only
+//! their folder watches stop at sign-out: nothing refreshes for nobody). The
 //! person removes one with `index_remove` (or by removing the workspace);
 //! the Doctor can too.
 
@@ -473,7 +477,10 @@ impl IndexRegistry {
             }
         });
         match blocking(move || FolderWatcher::start(workspace, config, on_change)).await {
-            Ok(Ok(watcher)) => Some(watcher),
+            Ok(Ok(watcher)) => {
+                service.set_watching(true);
+                Some(watcher)
+            }
             Ok(Err(error)) => {
                 log::warn!("a workspace folder could not be watched: {error}");
                 None
@@ -1026,6 +1033,75 @@ impl IndexRegistry {
             }
         }
         resumed
+    }
+
+    /// Whether the workspace's folder is watched now (the Doctor's
+    /// staleness check). Never waits for the workspace's slot.
+    #[must_use]
+    pub fn is_watching(&self, workspace_id: &str) -> bool {
+        self.existing(workspace_id)
+            .and_then(|entry| entry.current())
+            .is_some_and(|service| service.status().watching)
+    }
+
+    /// Every entry, for a pass over all workspaces.
+    fn all_entries(&self) -> Vec<(String, Arc<Entry>)> {
+        self.entries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(id, entry)| (id.clone(), Arc::clone(entry)))
+            .collect()
+    }
+
+    /// Sign-out: stop every folder watch. The indexes themselves stay (they
+    /// are kept across sign-out, above); with the policy gone, the next
+    /// entry point closes them. [`Self::resume_watching`] starts the
+    /// watches again at sign-in.
+    pub async fn stop_watching(&self) {
+        let mut stopped = Vec::new();
+        for (_, entry) in self.all_entries() {
+            let mut slot = entry.slot.clone().lock_owned().await;
+            if let Some(open) = slot.open.as_mut()
+                && let Some(watcher) = open.watcher.take()
+            {
+                open.service.set_watching(false);
+                stopped.push(watcher);
+            }
+        }
+        // Each joins its thread, which notices the stop within a tick.
+        if !stopped.is_empty() {
+            let _ = blocking(move || drop(stopped)).await;
+        }
+    }
+
+    /// Sign-in: watch the folder of every index still open and turned on
+    /// again, when the policy now allows the index and the index was opened
+    /// under it (one opened under another `path_deny` is reopened, with its
+    /// watch, by the next entry point; a closed one when it opens).
+    pub async fn resume_watching(&self) {
+        let now = self.policy_now();
+        if now.allowed.is_none() {
+            return;
+        }
+        for (id, entry) in self.all_entries() {
+            let mut slot = entry.slot.clone().lock_owned().await;
+            let Some(open) = slot.open.as_ref() else {
+                continue;
+            };
+            if !open.enabled
+                || open.watcher.is_some()
+                || open.service.is_closed()
+                || open.service.policy() != now.fingerprint
+            {
+                continue;
+            }
+            let service = open.service.clone();
+            let watcher = self.watch(&id, &service).await;
+            if let Some(open) = slot.open.as_mut() {
+                open.watcher = watcher;
+            }
+        }
     }
 
     /// `index_cancel`: `true` when a refresh was running. Never waits for
@@ -1847,6 +1923,66 @@ mod tests {
         let dir = registry.index_dir(&id);
         let peek = SqliteGraphStore::peek(&dir).unwrap().unwrap();
         assert_eq!(peek.documents, status.files, "not refreshed while off");
+    }
+
+    /// The watch runs while the index is open and turned on, and the status
+    /// says so: it stops on disable, sign-out and the policy turning the
+    /// index off, and starts again on enable, sign-in and reopening
+    /// (#1219).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watcher_stops_on_disable_and_policy_off() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("a.py"), "class A:\n    pass\n").unwrap();
+        let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
+        let id = workspaces.add(folder.path()).unwrap().id;
+        let policy = Arc::new(Policy(Mutex::new(Some(on()))));
+        let registry = IndexRegistry::new(workspaces, policy.clone(), Arc::new(NoEvents))
+            .with_refresh_delay(None)
+            .with_watch(Some(WatchConfig {
+                quiet: Duration::from_millis(100),
+                min_interval: Duration::from_millis(200),
+            }))
+            .shared();
+        registry.enable(&id).await.unwrap();
+        assert!(
+            until_built(&registry, &id).await.watching,
+            "watched once on"
+        );
+        assert!(registry.is_watching(&id));
+
+        let off = registry.disable(&id).await.unwrap();
+        assert!(!off.watching && !registry.is_watching(&id), "{off:?}");
+        assert!(registry.enable(&id).await.unwrap().watching, "on again");
+
+        // Sign-out stops the watch, keeping the index open; sign-in
+        // starts it again.
+        registry.stop_watching().await;
+        assert!(!registry.status(&id).await.unwrap().watching);
+        assert!(!registry.is_watching(&id));
+        registry.resume_watching().await;
+        assert!(registry.status(&id).await.unwrap().watching);
+
+        // The policy turns the index off: closed, not watched, and a change
+        // refreshes nothing.
+        let built = until_built(&registry, &id).await;
+        *policy.0.lock().unwrap() = None;
+        let status = registry.status(&id).await.unwrap();
+        assert!(status.policy_off && !status.watching, "{status:?}");
+        assert!(!registry.is_watching(&id));
+        std::fs::write(folder.path().join("b.py"), "class B:\n    pass\n").unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let peek = SqliteGraphStore::peek(&registry.index_dir(&id))
+            .unwrap()
+            .unwrap();
+        assert_eq!(peek.documents, built.files, "not refreshed while off");
+        // Sign-in under no policy starts nothing.
+        registry.resume_watching().await;
+        assert!(!registry.is_watching(&id));
+
+        // Allowed again: reopening watches it.
+        *policy.0.lock().unwrap() = Some(on());
+        assert!(registry.open(&id).await.unwrap().watching);
     }
 
     /// A turned-on index whose setting names an embedder is embedded

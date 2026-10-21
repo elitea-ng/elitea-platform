@@ -321,7 +321,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
     router,
     /** The index builds: `n` of `total` files read (the island and the inspector follow). */
     playIndex(done = 40, total = 120) {
-      const building = { state: 'building' as const, files: 0, entities: 0, relations: 0, vectors: 0, chunks: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true };
+      const building = { state: 'building' as const, files: 0, entities: 0, relations: 0, vectors: 0, chunks: 0, last_run: null, changed_files: 0, error: null, policy_off: false, on_disk: true, watching: false };
       indexIpc.emit({ workspace_id: 'w1', phase: 'listing', message: null, status: building });
       indexIpc.emit({ workspace_id: 'w1', phase: 'parsing', message: `[extract] Parsing ${String(total)} files`, status: building });
       indexIpc.emit({ workspace_id: 'w1', phase: 'building', message: `[progress] Processed ${String(done)} files`, status: building });

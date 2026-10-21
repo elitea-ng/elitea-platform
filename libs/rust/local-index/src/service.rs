@@ -50,6 +50,7 @@ use elitea_local_tools::workspace::Workspace;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -126,6 +127,10 @@ pub struct IndexStatus {
     /// An index exists on this computer (what turning it off and removing
     /// it act on).
     pub on_disk: bool,
+    /// The host watches the folder and refreshes the index on outside
+    /// changes (`watch::FolderWatcher`; set with
+    /// [`IndexService::set_watching`]).
+    pub watching: bool,
 }
 
 impl IndexStatus {
@@ -144,6 +149,7 @@ impl IndexStatus {
             error: None,
             policy_off: false,
             on_disk: false,
+            watching: false,
         }
     }
 }
@@ -286,6 +292,8 @@ pub struct IndexService {
     query_embedder: Mutex<Option<Weak<dyn QueryEmbedder>>>,
     /// The vectors of the dense side, cached.
     matrix: Mutex<Option<CachedMatrix>>,
+    /// The host watches the folder ([`IndexService::set_watching`]).
+    watching: AtomicBool,
 }
 
 /// A loaded vector matrix and what it was loaded at.
@@ -423,6 +431,7 @@ impl IndexService {
                 skipped: std::collections::HashMap::new(),
                 shortcut: false,
             }),
+            watching: AtomicBool::new(false),
             query_embedder: Mutex::new(None),
             matrix: Mutex::new(None),
         }))
@@ -456,7 +465,7 @@ impl IndexService {
         &self.policy
     }
 
-    fn status_of(inner: &Inner) -> IndexStatus {
+    fn status_of(inner: &Inner, watching: bool) -> IndexStatus {
         let (entities, relations) = inner.view.as_ref().map_or((0, 0), |view| {
             (
                 count(view.graph.node_count()),
@@ -475,6 +484,7 @@ impl IndexService {
             error: inner.error.clone(),
             policy_off: false,
             on_disk: true,
+            watching,
         }
     }
 
@@ -487,7 +497,13 @@ impl IndexService {
     /// Where the index is now.
     #[must_use]
     pub fn status(&self) -> IndexStatus {
-        Self::status_of(&self.inner())
+        Self::status_of(&self.inner(), self.watching.load(Ordering::SeqCst))
+    }
+
+    /// Record whether the host watches the folder (what
+    /// [`IndexStatus::watching`] answers, here and in every event).
+    pub fn set_watching(&self, watching: bool) {
+        self.watching.store(watching, Ordering::SeqCst);
     }
 
     /// Whether [`Self::close`] ran.
@@ -502,7 +518,7 @@ impl IndexService {
             if inner.closed {
                 return;
             }
-            Self::status_of(&inner)
+            Self::status_of(&inner, self.watching.load(Ordering::SeqCst))
         };
         self.events.emit(IndexEvent {
             workspace_id: self.workspace_id.clone(),

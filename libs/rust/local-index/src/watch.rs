@@ -49,7 +49,8 @@ pub type OnChange = Box<dyn Fn(u64) + Send + Sync>;
 
 /// One folder's watch; dropping it stops it.
 pub struct FolderWatcher {
-    _watcher: notify::RecommendedWatcher,
+    /// The operating system's watch (`None`: a test feeds the events).
+    _watcher: Option<notify::RecommendedWatcher>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -179,6 +180,28 @@ impl FolderWatcher {
         watcher
             .watch(workspace.root(), RecursiveMode::Recursive)
             .map_err(|error| error.to_string())?;
+        Self::spawn(Some(watcher), workspace, config, on_change, received)
+    }
+
+    /// A watcher fed by `received` instead of the operating system (tests:
+    /// events without a real folder's timing).
+    #[cfg(test)]
+    fn with_events(
+        workspace: Arc<Workspace>,
+        config: WatchConfig,
+        on_change: OnChange,
+        received: mpsc::Receiver<notify::Result<notify::Event>>,
+    ) -> Result<Self, String> {
+        Self::spawn(None, workspace, config, on_change, received)
+    }
+
+    fn spawn(
+        watcher: Option<notify::RecommendedWatcher>,
+        workspace: Arc<Workspace>,
+        config: WatchConfig,
+        on_change: OnChange,
+        received: mpsc::Receiver<notify::Result<notify::Event>>,
+    ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
@@ -220,6 +243,14 @@ fn run(
                 .min(tick)
         };
         match received.recv_timeout(wait) {
+            // The system dropped events (inotify `Q_OVERFLOW`, FSEvents
+            // `MustScanSubDirs`; no paths): the whole folder may have
+            // changed. The refresh that follows stat-walks it (never a
+            // rebuild).
+            Ok(Ok(event)) if event.need_rescan() => {
+                pending.insert(workspace.root().to_owned());
+                last_event = Instant::now();
+            }
             Ok(Ok(event)) => {
                 if matches!(event.kind, EventKind::Access(_)) {
                     continue;
@@ -255,7 +286,10 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{AccessKind, Flag, ModifyKind};
     use std::sync::Mutex;
+
+    type Reports = Arc<Mutex<Vec<(Instant, u64)>>>;
 
     fn fast() -> WatchConfig {
         WatchConfig {
@@ -264,34 +298,58 @@ mod tests {
         }
     }
 
-    struct Watched {
-        folder: tempfile::TempDir,
-        reports: Arc<Mutex<Vec<(Instant, u64)>>>,
-        watcher: FolderWatcher,
-    }
-
-    fn watch(path_deny: &[String]) -> Watched {
+    /// A folder with ignored, `.git` and denied places.
+    fn folder() -> tempfile::TempDir {
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join(".gitignore"), "target/\n*.log\n").unwrap();
-        std::fs::create_dir_all(folder.path().join("src")).unwrap();
-        std::fs::create_dir_all(folder.path().join("target")).unwrap();
-        std::fs::create_dir_all(folder.path().join(".git")).unwrap();
-        std::fs::create_dir_all(folder.path().join("secrets")).unwrap();
-        // Events from the setup above settle before the watch starts.
-        std::thread::sleep(Duration::from_millis(300));
-        let workspace = Arc::new(Workspace::open(folder.path(), path_deny).unwrap());
-        let reports = Arc::new(Mutex::new(Vec::new()));
+        for dir in ["src", "target", ".git", "secrets"] {
+            std::fs::create_dir_all(folder.path().join(dir)).unwrap();
+        }
+        folder
+    }
+
+    fn recorder() -> (Reports, OnChange) {
+        let reports: Reports = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&reports);
-        let watcher = FolderWatcher::start(
-            workspace,
-            fast(),
-            Box::new(move |n| seen.lock().unwrap().push((Instant::now(), n))),
-        )
-        .unwrap();
-        Watched {
-            folder,
-            reports,
-            watcher,
+        let on_change: OnChange = Box::new(move |n| seen.lock().unwrap().push((Instant::now(), n)));
+        (reports, on_change)
+    }
+
+    /// A watcher fed by hand: no real file events, no FS timing.
+    struct Fed {
+        _folder: tempfile::TempDir,
+        root: PathBuf,
+        events: mpsc::Sender<notify::Result<notify::Event>>,
+        reports: Reports,
+        _watcher: FolderWatcher,
+    }
+
+    impl Fed {
+        fn new(config: WatchConfig, path_deny: &[String]) -> Self {
+            let folder = folder();
+            let workspace = Arc::new(Workspace::open(folder.path(), path_deny).unwrap());
+            let root = workspace.root().to_owned();
+            let (events, received) = mpsc::channel();
+            let (reports, on_change) = recorder();
+            let watcher =
+                FolderWatcher::with_events(workspace, config, on_change, received).unwrap();
+            Self {
+                _folder: folder,
+                root,
+                events,
+                reports,
+                _watcher: watcher,
+            }
+        }
+
+        fn modified(&self, relative: &str) {
+            let event = notify::Event::new(EventKind::Modify(ModifyKind::Any))
+                .add_path(self.root.join(relative));
+            self.events.send(Ok(event)).unwrap();
+        }
+
+        fn reports(&self) -> Vec<(Instant, u64)> {
+            self.reports.lock().unwrap().clone()
         }
     }
 
@@ -301,63 +359,137 @@ mod tests {
             if reports.lock().unwrap().len() >= count {
                 return true;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(20));
         }
         false
     }
 
+    /// A burst of changes (repeats included) is one report, once the
+    /// folder has been quiet, counting each path once.
     #[test]
-    fn a_change_is_reported_once_the_folder_is_quiet() {
-        let w = watch(&[]);
-        let written = Instant::now();
-        for n in 0..3 {
-            std::fs::write(w.folder.path().join(format!("src/{n}.rs")), "fn a() {}").unwrap();
+    fn debounce_coalesces_bursts() {
+        let fed = Fed::new(fast(), &[]);
+        for round in 0..3 {
+            for n in 0..4 {
+                fed.modified(&format!("src/{n}.rs"));
+            }
+            if round < 2 {
+                std::thread::sleep(fast().quiet / 3);
+            }
         }
-        assert!(wait_for(&w.reports, 1, Duration::from_secs(5)), "reported");
-        let (at, files) = w.reports.lock().unwrap()[0];
+        let last = Instant::now();
         assert!(
-            at.duration_since(written) >= fast().quiet,
+            wait_for(&fed.reports, 1, Duration::from_secs(3)),
+            "reported"
+        );
+        std::thread::sleep(fast().quiet * 2);
+        let reports = fed.reports();
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        let (at, files) = reports[0];
+        assert!(
+            at.duration_since(last) >= fast().quiet,
             "after the quiet period"
         );
-        assert!(files >= 3, "{files}");
+        assert_eq!(files, 4, "each path once");
     }
 
+    /// Changes during the minimum interval wait for it, then make one
+    /// report.
     #[test]
-    fn ignored_denied_and_git_paths_are_not_changes() {
-        let w = watch(&["secrets/**".to_owned()]);
-        std::fs::write(w.folder.path().join("target/out.o"), "x").unwrap();
-        std::fs::write(w.folder.path().join("build.log"), "x").unwrap();
-        std::fs::write(w.folder.path().join(".git/HEAD"), "ref").unwrap();
-        std::fs::write(w.folder.path().join("secrets/key.pem"), "x").unwrap();
-        assert!(
-            !wait_for(&w.reports, 1, Duration::from_secs(2)),
-            "{:?}",
-            w.reports.lock().unwrap()
-        );
-        // A changed .gitignore is a change (it changes what is listed).
-        std::fs::write(w.folder.path().join(".gitignore"), "target/\n").unwrap();
-        assert!(wait_for(&w.reports, 1, Duration::from_secs(5)));
-    }
-
-    #[test]
-    fn reports_are_spaced_by_the_minimum_interval() {
-        let w = watch(&[]);
-        std::fs::write(w.folder.path().join("src/a.rs"), "fn a() {}").unwrap();
-        assert!(wait_for(&w.reports, 1, Duration::from_secs(5)));
-        std::fs::write(w.folder.path().join("src/b.rs"), "fn b() {}").unwrap();
-        assert!(wait_for(&w.reports, 2, Duration::from_secs(6)));
-        let reports = w.reports.lock().unwrap();
+    fn min_interval_between_refreshes() {
+        let config = WatchConfig {
+            quiet: Duration::from_millis(50),
+            min_interval: Duration::from_millis(800),
+        };
+        let fed = Fed::new(config, &[]);
+        fed.modified("src/a.rs");
+        assert!(wait_for(&fed.reports, 1, Duration::from_secs(2)));
+        for name in ["src/b.rs", "src/c.rs"] {
+            fed.modified(name);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(wait_for(&fed.reports, 2, Duration::from_secs(3)));
+        std::thread::sleep(config.quiet * 4);
+        let reports = fed.reports();
+        assert_eq!(reports.len(), 2, "{reports:?}");
         let gap = reports[1].0.duration_since(reports[0].0);
-        assert!(gap >= fast().min_interval, "{gap:?}");
+        assert!(gap >= config.min_interval, "{gap:?}");
+        assert_eq!(reports[1].1, 2, "both changes in the second report");
     }
 
+    /// Ignored, `.git`, denied, outside and read-only events are no
+    /// change; a changed `.gitignore` is one (it changes the listing).
     #[test]
-    fn dropping_the_watcher_stops_it() {
-        let w = watch(&[]);
-        let reports = Arc::clone(&w.reports);
-        let folder = w.folder.path().to_owned();
-        drop(w.watcher);
-        std::fs::write(folder.join("src/late.rs"), "fn late() {}").unwrap();
-        assert!(!wait_for(&reports, 1, Duration::from_secs(1)));
+    fn ignored_and_denied_paths_are_dropped() {
+        let fed = Fed::new(fast(), &["secrets/**".to_owned()]);
+        for (path, body) in [
+            ("target/out.o", "x"),
+            ("build.log", "x"),
+            (".git/HEAD", "ref"),
+            ("secrets/key.pem", "x"),
+            ("src/main.rs", "fn main() {}"),
+        ] {
+            std::fs::write(fed.root.join(path), body).unwrap();
+        }
+        for path in ["target/out.o", "build.log", ".git/HEAD", "secrets/key.pem"] {
+            fed.modified(path);
+        }
+        let outside = fed.root.parent().unwrap().join("elsewhere.rs");
+        let event = notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(outside);
+        fed.events.send(Ok(event)).unwrap();
+        let read = notify::Event::new(EventKind::Access(AccessKind::Any))
+            .add_path(fed.root.join("src/main.rs"));
+        fed.events.send(Ok(read)).unwrap();
+        assert!(
+            !wait_for(&fed.reports, 1, fast().quiet * 4),
+            "{:?}",
+            fed.reports()
+        );
+        fed.modified(".gitignore");
+        fed.modified("src/main.rs");
+        assert!(wait_for(&fed.reports, 1, Duration::from_secs(3)));
+        assert_eq!(fed.reports()[0].1, 2, "only the two relevant paths");
+    }
+
+    /// An overflow (a rescan notice without paths, or a watch error) is a
+    /// report: the host's refresh that follows stat-walks the whole folder
+    /// (an incremental refresh, never a rebuild).
+    #[test]
+    fn overflow_triggers_stat_walk() {
+        let fed = Fed::new(fast(), &[]);
+        let overflow = notify::Event::new(EventKind::Other).set_flag(Flag::Rescan);
+        fed.events.send(Ok(overflow)).unwrap();
+        assert!(
+            wait_for(&fed.reports, 1, Duration::from_secs(3)),
+            "rescan reported"
+        );
+        assert_eq!(fed.reports()[0].1, 1, "the folder itself");
+
+        let fed = Fed::new(fast(), &[]);
+        fed.events
+            .send(Err(notify::Error::generic("queue overflow")))
+            .unwrap();
+        assert!(
+            wait_for(&fed.reports, 1, Duration::from_secs(3)),
+            "error reported"
+        );
+    }
+
+    /// With the operating system's events: a real change is reported, and
+    /// none once the watcher is dropped.
+    #[test]
+    fn a_real_change_is_reported_and_dropping_stops_it() {
+        let folder = folder();
+        // Events from the setup settle before the watch starts.
+        std::thread::sleep(Duration::from_millis(300));
+        let workspace = Arc::new(Workspace::open(folder.path(), &[]).unwrap());
+        let (reports, on_change) = recorder();
+        let watcher = FolderWatcher::start(workspace, fast(), on_change).unwrap();
+        std::fs::write(folder.path().join("src/a.rs"), "fn a() {}").unwrap();
+        assert!(wait_for(&reports, 1, Duration::from_secs(5)), "reported");
+        drop(watcher);
+        let seen = reports.lock().unwrap().len();
+        std::fs::write(folder.path().join("src/late.rs"), "fn late() {}").unwrap();
+        assert!(!wait_for(&reports, seen + 1, Duration::from_secs(1)));
     }
 }

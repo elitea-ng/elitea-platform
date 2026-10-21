@@ -77,6 +77,14 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
         crate::doctor::DoctorHooks::rebuild_index(self.agents.as_ref(), workspace_id)
     }
+
+    fn index_watching(&self, workspace_id: &str) -> bool {
+        crate::doctor::DoctorHooks::index_watching(self.agents.as_ref(), workspace_id)
+    }
+
+    fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
+        crate::doctor::DoctorHooks::refresh_index(self.agents.as_ref(), workspace_id)
+    }
 }
 
 /// A local-work command's failure as the webview receives it.

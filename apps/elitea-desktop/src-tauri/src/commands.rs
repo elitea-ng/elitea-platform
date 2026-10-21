@@ -38,6 +38,7 @@ pub async fn host_connect(
     // Another deployment ended the session (connect signed out of the old one).
     if before.as_deref() != Some(info.origin.as_str()) {
         local.agents.forget_identity();
+        local.index.stop_watching().await;
     }
     // From here the webview's fetch (src/net.rs) may reach this deployment.
     fetches
@@ -56,6 +57,8 @@ pub async fn host_sign_in(
     let signed_in = state.auth.sign_in().await?;
     // A new session (perhaps another account): nothing of the last one goes on.
     local.agents.forget_identity();
+    // The indexes still open are watched again (under the new policy).
+    local.index.resume_watching().await;
     Ok(signed_in)
 }
 
@@ -90,6 +93,8 @@ pub async fn host_sign_out(
 ) -> Result<(), HostError> {
     // First: no running turn sends another request with this session.
     local.agents.forget_identity();
+    // The indexes stay; their folders are no longer watched.
+    local.index.stop_watching().await;
     // The background delivery is detached.
     let result = state.auth.sign_out().await.map(drop);
     clear_webview_data(&window);
@@ -105,6 +110,7 @@ pub async fn host_wipe(
     local: State<'_, LocalState>,
 ) -> Result<(), HostError> {
     local.agents.forget_identity();
+    local.index.stop_watching().await;
     local.agents.wipe_sessions().await;
     let result = state.auth.wipe().await;
     clear_webview_data(&window);

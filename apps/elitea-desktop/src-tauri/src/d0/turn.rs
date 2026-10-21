@@ -2865,6 +2865,12 @@ impl crate::doctor::DoctorHooks for AgentHost {
 
     fn signed_out(&self) {
         self.forget_identity();
+        // The indexes stay; their folders are no longer watched.
+        if let Some(index) = &self.deps.index
+            && let Err(error) = drive(index.stop_watching())
+        {
+            log::warn!("the folder watches did not stop: {error}");
+        }
     }
 
     fn with_index_closed(&self, workspace_id: &str, work: &mut (dyn FnMut() + Send)) {
@@ -2887,6 +2893,22 @@ impl crate::doctor::DoctorHooks for AgentHost {
     fn rebuild_index(&self, workspace_id: &str) -> Result<(), String> {
         match &self.deps.index {
             Some(index) => drive(index.enable(workspace_id))?
+                .map(|_| ())
+                .map_err(|error| error.message),
+            None => Err("the local index is not available".into()),
+        }
+    }
+
+    fn index_watching(&self, workspace_id: &str) -> bool {
+        self.deps
+            .index
+            .as_ref()
+            .is_some_and(|index| index.is_watching(workspace_id))
+    }
+
+    fn refresh_index(&self, workspace_id: &str) -> Result<(), String> {
+        match &self.deps.index {
+            Some(index) => drive(index.refresh(workspace_id, false))?
                 .map(|_| ())
                 .map_err(|error| error.message),
             None => Err("the local index is not available".into()),
