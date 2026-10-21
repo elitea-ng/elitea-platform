@@ -414,9 +414,10 @@ func main() {
 	// call site. Measured against the standalone compose stack.
 	mux.HandleFunc("/readyz", makeReadyzHandler(plane, plane.unwired, rateLimitsCheck(policyLimiter, natsConfigured, rateRules(policyStore))))
 
-	// The operator's answer to "is the rule I saved actually in force?".
-	mux.HandleFunc("/governance/status",
-		makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), cfg.WorkloadIdentityEnabled, eliteaAccount))
+	// The operator's answer to "is the rule I saved actually in force?". It is
+	// served by GatewayService.GovernanceStatus (grpc_listener.go), the one
+	// way elitea-main reaches this process.
+	governanceStatus := makeGovernanceStatusHandler(policyStore, policyLimiter, cfg.PublicProjectIDString(), cfg.WorkloadIdentityEnabled, eliteaAccount)
 
 	// The soft-alert event publisher (gateway.events.*, spec §8.3) rides the
 	// same NATS connection as the budget counters; without NATS the alert
@@ -514,7 +515,15 @@ func main() {
 		logger.Warn("request log DISABLED: no database pool — the admin Logs view will be empty")
 	}
 
-	mux.Handle("/llm/", api.NewRouterWithLog(handler, requestLogger))
+	// #1359: the /llm surface is served over gRPC only. The router is the
+	// same one the HTTP listener used to mount; GatewayService runs it in
+	// process, so every gate and the request log above still apply. The HTTP
+	// mux keeps /healthz, /readyz and /metrics and nothing else.
+	gatewayGRPC, err := newGatewayGRPC(cfg, api.NewRouterWithLog(handler, requestLogger), governanceStatus, logger)
+	if err != nil {
+		slog.Error("FATAL: refusing to start: the GatewayService gRPC listener cannot be built", "err", err)
+		os.Exit(1)
+	}
 
 	// Issue #315: recover budget enforcement when NATS returns.
 	//
@@ -544,8 +553,9 @@ func main() {
 	})
 	startRateLimitMonitor(ctx, rlMonitor, natsConfigured)
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- gatewayGRPC.ListenAndServe() }()
 
 	// A serve error must NOT skip the shutdown sequence: in-flight streams may
 	// still hold recovered provider usage, and exiting straight from here drops
@@ -565,7 +575,9 @@ func main() {
 	// plane.current() and not govStore: a background re-dial can install the
 	// store after this goroutine passed the wiring block, and the drain has to
 	// see the store the handler actually billed through (issue #315).
-	if err := shutdownSequence(context.Background(), handler, srv, handler, handler, plane.current()); err != nil {
+	if err := shutdownSequence(context.Background(), handler,
+		newGatewayServers(srv, gatewayGRPC, cfg.ShutdownTimeout),
+		handler, handler, plane.current()); err != nil {
 		slog.Error("gateway shutdown error", "err", err)
 		failed = true
 	}

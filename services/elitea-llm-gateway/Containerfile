@@ -40,11 +40,12 @@ WORKDIR /src
 
 # Cache module downloads separately from source.
 #
-# The local `replace` targets (egresslib, natsconn) must be present BEFORE
+# The local `replace` targets (egresslib, natsconn, the proto Go module) must be present BEFORE
 # `go mod download` runs: the command reads each replace directive and opens
 # the replaced module's go.mod.
 COPY libs/go/egresslib ./libs/go/egresslib
 COPY libs/go/natsconn ./libs/go/natsconn
+COPY libs/proto/gen/go ./libs/proto/gen/go
 COPY services/elitea-llm-gateway/go.mod services/elitea-llm-gateway/go.sum ./services/elitea-llm-gateway/
 WORKDIR /src/services/elitea-llm-gateway
 # A TRANSIENT proxy.golang.org failure must not fail the build.

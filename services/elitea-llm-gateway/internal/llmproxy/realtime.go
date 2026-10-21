@@ -539,7 +539,11 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 	}
 	tracked = true
 
-	client, aerr := websocket.Accept(w, r, &websocket.AcceptOptions{
+	// The accept is pluggable: over HTTP it is websocket.Accept on a hijacked
+	// connection; over the GatewayService Realtime RPC (internal/grpcapi) the
+	// caller's WebSocket ends at elitea-main and the messages ride the gRPC
+	// stream. Both apply the SAME handshake and Origin checks.
+	clientSock, clientSubprotocol, aerr := RealtimeAcceptorFrom(r.Context())(w, r, RealtimeAcceptOptions{
 		// The caller may ask for a subprotocol or for none. RFC 6455 always
 		// allows the empty one, which is what the pylon relay uses. The
 		// provider's own subprotocol is not known yet — the dial happens after
@@ -551,19 +555,18 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 		// same-origin default, NOT "allow everything" — and InsecureSkipVerify
 		// is deliberately never set. See config.RealtimeAllowedOrigins.
 		//
-		// This check runs INSIDE Accept, which is the second reason the dial
-		// moved below it: a refused cross-site handshake must not have opened a
-		// provider socket first.
+		// This check runs INSIDE the accept, which is the second reason the
+		// dial moved below it: a refused cross-site handshake must not have
+		// opened a provider socket first.
 		OriginPatterns: h.realtimeOrigins,
+		ReadLimit:      realtimeReadLimit,
 	})
 	if aerr != nil {
-		// Accept has already written its own HTTP error response.
+		// The acceptor has already written its own HTTP error response.
 		h.logger.WarnContext(ctx, "realtime: the client upgrade was refused",
 			"project_id", projectID, "origin", r.Header.Get("Origin"), "err", aerr)
 		return
 	}
-	client.SetReadLimit(realtimeReadLimit)
-	clientSock := &wsSocket{conn: client}
 
 	// The dialer applies realtimeDialTimeout itself: the handshake deadline
 	// belongs to the dial, and the session context must outlive it. Only the
@@ -588,7 +591,7 @@ func (h *Handler) Realtime(w http.ResponseWriter, r *http.Request) {
 	// fact an operator has to be able to see.
 	h.logger.InfoContext(ctx, "realtime: session opened",
 		"project_id", projectID, "provider", provider, "model", model,
-		"client_subprotocol", client.Subprotocol(), "provider_subprotocol", up.Subprotocol,
+		"client_subprotocol", clientSubprotocol, "provider_subprotocol", up.Subprotocol,
 		"metric", MetricRealtimeSessionsOpened)
 
 	admitted := realtimeModel{provider: string(provider), model: model, pricing: pricing}

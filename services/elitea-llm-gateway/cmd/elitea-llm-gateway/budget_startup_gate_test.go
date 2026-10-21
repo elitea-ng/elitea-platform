@@ -343,7 +343,7 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 	command := func(t *testing.T, ctx context.Context, mode string) (*exec.Cmd, *bytes.Buffer) {
 		t.Helper()
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestGatewayRefusesToStartWithoutEnforcement")
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(append(os.Environ(), grpcListenerTestEnv(t)...),
 			gatewaySubprocessEnv+"=1",
 			// Port 1 is reserved and refuses immediately, so the dial fails
 			// fast and leaves the NATS client nil — the exact state of a
