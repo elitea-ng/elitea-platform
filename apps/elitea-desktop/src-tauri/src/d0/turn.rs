@@ -31,6 +31,7 @@ use adk_core::{
 };
 use adk_runner::Runner;
 use async_trait::async_trait;
+use elitea_agent_runtime::context::ToolResultElision;
 use elitea_agent_runtime::host::{
     EventSink, ExecutionGuard, HostError, LocalExecutionGuard, LocalStop, ModelRequest,
     ModelTransport, RunOutcome, ToolProvider, ToolsetRequest,
@@ -923,6 +924,7 @@ impl AgentHost {
             shell: None,
             deny_read: self.deps.sandbox_deny.clone(),
             app_id: self.deps.app_id.clone(),
+            budgets: elitea_local_tools::budget::Budgets::default(),
         })
         .map_err(|e| TurnError::new("workspace_unavailable", e.message().to_owned()))?;
         // Layer 3: the workspace's rules, then the person's (a broken file
@@ -1764,6 +1766,7 @@ impl AgentHost {
         mut guard: LocalExecutionGuard,
     ) {
         let Prepared {
+            conversation,
             conversation_uuid,
             tap,
             project,
@@ -1787,6 +1790,9 @@ impl AgentHost {
         }));
         let session = workspace.session.clone();
         session.set_plan_mode(request.plan_mode);
+        // The turn's spilled outputs are its conversation's: read_output in
+        // another thread of this folder does not see them.
+        session.set_conversation(Some(&conversation));
         session.begin_turn(&checkpoint_label(&request.prompt));
         events.running(&project.paths());
 
@@ -2169,19 +2175,24 @@ impl AgentHost {
             execution_id: started.execution_id.clone(),
             events: events.clone(),
         };
+        let instruction = system_instruction(
+            &admitted.instructions,
+            &environment::preamble(&facts),
+            invoked,
+            project,
+            &environment::current(&facts),
+            &started.memory_recall.text,
+            &nonce,
+        );
+        // The transport sends the instruction outside adk's contents: the
+        // elision below counts it as the provider request carries it.
+        let instruction_tokens =
+            elitea_agent_runtime::context_budget::estimate_tokens(instruction.len());
         let bound = transport
             .bind(ModelRequest {
                 model_project_id: check_project_id(request.project_id)?,
                 model_name: admitted.model.model_name.clone(),
-                system_instruction: system_instruction(
-                    &admitted.instructions,
-                    &environment::preamble(&facts),
-                    invoked,
-                    project,
-                    &environment::current(&facts),
-                    &started.memory_recall.text,
-                    &nonce,
-                ),
+                system_instruction: instruction,
                 max_tokens: admitted.model.max_tokens,
                 temperature: admitted.model.temperature,
                 reasoning_effort: admitted.model.reasoning_effort,
@@ -2192,13 +2203,13 @@ impl AgentHost {
             .map_err(|e| failed("model_unavailable", &e.to_string()))?;
 
         // Skills and project context: the runtime's instruction authority.
-        let plan = InstructionPlan::admit(&execution_request(
+        let execution = execution_request(
             request,
             admitted,
             &started.execution_id,
             &started.question_id,
-        ))
-        .map_err(|_| {
+        );
+        let plan = InstructionPlan::admit(&execution).map_err(|_| {
             failed(
                 "skills_invalid",
                 "The agent's frozen skills could not be loaded.",
@@ -2253,6 +2264,14 @@ impl AgentHost {
             // adk takes it from the agent: RunConfig has no such field.
             .tool_execution_strategy(ToolExecutionStrategy::Auto);
         builder = plan.bind_builder(builder);
+        // A long turn's older tool results go to the model as notes once
+        // the request passes 60% of the model's window; the session keeps
+        // them whole. The window is the execution request's model limits;
+        // the desktop resolves none yet (#1217 stage 1 resolves them from
+        // the model catalogue), so today it is the runtime's 128k fallback.
+        builder = ToolResultElision::for_limits(execution.payload.model_context_limits)
+            .with_fixed_tokens(instruction_tokens)
+            .bind_builder(builder);
         for toolset in toolsets {
             // The local tools and the index tools run here; only the
             // toolkits' tools are remote.
@@ -2631,6 +2650,8 @@ impl AgentHost {
             self.forget_session(&owner.origin, owner.user_id, &uuid)
                 .await;
         }
+        // And its spilled tool outputs (the open session's, or on disk).
+        self.forget_outputs(workspace_id, &conversation);
         history
             .forget_thread(owner, workspace_id.to_owned(), conversation)
             .await
@@ -2731,6 +2752,24 @@ impl AgentHost {
                 "thread_not_empty",
                 "The new thread already has turns, so nothing was copied.",
             )),
+        }
+    }
+
+    /// Remove one conversation's spilled tool outputs in a workspace (best
+    /// effort: they expire on their own after a day).
+    fn forget_outputs(&self, workspace_id: &str, conversation: &str) {
+        let open = self
+            .sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(workspace_id).cloned());
+        match open {
+            Some(open) => open.session.spill_store().forget_conversation(conversation),
+            None => elitea_local_tools::budget::forget_conversation_outputs(
+                &self.deps.workspaces.data_dir(workspace_id),
+                workspace_id,
+                conversation,
+            ),
         }
     }
 

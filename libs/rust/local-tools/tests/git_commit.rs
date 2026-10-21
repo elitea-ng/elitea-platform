@@ -147,6 +147,7 @@ fn fixture_with(
         shell: Some(shell),
         deny_read: Vec::new(),
         app_id: None,
+        budgets: elitea_local_tools::budget::Budgets::default(),
     })
     .expect("session");
     Fixture {

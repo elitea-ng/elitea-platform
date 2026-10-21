@@ -45,13 +45,14 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "read_file",
         read_only: true,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
         parameters: || {
             json!({
                 "type": "object",
                 "properties": {
                     "path": path_param("Path relative to the workspace root."),
                     "offset": { "type": "integer", "minimum": 1, "description": "First line to return (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Number of lines (default 2000)." }
                 },
                 "required": ["path"]
@@ -76,7 +77,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "search_files",
         read_only: true,
-        description: "Search text files in the workspace for a regular expression (or a literal string). Honours .gitignore.",
+        description: "Search the text inside workspace files for a regular expression (or a literal string), like rg: matching lines with optional context lines (output_mode content), only the matching paths (files), or matches per file (count). Honours .gitignore. To find files by name use find_files.",
         parameters: || {
             json!({
                 "type": "object",
@@ -86,6 +87,29 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                     "glob": { "type": "string", "description": "Only files matching this glob, e.g. *.rs" },
                     "fixed_strings": { "type": "boolean" },
                     "case_insensitive": { "type": "boolean" },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "output_mode": { "type": "string", "enum": ["content", "files", "count"], "description": "content (default): matching lines; files: paths only; count: matches per file." },
+                    "context_before": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context_after": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Lines before and after (like -C)." },
+                    "multiline": { "type": "boolean", "description": "Let the pattern span lines (like rg -U)." },
+                    "max_per_file": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["pattern"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "find_files",
+        read_only: true,
+        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml, !*.md for every file but those; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). A glob with / matches the path under `path` (or from the workspace root); one without matches the file name. Lists paths only and opens nothing; .gitignore always honoured. For text inside files use search_files.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs, !*.md) or, with fuzzy=true, a name fragment (usrctrl)." },
+                    "path": path_param("Directory relative to the workspace root (default: the root)."),
+                    "fuzzy": { "type": "boolean", "description": "Rank by fuzzy match instead of glob filtering." },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
                 },
                 "required": ["pattern"]
@@ -101,6 +125,23 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                 "type": "object",
                 "properties": { "path": path_param("Path relative to the workspace root.") },
                 "required": ["path"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "read_output",
+        read_only: true,
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "output_id": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 1, "description": "First line (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
+                    "limit": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["output_id"]
             })
         },
     },
@@ -501,7 +542,7 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 12);
+        assert_eq!(names(true).len(), 14);
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

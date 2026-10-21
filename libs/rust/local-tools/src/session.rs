@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use crate::approvals::{
     ChoiceStore, PAYLOAD_KEY, RuleApprovals, RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
 };
+use crate::budget::{self, Budgets, SpillStore};
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
 use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
@@ -61,6 +62,11 @@ pub struct SessionConfig {
     /// under the home are denied too ([`crate::deny::app_paths`]); sets
     /// [`ShellConfig::app_id`] when `shell` names none.
     pub app_id: Option<String>,
+    /// Each tool's output budget in estimated tokens
+    /// ([`Budgets::default`]: 12k for reads, 6k for commands, 8k for
+    /// searches and git). Output over a budget is cut; a command's, git's
+    /// and a document's whole output is spilled for `read_output`.
+    pub budgets: Budgets,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +85,10 @@ pub struct LocalSession {
     approvals: Arc<dyn ApprovalChannel>,
     checkpoints: Checkpoints,
     shell: ShellConfig,
+    budgets: Budgets,
+    /// The session's spilled outputs, per conversation (under the data
+    /// directory; kept across a reopen for [`budget::SPILL_RETENTION`]).
+    spill: SpillStore,
     turn: Mutex<Turn>,
 }
 
@@ -108,13 +118,14 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_file",
         kind: ToolKind::ReadFile,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
         parameters: || {
             json!({
                 "type": "object",
                 "properties": {
                     "path": path_param("Path relative to the workspace root."),
                     "offset": { "type": "integer", "minimum": 1, "description": "First line to return (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Number of lines (default 2000)." }
                 },
                 "required": ["path"]
@@ -139,7 +150,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "search_files",
         kind: ToolKind::SearchFiles,
-        description: "Search text files in the workspace for a regular expression (or a literal string). Honours .gitignore.",
+        description: "Search the text inside workspace files for a regular expression (or a literal string), like rg: matching lines with optional context lines (output_mode content), only the matching paths (files), or matches per file (count). Honours .gitignore. To find files by name use find_files.",
         parameters: || {
             json!({
                 "type": "object",
@@ -149,6 +160,29 @@ pub const TOOLS: &[ToolSpec] = &[
                     "glob": { "type": "string", "description": "Only files matching this glob, e.g. *.rs" },
                     "fixed_strings": { "type": "boolean" },
                     "case_insensitive": { "type": "boolean" },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "output_mode": { "type": "string", "enum": ["content", "files", "count"], "description": "content (default): matching lines; files: paths only; count: matches per file." },
+                    "context_before": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context_after": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Lines before and after (like -C)." },
+                    "multiline": { "type": "boolean", "description": "Let the pattern span lines (like rg -U)." },
+                    "max_per_file": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["pattern"]
+            })
+        },
+    },
+    ToolSpec {
+        name: "find_files",
+        kind: ToolKind::FindFiles,
+        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml, !*.md for every file but those; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). A glob with / matches the path under `path` (or from the workspace root); one without matches the file name. Lists paths only and opens nothing; .gitignore always honoured. For text inside files use search_files.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs, !*.md) or, with fuzzy=true, a name fragment (usrctrl)." },
+                    "path": path_param("Directory relative to the workspace root (default: the root)."),
+                    "fuzzy": { "type": "boolean", "description": "Rank by fuzzy match instead of glob filtering." },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
                 },
                 "required": ["pattern"]
@@ -164,6 +198,23 @@ pub const TOOLS: &[ToolSpec] = &[
                 "type": "object",
                 "properties": { "path": path_param("Path relative to the workspace root.") },
                 "required": ["path"]
+            })
+        },
+    },
+    ToolSpec {
+        name: "read_output",
+        kind: ToolKind::ReadOutput,
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "output_id": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 1, "description": "First line (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
+                    "limit": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["output_id"]
             })
         },
     },
@@ -526,6 +577,11 @@ impl LocalSession {
             &shell.sandbox,
         )?
         .with_git_global_config(shell.git_global_config.clone());
+        // What an earlier session of this id spilled (before a policy
+        // change, or an app restart) stays readable within its retention:
+        // the conversations' history names those ids. Expired ones go now.
+        let spill = SpillStore::new(&config.data_dir, &config.session_id);
+        spill.sweep();
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),
@@ -533,6 +589,8 @@ impl LocalSession {
             approvals,
             checkpoints,
             shell,
+            budgets: config.budgets,
+            spill,
             turn: Mutex::new(Turn::default()),
         }))
     }
@@ -540,6 +598,20 @@ impl LocalSession {
     #[must_use]
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
+    }
+
+    /// The session's spilled outputs.
+    #[must_use]
+    pub fn spill_store(&self) -> &SpillStore {
+        &self.spill
+    }
+
+    /// The conversation the next turn runs for: the outputs its tools
+    /// spill are its own, and `read_output` sees only those
+    /// ([`SpillStore::set_conversation`]). Hosts set it with
+    /// [`Self::begin_turn`]; `None` is the default scope.
+    pub fn set_conversation(&self, conversation: Option<&str>) {
+        self.spill.set_conversation(conversation);
     }
 
     /// The session's deny list (built once at open).
@@ -763,7 +835,17 @@ impl LocalSession {
             ToolKind::ReadFile
             | ToolKind::ListTree
             | ToolKind::SearchFiles
+            | ToolKind::FindFiles
             | ToolKind::ReadDocument => self.read_only(spec, call_id, args).await,
+            ToolKind::ReadOutput => {
+                // No path: the id names one of this session's outputs.
+                self.authorize(call_id, ToolCall::new(ToolKind::ReadOutput), spec.name)
+                    .await?;
+                self.blocking(move |this| {
+                    budget::read_output(&this.spill, args, budget::bytes(this.budgets.read_file))
+                })
+                .await
+            }
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::GitCommit => self.git_commit(call_id, args).await,
             ToolKind::WriteFile => {
@@ -855,11 +937,29 @@ impl LocalSession {
         call.paths = vec![resolved.display_string()];
         self.authorize(call_id, call, spec.name).await?;
         let kind = spec.kind;
-        self.blocking(move |this| match kind {
-            ToolKind::ReadFile => files::read(&this.workspace, &this.ledger, args),
-            ToolKind::ListTree => files::tree(&this.workspace, args),
-            ToolKind::SearchFiles => files::search(&this.workspace, args),
-            _ => files::document(&this.workspace, args),
+        self.blocking(move |this| {
+            let budgets = this.budgets;
+            match kind {
+                ToolKind::ReadFile => files::read(
+                    &this.workspace,
+                    &this.ledger,
+                    args,
+                    budget::bytes(budgets.read_file),
+                ),
+                ToolKind::ListTree => files::tree(&this.workspace, args),
+                ToolKind::SearchFiles => {
+                    files::search(&this.workspace, args, budget::bytes(budgets.search))
+                }
+                ToolKind::FindFiles => {
+                    files::find_files(&this.workspace, args, budget::bytes(budgets.search))
+                }
+                _ => files::document(
+                    &this.workspace,
+                    args,
+                    &this.spill,
+                    budget::bytes(budgets.document),
+                ),
+            }
         })
         .await
     }
@@ -1037,7 +1137,17 @@ impl LocalSession {
             self.blocking(Self::ensure_checkpoint).await?;
         }
         // Approved as confined and the sandbox changed since: refused.
-        let output = shell::run_checked(&self.workspace, &self.shell, &spec, unconfined).await?;
+        let mut output =
+            shell::run_checked(&self.workspace, &self.shell, &spec, unconfined).await?;
+        let max_bytes = budget::bytes(self.budgets.run_command);
+        if output.stdout.len() + output.stderr.len() > max_bytes {
+            output = self
+                .blocking(move |this| {
+                    budget::shape_command(&mut output, max_bytes, &this.spill);
+                    Ok(output)
+                })
+                .await?;
+        }
         serde_json::to_value(output)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the result"))
     }
@@ -1247,8 +1357,29 @@ impl LocalSession {
                 }
             })
             .await?;
-        let (text, truncated) = capped(&output);
-        Ok(json!({ "output": text, "truncated": truncated }))
+        let spills = matches!(tool, "git_diff" | "git_log");
+        self.blocking(move |this| Ok(this.git_answer(&output, spills)))
+            .await
+    }
+
+    /// A git read's result: capped; `git_diff` and `git_log` within their
+    /// token budget, the whole output spilled for `read_output`.
+    fn git_answer(&self, output: &[u8], spills: bool) -> Value {
+        let (text, capped_off) = capped(output);
+        if !spills {
+            return json!({ "output": text, "truncated": capped_off });
+        }
+        let max_bytes = budget::bytes(self.budgets.git);
+        let (shown, output_id, cut) = budget::spill_over(&self.spill, &text, max_bytes);
+        let mut answer = json!({
+            "output": shown,
+            "truncated": cut || capped_off,
+            "bytes": output.len(),
+        });
+        if let (Some(id), Value::Object(map)) = (output_id, &mut answer) {
+            map.insert("output_id".to_owned(), Value::String(id));
+        }
+        answer
     }
 }
 

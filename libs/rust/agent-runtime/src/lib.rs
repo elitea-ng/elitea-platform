@@ -14,6 +14,8 @@
 //! * [`planner`], [`lazy_tools`] — the `planner` and `lazy_tools_mode`
 //!   (Smart Tools Selection) internal tools;
 //! * [`tool_namespacing`] — the provider-alias notice for renamed tools;
+//! * [`context`] — shrinking older tool results in a long turn's model
+//!   requests (host opt-in);
 //! * [`step_limit`] — the end of a run that used its model steps, and the
 //!   person's "Continue?" that runs it again on the same session;
 //! * [`toolkits`] — native toolkit families, the Streamable HTTP MCP client,
@@ -48,6 +50,7 @@
 pub mod assembly_error;
 pub mod bounded_yaml;
 pub mod canonical;
+pub mod context;
 pub mod context_budget;
 pub mod context_management;
 pub mod context_status;

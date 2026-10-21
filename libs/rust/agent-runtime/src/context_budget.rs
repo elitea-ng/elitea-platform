@@ -7,13 +7,26 @@
     reason = "moved verbatim from the worker, where these items were crate-private"
 )]
 
-use adk_core::{AdkError, Content, ErrorCategory, ErrorComponent, Event, LlmRequest};
+use adk_core::{AdkError, ErrorCategory, ErrorComponent, LlmRequest};
 use serde_json::{Map, Value};
 
 use super::request::ModelContextLimits;
 use crate::assembly_error::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 
 const BALANCED_TOKENS: u32 = 272_000;
+
+/// Bytes per estimated token: the one heuristic every request estimate in
+/// this crate (and the local tools' output budgets) uses. ADK's
+/// `intra_compaction::estimate_tokens` counts the same bytes at the same
+/// rate; [`estimate_tokens`] rounds up.
+pub const BYTES_PER_TOKEN: usize = 4;
+
+/// Estimated tokens of `bytes` bytes of encoded text: `ceil(bytes / 4)`.
+/// This is an estimate, not a provider tokenizer.
+#[must_use]
+pub const fn estimate_tokens(bytes: usize) -> u64 {
+    bytes.div_ceil(BYTES_PER_TOKEN) as u64
+}
 const AUTO_OUTPUT_FLOOR: u32 = 1_024;
 
 /// The compaction boundary consumes measurements of the actual provider body.
@@ -246,11 +259,8 @@ impl RequestContextBudget {
 }
 
 fn estimate_provider_request(encoded: &[u8]) -> adk_core::Result<u64> {
-    let text = std::str::from_utf8(encoded).map_err(|_| budget_error())?;
-    let mut event = Event::new("context-budget-estimate");
-    event.set_content(Content::new("user").with_text(text));
-    Ok(adk_core::intra_compaction::estimate_tokens(&[event], 4)
-        + u64::from(!encoded.len().is_multiple_of(4)))
+    std::str::from_utf8(encoded).map_err(|_| budget_error())?;
+    Ok(estimate_tokens(encoded.len()))
 }
 
 fn invalid_budget() -> NativeAgentAssemblyError {
@@ -273,6 +283,30 @@ fn budget_error() -> AdkError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The shared estimate is ADK's byte heuristic, rounded up.
+    #[test]
+    fn the_shared_estimate_is_adks_rounded_up() {
+        for text in [
+            "",
+            "a",
+            "abcd",
+            "abcde",
+            "naïve 漢字 text",
+            &"x".repeat(4_001),
+        ] {
+            let mut event = adk_core::Event::new("estimate");
+            event.set_content(adk_core::Content::new("user").with_text(text));
+            let adk = adk_core::intra_compaction::estimate_tokens(&[event], 4);
+            let ours = estimate_tokens(text.len());
+            assert_eq!(
+                ours,
+                adk + u64::from(!text.len().is_multiple_of(4)),
+                "{text}"
+            );
+            assert_eq!(estimate_provider_request(text.as_bytes()).ok(), Some(ours));
+        }
+    }
 
     pub fn limits(window: u32, output: u32) -> ModelContextLimits {
         ModelContextLimits {

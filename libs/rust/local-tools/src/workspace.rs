@@ -806,7 +806,7 @@ impl Workspace {
 /// Permission and type bits as `u32` (`mode_t` is `u16` on macOS and `u32`
 /// on Linux, where this conversion is the identity).
 #[allow(clippy::useless_conversion)]
-fn mode_bits(raw: rustix::fs::RawMode) -> u32 {
+pub(crate) fn mode_bits(raw: rustix::fs::RawMode) -> u32 {
     u32::from(raw)
 }
 

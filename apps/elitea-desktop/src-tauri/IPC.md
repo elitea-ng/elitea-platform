@@ -1214,13 +1214,39 @@ cannot change, such as `410` or `403`) the host sends `commit_failed`
 commit still running or failed is logged; that execution expires on the
 server, as before.
 The read-only, concurrency-safe calls of one model step (`read_file`,
-`list_tree`, `search_files`, `read_document`, git reads, the index tools)
+`list_tree`, `search_files`, `find_files`, `read_output`, `read_document`,
+git reads, the index tools)
 run together, at most 8 at once, before the step's other calls; writes,
 commands and remote toolkit calls then run one at a time in the model's
 order, so at most one tool `approval_request` is open at a time. Their
 `tool_call` and `tool_result` events interleave: match a result to its call
 by `call_id`, never by position. The commit lists the steps in the model's
 call order, whatever order they ran in.
+**Tool output budgets** (`elitea-local-tools` `budget`). Every local tool
+result the model reads stays within a token budget (estimated as
+`ceil(bytes / 4)`): `read_file` and `read_output` 12k (whole lines,
+`next_offset`; a line longer than a page continues at `next_column`),
+`run_command` 6k for stdout and stderr together (head and tail),
+`search_files` and `find_files` 8k (`truncated`), `git_diff` and
+`git_log` 8k, `read_document` 12k. When a command's, a diff's, a log's or
+a document's output is cut, the whole of it is kept in a file under the
+workspace's data directory (`sessions/<workspace id>/out/<conversation>/`,
+`0700`, files `0600`, hidden from the file tools by the deny list even when
+the workspace is the home folder), and the result names it as `output_id`;
+the model pages it with `read_output` (by id only, no path, and only the
+thread's own outputs). Outputs are per conversation (at most 64 MiB each,
+256 MiB per workspace, the oldest dropped first), outlive a policy change
+and an app restart for 24 hours, and go with `thread_history_delete`; a
+gone id answers `local_tools.output_expired` (the model re-runs the tool).
+A `tool_result`'s `summary` is unchanged.
+Inside a long turn, once a model request (its messages, the system
+instruction and the tool declarations) passes 60% of the model's window,
+the tool results older than the newest 6 are sent to the model as short
+notes naming the tool, its arguments and any `output_id`
+(`elitea-agent-runtime` `context::ToolResultElision`); the session and the
+committed transcript keep them whole. The window is the turn's model
+limits; the desktop resolves none yet (#1217 resolves them from the model
+catalogue), so it is the runtime's 128k-token fallback.
 Events are not replayed: a UI that may have missed one (the window was
 hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
 asks `agent_turn_status` and takes its `done` payload as the event.

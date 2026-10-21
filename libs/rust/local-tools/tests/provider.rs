@@ -165,6 +165,7 @@ fn fixture(policy: LocalWorkPolicy) -> Fixture {
         shell: Some(shell),
         deny_read: Vec::new(),
         app_id: None,
+        budgets: elitea_local_tools::budget::Budgets::default(),
     })
     .expect("session");
     let provider = LocalToolProvider::new(session.clone());
@@ -220,6 +221,8 @@ async fn the_toolset_follows_policy_and_plan_mode() {
         "edit_file",
         "apply_patch",
         "search_files",
+        "find_files",
+        "read_output",
         "list_tree",
         "read_document",
         "run_command",
@@ -433,4 +436,97 @@ async fn the_session_channel_is_the_hosts_approval_channel() {
         1,
         "HITL requests go straight to the person"
     );
+}
+
+/// Output over a budget: a large command and a large diff answer within
+/// the budget with an `output_id`, `read_output` pages them, plan mode
+/// keeps it, and the spill files outlive the session (a reopen pages them)
+/// until their retention ends or the conversation is forgotten.
+#[tokio::test]
+async fn large_outputs_spill_and_read_output_pages_them() {
+    let fixture = fixture(open_policy());
+    let ran = call(
+        &fixture,
+        "run_command",
+        json!({ "command": "seq 1 150000", "sandbox": "read-only" }),
+    )
+    .await;
+    assert_eq!(ran["status"], "ok", "{ran}");
+    let shown = ran["stdout"].as_str().expect("stdout").len()
+        + ran["stderr"].as_str().expect("stderr").len();
+    assert!(shown.div_ceil(4) <= 6_000, "{shown}");
+    assert!(ran["stdout_bytes"].as_u64().expect("bytes") > 900_000);
+    let id = ran["output_id"].as_str().expect("output_id").to_owned();
+    let out_dir = fixture.session.spill_store().conversation_dir();
+    let spilled = out_dir.join(format!("{id}.txt"));
+    assert!(out_dir.starts_with(fixture.dir.path().join("app-data/sessions/conv-1/out")));
+    assert!(spilled.is_file());
+    assert!(!spilled.starts_with(fixture.session.workspace().root()));
+
+    fixture.session.set_plan_mode(true);
+    let page = call(
+        &fixture,
+        "read_output",
+        json!({ "output_id": id, "offset": 149_999 }),
+    )
+    .await;
+    assert_eq!(page["status"], "ok", "{page}");
+    assert_eq!(page["content"], "149999\t149999\n150000\t150000\n");
+    let path = call(
+        &fixture,
+        "read_output",
+        json!({ "output_id": spilled.display().to_string() }),
+    )
+    .await;
+    assert_eq!(path["code"], "local_tools.invalid_argument", "{path}");
+    fixture.session.set_plan_mode(false);
+
+    std::fs::write(
+        fixture.session.workspace().root().join("main.rs"),
+        (0..20_000)
+            .map(|n| "// line ".to_owned() + &n.to_string() + "\n")
+            .collect::<String>(),
+    )
+    .expect("write");
+    let diff = call(&fixture, "git_diff", json!({})).await;
+    assert_eq!(diff["truncated"], true, "{diff}");
+    assert!(diff["output"].as_str().expect("diff").len() <= 8_000 * 4);
+    let diff_id = diff["output_id"]
+        .as_str()
+        .expect("diff output_id")
+        .to_owned();
+    let diff_page = call(&fixture, "read_output", json!({ "output_id": diff_id })).await;
+    assert!(
+        diff_page["content"]
+            .as_str()
+            .expect("content")
+            .contains("diff --git")
+    );
+
+    let Fixture {
+        dir,
+        person,
+        session,
+        provider,
+    } = fixture;
+    drop((person, session, provider));
+    assert!(spilled.is_file(), "the outputs outlive the session");
+    let reopened =
+        elitea_local_tools::budget::SpillStore::new(&dir.path().join("app-data"), "conv-1");
+    assert_eq!(
+        reopened.read(&id).expect("kept").lines().last(),
+        Some("150000")
+    );
+    elitea_local_tools::budget::forget_conversation_outputs(
+        &dir.path().join("app-data"),
+        "conv-1",
+        "unrelated",
+    );
+    assert!(
+        spilled.is_file(),
+        "another conversation's forget keeps them"
+    );
+    reopened.clear();
+    assert!(!out_dir.exists());
+    drop(dir);
 }

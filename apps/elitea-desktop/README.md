@@ -180,7 +180,7 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   (`~/.ssh`, cloud, git and browser credentials, the keychains) form one
   deny list per session. The OS sandbox of every command, the app's own
   git, the file tools (`read_file`, `list_tree`, `search_files`,
-  `read_document`) and the local index all honour it, even for a workspace
+  `find_files`, `read_document`) and the local index all honour it, even for a workspace
   opened at your home folder: the stored sign-in, the history, other
   workspaces' checkpoints and indexes stay out of reach, while the
   session's temporary directory inside them stays usable. A command whose

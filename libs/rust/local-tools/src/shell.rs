@@ -40,12 +40,17 @@ const SECRET_MARKERS: &[&str] = &[
 /// grandchild that left the group can hold a pipe open).
 const DRAIN_AFTER_KILL: Duration = Duration::from_secs(2);
 
+/// Bytes [`ShellConfig::new`] keeps per stream.
+pub const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
+
 /// The host's command settings.
 #[derive(Clone, Debug)]
 pub struct ShellConfig {
     pub default_timeout: Duration,
     pub max_timeout: Duration,
-    /// Bytes kept per stream (half from the start, half from the end).
+    /// Bytes kept per stream (half from the start, half from the end):
+    /// what a session spills when the output is over its token budget
+    /// ([`crate::budget`]), which is what the model sees.
     pub output_cap: usize,
     /// More variable names to pass through (never secret-looking ones).
     pub env_passthrough: Vec<String>,
@@ -85,13 +90,13 @@ pub struct ShellConfig {
 }
 
 impl ShellConfig {
-    /// Defaults: 2 minutes (at most 10), 64 KiB per stream.
+    /// Defaults: 2 minutes (at most 10), 4 MiB kept per stream.
     #[must_use]
     pub fn new(temp_dir: PathBuf) -> Self {
         Self {
             default_timeout: Duration::from_mins(2),
             max_timeout: Duration::from_mins(10),
-            output_cap: 64 * 1024,
+            output_cap: DEFAULT_OUTPUT_CAP,
             env_passthrough: Vec::new(),
             temp_dir,
             sandbox: SandboxConfig::default(),
@@ -165,6 +170,13 @@ pub struct CommandOutput {
     pub stderr: String,
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
+    /// Bytes the command wrote to each stream (all of them, kept or not).
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    /// The spilled whole output, when it was over the session's budget:
+    /// `read_output` pages it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_id: Option<String>,
     pub duration_ms: u64,
     pub sandbox: SandboxMode,
     pub enforcement: Enforcement,
@@ -181,6 +193,7 @@ pub struct CommandOutput {
 struct Captured {
     text: String,
     truncated: bool,
+    total: usize,
 }
 
 /// What a reader has captured so far, shared with [`run`] so a reader
@@ -224,6 +237,7 @@ impl Capture {
         Captured {
             text,
             truncated: omitted > 0 || cut_off,
+            total: self.total,
         }
     }
 }
@@ -242,11 +256,30 @@ async fn capture<R: AsyncRead + Unpin>(mut reader: R, cap: usize, into: SharedCa
     }
 }
 
+/// Give both readers a bounded drain, then render what they captured. A
+/// reader still running holds a pipe some escaped process keeps open: keep
+/// what it read, stop waiting for the rest.
+async fn drain(
+    out: (&mut tokio::task::JoinHandle<()>, &SharedCapture),
+    err: (&mut tokio::task::JoinHandle<()>, &SharedCapture),
+) -> (Captured, Captured) {
+    let _ = tokio::time::timeout(DRAIN_AFTER_KILL, async {
+        let _ = (&mut *out.0).await;
+        let _ = (&mut *err.0).await;
+    })
+    .await;
+    let (out_cut, err_cut) = (!out.0.is_finished(), !err.0.is_finished());
+    out.0.abort();
+    err.0.abort();
+    (rendered(out.1, out_cut), rendered(err.1, err_cut))
+}
+
 fn rendered(capture: &SharedCapture, cut_off: bool) -> Captured {
     capture.lock().map_or_else(
         |_| Captured {
             text: String::new(),
             truncated: true,
+            total: 0,
         },
         |captured| captured.render(cut_off),
     )
@@ -501,23 +534,14 @@ pub async fn run_checked(
         // It may have created a `.git` or a denied file.
         config.sandbox.masks.invalidate();
     }
-    let _ = tokio::time::timeout(DRAIN_AFTER_KILL, async {
-        let _ = (&mut out_reader).await;
-        let _ = (&mut err_reader).await;
-    })
+    let (out, err) = drain(
+        (&mut out_reader, &out_capture),
+        (&mut err_reader, &err_capture),
+    )
     .await;
-    // A reader still running holds a pipe some escaped process keeps
-    // open: keep what it read, stop waiting for the rest.
-    let (out_cut, err_cut) = (!out_reader.is_finished(), !err_reader.is_finished());
-    out_reader.abort();
-    err_reader.abort();
-    let out = rendered(&out_capture, out_cut);
-    let err = rendered(&err_capture, err_cut);
-    let exit_code = if timed_out {
-        None
-    } else {
-        status.and_then(|status| status.code())
-    };
+    let exit_code = status
+        .filter(|_| !timed_out)
+        .and_then(|status| status.code());
     if let Some(refusal) = helper_refusal(prepared.enforcement, exit_code, &err.text) {
         return Err(refusal);
     }
@@ -528,6 +552,9 @@ pub async fn run_checked(
         stderr: err.text,
         stdout_truncated: out.truncated,
         stderr_truncated: err.truncated,
+        stdout_bytes: out.total as u64,
+        stderr_bytes: err.total as u64,
+        output_id: None,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         sandbox: spec.mode,
         enforcement: prepared.enforcement,
@@ -867,6 +894,66 @@ mod tests {
         assert!(output.stdout.starts_with("1\n2\n"));
         assert!(output.stdout.trim_end().ends_with("10000"));
         assert!(output.stdout.contains("bytes omitted"));
+    }
+
+    /// A command printing about 1 MB answers its head and tail within the
+    /// 6k-token budget and an output id; `read_output` pages the whole.
+    #[tokio::test]
+    async fn large_output_spills_and_pages() {
+        use crate::budget::{self, Budgets, SpillStore};
+        let (dir, workspace, config) = setup();
+        let mut output = run(
+            &workspace,
+            &config,
+            &spec("seq 1 160000", SandboxMode::FullAccess),
+        )
+        .await
+        .expect("run");
+        assert!(output.stdout_bytes >= 1_000_000, "{}", output.stdout_bytes);
+        assert!(!output.stdout_truncated, "the capture keeps it all");
+        let spill = SpillStore::new(&dir.path().join("data"), "s");
+        budget::shape_command(
+            &mut output,
+            budget::bytes(Budgets::default().run_command),
+            &spill,
+        );
+        let shown = output.stdout.len() + output.stderr.len();
+        assert!(budget::estimate_tokens(shown) <= 6_000, "{shown}");
+        assert!(output.stdout_truncated);
+        assert!(output.stdout.starts_with("1\n2\n"), "the head");
+        assert!(output.stdout.ends_with("160000\n"), "the tail");
+        let id = output.output_id.clone().expect("spilled");
+        assert!(output.stdout.contains(&id), "the note names the id");
+        let value = serde_json::to_value(&output).expect("json");
+        assert_eq!(value["output_id"], id.as_str());
+        assert_eq!(value["stdout_bytes"], output.stdout_bytes);
+        let page_budget = budget::bytes(Budgets::default().read_file);
+        let first =
+            budget::read_output(&spill, serde_json::json!({ "output_id": id }), page_budget)
+                .expect("page");
+        assert!(
+            first["content"]
+                .as_str()
+                .expect("content")
+                .starts_with("     1\t1\n")
+        );
+        assert_eq!(first["total_lines"], 160_000);
+        let next = first["next_offset"].as_u64().expect("more");
+        let second = budget::read_output(
+            &spill,
+            serde_json::json!({ "output_id": id, "offset": next }),
+            page_budget,
+        )
+        .expect("page");
+        assert_eq!(second["start_line"], next);
+        let last = budget::read_output(
+            &spill,
+            serde_json::json!({ "output_id": id, "offset": 160_000 }),
+            page_budget,
+        )
+        .expect("page");
+        assert_eq!(last["content"], "160000\t160000\n");
+        assert_eq!(last["truncated"], false);
     }
 
     /// The session's data directory sits under the desktop app's own data

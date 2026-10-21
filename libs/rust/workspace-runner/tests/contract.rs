@@ -11,6 +11,10 @@ fn workspace_tools_are_the_local_tools_minus_git_commit() {
         .filter(|spec| spec.name != REPLACED_TOOL)
         .collect();
     assert!(TOOLS.iter().any(|spec| spec.name == REPLACED_TOOL));
+    let mut unique: Vec<_> = TOOLS.iter().map(|spec| spec.name).collect();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), TOOLS.len(), "every tool name once");
     assert_eq!(
         local.iter().map(|spec| spec.name).collect::<Vec<_>>(),
         WORKSPACE_TOOLS

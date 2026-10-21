@@ -28,6 +28,9 @@ globset = "0.4.20"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 ignore = "0.4.33"
+# find_files' fuzzy ranking: the matcher nucleo 0.5 re-exports (MPL-2.0,
+# linked unmodified; no serde_json, no threads), as Codex's file search uses.
+nucleo-matcher = "0.3.1"
 # The handoff's secret rules (shipped as data, `src/handoff/secret_rules.json`).
 regex = { version = "1.13.1", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
