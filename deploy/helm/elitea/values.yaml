@@ -1955,20 +1955,18 @@ main:
       enabled: false
       # ELITEA_RT_V1_AGENT. Its durable consumer is fixed by the stream.
       commandStream: ""
-      # OPTIONAL. The origin elitea-main calls for the next-input-suggestion
-      # policy, and the internal MCP origin it hands the worker. Empty derives
-      # the self call from the cleartext listener
+      # OPTIONAL. The internal MCP origin elitea-main hands the worker (#1359:
+      # elitea-main no longer calls itself; this is read for that origin
+      # alone, until the worker's internal MCP moves onto gRPC). Empty derives
+      # it from the cleartext listener
       # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>), which the worker
       # cannot reach, so internal MCP toolkits stay unavailable.
       #
       # The recommended value is the platform listener,
       # "https://elitea-main:9446" (listeners.platformAddress), as
-      # values-standalone.yaml sets it. That listener requires a client
-      # certificate, so the chart then adds main-platform-client.crt / .key
-      # to the runtime material contract below. Otherwise it must be an https
-      # ORIGIN, with no path, query or fragment, on an address that TERMINATES
-      # TLS. An https origin on elitea-main's own cleartext port is refused at
-      # boot.
+      # values-standalone.yaml sets it. Otherwise it must be an https ORIGIN,
+      # with no path, query or fragment, on an address that TERMINATES TLS. An
+      # https origin on elitea-main's own cleartext port is refused at boot.
       currentMainBaseUrl: ""
 
     # Index start, index cancel and index metadata. NEEDS
@@ -2073,10 +2071,9 @@ main:
     #   control-server.crt / .key     the control listener keypair
     #   output-server.crt / .key      the output listener keypair
     #   content-server.crt / .key     the content AND platform listener keypair
-    #   main-platform-client.crt/.key Main's own client identity for the
-    #                                 platform listener, required only when
-    #                                 agentExecutionDispatch.currentMainBaseUrl
-    #                                 names that listener
+    #
+    # (main-platform-client.crt / .key, Main's client identity for its retired
+    # self call, is no longer read; #1359.)
     #
     # The server certificates must carry the Service name, because the agent
     # worker dials all three listeners on this Service.

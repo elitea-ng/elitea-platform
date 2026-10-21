@@ -170,22 +170,6 @@ type Config struct {
 	// that chains to PlatformTLS.ClientCAPath is required at the handshake.
 	PlatformAddress string
 	PlatformTLS     runtimegrpc.ServerTLSFiles
-	// PlatformClient is the client identity this process presents when it
-	// calls an https CurrentMainBaseURL — in practice its own platform
-	// listener (ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE / _KEY_FILE). Both or
-	// neither.
-	PlatformClient PlatformClientFiles
-}
-
-// PlatformClientFiles is a client certificate chain and its private key.
-type PlatformClientFiles struct {
-	CertificateChainPath string
-	PrivateKeyPath       string
-}
-
-// Configured reports whether a client identity was named.
-func (f PlatformClientFiles) Configured() bool {
-	return f.CertificateChainPath != "" || f.PrivateKeyPath != ""
 }
 
 func ConfigFromEnv(lookup LookupEnv) (Config, error) {
@@ -452,25 +436,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 			return Config{}, errors.New("ELITEA_RUNTIME_PLATFORM_ADDRESS must not use the public HTTP listener's port")
 		}
 	}
-	// helm-render-optional: ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE
-	// helm-render-optional: ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE
-	// (Main's own client identity for an https CurrentMainBaseURL; the chart
-	// renders the pair only when it points that origin at the platform
-	// listener.)
-	config.PlatformClient.CertificateChainPath, _ = lookup("ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE")
-	config.PlatformClient.PrivateKeyPath, _ = lookup("ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE")
-	// A self call aimed at this process's own platform listener without a
-	// client identity fails every handshake; refuse it at boot instead of
-	// once per chat turn.
-	if config.PlatformAddress != "" && config.CurrentMainBaseURL != "" && !config.PlatformClient.Configured() {
-		if parsed, parseErr := url.Parse(config.CurrentMainBaseURL); parseErr == nil && parsed.Scheme == "https" {
-			if _, platformPort, splitErr := net.SplitHostPort(config.PlatformAddress); splitErr == nil && parsed.Port() == platformPort {
-				return Config{}, errors.New("ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL names the platform listener, which " +
-					"requires a client certificate: set ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE and " +
-					"ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE")
-			}
-		}
-	}
 	// The SSE stream limits are optional overrides of the built-in
 	// process-local profile. executionapi reads the three
 	// ELITEA_RUNTIME_SSE_* names itself, so they do not appear as literal
@@ -626,50 +591,23 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
-	if c.PlatformClient.Configured() {
-		if c.PlatformClient.CertificateChainPath == "" || c.PlatformClient.PrivateKeyPath == "" {
-			return errors.New("ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE and " +
-				"ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE must be set together")
-		}
-		if !validConfigPath(c.PlatformClient.CertificateChainPath) || !validConfigPath(c.PlatformClient.PrivateKeyPath) {
-			return errors.New("runtime platform client certificate path is invalid")
-		}
-	}
 	return nil
 }
 
-// currentMainBaseURL resolves the origin this process calls for the
-// next-input-suggestion policy.
+// currentMainBaseURL resolves the internal MCP origin handed to the worker
+// (agent_prebuilt_mcp.go): the URL its internal-MCP client calls back on.
 //
-// # Why this is DERIVED rather than required
+// It used to be, first, the origin of elitea-main's next-input-suggestion
+// SELF call. That call is in process now (#1359 H7), so this value is read for
+// the MCP origin alone. TODO(#1359 U5): when the worker's internal-MCP client
+// becomes InternalToolService on the platform gRPC listener, this value and
+// ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL retire.
 //
-// In the standalone topology the call is a SELF call: elitea-main asks itself
-// for the policy. Its public listener on ELITEA_HTTP_ADDRESS is cleartext, so
-// an https origin aimed at THAT port cannot work. The standalone stack set
-// `https://elitea-main:8080`, and every chat turn produced
-//
-//	http: server gave HTTP response to HTTPS client
-//
-// That is a DEPLOYMENT fault reported once per process at warning level and
-// once per turn at debug level, which is the wrong place to learn it. So when
-// the variable is unset the base URL comes from the LISTENER instead:
-// `http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>`. The request stays on the
-// loopback interface, and the actor bearer token it carries never reaches a
-// network.
-//
-// # Why the variable still exists
-//
-// The retired centry-hybrid stack did not serve this route from this process. It aimed
-// the call at the edge (`https://elitea-gateway`), which routed the path to
-// legacy Centry. Any mixed deployment has the same shape, so an explicit
-// origin has to stay possible for that topology.
-//
-// The value is ALSO the internal MCP origin handed to the worker
-// (agent_prebuilt_mcp.go), which a loopback address cannot serve. The
-// standalone stack and the chart therefore name the platform listener
-// (ELITEA_RUNTIME_PLATFORM_ADDRESS, `https://elitea-main:9446`, #1359): this
-// process DOES terminate TLS there, and requires a runtime-CA client
-// certificate, so the self call presents ELITEA_RUNTIME_PLATFORM_CLIENT_*.
+// Unset, it derives from the public listener
+// (`http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>`), which only this process
+// can reach. The standalone stack and the chart name the platform listener
+// (`https://elitea-main:9446`). An https origin on this process's own
+// cleartext port, and cleartext to a non-loopback host, are refused at boot.
 func currentMainBaseURL(lookup LookupEnv) (string, error) {
 	listenPort, err := publicListenPort(lookup)
 	if err != nil {

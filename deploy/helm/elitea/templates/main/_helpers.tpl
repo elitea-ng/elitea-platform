@@ -1255,13 +1255,6 @@ ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
 {{- if $agent.currentMainBaseUrl }}
 ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
-{{- if include "elitea-main.currentMainViaPlatformListener" . }}
-{{/* The self call (and the internal MCP origin handed to the worker) names
-     the platform listener, which requires a runtime-CA client certificate:
-     Main presents main-platform-client.crt from the same material. */}}
-ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE: {{ printf "%s/main-platform-client.crt" $dir | quote }}
-ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE: {{ printf "%s/main-platform-client.key" $dir | quote }}
-{{- end }}
 {{- end }}
 {{- end }}
 {{- if $ingest.enabled }}
@@ -1410,19 +1403,3 @@ elitea-llm-gateway.masterKeyRef).
 {{- end -}}
 {{- end }}
 
-{{/*
-elitea-main.currentMainViaPlatformListener — "true" when
-main.runtime.agentExecutionDispatch.currentMainBaseUrl is an https origin on
-the platform listener's port, so Main must present its own client certificate
-(main-platform-client.crt / .key in the runtime material). Empty otherwise.
-*/}}
-{{- define "elitea-main.currentMainViaPlatformListener" -}}
-{{- $runtime := .Values.main.runtime -}}
-{{- $url := $runtime.agentExecutionDispatch.currentMainBaseUrl | default "" | toString -}}
-{{- if and $runtime.enabled $runtime.agentExecutionDispatch.enabled (hasPrefix "https://" $url) -}}
-{{- $host := (urlParse $url).host -}}
-{{- if hasSuffix (printf ":%s" (include "elitea-main.runtimePort" $runtime.listeners.platformAddress)) $host -}}
-true
-{{- end -}}
-{{- end -}}
-{{- end -}}

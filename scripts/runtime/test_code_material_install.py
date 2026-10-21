@@ -14,8 +14,7 @@ BASE_FILES = (
     "command-signing-key.pem auth-attempt-key "
     "auth-pat-signing-key auth-form-users.json vault-master-key "
     "agent-worker-client.crt agent-worker-client.key "
-    "worker-output-spool-key agent-checkpoint-connection "
-    "main-platform-client.crt main-platform-client.key"
+    "worker-output-spool-key agent-checkpoint-connection"
 ).split()
 CODE_FILES = ("code-owner-client.crt", "code-owner-client.key", "code-platform-content-keys.json")
 ENABLED = {"ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED": "true",

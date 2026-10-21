@@ -25,8 +25,6 @@
 #     content-server.{crt,key}        elitea-main content HTTPS  :9445, and the
 #                                     platform listener :9446 (the worker's
 #                                     platform_origin, #1359)
-#     main-platform-client.{crt,key}  elitea-main's own client identity for its
-#                                     platform listener (the self call)
 #     subapp-callback-client.{crt,key} a sub-application's (DeepWiki,
 #                                     Inventory) callback identity for the
 #                                     platform listener (Helm:
@@ -80,7 +78,6 @@ material=(
   control-server.crt control-server.key
   output-server.crt output-server.key
   content-server.crt content-server.key
-  main-platform-client.crt main-platform-client.key
   subapp-callback-client.crt subapp-callback-client.key
   agent-worker-client.crt agent-worker-client.key
   agent-checkpoint-connection
@@ -99,11 +96,13 @@ done
 # full rotation would also rotate vault-master-key, auth-pat-signing-key and
 # the Form users, and every vault secret already stored would become
 # unreadable. Idempotent: a tree without them is left alone. The retired
-# platform-edge keypair (#1359) goes the same way.
+# platform-edge keypair and elitea-main's retired self-call client identity
+# (main-platform-client, #1359) go the same way.
 for retired in redis-server.crt redis-server.key redis-users.acl \
                redis-producer-password redis-worker-password \
                redis-bootstrap-password redis-auth-password \
-               platform-edge.crt platform-edge.key; do
+               platform-edge.crt platform-edge.key \
+               main-platform-client.crt main-platform-client.key; do
   if [ -e "$RUNTIME_DIR/$retired" ]; then
     rm -f "$RUNTIME_DIR/$retired"
     echo "→ Removed retired runtime material: $RUNTIME_DIR/$retired"
@@ -111,7 +110,7 @@ for retired in redis-server.crt redis-server.key redis-users.acl \
 done
 if [ "$needs_regen" -eq 0 ]; then
   for name in runtime-ca.crt control-server.crt output-server.crt \
-              content-server.crt main-platform-client.crt \
+              content-server.crt \
               subapp-callback-client.crt agent-worker-client.crt; do
     openssl x509 -checkend 86400 -noout -in "$RUNTIME_DIR/$name" >/dev/null 2>&1 || needs_regen=1
   done
@@ -155,10 +154,9 @@ issue_server content-server elitea-main   "DNS:elitea-main"
 # with content-server's keypair: same process, same DNS:elitea-main.
 
 # Client identities for the platform listener, which requires a client
-# certificate the runtime CA signed. elitea-main's own (the self call to
-# ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL) and the sub-applications' callback hop.
-# Neither is the worker's: the worker's identity authorizes runtime gRPC calls
-# by its SPIFFE SAN, and these must not be interchangeable with it.
+# certificate the runtime CA signed: the sub-applications' callback hop. It is
+# not the worker's: the worker's identity authorizes runtime gRPC calls by its
+# SPIFFE SAN, and this must not be interchangeable with it.
 issue_client() {
   local name="$1" cn="$2" sans="$3"
   openssl req -newkey rsa:2048 -nodes \
@@ -169,7 +167,6 @@ issue_client() {
     -out "$RUNTIME_DIR/$name.crt" -days "$DAYS" \
     -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature\n' "$sans") 2>/dev/null
 }
-issue_client main-platform-client   elitea-main            "DNS:elitea-main"
 issue_client subapp-callback-client elitea-subapp-callback "DNS:elitea-subapp-callback"
 
 # ── worker client cert: exactly one SPIFFE URI SAN, nothing else ─────────────

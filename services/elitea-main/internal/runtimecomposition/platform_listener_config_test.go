@@ -97,20 +97,6 @@ func TestPlatformListenerRefusals(t *testing.T) {
 			},
 			want: "path is invalid",
 		},
-		"a self call on the platform listener with no client identity": {
-			mutate: func(environment map[string]string) {
-				environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-				environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
-				environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-main:9446"
-			},
-			want: "requires a client certificate",
-		},
-		"half a client identity": {
-			mutate: func(environment map[string]string) {
-				environment["ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE"] = "/run/secrets/main-platform-client.crt"
-			},
-			want: "must be set together",
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			environment := platformEnvironment()
@@ -123,26 +109,28 @@ func TestPlatformListenerRefusals(t *testing.T) {
 	}
 }
 
-func TestPlatformClientIdentityIsRuntimeMaterial(t *testing.T) {
+// elitea-main no longer calls its own platform listener (#1359 H7: the
+// next-input-suggestion self call is in process), so naming the listener as
+// CURRENT_MAIN_BASE_URL (the internal MCP origin) needs no client identity of
+// Main's own, and the retired main-platform-client files are not material.
+func TestPlatformListenerNeedsNoMainClientIdentity(t *testing.T) {
 	environment := platformEnvironment()
+	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
+	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
+	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-main:9446"
 	environment["ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE"] = "/run/secrets/main-platform-client.crt"
 	environment["ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE"] = "/run/secrets/main-platform-client.key"
 	config, err := ConfigFromEnv(mapLookup(environment))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("a platform-listener MCP origin without a Main client identity was refused: %v", err)
 	}
 	files, err := config.MaterialFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]securefile.Permissions{}
 	for _, file := range files {
-		found[file.Path] = file.Permissions
-	}
-	if permissions, ok := found["/run/secrets/main-platform-client.key"]; !ok || permissions != securefile.PrivateMaterial {
-		t.Fatalf("the platform client key is not private runtime material: %v", found)
-	}
-	if _, ok := found["/run/secrets/main-platform-client.crt"]; !ok {
-		t.Fatalf("the platform client certificate is not runtime material: %v", found)
+		if strings.Contains(file.Path, "main-platform-client") {
+			t.Fatalf("the retired main-platform-client file %s is still runtime material", file.Path)
+		}
 	}
 }

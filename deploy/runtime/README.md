@@ -172,17 +172,17 @@ See [`worker-runtime.json`](worker-runtime.json); its `nats_stream` /
 `nats_consumer` must match the compose env on elitea-main, and its
 `workload_session_id` / `producer_id` must match the row `seed-runtime` writes.
 
-**`platform_origin` is elitea-main's platform listener.** The worker rejects a
-non-https origin outright (`config.py:187`), so elitea-main serves its ordinary
-`/api/v2` + `/llm` surface a second time on a fourth mTLS listener,
-`https://elitea-main:9446` (`ELITEA_RUNTIME_PLATFORM_ADDRESS`, #1359). It is the
-same handler as :8080 over TLS 1.3 with the content listener's keypair, and
-like the other three it **requires a runtime-CA client certificate**: the
-worker presents `agent-worker-client.crt`, elitea-main's own self call
-(`ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL`) presents `main-platform-client.crt`.
-Caller-supplied identity headers are stripped there and `/internal/*` answers
-404. It replaced `platform-edge`, a second Traefik that used to terminate TLS for
-this origin. It is not the browser edge and publishes no host port.
+**`platform_origin` is elitea-main's platform listener.** elitea-main serves a
+fourth mTLS listener, `https://elitea-main:9446`
+(`ELITEA_RUNTIME_PLATFORM_ADDRESS`, #1359), over TLS 1.3 with the content
+listener's keypair, and like the other three it **requires a runtime-CA client
+certificate**: the worker presents `agent-worker-client.crt`. It is a **gRPC**
+listener (ALPN h2 only): each gRPC service on it admits only the workload
+identities configured for it, `grpc.health.v1` answers any verified workload,
+and it serves no HTTP route — probe it with `/elitea-grpc-health` from the
+elitea-main image, not curl. It replaced `platform-edge`, a second Traefik that
+used to terminate TLS for this origin. It is not the browser edge and publishes
+no host port.
 (`content_origin` is different: that one is elitea-main's
 own :9445 listener, reached over mTLS, and the worker requires **HTTP/2** on it
 specifically — `serve.py:721` sets `http1=False`.)

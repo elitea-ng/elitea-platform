@@ -315,12 +315,9 @@ main:
       enabled: true
       commandStream: "ELITEA_RT_V1_AGENT"
       # elitea-main's own platform listener (listeners.platformAddress, #1359),
-      # as the compose stack sets it. It is the self call's origin AND the
-      # internal MCP origin handed to the worker, which a loopback address
-      # cannot serve. The listener requires a client certificate, so the
-      # runtime material Secret must also carry main-platform-client.crt /
-      # .key (gen-runtime-certs.sh mints them). Never "https://elitea-main:8080":
-      # that port is cleartext and boot refuses it.
+      # as the compose stack sets it: the internal MCP origin handed to the
+      # worker, which a loopback address cannot serve. Never
+      # "https://elitea-main:8080": that port is cleartext and boot refuses it.
       currentMainBaseUrl: "https://elitea-main:9446"
 
     # Index start, index cancel and index metadata.

@@ -42,12 +42,14 @@ certificate and chart/env names (`ELITEA_RUNTIME_PLATFORM_*`,
 2. Set `worker.runtime.platformOrigin: https://elitea-main:9446` (the new
    default) if you override it.
 3. Delete the `elitea-platform-edge-tls` Secret; nothing reads it.
-4. If `main.runtime.currentMainBaseUrl` names the platform listener
-   (`https://elitea-main:9446`, as in `values-standalone.yaml`), mint
-   `main-platform-client.crt` / `.key` (runtime CA, clientAuth EKU,
-   `DNS:elitea-main`) into the runtime material Secret. elitea-main presents it
-   for its own self call and refuses to start without it.
-   `deploy/scripts/gen-runtime-certs.sh` issues it.
+4. elitea-main no longer calls itself: the next-input-suggestion policy
+   lookup is in process. `main-platform-client.crt` / `.key` and
+   `ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE` / `_KEY_FILE` are not read any
+   more; remove them from the runtime material Secret and any env overrides.
+   `main.runtime.currentMainBaseUrl` stays (it is the internal MCP origin
+   handed to the worker); `https://elitea-main:9446` needs no Main client
+   certificate. `deploy/scripts/gen-runtime-certs.sh` deletes the retired
+   files from an existing tree.
 5. `deepwiki.callbackViaPlatformEdge` was removed and now fails the render; it
    is not mapped onto the new key because the new hop needs a client
    certificate you have to mint. Use `deepwiki.callbackViaPlatformListener:
@@ -57,7 +59,8 @@ certificate and chart/env names (`ELITEA_RUNTIME_PLATFORM_*`,
 6. If `GATEWAY_SELF_LLM_ORIGINS` lists the worker's model origin, replace
    `https://elitea-platform-edge/llm/v1` with `https://elitea-main:9446/llm/v1`.
 7. Compose: re-run `deploy/scripts/gen-runtime-certs.sh` (it removes the
-   retired `platform-edge.*` files and issues the two client identities), then
+   retired `platform-edge.*` and `main-platform-client.*` files and issues the
+   sub-application callback identity), then
    recreate the stack. The `standalone_runtime_edge` volume is unused and can
    be removed.
 

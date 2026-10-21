@@ -1197,14 +1197,12 @@ services:
       # refuses sharing the configuration-validation stream.
       ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
       ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
-      # Workers use this HTTPS origin for internal MCP tools, and Main uses it
-      # for its own next-input-suggestion policy calls: Main's platform
-      # listener (ELITEA_RUNTIME_PLATFORM_ADDRESS below, #1359). That listener
-      # requires a runtime-CA client certificate, so Main presents
-      # main-platform-client.crt (DNS:elitea-main) for the self call.
+      # The internal MCP origin handed to workers: Main's platform listener
+      # (ELITEA_RUNTIME_PLATFORM_ADDRESS below, #1359). Main no longer calls
+      # itself (the next-input-suggestion lookup is in process), so it needs
+      # no client identity of its own. TODO(#1359 U5): retires when the
+      # worker's internal MCP moves to InternalToolService over gRPC.
       ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: https://elitea-main:9446
-      ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE: /run/elitea-runtime/main-platform-client.crt
-      ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE: /run/elitea-runtime/main-platform-client.key
 
       # Index-ingest dispatch: the toolkit `index_data` path behind
       # POST /api/v2/elitea_core/test_toolkit_tool/prompt_lib/{projectID}

@@ -730,6 +730,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct nested application version reader: %w", targetErr)
 		}
+		// TODO(#1359 U5): CurrentMainBaseURL survives only as the internal
+		// MCP origin handed to the worker (https://elitea-main:9446). When the
+		// worker's internal-MCP client becomes InternalToolService on the
+		// platform gRPC listener, this URL and ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL
+		// retire.
 		agentPrebuiltMCP, prebuiltErr := newCurrentAgentRuntimePrebuiltMCP(
 			mcpregistry.NewPrebuiltStore(dependencies.AdmissionPool),
 			config.CurrentMainBaseURL,
@@ -746,25 +751,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent configuration materializer: %w", targetErr)
 		}
-		// The runtime CA: the same bundle the private listeners verify
-		// worker client certificates against. The client identity is what
-		// the platform listener requires when CurrentMainBaseURL names it.
-		currentMainClient, targetErr := currentcore.NewTLSClient(
-			config.ControlTLS.ClientCAPath,
-			config.PlatformClient.CertificateChainPath,
-			config.PlatformClient.PrivateKeyPath,
-		)
-		if targetErr != nil {
-			return nil, fmt.Errorf("construct current Main policy client: %w", targetErr)
-		}
-		nextInputSuggestionResolver, targetErr := currentcore.NewNextInputSuggestionResolver(
-			config.CurrentMainBaseURL,
-			dependencies.ActorTokenIssuer,
-			currentMainClient,
-		)
-		if targetErr != nil {
-			return nil, fmt.Errorf("construct next-input-suggestion policy resolver: %w", targetErr)
-		}
+		// In process (#1359 H7): this used to be an HTTP self-call to the
+		// platform listener that always answered 404. No policy source
+		// exists yet (#334), so every turn carries no policy, as before.
+		nextInputSuggestionResolver := currentcore.NewNextInputSuggestionResolver(nil)
 		agentGuardrails, targetErr := platformconfig.NewGuardrailPolicyAdapter(dependencies.AdmissionPool)
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct current agent guardrail policy source: %w", targetErr)

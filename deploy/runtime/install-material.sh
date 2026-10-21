@@ -82,18 +82,13 @@ install_files() {
 MAIN=/dst/main
 mkdir -p "$MAIN"; chown 65532:65532 "$MAIN"; chmod 755 "$MAIN"
 # PublicMaterial: readable by anyone, writable by nobody but the owner.
-# main-platform-client.crt is Main's own client identity for its platform
-# listener (#1359): ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL names that listener,
-# which requires a runtime-CA client certificate even for a self call.
 install_files "$MAIN" 65532:65532 0644 \
   runtime-ca.crt \
   control-server.crt output-server.crt content-server.crt \
-  main-platform-client.crt \
   command-signing-keyring.json
 # PrivateMaterial: owner-only, no exceptions.
 install_files "$MAIN" 65532:65532 0600 \
   control-server.key output-server.key content-server.key \
-  main-platform-client.key \
   command-signing-key.pem \
   auth-attempt-key auth-pat-signing-key auth-form-users.json \
   vault-master-key

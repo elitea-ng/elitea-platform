@@ -14,8 +14,9 @@
 #   1. the standalone + worker render wires the listener: elitea-main's
 #      ConfigMap names the address, the content keypair and the runtime CA as
 #      client CA; the Deployment and Service expose 9446; the worker's
-#      platform_origin is https://elitea-main:9446; Main's self call presents
-#      its own client identity; and no platform-edge resource is rendered;
+#      platform_origin is https://elitea-main:9446; Main renders no client
+#      identity of its own (its self call is gone); and no platform-edge
+#      resource is rendered;
 #   2. the NetworkPolicy admits the worker (and nothing else by default) to
 #      9446, the chart default renders no platform client identity, and the
 #      retired worker.platformEdge values are refused with a migration message;
@@ -73,9 +74,11 @@ expect "listener address" "$(cm ELITEA_RUNTIME_PLATFORM_ADDRESS)" ":9446"
 expect "listener certificate (content keypair, SAN elitea-main)" "$(cm ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE)" "/run/elitea-runtime/content-server.crt"
 expect "listener key" "$(cm ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE)" "/run/elitea-runtime/content-server.key"
 expect "listener client CA is the runtime CA" "$(cm ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE)" "/run/elitea-runtime/runtime-ca.crt"
-expect "Main's self call names the listener" "$(cm ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL)" "https://elitea-main:9446"
-expect "Main's self call presents its client certificate" "$(cm ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE)" "/run/elitea-runtime/main-platform-client.crt"
-expect "Main's self call presents its client key" "$(cm ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE)" "/run/elitea-runtime/main-platform-client.key"
+expect "the internal MCP origin names the listener" "$(cm ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL)" "https://elitea-main:9446"
+# Main no longer calls itself (#1359 H7), so even with that origin on the
+# listener the chart renders no client identity of Main's own.
+expect "no Main client identity is rendered" \
+  "$(grep -c 'ELITEA_RUNTIME_PLATFORM_CLIENT_\|main-platform-client' "$WORK/worker.yaml" || true)" "0"
 expect "Deployment exposes runtime-platform" \
   "$(yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-main") | .spec.template.spec.containers[].ports[] | select(.name == "runtime-platform") | .containerPort' "$WORK/worker.yaml")" "9446"
 expect "Service exposes runtime-platform" \

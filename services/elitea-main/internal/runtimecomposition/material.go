@@ -71,10 +71,6 @@ func (c Config) MaterialFiles() ([]MaterialFile, error) {
 			c.PlatformTLS.CertificateChainPath, c.PlatformTLS.PrivateKeyPath, c.PlatformTLS.ClientCAPath,
 		})
 	}
-	if c.PlatformClient.Configured() {
-		add(c.PlatformClient.CertificateChainPath, securefile.PublicMaterial)
-		add(c.PlatformClient.PrivateKeyPath, securefile.PrivateMaterial)
-	}
 	for _, listener := range listeners {
 		add(listener.certificateChain, securefile.PublicMaterial)
 		add(listener.privateKey, securefile.PrivateMaterial)
