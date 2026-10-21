@@ -212,14 +212,14 @@ Until that is in place, the connection check in the admin console fails with DIA
 In the admin console, open **Configuration › LLM Proxy › Providers & models**.
 </Step>
 <Step title="Add a provider">
-Choose **Vertex AI** or **EPAM DIAL**, and set **Authentication** to **Workload identity**.
+Choose **Vertex AI** or **EPAM DIAL**, and set **Authentication** to **Workload identity (GKE service account)**.
 - Vertex AI: the Google Cloud project and location. There is no key field.
 - EPAM DIAL: the endpoint and API version, plus a token audience if your DIAL expects one other than the endpoint's origin.
 
-Run **Test connection**. A warning on the Workload identity option means `llmGateway.workloadIdentity.enabled` is not on.
+Save the provider, then run **Test connection**. A keyless provider can be tested only after it is saved. A warning under the Workload identity option means `llmGateway.workloadIdentity.enabled` is not on.
 </Step>
 <Step title="Publish models">
-Add a platform model for each model you share: its name as the provider knows it, its context window, and, for DIAL, its protocol. Use **Responses** for OpenAI models that need the Responses API, and **Anthropic** for Claude with extended thinking.
+Add a platform model for each model you share: its name as the provider knows it, its context window, and, for DIAL, its **DIAL protocol**. **Default** fits most models. Choose **OpenAI Responses API** for gpt models that need it, and **Anthropic Messages API** for Claude with extended thinking.
 </Step>
 <Step title="Choose the platform default model">
 Set it on the same tab. New conversations use it.
