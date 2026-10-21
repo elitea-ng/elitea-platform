@@ -66,7 +66,7 @@ export const UpdateConversationRequest = zod
       .record(zod.string(), zod.unknown())
       .optional()
       .describe(
-        "Replaces the whole settings document when present, except `internal_tools`: a document without that key keeps the stored list (client contract 1.14). To change the list alone, use updateConversationInternalTools.",
+        "Replaces the whole settings document when present, except `internal_tools`: a document without that key keeps the stored list (client contract 1.15). To change the list alone, use updateConversationInternalTools.",
       ),
   })
   .describe(

@@ -1,6 +1,6 @@
 package repos
 
-// Issue 1060 (client contract 1.14): updateConversationInternalTools writes
+// Issue 1060 (client contract 1.15): updateConversationInternalTools writes
 // `meta.internal_tools` alone, and the PUT keeps a stored list its document
 // does not state, so the two never clobber each other. Through the real
 // handler and repository.

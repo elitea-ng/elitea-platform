@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.14"
+  x-elitea-client-contract: "1.15"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -3050,7 +3050,7 @@ components:
           description: >-
             Replaces the whole settings document when present, except
             `internal_tools`: a document without that key keeps the stored
-            list (client contract 1.14). To change the list alone, use
+            list (client contract 1.15). To change the list alone, use
             updateConversationInternalTools.
           x-elitea-passthrough: >-
             NOTE(W2): the `chat_conversations.meta` jsonb column, written whole
@@ -3293,16 +3293,16 @@ components:
               type: array
               items: { type: integer, format: int64 }
               description: >-
-                Client contract 1.13. On a user's message: the user ids the
+                Client contract 1.14. On a user's message: the user ids the
                 sender tagged (the send's `user_ids`), deduplicated, in the
                 order sent, at most 64. Absent when the message tags nobody
-                and on messages sent before 1.13. These are who was TAGGED,
+                and on messages sent before 1.14. These are who was TAGGED,
                 not who was notified: notification only reaches project
                 members other than the sender.
             mentions_everyone:
               type: boolean
               description: >-
-                Client contract 1.13. On a user's message: true when it
+                Client contract 1.14. On a user's message: true when it
                 tagged `@everyone` (the send's `sending_to_everyone`); absent
                 otherwise.
         message_items:
@@ -3367,7 +3367,7 @@ components:
           description: >-
             `/{bucket}/{conversation_uuid}/{file name}`. The file name is the
             uploaded one, numbered (`name (1).ext`) when the conversation
-            already holds that name (client contract 1.12).
+            already holds that name (client contract 1.13).
         file_size: { type: integer, format: int64 }
 
     ConversationAttachmentChunkReceived:
@@ -17353,7 +17353,7 @@ paths:
       operationId: updateConversationInternalTools
       summary: Replace a conversation's internal tools and nothing else
       description: |
-        Client contract 1.14. Sets the conversation's `meta.internal_tools`
+        Client contract 1.15. Sets the conversation's `meta.internal_tools`
         (the built-in tools a turn may use, such as `attachments` or
         `ask_user`) and no other key, in one statement, so it never loses or
         undoes a concurrent write of other settings, from this client or
@@ -20479,7 +20479,7 @@ paths:
         (images and documents have separate ceilings); one chunk is at most a
         few MB.
 
-        Client contract 1.12: a name already stored in this conversation is
+        Client contract 1.13: a name already stored in this conversation is
         never overwritten. The file is stored under a numbered name instead:
         the number after the highest one the conversation holds for that name
         (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
@@ -20489,7 +20489,7 @@ paths:
         a conversation holds, the upload is never refused for it. Always send
         the returned `filepath`, never one built from the local file name.
 
-        Client contract 1.13: a stored document's text is extracted in the
+        Client contract 1.14: a stored document's text is extracted in the
         background as soon as it is uploaded, so the first turn that carries
         it does not wait for the extraction. This never delays or fails the
         upload. A file uploaded and never sent can be removed with
@@ -20643,7 +20643,7 @@ paths:
       operationId: deleteConversationAttachment
       summary: Delete one file uploaded to a conversation that no message carries
       description: |
-        Client contract 1.13. Removes one stored file: the one a user uploaded
+        Client contract 1.14. Removes one stored file: the one a user uploaded
         in the composer and took back before sending. Needs
         `models.chat.attachments.delete` (the permission of the
         conversation-wide attachment delete) and access to the conversation;

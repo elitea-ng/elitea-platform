@@ -67,13 +67,13 @@ export const ConversationMessage = zod
           .array(zod.int())
           .optional()
           .describe(
-            "Client contract 1.13. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.13. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender.",
+            "Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender.",
           ),
         mentions_everyone: zod
           .boolean()
           .optional()
           .describe(
-            "Client contract 1.13. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise.",
+            "Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise.",
           ),
       })
       .optional(),

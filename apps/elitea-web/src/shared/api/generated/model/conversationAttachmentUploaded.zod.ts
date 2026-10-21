@@ -46,7 +46,7 @@ export const ConversationAttachmentUploaded = zod
     filepath: zod
       .string()
       .describe(
-        "`/{bucket}/{conversation_uuid}/{file name}`. The file name is the uploaded one, numbered (`name (1).ext`) when the conversation already holds that name (client contract 1.12).",
+        "`/{bucket}/{conversation_uuid}/{file name}`. The file name is the uploaded one, numbered (`name (1).ext`) when the conversation already holds that name (client contract 1.13).",
       ),
     file_size: zod.int(),
   })

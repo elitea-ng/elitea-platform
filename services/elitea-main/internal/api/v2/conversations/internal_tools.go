@@ -1,6 +1,6 @@
 package conversations
 
-// Narrow write of a conversation's internal tools (client contract 1.14,
+// Narrow write of a conversation's internal tools (client contract 1.15,
 // updateConversationInternalTools):
 // PATCH /conversation_internal_tools/prompt_lib/{projectID}/{conversationID}.
 //

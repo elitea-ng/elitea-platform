@@ -1,6 +1,6 @@
 package conversations
 
-// Per-file attachment delete (client contract 1.13, deleteConversationAttachment):
+// Per-file attachment delete (client contract 1.14, deleteConversationAttachment):
 // DELETE /attachments/prompt_lib/{projectID}/{conversationUUID}/{name}.
 //
 // The conversation-wide DELETE on the parent path removes every file the

@@ -3605,7 +3605,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Get)
 					r.With(projectPermission("models.chat.conversation.update")).
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
-					// Client contract 1.14: `meta.internal_tools` alone, in one
+					// Client contract 1.15: `meta.internal_tools` alone, in one
 					// statement, under the PUT's permission (internal_tools.go).
 					r.With(projectPermission("models.chat.conversation.update")).
 						Patch("/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateInternalTools)
@@ -3739,7 +3739,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.AddAttachments)
 					r.With(projectPermission("models.chat.attachments.delete")).
 						Delete("/attachments/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteAttachments)
-					// Client contract 1.13: ONE stored file, addressed like the
+					// Client contract 1.14: ONE stored file, addressed like the
 					// download below, under the conversation-wide delete's
 					// permission (attachment_delete.go).
 					r.With(projectPermission("models.chat.attachments.delete")).

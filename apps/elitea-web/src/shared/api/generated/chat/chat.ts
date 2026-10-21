@@ -72,6 +72,7 @@ import type {
   ConversationMessageListing,
   ConversationParticipant,
   ConversationParticipantCreate,
+  ConversationReadState,
   ConversationSummary,
   CreateSupportConversationBody,
   CreatedConversation,
@@ -98,6 +99,7 @@ import type {
   LocalTurnError,
   LocalTurnStartRequest,
   LocalTurnStarted,
+  MarkConversationReadRequest,
   MemoryEntry,
   MemoryEntryList,
   MemoryEntryWriteRequest,
@@ -2252,6 +2254,361 @@ export function useUnarchiveConversation<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type markConversationReadResponse200 = {
+  data: ConversationReadState;
+  status: 200;
+};
+
+export type markConversationReadResponse400 = {
+  data: ErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type markConversationReadResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type markConversationReadResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type markConversationReadResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type markConversationReadResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type markConversationReadResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type markConversationReadResponseSuccess =
+  markConversationReadResponse200 & {
+    headers: Headers;
+  };
+export type markConversationReadResponseError = (
+  | markConversationReadResponse400
+  | markConversationReadResponse401
+  | markConversationReadResponse403
+  | markConversationReadResponse404
+  | markConversationReadResponse426
+  | markConversationReadResponse500
+) & {
+  headers: Headers;
+};
+
+export type markConversationReadResponse =
+  markConversationReadResponseSuccess | markConversationReadResponseError;
+
+export const getMarkConversationReadUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/conversation_read/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.12. Moves the CALLER's read marker of the
+ * conversation: up to `message_id`, or up to now without it. The list
+ * rows' `unread` (listConversations and its `changes_since` delta)
+ * compares the newest answer with this marker. A client calls it when
+ * the user opens the conversation, and again when new messages arrive
+ * while the conversation is on screen.
+ *
+ * The marker is personal state, so read access is enough: the chat
+ * authority's detail rule (the rule of getConversation) and
+ * `models.chat.conversation.details`. A conversation the caller cannot
+ * see answers 404 and writes nothing. A `message_id` that is not a
+ * message of the conversation answers 404.
+ *
+ * The request is idempotent, and the marker never moves back. The read
+ * does not re-deliver the row in the `changes_since` delta of any
+ * member and does not change `updated_at`. The project event stream
+ * sends a `conversation_activity` event with `unread_hint: false` to the
+ * caller's other devices only. A delete of the conversation deletes its
+ * markers. A fork starts read for the member who forked it.
+ * @summary Mark a conversation read for the caller
+ */
+export const markConversationRead = async (
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<markConversationReadResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<markConversationReadResponse>(
+    getMarkConversationReadUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(markConversationReadRequest),
+    },
+  );
+};
+
+export const getMarkConversationReadQueryKey = (
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/conversation_read/prompt_lib/${projectId}/${conversationId}`,
+    markConversationReadRequest,
+  ] as const;
+};
+
+export const getMarkConversationReadQueryOptions = <
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMarkConversationReadQueryKey(
+      projectId,
+      conversationId,
+      markConversationReadRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof markConversationRead>>
+  > = ({ signal }) =>
+    markConversationRead(
+      projectId,
+      conversationId,
+      markConversationReadRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof markConversationRead>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MarkConversationReadQueryResult = NonNullable<
+  Awaited<ReturnType<typeof markConversationRead>>
+>;
+export type MarkConversationReadQueryError =
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest: undefined | MarkConversationReadRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markConversationRead>>,
+          TError,
+          Awaited<ReturnType<typeof markConversationRead>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markConversationRead>>,
+          TError,
+          Awaited<ReturnType<typeof markConversationRead>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mark a conversation read for the caller
+ */
+
+export function useMarkConversationRead<
+  TData = Awaited<ReturnType<typeof markConversationRead>>,
+  TError =
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  markConversationReadRequest?: MarkConversationReadRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markConversationRead>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMarkConversationReadQueryOptions(
+    projectId,
+    conversationId,
+    markConversationReadRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type updateConversationInternalToolsResponse200 = {
   data: UpdatedConversation;
   status: 200;
@@ -2320,7 +2677,7 @@ export const getUpdateConversationInternalToolsUrl = (
 };
 
 /**
- * Client contract 1.14. Sets the conversation's `meta.internal_tools`
+ * Client contract 1.15. Sets the conversation's `meta.internal_tools`
  * (the built-in tools a turn may use, such as `attachments` or
  * `ask_user`) and no other key, in one statement, so it never loses or
  * undoes a concurrent write of other settings, from this client or
@@ -13723,7 +14080,7 @@ export const getUploadConversationAttachmentUrl = (
  * (images and documents have separate ceilings); one chunk is at most a
  * few MB.
  *
- * Client contract 1.12: a name already stored in this conversation is
+ * Client contract 1.13: a name already stored in this conversation is
  * never overwritten. The file is stored under a numbered name instead:
  * the number after the highest one the conversation holds for that name
  * (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
@@ -13733,7 +14090,7 @@ export const getUploadConversationAttachmentUrl = (
  * a conversation holds, the upload is never refused for it. Always send
  * the returned `filepath`, never one built from the local file name.
  *
- * Client contract 1.13: a stored document's text is extracted in the
+ * Client contract 1.14: a stored document's text is extracted in the
  * background as soon as it is uploaded, so the first turn that carries
  * it does not wait for the extraction. This never delays or fails the
  * upload. A file uploaded and never sent can be removed with
@@ -14425,7 +14782,7 @@ export const getDeleteConversationAttachmentUrl = (
 };
 
 /**
- * Client contract 1.13. Removes one stored file: the one a user uploaded
+ * Client contract 1.14. Removes one stored file: the one a user uploaded
  * in the composer and took back before sending. Needs
  * `models.chat.attachments.delete` (the permission of the
  * conversation-wide attachment delete) and access to the conversation;

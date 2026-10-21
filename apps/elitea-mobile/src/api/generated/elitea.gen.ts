@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.14
- * operations sha256:  5f445416957ab134d0467128cf1145c6b6e0cbde4945380f5baa586e53d58510
+ * client contract:    1.15
+ * operations sha256:  0bab2b4bd6cd24ca017d9e6eb5912bbe131568de50fa8a3a1aa0d4fd5d748563
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -387,7 +387,7 @@ export interface paths {
          *     (images and documents have separate ceilings); one chunk is at most a
          *     few MB.
          *
-         *     Client contract 1.12: a name already stored in this conversation is
+         *     Client contract 1.13: a name already stored in this conversation is
          *     never overwritten. The file is stored under a numbered name instead:
          *     the number after the highest one the conversation holds for that name
          *     (`photo.jpg`, then `photo (1).jpg`, `photo (2).jpg`, …; the number goes
@@ -397,7 +397,7 @@ export interface paths {
          *     a conversation holds, the upload is never refused for it. Always send
          *     the returned `filepath`, never one built from the local file name.
          *
-         *     Client contract 1.13: a stored document's text is extracted in the
+         *     Client contract 1.14: a stored document's text is extracted in the
          *     background as soon as it is uploaded, so the first turn that carries
          *     it does not wait for the extraction. This never delays or fails the
          *     upload. A file uploaded and never sent can be removed with
@@ -493,6 +493,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Archive a conversation in its project
+         * @description Client contract 1.10. Archives the conversation in its project. The
+         *     archive is shared by the project, as the conversation pin is: one
+         *     archive per conversation, and every member's default conversation
+         *     list leaves it out. The list row names who archived it
+         *     (`archived_by`) and when (`archived_at`). The archive does not change
+         *     the conversation. It stays open by id, it keeps its project pin, and
+         *     new turns work as before.
+         *
+         *     Needs `models.chat.conversation.edit`, because an archive changes
+         *     every member's default list (a default-mode viewer does not hold
+         *     it), and access to the conversation itself (the chat authority's
+         *     detail rule, the same one the conversation pin passes). A
+         *     conversation the caller cannot see
+         *     answers 404 and archives nothing. A repeated request succeeds and
+         *     keeps the FIRST archive: its `archived_by` and `archived_at` do not
+         *     change, and nothing is re-delivered.
+         *
+         *     The archive re-delivers the conversation's list row, with
+         *     `is_archived: true`, in the `changes_since` delta of every member who
+         *     can see the conversation. It does not change `updated_at`. It writes
+         *     no tombstone: a tombstone means a deletion or a loss of access. Only
+         *     a delta call without `archived` (a client before contract 1.10) gets
+         *     the archived row as an `access_lost` tombstone; see listConversations.
+         */
+        put: operations["archiveConversation"];
+        post?: never;
+        /**
+         * Unarchive a conversation in its project
+         * @description Client contract 1.10. Removes the project's archive of the
+         *     conversation, whichever member archived it, as unpinEntity removes a
+         *     pin. The conversation is in every member's default conversation list
+         *     again. Needs the same access as archiveConversation; a conversation
+         *     the caller cannot see answers 404. A repeated request succeeds,
+         *     removes nothing and re-delivers nothing.
+         *
+         *     An unarchive re-delivers the list row, with `is_archived: false`, in
+         *     the `changes_since` delta of every member who can see the
+         *     conversation.
+         */
+        delete: operations["unarchiveConversation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/conversation_export/prompt_lib/{project_id}/{conversation_id}": {
         parameters: {
             query?: never;
@@ -524,6 +584,69 @@ export interface paths {
         get: operations["exportConversation"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The source conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork a conversation into a new conversation
+         * @description Client contract 1.11. Creates a NEW conversation from the history of
+         *     the source conversation. With `message_id`, the new conversation holds
+         *     the messages up to and including that message (the fork point), and
+         *     every later message that belongs to one of them: the replies to a
+         *     copied message (its answer, a regenerated or swarm answer) and the
+         *     swarm children of a copied answer. Without it, it holds the whole
+         *     history.
+         *
+         *     The copy is one transaction. It copies the message groups, their items
+         *     (text, context, attachments, canvases with their versions) and their
+         *     trace steps, with new ids, in the same order and with the same
+         *     `created_at`; the answer's `forked_messages` maps each copied message
+         *     group's UUID to its copy's. It copies the participants with their
+         *     per-conversation settings, except the other members: the fork is the
+         *     caller's, so another member's questions are copied (still theirs, with
+         *     `role` `user`) but that member is not a participant of the fork and
+         *     cannot read it. It copies the instructions, `source` and the
+         *     conversation settings in `meta`. Attachment files are copied to the new conversation, so a
+         *     delete of either conversation leaves the other one readable. It does
+         *     NOT copy the pin, the archive, likes and dislikes, a selection, the
+         *     folder of another member, or a pending tool approval.
+         *
+         *     The new conversation belongs to the caller, in the same project, with
+         *     the privacy a new conversation of the caller gets. Its name is `name`,
+         *     or the source name with " (fork)" added. Its `meta.forked_from` and
+         *     the row's `forked_from` name the source conversation and the fork
+         *     point. A Local work thread (`source: local_work`) gives a Local work
+         *     thread with the same folder settings; the desktop copies its local
+         *     turn history itself.
+         *
+         *     Needs `models.chat.conversations.create` and
+         *     `models.chat.conversation.details`, and access to the source
+         *     conversation (the chat authority's detail rule). A source the caller
+         *     cannot see answers 404. A `message_id` that is not a message of the
+         *     source answers 404. A fork point that is still streaming or waits for
+         *     a tool approval answers 409 `fork_point_unsettled`, as does a later
+         *     reply of the copy that is; without
+         *     `message_id`, the newest message is the fork point. An editor Test
+         *     conversation answers 409 `fork_not_supported`.
+         */
+        post: operations["forkConversation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2088,6 +2211,16 @@ export interface components {
             low_tier_default_model_project_id?: number | null;
             total: number;
         };
+        /** @description Client contract 1.12. The activity status of a conversation. A turn transition (a start, a pause, a finish, a failure or a cancel) re-delivers the list row in the `changes_since` delta; a streamed token does not. The project event stream (`conversation_activity` events) also sends each transition to the members who can see the conversation. */
+        ConversationActivity: {
+            /**
+             * Format: date-time
+             * @description When the conversation entered `state`, in UTC.
+             */
+            since: string;
+            /** @description `running` (a turn of the conversation is in flight), `needs_you` (the newest message waits for the user: a tool approval, an answer to a question, an authorization or other input) or `idle` (anything else). A client shows an unknown value as `idle`. */
+            state: string;
+        };
         /** @description Client contract 1.10. The member who archived the conversation. Present on a list row only when `is_archived` is true. `name` is the user's display name, or an empty string when the server cannot resolve one. */
         ConversationArchivedBy: {
             /**
@@ -2110,7 +2243,7 @@ export interface components {
         ConversationAttachmentUploaded: {
             /** Format: int64 */
             file_size: number;
-            /** @description `/{bucket}/{conversation_uuid}/{file name}`. The file name is the uploaded one, numbered (`name (1).ext`) when the conversation already holds that name (client contract 1.12). */
+            /** @description `/{bucket}/{conversation_uuid}/{file name}`. The file name is the uploaded one, numbered (`name (1).ext`) when the conversation already holds that name (client contract 1.13). */
             filepath: string;
         };
         /** @description NOTE(W2): read key by key from a free JSON body by internal/api/v2/conversations/handler.go:653 (`Create`). Unknown keys are ignored. */
@@ -2244,9 +2377,9 @@ export interface components {
             /** @description Omitted, not empty, for a group with no attachments. */
             message_items?: components["schemas"]["AttachmentMessageItem"][];
             metadata?: {
-                /** @description Client contract 1.13. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.13. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender. */
+                /** @description Client contract 1.14. On a user's message: the user ids the sender tagged (the send's `user_ids`), deduplicated, in the order sent, at most 64. Absent when the message tags nobody and on messages sent before 1.14. These are who was TAGGED, not who was notified: notification only reaches project members other than the sender. */
                 mentioned_user_ids?: number[];
-                /** @description Client contract 1.13. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise. */
+                /** @description Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise. */
                 mentions_everyone?: boolean;
             } & {
                 [key: string]: unknown;
@@ -2339,6 +2472,7 @@ export interface components {
         ConversationStarters: unknown[];
         /** @description One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field. */
         ConversationSummary: {
+            activity?: components["schemas"]["ConversationActivity"];
             /**
              * Format: date-time
              * @description Client contract 1.10. When the conversation was archived, in UTC. Present only when `is_archived` is true.
@@ -2358,6 +2492,11 @@ export interface components {
             is_archived: boolean;
             /** @description Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app's "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned. */
             is_pinned: boolean;
+            /**
+             * Format: date-time
+             * @description Client contract 1.12. The last write of any message of the conversation (a message, the start of a turn, or a change of its state), in UTC. The creation time when the conversation has no message.
+             */
+            last_activity_at?: string;
             message_groups_count: number;
             /** @description Carries `single_participant` (the entity this conversation was filtered by, when entity_name/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc). */
             meta?: {
@@ -2366,6 +2505,8 @@ export interface components {
             name: string;
             /** @description Client contract 1.11. The conversation's origin (`elitea` for a chat, `local_work` for a Local work thread). */
             source?: string;
+            /** @description Client contract 1.12. For the CALLER: an answer of the conversation (a message that no user participant wrote, that does not stream, including a pause for the user) changed after the caller's read marker (markConversationRead). A message of a user never makes the conversation unread. The value is personal: two members can see different values on the same row. A server before 1.12 omits the field, which means read. */
+            unread?: boolean;
             updated_at: string;
             /**
              * Format: uuid
@@ -2486,6 +2627,13 @@ export interface components {
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
+        };
+        /** @description Client contract 1.11. The body of forkConversation. An absent body forks the whole conversation with the default name. */
+        ForkConversationRequest: {
+            /** @description The fork point: the numeric id or the UUID of a message group of the source conversation, a user message or an assistant message. Absent: the whole conversation. */
+            message_id?: string;
+            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
+            name?: string;
         };
         /** @description The 400 answer to a native client whose `X-Client-Version` does not parse (ADR-0025 decision 5). NOTE(W2): internal/api/middleware/client_version.go:190 (`WriteInvalidClientVersion`). */
         InvalidClientVersionError: {
@@ -3119,7 +3267,7 @@ export interface components {
             instructions?: string;
             /** @description `false` publishes the conversation in its project. Making a public conversation private is the author's alone. */
             is_private?: boolean;
-            /** @description Replaces the whole settings document when present, except `internal_tools`: a document without that key keeps the stored list (client contract 1.14). To change the list alone, use updateConversationInternalTools. */
+            /** @description Replaces the whole settings document when present, except `internal_tools`: a document without that key keeps the stored list (client contract 1.15). To change the list alone, use updateConversationInternalTools. */
             meta?: {
                 [key: string]: unknown;
             };
@@ -3379,6 +3527,15 @@ export interface components {
         };
         /** @description Not found */
         404: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Conflict */
+        409: {
             headers: {
                 [name: string]: unknown;
             };
@@ -4142,6 +4299,74 @@ export interface operations {
             };
         };
     };
+    archiveConversation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conversation is archived in its project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    unarchiveConversation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive is removed, or there was none. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     exportConversation: {
         parameters: {
             query?: {
@@ -4186,6 +4411,53 @@ export interface operations {
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    forkConversation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The source conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ForkConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description The new conversation, in the row shape of listConversations. `uuid`, `source`, `forked_from` and `forked_messages` are always present on this response. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSummary"];
+                };
+            };
+            /** @description A body that is not a JSON object, an invalid `name` (blank, longer than 256 characters or with a control character), a `message_id` that is not a string, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            409: components["responses"]["409"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };

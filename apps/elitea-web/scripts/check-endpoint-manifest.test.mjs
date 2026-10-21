@@ -760,10 +760,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 339 -> 340 (issue 1057): resetBrandingSettings, the server-side Reset of
 // Admin › Branding (DELETE of the section's rows). Admin routes are not in
 // the manifest, so its count is unchanged.
-// 340 -> 341 (client contract 1.13, issue 1062): deleteConversationAttachment,
+// 340 -> 341 (client contract 1.14, issue 1062): deleteConversationAttachment,
 // one uploaded file's delete for the native composers. No web code calls it
 // yet, so the manifest count is unchanged.
-// 341 -> 342 (client contract 1.14, issue 1060):
+// 341 -> 342 (client contract 1.15, issue 1060):
 // updateConversationInternalTools, the narrow write of a conversation's
 // meta.internal_tools for the native settings sheets. No web code calls it
 // yet (the web still PUTs the whole meta), so the manifest count is
