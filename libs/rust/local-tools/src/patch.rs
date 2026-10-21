@@ -13,7 +13,8 @@
 //!
 //! Every line keeps its own line ending: context lines stay as they are in
 //! the file, and an added line takes the ending of the original line next
-//! to it (the file's usual ending when the hunk has none).
+//! to it (the file's usual ending, `crate::line_ending`, when the hunk
+//! has none).
 //!
 //! git's extended headers are read too: a section with `rename from` /
 //! `rename to` renames (with or without hunks), and `new file mode` /
@@ -24,6 +25,7 @@
 
 use crate::apply_patch::seek_sequence::{self, Pass};
 use crate::error::{ErrorCode, ToolError, ToolResult};
+use crate::line_ending::usual_ending;
 
 /// One line of a hunk.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -436,13 +438,6 @@ fn strip_ending(line: &str) -> &str {
     &line[..line.len() - ending_of(line).len()]
 }
 
-/// The ending most of `lines` use (`\n` on a tie or with none).
-fn usual_ending(lines: &[String]) -> &'static str {
-    let crlf = lines.iter().filter(|line| line.ends_with("\r\n")).count();
-    let lf = lines.iter().filter(|line| ending_of(line) == "\n").count();
-    if crlf > lf { "\r\n" } else { "\n" }
-}
-
 /// The new lines for a hunk matched at `matched` (the original lines its
 /// context and removed lines matched): context lines as they were, added
 /// lines with the ending of the nearest original line in the hunk (before
@@ -581,7 +576,7 @@ fn fuzzy_position(
 /// only a fuzzy pass finds it, more than once.
 pub fn apply_reported(original: &str, patch: &FilePatch) -> ToolResult<Applied> {
     let mut lines: Vec<String> = original.split_inclusive('\n').map(str::to_owned).collect();
-    let usual = usual_ending(&lines);
+    let usual = usual_ending(original);
     let mut matches = Vec::new();
     let mut changed = Vec::new();
     // `cursor`: hunks apply in order and never overlap the previous one.

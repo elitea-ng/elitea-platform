@@ -2,10 +2,13 @@
 // Changes: pure functions over text (no file system: this crate's
 // Workspace reads and writes); each chunk reports the seek pass that
 // located it; a fuzzy location must be unique; the new text's changed
-// line ranges are returned for the result's snippet.
+// line ranges are returned for the result's snippet; an anchored pure
+// addition is inserted after its anchor; only `\n` and `\r\n` end a line;
+// inserted lines take the file's majority ending; a final line without a
+// newline keeps it unless the patch changes or appends after it.
 
 //! The Codex `*** Begin Patch` envelope, as GPT-5 and codex-family models
-//! write it: [`parser`] reads it, [`seek_sequence`] locates each chunk with
+//! write it: [`parser`] reads it, [`mod@seek_sequence`] locates each chunk with
 //! an ordered fuzzy ladder, and [`derive_new_contents`] builds the new
 //! text. `crate::files::plan_patch` turns the hunks into the same atomic,
 //! ledger-checked plan a unified diff becomes.
@@ -14,6 +17,7 @@ pub mod parser;
 pub mod seek_sequence;
 
 use crate::error::{ErrorCode, ToolError, ToolResult};
+use crate::line_ending::usual_ending;
 use parser::UpdateFileChunk;
 pub use parser::{Hunk, is_envelope, parse_patch};
 pub use seek_sequence::Pass;
@@ -22,70 +26,47 @@ use seek_sequence::{SeekError, seek_sequence};
 /// `(start, old_len, new_lines)` in the original's lines.
 type Replacement = (usize, usize, Vec<String>);
 
-#[derive(Clone, Copy)]
-enum LineEnding {
-    Lf,
-    CrLf,
-    Cr,
-}
-
-impl LineEnding {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Lf => "\n",
-            Self::CrLf => "\r\n",
-            Self::Cr => "\r",
-        }
-    }
-}
-
 struct SourceLine {
     text: String,
-    ending: Option<LineEnding>,
+    /// `\n` or `\r\n`; `None` for a final line without a newline.
+    ending: Option<&'static str>,
 }
 
 /// A file as lines that keep their own endings.
 struct SourceFile {
     lines: Vec<SourceLine>,
-    preferred_ending: LineEnding,
+    /// The ending inserted lines take (`crate::line_ending`).
+    preferred_ending: &'static str,
 }
 
 impl SourceFile {
-    /// Split into lines, keeping each ending. The first ending is the one
-    /// inserted lines take; a file without one gets LF.
+    /// Split into lines, keeping each ending. Only `\n` and `\r\n` end a
+    /// line (as the patch's own lines are split); a lone `\r` is content.
     fn parse(contents: &str) -> Self {
-        let bytes = contents.as_bytes();
-        let mut lines = Vec::new();
-        let mut preferred_ending = None;
-        let mut line_start = 0;
-        let mut cursor = 0;
-        while cursor < bytes.len() {
-            let (ending, ending_len) = match bytes[cursor] {
-                b'\r' if bytes.get(cursor + 1) == Some(&b'\n') => (LineEnding::CrLf, 2),
-                b'\r' => (LineEnding::Cr, 1),
-                b'\n' => (LineEnding::Lf, 1),
-                _ => {
-                    cursor += 1;
-                    continue;
+        let lines = contents
+            .split_inclusive('\n')
+            .map(|line| {
+                if let Some(text) = line.strip_suffix("\r\n") {
+                    SourceLine {
+                        text: text.to_owned(),
+                        ending: Some("\r\n"),
+                    }
+                } else if let Some(text) = line.strip_suffix('\n') {
+                    SourceLine {
+                        text: text.to_owned(),
+                        ending: Some("\n"),
+                    }
+                } else {
+                    SourceLine {
+                        text: line.to_owned(),
+                        ending: None,
+                    }
                 }
-            };
-            preferred_ending.get_or_insert(ending);
-            lines.push(SourceLine {
-                text: contents[line_start..cursor].to_owned(),
-                ending: Some(ending),
-            });
-            cursor += ending_len;
-            line_start = cursor;
-        }
-        if line_start < contents.len() {
-            lines.push(SourceLine {
-                text: contents[line_start..].to_owned(),
-                ending: None,
-            });
-        }
+            })
+            .collect();
         Self {
             lines,
-            preferred_ending: preferred_ending.unwrap_or(LineEnding::Lf),
+            preferred_ending: usual_ending(contents),
         }
     }
 
@@ -94,8 +75,11 @@ impl SourceFile {
     }
 
     /// Apply source-ordered, non-overlapping replacements. Unchanged lines
-    /// keep their endings; inserted lines take the preferred one; every
-    /// line ends with one (as Codex's updates always have).
+    /// keep their endings; inserted lines take the preferred one. A final
+    /// line without a newline stays so while it is still last (the patch
+    /// neither replaced it nor added lines after it, as a unified diff
+    /// without `\ No newline` markers would leave it); every other line
+    /// ends with one, as Codex's updates do.
     fn apply_replacements(&mut self, replacements: &[Replacement]) {
         let mut source_lines = std::mem::take(&mut self.lines).into_iter();
         let mut new_lines = Vec::new();
@@ -114,7 +98,8 @@ impl SourceFile {
             source_index = start + old_len;
         }
         new_lines.extend(source_lines);
-        for line in &mut new_lines {
+        let last = new_lines.len().saturating_sub(1);
+        for line in &mut new_lines[..last] {
             line.ending.get_or_insert(self.preferred_ending);
         }
         self.lines = new_lines;
@@ -125,7 +110,7 @@ impl SourceFile {
         for line in self.lines {
             contents.push_str(&line.text);
             if let Some(ending) = line.ending {
-                contents.push_str(ending.as_str());
+                contents.push_str(ending);
             }
         }
         contents
@@ -190,8 +175,15 @@ fn compute_replacements(
             chunk_pass = pass;
         }
         if chunk.old_lines.is_empty() {
-            // Codex's rule: a chunk with no old lines appends at the end.
-            replacements.push((original_lines.len(), 0, chunk.new_lines.clone()));
+            // A pure addition goes right after its `@@` anchor line. With
+            // no anchor it appends at the end of the file (Codex's rule for
+            // an anchorless chunk with no old lines).
+            let at = if chunk.change_context.is_some() {
+                line_index
+            } else {
+                original_lines.len()
+            };
+            replacements.push((at, 0, chunk.new_lines.clone()));
             matches.push(chunk_pass);
             continue;
         }

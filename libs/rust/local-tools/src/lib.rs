@@ -29,6 +29,7 @@ pub mod git;
 #[cfg(feature = "handoff")]
 pub mod handoff;
 pub mod ledger;
+mod line_ending;
 pub mod patch;
 pub mod policy;
 pub mod project_instructions;

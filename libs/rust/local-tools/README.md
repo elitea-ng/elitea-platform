@@ -69,7 +69,8 @@ changed since is refused, whatever the format.
   `*** Update File:` with `@@ <anchor>` chunks, `*** Move to:`,
   `*** Delete File:`, `*** End of File`, `*** End Patch`; a heredoc around
   it is unwrapped). Envelope paths are workspace-relative: an absolute
-  path, `~` or `..` is refused, and `path_deny`, the deny list and `.git`
+  path, `~` or any `..` step (even one that resolves back inside, like
+  `src/../secrets/x`) is refused, and `path_deny`, the deny list and `.git`
   are checked for every file before anything is written. An add over an
   existing file needs it read, as `write_file` does; a move onto an
   existing file is refused. Every file applies or none does.
@@ -83,6 +84,14 @@ changed since is refused, whatever the format.
   the header's line numbers; only when its context matches exactly
   nowhere is the same fuzzy ladder tried (after the previous hunk), with
   the same uniqueness rule and the same report.
+* A chunk with only `+` lines goes right after its `@@ <anchor>` line;
+  without an anchor it appends at the end of the file (Codex's rule).
+  Only `\n` and `\r\n` end a line (a lone `\r` is content). Unchanged
+  lines keep their endings; a file's final line without a newline stays
+  so unless the patch replaces it or adds lines after it.
+* Line endings for new lines, in every format: the nearest replaced line's
+  ending where there is one, else the file's majority ending (CRLF only
+  when more lines end in `\r\n` than `\n`; a tie or none is LF).
 
 * `multi_edit` takes `{path, edits: [{old_string, new_string,
   replace_all?}]}` (1 to 50): every `old_string` is matched against the
@@ -94,7 +103,9 @@ changed since is refused, whatever the format.
   is nowhere exactly, a whitespace-normalised match (CRLF read as LF,
   trailing whitespace ignored, one uniform indentation shift, whole lines
   only) is accepted only when unique (or with `replace_all`), re-indents
-  `new_string` by the same shift and is reported (`match` /
+  `new_string` by the same shift (refused, rather than flattened, when a
+  `new_string` line has less indentation than a shift removes) and is
+  reported (`match` /
   `matches[]`: `exact` or `normalised`). A replacement takes the line
   ending of the text it replaces.
 * `edit_file`, `multi_edit` and `apply_patch` results carry `snippet`: the

@@ -230,6 +230,13 @@ fn place_edits(
                 ErrorCode::Conflict,
                 format!("{}old_string does not occur in `{path}`", label(index)),
             ),
+            Unplaced::Unshiftable => ToolError::new(
+                ErrorCode::Conflict,
+                format!(
+                    "{}old_string matches `{path}` only with less indentation, and new_string has lines indented less than that difference; resend old_string and new_string with the file's indentation",
+                    label(index)
+                ),
+            ),
             Unplaced::Ambiguous(count, how) => ToolError::new(
                 ErrorCode::Conflict,
                 format!(
@@ -478,13 +485,25 @@ fn push(planned: &mut Vec<PlannedChange>, change: PlannedChange) -> ToolResult<(
     Ok(())
 }
 
-/// A path a Codex envelope names: workspace-relative only.
+/// A path a Codex envelope names: workspace-relative only, with no `..`
+/// step.
 fn envelope_path(argument: &str) -> ToolResult<&str> {
     let trimmed = argument.trim();
     if Path::new(trimmed).is_absolute() || trimmed == "~" || trimmed.starts_with("~/") {
         return Err(ToolError::new(
             ErrorCode::OutsideWorkspace,
             format!("`{trimmed}`: patch paths are relative to the workspace root"),
+        ));
+    }
+    // Either separator, whatever the host: a `..` step is refused even
+    // where it would resolve back inside the workspace.
+    if trimmed
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+    {
+        return Err(ToolError::new(
+            ErrorCode::OutsideWorkspace,
+            format!("`{trimmed}`: patch paths may not contain `..`"),
         ));
     }
     Ok(trimmed)

@@ -6,12 +6,21 @@
 //! whitespace ignored, one uniform indentation shift), which is accepted
 //! only where it finds a single place (or every place, with `replace_all`)
 //! and is reported. Replacements keep the file's line endings: a
-//! `new_string` takes the ending of the lines it replaces.
+//! `new_string` takes the ending of the lines it replaces (the file's
+//! usual ending, `crate::line_ending`, when they have none).
+//!
+//! An indentation shift re-indents `new_string` by the same amount. When
+//! the pattern is indented more than the file and a `new_string` line is
+//! indented less than that difference, the edit is refused
+//! ([`Unplaced::Unshiftable`]) rather than changing the relative
+//! indentation the model wrote.
 
 use serde::Deserialize;
 
+use crate::line_ending::usual_ending;
+
 /// The most edits one `multi_edit` call takes.
-pub const MAX_EDITS: usize = 50;
+pub const MAX_EDITS: usize = elitea_agent_runtime::edit_profile::MULTI_EDIT_MAX_EDITS;
 /// The most snippet text one call returns.
 pub const MAX_SNIPPET_BYTES: usize = 4 * 1024;
 /// Lines of context around each change in a snippet.
@@ -59,6 +68,9 @@ pub enum Unplaced {
     Absent,
     /// Found this many times, and `replace_all` is off.
     Ambiguous(usize, EditMatch),
+    /// Found only with the pattern's indentation reduced, and some
+    /// `new_string` line is indented less than that reduction.
+    Unshiftable,
 }
 
 /// `text` with every line ending made `ending`.
@@ -71,21 +83,15 @@ fn with_endings(text: &str, ending: &str) -> String {
     }
 }
 
-/// The ending most of `text`'s lines use (`\n` on a tie or with none).
-fn usual_ending(text: &str) -> &'static str {
-    let crlf = text.matches("\r\n").count();
-    let lf = text.matches('\n').count() - crlf;
-    if crlf > lf { "\r\n" } else { "\n" }
-}
-
-/// The ending a replacement takes: the replaced text's, else the file's.
-fn ending_for(replaced: &str, file: &str) -> &'static str {
+/// The ending a replacement takes: the replaced text's, else the file's
+/// usual one (computed once per call by the caller).
+fn ending_for(replaced: &str, usual: &'static str) -> &'static str {
     if replaced.contains("\r\n") {
         "\r\n"
     } else if replaced.contains('\n') {
         "\n"
     } else {
-        usual_ending(file)
+        usual
     }
 }
 
@@ -94,18 +100,19 @@ fn ending_for(replaced: &str, file: &str) -> &'static str {
 /// # Errors
 ///
 /// [`Unplaced`] when it is nowhere, or in more than one place without
-/// `replace_all`.
+/// `replace_all`, or matched only by a shift `new_string` cannot take.
 pub fn locate(text: &str, edit: &EditSpec) -> Result<(Vec<Span>, EditMatch), Unplaced> {
+    let usual = usual_ending(text);
     let exact: Vec<Span> = text
         .match_indices(edit.old_string.as_str())
         .map(|(start, found)| Span {
             start,
             end: start + found.len(),
-            new: with_endings(&edit.new_string, ending_for(found, text)),
+            new: with_endings(&edit.new_string, ending_for(found, usual)),
         })
         .collect();
     let (spans, how) = if exact.is_empty() {
-        (normalised(text, edit), EditMatch::Normalised)
+        (normalised(text, edit)?, EditMatch::Normalised)
     } else {
         (exact, EditMatch::Exact)
     };
@@ -176,13 +183,13 @@ fn file_lines(text: &str) -> Vec<FileLine<'_>> {
 /// pattern's once CRLF, trailing whitespace and one uniform indentation
 /// shift are set aside. `new_string` is re-indented by the same shift and
 /// takes the matched lines' ending.
-fn normalised(text: &str, edit: &EditSpec) -> Vec<Span> {
+fn normalised(text: &str, edit: &EditSpec) -> Result<Vec<Span>, Unplaced> {
     let pattern = edit.old_string.replace("\r\n", "\n");
     let ends_with_newline = pattern.ends_with('\n');
     let body = pattern.strip_suffix('\n').unwrap_or(&pattern);
     let wanted: Vec<&str> = body.split('\n').map(str::trim_end).collect();
     if wanted.iter().all(|line| line.is_empty()) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let lines = file_lines(text);
     let mut spans: Vec<Span> = Vec::new();
@@ -207,11 +214,11 @@ fn normalised(text: &str, edit: &EditSpec) -> Vec<Span> {
         spans.push(Span {
             start: window[0].start,
             end,
-            new: reindent(&edit.new_string, shift, ending),
+            new: reindent(&edit.new_string, shift, ending).ok_or(Unplaced::Unshiftable)?,
         });
         at += wanted.len();
     }
-    spans
+    Ok(spans)
 }
 
 /// The one shift under which `window` matches `wanted` line for line.
@@ -235,21 +242,25 @@ fn window_shift<'a>(window: &[FileLine<'a>], wanted: &[&'a str]) -> Option<Shift
     shift
 }
 
-fn reindent(new: &str, shift: Shift<'_>, ending: &str) -> String {
+/// `new` shifted like the match, with `ending` between its lines; `None`
+/// when a non-blank line does not start with a [`Shift::Remove`]'s whole
+/// prefix (stripping less would change its indentation relative to the
+/// other lines).
+fn reindent(new: &str, shift: Shift<'_>, ending: &str) -> Option<String> {
     let lf = new.replace("\r\n", "\n");
-    let lines: Vec<String> = lf
+    let lines: Option<Vec<String>> = lf
         .split('\n')
         .map(|line| {
             if line.trim().is_empty() {
-                return line.to_owned();
+                return Some(line.to_owned());
             }
             match shift {
-                Shift::Add(extra) => format!("{extra}{line}"),
-                Shift::Remove(extra) => line.strip_prefix(extra).unwrap_or(line).to_owned(),
+                Shift::Add(extra) => Some(format!("{extra}{line}")),
+                Shift::Remove(extra) => line.strip_prefix(extra).map(str::to_owned),
             }
         })
         .collect();
-    lines.join(ending)
+    Some(lines?.join(ending))
 }
 
 /// The 0-based `[start, end)` lines of `text` a byte range covers (both
@@ -272,7 +283,7 @@ pub fn line_range(text: &str, start: usize, end: usize) -> (usize, usize) {
     )
 }
 
-/// A bounded view of the new text: [`SNIPPET_CONTEXT`] lines around each
+/// A bounded view of the new text: `SNIPPET_CONTEXT` (3) lines around each
 /// changed range, numbered like `read_file`, gaps marked `...`. Stops at
 /// the last whole line within `budget` bytes, which it lowers; the flag
 /// says whether something was left out.
@@ -318,30 +329,38 @@ pub fn snippet(text: &str, ranges: &[(usize, usize)], budget: &mut usize) -> (St
 }
 
 /// Apply non-overlapping spans (sorted by start) to `text`; also the new
-/// text's changed line ranges.
+/// text's changed line ranges (as [`line_range`] gives them), counted as
+/// the text is built so many spans stay linear.
 #[must_use]
 pub fn splice(text: &str, spans: &[Span]) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(text.len());
-    let mut byte_ranges = Vec::new();
+    let mut lines = Vec::with_capacity(spans.len());
+    // Newlines in `out` so far.
+    let mut newlines = 0;
     let mut at = 0;
     for span in spans {
-        out.push_str(&text[at..span.start]);
-        let start = out.len();
+        let kept = &text[at..span.start];
+        newlines += kept.matches('\n').count();
+        out.push_str(kept);
+        let first = newlines;
+        newlines += span.new.matches('\n').count();
         out.push_str(&span.new);
-        byte_ranges.push((start, out.len()));
+        lines.push(if span.new.is_empty() {
+            (first, first)
+        } else if span.new.ends_with('\n') {
+            (first, newlines)
+        } else {
+            (first, newlines + 1)
+        });
         at = span.end;
     }
     out.push_str(&text[at..]);
-    let lines = byte_ranges
-        .into_iter()
-        .map(|(start, end)| line_range(&out, start, end))
-        .collect();
     (out, lines)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EditMatch, EditSpec, Unplaced, locate, snippet, splice};
+    use super::{EditMatch, EditSpec, Span, Unplaced, line_range, locate, snippet, splice};
 
     fn spec(old: &str, new: &str) -> EditSpec {
         EditSpec {
@@ -394,6 +413,117 @@ mod tests {
         assert_eq!(
             apply("a \nb\na\t\nb\n", "a\nb", "c"),
             Err(Unplaced::Ambiguous(2, EditMatch::Normalised))
+        );
+    }
+
+    /// A shift that removes indentation must remove all of it from every
+    /// `new_string` line; one indented less than the shift refuses the
+    /// edit instead of flattening its relative indentation.
+    #[test]
+    fn an_under_indented_new_line_refuses_the_shift() {
+        let file = "def f():\n  if x:\n    y()\n";
+        // The pattern is indented 4 more than the file; new_string's
+        // second line has only 2 of those 4.
+        assert_eq!(
+            apply(file, "      if x:\n        y()\n", "      if x:\n  z()\n"),
+            Err(Unplaced::Unshiftable)
+        );
+        // Every line has the whole shift: re-indented, relative indentation
+        // kept.
+        assert_eq!(
+            apply(
+                file,
+                "      if x:\n        y()\n",
+                "      if x:\n        z()\n          w()\n"
+            ),
+            Ok((
+                "def f():\n  if x:\n    z()\n      w()\n".to_owned(),
+                EditMatch::Normalised
+            ))
+        );
+        // Blank lines need no shift.
+        assert_eq!(
+            apply(
+                file,
+                "      if x:\n        y()\n",
+                "      if x:\n\n        z()\n"
+            ),
+            Ok((
+                "def f():\n  if x:\n\n    z()\n".to_owned(),
+                EditMatch::Normalised
+            ))
+        );
+    }
+
+    /// `splice`'s line ranges equal [`line_range`]'s, span by span.
+    #[test]
+    fn splice_line_ranges_match_line_range() {
+        let text = "a\nb\nc\nd\ne";
+        let spans = vec![
+            Span {
+                start: 0,
+                end: 2,
+                new: "A\nA2\n".to_owned(),
+            },
+            Span {
+                start: 4,
+                end: 6,
+                new: String::new(),
+            },
+            Span {
+                start: 7,
+                end: 9,
+                new: "D".to_owned(),
+            },
+        ];
+        let (out, ranges) = splice(text, &spans);
+        assert_eq!(out, "A\nA2\nb\ndD");
+        assert_eq!(ranges, [(0, 2), (3, 3), (3, 4)]);
+        // The same ranges from the reference.
+        let mut at = 0;
+        let mut built = String::new();
+        let mut expected = Vec::new();
+        for span in &spans {
+            built.push_str(&text[at..span.start]);
+            let start = built.len();
+            built.push_str(&span.new);
+            expected.push((start, built.len()));
+            at = span.end;
+        }
+        built.push_str(&text[at..]);
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|(start, end)| line_range(&built, start, end))
+            .collect();
+        assert_eq!(ranges, expected);
+    }
+
+    /// Perf guard: `replace_all` over 200k matches in a 3 MB file is
+    /// linear (the file's usual ending is computed once per call, line
+    /// ranges are counted while splicing). Either quadratic path took
+    /// minutes here; the bound is generous for slow CI runners.
+    #[test]
+    fn replace_all_over_many_matches_is_linear() {
+        const LINES: usize = 200_000;
+        let text = "let value_x = 1;\n".repeat(LINES);
+        let started = std::time::Instant::now();
+        let (spans, how) = locate(
+            &text,
+            &EditSpec {
+                old_string: "value_x".to_owned(),
+                new_string: "value_y".to_owned(),
+                replace_all: true,
+            },
+        )
+        .expect("located");
+        assert_eq!((spans.len(), how), (LINES, EditMatch::Exact));
+        let (out, ranges) = splice(&text, &spans);
+        let elapsed = started.elapsed();
+        assert_eq!(out.len(), text.len());
+        assert_eq!(ranges.last(), Some(&(LINES - 1, LINES)));
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "took {elapsed:?}"
         );
     }
 

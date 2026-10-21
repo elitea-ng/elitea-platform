@@ -10,6 +10,13 @@
 //! description do. A profile follows from the model and the agent's
 //! `meta.edit_format`, so it is stable for a thread unless the model
 //! changes, and the tool list stays cache-friendly.
+//!
+//! The edit tools' shared pieces live here too (the `multi_edit` and
+//! `apply_patch` schemas, the envelope description, and
+//! [`EditProfile::select_specs`]), so the two tool tables differ only in
+//! their spec types.
+
+use serde_json::{Value, json};
 
 /// The edit tools a turn offers.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -63,6 +70,30 @@ impl EditProfile {
         self == Self::StrReplace || !STR_REPLACE_TOOLS.contains(&tool)
     }
 
+    /// The tools of `table` a turn with this profile is offered, in table
+    /// order: those it [`offers`](Self::offers), with `apply_patch`
+    /// replaced by `envelope` (the Codex-envelope description) under
+    /// [`EditProfile::Patch`]. `name` reads a spec's tool name.
+    #[must_use]
+    pub fn select_specs<'a, T>(
+        self,
+        table: &'a [T],
+        name: impl Fn(&T) -> &str,
+        envelope: &'a T,
+    ) -> Vec<&'a T> {
+        table
+            .iter()
+            .filter(|spec| self.offers(name(spec)))
+            .map(|spec| {
+                if self == Self::Patch && name(spec) == APPLY_PATCH {
+                    envelope
+                } else {
+                    spec
+                }
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -70,6 +101,55 @@ impl EditProfile {
             Self::Patch => "patch",
         }
     }
+}
+
+/// The patch tool's name, under every profile.
+pub const APPLY_PATCH: &str = "apply_patch";
+
+/// The most edits one `multi_edit` call takes.
+pub const MULTI_EDIT_MAX_EDITS: usize = 50;
+
+/// `multi_edit`'s description.
+pub const MULTI_EDIT_DESCRIPTION: &str = "Apply several replacements to one file you have read, in one atomic write. Every old_string is matched against the original file (not after earlier edits), must be unique unless replace_all, and must not overlap another; if one fails, nothing is changed. Matching and the result are as for edit_file.";
+
+/// `multi_edit`'s parameters.
+#[must_use]
+pub fn multi_edit_params() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Path relative to the workspace root." },
+            "edits": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MULTI_EDIT_MAX_EDITS,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "old_string": { "type": "string" },
+                        "new_string": { "type": "string" },
+                        "replace_all": { "type": "boolean" }
+                    },
+                    "required": ["old_string", "new_string"]
+                }
+            }
+        },
+        "required": ["path", "edits"]
+    })
+}
+
+/// `apply_patch`'s description under [`EditProfile::StrReplace`]: a unified
+/// diff first, the envelope accepted too.
+pub const APPLY_PATCH_DESCRIPTION: &str = "Apply a patch to files in the workspace: a unified diff (git diff format), or a `*** Begin Patch` envelope (*** Add File / *** Update File with @@ chunks / *** Delete File / *** Move to). Read each file first. Every file applies or none does; the result says how each hunk matched.";
+
+/// `apply_patch`'s parameters, under every profile.
+#[must_use]
+pub fn patch_param() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "patch": { "type": "string" } },
+        "required": ["patch"]
+    })
 }
 
 /// `apply_patch`'s description under [`EditProfile::Patch`]: the Codex
@@ -135,5 +215,23 @@ mod tests {
         assert!(!EditProfile::Patch.offers("edit_file"));
         assert!(EditProfile::Patch.offers("apply_patch"));
         assert!(EditProfile::StrReplace.offers("edit_file"));
+    }
+
+    #[test]
+    fn select_specs_drops_str_replace_tools_and_swaps_the_envelope() {
+        let table = [
+            ("read_file", "read"),
+            ("edit_file", "edit"),
+            ("multi_edit", "multi"),
+            ("apply_patch", "diff"),
+        ];
+        let envelope = ("apply_patch", "envelope");
+        let all = EditProfile::StrReplace.select_specs(&table, |spec| spec.0, &envelope);
+        assert_eq!(all.into_iter().copied().collect::<Vec<_>>(), table);
+        let patch = EditProfile::Patch.select_specs(&table, |spec| spec.0, &envelope);
+        assert_eq!(
+            patch.into_iter().copied().collect::<Vec<_>>(),
+            [("read_file", "read"), ("apply_patch", "envelope")]
+        );
     }
 }

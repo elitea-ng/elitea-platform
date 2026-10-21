@@ -175,6 +175,59 @@ fn anchors_narrow_and_crlf_is_kept() {
     assert_eq!(derived.changed, [(4, 5)]);
 }
 
+/// An anchored pure addition lands right after the anchor line, not at
+/// the end of the file; an anchorless one still appends (Codex's rule).
+#[test]
+fn anchored_pure_addition_goes_after_its_anchor() {
+    let original = "def foo():\n    return 1\n\ndef bar():\n    return 2\n";
+    let derived = update(original, "@@ def foo():\n+    log()").expect("apply");
+    assert_eq!(
+        derived.content,
+        "def foo():\n    log()\n    return 1\n\ndef bar():\n    return 2\n"
+    );
+    assert_eq!(derived.matches, [Pass::Exact]);
+    assert_eq!(derived.changed, [(1, 2)]);
+    // The anchor matched fuzzily: the pass is reported, the place kept.
+    let derived =
+        update("def foo():  \n    return 1\n", "@@ def foo():\n+    log()").expect("apply");
+    assert_eq!(derived.content, "def foo():  \n    log()\n    return 1\n");
+    assert_eq!(derived.matches, [Pass::TrimEnd]);
+    // No anchor: appended at the end.
+    let derived = update(original, "@@\n+# tail").expect("apply");
+    assert_eq!(derived.content, format!("{original}# tail\n"));
+}
+
+/// A file without a final newline keeps it so when the patch leaves its
+/// last line alone, and gains one when the patch changes or extends it.
+#[test]
+fn missing_final_newline_survives_an_unrelated_change() {
+    let derived = update("a\nb\nc", "@@\n-a\n+A").expect("apply");
+    assert_eq!(derived.content, "A\nb\nc");
+    let derived = update("a\nb\nc", "@@\n b\n-c\n+C").expect("apply");
+    assert_eq!(derived.content, "a\nb\nC\n");
+    let derived = update("a\nb\nc", "@@\n+d").expect("apply");
+    assert_eq!(derived.content, "a\nb\nc\nd\n");
+    // Context ending at the unterminated last line leaves it unterminated.
+    let derived = update("a\nb\nc", "@@\n-a\n+A\n b\n c").expect("apply");
+    assert_eq!(derived.content, "A\nb\nc");
+}
+
+/// Only `\n` and `\r\n` end a line: a bare CR inside a line is content,
+/// so a chunk naming that line (CR and all) matches it and the CR stays.
+#[test]
+fn bare_cr_is_line_content() {
+    let derived = update("a\rb\nc\n", "@@\n a\rb\n-c\n+C").expect("apply");
+    assert_eq!(derived.content, "a\rb\nC\n");
+    assert_eq!(derived.changed, [(1, 2)]);
+}
+
+/// Inserted lines take the file's majority ending, not its first one.
+#[test]
+fn inserted_lines_take_the_majority_ending() {
+    let derived = update("a\nb\r\nc\r\nd\r\n", "@@\n+e").expect("apply");
+    assert_eq!(derived.content, "a\nb\r\nc\r\nd\r\ne\r\n");
+}
+
 fn setup(deny: &[&str]) -> (tempfile::TempDir, Workspace, ReadLedger) {
     let dir = tempfile::tempdir().expect("dir");
     let deny: Vec<String> = deny.iter().map(|s| (*s).to_owned()).collect();
@@ -338,6 +391,10 @@ fn envelope_rejects_absolute_and_parent_paths() {
         "*** Begin Patch\n*** Add File: ../escape.txt\n+x\n*** End Patch",
         "*** Begin Patch\n*** Update File: ok.txt\n*** Move to: ../moved.txt\n@@\n-ok\n+fine\n*** End Patch",
         "*** Begin Patch\n*** Delete File: sub/../../ok.txt\n*** End Patch",
+        // `..` that would resolve back inside the workspace is refused too.
+        "*** Begin Patch\n*** Add File: src/../secrets/x\n+x\n*** End Patch",
+        "*** Begin Patch\n*** Update File: sub/../ok.txt\n@@\n-ok\n+fine\n*** End Patch",
+        "*** Begin Patch\n*** Update File: ok.txt\n*** Move to: a\\..\\b.txt\n@@\n-ok\n+fine\n*** End Patch",
         "*** Begin Patch\n*** Add File: ~/escape.txt\n+x\n*** End Patch",
     ] {
         assert_eq!(

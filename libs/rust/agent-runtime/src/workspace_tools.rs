@@ -19,7 +19,10 @@ use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::edit_profile::{APPLY_PATCH_ENVELOPE_DESCRIPTION, EditProfile};
+use crate::edit_profile::{
+    APPLY_PATCH, APPLY_PATCH_DESCRIPTION, APPLY_PATCH_ENVELOPE_DESCRIPTION, EditProfile,
+    MULTI_EDIT_DESCRIPTION, multi_edit_params, patch_param,
+};
 use crate::host::{HostError, ToolProvider, ToolsetRequest};
 
 /// The toolset's name: the local toolset's (`elitea_local_tools::provider::TOOLSET_NAME`).
@@ -181,42 +184,14 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "multi_edit",
         read_only: false,
-        description: "Apply several replacements to one file you have read, in one atomic write. Every old_string is matched against the original file (not after earlier edits), must be unique unless replace_all, and must not overlap another; if one fails, nothing is changed. Matching and the result are as for edit_file.",
-        parameters: || {
-            json!({
-                "type": "object",
-                "properties": {
-                    "path": path_param("Path relative to the workspace root."),
-                    "edits": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 50,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "old_string": { "type": "string" },
-                                "new_string": { "type": "string" },
-                                "replace_all": { "type": "boolean" }
-                            },
-                            "required": ["old_string", "new_string"]
-                        }
-                    }
-                },
-                "required": ["path", "edits"]
-            })
-        },
+        description: MULTI_EDIT_DESCRIPTION,
+        parameters: multi_edit_params,
     },
     WorkspaceToolSpec {
-        name: "apply_patch",
+        name: APPLY_PATCH,
         read_only: false,
-        description: "Apply a patch to files in the workspace: a unified diff (git diff format), or a `*** Begin Patch` envelope (*** Add File / *** Update File with @@ chunks / *** Delete File / *** Move to). Read each file first. Every file applies or none does; the result says how each hunk matched.",
-        parameters: || {
-            json!({
-                "type": "object",
-                "properties": { "patch": { "type": "string" } },
-                "required": ["patch"]
-            })
-        },
+        description: APPLY_PATCH_DESCRIPTION,
+        parameters: patch_param,
     },
     WorkspaceToolSpec {
         name: "run_command",
@@ -281,18 +256,10 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     },
 ];
 
-fn patch_param() -> Value {
-    json!({
-        "type": "object",
-        "properties": { "patch": { "type": "string" } },
-        "required": ["patch"]
-    })
-}
-
 /// `apply_patch` as [`EditProfile::Patch`] offers it: the same name and
 /// schema, described as the Codex envelope.
 pub static APPLY_PATCH_ENVELOPE: WorkspaceToolSpec = WorkspaceToolSpec {
-    name: "apply_patch",
+    name: APPLY_PATCH,
     read_only: false,
     description: APPLY_PATCH_ENVELOPE_DESCRIPTION,
     parameters: patch_param,
@@ -302,17 +269,7 @@ pub static APPLY_PATCH_ENVELOPE: WorkspaceToolSpec = WorkspaceToolSpec {
 /// selection as `elitea-local-tools`' `session::tools_for`.
 #[must_use]
 pub fn workspace_tools_for(profile: EditProfile) -> Vec<&'static WorkspaceToolSpec> {
-    WORKSPACE_TOOLS
-        .iter()
-        .filter(|spec| profile.offers(spec.name))
-        .map(|spec| {
-            if profile == EditProfile::Patch && spec.name == APPLY_PATCH_ENVELOPE.name {
-                &APPLY_PATCH_ENVELOPE
-            } else {
-                spec
-            }
-        })
-        .collect()
+    profile.select_specs(WORKSPACE_TOOLS, |spec| spec.name, &APPLY_PATCH_ENVELOPE)
 }
 
 /// Runs one tool call in the sandbox's workspace runner.
