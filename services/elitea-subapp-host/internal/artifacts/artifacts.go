@@ -9,9 +9,10 @@
 // generic — deriving these settings from the legacy llm_settings dict, and
 // deciding when there is no transport at all.
 //
-// TODO(#1359 U2/U5): this is still an HTTP callback into elitea-main's
-// artifact API (cleartext in compose). It moves to gRPC over mTLS with the
-// rest of the engine → main hops (/llm, artifacts).
+// TODO(#1359 U5): this is still an HTTP callback into elitea-main's
+// artifact API (cleartext in compose). The engines' model calls already moved
+// to elitea.llm.v1.ModelService on the platform listener (U2); this hop moves
+// to gRPC over mTLS with the artifacts unit.
 package artifacts
 
 import (

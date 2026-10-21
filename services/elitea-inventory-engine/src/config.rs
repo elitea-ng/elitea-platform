@@ -85,6 +85,13 @@ pub struct Settings {
     /// client certificate the model transport presents. elitea-main's
     /// platform listener requires a runtime-CA one.
     pub callback_identity: Option<elitea_model_client::ClientIdentityFiles>,
+    /// `MODEL_SERVICE_URL`: the origin of `elitea.llm.v1.ModelService`,
+    /// elitea-main's platform listener (`https://elitea-main:9446`). Every
+    /// model call goes there over the callback CA and client certificate;
+    /// `llm_settings.api_base` then only names the route and stays the
+    /// artifact API's HTTP base (#1359 U5). Unset, model calls go to the
+    /// origin of `api_base`, which must then be https.
+    pub model_service: Option<String>,
     /// `MODEL_CONCURRENCY`: the ingestion model calls (extraction,
     /// relations, community labels) in flight at once across this engine
     /// process (default [`DEFAULT_MODEL_CONCURRENCY`]). Set it to the
@@ -99,6 +106,8 @@ pub const DEFAULT_MODEL_CONCURRENCY: usize = 8;
 pub const CALLBACK_CERT_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_CERT_FILE";
 /// Its private key's setting.
 pub const CALLBACK_KEY_SETTING: &str = "ELITEA_INVENTORY_CALLBACK_KEY_FILE";
+/// The model service origin's setting.
+pub const MODEL_SERVICE_SETTING: &str = "ELITEA_INVENTORY_MODEL_SERVICE_URL";
 
 impl Settings {
     /// Read the process environment.
@@ -181,26 +190,16 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine keeps every graph in PostgreSQL and has no other storage"
             )));
         }
-        let callback_identity = match (raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE")) {
-            (None, None) => None,
-            (Some(cert), Some(key)) => Some(elitea_model_client::ClientIdentityFiles {
-                cert_file: PathBuf::from(cert),
-                cert_file_setting: CALLBACK_CERT_SETTING,
-                key_file: PathBuf::from(key),
-                key_file_setting: CALLBACK_KEY_SETTING,
-            }),
-            _ => {
-                return Err(ConfigError(format!(
-                    "{CALLBACK_CERT_SETTING} and {CALLBACK_KEY_SETTING} must be set together"
-                )));
-            }
-        };
+        let callback_identity =
+            callback_identity(raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE"))?;
+        let model_service = model_service(raw("MODEL_SERVICE_URL"))?;
         Ok(Self {
             source_types,
             ingest,
             database_url,
             callback_ca_file: raw("CALLBACK_CA_FILE").map(PathBuf::from),
             callback_identity,
+            model_service,
             model_concurrency: usize::try_from(positive_count(
                 &raw,
                 "MODEL_CONCURRENCY",
@@ -215,6 +214,36 @@ impl Settings {
             fixture_step,
             fixtures: raw("FIXTURES").map(PathBuf::from),
         })
+    }
+}
+
+/// `CALLBACK_CERT_FILE` and `CALLBACK_KEY_FILE`: both or neither.
+fn callback_identity(
+    cert: Option<String>,
+    key: Option<String>,
+) -> Result<Option<elitea_model_client::ClientIdentityFiles>, ConfigError> {
+    match (cert, key) {
+        (None, None) => Ok(None),
+        (Some(cert), Some(key)) => Ok(Some(elitea_model_client::ClientIdentityFiles {
+            cert_file: PathBuf::from(cert),
+            cert_file_setting: CALLBACK_CERT_SETTING,
+            key_file: PathBuf::from(key),
+            key_file_setting: CALLBACK_KEY_SETTING,
+        })),
+        _ => Err(ConfigError(format!(
+            "{CALLBACK_CERT_SETTING} and {CALLBACK_KEY_SETTING} must be set together"
+        ))),
+    }
+}
+
+/// `MODEL_SERVICE_URL`: an https origin (the platform listener), or unset.
+fn model_service(value: Option<String>) -> Result<Option<String>, ConfigError> {
+    match value {
+        None => Ok(None),
+        Some(origin) if origin.starts_with("https://") => Ok(Some(origin)),
+        Some(origin) => Err(ConfigError(format!(
+            "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
+        ))),
     }
 }
 
@@ -331,6 +360,18 @@ mod tests {
                 "{half}"
             );
         }
+    }
+
+    #[test]
+    fn the_model_service_is_an_https_origin() {
+        let parsed = settings(&[(MODEL_SERVICE_SETTING, "https://elitea-main:9446")])
+            .map(|s| s.model_service);
+        assert_eq!(parsed, Ok(Some("https://elitea-main:9446".to_owned())));
+        assert_eq!(settings(&[]).map(|s| s.model_service), Ok(None));
+        assert!(
+            settings(&[(MODEL_SERVICE_SETTING, "http://elitea-main:8080")])
+                .is_err_and(|e| e.to_string().contains(MODEL_SERVICE_SETTING))
+        );
     }
 
     #[test]

@@ -43,9 +43,11 @@ var llmSuffix = regexp.MustCompile(`/llm(/api)?(/v\d+)?/?$`)
 // openai_api_key; the project from organization, openai_organization or
 // project_id, in that order.
 //
-// TODO(#1359 U2/U5): the engines still reach elitea-main over HTTP at this
-// api_base: its /llm routes for every model call and the artifact routes
-// for reads and uploads. Moving them is the LLM and artifacts units' work.
+// TODO(#1359 U5): the engines still reach elitea-main's artifact routes over
+// HTTP at this api_base, for reads and uploads. Their model calls no longer
+// use it as an HTTP origin: they go to elitea.llm.v1.ModelService
+// (ELITEA_DEEPWIKI_MODEL_SERVICE_URL, #1359 U2) and api_base only names the
+// route.
 func ExtractArtifactSettings(llmSettings map[string]any) ArtifactSettings {
 	apiBase := firstTruthy(llmSettings["api_base"], llmSettings["openai_api_base"], "")
 	apiKey := firstTruthy(llmSettings["api_key"], llmSettings["openai_api_key"], "")

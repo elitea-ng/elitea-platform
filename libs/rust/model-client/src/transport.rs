@@ -1,6 +1,22 @@
-//! The HTTP half of the model client: one `reqwest` client, the retry loop,
-//! bounded body reads, and the mapping of every failure onto the engine's
-//! error contract.
+//! The transport of the model client: the model calls over
+//! `elitea.llm.v1.ModelService` (gRPC over mutual TLS to elitea-main's
+//! platform listener, #1359), the retry loop, bounded body reads, and the
+//! mapping of every failure onto the engine's error contract.
+//!
+//! # The model service
+//!
+//! A call goes to the ORIGIN of `llm_settings.api_base` (the platform
+//! listener, `https://elitea-main:9446`); the path only names the route
+//! (`…/chat/completions`, `…/embeddings`). The answer comes back as the HTTP
+//! edge answered it — status, `content-type`, `retry-after` and the body
+//! bytes, SSE framing included (`elitea_model_rpc`) — so everything below is
+//! unchanged from the HTTP client it replaced. An `https` origin needs the
+//! platform CA ([`TransportSettings::ca_file`]) and presents the callback
+//! client certificate ([`TransportSettings::client_identity`]); plaintext
+//! `http` is accepted for a loopback host only (tests).
+//!
+//! The `reqwest` client stays for the artifact API ([`Transport::http_client`]),
+//! which is not a model call.
 //!
 //! # Retries
 //!
@@ -42,14 +58,20 @@
 //! few hundred characters and has the key replaced before it is used,
 //! because a misconfigured upstream can echo request headers.
 
+use bytes::Bytes;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::secret::Secret;
 use elitea_engine_core::stream::StopSignal;
 use elitea_llm_wire::refusal::{Detail, MessageShapes, redact_and_cut, rejection_detail};
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
-use reqwest::{Client, Response, StatusCode};
+use elitea_model_rpc::{BodyStream, CallError, ModelRequest, ModelServiceClient, Route};
+use futures_util::StreamExt as _;
+use reqwest::header::HeaderMap;
+use reqwest::{Client, StatusCode};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::Instrument as _;
 
 /// How much of a refusal body is read to find its message.
@@ -128,6 +150,13 @@ pub struct TransportSettings {
     /// which requires a runtime-CA client certificate (mutual TLS). `None`
     /// presents nothing.
     pub client_identity: Option<ClientIdentityFiles>,
+    /// The origin of `elitea.llm.v1.ModelService` (elitea-main's platform
+    /// listener, `https://elitea-main:9446`). Set, every model call goes
+    /// there and `llm_settings.api_base` only names the route; unset, the
+    /// call goes to the origin of `api_base`. The engines set it because
+    /// their `api_base` is also the artifact API's HTTP base, which is not
+    /// on the platform listener until #1359 U5.
+    pub model_service: Option<String>,
     /// The `User-Agent` of every request: the consuming engine's name.
     pub user_agent: &'static str,
     pub timeouts: Timeouts,
@@ -150,6 +179,7 @@ impl Default for TransportSettings {
             ca_file: None,
             ca_file_setting: "The TLS CA file",
             client_identity: None,
+            model_service: None,
             user_agent: concat!("elitea-model-client/", env!("CARGO_PKG_VERSION")),
             timeouts: Timeouts::default(),
             backoff: Backoff::default(),
@@ -157,14 +187,28 @@ impl Default for TransportSettings {
     }
 }
 
-/// A configured HTTP client. Cheap to clone; share one per process.
+/// A configured model transport. Cheap to clone; share one per process.
 #[derive(Debug, Clone)]
 pub struct Transport {
     client: Client,
+    /// The model service hop, shared by the clones (and kept off the stack:
+    /// the TLS config is large, and callers hold a `Transport` by value).
+    hop: Arc<ModelHop>,
     timeouts: Timeouts,
     backoff: Backoff,
     /// The consuming engine, for the request span (its `User-Agent`).
     engine: &'static str,
+}
+
+/// What the model service hop needs beside the timeouts.
+#[derive(Debug)]
+struct ModelHop {
+    /// The trust and the client certificate of the hop.
+    tls: Option<ClientTlsConfig>,
+    /// The configured model service origin ([`TransportSettings::model_service`]).
+    origin: Option<String>,
+    /// One channel per model service origin, opened on first use.
+    channels: Mutex<HashMap<String, Channel>>,
 }
 
 fn runtime(message: impl Into<String>) -> EngineError {
@@ -244,11 +288,21 @@ impl Transport {
             .connect_timeout(settings.timeouts.connect)
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(settings.user_agent);
+        let mut tls = None;
         if let Some(path) = &settings.ca_file {
             builder = builder.tls_certs_merge(read_ca_file(path, settings.ca_file_setting)?);
+            tls = Some(ClientTlsConfig::new().ca_certificate(
+                tonic::transport::Certificate::from_pem(read_pem(path, settings.ca_file_setting)?),
+            ));
         }
         if let Some(files) = &settings.client_identity {
             builder = builder.identity(read_identity(files)?);
+            let cert = read_pem(&files.cert_file, files.cert_file_setting)?;
+            let key = read_pem(&files.key_file, files.key_file_setting)?;
+            tls = Some(
+                tls.unwrap_or_default()
+                    .identity(tonic::transport::Identity::from_pem(cert, key)),
+            );
         }
         let client = builder.build().map_err(|error| {
             runtime(format!(
@@ -258,6 +312,16 @@ impl Transport {
         })?;
         Ok(Self {
             client,
+            hop: Arc::new(ModelHop {
+                tls,
+                origin: settings
+                    .model_service
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(str::to_owned),
+                channels: Mutex::default(),
+            }),
             timeouts: settings.timeouts,
             backoff: settings.backoff,
             engine: settings.user_agent,
@@ -269,14 +333,128 @@ impl Transport {
         self.timeouts
     }
 
-    /// The configured client, for the platform's object API (an
-    /// artifact-folder source): the same TLS stack, CA bundle and refusal
-    /// of redirects as the model calls.
+    /// The configured HTTP client, for the platform's object API (an
+    /// artifact-folder source): the same CA bundle and client certificate as
+    /// the model calls, and no redirects. Model calls never use it.
     #[must_use]
     pub fn http_client(&self) -> &Client {
         &self.client
     }
+
+    /// The model service client: the configured origin, else the origin of
+    /// `url`.
+    fn model_service(&self, url: &str) -> Result<ModelServiceClient<Channel>, EngineError> {
+        let parsed = match &self.hop.origin {
+            Some(origin) => reqwest::Url::parse(origin)
+                .map_err(|_| runtime(format!("The model service origin {origin} is not a URL")))?,
+            None => reqwest::Url::parse(url).map_err(|_| {
+                runtime("llm_settings.api_base is not a URL the model service can reach")
+            })?,
+        };
+        let host = parsed.host_str().unwrap_or_default().to_owned();
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        let origin = format!("{}://{}:{port}", parsed.scheme(), bracket(&host));
+        let plaintext = match parsed.scheme() {
+            "https" => false,
+            "http" if is_loopback(&host) => true,
+            _ => {
+                return Err(runtime(format!(
+                    "The model service at {host} must be reached over https: it is gRPC over mutual TLS to the platform listener (llm_settings.api_base)"
+                )));
+            }
+        };
+        let mut channels = self
+            .hop
+            .channels
+            .lock()
+            .map_err(|_| runtime("The model client's channel table is poisoned"))?;
+        if let Some(channel) = channels.get(&origin) {
+            return Ok(ModelServiceClient::new(channel.clone()));
+        }
+        let mut endpoint = Endpoint::from_shared(origin.clone())
+            .map_err(|_| runtime(format!("The model service origin {origin} is not valid")))?
+            .connect_timeout(self.timeouts.connect)
+            .http2_keep_alive_interval(Duration::from_mins(1))
+            .keep_alive_timeout(Duration::from_secs(10))
+            .keep_alive_while_idle(true)
+            .user_agent(self.engine)
+            .map_err(|_| runtime("The model client's user agent is not a header value"))?;
+        if !plaintext {
+            let tls = self.hop.tls.clone().ok_or_else(|| {
+                runtime(format!(
+                    "The model service at {host} needs the platform CA: set the engine's callback CA file"
+                ))
+            })?;
+            endpoint = endpoint.tls_config(tls).map_err(|error| {
+                runtime(format!(
+                    "The model client cannot start its TLS stack: {}",
+                    error_chain(&error)
+                ))
+            })?;
+        }
+        let channel = endpoint.connect_lazy();
+        channels.insert(origin, channel.clone());
+        Ok(ModelServiceClient::new(channel)
+            .max_decoding_message_size(MAX_MODEL_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES))
+    }
 }
+
+/// One gRPC message on the platform listener (its own cap).
+const MAX_MODEL_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+fn bracket(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    }
+}
+
+fn is_loopback(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    bare.eq_ignore_ascii_case("localhost")
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+/// A model answer: the status and headers the HTTP edge answered, and the
+/// body as it arrives.
+pub(crate) struct Reply {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: BodyStream,
+}
+
+impl Reply {
+    /// The next body chunk; `None` at the end.
+    pub(crate) async fn chunk(&mut self) -> Result<Option<Bytes>, StreamError> {
+        match self.body.next().await {
+            None => Ok(None),
+            Some(Ok(bytes)) => Ok(Some(bytes)),
+            Some(Err(status)) => Err(StreamError(status)),
+        }
+    }
+}
+
+/// A body stream that broke.
+#[derive(Debug)]
+pub(crate) struct StreamError(tonic::Status);
+
+impl StreamError {
+    pub(crate) fn is_timeout(&self) -> bool {
+        self.0.code() == tonic::Code::DeadlineExceeded
+    }
+}
+
+impl std::fmt::Display for StreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.0.code(), self.0.message())
+    }
+}
+
+impl std::error::Error for StreamError {}
 
 /// What one request is, for its error messages and its retries.
 #[derive(Debug, Clone, Copy)]
@@ -350,7 +528,7 @@ async fn wait(delay: Duration, stop: &StopSignal) -> Result<(), EngineError> {
 
 /// Read a body up to `limit` bytes. `idle` bounds the wait for each chunk.
 pub(crate) async fn read_limited(
-    response: &mut Response,
+    response: &mut Reply,
     limit: usize,
     idle: Duration,
 ) -> Result<Vec<u8>, BodyError> {
@@ -402,49 +580,52 @@ fn upstream_message(body: &[u8], key: &Secret) -> Option<String> {
 }
 
 impl Call<'_> {
-    fn headers(&self) -> Result<HeaderMap, EngineError> {
-        let mut headers = HeaderMap::new();
-        let mut bearer =
-            HeaderValue::from_str(&format!("Bearer {}", self.key.expose())).map_err(|_| {
-                EngineError::new(
-                    ErrorType::Value,
-                    "llm_settings.api_key holds characters an HTTP header cannot carry",
-                )
-            })?;
-        // Marks the value for hyper's HPACK (never indexed) and keeps it out
-        // of reqwest's Debug output.
-        bearer.set_sensitive(true);
-        headers.insert(AUTHORIZATION, bearer);
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static(if self.streaming {
-                "text/event-stream"
-            } else {
-                "application/json"
-            }),
-        );
-        // The worker's selector (ADR-0018's primary one). The callback bearer
-        // is bound to this project, so the edge refuses any other.
-        if let Some(organization) = self.organization {
-            let value = HeaderValue::from_str(organization).map_err(|_| {
-                EngineError::new(
-                    ErrorType::Value,
-                    "llm_settings.organization holds characters an HTTP header cannot carry",
-                )
-            })?;
-            headers.insert(PROJECT_HEADER, value);
+    /// The model service request: the route the URL names, the bearer, the
+    /// project selector and the execution, as the `/llm` caller contract
+    /// sent them in headers.
+    fn model_request(&self, body: Vec<u8>) -> Result<(Route, ModelRequest), EngineError> {
+        let path = reqwest::Url::parse(self.url)
+            .map(|url| url.path().to_owned())
+            .unwrap_or_default();
+        let route = Route::from_path(&path).ok_or_else(|| {
+            runtime(format!(
+                "{} has no model service route for {path}",
+                self.what
+            ))
+        })?;
+        let text = |value: Option<&str>, setting: &str| -> Result<Option<String>, EngineError> {
+            match value {
+                Some(value) if value.bytes().any(|byte| byte.is_ascii_control()) => {
+                    Err(EngineError::new(
+                        ErrorType::Value,
+                        format!("{setting} holds characters a header cannot carry"),
+                    ))
+                }
+                other => Ok(other.map(str::to_owned)),
+            }
+        };
+        if self
+            .key
+            .expose()
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+        {
+            return Err(EngineError::new(
+                ErrorType::Value,
+                "llm_settings.api_key holds characters an HTTP header cannot carry",
+            ));
         }
-        if let Some(execution) = self.execution_id {
-            let value = HeaderValue::from_str(execution).map_err(|_| {
-                EngineError::new(
-                    ErrorType::Value,
-                    "llm_settings.execution_id holds characters an HTTP header cannot carry",
-                )
-            })?;
-            headers.insert(EXECUTION_HEADER, value);
-        }
-        Ok(headers)
+        Ok((
+            route,
+            ModelRequest {
+                bearer: self.key.expose().to_owned(),
+                project_id: text(self.organization, "llm_settings.organization")?,
+                execution_id: text(self.execution_id, "llm_settings.execution_id")?,
+                content_type: Some("application/json".to_owned()),
+                body: Bytes::from(body),
+                ..ModelRequest::default()
+            },
+        ))
     }
 
     pub(crate) fn timeout_error(&self, after: Duration) -> EngineError {
@@ -514,8 +695,8 @@ impl Call<'_> {
         }
     }
 
-    fn transport_error(&self, error: &reqwest::Error, attempts: u32) -> EngineError {
-        if error.is_timeout() {
+    fn transport_error(&self, status: &tonic::Status, attempts: u32) -> EngineError {
+        if status.code() == tonic::Code::DeadlineExceeded {
             return runtime(format!(
                 "{} request for model '{}' hit a timeout after {attempts} attempt(s)",
                 self.what, self.model
@@ -525,10 +706,24 @@ impl Call<'_> {
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
             .unwrap_or_default();
+        let detail = sanitize(
+            &format!("{:?}: {}", status.code(), status.message()),
+            self.key,
+        );
+        if matches!(
+            status.code(),
+            tonic::Code::PermissionDenied | tonic::Code::Unauthenticated
+        ) {
+            // No refusal trailer: the platform listener did not admit this
+            // workload's client certificate (ELITEA_MODEL_SERVICE_CLIENTS).
+            return runtime(format!(
+                "{} inference refused: the model service at {host} did not admit this engine's client certificate: {detail}",
+                self.what
+            ));
+        }
         runtime(format!(
-            "{} inference failed: cannot reach the model gateway at {host} after {attempts} attempt(s): {}",
-            self.what,
-            sanitize(&error_chain(error), self.key)
+            "{} inference failed: cannot reach the model gateway at {host} after {attempts} attempt(s): {detail}",
+            self.what
         ))
     }
 }
@@ -592,7 +787,7 @@ impl Transport {
         call: &Call<'_>,
         body: Vec<u8>,
         stop: &StopSignal,
-    ) -> Result<Response, EngineError> {
+    ) -> Result<Reply, EngineError> {
         self.post_classified(call, body, stop)
             .await
             .map_err(|failure| failure.error)
@@ -606,7 +801,7 @@ impl Transport {
         call: &Call<'_>,
         body: Vec<u8>,
         stop: &StopSignal,
-    ) -> Result<Response, PostError> {
+    ) -> Result<Reply, PostError> {
         let span = tracing::info_span!(
             "engine.model.request",
             engine = self.engine,
@@ -628,7 +823,7 @@ impl Transport {
             .await;
         match &result {
             Ok(response) => {
-                span.record("http_status", response.status().as_u16());
+                span.record("http_status", response.status.as_u16());
                 span.record(
                     "outcome",
                     if call.streaming {
@@ -657,11 +852,12 @@ impl Transport {
         call: &Call<'_>,
         body: Vec<u8>,
         stop: &StopSignal,
-    ) -> Result<Response, PostError> {
+    ) -> Result<Reply, PostError> {
         if stop.is_requested() {
             return Err(EngineError::cancelled().into());
         }
-        let headers = call.headers()?;
+        let (route, request) = call.model_request(body)?;
+        let mut service = self.model_service(call.url)?;
         let attempt_timeout = if call.streaming {
             self.timeouts.stream_idle
         } else {
@@ -669,18 +865,8 @@ impl Transport {
         };
         let mut retry = 0_u32;
         loop {
-            let mut request = self
-                .client
-                .post(call.url)
-                .headers(headers.clone())
-                .body(body.clone());
-            if !call.streaming {
-                // Covers the body read as well: reqwest keeps the deadline
-                // on the response until it is consumed.
-                request = request.timeout(self.timeouts.request);
-            }
             let sent = tokio::select! {
-                sent = tokio::time::timeout(attempt_timeout, request.send()) => sent,
+                sent = tokio::time::timeout(attempt_timeout, elitea_model_rpc::call(&mut service, route, request.clone())) => sent,
                 () = stop.stopped() => return Err(EngineError::cancelled().into()),
             };
             let attempts = retry + 1;
@@ -699,19 +885,42 @@ impl Transport {
                     );
                     wait(retry_delay(self.backoff, retry, &HeaderMap::new()), stop).await?;
                 }
-                Ok(Err(error)) => {
-                    let transient = error.is_timeout() || error.is_connect() || error.is_request();
+                Ok(Err(CallError::Malformed(reason))) => {
+                    return Err(EngineError::new(
+                        ErrorType::Value,
+                        format!("{} request is malformed: {reason}", call.what),
+                    )
+                    .into());
+                }
+                Ok(Err(CallError::Hop(status))) => {
+                    let transient = matches!(
+                        status.code(),
+                        tonic::Code::Unavailable
+                            | tonic::Code::DeadlineExceeded
+                            | tonic::Code::Unknown
+                    );
                     if !transient || !can_retry {
-                        return Err(call.transport_error(&error, attempts).into());
+                        return Err(call.transport_error(&status, attempts).into());
                     }
-                    tracing::warn!(what = call.what, model = call.model, attempt = attempts, error = %sanitize(&error_chain(&error), call.key), "model request failed; retrying");
+                    tracing::warn!(what = call.what, model = call.model, attempt = attempts, error = %sanitize(status.message(), call.key), "model request failed; retrying");
                     wait(retry_delay(self.backoff, retry, &HeaderMap::new()), stop).await?;
                 }
-                Ok(Ok(response)) if response.status().is_success() => return Ok(response),
-                Ok(Ok(mut response)) => {
-                    let status = response.status();
+                Ok(Ok(response)) if response.status.is_success() => {
+                    return Ok(Reply {
+                        status: response.status,
+                        headers: response.headers,
+                        body: response.body,
+                    });
+                }
+                Ok(Ok(response)) => {
+                    let status = response.status;
+                    let mut reply = Reply {
+                        status,
+                        headers: response.headers,
+                        body: response.body,
+                    };
                     if retryable(status.as_u16()) && can_retry {
-                        let delay = retry_delay(self.backoff, retry, response.headers());
+                        let delay = retry_delay(self.backoff, retry, &reply.headers);
                         tracing::warn!(
                             what = call.what,
                             model = call.model,
@@ -719,16 +928,13 @@ impl Transport {
                             status = status.as_u16(),
                             "model gateway refused; retrying"
                         );
-                        drop(response);
+                        drop(reply);
                         wait(delay, stop).await?;
                     } else {
-                        let body = read_limited(
-                            &mut response,
-                            MAX_ERROR_BODY_BYTES,
-                            self.timeouts.connect,
-                        )
-                        .await
-                        .unwrap_or_default();
+                        let body =
+                            read_limited(&mut reply, MAX_ERROR_BODY_BYTES, self.timeouts.connect)
+                                .await
+                                .unwrap_or_default();
                         return Err(PostError {
                             error: call.status_error(status, &body, attempts),
                             refusal: Some(Refusal {
@@ -747,6 +953,7 @@ impl Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::HeaderValue;
 
     fn key() -> Secret {
         Secret::new("sk-test-123".to_owned()).unwrap_or_else(|| panic!("empty"))

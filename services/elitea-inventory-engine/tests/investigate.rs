@@ -136,6 +136,9 @@ async fn investigate_asks_the_model_with_graph_and_source_tools() {
                 )
                 .with_state(Arc::clone(&platform_seen)),
         );
+    // The engine's model calls are elitea.llm.v1.ModelService; the fake
+    // answers them through these handlers.
+    let app = elitea_model_rpc::testing::with_model_service(app, "/llm/v1");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

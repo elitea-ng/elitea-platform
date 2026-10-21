@@ -23,6 +23,34 @@ callers assert it:
 
 A change to the contract changes that file, and both suites run on it.
 
+## Transport: `elitea.llm.v1.ModelService`
+
+Neither caller sends HTTP to `/llm` any more (#1359 U2). Both call
+`elitea.llm.v1.ModelService` (`libs/proto/elitea/llm/v1/model.proto`) over
+gRPC with mutual TLS on elitea-main's internal platform listener
+(`https://elitea-main:9446`), through the shared client
+`libs/rust/model-rpc`. elitea-main runs each call through the public `/llm`
+pipeline in process (`internal/transport/modelgrpc`): authentication,
+project selection, the execution verifier and the budget gate are the same
+code a browser's `/llm` request passes. So everything below still holds:
+
+- the route is the RPC (`ChatCompletions`, `Messages`, `Embeddings`, …),
+  named from the path the caller would have posted to;
+- the headers below travel as call fields (the bearer as `authorization`
+  metadata, the project and execution as fields of the call);
+- a 2xx answer arrives as a head (status, `content-type`) and the body
+  bytes, SSE framing included, so the wire parsing is unchanged;
+- a refusal is a gRPC status carrying the `elitea-model-refusal-bin`
+  trailer: the HTTP status, `content-type`, `retry-after` and body the edge
+  answered. Both callers turn it back into that HTTP answer and map it with
+  the table under Refusals. A status with no trailer is a failed hop (for
+  example `PermissionDenied`: the listener does not admit the caller's
+  client certificate, `ELITEA_MODEL_SERVICE_CLIENTS`).
+
+The listener admits only identities in `ELITEA_MODEL_SERVICE_CLIENTS`: the
+worker's SPIFFE id and the sub-application callback identity
+(`dns:elitea-subapp-callback`) the engines present.
+
 The Python SDK's side of the gateway is covered separately: the
 `elitea-sdk compatibility` section of `services/elitea-llm-gateway/CLAUDE.md`,
 and the tier-1/2/3 SDK conformance gates.
@@ -116,7 +144,7 @@ set, unless `OTEL_SDK_DISABLED=true`.
 
 | | Worker | Engine |
 | --- | --- | --- |
-| Transport | HTTP/2 only, to elitea-main's internal platform listener (`platform_origin`, mTLS with the worker's runtime client certificate) | HTTP/1.1 or 2, to the callback base (`ELITEA_*_CALLBACK_BASE_URL`): cleartext in-cluster, or the platform listener over mTLS, presenting `ELITEA_*_CALLBACK_CERT_FILE` / `_KEY_FILE` |
+| Transport | `ModelService` on elitea-main's internal platform listener (`platform_origin`, mTLS with the worker's runtime client certificate) | `ModelService` on the platform listener (`ELITEA_*_MODEL_SERVICE_URL`, else the origin of `llm_settings.api_base`, which must then be https), trusting `ELITEA_*_CALLBACK_CA_FILE` and presenting `ELITEA_*_CALLBACK_CERT_FILE` / `_KEY_FILE` |
 | Retries | none in the facade (the ADK decides from `retryable`) | up to `llm_settings.max_retries` (default 2), backoff 0.5 s · 2ⁿ ≤ 8 s, honours `retry-after` ≤ 60 s |
 | Response headers / non-stream request | 120 s | 10 min |
 | Stream idle | 120 s | 5 min |
@@ -135,14 +163,8 @@ set, unless `OTEL_SDK_DISABLED=true`.
   - a client certificate that is never rotated (the platform listener now
     verifies it: it must chain to the runtime CA);
   - no embeddings client.
-- **Engine transport:** by default an engine reaches elitea-main directly
-  over plain HTTP inside the cluster.
-  - When the chart puts the DeepWiki callback on elitea-main's internal
-    platform listener (the successor of `deepwiki.callbackViaPlatformEdge`;
-    the Traefik `platform-edge` is gone), the callback origin becomes
-    `worker.runtime.platformOrigin` (`https://elitea-main:9446`).
-  - The host and the engine then trust the runtime CA through
-    `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` and present a runtime-CA client
-    certificate through `ELITEA_DEEPWIKI_CALLBACK_CERT_FILE` /
-    `ELITEA_DEEPWIKI_CALLBACK_KEY_FILE`: the listener requires one, as it
-    does of the worker. This is the worker's posture, end to end.
+- **Engine artifact hop:** an engine's `llm_settings.api_base` is still the
+  artifact API's HTTP base (`ELITEA_*_CALLBACK_BASE_URL`), so it keeps a
+  separate model service origin (`ELITEA_DEEPWIKI_MODEL_SERVICE_URL`,
+  `ELITEA_INVENTORY_MODEL_SERVICE_URL`). The artifact calls move to gRPC
+  with #1359 U5, after which the two origins can be one.

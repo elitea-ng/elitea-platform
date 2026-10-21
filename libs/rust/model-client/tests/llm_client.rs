@@ -26,6 +26,7 @@ use elitea_model_client::{
     ChatClient, ChatMessage, ChatRequest, EmbeddingClient, EmbeddingOptions, ModelSettings,
     Sampling, Timeouts, ToolChoice, ToolDefinition, Transport, TransportSettings,
 };
+use elitea_model_rpc::testing::with_model_service;
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -139,7 +140,10 @@ async fn gateway(
     let Ok(address) = listener.local_addr() else {
         panic!("no local address");
     };
-    let app = Router::new().fallback(handle).with_state(gateway.clone());
+    let app = with_model_service(
+        Router::new().fallback(handle).with_state(gateway.clone()),
+        "/llm/v1",
+    );
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -310,6 +314,46 @@ async fn embeddings_batch_in_order_with_the_right_headers() {
     assert_eq!(client.prompt_tokens(), 150);
     let query = ok(client.embed_query("t7", &StopSignal::default()).await);
     assert_eq!(query[0], 7.0);
+}
+
+/// The engines' `api_base` is the artifact API's cleartext HTTP base; the
+/// configured model service origin is where every model call goes, and the
+/// `api_base` path still names the route.
+#[tokio::test]
+async fn a_configured_model_service_origin_wins_over_the_api_base_origin() {
+    let (gw, base) = gateway(|_, seen| embeddings_reply(seen, 4)).await;
+    let Some(origin) = base.strip_suffix("/llm/v1") else {
+        panic!("gateway base {base}");
+    };
+    let client = EmbeddingClient::new(
+        transport(&TransportSettings {
+            model_service: Some(origin.to_owned()),
+            ..fast()
+        }),
+        // Not on loopback and not https: dialled directly, it is refused.
+        settings("http://elitea-main.invalid:8080/llm/v1", json!({})),
+        "emb-model",
+        EmbeddingOptions::default(),
+    );
+    let vectors = ok(client
+        .embed_documents(&texts(2), &StopSignal::default())
+        .await);
+    assert_eq!(vectors.len(), 2);
+    let requests = gw.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/llm/v1/embeddings");
+
+    let direct = embedder(
+        "http://elitea-main.invalid:8080/llm/v1",
+        EmbeddingOptions::default(),
+    );
+    let error = err(direct
+        .embed_documents(&texts(1), &StopSignal::default())
+        .await);
+    assert!(
+        error.message.contains("must be reached over https"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -959,6 +1003,10 @@ async fn the_key_never_reaches_errors_or_logs() {
         .with_writer(move || LogWriter(Arc::clone(&writer_logs)))
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
+    // Another test's thread can register the retry callsite while no
+    // subscriber wants it and cache that interest; recompute it now that
+    // this thread has one, or the retry line is never written here.
+    tracing::callsite::rebuild_interest_cache();
 
     let client = ChatClient::new(
         transport(&fast()),
@@ -1116,12 +1164,14 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     else {
         panic!("protocol versions")
     };
-    let Ok(config) = builder
+    let Ok(mut config) = builder
         .with_no_client_auth()
         .with_single_cert(vec![leaf], key)
     else {
         panic!("server config")
     };
+    // The model service is gRPC: HTTP/2 is negotiated.
+    config.alpn_protocols = vec![b"h2".to_vec()];
     let Ok(tcp) = TcpListener::bind("127.0.0.1:0").await else {
         panic!("bind")
     };
@@ -1132,9 +1182,12 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
         seen: Arc::new(Mutex::new(Vec::new())),
         script: Arc::new(|_, seen| embeddings_reply(seen, 3)),
     };
-    let app = Router::new()
-        .fallback(handle)
-        .with_state(gateway_state.clone());
+    let app = with_model_service(
+        Router::new()
+            .fallback(handle)
+            .with_state(gateway_state.clone()),
+        "/llm/v1",
+    );
     let listener = TlsListener {
         tcp,
         acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
@@ -1177,10 +1230,7 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     let error = err(untrusted
         .embed_documents(&texts(1), &StopSignal::default())
         .await);
-    assert!(
-        error.message.contains("cannot reach the model gateway"),
-        "{error}"
-    );
+    assert!(error.message.contains("needs the platform CA"), "{error}");
     assert_eq!(
         gateway_state.requests().len(),
         1,
@@ -1260,7 +1310,7 @@ async fn the_client_identity_is_presented_to_a_listener_that_requires_one() {
     )
     .build()
     .expect("client verifier");
-    let config = rustls::ServerConfig::builder_with_provider(provider)
+    let mut config = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .expect("protocol versions")
         .with_client_cert_verifier(verifier)
@@ -1269,15 +1319,19 @@ async fn the_client_identity_is_presented_to_a_listener_that_requires_one() {
             PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(server_key.serialize_der())),
         )
         .expect("server config");
+    config.alpn_protocols = vec![b"h2".to_vec()];
     let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let address = tcp.local_addr().expect("address");
     let gateway_state = Gateway {
         seen: Arc::new(Mutex::new(Vec::new())),
         script: Arc::new(|_, seen| embeddings_reply(seen, 3)),
     };
-    let app = Router::new()
-        .fallback(handle)
-        .with_state(gateway_state.clone());
+    let app = with_model_service(
+        Router::new()
+            .fallback(handle)
+            .with_state(gateway_state.clone()),
+        "/llm/v1",
+    );
     let listener = TlsListener {
         tcp,
         acceptor: tokio_rustls::TlsAcceptor::from(Arc::new(config)),
@@ -1351,56 +1405,4 @@ async fn the_client_identity_is_presented_to_a_listener_that_requires_one() {
     let error = err(Transport::new(&missing_key));
     assert!(error.message.contains("TEST_CALLBACK_KEY_FILE"), "{error}");
     let _ = std::fs::remove_dir_all(&scratch);
-}
-
-/// A real round trip against the LAN vLLM, when asked for.
-#[tokio::test]
-async fn live_lan_model_chat() {
-    if std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM")
-        .ok()
-        .as_deref()
-        != Some("1")
-    {
-        return;
-    }
-    let base = std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM_BASE")
-        .unwrap_or_else(|_| "http://192.168.29.60:8000/v1".to_owned());
-    let model = std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM_MODEL")
-        .unwrap_or_else(|_| "RadixArk/Qwen3.8-27B-NVFP4".to_owned());
-    let settings = settings(&base, json!({"model_name": model, "max_tokens": 2048}));
-    let live = TransportSettings::default();
-    let client = ChatClient::new(transport(&live), settings);
-    let mut request = ChatRequest::new(vec![
-        ChatMessage::System("Answer in one short sentence. /no_think"),
-        ChatMessage::User("What is the capital of France?".to_owned()),
-    ]);
-    let blocking = ok(client.complete(&request, &StopSignal::default()).await);
-    eprintln!("live blocking: {blocking:?}");
-    assert!(blocking.content.contains("Paris"), "{blocking:?}");
-
-    let mut fragments = 0;
-    let streamed = ok(client
-        .stream(&request, &StopSignal::default(), &mut |_| fragments += 1)
-        .await);
-    eprintln!("live streamed ({fragments} fragments): {streamed:?}");
-    assert!(streamed.content.contains("Paris"), "{streamed:?}");
-
-    request.messages = vec![ChatMessage::User(
-        "Call the get_weather tool for Paris. /no_think".to_owned(),
-    )];
-    request.tools = vec![ToolDefinition {
-        name: "get_weather".to_owned(),
-        description: "Current weather for a city".to_owned(),
-        parameters: json!({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}),
-    }];
-    request.tool_choice = Some(ToolChoice::Required);
-    let tools = ok(client
-        .stream(&request, &StopSignal::default(), &mut |_| {})
-        .await);
-    eprintln!("live tool call: {tools:?}");
-    assert_eq!(
-        tools.tool_calls.first().map(|c| c.name.as_str()),
-        Some("get_weather"),
-        "{tools:?}"
-    );
 }

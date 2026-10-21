@@ -365,9 +365,14 @@ async fn serve_gateway(hang: bool) -> (u16, Gateway) {
         embedding_requested: Arc::new(AtomicBool::new(false)),
         objects_seen: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
-    let app = axum::Router::new()
-        .fallback(gateway)
-        .with_state(state.clone());
+    // Model calls arrive as elitea.llm.v1.ModelService, the artifact
+    // routes as HTTP: both reach `gateway`.
+    let app = elitea_model_rpc::testing::with_model_service(
+        axum::Router::new()
+            .fallback(gateway)
+            .with_state(state.clone()),
+        "/llm/v1",
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

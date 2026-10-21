@@ -306,6 +306,7 @@ orphaned, so:
 | `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, `import-graph`, `export-graph`, and required by `native`; `postgresql://` URL form). PostgreSQL with the pgvector extension available: migration 0004 creates it, and semantic search ranks there |
 | `ELITEA_INVENTORY_CALLBACK_CA_FILE` | unset | a PEM bundle the model transport trusts besides the platform roots |
 | `ELITEA_INVENTORY_CALLBACK_CERT_FILE` / `ELITEA_INVENTORY_CALLBACK_KEY_FILE` | unset | the client certificate chain and key the model transport presents; both or neither. elitea-main's internal platform listener (`https://elitea-main:9446`) requires a runtime-CA client certificate |
+| `ELITEA_INVENTORY_MODEL_SERVICE_URL` | unset | the origin of `elitea.llm.v1.ModelService`, elitea-main's platform listener (`https://elitea-main:9446`): every model call goes there, and `llm_settings.api_base` only names the route (it stays the artifact API's HTTP base until #1359 U5). Unset, model calls go to the origin of `api_base`, which must then be https. https only |
 | `ELITEA_INVENTORY_MODEL_CONCURRENCY` | `8` | ingestion model calls (extraction, relations, community labels) in flight at once across the engine process; set it to the chat model server's concurrent slots (past them a request only queues there, and keeps the server busy after a stop) |
 | `OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT` | unset | span export (`elitea-engine-sidecar::telemetry`) |
 

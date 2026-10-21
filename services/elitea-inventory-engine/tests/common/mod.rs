@@ -261,6 +261,9 @@ pub async fn gateway(chat: fn(&str) -> String) -> String {
         .route("/v1/chat/completions", axum::routing::post(completions))
         .route("/v1/embeddings", axum::routing::post(embeddings))
         .with_state(chat);
+    // The engine's model calls are elitea.llm.v1.ModelService; the fake
+    // answers them through these handlers.
+    let app = elitea_model_rpc::testing::with_model_service(app, "/v1");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

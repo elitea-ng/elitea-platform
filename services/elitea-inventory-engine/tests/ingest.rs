@@ -1056,6 +1056,9 @@ async fn a_source_with_a_model_gets_entities_facts_and_relations() {
     let app = axum::Router::new()
         .route("/v1/chat/completions", axum::routing::post(gateway))
         .with_state(std::sync::Arc::clone(&calls));
+    // The engine's model calls are elitea.llm.v1.ModelService; the fake
+    // answers them through these handlers.
+    let app = elitea_model_rpc::testing::with_model_service(app, "/v1");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

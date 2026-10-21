@@ -11,8 +11,15 @@ elitea-engine-core = { path = "../engine-core" }
 # The /llm caller contract the agent worker shares: routes, headers,
 # refusal codes, the SSE splitter, usage and tool-call assembly.
 elitea-llm-wire = { path = "../llm-wire" }
-# rustls with the platform verifier and HTTP/2; no native-tls, no cookies,
-# no decompression. `Response::chunk` reads SSE, so `stream` is not needed.
+# The model calls: elitea.llm.v1.ModelService over a tonic mTLS channel
+# (#1359), on aws-lc like reqwest's rustls below.
+elitea-model-rpc = { path = "../model-rpc" }
+bytes = "1.12.1"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+tonic = { version = "0.14.6", default-features = false, features = ["channel", "tls-aws-lc"] }
+# The artifact API only (`Transport::http_client`): rustls with the platform
+# verifier and HTTP/2; no native-tls, no cookies, no decompression. Model calls
+# never use it.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
 serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The o200k_base and cl100k_base BPEs are compiled in: no runtime download.
@@ -21,7 +28,9 @@ tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1.44"
 
 [dev-dependencies]
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "json", "tokio"] }
+# The test gateway serves its HTTP handlers as ModelService (#1359).
+elitea-model-rpc = { path = "../model-rpc", features = ["testing"] }
 # A throwaway CA and server certificate per test run, for the TLS CA file
 # test: macOS refuses a leaf valid for more than 825 days, so a committed
 # fixture would need rotating.

@@ -530,6 +530,8 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "itoa",
  "matchit",
  "memchr",
@@ -538,6 +540,7 @@ dependencies = [
  "pin-project-lite",
  "serde_core",
  "sync_wrapper",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1455,6 +1458,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-model-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http",
+ "prost",
+ "protoc-bin-vendored",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
+]
+
+[[package]]
 name = "elitea-office-core"
 version = "0.1.0"
 dependencies = [
@@ -1501,6 +1520,7 @@ dependencies = [
  "async-nats",
  "async-stream",
  "async-trait",
+ "axum",
  "base64 0.23.1",
  "bollard",
  "bytes",
@@ -1511,6 +1531,7 @@ dependencies = [
  "elitea-doc-chunk",
  "elitea-doc-extract",
  "elitea-llm-wire",
+ "elitea-model-rpc",
  "elitea-office-core",
  "elitea-vector-index",
  "elitea-workspace-store",

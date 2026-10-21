@@ -207,6 +207,8 @@ pub const TLS_CA_SETTING: &str = "ELITEA_DEEPWIKI_TLS_CA_FILE";
 pub const CALLBACK_CERT_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CERT_FILE";
 /// Its private key.
 pub const CALLBACK_KEY_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_KEY_FILE";
+/// The model service origin (see [`ModelEnvSettings::model_service`]).
+pub const MODEL_SERVICE_SETTING: &str = "ELITEA_DEEPWIKI_MODEL_SERVICE_URL";
 
 /// What the environment decides about model calls; the invocation's
 /// `llm_settings` decide the rest (`llm::settings`).
@@ -229,6 +231,14 @@ pub struct ModelEnvSettings {
     /// platform listener requires one; a cleartext or ordinary TLS callback
     /// origin never asks for it.
     pub callback_identity: Option<crate::llm::ClientIdentityFiles>,
+    /// `ELITEA_DEEPWIKI_MODEL_SERVICE_URL`: the origin of
+    /// `elitea.llm.v1.ModelService`, elitea-main's platform listener
+    /// (`https://elitea-main:9446`). Every model call goes there over the
+    /// callback CA and client certificate; `llm_settings.api_base` then only
+    /// names the route and stays the artifact API's HTTP base (#1359 U5).
+    /// Unset, model calls go to the origin of `api_base`, which must then be
+    /// https.
+    pub model_service: Option<String>,
     /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
     /// inputs per embedding request, default 64.
     pub embed_batch_size: usize,
@@ -271,6 +281,15 @@ fn model_settings(
                 "{ENV_PREFIX}EMBED_CTX_TOKENS must be a whole number of at least {MIN_SPLIT_TOKENS}, got '{ctx_tokens}'"
             ))
         })?;
+    let model_service = match raw("MODEL_SERVICE_URL") {
+        None => None,
+        Some(origin) if origin.starts_with("https://") => Some(origin),
+        Some(origin) => {
+            return Err(ConfigError(format!(
+                "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
+            )));
+        }
+    };
     let callback_identity = match (raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE")) {
         (None, None) => None,
         (Some(cert), Some(key)) => Some(crate::llm::ClientIdentityFiles {
@@ -295,6 +314,7 @@ fn model_settings(
             TLS_CA_SETTING
         },
         callback_identity,
+        model_service,
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
@@ -1192,6 +1212,7 @@ mod tests {
                 tls_ca_file: None,
                 tls_ca_setting: TLS_CA_SETTING,
                 callback_identity: None,
+                model_service: None,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
                 embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
@@ -1204,6 +1225,10 @@ mod tests {
             ("ELITEA_DEEPWIKI_EMBED_CONCURRENCY", "2"),
             ("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", "4096"),
             ("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "10800"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
         ])
         .map(|s| s.model);
         assert_eq!(
@@ -1212,6 +1237,7 @@ mod tests {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
                 tls_ca_setting: TLS_CA_SETTING,
                 callback_identity: None,
+                model_service: Some("https://elitea-main:9446".to_owned()),
                 embed_batch_size: 16,
                 embed_concurrency: 2,
                 embed_ctx_tokens: 4096,
@@ -1228,6 +1254,14 @@ mod tests {
         assert_eq!(
             split,
             Ok((Some(PathBuf::from("/runtime-ca.pem")), CALLBACK_CA_SETTING))
+        );
+        // The model service is the platform listener: https only.
+        assert!(
+            settings(&[(
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "http://elitea-main:8080"
+            )])
+            .is_err()
         );
         // The callback client certificate: both halves or neither.
         let identity = settings(&[
@@ -1283,6 +1317,7 @@ impl From<&ModelEnvSettings> for crate::llm::TransportSettings {
             ca_file: settings.tls_ca_file.clone(),
             ca_file_setting: settings.tls_ca_setting,
             client_identity: settings.callback_identity.clone(),
+            model_service: settings.model_service.clone(),
             user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
             timeouts: crate::llm::Timeouts {
                 stream_total: settings.stream_total,
@@ -1315,6 +1350,7 @@ mod model_env_tests {
             tls_ca_file: None,
             tls_ca_setting: TLS_CA_SETTING,
             callback_identity: None,
+            model_service: None,
             embed_batch_size: 16,
             embed_concurrency: 3,
             embed_ctx_tokens: 4096,

@@ -578,6 +578,7 @@ dependencies = [
  "elitea-engine-sidecar",
  "elitea-graph-algos",
  "elitea-model-client",
+ "elitea-model-rpc",
  "elitea-pg-migrate",
  "elitea-repo-ingest",
  "fancy-regex",
@@ -652,13 +653,33 @@ dependencies = [
 name = "elitea-model-client"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "elitea-engine-core",
  "elitea-llm-wire",
+ "elitea-model-rpc",
+ "futures-util",
  "reqwest",
  "serde_json",
  "tiktoken-rs",
  "tokio",
+ "tonic",
  "tracing",
+]
+
+[[package]]
+name = "elitea-model-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http",
+ "prost",
+ "protoc-bin-vendored",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
 ]
 
 [[package]]
@@ -3267,6 +3288,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
@@ -4008,6 +4030,7 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

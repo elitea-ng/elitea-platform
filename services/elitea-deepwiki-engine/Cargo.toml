@@ -12,6 +12,11 @@ description = "The Rust-native DeepWiki engine behind the sub-application host's
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
+# `testing::with_model_service`: the page gate's `StubModel`
+# (`wiki::parity`, the `deepwiki-parity` tool and the golden tests) answers
+# the model client over elitea.llm.v1.ModelService, as elitea-main does. The
+# engine binary never calls it, so the bridge is dead code there.
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
 # The agents' conversation and its summarisation (shared with Inventory).
 elitea-conversation = { path = "../../libs/rust/conversation" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
@@ -69,6 +74,9 @@ unicode-normalization = "=0.1.25"
 tokio = { version = "=1.53.1", features = ["test-util"] }
 # The sidecar's refusals (tests/sidecar.rs): a status code and message.
 tonic = { version = "=0.14.6", default-features = false }
+# The model fakes served as elitea.llm.v1.ModelService over real gRPC
+# (`testing::with_model_service`): the engine's model calls are gRPC.
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
 
 [features]
 # TEST ONLY. In a debug build, a `repo_config` base URL of

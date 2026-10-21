@@ -1,0 +1,38 @@
+[package]
+name = "elitea-model-rpc"
+description = "The client of elitea.llm.v1.ModelService (elitea-main's platform listener): a /llm call in, the HTTP-shaped answer out, so the callers' wire parsing stays."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# An in-process ModelService that serves an axum Router's /llm routes over
+# gRPC, for the callers' tests and model stubs (`testing::with_model_service`).
+# Nothing in an image calls it: DeepWiki links it only for its page-gate stub.
+testing = ["dep:axum", "dep:tower", "tonic/server"]
+
+[dependencies]
+bytes = "1.12.1"
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+http = "1.5.0"
+prost = "0.14.4"
+# No TLS feature here: the caller builds the mTLS `Channel` with the crypto
+# provider it already links (the worker ring, the engines aws-lc).
+tonic = { version = "0.14.6", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14.6"
+axum = { version = "0.8.9", default-features = false, features = ["http2", "tokio"], optional = true }
+tower = { version = "0.5.3", default-features = false, features = ["util"], optional = true }
+
+[build-dependencies]
+protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14.6"
+
+[dev-dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http2", "tokio"] }
+# The crate's own test server, for its end-to-end tests.
+elitea-model-rpc = { path = ".", features = ["testing"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

@@ -2105,8 +2105,11 @@ name = "elitea-model-client"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "elitea-engine-core",
  "elitea-llm-wire",
+ "elitea-model-rpc",
+ "futures-util",
  "rcgen",
  "reqwest 0.13.5",
  "serde_json",
@@ -2114,8 +2117,27 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tonic",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "elitea-model-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "elitea-model-rpc",
+ "futures-util",
+ "http",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
 ]
 
 [[package]]

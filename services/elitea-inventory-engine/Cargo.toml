@@ -81,6 +81,9 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "jso
 tokio = { version = "=1.53.2", features = ["test-util"] }
 # The sidecar's refusals (tests/sidecar.rs): a status code and message.
 tonic = { version = "=0.14.6", default-features = false }
+# The model fakes served as elitea.llm.v1.ModelService over real gRPC
+# (`testing::with_model_service`): the engine's model calls are gRPC.
+elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
 
 [lints.rust]
 unsafe_code = "forbid"
