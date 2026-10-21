@@ -8,7 +8,12 @@
  *   route and stream). The conversation's own agent answers, so the picker is
  *   shown disabled and there is no plan mode;
  * - `returning`: read-only, with its notice.
+ *
+ * A local thread's footer also shows the context meter (`ContextMeter`, lazy)
+ * once a model call reported its occupancy; `/compact` marks the next send.
  */
+import { lazy, Suspense } from 'react';
+
 import { useNavigate } from '@tanstack/react-router';
 
 import type { WorkspaceTurn } from '@/features/workspace';
@@ -23,6 +28,8 @@ import type { CloudChat } from './useCloudChat';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
+
+const ContextMeter = lazy(() => import('./ContextMeter'));
 
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
@@ -47,6 +54,11 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
+/** The latest context occupancy of the shown turns: the active one's, else the newest earlier one's. */
+function latestMeter(turn: WorkspaceTurn) {
+  return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
+}
+
 export function ThreadComposer({ ipc, workspaceId, conversationId, session, turn, handoff, cloud, skills }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
@@ -54,10 +66,15 @@ export function ThreadComposer({ ipc, workspaceId, conversationId, session, turn
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
-    onSend: (prompt, mentions, picked) => session.send(prompt, commands.planMode, mentions, picked),
+    onSend: async (prompt, mentions, picked) => {
+      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext);
+      if (sent && commands.compactNext) commands.compactSent();
+      return sent;
+    },
     onStop: () => void turn.cancel(),
   };
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
+  const meter = cloudMode ? undefined : latestMeter(turn);
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
     <>
@@ -70,6 +87,13 @@ export function ThreadComposer({ ipc, workspaceId, conversationId, session, turn
         planMode={commands.planMode}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
+        contextMeter={
+          meter === undefined ? undefined : (
+            <Suspense fallback={null}>
+              <ContextMeter meter={meter} />
+            </Suspense>
+          )
+        }
         onPlanModeChange={commands.setPlanMode}
         skills={skills}
         onCommand={session.run}

@@ -1070,7 +1070,7 @@ describe('WorkspaceSessionPage', () => {
 
     // Six commands, a turn and a new thread in one test: the default 5 s is not
     // enough under the coverage shard's instrumentation (30 s below).
-    it('runs the "/" commands: plan, help, agent, new, clear and undo', async () => {
+    it('runs the "/" commands: plan, help, agent, new, clear, compact and undo', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       ipc.setChanges('turn-1', { files: [{ path: 'a.txt', status: 'modified', added: 1, removed: 1, diff: '' }] });
       const user = await ready(ipc);
@@ -1078,7 +1078,7 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/help']);
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/compact', '/help']);
       await user.type(input, 'pl{Enter}');
       expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
       await waitFor(() => expect(input).toHaveValue(''));
@@ -1095,14 +1095,33 @@ describe('WorkspaceSessionPage', () => {
       await user.type(input, '/undo{Enter}');
       expect(await screen.findByText('The last turn here changed no files.')).toBeInTheDocument();
 
+      // /compact: the next send asks the host to compact first.
+      await user.type(input, '/compact{Enter}');
+      expect(await screen.findByTestId('workspace-compact-next')).toBeInTheDocument();
+
       // A turn that changed a file: /undo asks the same confirmation as the card's button.
       await user.type(input, 'go{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       expect(ipc.calls.started[0]?.plan_mode).toBe(true);
+      expect(ipc.calls.started[0]?.compact).toBe(true);
+      await waitFor(() => expect(screen.queryByTestId('workspace-compact-next')).toBeNull());
       ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
       ipc.emit({ turn_id: 'turn-1', seq: 2, kind: 'text_delta', payload: { text: 'changed a.txt' } });
-      ipc.emit({ turn_id: 'turn-1', seq: 3, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
+      ipc.emit({
+        turn_id: 'turn-1',
+        seq: 3,
+        kind: 'usage',
+        payload: {
+          prompt_tokens: 124_000,
+          completion_tokens: 10,
+          total_tokens: 124_010,
+          context: { used_tokens: 124_000, window_tokens: 200_000, phase: 'compacted', compacted: true, compacted_at: '2026-10-21T10:15:00.000Z', window_fallback: false },
+        },
+      });
+      ipc.emit({ turn_id: 'turn-1', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
       expect(await screen.findByText('a.txt')).toBeInTheDocument();
+      // The composer's context meter shows the call's occupancy.
+      expect(await screen.findByTestId('context-meter')).toHaveTextContent('62% of 200K');
       await user.type(input, '/undo{Enter}');
       const dialog = await screen.findByRole('dialog', { name: 'Undo this turn?' });
       await user.click(within(dialog).getByRole('button', { name: 'Undo turn' }));
@@ -1129,6 +1148,7 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');
+      expect(ipc.calls.started[1]?.compact).toBeUndefined();
     }, 30_000);
 
     it('lists the agent\'s skills after the commands, filtered, and sends the one the message starts with', async () => {
@@ -1141,9 +1161,9 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(8));
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(9));
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
-        '/new', '/plan', '/undo', '/agent', '/clear', '/help', '/code-review', '/style',
+        '/new', '/plan', '/undo', '/agent', '/clear', '/compact', '/help', '/code-review', '/style',
       ]);
       expect(within(menu).getByText('Skills')).toBeInTheDocument();
       expect(within(menu).getByText('The house style')).toBeInTheDocument();

@@ -9,7 +9,7 @@ import type { WorkspaceCommandId, WorkspaceTurn } from '@/features/workspace';
 
 import type { AgentSelection } from './useAgentSelection';
 
-type SessionNotice = 'help' | 'nothingToUndo' | null;
+type SessionNotice = 'help' | 'nothingToUndo' | 'compactNext' | null;
 
 export interface SessionCommands {
   planMode: boolean;
@@ -20,6 +20,10 @@ export interface SessionCommands {
   undoRequest: number;
   /** The box holding the agent picker; `/agent` opens it. */
   agentRef: RefObject<HTMLDivElement | null>;
+  /** `/compact` was asked for: the next message's turn compacts the context first. */
+  compactNext: boolean;
+  /** The turn that compacts started. */
+  compactSent: () => void;
   run: (command: WorkspaceCommandId) => void;
 }
 
@@ -27,6 +31,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
   const [planMode, setPlanMode] = useState(false);
   const [notice, setNotice] = useState<SessionNotice>(null);
   const [undoRequest, setUndoRequest] = useState(0);
+  const [compactNext, setCompactNext] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
 
   const actions: Record<WorkspaceCommandId, () => void> = {
@@ -41,6 +46,10 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     },
     agent: () => agentRef.current?.querySelector<HTMLElement>('button')?.click(),
     clear: () => turn.clear(),
+    compact: () => {
+      setCompactNext(true);
+      setNotice('compactNext');
+    },
     help: () => setNotice('help'),
   };
 
@@ -51,6 +60,11 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     closeNotice: () => setNotice(null),
     undoRequest,
     agentRef,
+    compactNext,
+    compactSent: () => {
+      setCompactNext(false);
+      setNotice((current) => (current === 'compactNext' ? null : current));
+    },
     run: (command) => {
       setNotice(null);
       actions[command]();
