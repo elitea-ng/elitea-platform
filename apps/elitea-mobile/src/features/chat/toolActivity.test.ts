@@ -323,7 +323,6 @@ describe('a tool paused for the user (contract 1.2, python golden frame)', () =>
 });
 
 describe('a tool paused for approval (captured, python worker before contract 1.2)', () => {
-   
   const captured = require('./__fixtures__/captured/python-sensitive-tool-pause.json') as { frames: Record<string, unknown>[] };
   const frames = captured.frames.map((f) => frameOf(f));
 
@@ -352,7 +351,6 @@ describe('a tool paused for approval (captured, python worker before contract 1.
 });
 
 describe('persisted steps of a paused answer', () => {
-   
   const captured = require('./__fixtures__/captured/python-sensitive-tool-pause.json') as { frames: Record<string, unknown>[] };
   const pause = pauseOf(nodeOf(captured.frames[2]))!;
   const persisted = (id: string, name: string, status: ToolStep['status']): ToolStep => ({

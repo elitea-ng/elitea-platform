@@ -81,7 +81,7 @@
     "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "contract:build": "node scripts/contract.mjs build",
     "contract:gen": "node scripts/contract.mjs gen",
-    "contract:check": "node scripts/contract.mjs check",
+    "contract:check": "node scripts/check-generated-client.mjs",
     "check:generated-client": "node scripts/check-generated-client.mjs",
     "check:release-config": "node scripts/assert-release-config.mjs"
   },

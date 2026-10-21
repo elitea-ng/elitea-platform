@@ -19,6 +19,7 @@ on:
       - "services/elitea-main/api/openapi/v2.yaml"
       - "apps/elitea-web/public/brand/logo-mark.svg"
       - ".github/workflows/ci-mobile.yml"
+      - ".github/actions/npm-cache/**"
   push:
     branches:
       - main
@@ -28,11 +29,13 @@ on:
       - "apps/elitea-web/public/brand/logo-mark.svg"
       # This workflow's own file, in both arms (#518).
       - ".github/workflows/ci-mobile.yml"
+      - ".github/actions/npm-cache/**"
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Main runs are not cancelled: they write the npm cache (pull requests read, main writes).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

@@ -55,7 +55,7 @@ function restrictedImportsExcept(file) {
 module.exports = defineConfig([
   expoConfig,
   {
-    // src/api/generated/ is produced by `npm run contract:gen` and drift-checked by `contract:check`.
+    // src/api/generated/ is produced by `npm run contract:gen` and drift-checked by `check:generated-client`.
     ignores: ['dist/*', 'src/api/generated/**', 'contract/.build/**'],
   },
   {

@@ -6,9 +6,9 @@
  *
  *   node scripts/contract.mjs build    prune the spec, write contract/.build/pruned.yaml (inspection)
  *   node scripts/contract.mjs gen      build, then write src/api/generated/elitea.gen.ts
- *   node scripts/contract.mjs check    build + generate in memory and fail if the committed
- *                                      generated file differs (CI drift guard; also
- *                                      scripts/check-generated-client.mjs)
+ *
+ * The drift gate is scripts/check-generated-client.mjs (npm run check:generated-client, and
+ * npm run contract:check): one entry point, with the floor on kept paths.
  *
  * There is no pinned copy and no overlay: a gap in the spec is fixed in the spec, in the same
  * change as the app code that needs it. The generated file depends only on the PRUNED document,
@@ -231,16 +231,6 @@ const COMMANDS = {
     const { expected } = await compareGenerated();
     writeGenerated(expected);
     console.log(`contract: wrote ${GENERATED_RELATIVE} (${expected.length} bytes)`);
-  },
-  async check() {
-    const { expected, actual } = await compareGenerated();
-    if (actual === null) throw new ContractError(`${GENERATED_RELATIVE} is missing; run npm run contract:gen`);
-    if (actual !== expected) {
-      throw new ContractError(
-        `${GENERATED_RELATIVE} is out of date with services/elitea-main/api/openapi/v2.yaml; run npm run contract:gen and commit the result`,
-      );
-    }
-    console.log(`contract: ${GENERATED_RELATIVE} is up to date`);
   },
 };
 

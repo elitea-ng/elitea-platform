@@ -102,13 +102,13 @@ Administration, pipelines, toolkits, MCP, wiki, agent authoring and push notific
 
 The app talks to the server only through its public HTTP API.
 
-- A pinned copy of the server's OpenAPI document (`v2.yaml`) will live under `contract/`
-  (to be added). It is updated deliberately by copying a released version, never fetched
-  at build time.
-- The app generates its own typed client from that file. The generator choice is still
-  to be made, and the generated code is committed or rebuilt reproducibly.
-- **Nothing is imported from Elitea source code**, including no shared packages and no
-  copied UI or logic. The contract file is the only coupling.
+- The typed client (`src/api/generated/elitea.gen.ts`, openapi-typescript) is generated
+  from the server's spec in this repository, `services/elitea-main/api/openapi/v2.yaml`,
+  pruned to the operations in `contract/client-operations.json`. There is no pinned copy.
+  `npm run check:generated-client` fails CI when the committed file is stale; `--write`
+  regenerates it.
+- The app imports no server or web source. The spec and the brand mark (a parity test
+  against `apps/elitea-web/public/brand/logo-mark.svg`) are its only couplings.
 - Compatibility is checked against the server's advertised version or capabilities at
   connect time. If a server lacks native-client support, the connect flow reports it
   clearly instead of failing at login.
