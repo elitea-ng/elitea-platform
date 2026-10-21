@@ -125,4 +125,5 @@ function main(argv) {
   return 0;
 }
 
-if (import.meta.main) process.exitCode = main(process.argv.slice(2));
+// Not `import.meta.main`: that needs Node 24.2, and `engines` admits any 24.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main(process.argv.slice(2));

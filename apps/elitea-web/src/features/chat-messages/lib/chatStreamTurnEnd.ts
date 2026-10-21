@@ -15,7 +15,6 @@ import { isTerminalPauseFrame } from './chatStreamInterruptFrames';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
 import { isFullMessageResultFrame, isRootAnswerFrame } from './chatStreamFinalResult';
 
-
 /**
  * Is this the last frame of the turn?
  *

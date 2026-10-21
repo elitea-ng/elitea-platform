@@ -38,8 +38,8 @@ import type { z } from 'zod';
 import type { SOCKET_MESSAGE_TYPES, socketMessageSchema } from '@/shared/api/socket/messages';
 
 /**
- * The 34 streaming payload discriminants — derived from S5's
- * `SOCKET_MESSAGE_TYPES` (constants.js declaration order), not
+ * The streaming payload discriminants — derived from S5's
+ * `SOCKET_MESSAGE_TYPES` (`@elitea/client-core`'s `FRAME_TYPE`), not
  * hand-duplicated. NOT the 43 channel event names (those are
  * `entities/canvas`'s and S5's `events.ts` concern) — this is the `type`
  * field carried inside a socket message payload.

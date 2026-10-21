@@ -9,7 +9,7 @@ import rehypeSlug from 'rehype-slug';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkMdxFrontmatter from 'remark-mdx-frontmatter';
-import { defineConfig, type PluginOption, type UserConfig } from 'vite';
+import { defineConfig, searchForWorkspaceRoot, type PluginOption, type UserConfig } from 'vite';
 
 // No `.ts` extension: tsconfig.json does not set `allowImportingTsExtensions`
 // (TS5097), so adding one here to silence Vite's own `configLoader: 'native'`
@@ -164,12 +164,26 @@ export default defineConfig(({ mode }): UserConfig => withClientCoreAccess(confi
  * `@elitea/client-core` (libs/ts/client-core) is TypeScript source outside
  * this app's root: `tsconfigPaths()` resolves the import and Vite compiles
  * it, but the dev server serves only allowed directories. Every mode's dev
- * server allows this app and that package; a build is not affected.
+ * server allows that package on top of whatever it already allowed; a build
+ * is not affected.
+ *
+ * Merged, not replaced: setting `server.fs.allow` drops Vite's own default
+ * (the workspace root), so that default is put back first, then any `fs`
+ * options and `allow` entries the config already had. vitest.config.ts
+ * applies the same function, so the storybook project's browser-mode server
+ * can serve the package too.
  */
-function withClientCoreAccess(config: UserConfig): UserConfig {
+export function withClientCoreAccess<T extends UserConfig>(config: T): T {
+  const fs = config.server?.fs;
   return {
     ...config,
-    server: { ...config.server, fs: { allow: [resolvePath('.'), resolvePath('../../libs/ts/client-core')] } },
+    server: {
+      ...config.server,
+      fs: {
+        ...fs,
+        allow: [searchForWorkspaceRoot(process.cwd()), ...(fs?.allow ?? []), resolvePath('../../libs/ts/client-core')],
+      },
+    },
   };
 }
 

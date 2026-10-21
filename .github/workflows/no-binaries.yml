@@ -233,6 +233,24 @@ jobs:
           node --test scripts/ci/check-workflow-branch-coverage.test.mjs
           node scripts/ci/check-workflow-branch-coverage.mjs
 
+  # docs/client-feature-parity.md is how new client work lands on web, desktop
+  # and mobile together; the checker holds the table's shape (every row has a
+  # status for each client in one of the three forms). Here rather than in
+  # ci-web.yml: a table-only edit is a documentation change, and the web
+  # pipeline it used to start is the most expensive one in the repository.
+  # This workflow has no path filter, so the table is checked on every change.
+  # It reads only node's standard library (the runner's node).
+  client-feature-parity:
+    name: Client feature-parity table is well formed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every feature has a status for web, desktop and mobile
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-client-feature-parity.test.mjs
+          node scripts/ci/check-client-feature-parity.mjs
+
   # Issue #520. A migration states its version number when an author writes it.
   # The number is only true when the pull request MERGES. Pull requests #369 and
   # #388 both claimed 0072; #495 and #516 both claimed 0084. In each case both

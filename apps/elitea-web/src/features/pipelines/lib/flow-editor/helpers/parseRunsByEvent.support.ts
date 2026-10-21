@@ -4,25 +4,27 @@
  * that file's doc comment for the actual port's provenance and citations;
  * this file has no baseline counterpart of its own.
  */
+import { FRAME_TYPE } from '@elitea/client-core/stream';
+
 import type { SocketMessageType as SocketMessageTypeValue } from '@/entities/message';
 
 import { PipelineNodeTypes } from '../constants/flowEditor.constants';
 
-/** Local duplicate of `common/constants.js`'s `SocketMessageType` object, scoped to `parseRunEvent`'s switch discriminants — see `parseRunsByEvent.helpers.ts`'s doc comment. */
+/** `common/constants.js`'s `SocketMessageType` (`@elitea/client-core`'s `FRAME_TYPE`), narrowed to `parseRunEvent`'s switch discriminants — see `parseRunsByEvent.helpers.ts`'s doc comment. */
 export const PIPELINE_SOCKET_MESSAGE_TYPE = {
-  AgentStart: 'agent_start',
-  AgentException: 'agent_exception',
-  AgentToolStart: 'agent_tool_start',
-  AgentToolEnd: 'agent_tool_end',
-  AgentToolError: 'agent_tool_error',
-  AgentHitlInterrupt: 'agent_hitl_interrupt',
-  AgentLlmStart: 'agent_llm_start',
-  AgentLlmEnd: 'agent_llm_end',
-  AgentOnTransitionalEdge: 'agent_on_transitional_edge',
-  AgentOnConditionalEdge: 'agent_on_conditional_edge',
-  AgentOnDecisionEdge: 'agent_on_decision_edge',
-  StartTask: 'start_task',
-  PipelineFinish: 'pipeline_finish',
+  AgentStart: FRAME_TYPE.AgentStart,
+  AgentException: FRAME_TYPE.AgentException,
+  AgentToolStart: FRAME_TYPE.AgentToolStart,
+  AgentToolEnd: FRAME_TYPE.AgentToolEnd,
+  AgentToolError: FRAME_TYPE.AgentToolError,
+  AgentHitlInterrupt: FRAME_TYPE.AgentHitlInterrupt,
+  AgentLlmStart: FRAME_TYPE.AgentLlmStart,
+  AgentLlmEnd: FRAME_TYPE.AgentLlmEnd,
+  AgentOnTransitionalEdge: FRAME_TYPE.AgentOnTransitionalEdge,
+  AgentOnConditionalEdge: FRAME_TYPE.AgentOnConditionalEdge,
+  AgentOnDecisionEdge: FRAME_TYPE.AgentOnDecisionEdge,
+  StartTask: FRAME_TYPE.StartTask,
+  PipelineFinish: FRAME_TYPE.PipelineFinish,
 } as const satisfies Partial<Record<string, SocketMessageTypeValue>>;
 
 export interface RunEventNode {

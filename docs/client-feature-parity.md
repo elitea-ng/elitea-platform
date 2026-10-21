@@ -8,7 +8,7 @@ This table lists the user-facing features of the three Elitea clients:
 
 Update the table in the pull request that changes a feature on one client. The
 pull request template asks for it. `scripts/ci/check-client-feature-parity.mjs`
-checks the table in `ci-web.yml`.
+checks the table in `no-binaries.yml`, which runs on every change.
 
 ## Rules
 

@@ -42,12 +42,10 @@ on:
       - "tools/uictl/**"
       - "services/elitea-main/**"
       - "deploy/**"
-      # The shared client package the app compiles from source, and the
-      # client feature-parity table whose gate runs in `gates-static`.
+      # The shared client package the app compiles from source. The client
+      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
+      # so a table-only edit does not start this pipeline.
       - "libs/ts/client-core/**"
-      - "docs/client-feature-parity.md"
-      - "scripts/ci/check-client-feature-parity.mjs"
-      - "scripts/ci/check-client-feature-parity.test.mjs"
       - ".github/workflows/ci-web.yml"
   push:
     branches:
@@ -57,12 +55,10 @@ on:
       - "tools/uictl/**"
       - "services/elitea-main/**"
       - "deploy/**"
-      # The shared client package the app compiles from source, and the
-      # client feature-parity table whose gate runs in `gates-static`.
+      # The shared client package the app compiles from source. The client
+      # feature-parity table is NOT here: its gate runs in no-binaries.yml,
+      # so a table-only edit does not start this pipeline.
       - "libs/ts/client-core/**"
-      - "docs/client-feature-parity.md"
-      - "scripts/ci/check-client-feature-parity.mjs"
-      - "scripts/ci/check-client-feature-parity.test.mjs"
       - ".github/workflows/ci-web.yml"
     # NO `tags: v*` — issue #309, Gate 2. publish.yml cuts release tags with
     # `secrets.GITHUB_TOKEN`, and GitHub does not start workflow runs for refs
@@ -543,12 +539,6 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: libs/ts/client-core
         run: npm run check:generated
-      - name: Client feature-parity table (docs/client-feature-parity.md)
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        working-directory: .
-        run: |
-          node --test scripts/ci/check-client-feature-parity.test.mjs
-          node scripts/ci/check-client-feature-parity.mjs
 
       # ── Endpoint manifest ───────────────────────────────────────────────
       # Issue #426. Both the checker and the manifest it reads are in the tree,

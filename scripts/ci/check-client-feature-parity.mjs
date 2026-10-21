@@ -29,10 +29,64 @@ export const MINIMUM_ROWS = 10;
 
 const STATUS = [/^shipped$/, /^planned \(#[1-9]\d*\)$/, /^n-a: \S.*$/];
 
-/** Splits one markdown table line into its trimmed cells. */
+/** The length of the run of backticks that starts at `at`. */
+function backtickRun(text, at) {
+  let end = at;
+  while (text[end] === "`") end++;
+  return end - at;
+}
+
+/** Does a run of exactly `length` backticks start somewhere after `from`? */
+function hasClosingRun(text, from, length) {
+  for (let i = from; i < text.length; ) {
+    if (text[i] !== "`") {
+      i += text[i] === "\\" ? 2 : 1;
+      continue;
+    }
+    const run = backtickRun(text, i);
+    if (run === length) return true;
+    i += run;
+  }
+  return false;
+}
+
+/**
+ * Splits one markdown table line into its trimmed cells.
+ *
+ * A pipe separates cells unless it is escaped (`\|`) or inside a code span
+ * (`` `a|b` ``): both are cell text, kept as written. A backtick run with no
+ * closing run of the same length opens no span, as in CommonMark.
+ */
 export function cells(line) {
-  const inner = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return inner.split("|").map((cell) => cell.trim());
+  const text = line.trim();
+  const out = [];
+  let cell = "";
+  let span = 0; // the length of the open code span's backtick run; 0 outside one
+  let endedOnPipe = false;
+  for (let i = 0; i < text.length; ) {
+    const ch = text[i];
+    endedOnPipe = false;
+    if (ch === "\\" && i + 1 < text.length) {
+      cell += text.slice(i, i + 2);
+      i += 2;
+    } else if (ch === "`") {
+      const run = backtickRun(text, i);
+      if (span === 0 ? hasClosingRun(text, i + run, run) : run === span) span = span === 0 ? run : 0;
+      cell += text.slice(i, i + run);
+      i += run;
+    } else if (ch === "|" && span === 0) {
+      out.push(cell);
+      cell = "";
+      endedOnPipe = true;
+      i++;
+    } else {
+      cell += ch;
+      i++;
+    }
+  }
+  if (!endedOnPipe) out.push(cell);
+  if (text.startsWith("|")) out.shift();
+  return out.map((value) => value.trim());
 }
 
 /** Is `value` a valid status cell? */

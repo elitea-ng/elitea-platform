@@ -330,6 +330,23 @@ const PACK_META = {
  * `text.button.primary`. The mobile app reads these to tell a hue-only
  * workspace brand from the default (theme/brandPack.ts).
  */
+/**
+ * A TypeScript object literal for a tree of plain objects and strings. Every
+ * leaf and every key that is not a bare identifier goes through
+ * JSON.stringify, so the output is valid TypeScript whatever the strings
+ * hold; nothing is rewritten after the fact. Laid out the way prettier's
+ * defaults print it (two-space indent, double quotes, trailing commas).
+ */
+function tsObjectLiteral(value, indent = '') {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  const inner = `${indent}  `;
+  const lines = Object.entries(value).map(([key, child]) => {
+    const name = /^[A-Za-z_$][\w$]*$/.test(key) ? key : JSON.stringify(key);
+    return `${inner}${name}: ${tsObjectLiteral(child, inner)},`;
+  });
+  return `{\n${lines.join('\n')}\n${indent}}`;
+}
+
 function renderAccentsTs(pack) {
   const pick = (scheme) => ({
     accent: pack.schemes[scheme]['primary.main'],
@@ -349,7 +366,7 @@ function renderAccentsTs(pack) {
  * The default pack's accent inputs. They are the product default only: a
  * workspace brand pack (ADR-0024) replaces them at run time.
  */
-export const DEFAULT_PACK_ACCENTS = ${JSON.stringify(value, null, 2).replace(/"([a-zA-Z]+)":/g, '$1:').replaceAll('"', "'")} as const;
+export const DEFAULT_PACK_ACCENTS = ${tsObjectLiteral(value)} as const;
 `;
 }
 

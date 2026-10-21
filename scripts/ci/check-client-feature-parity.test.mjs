@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { MINIMUM_ROWS, TABLE_PATH, checkParityTable, isStatus } from "./check-client-feature-parity.mjs";
+import { MINIMUM_ROWS, TABLE_PATH, cells, checkParityTable, isStatus } from "./check-client-feature-parity.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -22,7 +22,37 @@ describe("isStatus", () => {
   }
 });
 
+describe("cells", () => {
+  it("splits on the outer and inner pipes", () => {
+    assert.deepEqual(cells("| a | b |c|"), ["a", "b", "c"]);
+    assert.deepEqual(cells("a | b"), ["a", "b"]);
+  });
+
+  it("keeps an escaped pipe in its cell", () => {
+    assert.deepEqual(cells("| a \\| b | c |"), ["a \\| b", "c"]);
+  });
+
+  it("keeps a pipe inside a code span in its cell", () => {
+    assert.deepEqual(cells("| `a|b` | ``x | `y` | z`` | c |"), ["`a|b`", "``x | `y` | z``", "c"]);
+  });
+
+  it("treats an unclosed backtick as text, so later pipes still split", () => {
+    assert.deepEqual(cells("| a ` b | c |"), ["a ` b", "c"]);
+  });
+
+  it("keeps an escaped pipe at the end of the line as text", () => {
+    assert.deepEqual(cells("| a | b \\|"), ["a", "b \\|"]);
+  });
+});
+
 describe("checkParityTable", () => {
+  it("does not count a pipe in a code span or an escaped pipe as a column", () => {
+    const result = checkParityTable(
+      doc([...filler(MINIMUM_ROWS), "| Pipes `a|b` | shipped | n-a: no `x|y` here | shipped | one \\| two |"]),
+    );
+    assert.deepEqual(result.failures, []);
+  });
+
   it("passes a well-formed table", () => {
     const result = checkParityTable(doc(filler(MINIMUM_ROWS)));
     assert.deepEqual(result.failures, []);
