@@ -437,7 +437,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
 	var principalValidator apimw.PrincipalValidator
-	var forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
+	// formSessions reads the Form plane's session cookie for every route's
+	// apimw.Auth. It replaced the forwarded-identity verifier the X-Auth-*
+	// edge projection needed (#1359), and is assigned exactly where that was:
+	// only inside the authEnabled block below.
+	var formSessions apimw.FormSessionAuthenticator
 	// firstLoginPolicy travels OUT of the authEnabled block below, because the
 	// plane that consumes it is composed further down. `initial_global_admins`
 	// used to reach only the browserauth plane, and internal/api/
@@ -452,7 +456,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The local username/password sign-in. OFF unless explicitly enabled:
 	// a deployment signs people in through OIDC or SAML (and provisions them
 	// through SCIM). The authentication document is still read either way —
-	// the gateway edge, PAT validation and the runtime depend on it.
+	// PAT validation and the runtime depend on it.
 	formSignInEnabled, err := formSignInEnabledFromEnv(os.LookupEnv)
 	if err != nil {
 		return err
@@ -553,27 +557,24 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			InitialGlobalAdmins: authConfig.Identity.InitialGlobalAdmins,
 		}
 		formGraph, err = authcomposition.NewFormGraph(ctx, authConfig, authcomposition.FormGraphDependencies{
-			PostgreSQL:           pool,
-			MainRoutePublicRules: api.CurrentMainRoutePublicRules(),
-			Brand:                brandingResolver,
-			FormSignInEnabled:    formSignInEnabled,
-			NativeTokens:         native.graphTokens(),
+			PostgreSQL:        pool,
+			Brand:             brandingResolver,
+			FormSignInEnabled: formSignInEnabled,
 		})
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
 		}
 		if formGraph.FormSignInEnabled() {
 			logFormUserConfiguration(logger, formGraph.FormUsers())
-			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
+			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes())
+			if err != nil {
+				return fmt.Errorf("mount production Form authentication: %w", err)
+			}
 		} else {
 			logFormSignInDisabled(logger, formGraph.FormUsers())
-			productionAuth, err = api.NewEdgeOnlyProductionAuthRoutes(formGraph.MainEdgeAuth())
-		}
-		if err != nil {
-			return fmt.Errorf("mount production Form authentication: %w", err)
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
-		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
+		formSessions = formGraph.FormSessions()
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
@@ -746,14 +747,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	//
 	// It is built here, immediately after both browser-authentication planes
 	// are final, because every field it reads is final at this point:
-	// formGraph, principalValidator and forwardedIdentityVerifier are assigned
+	// formGraph, principalValidator and formSessions are assigned
 	// only inside the `authEnabled` block above, and oidcSessionHandler only
 	// inside the single-sign-on block above. Nothing between there and here
 	// assigns any of them.
 	//
 	// Under production Form authentication the set is the graph's token
-	// validator, the forwarded-identity verifier and the browser session
-	// secret; under OIDC-only it is the session cookie plus the LocalValidator
+	// validator, the Form session reader and the browser session secret; under OIDC-only it is the session cookie plus the LocalValidator
 	// for the tokens APPLICATION_SECRET_KEY signs — which is also how a
 	// provider's callback bearer, minted by the same key, is read back on its
 	// upload. See apiGroupAuthConfig for both shapes and why each carries a
@@ -784,7 +784,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	apiGroupAuth := withNativeTokens(apiGroupAuthConfig(
 		formGraph,
 		principalValidator,
-		forwardedIdentityVerifier,
+		formSessions,
 		authsvc.NewPrincipalValidator(pool),
 		sessionTokens,
 		os.Getenv("APPLICATION_SECRET_KEY"),
@@ -903,7 +903,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load current project-info settings: %w", err)
 	}
 	if currentProjectInfoSettings.Enabled &&
-		(formGraph == nil || principalValidator == nil || forwardedIdentityVerifier == nil) {
+		(formGraph == nil || principalValidator == nil || formSessions == nil) {
 		return errors.New("ELITEA_PROJECT_INFO_ENABLED requires production authentication")
 	}
 	var currentProjectInfo *projectinfoapi.CurrentProjectInfoRoute
@@ -1406,7 +1406,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose ungated project-context reader: %w", readerErr)
 		}
 		// apiGroupAuth, not a fresh composition from formGraph/
-		// principalValidator/forwardedIdentityVerifier: those are the SAME
+		// principalValidator/formSessions: those are the SAME
 		// inputs apiGroupAuth was already built from above, and the gate on
 		// this block (formGraph != nil || oidcSessionHandler != nil) makes
 		// the two compositions identical in both branches. See
@@ -1427,7 +1427,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	// runtimeConfig was read above, before the Configurations runtime, so the
 	// project vector-store decision could use it.
-	if runtimeConfig.Enabled && (principalValidator == nil || forwardedIdentityVerifier == nil) {
+	if runtimeConfig.Enabled && (principalValidator == nil || formSessions == nil) {
 		return errors.New("ELITEA_RUNTIME_ENABLED requires production authentication")
 	}
 	if err := validateRuntimeComposition(currentConfigurationsConfig, runtimeConfig); err != nil {
@@ -1946,7 +1946,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			publicRoutes.Validation,
 			publicRoutes.ExecutionEvents,
 			principalValidator,
-			forwardedIdentityVerifier,
 			// The GROUP's own credential set, handed over whole. A browser's
 			// EventSource sends a cookie and nothing else (#93), and an SDK or
 			// a server-side client follows the run it started with the SAME
@@ -2424,13 +2423,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// admin list. The console then shows a rank-and-file user
 			// controls that the server refuses with 403 on each click.
 			Resolver: legacyrbac.NewPostgresResolver(pool),
-			// The runtime deployment authenticates the browser at
-			// /auth/login, which sets `elitea_browser_auth` and projects
-			// the principal as X-Auth-*. Without this verifier the handler has
-			// no way to read that identity, injects an empty permission list,
-			// and the SPA renders a sidebar with no items — see adminui's
-			// ServeSPA. A nil verifier (no form graph) still degrades closed.
-			ForwardedIdentityVerifier: forwardedIdentityVerifier,
+			// A Form deployment authenticates the browser at /auth/login,
+			// which sets `elitea_browser_auth`. Without this reader the
+			// handler has no way to read that identity, injects an empty
+			// permission list, and the SPA renders a sidebar with no items —
+			// see adminui's ServeSPA. A nil reader (no form graph) still
+			// degrades closed.
+			FormSessions: formSessions,
 			// The OIDC path's credential after shared migration 0117. The
 			// cookie carries an opaque identifier and no claims, so without
 			// this the HMAC reader below finds nothing and the sidebar is
@@ -2601,7 +2600,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SessionSecret:      apiGroupAuth.SessionSecret,
 		PATSigner:          patSigner,
 		Auth: api.AuthDeps{
-			ForwardedIdentityVerifier:  apiGroupAuth.ForwardedIdentityVerifier,
+			FormSessions:               apiGroupAuth.FormSessions,
 			SessionStore:               apiGroupAuth.SessionStore,
 			RejectLegacySessionCookies: apiGroupAuth.RejectLegacySessionCookies,
 			SessionHandler:             oidcSessionHandler,

@@ -11,27 +11,26 @@ import (
 	"strings"
 	"testing"
 
+	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // DEFECT: ServeSPA read the `elitea_session` cookie and nothing else.
 //
-// The runtime deployment does not issue that cookie. A browser logs in at
-// /auth/login, which stores an opaque server-side session under
-// `elitea_browser_auth` and projects the principal onto the upstream request as
-// X-Auth-* headers (deploy/runtime/platform-edge-dynamic.yml
-// `authResponseHeaders`). The cookie lookup found nothing on every load, so the
-// handler injected `permissions: []` and an empty `user_name`.
+// A Form-login browser does not carry that cookie. It signs in at /auth/login,
+// which stores an opaque server-side session under `elitea_browser_auth`. The
+// cookie lookup found nothing on every load, so the handler injected
+// `permissions: []` and an empty `user_name`.
 //
 // The SPA shows a nav item only when the injected list carries one of its
 // permissions, so the operator got a sidebar with no items at all — ten
 // implemented admin pages reachable only by typing their URL — and a footer
 // reading the generic fallback "Admin" instead of their address.
-
-// peerVerifier is an apimw.ForwardedIdentityPeerVerifier built from an error.
-type peerVerifier struct{ err error }
-
-func (v peerVerifier) VerifyForwardedIdentityPeer(*http.Request) error { return v.err }
+//
+// The first fix read the session through the edge's X-Auth-* projection. That
+// plane is gone (#1359): the handler now reads the Form session itself, through
+// the same reader apimw.Auth uses.
 
 type emailFunc func(context.Context, int64) (string, error)
 
@@ -39,8 +38,10 @@ func (f emailFunc) UserEmail(ctx context.Context, userID int64) (string, error) 
 	return f(ctx, userID)
 }
 
-// serveForwarded drives the real ServeSPA with X-Auth-* headers and no cookie.
-func serveForwarded(t *testing.T, cfg Config, headers map[string]string) adminUIConfig {
+// serveFormSession drives the real ServeSPA. A non-empty signIn sends the Form
+// session cookie authtest.FormSessions resolves to that user; there is never an
+// `elitea_session` cookie.
+func serveFormSession(t *testing.T, cfg Config, signIn string) adminUIConfig {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(
@@ -55,8 +56,8 @@ func serveForwarded(t *testing.T, cfg Config, headers map[string]string) adminUI
 	cfg.BasePath = "/admin/app"
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/app", nil)
-	for name, value := range headers {
-		req.Header.Set(name, value)
+	if signIn != "" {
+		authtest.SignIn(req, signIn)
 	}
 	rec := httptest.NewRecorder()
 	NewHandler(cfg).ServeSPA(rec, req)
@@ -75,22 +76,14 @@ func serveForwarded(t *testing.T, cfg Config, headers map[string]string) adminUI
 	return injected
 }
 
-func userHeaders(userID string) map[string]string {
-	return map[string]string{
-		"X-Auth-Type":    "user",
-		"X-Auth-ID":      userID,
-		"X-Auth-User-ID": userID,
-	}
-}
-
-func TestServeSPA_ForwardedIdentityGetsTheOperatorsPermissions(t *testing.T) {
+func TestServeSPA_FormSessionGetsTheOperatorsPermissions(t *testing.T) {
 	t.Parallel()
 
 	granted := []string{"admin.auth.users", "models.admin.audit_trail.view"}
 	var seenPrincipal auth.User
 	var seenMode string
 	cfg := Config{
-		ForwardedIdentityVerifier: peerVerifier{},
+		FormSessions: authtest.FormSessions{},
 		Resolver: resolverFunc(func(
 			_ context.Context, principal auth.User, mode, _ string,
 		) (auth.PermissionResolution, error) {
@@ -105,7 +98,7 @@ func TestServeSPA_ForwardedIdentityGetsTheOperatorsPermissions(t *testing.T) {
 		}),
 	}
 
-	injected := serveForwarded(t, cfg, userHeaders("42"))
+	injected := serveFormSession(t, cfg, "42")
 
 	if len(injected.Permissions) != len(granted) {
 		t.Fatalf("permissions = %v, want %v", injected.Permissions, granted)
@@ -126,62 +119,64 @@ func TestServeSPA_ForwardedIdentityGetsTheOperatorsPermissions(t *testing.T) {
 	if seenMode != auth.PermissionModeAdministration {
 		t.Errorf("resolver mode = %q, want %q", seenMode, auth.PermissionModeAdministration)
 	}
-	if seenPrincipal.UserID != "42" || seenPrincipal.AuthType != "user" {
-		t.Errorf("resolver principal = %+v, want the forwarded user 42", seenPrincipal)
+	if seenPrincipal.UserID != "42" || seenPrincipal.AuthType != "session" {
+		t.Errorf("resolver principal = %+v, want the Form session of user 42", seenPrincipal)
 	}
 }
 
-// A token principal's X-Auth-ID is the TOKEN's id, not its owner's user id.
-// The whole principal must reach the resolver, which is the component that
-// cross-checks the pair, and the injected user_id must be the OWNER's.
-func TestServeSPA_ForwardedTokenPrincipalReachesTheResolverIntact(t *testing.T) {
+// The X-Auth-* headers are no credential any more (#1359). A browser that
+// sends them, with no Form cookie, names nobody — whatever reader is composed.
+func TestServeSPA_ForgedXAuthHeadersGetNothing(t *testing.T) {
 	t.Parallel()
 
-	var seenPrincipal auth.User
 	cfg := Config{
-		ForwardedIdentityVerifier: peerVerifier{},
+		FormSessions: authtest.FormSessions{},
 		Resolver: resolverFunc(func(
-			_ context.Context, principal auth.User, _, _ string,
+			_ context.Context, _ auth.User, _, _ string,
 		) (auth.PermissionResolution, error) {
-			seenPrincipal = principal
-			return auth.PermissionResolution{UserID: 7, Permissions: []string{"admin.auth.users"}}, nil
+			t.Error("the resolver must not run for X-Auth-* headers")
+			return auth.PermissionResolution{UserID: 1, Permissions: []string{"admin.auth.users"}}, nil
 		}),
 	}
-
-	injected := serveForwarded(t, cfg, map[string]string{
-		"X-Auth-Type":    "token",
-		"X-Auth-ID":      "900",
-		"X-Auth-User-ID": "7",
-	})
-
-	if seenPrincipal.TokenID != "900" || seenPrincipal.UserID != "7" {
-		t.Errorf("resolver principal = %+v, want token 900 owned by user 7", seenPrincipal)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"),
+		[]byte("<html><body><!-- admin_ui_config --></body></html>"), 0o600); err != nil {
+		t.Fatalf("write index.html: %v", err)
 	}
-	if injected.UserID != float64(7) {
-		t.Errorf("user_id = %v, want the owning user 7, not the token id", injected.UserID)
+	cfg.StaticDir, cfg.SecretKey, cfg.BasePath = dir, testSecret, "/admin/app"
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/app", nil)
+	req.Header.Set("X-Auth-Type", "user")
+	req.Header.Set("X-Auth-ID", "1")
+	req.Header.Set("X-Auth-User-ID", "1")
+	rec := httptest.NewRecorder()
+	NewHandler(cfg).ServeSPA(rec, req)
+
+	if strings.Contains(rec.Body.String(), "admin.auth.users") {
+		t.Fatalf("X-Auth-* headers earned permissions:\n%s", rec.Body.String())
 	}
 }
 
-// The headers are the whole credential. Without proof that the request crossed
-// the header-stripping ingress, any browser could name any user (#390).
-func TestServeSPA_ForwardedIdentityWithoutPeerProofGetsNothing(t *testing.T) {
+// A Form cookie the reader rejects (forged, expired, signed out), or a reader
+// that is not composed, injects NOTHING.
+func TestServeSPA_UnprovenFormSessionGetsNothing(t *testing.T) {
 	t.Parallel()
 
-	for name, verifier := range map[string]Config{
-		"nil verifier":      {},
-		"refusing verifier": {ForwardedIdentityVerifier: peerVerifier{err: errors.New("not the ingress")}},
+	for name, cfg := range map[string]Config{
+		"no Form reader":        {},
+		"rejected Form session": {FormSessions: authtest.FormSessions{Err: apimw.ErrFormSessionRejected}},
+		"session store outage":  {FormSessions: authtest.FormSessions{Err: errors.New("store down")}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			cfg := verifier
 			cfg.Resolver = resolverFunc(func(
 				_ context.Context, _ auth.User, _, _ string,
 			) (auth.PermissionResolution, error) {
-				t.Error("the resolver must not run for an unproven forwarded identity")
+				t.Error("the resolver must not run for an unproven Form session")
 				return auth.PermissionResolution{UserID: 1, Permissions: []string{"admin.auth.users"}}, nil
 			})
 
-			injected := serveForwarded(t, cfg, userHeaders("1"))
+			injected := serveFormSession(t, cfg, "1")
 
 			if len(injected.Permissions) != 0 {
 				t.Errorf("permissions = %v, want none", injected.Permissions)
@@ -194,12 +189,12 @@ func TestServeSPA_ForwardedIdentityWithoutPeerProofGetsNothing(t *testing.T) {
 }
 
 // A refused resolution injects NOTHING — not a partial identity. The user may
-// be absent, suspended, or a token whose claimed owner does not match.
-func TestServeSPA_ForwardedIdentityRefusedByResolverInjectsNoIdentity(t *testing.T) {
+// be absent or suspended.
+func TestServeSPA_FormSessionRefusedByResolverInjectsNoIdentity(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{
-		ForwardedIdentityVerifier: peerVerifier{},
+		FormSessions: authtest.FormSessions{},
 		Resolver: resolverFunc(func(
 			_ context.Context, _ auth.User, _, _ string,
 		) (auth.PermissionResolution, error) {
@@ -211,7 +206,7 @@ func TestServeSPA_ForwardedIdentityRefusedByResolverInjectsNoIdentity(t *testing
 		}),
 	}
 
-	injected := serveForwarded(t, cfg, userHeaders("42"))
+	injected := serveFormSession(t, cfg, "42")
 
 	if len(injected.Permissions) != 0 {
 		t.Errorf("permissions = %v, want none", injected.Permissions)
@@ -223,11 +218,11 @@ func TestServeSPA_ForwardedIdentityRefusedByResolverInjectsNoIdentity(t *testing
 
 // A missing address is not a failed page load: the SPA's footer falls back to
 // the generic word "Admin", and the permissions still arrive.
-func TestServeSPA_ForwardedIdentitySurvivesAnEmailLookupFailure(t *testing.T) {
+func TestServeSPA_FormSessionSurvivesAnEmailLookupFailure(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{
-		ForwardedIdentityVerifier: peerVerifier{},
+		FormSessions: authtest.FormSessions{},
 		Resolver: resolverFunc(func(
 			_ context.Context, _ auth.User, _, _ string,
 		) (auth.PermissionResolution, error) {
@@ -238,7 +233,7 @@ func TestServeSPA_ForwardedIdentitySurvivesAnEmailLookupFailure(t *testing.T) {
 		}),
 	}
 
-	injected := serveForwarded(t, cfg, userHeaders("42"))
+	injected := serveFormSession(t, cfg, "42")
 
 	if len(injected.Permissions) != 1 || injected.Permissions[0] != "admin.auth.users" {
 		t.Errorf("permissions = %v, want [admin.auth.users]", injected.Permissions)
@@ -249,12 +244,12 @@ func TestServeSPA_ForwardedIdentitySurvivesAnEmailLookupFailure(t *testing.T) {
 }
 
 // The cookie path must keep working for a deployment that authenticates
-// through internal/api/v2/auth's OIDC handler instead of the auth edge.
-func TestServeSPA_SessionCookieStillResolvesWhenNoHeadersArrive(t *testing.T) {
+// through internal/api/v2/auth's OIDC handler instead of Form sign-in.
+func TestServeSPA_SessionCookieStillResolvesWithoutAFormCookie(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{
-		ForwardedIdentityVerifier: peerVerifier{},
+		FormSessions: authtest.FormSessions{},
 		Resolver: resolverFunc(func(
 			_ context.Context, _ auth.User, _, _ string,
 		) (auth.PermissionResolution, error) {
@@ -275,11 +270,6 @@ func TestServeSPA_SessionCookieStillResolvesWhenNoHeadersArrive(t *testing.T) {
 // The injected page is per-operator: it carries their address and the exact
 // list of administration-mode permissions they hold. A cache that stores it can
 // replay one operator's console to another.
-//
-// This is NOT a hypothetical for this handler. Before the forwarded-identity
-// source existed, the runtime deployment received a byte-identical payload on
-// every load — empty permissions, empty name — so a cached copy leaked nothing.
-// Personalising the response is what makes the missing directive matter.
 func TestServeSPA_PersonalisedPageIsNotCacheable(t *testing.T) {
 	t.Parallel()
 
@@ -293,10 +283,10 @@ func TestServeSPA_PersonalisedPageIsNotCacheable(t *testing.T) {
 	}
 
 	cfg := Config{
-		StaticDir:                 dir,
-		BasePath:                  "/admin/app",
-		SecretKey:                 testSecret,
-		ForwardedIdentityVerifier: peerVerifier{},
+		StaticDir:    dir,
+		BasePath:     "/admin/app",
+		SecretKey:    testSecret,
+		FormSessions: authtest.FormSessions{},
 		Resolver: resolverFunc(func(
 			_ context.Context, _ auth.User, _, _ string,
 		) (auth.PermissionResolution, error) {
@@ -308,9 +298,7 @@ func TestServeSPA_PersonalisedPageIsNotCacheable(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/app", nil)
-	for name, value := range userHeaders("42") {
-		req.Header.Set(name, value)
-	}
+	authtest.SignIn(req, "42")
 	rec := httptest.NewRecorder()
 	NewHandler(cfg).ServeSPA(rec, req)
 

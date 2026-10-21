@@ -198,9 +198,9 @@ func toolkitSettingsFieldErrors(violations []configurationapp.CurrentToolkitSett
 // set at all (internal/auth/types.go). Every production authentication path sets
 // it to a positive numeric id, including both token paths:
 //
-//   - the edge's forwarded identity sets UserID from X-Auth-ID for
-//     `X-Auth-Type: user` and from X-Auth-User-ID for `X-Auth-Type: token`
-//     (internal/api/middleware/auth.go's tryTraefikHeaders);
+//   - a Form session sets ID and UserID to the session's user, which the
+//     Form service has already reloaded as an active positive id
+//     (internal/api/browserauth/form_session.go);
 //   - direct PAT validation sets ID, UserID and TokenID from the token row, and
 //     refuses the row outright unless both ids are positive
 //     (internal/infra/authsvc/local_validator.go);

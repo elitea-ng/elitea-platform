@@ -36,6 +36,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -624,8 +625,7 @@ func TestInvestigateGetsTheCallbackBlockAndNothingElse(t *testing.T) {
 		strings.NewReader(`{"parameters":{"question":"who refunds?","llm_model":"gpt-x",`+
 			`"llm_settings":{"api_key":"sk-attacker"}}}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	built.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -672,8 +672,7 @@ func grantRoute(
 func post(handler http.Handler, path, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
@@ -939,8 +938,7 @@ func invoke(
 	request := httptest.NewRequest(http.MethodPost,
 		"/api/v2/inventory/tools/42/inventory/"+tool+"/invoke", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	built.ServeHTTP(response, request)
 	return response, bodies
@@ -952,12 +950,6 @@ func (f principalValidatorFunc) ValidatePrincipal(
 	ctx context.Context, user auth.User,
 ) (auth.User, error) {
 	return f(ctx, user)
-}
-
-type forwardedPeerVerifierFunc func(*http.Request) error
-
-func (f forwardedPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return f(request)
 }
 
 type permissionResolverFunc func(context.Context, auth.User, string, string) (auth.PermissionResolution, error)
@@ -972,8 +964,8 @@ func authConfig() apimw.AuthConfig {
 	return apimw.AuthConfig{
 		PrincipalValidator: principalValidatorFunc(
 			func(_ context.Context, user auth.User) (auth.User, error) { return user, nil }),
-		ForwardedIdentityVerifier: forwardedPeerVerifierFunc(
-			func(*http.Request) error { return nil }),
+		FormSessions: authtest.FormSessions{},
+		Validator:    authtest.Tokens{},
 	}
 }
 

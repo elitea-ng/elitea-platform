@@ -1671,14 +1671,15 @@ SQL
       *) fail "elitea-main answered HTTP ${main_code:-000} on /api/v2/llm/v1/models. An unauthenticated caller gets 401 or 403 from a live elitea-main, so this one is not answering" ;;
     esac
 
-    # ── Edge identity-header strip (#326) ────────────────────────────────────
-    # elitea-main accepts X-Auth-Type + X-Auth-Id as a finished identity from
-    # any source address inside auth.form.yml's trusted_proxy_cidrs, which is
-    # the whole compose network. The browser edge sits on that network, so
-    # without deploy/traefik/dynamic.e2e.yml's strip-client-identity middleware
-    # a caller with no credential at all picks its own user id. Measured on this
-    # stack before the fix: `curl -H 'X-Auth-ID: 4'` returned that user's
-    # /social/author record with HTTP 200.
+    # ── Client identity-header strip (#326, #1359) ──────────────────────────
+    # elitea-main USED TO accept X-Auth-Type + X-Auth-Id as a finished identity
+    # from any source address inside auth.form.yml's trusted_proxy_cidrs, which
+    # is the whole compose network, so without the edge's strip-client-identity
+    # middleware a caller with no credential at all picked its own user id.
+    # Measured on this stack before the fix: `curl -H 'X-Auth-ID: 4'` returned
+    # that user's /social/author record with HTTP 200. That reader is gone
+    # (#1359) and elitea-main strips the names itself; these probes keep
+    # proving that end to end, through the edge.
     #
     # Written to be DISCRIMINATING. A bare "spoof gets 401" would also pass on a
     # stack where the edge is down, the route is unmounted, or nothing is
@@ -1687,7 +1688,7 @@ SQL
     # report the PAT's own user. Two things therefore have to hold: the
     # legitimate path still works through the middleware, and the forged header
     # neither authenticates on its own nor overrides a genuine credential.
-    echo "→ edge identity-header strip (#326):"
+    echo "→ client identity-header strip (#326, #1359):"
     spoof_uuid="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
         psql -U elitea -d elitea -tAc \
         "SELECT uuid FROM public.auth_core__token
@@ -1719,7 +1720,7 @@ PY
                 -H 'X-Auth-Type: user' -H "X-Auth-ID: ${spoof_user}" "$spoof_route" || true)"
       case "$code" in
         401|403) ok "forged X-Auth-ID alone is rejected (HTTP ${code})" ;;
-        *) fail "forged X-Auth-ID alone got HTTP ${code} — the edge is forwarding client identity headers (#326)" ;;
+        *) fail "forged X-Auth-ID alone got HTTP ${code} — a client identity header authenticated (#326, #1359)" ;;
       esac
 
       body="$(curl -s -H "Authorization: Bearer ${spoof_jwt}" "$spoof_route" || true)"
@@ -1889,14 +1890,15 @@ sys.stdout.write(reply)
       *) fail "platform listener :9446 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$platform" | tail -1)" ;;
     esac
 
-    # ── Edge identity projection, from inside the network ───────────────────
-    # elitea-main accepts X-Auth-* only with EdgeAuth's signature over the
-    # identity, method and request URI. These probes run where the worker
-    # runs: through the platform listener, and straight at elitea-main:8080, which
-    # compose cannot make unreachable. Each unsigned projection must be refused,
-    # and the same request with a real PAT must still answer as the PAT's own
-    # user — so a down edge or an unmounted route cannot pass for a refusal.
-    echo "→ edge identity projection (inside the network):"
+    # ── Client identity headers, from inside the network ────────────────────
+    # The signed X-Auth-* projection an authenticating edge used to add is gone
+    # (#1359): elitea-main reads no X-Auth-* header at all, signed or not. These
+    # probes run where the worker runs: through the platform listener, and straight
+    # at elitea-main:8080, which compose cannot make unreachable. Each forged
+    # projection must be refused, and the same request with a real PAT must
+    # still answer as the PAT's own user — so a down edge or an unmounted route
+    # cannot pass for a refusal.
+    echo "→ client identity headers (inside the network):"
     if [ -z "${spoof_jwt:-}" ] || [ -z "${spoof_other:-}" ]; then
       for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
         skip "no PAT and second user to contrast the ${target%%/api/*} probes against (run: $0 seed-runtime)"
@@ -1924,8 +1926,8 @@ except Exception as error:
         out="$(identity_probe "$target" 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}" \
                  "X-Auth-User-ID: ${spoof_other}" 'X-Auth-Signature: v1.0.AAAA')"
         case "$out" in
-          401*|403*) ok "unsigned projection refused at ${target%%/api/*} (HTTP ${out%% *})" ;;
-          *) fail "unsigned projection at ${target%%/api/*} answered '${out%% *}', want 401/403" ;;
+          401*|403*) ok "forged X-Auth-* projection refused at ${target%%/api/*} (HTTP ${out%% *})" ;;
+          *) fail "forged X-Auth-* projection at ${target%%/api/*} answered '${out%% *}', want 401/403" ;;
         esac
         out="$(identity_probe "$target" "Authorization: Bearer ${spoof_jwt}" \
                  'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}")"

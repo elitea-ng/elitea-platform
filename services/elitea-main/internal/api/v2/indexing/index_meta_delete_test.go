@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -96,11 +97,13 @@ func TestCurrentIndexMetaDeleteRoutePreservesCurrentContract(t *testing.T) {
 func TestCurrentIndexMetaDeleteRouteAuthorizesBeforeDelete(t *testing.T) {
 	for name, test := range map[string]struct {
 		remote      string
+		forged      bool
 		permissions []string
 		want        int
 	}{
-		"untrusted peer": {
+		"forged X-Auth-* identity without a session": {
 			remote: "192.0.2.8:443",
+			forged: true,
 			permissions: []string{
 				handler.CurrentIndexMetaDeletePermission,
 			},
@@ -139,6 +142,11 @@ func TestCurrentIndexMetaDeleteRouteAuthorizesBeforeDelete(t *testing.T) {
 				"/api/v2/elitea_core/index_meta/prompt_lib/7/9/meta-1",
 			)
 			request.RemoteAddr = test.remote
+			if test.forged {
+				// The retired edge projection, and no session (#1359).
+				request.Header.Del("Cookie")
+				authtest.ForgeXAuth(request, "11")
+			}
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
 			wantCalls := 0
@@ -344,8 +352,7 @@ func TestCurrentIndexMetaDeleteRouteCurrentErrorsAndSafeCleanupDivergence(
 
 func currentIndexMetaDeleteRequest(path string) *http.Request {
 	request := httptest.NewRequest(http.MethodDelete, path, nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }
@@ -368,14 +375,7 @@ func newCurrentIndexMetaDeleteRoute(
 				}
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(
-				request *http.Request,
-			) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)

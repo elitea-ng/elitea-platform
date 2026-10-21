@@ -2,7 +2,6 @@ package social_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -33,9 +33,8 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 		repository,
 		apimw.AuthConfig{
 			PrincipalValidator: authsvc.NewPrincipalValidator(pool),
-			ForwardedIdentityVerifier: currentFeedbackIntegrationPeerVerifier{
-				trustedRemote: "10.0.0.8:43120",
-			},
+			FormSessions:       authtest.FormSessions{},
+			Validator:          authtest.Tokens{},
 		},
 		legacyrbac.NewPostgresResolver(pool),
 	)
@@ -266,19 +265,6 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 	})
 }
 
-type currentFeedbackIntegrationPeerVerifier struct {
-	trustedRemote string
-}
-
-func (verifier currentFeedbackIntegrationPeerVerifier) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	if request.RemoteAddr != verifier.trustedRemote {
-		return errors.New("untrusted peer")
-	}
-	return nil
-}
-
 func currentFeedbackIntegrationRequest(
 	target string,
 	authType string,
@@ -293,10 +279,10 @@ func currentFeedbackIntegrationRequest(
 	request.RemoteAddr = remote
 	request.Header.Set("Content-Type", "application/json")
 	if authID != "" {
-		request.Header.Set("X-Auth-Type", authType)
-		request.Header.Set("X-Auth-ID", authID)
 		if authType == "token" {
-			request.Header.Set("X-Auth-User-ID", userID)
+			authtest.BearerToken(request, authID, userID)
+		} else {
+			authtest.SignIn(request, authID)
 		}
 	}
 	if referrer != "" {

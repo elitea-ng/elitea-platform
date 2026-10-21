@@ -211,11 +211,10 @@ def read_stream(client: Client, events_url: str, deadline_seconds: int,
     """
     status, body, response = client.request("GET", events_url, stream=True)
     if status in (401, 403):
-        # production_runtime.go composes this route with PrincipalValidator +
-        # ForwardedIdentityVerifier only — no bearer, no session cookie — so it
-        # is reachable exclusively through a auth edge that projects
-        # verified identity headers (#289). A 403 here usually means the edge's
-        # X-Forwarded-Host does not equal auth.form.yml's public_origin host.
+        # production_runtime.go composes this route with the /api/v2 group's
+        # credentials: a bearer token, the `elitea_session` cookie, or the Form
+        # session cookie (#289, #1359). A 401 here means none of them reached
+        # elitea-main as a live session or token.
         raise Blocked(f"the events stream refused this caller: HTTP {status} (#289)")
     if status != 200:
         raise Fail(f"events stream → HTTP {status}: {body[:200]}")

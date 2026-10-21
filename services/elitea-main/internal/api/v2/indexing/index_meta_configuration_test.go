@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexmetaapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexmeta"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -45,12 +46,7 @@ func newCurrentIndexConfigurationRoute(
 				}
 				return user, nil
 			}),
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(request *http.Request) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -62,8 +58,7 @@ func newCurrentIndexConfigurationRoute(
 
 func currentIndexConfigurationRequest(path, body string) *http.Request {
 	request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
@@ -141,12 +136,14 @@ func TestCurrentIndexConfigurationRouteAuthorizesBeforeSaving(t *testing.T) {
 
 	for name, test := range map[string]struct {
 		remote      string
+		forged      bool
 		permissions []string
 		wantStatus  int
 		wantCalls   int
 	}{
-		"untrusted peer": {
+		"forged X-Auth-* identity without a session": {
 			remote:      "192.0.2.8:443",
+			forged:      true,
 			permissions: []string{handler.CurrentIndexConfigurationPermission},
 			wantStatus:  http.StatusUnauthorized,
 		},
@@ -175,6 +172,11 @@ func TestCurrentIndexConfigurationRouteAuthorizesBeforeSaving(t *testing.T) {
 				`{"index_configuration":{}}`,
 			)
 			request.RemoteAddr = test.remote
+			if test.forged {
+				// The retired edge projection, and no session (#1359).
+				request.Header.Del("Cookie")
+				authtest.ForgeXAuth(request, "11")
+			}
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
 			if response.Code != test.wantStatus || saver.calls != test.wantCalls {
@@ -297,7 +299,7 @@ func TestNewCurrentIndexConfigurationRouteRefusesMissingDependencies(t *testing.
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 			return user, nil
 		}),
-		ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(*http.Request) error { return nil }),
+		FormSessions: authtest.FormSessions{},
 	}
 	if _, err := handler.NewCurrentIndexConfigurationRoute(nil, authConfig, resolver); !errors.Is(err, handler.ErrInvalidCurrentIndexConfigurationRoute) {
 		t.Fatalf("err=%v", err)

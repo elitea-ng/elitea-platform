@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexscheduleapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -509,19 +510,18 @@ func TestCurrentIndexScheduleRouteRejectsIncompleteCompositionAndOtherMethods(t 
 	) (auth.User, error) {
 		return user, nil
 	})
-	peer := forwardedPeerVerifierFunc(func(*http.Request) error { return nil })
 	for name, test := range map[string]struct {
 		updater     handler.CurrentIndexScheduleUpdater
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
 		"missing updater": {
-			authConfig:  apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+			authConfig:  apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 			permissions: allowCurrentSchedulePermission,
 		},
 		"missing principal": {
 			updater:     updater,
-			authConfig:  apimw.AuthConfig{ForwardedIdentityVerifier: peer},
+			authConfig:  apimw.AuthConfig{FormSessions: authtest.FormSessions{}},
 			permissions: allowCurrentSchedulePermission,
 		},
 		"missing peer proof": {
@@ -531,7 +531,7 @@ func TestCurrentIndexScheduleRouteRejectsIncompleteCompositionAndOtherMethods(t 
 		},
 		"missing permissions": {
 			updater:    updater,
-			authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer},
+			authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -623,14 +623,7 @@ func newCurrentScheduleRoute(
 		updater,
 		apimw.AuthConfig{
 			PrincipalValidator: validator,
-			ForwardedIdentityVerifier: forwardedPeerVerifierFunc(func(
-				request *http.Request,
-			) error {
-				if request.RemoteAddr != "10.0.0.8:43120" {
-					return errors.New("untrusted peer")
-				}
-				return nil
-			}),
+			FormSessions:       authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -643,8 +636,7 @@ func newCurrentScheduleRoute(
 func currentScheduleRequest(path, body string) *http.Request {
 	request := httptest.NewRequest(http.MethodPatch, path, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	request.RemoteAddr = "10.0.0.8:43120"
 	return request
 }

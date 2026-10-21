@@ -51,8 +51,8 @@ type Route struct {
 }
 
 func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (*Route, error) {
-	// No ForwardedIdentityVerifier requirement: only a token caller is ever
-	// served (see caller), and an OIDC-only deployment's group has none.
+	// No Form-plane requirement: only a token caller is ever served (see
+	// caller), and an OIDC-only deployment's group has no Form plane.
 	if useCase == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidRoute
 	}

@@ -64,8 +64,7 @@ func NewCurrentApplicationTaskRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentApplicationTaskRoute, error) {
-	if reader == nil || canceller == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if reader == nil || canceller == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentApplicationTaskRoute
 	}
 	handler := &currentApplicationTaskHandler{reader: reader}

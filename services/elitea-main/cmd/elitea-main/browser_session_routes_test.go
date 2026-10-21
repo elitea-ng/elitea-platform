@@ -27,7 +27,7 @@ func formShapeAuth(principals apimw.PrincipalValidator) apimw.AuthConfig {
 	return apiGroupAuthConfig(
 		&authcomposition.FormGraph{},
 		principals,
-		stubForwardedIdentityVerifier{},
+		stubFormSessions{},
 		nil,
 		nil,
 		browserSessionTestSecret,

@@ -105,13 +105,14 @@ import (
 // AuthDeps preserves the current-main grouped dependency contract while the
 // parity composition continues to accept the established flat fields.
 type AuthDeps struct {
-	Validator                 apimw.TokenValidator
-	PrincipalValidator        apimw.PrincipalValidator
-	ForwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
-	SessionHandler            *v2auth.SessionHandler
-	OIDCHandler               *v2auth.OIDCHandler
-	SAMLHandler               *v2auth.SAMLHandler
-	SessionSecret             string
+	Validator          apimw.TokenValidator
+	PrincipalValidator apimw.PrincipalValidator
+	// FormSessions reads the Form plane's session cookie (apimw.AuthConfig).
+	FormSessions   apimw.FormSessionAuthenticator
+	SessionHandler *v2auth.SessionHandler
+	OIDCHandler    *v2auth.OIDCHandler
+	SAMLHandler    *v2auth.SAMLHandler
+	SessionSecret  string
 	// SessionStore validates the server-side browser session an
 	// `elitea_session` cookie names (migrations/shared/0117). It reaches every
 	// apimw.AuthConfig this file builds, and it must: a group that dropped it
@@ -1432,6 +1433,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// Mounted here, in front of every route, because the per-handler copies
 	// covered only the routes somebody remembered (see the middleware doc).
 	r.Use(apimw.SecurityHeaders)
+	// No inbound request header is an identity (#1359). Every name an edge,
+	// elitea-main or the LLM gateway ever read as one is deleted here, before
+	// any route runs, so elitea-main no longer depends on an edge to strip
+	// them. See StripClientIdentityHeaders for the one deliberate exception.
+	r.Use(apimw.StripClientIdentityHeaders)
 	// Keep the raw socket peer available to any trust-aware proxy resolver.
 	// Generic RealIP processing before authentication would make X-Real-IP and
 	// X-Forwarded-For caller-controlled trust inputs.
@@ -1439,10 +1445,6 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Use(apimw.Recover)
 
 	r.Mount("/", health.RoutesWithDeps(cfg.HealthDeps))
-
-	// Traefik edge-auth endpoint (no auth middleware — this IS the auth check)
-	edgeAuth := v2auth.NewEdgeAuthHandler(cfg.AuthValidator)
-	r.Get("/auth", edgeAuth.ServeHTTP)
 
 	// The pack is resolved from three layers (ADR-0024): the product default
 	// under the BRAND_PACK_PATH file under the admin-authored `branding`
@@ -1559,7 +1561,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			Authenticate: apimw.Auth(apimw.AuthConfig{
 				Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
-				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				FormSessions:               cfg.Auth.FormSessions,
 				SessionSecret:              cfg.SessionSecret,
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
@@ -1759,7 +1761,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	authenticate := apimw.Auth(apimw.AuthConfig{
 		Validator:                  cfg.AuthValidator,
 		PrincipalValidator:         cfg.PrincipalValidator,
-		ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+		FormSessions:               cfg.Auth.FormSessions,
 		SessionSecret:              cfg.SessionSecret,
 		SessionStore:               cfg.Auth.SessionStore,
 		RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
@@ -1965,7 +1967,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Auth(apimw.AuthConfig{
 			Validator:                  cfg.AuthValidator,
 			PrincipalValidator:         cfg.PrincipalValidator,
-			ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+			FormSessions:               cfg.Auth.FormSessions,
 			SessionSecret:              cfg.SessionSecret,
 			SessionStore:               cfg.Auth.SessionStore,
 			RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,
@@ -4884,7 +4886,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Use(apimw.Auth(apimw.AuthConfig{
 				Validator:                  cfg.AuthValidator,
 				PrincipalValidator:         cfg.PrincipalValidator,
-				ForwardedIdentityVerifier:  cfg.Auth.ForwardedIdentityVerifier,
+				FormSessions:               cfg.Auth.FormSessions,
 				SessionSecret:              cfg.SessionSecret,
 				SessionStore:               cfg.Auth.SessionStore,
 				RejectLegacySessionCookies: cfg.Auth.RejectLegacySessionCookies,

@@ -460,9 +460,8 @@ func isEntitledToProject(
 //
 // A selector that does not name a project is reported as absent (spec §6.2):
 // a blank value, a value that is not a positive int32, or a header that appears
-// more than once. The repeated-header rule follows uniqueForwardedIdentityHeader
-// in auth.go, the posture this service already applies to an identity-bearing
-// header: when two copies disagree, no rule can say which copy the caller meant.
+// more than once: when two copies disagree, no rule can say which copy the
+// caller meant.
 //
 // A present header that names no project does not fall through to the next
 // header. §6.1 picks the selector by the first header present, and §6.2 then

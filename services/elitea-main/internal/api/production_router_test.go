@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
 	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -254,8 +255,8 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 		productionChatConfigReader{},
 		productionProjectContextReader{},
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionPromptContextPermissionResolver{},
 	)
@@ -283,8 +284,7 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 	} {
 		request := httptest.NewRequest(test.method, test.path, nil)
 		request.RemoteAddr = "10.0.0.8:43120"
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "11")
+		authtest.SignIn(request, "11")
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
 		if response.Code != test.want {
@@ -304,21 +304,9 @@ func TestProductionRouterMountsOnlyCurrentPromptContextGETs(t *testing.T) {
 	}
 }
 
-func TestProductionAuthRoutesRequireBothReviewedEdges(t *testing.T) {
-	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
-	for name, test := range map[string]struct {
-		browser http.Handler
-		main    http.Handler
-	}{
-		"missing browser": {main: handler},
-		"missing main":    {browser: handler},
-		"both missing":    {},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := NewProductionAuthRoutes(test.browser, test.main); !errors.Is(err, ErrInvalidProductionAuthRoutes) {
-				t.Fatalf("error = %v, want %v", err, ErrInvalidProductionAuthRoutes)
-			}
-		})
+func TestProductionAuthRoutesRequireTheFormRoutes(t *testing.T) {
+	if _, err := NewProductionAuthRoutes(nil); !errors.Is(err, ErrInvalidProductionAuthRoutes) {
+		t.Fatalf("error = %v, want %v", err, ErrInvalidProductionAuthRoutes)
 	}
 }
 
@@ -330,10 +318,7 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 	browser.Post("/form/authorize", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
-	authRoutes, err := NewProductionAuthRoutes(browser, main)
+	authRoutes, err := NewProductionAuthRoutes(browser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,16 +330,17 @@ func TestProductionRouterMountsOnlyReviewedAuthEdges(t *testing.T) {
 		want   int
 	}{
 		// The Form router is served under /auth with the prefix stripped
-		// (auth_paths.go). The stub registers no core check, so /auth/check
-		// reaches it and finds nothing. The old prefix is not mounted.
+		// (auth_paths.go). The old prefix is not mounted, and neither the
+		// forward-auth check nor the edge's /internal/auth/main exists any
+		// more (#1359).
 		{http.MethodGet, "/auth/login", http.StatusNoContent},
 		{http.MethodPost, "/auth/form/authorize", http.StatusNoContent},
 		{http.MethodPost, "/auth/auth_form/authorize", http.StatusNotFound},
 		{http.MethodGet, "/forward-" + "auth/login", http.StatusNotFound},
-		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
+		{http.MethodGet, "/internal/auth/main", http.StatusNotFound},
 		{http.MethodGet, "/auth/check", http.StatusNotFound},
 		{http.MethodGet, "/auth/info", http.StatusNotFound},
-		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/internal/auth/main", http.StatusNotFound},
 	} {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -371,14 +357,11 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 	browser.Get("/login", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	main := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusNoContent)
-	})
 	agentStart := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("X-Reviewed-Agent-Route", "true")
 		writer.WriteHeader(http.StatusAccepted)
 	})
-	authRoutes, err := NewProductionAuthRoutes(browser, main)
+	authRoutes, err := NewProductionAuthRoutes(browser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,8 +380,8 @@ func TestCompatibilityRouterRetainsReviewedProductionAuthEdges(t *testing.T) {
 		want   int
 	}{
 		{http.MethodGet, "/auth/login", http.StatusNoContent},
-		{http.MethodGet, "/internal/auth/main", http.StatusNoContent},
-		{http.MethodPost, "/internal/auth/main", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/internal/auth/main", http.StatusNotFound},
+		{http.MethodPost, "/internal/auth/main", http.StatusNotFound},
 		{http.MethodPost, "/api/v2/elitea_core/messages/prompt_lib/2/conversation", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/regenerate/prompt_lib/2/message", http.StatusAccepted},
 		{http.MethodPost, "/api/v2/elitea_core/continue_predict/prompt_lib/2/conversation", http.StatusAccepted},
@@ -431,10 +414,6 @@ func (productionProjectPrincipalValidator) ValidatePrincipal(_ context.Context, 
 	return user, nil
 }
 
-type productionProjectPeerVerifier struct{}
-
-func (productionProjectPeerVerifier) VerifyForwardedIdentityPeer(*http.Request) error { return nil }
-
 type productionProjectPermissionResolver struct{}
 
 func (productionProjectPermissionResolver) ResolvePermissions(
@@ -458,8 +437,8 @@ func TestProductionRouterMountsOnlyExactCurrentProjectListPath(t *testing.T) {
 	projectList, err := v2projects.NewCurrentProjectListRoute(
 		productionProjectStore{},
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionProjectPermissionResolver{},
 	)
@@ -521,8 +500,8 @@ func TestProductionRouterMountsOnlyExactCurrentSocialAuthorsPaths(t *testing.T) 
 	authors, err := v2social.NewCurrentAuthorsRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionSocialAuthorsPermissionResolver{},
 	)
@@ -537,8 +516,7 @@ func TestProductionRouterMountsOnlyExactCurrentSocialAuthorsPaths(t *testing.T) 
 	} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.RemoteAddr = "10.0.0.8:43120"
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "41")
+		authtest.SignIn(request, "41")
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusOK || recorder.Body.String() != "[]\n" {
@@ -616,8 +594,8 @@ func TestProductionRouterMountsOnlyExactCurrentProjectInfoPathWhenComposed(t *te
 	projectInfo, err := projectinfoapi.NewCurrentProjectInfoRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionProjectInfoPermissionResolver{},
 	)
@@ -663,8 +641,7 @@ func TestProductionRouterMountsOnlyExactCurrentProjectInfoPathWhenComposed(t *te
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, nil)
 			if test.authenticated {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -742,8 +719,8 @@ func TestProductionRouterMountsOnlyExactCurrentIndexTypesPathWhenComposed(t *tes
 	indexTypes, err := indextypesapi.NewCurrentIndexTypesRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionIndexTypesPermissionResolver{},
 	)
@@ -789,8 +766,7 @@ func TestProductionRouterMountsOnlyExactCurrentIndexTypesPathWhenComposed(t *tes
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, nil)
 			if test.authenticated {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -902,8 +878,8 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 	route, err := applicationskillsapi.NewCurrentApplicationSkillsRoute(
 		reader,
 		middleware.AuthConfig{
-			PrincipalValidator:        productionProjectPrincipalValidator{},
-			ForwardedIdentityVerifier: productionProjectPeerVerifier{},
+			PrincipalValidator: productionProjectPrincipalValidator{},
+			FormSessions:       authtest.FormSessions{},
 		},
 		productionApplicationSkillsPermissionResolver{},
 	)
@@ -981,8 +957,7 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, nil)
 			if test.authenticated {
-				request.Header.Set("X-Auth-Type", "user")
-				request.Header.Set("X-Auth-ID", "11")
+				authtest.SignIn(request, "11")
 			}
 			router.ServeHTTP(recorder, request)
 			if recorder.Code != test.want {
@@ -2038,7 +2013,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /app/{projectID}/mcp/*",
 		"GET /artifacts/s3/{bucket}",
 		"GET /artifacts/s3/{bucket}/*",
-		"GET /auth",
 		"GET /avatars/{projectID}/{filename}",
 		"GET /healthz",
 		"GET /icons/{projectID}/{filename}",
@@ -2378,8 +2352,7 @@ func TestProductionAuthCandidatesRejectEveryForgedCredentialShape(t *testing.T) 
 				case "invalid":
 					request.Header.Set("Authorization", "Bearer invalid")
 				case "forwarded":
-					request.Header.Set("X-Auth-Type", "user")
-					request.Header.Set("X-Auth-Id", "1")
+					authtest.SignIn(request, "1")
 				case "session":
 					request.AddCookie(&http.Cookie{Name: "elitea_session", Value: "forged.session"})
 				}
@@ -2413,9 +2386,10 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 		path   string
 		want   int
 	}{
-		// Not a registered route at all: "/auth/check" (the Traefik
-		// EdgeAuth check) is a top-level "/auth" route, distinct from the
-		// "/auth/*" browser session group.
+		// Not registered routes at all: "/auth/check" and the top-level
+		// "/auth" were the edge's forward-auth checks, removed with the
+		// X-Auth-* projection (#1359).
+		{method: http.MethodGet, path: "/auth", want: http.StatusNotFound},
 		{method: http.MethodGet, path: "/auth/check", want: http.StatusNotFound},
 		{method: http.MethodHead, path: "/auth/check", want: http.StatusNotFound},
 		{method: http.MethodOptions, path: "/auth/check", want: http.StatusNotFound},

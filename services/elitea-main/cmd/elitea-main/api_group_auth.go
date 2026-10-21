@@ -82,7 +82,7 @@ import (
 func apiGroupAuthConfig(
 	formGraph *authcomposition.FormGraph,
 	principalValidator apimw.PrincipalValidator,
-	forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier,
+	formSessions apimw.FormSessionAuthenticator,
 	sessionPrincipals apimw.PrincipalValidator,
 	sessionTokens apimw.TokenValidator,
 	sessionSecret string,
@@ -104,7 +104,7 @@ func apiGroupAuthConfig(
 		return apimw.AuthConfig{
 			Validator:                  formGraph,
 			PrincipalValidator:         principalValidator,
-			ForwardedIdentityVerifier:  forwardedIdentityVerifier,
+			FormSessions:               formSessions,
 			SessionSecret:              sessionSecret,
 			SessionStore:               sessionStore,
 			RejectLegacySessionCookies: rejectLegacySessionCookies,

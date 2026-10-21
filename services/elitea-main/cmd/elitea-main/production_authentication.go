@@ -36,8 +36,8 @@ import (
 //
 // The predicate itself lives on apimw.AuthConfig, next to the middleware that
 // reads those fields, because the ROUTE CONSTRUCTORS ask the same question and
-// used to answer it differently: they demanded a non-nil
-// ForwardedIdentityVerifier, which only the Form document composes. This gate
+// used to answer it differently: they demanded a non-nil forwarded-identity
+// verifier (removed in #1359), which only the Form document composed. This gate
 // therefore admitted an OIDC-only deployment and the constructor behind it then
 // refused, so the binary stopped at boot with "invalid ... route dependencies"
 // on exactly the deployments this gate was widened for. One definition, asked

@@ -173,10 +173,10 @@ func NewCurrentApplicationSkillsRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentApplicationSkillsRoute, error) {
-	// ForwardedIdentityVerifier is OPTIONAL, PrincipalValidator is not. See
-	// internal/api/v2/indextypes/handler.go for the full reason: only the Form
-	// plane builds a verifier, an OIDC or SAML install authenticates the same
-	// caller through a cookie or a bearer token, and this route is the ONLY
+	// Only PrincipalValidator is mandatory. See
+	// internal/api/v2/indextypes/handler.go for the full reason: an OIDC or
+	// SAML install authenticates the caller through a cookie or a bearer
+	// token, not through the Form plane, and this route is the ONLY
 	// handler for its path now that the prototype fallback is deleted (#395).
 	if reader == nil || authConfig.PrincipalValidator == nil || permissions == nil {
 		return nil, ErrInvalidCurrentApplicationSkillsRoute

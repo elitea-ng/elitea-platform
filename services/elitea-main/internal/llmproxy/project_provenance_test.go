@@ -110,14 +110,13 @@ func TestEdge_UnprovenancedIdentityIsRefusedBeforeTheGateway(t *testing.T) {
 }
 
 // TestEdge_EveryTrustedProvenanceReachesTheGateway is direction 2 of issue
-// #461, end to end. Each of the four accepted provenance values reaches the
+// #461, end to end. Each of the three accepted provenance values reaches the
 // gateway, and each carries the correct signed project.
 func TestEdge_EveryTrustedProvenanceReachesTheGateway(t *testing.T) {
 	cases := map[string]auth.AuthenticationSource{
-		"forwarded": auth.AuthenticationSourceForwarded,
-		"api key":   auth.AuthenticationSourceAPIKey,
-		"token":     auth.AuthenticationSourceToken,
-		"session":   auth.AuthenticationSourceSession,
+		"api key": auth.AuthenticationSourceAPIKey,
+		"token":   auth.AuthenticationSourceToken,
+		"session": auth.AuthenticationSourceSession,
 	}
 
 	for name, source := range cases {

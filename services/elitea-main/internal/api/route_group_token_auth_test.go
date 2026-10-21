@@ -52,7 +52,6 @@ func TestEveryRouteGroupAcceptsABearerToken(t *testing.T) {
 	runtimeRoutes, err := NewProductionRuntimeRoutes(
 		reached, reached,
 		group.PrincipalValidator,
-		productionRuntimePeerVerifierFunc(func(*http.Request) error { return http.ErrNoCookie }),
 		group,
 	)
 	if err != nil {

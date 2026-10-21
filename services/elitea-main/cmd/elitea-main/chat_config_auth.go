@@ -9,7 +9,7 @@ import (
 // the whole /api/v2 group authenticates with.
 //
 // It used to re-compose its own AuthConfig from the same raw inputs
-// (formGraph, principalValidator, forwardedIdentityVerifier,
+// (formGraph, principalValidator, formSessions,
 // sessionSecret) that build apiGroupAuth, one call earlier in main.go. The
 // gate in front of the only call site,
 // `formGraph != nil || oidcSessionHandler != nil`, makes the two

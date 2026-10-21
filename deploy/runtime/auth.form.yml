@@ -3,11 +3,10 @@
 # WHY THIS FILE EXISTS AT ALL, given the stack logs in through oidc-mock:
 # cmd/elitea-main/main.go:686-688 refuses to boot with ELITEA_RUNTIME_ENABLED=true
 # unless production authentication is composed, and the PrincipalValidator and
-# ForwardedIdentityVerifier it means are only ever assigned inside the
-# ELITEA_AUTH_CONFIG_FILE branch (main.go:222-223). The runtime's HTTP surface
-# authenticates against those two — internal/api/production_runtime.go:31-37
-# composes the execution-events SSE route with them and NO session-cookie
-# fallback — so there is no "runtime without production auth" configuration.
+# Form session reader it means are only ever assigned inside the
+# ELITEA_AUTH_CONFIG_FILE branch. (The reader replaced the forwarded-identity
+# verifier in #1359; no edge authenticates any more.) So there is no "runtime
+# without production auth" configuration.
 #
 # The auth schema (internal/authcomposition/config.go) currently models exactly
 # one provider, `form`; OIDC and SAML are documented as awaiting their own

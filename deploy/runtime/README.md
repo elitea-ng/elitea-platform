@@ -43,8 +43,8 @@ else.
    `ELITEA_RUNTIME_SIGNING_KEY_ID`. Composition cross-checks the two and refuses
    to start on a mismatch.
 5. **Production authentication.** `cmd/elitea-main/main.go:686-688` rejects
-   `ELITEA_RUNTIME_ENABLED=true` unless a `PrincipalValidator` and a
-   `ForwardedIdentityVerifier` are composed, and those exist only in the
+   `ELITEA_RUNTIME_ENABLED=true` unless a `PrincipalValidator` and the Form
+   session reader (`FormSessions`, #1359) are composed, and those exist only in the
    `ELITEA_AUTH_CONFIG_FILE` branch. See [`auth.form.yml`](auth.form.yml) for
    why that means configuring a Form provider nobody signs in through.
 6. **`ELITEA_CONFIGURATIONS_ENABLED=true`.** Agent dispatch composes through

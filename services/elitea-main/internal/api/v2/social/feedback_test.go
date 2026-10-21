@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/social"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -42,12 +43,6 @@ func (function currentFeedbackPrincipalValidatorFunc) ValidatePrincipal(
 	user auth.User,
 ) (auth.User, error) {
 	return function(ctx, user)
-}
-
-type currentFeedbackPeerVerifierFunc func(*http.Request) error
-
-func (function currentFeedbackPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return function(request)
 }
 
 type currentFeedbackPermissionResolverFunc func(context.Context, auth.User, string, string) (auth.PermissionResolution, error)
@@ -369,13 +364,12 @@ func TestCurrentFeedbackCreateRouteRejectsIncompleteCompositionAndOtherMethods(t
 	principal := currentFeedbackPrincipalValidatorFunc(
 		func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },
 	)
-	peer := currentFeedbackPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentFeedbackPermissionResolverFunc(
 		func(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
 			return auth.PermissionResolution{}, nil
 		},
 	)
-	authConfig := apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}
+	authConfig := apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}, Validator: authtest.Tokens{}}
 
 	for name, test := range map[string]struct {
 		creator     handler.CurrentFeedbackCreator
@@ -383,7 +377,7 @@ func TestCurrentFeedbackCreateRouteRejectsIncompleteCompositionAndOtherMethods(t
 		permissions auth.PermissionResolver
 	}{
 		"missing creator":     {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {creator: creator, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":   {creator: creator, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing peer proof":  {creator: creator, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions": {creator: creator, authConfig: authConfig},
 	} {
@@ -435,14 +429,8 @@ func newCurrentFeedbackCreateRoute(
 			PrincipalValidator: currentFeedbackPrincipalValidatorFunc(
 				func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },
 			),
-			ForwardedIdentityVerifier: currentFeedbackPeerVerifierFunc(
-				func(request *http.Request) error {
-					if request.RemoteAddr != "10.0.0.8:43120" {
-						return errors.New("untrusted peer")
-					}
-					return nil
-				},
-			),
+			FormSessions: authtest.FormSessions{},
+			Validator:    authtest.Tokens{},
 		},
 		permissions,
 	)
@@ -460,9 +448,7 @@ func currentFeedbackRequest(body string) *http.Request {
 	)
 	request.RemoteAddr = "10.0.0.8:43120"
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Auth-Type", "token")
-	request.Header.Set("X-Auth-ID", "91")
-	request.Header.Set("X-Auth-User-ID", "41")
+	authtest.BearerToken(request, "91", "41")
 	return request
 }
 

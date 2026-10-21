@@ -84,7 +84,7 @@ func interruptKeyPrefix(key string) string {
 }
 
 func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (http.Handler, error) {
-	if useCase == nil || authConfig.PrincipalValidator == nil || authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if useCase == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, errors.New("execution interrupt route dependencies are required")
 	}
 	list := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

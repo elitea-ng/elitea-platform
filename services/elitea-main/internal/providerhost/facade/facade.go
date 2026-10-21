@@ -203,13 +203,13 @@ func Guard(
 // serves perfectly well without a validator, it simply does not authenticate,
 // and that is invisible at runtime.
 func Composable(authConfig apimw.AuthConfig, permissions auth.PermissionResolver) bool {
-	// A forwarded-identity verifier (production Form authentication) OR a
-	// token validator (OIDC-only, where APPLICATION_SECRET_KEY-signed tokens
-	// are read back by a LocalValidator): either authenticates a caller. The
-	// principal validator is required in both — it is the check that turns a
-	// deactivated user away, and a nil one serves without saying so.
+	// A Form session reader (production Form authentication) OR a token
+	// validator (OIDC-only, where APPLICATION_SECRET_KEY-signed tokens are read
+	// back by a LocalValidator): either authenticates a caller. The principal
+	// validator is required in both — it is the check that turns a deactivated
+	// user away, and a nil one serves without saying so.
 	return authConfig.PrincipalValidator != nil &&
-		(authConfig.ForwardedIdentityVerifier != nil || authConfig.Validator != nil) &&
+		(authConfig.FormSessions != nil || authConfig.Validator != nil) &&
 		permissions != nil
 }
 

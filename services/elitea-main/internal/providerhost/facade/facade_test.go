@@ -2,11 +2,11 @@ package facade_test
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 )
@@ -84,13 +84,13 @@ func TestValidProjectID(t *testing.T) {
 // authenticate, and that is invisible at runtime.
 func TestComposableRefusesAnIncompleteAuthConfig(t *testing.T) {
 	complete := apimw.AuthConfig{
-		PrincipalValidator:        stubPrincipal{},
-		ForwardedIdentityVerifier: stubForwarded{},
+		PrincipalValidator: stubPrincipal{},
+		FormSessions:       authtest.FormSessions{},
 	}
 	if !facade.Composable(complete, stubResolver{}) {
 		t.Fatal("a complete configuration was refused")
 	}
-	if facade.Composable(apimw.AuthConfig{ForwardedIdentityVerifier: stubForwarded{}}, stubResolver{}) {
+	if facade.Composable(apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, stubResolver{}) {
 		t.Error("a nil PrincipalValidator was accepted")
 	}
 	if facade.Composable(apimw.AuthConfig{PrincipalValidator: stubPrincipal{}}, stubResolver{}) {
@@ -114,10 +114,6 @@ type stubPrincipal struct{}
 func (stubPrincipal) ValidatePrincipal(_ context.Context, u auth.User) (auth.User, error) {
 	return u, nil
 }
-
-type stubForwarded struct{}
-
-func (stubForwarded) VerifyForwardedIdentityPeer(*http.Request) error { return nil }
 
 type stubResolver struct{}
 

@@ -32,9 +32,10 @@ the chat-config path is registered from this slice.
 
 Authentication was relaxed to match `notificationsapi.
 NewCurrentNotificationEventsRoute` (#152): `PrincipalValidator` and
-`ForwardedIdentityVerifier` are optional, because an OIDC-only deployment has
-no FormGraph and only a session cookie. Authorization is unchanged — an
-unauthenticated request and forged `X-Auth-*` headers are both still rejected,
+`ForwardedIdentityVerifier` (since removed with the whole X-Auth-* plane, #1359)
+are optional, because an OIDC-only deployment has no FormGraph and only a
+session cookie. Authorization is unchanged — an unauthenticated request is
+still rejected,
 and the per-project permission is still resolved before either handler runs.
 
 ## Pinned source evidence

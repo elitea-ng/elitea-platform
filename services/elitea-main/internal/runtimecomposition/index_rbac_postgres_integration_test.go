@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 
 	publicapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
@@ -39,15 +39,6 @@ const (
 	indexRBACSessionKey  = "index-rbac-session-secret-for-tests"
 	indexRBACStartBody   = `{"toolkit_config":{"toolkit_id":9},"tool_name":"index_data","tool_params":{"index_name":"docs"}}`
 )
-
-type indexRBACPeerVerifier struct{}
-
-func (indexRBACPeerVerifier) VerifyForwardedIdentityPeer(request *http.Request) error {
-	if request.RemoteAddr != indexRBACPeerAddress {
-		return errors.New("untrusted forwarded identity peer")
-	}
-	return nil
-}
 
 type indexRBACStartSpy struct {
 	calls int
@@ -553,10 +544,10 @@ func TestIndexAdditionalContractsResolveLegacyRolesAndRejectUnauthenticatedSched
 	// and coreHandler.SearchOptions for these exact paths unconditionally
 	// (not gated on any RouterConfig.*Repo field), inside the router's own
 	// auth-wrapped /api/v2 group. newIndexRBACRouter doesn't wire
-	// RouterConfig.Auth's ForwardedIdentityVerifier/PrincipalValidator (only
-	// the per-route ones passed into the CurrentIndex* constructors below),
-	// so the outer Auth middleware can't validate the X-Auth-Type/X-Auth-ID
-	// headers newIndexRBACRequest sends and 401s before reaching either
+	// RouterConfig.Auth's FormSessions/PrincipalValidator (only the per-route
+	// ones passed into the CurrentIndex* constructors below), so the outer
+	// Auth middleware can't validate the Form session newIndexRBACRequest
+	// sends and 401s before reaching either
 	// handler — same as production would for a caller with no valid
 	// credentials, not evidence the routes are absent.
 	_, router := newIndexRBACRouter(t, pool, nil)
@@ -596,9 +587,10 @@ func newIndexRBACRouter(
 	t.Helper()
 	resolver := legacyrbac.NewPostgresResolver(pool)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        authsvc.NewPrincipalValidator(pool),
-		ForwardedIdentityVerifier: indexRBACPeerVerifier{},
-		SessionSecret:             indexRBACSessionKey,
+		PrincipalValidator: authsvc.NewPrincipalValidator(pool),
+		FormSessions:       authtest.FormSessions{},
+		Validator:          authtest.Tokens{},
+		SessionSecret:      indexRBACSessionKey,
 	}
 	start := &indexRBACStartSpy{}
 	if canceller == nil {
@@ -644,8 +636,7 @@ func newIndexRBACRouter(
 		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		http.HandlerFunc(eventHandler.Stream),
 		authsvc.NewPrincipalValidator(pool),
-		indexRBACPeerVerifier{},
-		apimw.AuthConfig{},
+		apimw.AuthConfig{FormSessions: authtest.FormSessions{}, Validator: authtest.Tokens{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -675,8 +666,7 @@ func newIndexRBACRequest(
 	request := httptest.NewRequest(method, target, nil)
 	request.Body = body
 	request.RemoteAddr = indexRBACPeerAddress
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", userID)
+	authtest.SignIn(request, userID)
 	return request
 }
 
@@ -695,12 +685,9 @@ func newIndexRBACPrincipalRequest(
 	request.RemoteAddr = indexRBACPeerAddress
 	switch authType {
 	case "", "user":
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", userID)
+		authtest.SignIn(request, userID)
 	case "token":
-		request.Header.Set("X-Auth-Type", "token")
-		request.Header.Set("X-Auth-ID", tokenID)
-		request.Header.Set("X-Auth-User-ID", userID)
+		authtest.BearerToken(request, tokenID, userID)
 	case "session":
 		request.AddCookie(&http.Cookie{
 			Name:  "elitea_session",

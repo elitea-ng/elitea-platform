@@ -9,7 +9,8 @@ import (
 
 // TestMainWiring_GatewayProxyAuthFields is the "wiring gate" for issue #86:
 // PR #84 mounted GatewayProxy into api.RouterConfig without wiring
-// AuthValidator/PrincipalValidator/ForwardedIdentityVerifier/SessionSecret, so
+// AuthValidator/PrincipalValidator/SessionSecret (and the forwarded-identity
+// verifier FormSessions has since replaced, #1359), so
 // every /llm request returned 401 in any deployment where LLM_GATEWAY_URL is
 // set. TestGatewayProxy_* in internal/api/router_gateway_test.go inject
 // AuthValidator directly via a test helper and unit-test the router in
@@ -54,7 +55,7 @@ func TestMainWiring_GatewayProxyAuthFields(t *testing.T) {
 		}
 		keys[id.Name] = true
 
-		// The ForwardedIdentityVerifier field is only reachable through the
+		// The FormSessions field is only reachable through the
 		// nested Auth (AuthDeps) struct, not a top-level RouterConfig field —
 		// collect its keys too when the value is a composite literal.
 		if id.Name == "Auth" {
@@ -82,7 +83,7 @@ func TestMainWiring_GatewayProxyAuthFields(t *testing.T) {
 	}{
 		{"AuthValidator", "validateToken() returns \"authentication validator is not configured\" and every /llm request returns 401 (issue #86)"},
 		{"PrincipalValidator", "principal validation is skipped for the gateway auth middleware, breaking downstream project resolution"},
-		{"ForwardedIdentityVerifier", "tryTraefikHeaders() returns false, so the Traefik-forwarded-identity auth path never succeeds for /llm requests (issue #86)"},
+		{"FormSessions", "the Form session cookie is never read, so a Form-login browser cannot reach /llm (issues #86, #1359)"},
 		{"SessionSecret", "the session-cookie auth path is skipped for /llm requests when SessionSecret is empty (issue #86)"},
 	}
 	for _, r := range required {

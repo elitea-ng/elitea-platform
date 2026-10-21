@@ -176,8 +176,9 @@ done
 
 # ── Assert the stack before driving it (#368) ────────────────────────────────
 #
-# `check` holds the repository's only runtime proof of the #326 edge
-# identity-header strip: it forges an X-Auth-ID and requires 401 or 403, it
+# `check` holds the repository's only runtime proof of the #326 identity-header
+# strip (an edge middleware, and since #1359 elitea-main's own
+# StripClientIdentityHeaders): it forges an X-Auth-ID and requires 401 or 403, it
 # requires a real personal access token on the SAME route to answer 200 and to
 # echo its own user, and it requires a forged header not to override a genuine
 # bearer. Those assertions existed and no continuous-integration job ran them,

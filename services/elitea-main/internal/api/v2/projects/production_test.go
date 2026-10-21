@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/projects"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -17,12 +18,6 @@ type principalValidatorFunc func(context.Context, auth.User) (auth.User, error)
 
 func (f principalValidatorFunc) ValidatePrincipal(ctx context.Context, principal auth.User) (auth.User, error) {
 	return f(ctx, principal)
-}
-
-type forwardedPeerVerifierFunc func(*http.Request) error
-
-func (f forwardedPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return f(request)
 }
 
 type permissionResolverFunc func(context.Context, auth.User, string, string) (auth.PermissionResolution, error)
@@ -54,7 +49,6 @@ func TestNewCurrentProjectListRouteRejectsIncompleteSecurityComposition(t *testi
 		return nil, nil
 	})
 	principal := principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := forwardedPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := membershipResolverFunc(func(context.Context, auth.User, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{}, nil
 	})
@@ -65,10 +59,10 @@ func TestNewCurrentProjectListRouteRejectsIncompleteSecurityComposition(t *testi
 		permissions auth.MembershipPermissionResolver
 	}{
 		// Only store and permissions are required; PrincipalValidator and
-		// ForwardedIdentityVerifier are optional (OIDC-only deployments use
+		// FormSessions are optional (OIDC-only deployments use
 		// session-cookie auth without either).
-		"missing query":       {authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}, permissions: permissions},
-		"missing permissions": {store: store, authConfig: apimw.AuthConfig{PrincipalValidator: principal, ForwardedIdentityVerifier: peer}},
+		"missing query":       {authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}, permissions: permissions},
+		"missing permissions": {store: store, authConfig: apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := handler.NewCurrentProjectListRoute(test.store, test.authConfig, test.permissions); !errors.Is(err, handler.ErrInvalidCurrentProjectListRoute) {
@@ -88,17 +82,11 @@ func TestCurrentProjectListRouteValidatesPeerPrincipalRBACBeforeQuery(t *testing
 		return []sqlcgen.ListCurrentUserProjectsRow{}, nil
 	})
 	principal := principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
-		if user.ID != "7" || user.UserID != "7" || user.AuthType != "user" {
+		if user.ID != "7" || user.UserID != "7" || user.AuthType != "session" {
 			t.Fatalf("forwarded principal = %+v", user)
 		}
 		user.Email = "server-derived@example.test"
 		return user, nil
-	})
-	peer := forwardedPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
 	})
 	permissions := membershipResolverFunc(func(_ context.Context, user auth.User, mode string) (auth.PermissionResolution, error) {
 		if user.Email != "server-derived@example.test" || mode != handler.CurrentProjectListMode {
@@ -110,8 +98,8 @@ func TestCurrentProjectListRouteValidatesPeerPrincipalRBACBeforeQuery(t *testing
 		}, nil
 	})
 	route, err := handler.NewCurrentProjectListRoute(store, apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}, permissions)
 	if err != nil {
 		t.Fatal(err)
@@ -119,8 +107,7 @@ func TestCurrentProjectListRouteValidatesPeerPrincipalRBACBeforeQuery(t *testing
 
 	request := httptest.NewRequest(http.MethodGet, handler.CurrentProjectListPath, nil)
 	request.RemoteAddr = "10.0.0.8:43120"
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "7")
+	authtest.SignIn(request, "7")
 	recorder := httptest.NewRecorder()
 
 	route.ServeHTTP(recorder, request)
@@ -137,32 +124,29 @@ func TestCurrentProjectListRouteRejectsForgedPeerAndMissingPermission(t *testing
 		return nil, nil
 	})
 	principal := principalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) { return user, nil })
-	peer := forwardedPeerVerifierFunc(func(request *http.Request) error {
-		if request.RemoteAddr != "10.0.0.8:43120" {
-			return errors.New("untrusted peer")
-		}
-		return nil
-	})
 	permissions := membershipResolverFunc(func(context.Context, auth.User, string) (auth.PermissionResolution, error) {
 		return auth.PermissionResolution{UserID: 7, Permissions: []string{}}, nil
 	})
 	route, err := handler.NewCurrentProjectListRoute(store, apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}, permissions)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for name, peerAddress := range map[string]string{
-		"forged untrusted peer": "192.0.2.10:443",
-		"trusted but denied":    "10.0.0.8:43120",
+	for name, forged := range map[string]bool{
+		"forged X-Auth-* identity without a session": true,
+		"signed in but denied":                       false,
 	} {
 		t.Run(name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, handler.CurrentProjectListPath, nil)
-			request.RemoteAddr = peerAddress
-			request.Header.Set("X-Auth-Type", "user")
-			request.Header.Set("X-Auth-ID", "7")
+			if forged {
+				// The retired edge projection, and no session (#1359).
+				authtest.ForgeXAuth(request, "7")
+			} else {
+				authtest.SignIn(request, "7")
+			}
 			recorder := httptest.NewRecorder()
 
 			route.ServeHTTP(recorder, request)

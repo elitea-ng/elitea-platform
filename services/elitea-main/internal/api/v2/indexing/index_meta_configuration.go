@@ -57,8 +57,7 @@ func NewCurrentIndexConfigurationRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentIndexConfigurationRoute, error) {
-	if saver == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if saver == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentIndexConfigurationRoute
 	}
 	handler := &currentIndexConfigurationHandler{saver: saver}

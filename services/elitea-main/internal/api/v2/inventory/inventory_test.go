@@ -25,6 +25,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -118,8 +119,7 @@ func route(t *testing.T, cfg facade.Config, granted ...string) *inventory.Route 
 func request(t *testing.T, handler http.Handler, method, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(method, path, nil)
-	r.Header.Set("X-Auth-Type", "user")
-	r.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(r, "11")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, r)
 	return response
@@ -278,8 +278,7 @@ func TestTheProviderReceivesASignedIdentityTheClientCannotInfluence(t *testing.T
 	handler := route(t, cfg, inventory.ReadPermission)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v2/inventory/slots/7", nil)
-	r.Header.Set("X-Auth-Type", "user")
-	r.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(r, "11")
 	r.Header.Set(llmproxy.HeaderProjectID, "999")
 	r.Header.Set(llmproxy.HeaderUserID, "1")
 	r.Header.Set(llmproxy.HeaderSignature, "sha256=deadbeef")
@@ -308,9 +307,8 @@ func TestTheCallersCredentialsDoNotReachTheProvider(t *testing.T) {
 	handler := route(t, cfg, inventory.ReadPermission)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v2/inventory/slots/7", nil)
-	r.Header.Set("X-Auth-Type", "user")
-	r.Header.Set("X-Auth-ID", "11")
-	r.Header.Set("Authorization", "Bearer platform-token")
+	// The caller's bearer authenticates it; the cookie rides along.
+	authtest.BearerToken(r, "11", "11")
 	r.Header.Set("Cookie", "elitea_session=secret")
 	r.Header.Set("X-Secret", "legacy-shared-secret")
 	response := httptest.NewRecorder()
@@ -346,7 +344,7 @@ func TestAFacadeThatCannotAuthenticateIsNotComposed(t *testing.T) {
 		permissions auth.PermissionResolver
 	}{
 		{"no principal validator",
-			apimw.AuthConfig{ForwardedIdentityVerifier: full.ForwardedIdentityVerifier}, permissions()},
+			apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions()},
 		{"no way to authenticate the caller",
 			apimw.AuthConfig{PrincipalValidator: full.PrincipalValidator}, permissions()},
 		{"no permission resolver", full, nil},
@@ -490,8 +488,7 @@ func TestAdmissionGatesTheInvokeAndNotTheReads(t *testing.T) {
 	body := strings.NewReader(`{"parameters":{}}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/v2/inventory/tools/7/inventory/get_stats/invoke", body)
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("X-Auth-Type", "user")
-	r.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(r, "11")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, r)
 	if response.Code != http.StatusServiceUnavailable {

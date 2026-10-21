@@ -49,6 +49,49 @@ headers are stripped and `/internal/*` answers 404 on that port.
    recreate the stack. The `standalone_runtime_edge` volume is unused and can
    be removed.
 
+## The X-Auth-* edge identity plane is removed; Form sessions resolve in elitea-main — BREAKING for external auth edges
+
+**Affects:** a deployment whose own edge (outside this repository) calls
+`elitea-main`'s `/internal/auth/main` or `GET /auth` as a forward-auth target
+(Traefik `forwardAuth`, a Gateway API `ExtensionRef`, NGINX `auth_request`),
+or that sends `X-Auth-*` identity headers to `elitea-main` in any other way.
+A deployment that uses only this repository's chart or compose files has
+nothing to do.
+
+**What changed.** (#1359)
+
+- `GET /internal/auth/main`, `GET /auth` (the edge-auth token check) and the
+  Form plane's `/auth/check` are gone and answer 404. No `elitea-main` route
+  emits an `X-Auth-*` header any more, and none reads one.
+- **Form sign-in sessions now resolve in `elitea-main` itself.** The
+  `elitea_browser_auth` cookie that `/auth/form/authorize` sets is read
+  in-process by every API route and the admin console, exactly like the single
+  sign-on `elitea_session` cookie (including the cross-site write check). No
+  edge ForwardAuth is needed for `ELITEA_FORM_LOGIN_ENABLED=true` — before
+  this change, a Form sign-in authenticated nothing behind an edge that did not
+  run one, which was every edge this repository ships.
+- `elitea-main` deletes the inbound identity headers (`X-Auth-Type`,
+  `X-Auth-ID`, `X-Auth-User-ID`, `X-Auth-Reference`, `X-Auth-Signature`,
+  `X-Auth-Avatar`, `X-Auth-Avatar-State`, `X-Auth-Session-Id`,
+  `X-Auth-Session-Name`, `X-Auth-Session-Endpoint`,
+  `X-Elitea-Identity-Signature`, `X-Elitea-Project-Id`, `X-Elitea-User-Id`,
+  `X-Elitea-Tenant-Id`) on every request before any route runs, so it no
+  longer depends on an edge to strip them. `X-Elitea-Execution-Id` is kept: the
+  desktop and the runtime worker send it on `/llm`, and `elitea-main` verifies
+  it against a live execution of the caller before using it.
+- The worker's private edge (`platform-edge`) no longer authenticates the
+  execution-events stream: the worker's bearer token is read by
+  `elitea-main` directly, as on every other route.
+
+**What to do.** Remove any forward-auth middleware that points at
+`/internal/auth/main` or `/auth`; with it in place every request is refused,
+because the target answers 404. Route browser traffic straight to
+`elitea-main` — it authenticates the Form cookie, the single sign-on cookie and
+bearer tokens itself. Keep stripping the identity headers at the edge if you
+like; it is now defence in depth rather than the only control. The auth
+document is unchanged; its `mappers`, `authorization` and `credential_headers`
+sections are still validated but no longer used.
+
 ## Default-deny NetworkPolicies; an ingress decision is required
 
 **Affects:** every install of the `deploy/helm/elitea` chart. A CNI that
@@ -90,12 +133,9 @@ sample has a new parameter for the gateway namespace
 **Related, unchanged checks.** A plain `networking.k8s.io/v1` Ingress with Form
 sign-in is still refused unless the controller removes the inbound `X-Auth-*`
 and `X-Elitea-*` identity headers and
-`main.ingress.identityHeadersStrippedByController=true` says so. An edge you
-run outside this repository that uses `elitea-main`'s `/internal/auth/main`
-forward-auth must copy `X-Auth-Signature` from the auth response (for example
-Traefik `authResponseHeaders`) along with the other `X-Auth-*` names it already
-forwards; `elitea-main` accepts an `X-Auth-*` identity only together with a
-valid signature.
+`main.ingress.identityHeadersStrippedByController=true` says so. (Superseded
+for `elitea-main` itself by the entry above: it now strips those headers and
+serves no forward-auth endpoint.)
 
 ## DeepWiki indexes are scoped by project; existing indexes are deleted — BREAKING
 

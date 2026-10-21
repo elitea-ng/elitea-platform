@@ -63,7 +63,7 @@ func BrowserSignInRequired(
 
 func browserPrincipal(r *http.Request) bool {
 	source, ok := auth.AuthenticationSourceFromContext(r.Context())
-	if !ok || (source != auth.AuthenticationSourceSession && source != auth.AuthenticationSourceForwarded) {
+	if !ok || source != auth.AuthenticationSourceSession {
 		return false
 	}
 	user, ok := auth.UserFromContext(r.Context())

@@ -39,8 +39,7 @@ func NewCurrentAgentCancelRoute(
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentAgentCancelRoute, error) {
-	if canceller == nil || authConfig.PrincipalValidator == nil ||
-		authConfig.ForwardedIdentityVerifier == nil || permissions == nil {
+	if canceller == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentAgentCancelRoute
 	}
 	handler := &currentAgentCancelHandler{canceller: canceller}

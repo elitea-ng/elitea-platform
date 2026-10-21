@@ -1,13 +1,18 @@
 // This file gates the edge identity-header strip (#368, guarding the fix from
 // #326).
 //
-// elitea-main accepts X-Auth-Type + X-Auth-ID as a finished identity from any
-// address inside auth.form.yml's trusted_proxy_cidrs, which is the whole compose
-// network. The browser edge sits on that network. Without the
-// `strip-client-identity` middleware a caller with no credential at all chooses
-// its own user id, on every route that does not carry the #302 membership gate.
+// elitea-main USED TO accept X-Auth-Type + X-Auth-ID as a finished identity from
+// any address inside auth.form.yml's trusted_proxy_cidrs, which is the whole
+// compose network. The browser edge sits on that network. Without the
+// `strip-client-identity` middleware a caller with no credential at all chose
+// its own user id, on every route that did not carry the #302 membership gate.
 // Measured on a real stack before the fix: `curl -H 'X-Auth-ID: 4'` returned
 // that user's record with HTTP 200.
+//
+// That reader is gone (#1359), and elitea-main strips the same names itself
+// (apimw.StripClientIdentityHeaders; TestInProcessStripCoversTheEdgeFloor in
+// edge_auth_target_test.go holds the two lists together). The edge strip is
+// kept as defence in depth, and this gate keeps it from narrowing.
 //
 // WHAT THIS GATE ADDS, AND WHAT IT DOES NOT DUPLICATE.
 //
@@ -63,10 +68,6 @@ const protectedService = "elitea-main"
 // browserEdgeFiles are the two files #326 fixed. Both front elitea-main from a
 // browser and NEITHER runs an edgeAuth, so no identity header arriving at
 // them is ever legitimate client input.
-//
-// The runtime plane's platform-edge Traefik is gone (#1359). Its replacement,
-// elitea-main's platform listener, strips the same floor in Go;
-// cmd/elitea-main/platform_listener_test.go holds it to that floor.
 var browserEdgeFiles = []string{
 	"deploy/traefik/dynamic.yml",
 	"deploy/traefik/dynamic.e2e.yml",
@@ -75,8 +76,8 @@ var browserEdgeFiles = []string{
 // requiredStrippedHeaders is the floor, not the ceiling: each name here must be
 // deleted, and a file may delete more. It stops a silent narrowing of the list.
 //
-// The X-Auth-* names are what internal/api/middleware/auth.go reads through
-// tryTrustedProxyHeaders. The X-Elitea-* names are the elitea-main to gateway
+// The X-Auth-* names are the retired forward-auth projection (#1359), which
+// nothing reads any more. The X-Elitea-* names are the elitea-main to gateway
 // identity projection, never a browser input; they are listed so that a future
 // route through either edge cannot inherit a client-chosen project or tenant.
 //

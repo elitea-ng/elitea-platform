@@ -34,6 +34,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
@@ -49,12 +50,6 @@ type principalValidatorFunc func(context.Context, auth.User) (auth.User, error)
 
 func (f principalValidatorFunc) ValidatePrincipal(ctx context.Context, user auth.User) (auth.User, error) {
 	return f(ctx, user)
-}
-
-type forwardedPeerVerifierFunc func(*http.Request) error
-
-func (f forwardedPeerVerifierFunc) VerifyForwardedIdentityPeer(request *http.Request) error {
-	return f(request)
 }
 
 type permissionResolverFunc func(context.Context, auth.User, string, string) (auth.PermissionResolution, error)
@@ -218,8 +213,8 @@ func authConfig() apimw.AuthConfig {
 	return apimw.AuthConfig{
 		PrincipalValidator: principalValidatorFunc(
 			func(_ context.Context, user auth.User) (auth.User, error) { return user, nil }),
-		ForwardedIdentityVerifier: forwardedPeerVerifierFunc(
-			func(*http.Request) error { return nil }),
+		FormSessions: authtest.FormSessions{},
+		Validator:    authtest.Tokens{},
 	}
 }
 
@@ -239,8 +234,7 @@ func call(t *testing.T, handler http.Handler, method, path string, body string) 
 		request = httptest.NewRequest(method, path, strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
@@ -314,8 +308,7 @@ func TestTheProviderReceivesASignedIdentityTheClientCannotInfluence(t *testing.T
 	handler := route(t, cfg, deepwiki.ReadPermission)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/deepwiki/slots/7", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
+	authtest.SignIn(request, "11")
 	// A caller trying to be someone else, in every field of the scheme.
 	request.Header.Set(llmproxy.HeaderProjectID, "999")
 	request.Header.Set(llmproxy.HeaderUserID, "1")
@@ -358,9 +351,8 @@ func TestTheCallersCredentialsDoNotReachTheProvider(t *testing.T) {
 	handler := route(t, cfg, deepwiki.ReadPermission)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v2/deepwiki/slots/7", nil)
-	request.Header.Set("X-Auth-Type", "user")
-	request.Header.Set("X-Auth-ID", "11")
-	request.Header.Set("Authorization", "Bearer platform-token")
+	// The caller's bearer authenticates it; the cookie rides along.
+	authtest.BearerToken(request, "11", "11")
 	request.Header.Set("Cookie", "elitea_session=secret")
 	request.Header.Set("X-Secret", "legacy-shared-secret")
 	response := httptest.NewRecorder()
@@ -491,7 +483,7 @@ func TestCompositionRefusesAHalfWiredAuthenticationChain(t *testing.T) {
 	full := authConfig()
 	cases := map[string]apimw.AuthConfig{
 		"no principal validator": {
-			ForwardedIdentityVerifier: full.ForwardedIdentityVerifier,
+			FormSessions: authtest.FormSessions{},
 		},
 		"no forwarded identity verifier": {
 			PrincipalValidator: full.PrincipalValidator,

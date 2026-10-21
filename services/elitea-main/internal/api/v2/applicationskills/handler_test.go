@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	handler "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -170,11 +171,10 @@ func TestCurrentApplicationSkillsRouteAuthenticatesAndAuthorizesBeforeTenantRead
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "untrusted forwarded identity",
+			name:       "forged X-Auth-* identity without a session",
 			method:     http.MethodGet,
 			path:       "/api/v2/elitea_core/application_skills/prompt_lib/7/31",
 			remoteAddr: "192.0.2.9:443",
-			auth:       true,
 			allowed:    true,
 			wantStatus: http.StatusUnauthorized,
 		},
@@ -439,7 +439,6 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 	principal := currentApplicationSkillsPrincipalValidatorFunc(
 		func(_ context.Context, user auth.User) (auth.User, error) { return user, nil },
 	)
-	peer := currentApplicationSkillsPeerVerifierFunc(func(*http.Request) error { return nil })
 	permissions := currentApplicationSkillsPermissionResolverFunc(
 		func(
 			context.Context,
@@ -451,8 +450,8 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 		},
 	)
 	authConfig := apimw.AuthConfig{
-		PrincipalValidator:        principal,
-		ForwardedIdentityVerifier: peer,
+		PrincipalValidator: principal,
+		FormSessions:       authtest.FormSessions{},
 	}
 
 	for name, test := range map[string]struct {
@@ -461,7 +460,7 @@ func TestCurrentApplicationSkillsRouteRejectsIncompleteComposition(t *testing.T)
 		permissions auth.PermissionResolver
 	}{
 		"missing reader":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{ForwardedIdentityVerifier: peer}, permissions: permissions},
+		"missing principal":   {reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"missing permissions": {reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -546,14 +545,7 @@ func newCurrentApplicationSkillsRoute(
 					return user, nil
 				},
 			),
-			ForwardedIdentityVerifier: currentApplicationSkillsPeerVerifierFunc(
-				func(request *http.Request) error {
-					if request.RemoteAddr != "10.0.0.8:43120" {
-						return errors.New("untrusted peer")
-					}
-					return nil
-				},
-			),
+			FormSessions: authtest.FormSessions{},
 		},
 		permissions,
 	)
@@ -572,8 +564,11 @@ func currentApplicationSkillsRequest(
 	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = remoteAddr
 	if authenticated {
-		request.Header.Set("X-Auth-Type", "user")
-		request.Header.Set("X-Auth-ID", "11")
+		authtest.SignIn(request, "11")
+	} else {
+		// No credential, but the forged X-Auth-* identity the retired edge
+		// projection used: it must authenticate nobody (#1359).
+		authtest.ForgeXAuth(request, "11")
 	}
 	return request
 }
@@ -604,14 +599,6 @@ func (function currentApplicationSkillsPrincipalValidatorFunc) ValidatePrincipal
 	user auth.User,
 ) (auth.User, error) {
 	return function(ctx, user)
-}
-
-type currentApplicationSkillsPeerVerifierFunc func(*http.Request) error
-
-func (function currentApplicationSkillsPeerVerifierFunc) VerifyForwardedIdentityPeer(
-	request *http.Request,
-) error {
-	return function(request)
 }
 
 // TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract pins

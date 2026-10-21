@@ -11,6 +11,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware/authtest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/authcomposition"
 )
@@ -42,7 +43,7 @@ func newAPIGroupRouter(config apimw.AuthConfig, handler http.Handler) http.Handl
 		PrincipalValidator: config.PrincipalValidator,
 		SessionSecret:      config.SessionSecret,
 		Auth: api.AuthDeps{
-			ForwardedIdentityVerifier: config.ForwardedIdentityVerifier,
+			FormSessions: authtest.FormSessions{},
 		},
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      handler,
@@ -169,15 +170,15 @@ func TestAPIGroupAuthConfigDoesNotReuseTheProductionValidator(t *testing.T) {
 // TestAPIGroupAuthConfigKeepsTheProductionCredentials proves the fix did not
 // move the deployment that already worked. With ELITEA_AUTH_CONFIG_FILE set the
 // group must keep the token validator, the production principal validator, the
-// forwarded identity verifier and the session secret.
+// Form session reader and the session secret.
 func TestAPIGroupAuthConfigKeepsTheProductionCredentials(t *testing.T) {
 	production := &countingPrincipals{inner: activePrincipals{}}
 	session := &countingPrincipals{inner: activePrincipals{}}
-	verifier := &stubForwardedIdentityVerifier{}
+	formSessions := &stubFormSessions{}
 	formGraph := &authcomposition.FormGraph{}
 
 	config := apiGroupAuthConfig(
-		formGraph, production, verifier, session, &countingTokens{}, apiGroupTestSecret, true, nil)
+		formGraph, production, formSessions, session, &countingTokens{}, apiGroupTestSecret, true, nil)
 
 	if config.Validator != apimw.TokenValidator(formGraph) {
 		t.Fatal("the production branch lost its token validator: the form " +
@@ -187,9 +188,9 @@ func TestAPIGroupAuthConfigKeepsTheProductionCredentials(t *testing.T) {
 		t.Fatal("the production branch must keep the production principal " +
 			"validator, which is the one bound to the production auth graph")
 	}
-	if config.ForwardedIdentityVerifier != apimw.ForwardedIdentityPeerVerifier(verifier) {
-		t.Fatal("the production branch lost its forwarded identity verifier: " +
-			"the worker and the auth edge authenticate with it")
+	if config.FormSessions != apimw.FormSessionAuthenticator(formSessions) {
+		t.Fatal("the production branch lost its Form session reader: a " +
+			"Form-login browser authenticates with it and nothing else (#1359)")
 	}
 	if config.SessionSecret != apiGroupTestSecret {
 		t.Fatalf("the production branch lost its SessionSecret: %q — the chat "+
@@ -221,9 +222,9 @@ func TestAPIGroupAuthConfigAdmitsNothingWithoutACredentialPlane(t *testing.T) {
 		t.Fatal("a deployment with no credential plane carries a principal " +
 			"validator: it validates a principal no credential can name")
 	}
-	if config.ForwardedIdentityVerifier != nil {
-		t.Fatal("a deployment with no credential plane carries a forwarded " +
-			"identity verifier")
+	if config.FormSessions != nil {
+		t.Fatal("a deployment with no credential plane carries a Form " +
+			"session reader")
 	}
 }
 
@@ -294,11 +295,11 @@ func fieldReadsAPIGroupAuth(literal *ast.CompositeLit, field string) bool {
 	return found
 }
 
-// stubForwardedIdentityVerifier stands in for the production peer verifier.
-type stubForwardedIdentityVerifier struct{}
+// stubFormSessions stands in for the production Form session reader.
+type stubFormSessions struct{}
 
-func (stubForwardedIdentityVerifier) VerifyForwardedIdentityPeer(*http.Request) error {
-	return nil
+func (stubFormSessions) AuthenticateFormSession(*http.Request) (auth.User, error) {
+	return auth.User{}, apimw.ErrFormSessionAbsent
 }
 
 // countingTokens is a stand-in for the pool-backed personal-access-token
