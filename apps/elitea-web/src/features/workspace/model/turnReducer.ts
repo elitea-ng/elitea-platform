@@ -8,8 +8,8 @@
  * that list. The common case (a higher seq than any seen) is applied
  * incrementally; a late lower seq re-folds from the sorted list.
  *
- * Kept compact: a `text_delta` whose seq directly follows a stored text run
- * is merged into it (the run then covers `seq..last`), so a long answer is
+ * Kept compact: a `text_delta` (or `thinking_delta`) whose seq directly
+ * follows a stored run of its kind is merged into it (the run then covers `seq..last`), so a long answer is
  * one stored event, not thousands, and an append copies a short list. The
  * channel is global (every workspace's turns), so the turns this hook did
  * not begin are kept only for the few most recently heard
@@ -18,10 +18,15 @@
  */
 import { isPlanEvent, type PlanEvent } from '@/shared/desktop/planEvents';
 import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
+import type { TurnModel } from '@/shared/desktop/turnModel';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
+
+import { applySideEvent, isSideEvent } from './turnSideEvents';
 
 export type TranscriptItem =
   | { type: 'text'; key: string; text: string }
+  /** A model step's reasoning (`thinking_delta`); `chars` once its `thinking_end` came. */
+  | { type: 'thinking'; key: string; text: string; chars?: number }
   | {
       type: 'tool';
       key: string;
@@ -59,6 +64,8 @@ export interface TurnView {
   planProposal?: PlanProposalPayload;
   /** The person accepted a plan in this turn (its `call_id`): the session left plan mode. */
   planAccepted?: string;
+  /** The model the turn runs on (from `status` `running`). */
+  model?: TurnModel;
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -124,6 +131,7 @@ function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
   if (event.payload.message !== undefined) next.message = event.payload.message;
   else delete next.message;
   if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
+  if (event.payload.model !== undefined) next.model = event.payload.model;
   if (isTerminalPhase(event.payload.phase)) return withoutProposal({ ...next, approvals: [] });
   return next;
 }
@@ -197,24 +205,9 @@ function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly str
   }
 }
 
-/** `usage` (the meter of a call that ended) or `context` (a phase change, sent at once). */
-function isMeterEvent(event: AgentEvent): event is EventOf<'usage'> | EventOf<'context'> {
-  return event.kind === 'usage' || event.kind === 'context';
-}
-
-/**
- * Not part of the transcript: the activity island shows a turn's tokens; the
- * composer's meter the latest context occupancy, which a `context` event
- * carries while a summary call runs.
- */
-function onMeter(view: TurnView, event: EventOf<'usage'> | EventOf<'context'>): TurnView {
-  const context = event.kind === 'context' ? event.payload : event.payload.context;
-  return context === undefined ? view : { ...view, context };
-}
-
 function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
-  if (isMeterEvent(event)) return onMeter(view, event);
   if (isPlanEvent(event)) return applyPlanEvent(view, event, resolved);
+  if (isSideEvent(event)) return applySideEvent(view, event);
   switch (event.kind) {
     case 'status':
       return onStatus(view, event);
@@ -247,9 +240,13 @@ function lastSeq(event: AgentEvent | StoredEvent): number {
   return 'last' in event ? event.last : event.seq;
 }
 
-/** `event` merged onto `run` when it is a text delta (or run) directly following the text run; otherwise null. */
+type DeltaEvent = EventOf<'text_delta'> | EventOf<'thinking_delta'>;
+
+const isDelta = (event: AgentEvent | undefined): event is DeltaEvent => event?.kind === 'text_delta' || event?.kind === 'thinking_delta';
+
+/** `event` merged onto `run` when it is a delta (or run) of the run's kind directly following it; otherwise null. */
 function extendRun(run: StoredEvent | undefined, event: AgentEvent | StoredEvent): StoredEvent | null {
-  if (run?.kind !== 'text_delta' || event.kind !== 'text_delta' || event.seq !== run.last + 1) return null;
+  if (run === undefined || !isDelta(run) || !isDelta(event) || run.kind !== event.kind || event.seq !== run.last + 1) return null;
   return { ...run, payload: { text: run.payload.text + event.payload.text }, last: lastSeq(event) };
 }
 

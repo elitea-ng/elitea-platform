@@ -98,10 +98,26 @@ beforeEach(() => {
         { id: '42', name: 'Marketing', suspended: false },
       ]),
     ),
+    // What the composer's model chip reads: the agent version's own model, and the project's chat models.
+    http.get(`${BASE}/elitea_core/version/prompt_lib/:project/:app/:version`, ({ params }) =>
+      HttpResponse.json({ id: Number(params['version']), name: 'base', llm_settings: { model_name: 'gpt-4o', pin_model: pinModel } }),
+    ),
+    http.get(`${BASE}/configurations/models/:project`, () =>
+      HttpResponse.json({
+        items: [
+          { name: 'gpt-4o', project_id: 42, supports_reasoning: false },
+          { name: 'gpt-5', project_id: 42, description: 'Thinks first', supports_reasoning: true },
+        ],
+        total: 2,
+      }),
+    ),
   );
 });
+/** The agent version pins its model (`llm_settings.pin_model`). */
+let pinModel = false;
 
 afterEach(() => {
+  pinModel = false;
   resetGeneratedClient();
   resetConfigForTests();
   delete globals['elitea_ui_config'];
@@ -1078,7 +1094,7 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/compact', '/help']);
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help']);
       await user.type(input, 'pl{Enter}');
       expect(screen.getByRole('radio', { name: 'Plan mode (no changes)' })).toBeChecked();
       await waitFor(() => expect(input).toHaveValue(''));
@@ -1151,6 +1167,54 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[1]?.compact).toBeUndefined();
     }, 30_000);
 
+    it('chooses the turn\'s model and effort from the chip, or with /model, and sends it with the turn', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+      const chip = await screen.findByTestId('model-chip');
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-4o'));
+
+      await user.click(chip);
+      await user.click(await screen.findByRole('menuitem', { name: /gpt-5/ }));
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-5'));
+      // gpt-5 supports reasoning: its effort is offered too.
+      await user.click(chip);
+      await user.click(await screen.findByTestId('model-effort-high'));
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-5 · High'));
+
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.model).toEqual({ name: 'gpt-5', reasoning_effort: 'high' });
+      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', model: { name: 'gpt-5', reasoning_effort: 'high', chosen: true, pinned: false } } });
+      ipc.emit({ turn_id: 'turn-1', seq: 2, kind: 'done', payload: { committed: false, conversation_id: '77', message_ids: [], changed_files: 0 } });
+      await waitFor(() => expect(screen.getByTestId('workspace-send-button')).toBeInTheDocument());
+
+      // `/model <name>` as the whole message sets it; nothing goes to the agent.
+      await user.type(input, '/model gpt-4o{Enter}');
+      await waitFor(() => expect(chip).toHaveTextContent('gpt-4o'));
+      expect(chip).not.toHaveTextContent('High');
+      await waitFor(() => expect(input).toHaveValue(''));
+      expect(ipc.calls.started).toHaveLength(1);
+
+      // `/model` alone opens the chip's menu.
+      await user.type(input, '/mod{Enter}');
+      expect(await screen.findByRole('menuitem', { name: /gpt-5/ })).toBeInTheDocument();
+    });
+
+    it('offers no model choice when the agent pins its model, and /model says why', async () => {
+      pinModel = true;
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+      await waitFor(() => expect(screen.queryByTestId('model-chip')).toBeNull());
+      await user.type(input, '/model{Enter}');
+      expect(await screen.findByTestId('workspace-model-fixed')).toBeInTheDocument();
+      await user.type(input, '/model gpt-5{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      // Without a chip the text is a message like any other, sent without a model.
+      expect(ipc.calls.started[0]?.model).toBeUndefined();
+    });
+
     it('lists the agent\'s skills after the commands, filtered, and sends the one the message starts with', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc, [
@@ -1161,9 +1225,9 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, '/');
       const menu = await screen.findByTestId('workspace-command-menu');
-      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(9));
+      await waitFor(() => expect(within(menu).getAllByRole('option')).toHaveLength(10));
       expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual([
-        '/new', '/plan', '/undo', '/agent', '/clear', '/compact', '/help', '/code-review', '/style',
+        '/new', '/plan', '/undo', '/agent', '/model', '/clear', '/compact', '/help', '/code-review', '/style',
       ]);
       expect(within(menu).getByText('Skills')).toBeInTheDocument();
       expect(within(menu).getByText('The house style')).toBeInTheDocument();

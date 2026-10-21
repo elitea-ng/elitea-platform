@@ -9,7 +9,7 @@ import type { WorkspaceCommandId, WorkspaceTurn } from '@/features/workspace';
 
 import type { AgentSelection } from './useAgentSelection';
 
-type SessionNotice = 'help' | 'nothingToUndo' | 'compactNext' | null;
+type SessionNotice = 'help' | 'nothingToUndo' | 'compactNext' | 'modelFixed' | null;
 
 export interface SessionCommands {
   planMode: boolean;
@@ -20,6 +20,8 @@ export interface SessionCommands {
   undoRequest: number;
   /** The box holding the agent picker; `/agent` opens it. */
   agentRef: RefObject<HTMLDivElement | null>;
+  /** The box holding the model chip; `/model` opens it (no chip: the agent's model is fixed here). */
+  modelRef: RefObject<HTMLDivElement | null>;
   /** `/compact` was asked for: the next message's turn compacts the context first. */
   compactNext: boolean;
   /** The turn that compacts started. */
@@ -40,6 +42,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
   const [undoRequest, setUndoRequest] = useState(0);
   const [compactNext, setCompactNext] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<HTMLDivElement>(null);
 
   const actions: Record<WorkspaceCommandId, () => void> = {
     new: () => {
@@ -52,6 +55,11 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
       else setNotice('nothingToUndo');
     },
     agent: () => agentRef.current?.querySelector<HTMLElement>('button')?.click(),
+    model: () => {
+      const chip = modelRef.current?.querySelector<HTMLElement>('button');
+      if (chip === undefined || chip === null) setNotice('modelFixed');
+      else chip.click();
+    },
     clear: () => turn.clear(),
     compact: () => {
       setCompactNext(true);
@@ -67,6 +75,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     closeNotice: () => setNotice(null),
     undoRequest,
     agentRef,
+    modelRef,
     compactNext,
     compactSent: () => {
       setCompactNext(false);

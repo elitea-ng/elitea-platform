@@ -4,6 +4,7 @@
 import { useRef, useState } from 'react';
 
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
+import type { TurnModelChoice } from '@/shared/desktop/turnModel';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 
 import type { AgentSelection } from './useAgentSelection';
@@ -12,8 +13,8 @@ import { useEnsureConversation } from './useEnsureConversation';
 export interface SendPrompt {
   canSend: boolean;
   sendError: string | null;
-  /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the agent's skills it invokes with "/"; `compact`: `/compact` was asked for. */
-  send: (prompt: string, planMode: boolean, mentions: string[], skills?: string[], compact?: boolean) => Promise<boolean>;
+  /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the agent's skills it invokes with "/"; `compact`: `/compact` was asked for; `model`: the model chip's choice. */
+  send: (prompt: string, planMode: boolean, mentions: string[], skills?: string[], compact?: boolean, model?: TurnModelChoice) => Promise<boolean>;
   /** The composer got focus with an agent selected: the host reads ahead what the send will need. */
   prewarm: () => void;
 }
@@ -43,6 +44,11 @@ function compactFlag(compact: boolean | undefined): { compact?: true } {
   return compact === true ? { compact: true } : {};
 }
 
+/** A model only when one was chosen: without it the host runs the thread's kept model. */
+function modelField(model: TurnModelChoice | undefined): { model?: TurnModelChoice } {
+  return model === undefined ? {} : { model };
+}
+
 /** `onStarted`: the host started a turn in `conversationId` (new or continued) — the page makes it the open thread. */
 export function useSendPrompt(
   workspace: Workspace,
@@ -62,7 +68,7 @@ export function useSendPrompt(
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
-  const send = async (prompt: string, planMode: boolean, mentions: string[], skills: string[] = [], compact?: boolean): Promise<boolean> => {
+  const send = async (prompt: string, planMode: boolean, mentions: string[], skills: string[] = [], compact?: boolean, model?: TurnModelChoice): Promise<boolean> => {
     if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
     inFlight.current = true;
     setSending(true);
@@ -97,6 +103,7 @@ export function useSendPrompt(
         mentions,
         skills,
         ...compactFlag(compact),
+        ...modelField(model),
       });
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.

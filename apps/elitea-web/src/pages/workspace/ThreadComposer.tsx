@@ -11,12 +11,15 @@
  *
  * A local thread's footer also shows the context meter (`ContextMeter`, lazy)
  * once a model call reported its occupancy; `/compact` marks the next send.
+ * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
+ * runs on, unless the agent pins it or the folder's settings keep it
+ * (`/model` opens it, `/model <name>` sets it).
  */
 import { lazy, Suspense } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import type { WorkspaceTurn } from '@/features/workspace';
+import { ModelChip, type WorkspaceTurn } from '@/features/workspace';
 import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
@@ -27,6 +30,8 @@ import type { ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
+import type { SessionCommands } from './useSessionCommands';
+import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 const ContextMeter = lazy(() => import('./ContextMeter'));
@@ -34,6 +39,8 @@ const ContextMeter = lazy(() => import('./ContextMeter'));
 export interface ThreadComposerProps {
   ipc: WorkspaceIpc;
   workspaceId: string;
+  /** The folder's project: the model chip offers its chat models. */
+  projectId: number;
   conversationId: string;
   session: ThreadSession;
   turn: WorkspaceTurn;
@@ -54,20 +61,30 @@ function cloudBinding(cloud: CloudChat): Pick<WorkspaceComposerProps, 'canSend' 
   };
 }
 
+/** The model chip and `/model <name>`: neither for a cloud thread (its own agent answers) nor when no choice is offered. */
+function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: SessionCommands['modelRef']): Pick<WorkspaceComposerProps, 'modelPicker' | 'onModelCommand'> {
+  if (cloudMode || !model.offered) return {};
+  return {
+    modelPicker: <ModelChip current={model.current} effort={model.effort} models={model.models} onChoose={model.choose} chipRef={chipRef} />,
+    onModelCommand: (name) => model.choose({ name }),
+  };
+}
+
 /** The latest context occupancy of the shown turns: the active one's, else the newest earlier one's. */
 function latestMeter(turn: WorkspaceTurn) {
   return turn.view.context ?? turn.earlier.findLast((earlier) => earlier.view.context !== undefined)?.view.context;
 }
 
-export function ThreadComposer({ ipc, workspaceId, conversationId, session, turn, handoff, cloud, skills }: ThreadComposerProps): React.JSX.Element {
+export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
+  const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
   const local: Pick<WorkspaceComposerProps, 'canSend' | 'busy' | 'onSend' | 'onStop'> = {
     canSend: session.canSend && !handoff.offLaptop,
     busy: turn.busy,
     onSend: async (prompt, mentions, picked) => {
-      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext);
+      const sent = await session.send(prompt, commands.planMode, mentions, picked, commands.compactNext, model.choice);
       if (sent && commands.compactNext) commands.compactSent();
       return sent;
     },
@@ -86,6 +103,7 @@ export function ThreadComposer({ ipc, workspaceId, conversationId, session, turn
         readOnly={handoff.offLaptop && !cloudMode}
         planMode={commands.planMode}
         agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
+        {...modelBinding(model, cloudMode, commands.modelRef)}
         runLocation={<RunLocationChip handoff={handoff} onOpenInChat={openInChat} />}
         contextMeter={
           meter === undefined ? undefined : (
