@@ -1793,6 +1793,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
 	// under the same guard so an absent agent plane leaves a NIL interface.
 	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// Bound by the router to the MCP server it builds: a platform MCP tool of a
+	// local turn runs through the same dispatch a cloud turn's does, and the
+	// resolved definition names each platform server's tools from the same
+	// listing (issue 1231).
+	platformMCPTools := desktopopsapi.NewPlatformToolBridge()
 	// The upload-time attachment extraction warm-up (issue 1062), assigned
 	// only under the same guard so an absent reader leaves a NIL interface.
 	var attachmentExtractionWarmer v2convs.AttachmentExtractionWarmer
@@ -1985,6 +1990,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		toolkitDiscovery = publicRoutes.ToolkitDiscovery
 		toolkitToolRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.ClientApplicationVersions != nil {
+			publicRoutes.ClientApplicationVersions.WithPlatformTools(platformMCPTools)
 			clientApplicationVersions = publicRoutes.ClientApplicationVersions
 			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
 		}
@@ -2452,6 +2458,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		canvasPresence = v2canvaspresence.Backend{Store: presenceStore, Bus: liveNATSBus}
 	}
 
+	// The platform MCP replay store (issue 1231): a JetStream KV bucket on the
+	// same server, which every replica claims a platform call's
+	// Idempotency-Key in before running it. It is optional: without the
+	// live-update NATS, or with the bucket missing or misconfigured (logged as
+	// an error naming the nats-bootstrap Job), elitea-main starts without it
+	// and the remote toolkit route answers 501 for platform MCP tools rather
+	// than dedupe them per replica.
+	platformMCPReplays := composePlatformMCPReplays(ctx, eventsNATS, logger)
+
 	// The toolkit TYPE catalogue (GET /elitea_core/toolkits/prompt_lib/
 	// {projectID}) serves each tool's argument schema from the digest-pinned SDK
 	// snapshot. It is loaded unconditionally and here, in the composition root,
@@ -2508,7 +2523,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose resolved version route: %w", err)
 	}
 	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
-		nativePolicy, auditRecorder, apiGroupAuth, logger)
+		nativePolicy, auditRecorder, platformMCPTools, platformMCPReplays, apiGroupAuth, logger)
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
@@ -2634,6 +2649,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CloudExecutorStorageEncryption: workspaceHandoff.Encryption,
 		CurrentResolvedVersion:         currentResolvedVersion,
 		CurrentRemoteToolkit:           currentRemoteToolkit,
+		PlatformMCPTools:               platformMCPTools,
 		CurrentNodeRecovery:            currentNodeRecovery,
 		CurrentExecutionInterrupts:     currentExecutionInterrupts,
 		CurrentApplicationTask:         currentApplicationTask,

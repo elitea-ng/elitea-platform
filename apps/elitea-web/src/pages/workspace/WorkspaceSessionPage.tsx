@@ -73,9 +73,10 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
-  // "Continue?" at the step limit is a card in the transcript; the rest are the dialog's queue.
-  const continueRequest = turn.view.approvals.find((approval) => approval.kind === 'continue');
-  const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => approval.kind !== 'continue');
+  // "Continue?" at the step limit and an MCP sign-in are cards in the transcript; the rest are the dialog's queue.
+  const inline = (kind: string | undefined): boolean => kind === 'continue' || kind === 'mcp_authorization';
+  const continueRequest = turn.view.approvals.find((approval) => inline(approval.kind));
+  const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => !inline(approval.kind));
   const busy = turn.busy || session.rebind.isPending;
   const started = turn.turnId !== null || turn.earlier.length > 0;
   // The intro stands in for a thread with nothing to show: new, or its history unreadable.

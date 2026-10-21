@@ -2,9 +2,10 @@
 //! refusals for what it does not run locally yet.
 //!
 //! D0 runs one ordinary agent: its instructions, its model, its frozen
-//! skills and project context, and its credentialed toolkits as remote
-//! tools. A pipeline, a nested agent and a project MCP server are refused
-//! before the turn starts, so no execution is opened for them.
+//! skills and project context, and its credentialed toolkits and platform
+//! MCP servers as remote tools. A pipeline, a nested agent and a platform MCP
+//! server without a `toolkit_ref` (an older platform) are refused before the
+//! turn starts, so no execution is opened for them.
 
 use serde_json::{Map, Value};
 
@@ -53,11 +54,29 @@ pub struct RemoteToolSpec {
     pub toolkit_id: i64,
     pub toolkit_ref: String,
     pub toolkit_name: String,
+    /// The toolkit's `type` (`mcp_*` names an MCP server toolkit), for the
+    /// web app page that signs in to it.
+    pub toolkit_type: String,
     pub description: String,
     /// `None`: the toolkit's every tool (`all_tools`); the model names the
     /// tool in a `tool_name` argument.
     pub tool_name: Option<String>,
+    /// The tools a platform MCP server offers (`tools`, client contract
+    /// 1.16), for the generic tool's description and its `tool_name` enum;
+    /// empty when the definition names none.
+    pub tools: Vec<RemoteToolInfo>,
 }
+
+/// One tool of a platform MCP server, as the definition names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// At most this many named tools reach one generic tool's description and
+/// enum (a server lists a few dozen).
+pub const MAX_NAMED_TOOLS: usize = 64;
 
 /// A definition D0 can run.
 #[derive(Clone, Debug)]
@@ -107,10 +126,17 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
                     "This agent uses other agents as tools, which do not run locally yet; run it in the cloud.",
                 ));
             }
+            // A platform MCP server runs on the platform like a credentialed
+            // toolkit (ADR-0029 decision 3): a server that hands it a
+            // `toolkit_ref` (client contract 1.16) is called through
+            // `executeRemoteToolkitTool`; an older one cannot be reached.
+            Some("platform_mcp") if tool.get("toolkit_ref").is_some_and(Value::is_object) => {
+                remote_tools.extend(remote_specs(tool)?);
+            }
             Some("platform_mcp") => {
                 return Err(Refusal::new(
                     "platform_mcp_unsupported",
-                    "This agent uses a project MCP server, which local turns cannot reach yet; run it in the cloud.",
+                    "This agent uses a project MCP server that this platform version cannot reach from a local turn; update the platform or run it in the cloud.",
                 ));
             }
             _ => {
@@ -234,6 +260,7 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
         .unwrap_or("toolkit")
         .to_owned();
     let description = text("description").unwrap_or_default().to_owned();
+    let toolkit_type = text("type").unwrap_or_default().to_owned();
     let all_tools = tool.get("all_tools") == Some(&Value::Bool(true));
     let selected: Vec<String> = tool
         .get("selected_tools")
@@ -246,18 +273,65 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
                 .collect()
         })
         .unwrap_or_default();
-    let spec = |tool_name: Option<String>| RemoteToolSpec {
-        exposed_name: String::new(),
-        toolkit_id,
-        toolkit_ref: toolkit_ref.to_owned(),
-        toolkit_name: toolkit_name.clone(),
-        description: description.clone(),
-        tool_name,
+    let tools = named_tools(tool);
+    let spec = |tool_name: Option<String>| {
+        // A named tool of a platform server says what it does.
+        let own = tool_name
+            .as_deref()
+            .and_then(|name| tools.iter().find(|t| t.name == name))
+            .map(|t| t.description.as_str())
+            .filter(|d| !d.is_empty());
+        RemoteToolSpec {
+            exposed_name: String::new(),
+            toolkit_id,
+            toolkit_ref: toolkit_ref.to_owned(),
+            toolkit_name: toolkit_name.clone(),
+            toolkit_type: toolkit_type.clone(),
+            description: own.map_or_else(|| description.clone(), str::to_owned),
+            tool_name: tool_name.clone(),
+            tools: if tool_name.is_none() {
+                tools.clone()
+            } else {
+                Vec::new()
+            },
+        }
     };
     if all_tools {
         return Ok(vec![spec(None)]);
     }
     Ok(selected.into_iter().map(|name| spec(Some(name))).collect())
+}
+
+/// A platform MCP server's `tools` (`[{name, description}]`): named,
+/// de-duplicated, at most [`MAX_NAMED_TOOLS`].
+fn named_tools(tool: &Value) -> Vec<RemoteToolInfo> {
+    let mut named: Vec<RemoteToolInfo> = Vec::new();
+    for entry in tool
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        if named.len() >= MAX_NAMED_TOOLS || named.iter().any(|t| t.name == name) {
+            continue;
+        }
+        let description = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        named.push(RemoteToolInfo {
+            name: name.to_owned(),
+            description: description.to_owned(),
+        });
+    }
+    named
 }
 
 fn valid_toolkit_ref(value: &str) -> bool {
@@ -439,8 +513,86 @@ mod tests {
             admit(&nested, &[]).unwrap_err().code,
             "nested_agents_unsupported"
         );
+        let old_platform = resolved(json!({
+            "llm_settings": {"model_name": "m"},
+            "tools": [{"kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                       "server_name": "mcp_elitea_internal_applications"}]
+        }));
+        assert_eq!(
+            admit(&old_platform, &[]).unwrap_err().code,
+            "platform_mcp_unsupported"
+        );
         let no_model = resolved(json!({"tools": []}));
         assert_eq!(admit(&no_model, &[]).unwrap_err().code, "model_unresolved");
+    }
+
+    #[test]
+    fn a_platform_mcp_server_with_a_ref_is_one_generic_remote_tool() {
+        let admitted = admit(
+            &resolved(json!({
+                "llm_settings": {"model_name": "m"},
+                "tools": [{
+                    "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                    "server_name": "mcp_elitea_internal_applications",
+                    "name": "Elitea Applications", "toolkit_name": "Elitea Applications",
+                    "selected_tools": [], "all_tools": true,
+                    "toolkit_ref": {"toolkit_id": 0, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
+                }]
+            })),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(admitted.remote_tools.len(), 1);
+        let spec = &admitted.remote_tools[0];
+        assert_eq!(spec.toolkit_id, 0);
+        assert_eq!(spec.tool_name, None);
+        assert_eq!(spec.exposed_name, "Elitea_Applications_call");
+    }
+
+    /// A platform server names its tools (client contract 1.16): the
+    /// generic tool carries them; a server whose guardrails blocked some
+    /// lists the rest, one tool each, with its own description.
+    #[test]
+    fn a_platform_mcp_servers_tools_reach_the_model() {
+        let server = |all_tools: bool, selected: Value| {
+            resolved(json!({
+                "llm_settings": {"model_name": "m"},
+                "tools": [{
+                    "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                    "server_name": "mcp_elitea_internal_applications", "toolkit_name": "Elitea Applications",
+                    "selected_tools": selected, "all_tools": all_tools,
+                    "tools": [
+                        {"name": "get_elitea_core_applications", "description": "List the project's agents."},
+                        {"name": "post_elitea_core_applications", "description": ""},
+                        {"name": "get_elitea_core_applications", "description": "a duplicate"},
+                        {"description": "no name"}
+                    ],
+                    "toolkit_ref": {"toolkit_id": 0, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
+                }]
+            }))
+        };
+        let generic = admit(&server(true, json!([])), &[]).unwrap();
+        let spec = &generic.remote_tools[0];
+        assert_eq!(spec.tool_name, None);
+        let names: Vec<&str> = spec.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "get_elitea_core_applications",
+                "post_elitea_core_applications"
+            ]
+        );
+        assert_eq!(spec.tools[0].description, "List the project's agents.");
+
+        let listed = admit(&server(false, json!(["get_elitea_core_applications"])), &[]).unwrap();
+        assert_eq!(listed.remote_tools.len(), 1);
+        let spec = &listed.remote_tools[0];
+        assert_eq!(
+            spec.tool_name.as_deref(),
+            Some("get_elitea_core_applications")
+        );
+        assert_eq!(spec.description, "List the project's agents.");
+        assert!(spec.tools.is_empty());
     }
 
     #[test]
@@ -451,8 +603,10 @@ mod tests {
                 toolkit_id: 1,
                 toolkit_ref: String::new(),
                 toolkit_name: "read".into(),
+                toolkit_type: String::new(),
                 description: String::new(),
                 tool_name: Some("file".into()),
+                tools: Vec::new(),
             };
             2
         ];

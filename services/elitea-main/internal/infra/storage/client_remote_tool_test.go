@@ -255,3 +255,59 @@ func TestFrozenRunModelKeepsOnlyTheRunsModelSettings(t *testing.T) {
 	require.Equal(t, "m", model)
 	require.Nil(t, settings)
 }
+
+func platformToolRequest(toolkitType string, mutate func(*RemoteToolAuthorization)) RemoteToolAuthorization {
+	return clientRemoteToolRequest(func(r *RemoteToolAuthorization) {
+		r.ToolkitID, r.ToolName = 0, "get_elitea_core_applications"
+		r.ToolkitRef = ClientToolkitRef(ClientVersionIdentity{ProjectID: 90106, ApplicationID: 1, VersionID: 2}, 0, toolkitType)
+		if mutate != nil {
+			mutate(r)
+		}
+	})
+}
+
+// A platform MCP server (toolkit id 0) is authorized from the frozen version
+// exactly as a saved toolkit: the reference must name one builder of THIS
+// version, the version must select it, and the guardrails apply (issue 1231).
+func TestAuthorizeRemoteToolPlatformMCP(t *testing.T) {
+	t.Parallel()
+	service := clientRemoteToolService(t, guardrails.Policy{})
+	grant, err := service.AuthorizeRemoteTool(t.Context(), platformToolRequest("mcp_elitea_internal_applications", nil))
+	require.NoError(t, err)
+	require.True(t, grant.PlatformMCP)
+	require.Equal(t, "mcp_elitea_internal_applications", grant.ToolkitType)
+	require.Equal(t, "Elitea Applications", grant.ToolkitName)
+	require.Empty(t, grant.LLMModel, "no worker runs a platform tool, so no model is granted")
+
+	// Another version's reference, or one for a type that is no builder.
+	_, err = service.AuthorizeRemoteTool(t.Context(), platformToolRequest("mcp_elitea_internal_applications", func(r *RemoteToolAuthorization) {
+		r.ToolkitRef = ClientToolkitRef(ClientVersionIdentity{ProjectID: 90106, ApplicationID: 3, VersionID: 4}, 0, "mcp_elitea_internal_applications")
+	}))
+	require.ErrorIs(t, err, ErrRemoteToolkitRefMismatch)
+	_, err = service.AuthorizeRemoteTool(t.Context(), platformToolRequest("github", nil))
+	require.ErrorIs(t, err, ErrRemoteToolkitRefMismatch)
+	// A saved toolkit's reference under toolkit id 0.
+	_, err = service.AuthorizeRemoteTool(t.Context(), platformToolRequest("", func(r *RemoteToolAuthorization) {
+		r.ToolkitRef = ClientToolkitRef(ClientVersionIdentity{ProjectID: 90106, ApplicationID: 1, VersionID: 2}, 7, "github")
+	}))
+	require.ErrorIs(t, err, ErrRemoteToolkitRefMismatch)
+
+	// The child version selects no internal MCP: its builder reference is
+	// valid for it, and still not in the agent.
+	_, err = service.AuthorizeRemoteTool(t.Context(), platformToolRequest("", func(r *RemoteToolAuthorization) {
+		r.ApplicationID, r.VersionID = 3, 4
+		r.ToolkitRef = ClientToolkitRef(ClientVersionIdentity{ProjectID: 90106, ApplicationID: 3, VersionID: 4}, 0, "mcp_elitea_internal_applications")
+	}))
+	require.ErrorIs(t, err, ErrRemoteToolNotInAgent)
+
+	for name, policy := range map[string]guardrails.Policy{
+		"blocked builder": guardrails.NewPolicy(guardrails.PolicyInput{BlockedToolkits: []string{"mcp_elitea_internal_applications"}}),
+		"blocked mcp":     guardrails.NewPolicy(guardrails.PolicyInput{BlockedToolkits: []string{"mcp"}}),
+		"blocked tool": guardrails.NewPolicy(guardrails.PolicyInput{BlockedTools: map[string][]string{
+			"mcp_elitea_internal_applications": {"get_elitea_core_applications"},
+		}}),
+	} {
+		_, err := clientRemoteToolService(t, policy).AuthorizeRemoteTool(t.Context(), platformToolRequest("mcp_elitea_internal_applications", nil))
+		require.ErrorIs(t, err, ErrRemoteToolBlocked, name)
+	}
+}

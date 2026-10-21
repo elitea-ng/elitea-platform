@@ -1050,7 +1050,9 @@ main:
     # elitea.events.project.<id>.presence, which elitea-main publishes in its
     # own NATS account, and the gateway's budget.soft_alert on
     # gateway.events.project.<id>.events, imported from the gateway's account.
-    # Plus canvas presence's JetStream KV bucket ELITEA_CANVAS_PRESENCE. The
+    # Plus two JetStream KV buckets: canvas presence's ELITEA_CANVAS_PRESENCE
+    # and ELITEA_PLATFORM_MCP_REPLAY, the cross-replica Idempotency-Key store
+    # of platform MCP tool calls (without this NATS those calls answer 501). The
     # server needs JetStream. Domain events (conversation.created, …) do NOT
     # travel here — they go to webhooks only.
     #

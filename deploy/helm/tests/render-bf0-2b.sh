@@ -97,6 +97,7 @@ grep -q  'ensure_stream GATEWAY_RATELIMIT file'     "$BS" && ok "creates the GAT
 grep -q  'ensure_stream GATEWAY_BUDGET_DELTAS file' "$BS" && ok "creates the GATEWAY_BUDGET_DELTAS stream"       || bad "GATEWAY_BUDGET_DELTAS stream"
 grep -q  'ensure_kv GATEWAY_ALERT_COOLDOWN'         "$BS" && ok "creates the GATEWAY_ALERT_COOLDOWN KV"         || bad "GATEWAY_ALERT_COOLDOWN KV"
 grep -q  'ensure_kv ELITEA_CANVAS_PRESENCE'         "$BS" && ok "creates the ELITEA_CANVAS_PRESENCE KV"         || bad "ELITEA_CANVAS_PRESENCE KV"
+grep -q  'ensure_kv ELITEA_PLATFORM_MCP_REPLAY'     "$BS" && ok "creates the ELITEA_PLATFORM_MCP_REPLAY KV"     || bad "ELITEA_PLATFORM_MCP_REPLAY KV"
 [ "$(grep -cE -- '^ +--allow-counter \\$' "$BS")" -eq 2 ]       && ok "both counter streams are AllowMsgCounter"      || bad "counter streams must set --allow-counter"
 grep -q  'gateway.budget.delta'             "$BS" && ok "stream subject gateway.budget.delta" || bad "stream subject"
 grep -q  -- '--dupe-window "${DELTAS_DUPE_WINDOW}"' "$BS" && ok "sets the deltas duplicate_window" || bad "duplicate_window"

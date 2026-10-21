@@ -42,8 +42,12 @@ describe('the activity feed', () => {
     emit({ ...at(3), kind: 'tool_result', payload: { call_id: 'c', ok: true, summary: '', truncated: false } });
     emit({ ...at(4), kind: 'text_delta', payload: { text: 'hi' } });
     expect(buildActivities(facts(store))[0]?.kind).toBe('approval');
-    // Only the answer (approval_respond) closes it.
+    // Only the answer (approval_respond), or the host closing it at its wait, closes it.
     store.getState().answerApproval('r1');
+    expect(buildActivities(facts(store))[0]?.kind).toBe('turn');
+    emit({ ...at(5), kind: 'approval_request', payload: { request_id: 'r2', tool: 'create_issue', title: 'Jira needs your sign-in', detail: '', reason: '', can_remember: false } });
+    expect(buildActivities(facts(store))[0]?.kind).toBe('approval');
+    emit({ ...at(6), kind: 'approval_closed', payload: { request_id: 'r2', reason: 'timeout' } });
     expect(buildActivities(facts(store))[0]?.kind).toBe('turn');
   });
 

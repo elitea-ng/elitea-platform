@@ -850,6 +850,27 @@ export const getExecuteRemoteToolkitToolUrl = (
  * the worker refuses (the Rust worker runs only read-only, non-sensitive
  * tools in this path) answers `reason: worker_refused`. A deployment
  * with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+ *
+ * PLATFORM MCP SERVERS (client contract 1.16). `toolkit_id` 0 with a
+ * `platform_mcp` tool's `toolkit_ref` runs one tool of that internal
+ * builder (`mcp_elitea_internal_*`). The same checks apply: the ref must
+ * name a server of this version (`toolkit_ref_mismatch`), the frozen
+ * version must select it (`tool_not_in_agent`), the guardrails' blocks
+ * (`tool_blocked`), the sensitive-tool confirmation, the rate and the
+ * audit. Main runs it in process through the dispatch its internal MCP
+ * endpoint serves a cloud turn, AS THE CALLER: each operation re-checks
+ * its own permission (an operation's refusal is 200 `ok: false`,
+ * `status: tool_error`). No worker runs, so there is no `task_id`;
+ * `mcp_authorization_reference` is refused (400); an unknown tool
+ * answers 422 `reason: unknown_tool` naming the server's tools, and MCP
+ * exposure switched off answers 422 `reason: unsupported_toolkit`. A
+ * retry with the same Idempotency-Key and body answers the first call's
+ * result on any server replica (claimed in a shared JetStream KV store
+ * before the tool runs and kept 15 minutes; a retry that finds it still
+ * running waits up to 10 s, then answers 409
+ * `remote_toolkit_in_progress`). Without that store the call never
+ * runs (503 `remote_toolkit_unavailable_now`; 501
+ * `remote_toolkit_unavailable` where the server started without it).
  * @summary Run one tool of one saved toolkit on a cloud worker
  */
 export const executeRemoteToolkitTool = async (

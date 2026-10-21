@@ -3774,7 +3774,10 @@ export const getResolveApplicationVersionUrl = (
  * run its tools with executeRemoteToolkitTool. `application`: a nested
  * agent; resolve it with this operation and its
  * `application_id`/`application_version_id`. `platform_mcp`: an internal
- * platform MCP server the version selects (`server_name`). No credential,
+ * platform MCP server the version selects (`server_name`); from client
+ * contract 1.16 it also carries `selected_tools`/`all_tools` and a
+ * `toolkit_ref` whose `toolkit_id` is 0, so its tools run through
+ * executeRemoteToolkitTool too (an older server sends no ref). No credential,
  * vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
  * the document; a secret reference outside the tools reads
  * `[secret withheld]`, and `withheld_secrets` names each such string by

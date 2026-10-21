@@ -564,6 +564,7 @@ export * from "./resolveApplicationVersionHeaders.zod";
 export * from "./resolvedApplicationTool.zod";
 export * from "./resolvedApplicationVersion.zod";
 export * from "./resolvedApplicationVersionDetails.zod";
+export * from "./resolvedPlatformTool.zod";
 export * from "./resolvedToolkitRef.zod";
 export * from "./revalidateConfiguration200.zod";
 export * from "./revokeNativeDeviceHeaders.zod";

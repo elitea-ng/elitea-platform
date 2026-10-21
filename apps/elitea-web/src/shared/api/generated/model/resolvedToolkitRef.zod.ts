@@ -45,7 +45,11 @@ export const resolvedToolkitRefRefRegExp = new RegExp("^tkr1_[0-9a-f]{32}$");
 
 export const ResolvedToolkitRef = zod
   .object({
-    toolkit_id: zod.int(),
+    toolkit_id: zod
+      .int()
+      .describe(
+        "The saved toolkit, or 0 for a `platform_mcp` server (client contract 1.16), whose `ref` is derived with the server's type.",
+      ),
     project_id: zod.int(),
     ref: zod.string().regex(resolvedToolkitRefRefRegExp),
   })

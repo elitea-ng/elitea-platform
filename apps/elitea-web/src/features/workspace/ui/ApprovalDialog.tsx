@@ -9,6 +9,8 @@
  * The `continue` kind (the run used its steps: go on?) is not a modal: it is
  * a compact card the page puts in the transcript, under what the agent did.
  * It is asked every time and never remembered, so it offers no "always".
+ * The `mcp_authorization` kind (an MCP server needs the person's sign-in) is
+ * such a card too: McpAuthorizationCard.
  */
 import { useEffect, useRef } from 'react';
 
@@ -25,6 +27,8 @@ import { t } from '@/shared/i18n';
 import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/workspaceIpc';
 
 import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
+
+import { McpAuthorizationCard } from './McpAuthorizationCard';
 
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */
@@ -88,6 +92,26 @@ function ContinueCard({ request, respond }: { request: ApprovalRequestPayload; r
   );
 }
 
+/** The command and the paths a request names, each shown only when present. */
+function ApprovalTargets({ command, paths }: { command?: string[] | undefined; paths?: string[] | undefined }): React.JSX.Element {
+  return (
+    <>
+      {command !== undefined && command.length > 0 && (
+        <Box component="pre" data-testid="approval-command" aria-label={t('workspace.approval.command', 'Command')} sx={monoSx}>
+          {command.map(quoteArg).join(' ')}
+        </Box>
+      )}
+      {paths !== undefined && paths.length > 0 && (
+        <Box component="ul" data-testid="approval-paths" aria-label={t('workspace.approval.paths', 'Paths')} sx={(theme: Theme) => ({ ...monoSx(theme), listStyle: 'none' })}>
+          {paths.map((path) => (
+            <li key={path}>{path}</li>
+          ))}
+        </Box>
+      )}
+    </>
+  );
+}
+
 export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogProps): React.JSX.Element | null {
   const denyRef = useRef<HTMLButtonElement>(null);
   const requestId = request?.request_id;
@@ -98,6 +122,7 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
   if (request === undefined) return null;
   const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
   if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
+  if (request.kind === 'mcp_authorization') return <McpAuthorizationCard request={request} respond={respond} />;
   const decidedBy = ruleSourceLabel(request.source, request.rule);
   return (
     <Dialog
@@ -117,18 +142,7 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
         <Typography id="workspace-approval-detail" variant="bodyMedium">
           {request.detail}
         </Typography>
-        {request.command !== undefined && request.command.length > 0 && (
-          <Box component="pre" data-testid="approval-command" aria-label={t('workspace.approval.command', 'Command')} sx={monoSx}>
-            {request.command.map(quoteArg).join(' ')}
-          </Box>
-        )}
-        {request.paths !== undefined && request.paths.length > 0 && (
-          <Box component="ul" data-testid="approval-paths" aria-label={t('workspace.approval.paths', 'Paths')} sx={(theme: Theme) => ({ ...monoSx(theme), listStyle: 'none' })}>
-            {request.paths.map((path) => (
-              <li key={path}>{path}</li>
-            ))}
-          </Box>
-        )}
+        <ApprovalTargets command={request.command} paths={request.paths} />
         <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
           {t('workspace.approval.reason', 'Why: {{reason}}', { reason: request.justification ?? request.reason })}
         </Typography>

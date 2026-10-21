@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.15",
+  "client_contract": "1.16",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -7750,6 +7750,24 @@
                               }
                             }
                           },
+                          "tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "description",
+                                "name"
+                              ],
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
                           "type": {
                             "type": "string"
                           }
@@ -15349,7 +15367,7 @@
           "required": true,
           "schema": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 0
           }
         }
       },

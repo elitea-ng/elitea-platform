@@ -51,6 +51,10 @@ function decisionLabel(decision: ApprovalDecision): string {
       return t('workspace.panel.allowedAlways', 'Always allowed');
     case 'deny':
       return t('workspace.panel.denied', 'Denied');
+    case 'continue':
+      return t('workspace.panel.continued', 'Continued');
+    case 'cancel':
+      return t('workspace.panel.cancelled', 'Cancelled');
   }
 }
 

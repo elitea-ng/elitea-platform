@@ -183,6 +183,8 @@ export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
       return turn;
     case 'approval_request':
       return withApproval(turn, event.payload);
+    case 'approval_closed':
+      return { ...turn, approvals: turn.approvals.filter((a) => a.requestId !== event.payload.request_id) };
     case 'error':
       return ended(turn, 'error');
     case 'done':

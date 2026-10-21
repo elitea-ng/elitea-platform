@@ -97,6 +97,13 @@ impl Tracker {
                     }),
                 }
             }
+            // Closed at its wait without an answer: it no longer waits.
+            "approval_closed" => Observed {
+                badge_changed: event.payload["request_id"]
+                    .as_str()
+                    .is_some_and(|id| self.answered(id)),
+                notice: None,
+            },
             "error" => {
                 self.remember(turn, Outcome::Failed);
                 Observed::default()
@@ -365,6 +372,26 @@ mod tests {
             tracker.pending(),
             0,
             "a sign-out cancels the turn, whose done clears it"
+        );
+    }
+
+    /// A question the host closed at its wait (`approval_closed`) no longer
+    /// counts.
+    #[test]
+    fn a_closed_question_stops_counting() {
+        let mut tracker = Tracker::default();
+        tracker.observe(&approval("t1", "r1"));
+        let closed = tracker.observe(&event(
+            "t1",
+            "approval_closed",
+            json!({"request_id": "r1", "reason": "timeout"}),
+        ));
+        assert!(closed.badge_changed);
+        assert_eq!(tracker.pending(), 0);
+        assert!(
+            !tracker
+                .observe(&event("t1", "approval_closed", json!({"request_id": "r1"})))
+                .badge_changed
         );
     }
 

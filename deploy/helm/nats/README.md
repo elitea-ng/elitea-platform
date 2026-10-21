@@ -136,7 +136,7 @@ SCHEDULER stores nothing.
 
 | Account | Identities | Assets |
 |---|---|---|
-| `MAIN` | `elitea-main`, `elitea-nats-bootstrap-main` | `ELITEA_CANVAS_PRESENCE` (KV) |
+| `MAIN` | `elitea-main`, `elitea-nats-bootstrap-main` | `ELITEA_CANVAS_PRESENCE`, `ELITEA_PLATFORM_MCP_REPLAY` (KV) |
 | `GATEWAY` | `elitea-llm-gateway`, `elitea-nats-bootstrap-gateway` | `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `GATEWAY_BUDGET_DELTAS`, `GATEWAY_ALERT_COOLDOWN` (KV) |
 | `SCHEDULER` | `elitea-scheduler` | none — no JetStream, no bootstrap |
 | `RUNTIME` | `elitea-main-runtime`, `elitea-nats-bootstrap-runtime` | the command bus: `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` streams, their worker durables, the replay wake-up |
@@ -249,8 +249,8 @@ subject), and the gateway holds no consumer grant at all.
 
 | Account | Identity | May publish | May subscribe |
 |---|---|---|---|
-| MAIN | `elitea-main` | `elitea.events.project.*.presence` (its presence family); `elitea.events.project.*.workspace` (its workspace handoff family); `elitea.events.project.*.conversations` (its conversation activity family); `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: `gateway.>` (it never speaks for the gateway), stream admin | `elitea.events.project.*.presence`, `elitea.events.project.*.workspace`, `elitea.events.project.*.conversations`, `gateway.events.project.*.events` (imported), `_INBOX_elitea-main.>` |
-| MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_ELITEA_CANVAS_PRESENCE` | `_INBOX_elitea-nats-bootstrap-main.>` |
+| MAIN | `elitea-main` | `elitea.events.project.*.presence` (its presence family); `elitea.events.project.*.workspace` (its workspace handoff family); `elitea.events.project.*.conversations` (its conversation activity family); `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`; `$KV.ELITEA_PLATFORM_MCP_REPLAY.>`, `$JS.API.STREAM.INFO.KV_ELITEA_PLATFORM_MCP_REPLAY`, `$JS.API.DIRECT.GET.KV_ELITEA_PLATFORM_MCP_REPLAY.>` (the platform MCP replay: claim, answer, release, read back; no consumer). Denied: `gateway.>` (it never speaks for the gateway), stream admin | `elitea.events.project.*.presence`, `elitea.events.project.*.workspace`, `elitea.events.project.*.conversations`, `gateway.events.project.*.events` (imported), `_INBOX_elitea-main.>` |
+| MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_{ELITEA_CANVAS_PRESENCE,ELITEA_PLATFORM_MCP_REPLAY}` | `_INBOX_elitea-nats-bootstrap-main.>` |
 | GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
 | GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.{CREATE,INFO}` on `GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
 | SCHEDULER | `elitea-scheduler` | `JS.GATEWAY.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — the three imported services, nothing else; it binds to the consumer the GATEWAY bootstrap creates | `_INBOX_elitea-scheduler.>` |
@@ -321,6 +321,7 @@ subject to NetworkPolicy.
 | `GATEWAY_BUDGET_DELTAS` | GATEWAY | stream (72h / 1 GiB / 5M, 12m dedup) | write-behind deltas, drained by `budget-writeback` |
 | `GATEWAY_ALERT_COOLDOWN` | GATEWAY | KV (TTL 4h) | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
 | `ELITEA_CANVAS_PRESENCE` | MAIN | KV (TTL 2m, history 1) | canvas presence rosters |
+| `ELITEA_PLATFORM_MCP_REPLAY` | MAIN | KV (TTL 15m, history 1, 256 KiB values, 512 MiB) | platform MCP call claims and answers: a retried `executeRemoteToolkitTool` call (toolkit id 0) with the same Idempotency-Key replays on any replica instead of running again |
 | `GATEWAY_BUDGET_DELTAS` / `budget-writeback` | GATEWAY | durable pull consumer (explicit ack, AckWait 30s, MaxDeliver -1 and MaxAckPending 40000; the scheduler defers with a 5s-to-60s backoff, and a delayed redelivery keeps its pending slot for the delay) | the scheduler's write-back drain; it binds only |
 | `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` | RUNTIME | WorkQueue streams (discard new + per subject, 1 msg/subject, ≤1024 msgs, 64 MiB, 64 KiB msgs, MaxAge 3h/26h/26h, 2m dedup, allow_direct, deny delete/purge) | the runtime command bus, one stream per route |
 | `elitea-{configuration,agent,index}-worker-v1` | RUNTIME | durable pull consumers (AckWait 60s, MaxDeliver -1, MaxWaiting 512) | the workers' shared consumer, one per stream; they bind only |
@@ -332,8 +333,12 @@ command bus; it applies to every account's streams on the server).
 
 The services **bind** and verify what their code depends on (counter flag,
 direct get, dedup windows, TTLs); they create nothing, and a missing asset is a
-boot error naming the bootstrap Job. Re-running the bootstrap reconciles drift
-(`stream edit` / `kv edit`).
+boot error naming the bootstrap Job. The one exception is
+`ELITEA_PLATFORM_MCP_REPLAY`: only platform MCP tools of desktop local turns
+need it, so when it is missing or misconfigured elitea-main logs an error
+naming the Job and starts without it (those calls then answer 501 and never
+run); restart elitea-main after the Job has run. Re-running the bootstrap
+reconciles drift (`stream edit` / `kv edit`).
 
 **`max_file_store` must hold the reservations**: `GATEWAY_BUDGET_DELTAS`
 reserves its 1 GiB `MaxBytes` up front, so a smaller JetStream file store
@@ -401,7 +406,7 @@ $N stream ls          # GATEWAY_BUDGET, GATEWAY_RATELIMIT, GATEWAY_BUDGET_DELTAS
 ```
 
 (`elitea-nats-bootstrap-main-nats-client-tls` the same way shows MAIN's
-`KV_ELITEA_CANVAS_PRESENCE`, and nothing of GATEWAY's.)
+`KV_ELITEA_CANVAS_PRESENCE` and `KV_ELITEA_PLATFORM_MCP_REPLAY`, and nothing of GATEWAY's.)
 
 Who is connected, as whom. The server image is `scratch` (no shell, no
 `wget`), and 8222 is reachable in the cluster only from the KEDA operator,

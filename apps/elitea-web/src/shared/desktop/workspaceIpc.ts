@@ -58,7 +58,8 @@ export interface TurnStarted {
   execution_id: string;
 }
 
-export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny';
+/** `continue` / `cancel` answer an `mcp_authorization` request; the rest answer a tool's approval (`continue` takes `allow_once` too). */
+export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'continue' | 'cancel';
 type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface ChangedFile {
@@ -95,10 +96,22 @@ export type TurnPhase = 'resolving' | 'starting' | 'running' | 'committing' | 'd
 
 export interface ApprovalRequestPayload {
   request_id: string;
-  /** `continue`: the run used its steps; asked every time, shown as a card in the transcript. Absent for a tool's approval. */
-  kind?: 'continue';
+  /**
+   * `continue`: the run used its steps; asked every time, shown as a card in the transcript.
+   * `mcp_authorization`: a remote tool's MCP server needs the person's sign-in in the browser, then `continue` (or `cancel`).
+   * Absent for a tool's approval.
+   */
+  kind?: 'continue' | 'mcp_authorization';
   /** For `continue`: the steps each run takes (and the next one would). */
   steps?: number;
+  /** For `mcp_authorization`: the tool call it holds up; the card goes when that call's `tool_result` arrives. */
+  call_id?: string;
+  /** For `mcp_authorization`: the toolkit's name. */
+  toolkit?: string;
+  /** For `mcp_authorization`: the MCP server's address, to show. */
+  server_url?: string;
+  /** For `mcp_authorization`: the web app page to sign in on (`/app/<project>/mcps/all/<toolkit>`), relative to the deployment; absent when there is none. */
+  authorize_path?: string;
   tool: string;
   title: string;
   detail: string;
@@ -159,6 +172,8 @@ export type AgentEvent =
   /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced. Absent when the gateway reports no usage. */
   | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number } })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
+  /** The host closed an open request nobody answered within its wait (an MCP sign-in): it no longer waits. */
+  | (EventBase & { kind: 'approval_closed'; payload: { request_id: string; reason: string } })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */

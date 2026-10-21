@@ -133,7 +133,15 @@ function onToolCall(view: TurnView, event: EventOf<'tool_call'>): TurnView {
   return { ...view, items: [...view.items, { type: 'tool', key: `c${callId}`, callId, tool, argsSummary, remote }] };
 }
 
+/** A sign-in card belongs to its tool call: once the call ends (its wait timed out, say), the card goes. */
 function onToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
+  const next = withToolResult(view, event);
+  const callId = event.payload.call_id;
+  if (!next.approvals.some((a) => a.call_id === callId)) return next;
+  return { ...next, approvals: next.approvals.filter((a) => a.call_id !== callId) };
+}
+
+function withToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
   const { call_id: callId, ok, summary, truncated } = event.payload;
   const result = { ok, summary, truncated };
   const index = view.items.findIndex((item) => item.type === 'tool' && item.callId === callId);
@@ -168,6 +176,8 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
       return onToolResult(view, event);
     case 'approval_request':
       return onApprovalRequest(view, event, resolved);
+    case 'approval_closed':
+      return { ...view, approvals: view.approvals.filter((a) => a.request_id !== event.payload.request_id) };
     case 'usage':
       // Not part of the transcript: the activity island shows a turn's tokens.
       return view;

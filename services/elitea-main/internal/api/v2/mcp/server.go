@@ -290,35 +290,8 @@ func (h *Handler) callToolWithObservers(r *http.Request, schema string, s scope,
 		// is not a plain positive integer before this handler was reached.
 		return newError(message.ID, codeInvalidParams, "invalid project id")
 	}
-	if target.internalDiscoveryOperation != "" {
-		return newResult(message.ID, h.callInternalDiscoveryTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalDraftOperation != "" {
-		return newResult(message.ID, h.callInternalDraftTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalApplicationOperation != "" {
-		return newResult(message.ID, h.callInternalApplicationTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalSkillOperation != "" {
-		return newResult(message.ID, h.callInternalSkillTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalToolkitOperation != "" {
-		return newResult(message.ID, h.callInternalToolkitTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalConfigurationOperation != "" {
-		return newResult(message.ID, h.callInternalConfigurationTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalChatOperation != "" {
-		return newResult(message.ID, h.callInternalChatTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalNotificationOperation != "" {
-		return newResult(message.ID, h.callInternalNotificationTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalProjectContextOperation != "" {
-		return newResult(message.ID, h.callInternalProjectContextTool(r, projectID, target, params.Arguments))
-	}
-	if target.internalSecretOperation != "" {
-		return newResult(message.ID, h.callInternalSecretTool(r, projectID, target, params.Arguments))
+	if result, internal := h.callInternalTarget(r, projectID, target, params.Arguments); internal {
+		return newResult(message.ID, result)
 	}
 
 	if h.start == nil && h.toolkitExecute == nil && h.toolRuns == nil {
@@ -364,6 +337,38 @@ func (h *Handler) callToolWithObservers(r *http.Request, schema string, s scope,
 	}
 
 	return newResult(message.ID, h.runAgentToolWithObserver(r.Context(), schema, projectID, actorUserID, target, task, observer))
+}
+
+// callInternalTarget runs target when it is an operation of one of the fixed
+// internal builder categories, and reports whether it was one. It is the one
+// dispatch both the MCP endpoint and CallPlatformTool (the desktop's
+// executeRemoteToolkitTool, in process) go through, so the two cannot disagree
+// about which executor, permission or project clamp an operation gets.
+func (h *Handler) callInternalTarget(r *http.Request, projectID int64, target Tool, arguments map[string]any) (map[string]any, bool) {
+	switch {
+	case target.internalDiscoveryOperation != "":
+		return h.callInternalDiscoveryTool(r, projectID, target, arguments), true
+	case target.internalDraftOperation != "":
+		return h.callInternalDraftTool(r, projectID, target, arguments), true
+	case target.internalApplicationOperation != "":
+		return h.callInternalApplicationTool(r, projectID, target, arguments), true
+	case target.internalSkillOperation != "":
+		return h.callInternalSkillTool(r, projectID, target, arguments), true
+	case target.internalToolkitOperation != "":
+		return h.callInternalToolkitTool(r, projectID, target, arguments), true
+	case target.internalConfigurationOperation != "":
+		return h.callInternalConfigurationTool(r, projectID, target, arguments), true
+	case target.internalChatOperation != "":
+		return h.callInternalChatTool(r, projectID, target, arguments), true
+	case target.internalNotificationOperation != "":
+		return h.callInternalNotificationTool(r, projectID, target, arguments), true
+	case target.internalProjectContextOperation != "":
+		return h.callInternalProjectContextTool(r, projectID, target, arguments), true
+	case target.internalSecretOperation != "":
+		return h.callInternalSecretTool(r, projectID, target, arguments), true
+	default:
+		return nil, false
+	}
 }
 
 func (h *Handler) callInternalApplicationTool(

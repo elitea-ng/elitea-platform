@@ -67,7 +67,8 @@ use super::mentions;
 use super::model::GatewayTransport;
 use super::recorder::{self, FileChange, Recorder, ToolCalls};
 use super::remote_tools::{
-    RemoteContext, RemoteToolProvider, RetryPolicy, TOOLSET_NAME as REMOTE_TOOLSET,
+    MCP_AUTHORIZATION_WAIT, RemoteContext, RemoteToolProvider, RetryPolicy,
+    TOOLSET_NAME as REMOTE_TOOLSET,
 };
 use super::session::{AGENT_AUTHOR, Refusal, SessionError, SessionPlan};
 use super::skills::{self, InvokedSkill};
@@ -2226,6 +2227,7 @@ impl AgentHost {
             version_id: request.version_id,
             prompt: workspace.prompt.clone(),
             retry: self.deps.retry,
+            authorization_wait: MCP_AUTHORIZATION_WAIT,
         });
         let remote_specs = if request.plan_mode {
             Vec::new()

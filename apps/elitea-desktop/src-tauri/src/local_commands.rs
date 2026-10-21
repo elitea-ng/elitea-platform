@@ -745,7 +745,7 @@ pub fn approval_respond(
     let decision = UiDecision::parse(&decision).ok_or_else(|| {
         IpcError::new(
             "invalid_request",
-            "decision must be allow_once, allow_always or deny",
+            "decision must be allow_once, allow_always, deny, continue or cancel",
         )
     })?;
     if state.agents.respond(&request_id, decision) {
@@ -759,7 +759,7 @@ pub fn approval_respond(
     } else {
         Err(IpcError::new(
             "approval_closed",
-            "That question is no longer open (the turn ended or it was answered).",
+            "That question is no longer open (the turn ended, it was answered, or nobody answered it in time).",
         ))
     }
 }

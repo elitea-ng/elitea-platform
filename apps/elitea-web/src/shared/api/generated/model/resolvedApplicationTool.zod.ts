@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ResolvedPlatformTool } from "./resolvedPlatformTool.zod";
 import { ResolvedToolkitRef } from "./resolvedToolkitRef.zod";
 
 export const ResolvedApplicationTool = zod
@@ -62,18 +63,26 @@ export const ResolvedApplicationTool = zod
     server_name: zod
       .string()
       .optional()
-      .describe("A `platform_mcp` tool's server."),
+      .describe(
+        "A `platform_mcp` tool's server (its internal builder type, `mcp_elitea_internal_*`).",
+      ),
     selected_tools: zod
       .array(zod.string())
       .optional()
       .describe(
-        "A `remote_toolkit`'s tools the version may call, after the guardrails removed blocked ones. Read it with `all_tools`: an empty list means every tool only when `all_tools` is true.",
+        "A `remote_toolkit`'s (and, from client contract 1.16, a `platform_mcp`'s) tools the version may call, after the guardrails removed blocked ones. Read it with `all_tools`: an empty list means every tool only when `all_tools` is true.",
       ),
     all_tools: zod
       .boolean()
       .optional()
       .describe(
-        "A `remote_toolkit`'s: true when the author selected no tool, which means every tool of the toolkit (as in chat; the guardrails still block theirs). False with an empty `selected_tools` means the guardrails blocked every selected tool: the agent may call none. executeRemoteToolkitTool admits exactly this selection.",
+        "A `remote_toolkit`'s: true when the author selected no tool, which means every tool of the toolkit (as in chat; the guardrails still block theirs). False with an empty `selected_tools` means the guardrails blocked every selected tool: the agent may call none. executeRemoteToolkitTool admits exactly this selection. A `platform_mcp`'s (client contract 1.16) is true while the guardrails block none of the server's tools (a cloud turn's internal MCP has every tool of the server); once they block one, it is false and `selected_tools` lists the remaining tools.",
+      ),
+    tools: zod
+      .array(ResolvedPlatformTool)
+      .optional()
+      .describe(
+        "A `platform_mcp`'s tools the version may call, with their descriptions (at most 512 bytes each), as the server's internal MCP endpoint lists them (client contract 1.16); a blocked tool is never listed. Absent when the server cannot list them (no MCP server is composed).",
       ),
     toolkit_ref: ResolvedToolkitRef.optional(),
   })
