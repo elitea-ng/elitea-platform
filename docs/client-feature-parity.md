@@ -37,7 +37,7 @@ clients generated from it.
 | Rename, pin and delete chats | shipped | shipped | shipped | Mobile queues the actions offline. |
 | Archive and Archived chats (contract 1.10) | shipped | shipped | planned (#1352) | |
 | Fork a conversation (contract 1.11) | shipped | shipped | planned (#1351) | |
-| Activity status and read markers in chat lists (contract 1.12) | planned (#1350) | planned (#1350) | planned (#1350) | Web and desktop are on the branch `feat/conversation-activity`. |
+| Activity status and read markers in chat lists (contract 1.12) | shipped | shipped | planned (#1350) | Mobile regenerated its client for 1.12 (the list fields are typed); the glyphs, read markers and `conversation_activity` events are not wired yet. |
 | Notifications | shipped | shipped | shipped | |
 | Discover public agents | shipped | shipped | shipped | |
 | Workspace brand (ADR-0024 runtime branding) | shipped | shipped | shipped | The default mark and identity are shared: `@elitea/client-core/brand`. |

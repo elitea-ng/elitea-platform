@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.11
+ * client contract:    1.12
  * operations sha256:  5f445416957ab134d0467128cf1145c6b6e0cbde4945380f5baa586e53d58510
  */
 export interface paths {
@@ -2070,6 +2070,16 @@ export interface components {
             low_tier_default_model_project_id?: number | null;
             total: number;
         };
+        /** @description Client contract 1.12. The activity status of a conversation. A turn transition (a start, a pause, a finish, a failure or a cancel) re-delivers the list row in the `changes_since` delta; a streamed token does not. The project event stream (`conversation_activity` events) also sends each transition to the members who can see the conversation. */
+        ConversationActivity: {
+            /**
+             * Format: date-time
+             * @description When the conversation entered `state`, in UTC.
+             */
+            since: string;
+            /** @description `running` (a turn of the conversation is in flight), `needs_you` (the newest message waits for the user: a tool approval, an answer to a question, an authorization or other input) or `idle` (anything else). A client shows an unknown value as `idle`. */
+            state: string;
+        };
         /** @description Client contract 1.10. The member who archived the conversation. Present on a list row only when `is_archived` is true. `name` is the user's display name, or an empty string when the server cannot resolve one. */
         ConversationArchivedBy: {
             /**
@@ -2316,6 +2326,7 @@ export interface components {
         ConversationStarters: unknown[];
         /** @description One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field. */
         ConversationSummary: {
+            activity?: components["schemas"]["ConversationActivity"];
             /**
              * Format: date-time
              * @description Client contract 1.10. When the conversation was archived, in UTC. Present only when `is_archived` is true.
@@ -2335,6 +2346,11 @@ export interface components {
             is_archived: boolean;
             /** @description Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app's "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned. */
             is_pinned: boolean;
+            /**
+             * Format: date-time
+             * @description Client contract 1.12. The last write of any message of the conversation (a message, the start of a turn, or a change of its state), in UTC. The creation time when the conversation has no message.
+             */
+            last_activity_at?: string;
             message_groups_count: number;
             /** @description Carries `single_participant` (the entity this conversation was filtered by, when entity_name/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc). */
             meta?: {
@@ -2343,6 +2359,8 @@ export interface components {
             name: string;
             /** @description Client contract 1.11. The conversation's origin (`elitea` for a chat, `local_work` for a Local work thread). */
             source?: string;
+            /** @description Client contract 1.12. For the CALLER: an answer of the conversation (a message that no user participant wrote, that does not stream, including a pause for the user) changed after the caller's read marker (markConversationRead). A message of a user never makes the conversation unread. The value is personal: two members can see different values on the same row. A server before 1.12 omits the field, which means read. */
+            unread?: boolean;
             updated_at: string;
             /**
              * Format: uuid
