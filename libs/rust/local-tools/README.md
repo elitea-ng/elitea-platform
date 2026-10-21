@@ -30,6 +30,28 @@ local index (`read_file`, `read_document`, `list_tree`, `search_files`,
 `find_files` refuse or leave out what it covers, as for `path_deny`, wherever the
 workspace sits).
 
+## Finding and searching
+
+* `find_files` lists files by name: a glob (`src/**/*.rs`; a glob without
+  `/` matches the file name at any depth), newest first, or with
+  `fuzzy: true` a name fragment ranked by nucleo's path scorer
+  (`nucleo-matcher`, MPL-2.0, linked unmodified). Names only: nothing is
+  opened.
+* `search_files` searches text like `rg`: `output_mode` `content` (lines,
+  with `context` / `context_before` / `context_after` up to 20 lines,
+  each entry `{path, line, text, kind: match|context}`), `files` (paths)
+  or `count` (matches per file); `multiline` lets a pattern span lines,
+  `max_per_file` caps one file. The walk is parallel; the answer is sorted
+  (files in the serial walker's order, then lines), so it does not depend
+  on thread timing.
+* Both walk as `list_tree` does: `.gitignore` honoured (a glob filters
+  files, it does not override `.gitignore`), `.git`, `path_deny` and the
+  session's deny list pruned in the walker's `filter_entry`, never
+  filtered after, and symlinks never followed. `search_files` opens each
+  file through the workspace (`O_NOFOLLOW`). The desktop index's
+  `search_workspace` is a ranked search over the index; these are exact
+  name and text matches over the folder as it is now.
+
 ## What counts as destructive
 
 Every segment of a command is classified, including those inside `&&`,

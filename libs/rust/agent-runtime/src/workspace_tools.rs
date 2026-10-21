@@ -76,7 +76,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "search_files",
         read_only: true,
-        description: "Search text files in the workspace for a regular expression (or a literal string). Honours .gitignore.",
+        description: "Search the text inside workspace files for a regular expression (or a literal string), like rg: matching lines with optional context lines (output_mode content), only the matching paths (files), or matches per file (count). Honours .gitignore. To find files by name use find_files.",
         parameters: || {
             json!({
                 "type": "object",
@@ -86,7 +86,13 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                     "glob": { "type": "string", "description": "Only files matching this glob, e.g. *.rs" },
                     "fixed_strings": { "type": "boolean" },
                     "case_insensitive": { "type": "boolean" },
-                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "output_mode": { "type": "string", "enum": ["content", "files", "count"], "description": "content (default): matching lines; files: paths only; count: matches per file." },
+                    "context_before": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context_after": { "type": "integer", "minimum": 0, "maximum": 20 },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 20, "description": "Lines before and after (like -C)." },
+                    "multiline": { "type": "boolean", "description": "Let the pattern span lines (like rg -U)." },
+                    "max_per_file": { "type": "integer", "minimum": 1, "maximum": 1000 }
                 },
                 "required": ["pattern"]
             })

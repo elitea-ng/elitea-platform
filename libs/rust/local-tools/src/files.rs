@@ -5,9 +5,8 @@
 
 use std::path::Path;
 
-use grep_regex::RegexMatcherBuilder;
-use grep_searcher::sinks::UTF8;
-use grep_searcher::{BinaryDetection, SearcherBuilder};
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -405,6 +404,19 @@ pub(crate) fn apply_patch(
     Ok(json!({ "changed": changed }))
 }
 
+/// What `search_files` answers with.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OutputMode {
+    /// Matching lines (and context lines).
+    #[default]
+    Content,
+    /// The paths of matching files only.
+    Files,
+    /// Matches per file.
+    Count,
+}
+
 #[derive(Deserialize)]
 pub(crate) struct SearchArgs {
     pub pattern: String,
@@ -419,7 +431,29 @@ pub(crate) struct SearchArgs {
     pub case_insensitive: bool,
     #[serde(default)]
     pub max_results: Option<usize>,
+    #[serde(default)]
+    pub output_mode: OutputMode,
+    /// Lines before each match (`-B`).
+    #[serde(default)]
+    pub context_before: Option<usize>,
+    /// Lines after each match (`-A`).
+    #[serde(default)]
+    pub context_after: Option<usize>,
+    /// Lines before and after (`-C`); the two above win over it.
+    #[serde(default)]
+    pub context: Option<usize>,
+    /// Let the pattern span lines (`rg -U`).
+    #[serde(default)]
+    pub multiline: bool,
+    /// The most matches one file contributes (`-m`).
+    #[serde(default)]
+    pub max_per_file: Option<usize>,
 }
+
+/// The most context lines on either side of a match.
+const MAX_CONTEXT: usize = 20;
+/// Matches `search_files` answers by default.
+const DEFAULT_SEARCH_RESULTS: usize = 200;
 
 fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     let base = match path {
@@ -529,57 +563,343 @@ pub fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
     WsPath::from_relative(path.strip_prefix(workspace.root()).ok()?).ok()
 }
 
-/// `search_files`: a regex (or literal) over the workspace's text files,
-/// `.gitignore` honoured, denied paths skipped.
-pub(crate) fn search(workspace: &Workspace, args: Value) -> ToolResult<Value> {
-    let args: SearchArgs = parse(args)?;
-    let max = args.max_results.unwrap_or(200).clamp(1, 1000);
-    let matcher = RegexMatcherBuilder::new()
-        .case_insensitive(args.case_insensitive)
-        .fixed_strings(args.fixed_strings)
-        .build(&args.pattern)
-        .map_err(|error| ToolError::invalid(format!("bad pattern: {error}")))?;
-    let mut searcher = SearcherBuilder::new()
-        .line_number(true)
-        .binary_detection(BinaryDetection::quit(0))
-        .build();
-    let base = base_dir(workspace, args.path.as_deref())?;
-    let mut found = Vec::new();
-    let mut files = 0usize;
-    for entry in walker(workspace, &base, args.glob.as_deref(), None)?.flatten() {
-        if found.len() >= max {
+/// [`walker`] for many threads: the same pruning (`.git`, `path_deny`
+/// and the session's deny list in `filter_entry`, never filtered after),
+/// the same glob, symlinks never followed; entries arrive in no particular
+/// order, so a caller sorts what it collects.
+///
+/// # Errors
+///
+/// `glob` is not a glob.
+pub fn walker_parallel(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    depth: Option<usize>,
+) -> ToolResult<ignore::WalkParallel> {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    let mut builder = walk_builder(workspace, base, glob, depth)?;
+    builder.threads(threads);
+    Ok(builder.build_parallel())
+}
+
+/// One line a search shows.
+struct Hit {
+    line: u64,
+    text: String,
+    matched: bool,
+}
+
+/// One searched file: its matches, and the lines to show when they are kept.
+struct FileHits {
+    path: WsPath,
+    matches: u64,
+    hits: Vec<Hit>,
+}
+
+fn shown_line(bytes: &[u8]) -> String {
+    let line = String::from_utf8_lossy(bytes);
+    line.trim_end_matches(['\n', '\r'])
+        .chars()
+        .take(MAX_MATCH_LINE)
+        .collect()
+}
+
+/// A sink keeping one file's matches (each line of a multiline match) and
+/// context lines, in file order.
+struct Collect {
+    keep_lines: bool,
+    matches: u64,
+    hits: Vec<Hit>,
+}
+
+impl Sink for Collect {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _: &Searcher, found: &SinkMatch<'_>) -> Result<bool, std::io::Error> {
+        self.matches += 1;
+        if self.keep_lines {
+            let first = found.line_number().unwrap_or(0);
+            for (line, text) in (first..).zip(found.lines()) {
+                self.hits.push(Hit {
+                    line,
+                    text: shown_line(text),
+                    matched: true,
+                });
+            }
+        }
+        Ok(true)
+    }
+
+    fn context(&mut self, _: &Searcher, context: &SinkContext<'_>) -> Result<bool, std::io::Error> {
+        if self.keep_lines {
+            self.hits.push(Hit {
+                line: context.line_number().unwrap_or(0),
+                text: shown_line(context.bytes()),
+                matched: false,
+            });
+        }
+        Ok(true)
+    }
+}
+
+/// What one search runs with, shared by every walker thread.
+struct SearchPlan {
+    matcher: RegexMatcher,
+    /// Each thread builds its own searcher (a searcher is not `Sync`).
+    searcher: SearcherBuilder,
+    keep_lines: bool,
+    /// The walk stops once this many results are collected.
+    stop_after: u64,
+    mode: OutputMode,
+}
+
+impl SearchPlan {
+    fn new(args: &SearchArgs, max: usize) -> ToolResult<Self> {
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(args.case_insensitive)
+            .fixed_strings(args.fixed_strings)
+            .multi_line(args.multiline)
+            .build(&args.pattern)
+            .map_err(|error| ToolError::invalid(format!("bad pattern: {error}")))?;
+        let keep_lines = args.output_mode == OutputMode::Content;
+        let context = |side: Option<usize>| {
+            if keep_lines {
+                side.or(args.context).unwrap_or(0).min(MAX_CONTEXT)
+            } else {
+                0
+            }
+        };
+        let per_file = match args.output_mode {
+            OutputMode::Files => Some(1),
+            _ => args.max_per_file.map(|max| max.clamp(1, 1000) as u64),
+        };
+        let mut searcher = SearcherBuilder::new();
+        searcher
+            .line_number(true)
+            .binary_detection(BinaryDetection::quit(0))
+            .multi_line(args.multiline)
+            .before_context(context(args.context_before))
+            .after_context(context(args.context_after))
+            .max_matches(per_file);
+        Ok(Self {
+            matcher,
+            searcher,
+            keep_lines,
+            stop_after: max as u64,
+            mode: args.output_mode,
+        })
+    }
+
+    /// What one file adds toward [`Self::stop_after`].
+    fn weight(&self, file: &FileHits) -> u64 {
+        match self.mode {
+            OutputMode::Content => file.hits.iter().filter(|hit| hit.matched).count() as u64,
+            OutputMode::Files | OutputMode::Count => u64::from(file.matches > 0),
+        }
+    }
+
+    /// Search one walked file: `None` when it is not a regular file, is
+    /// denied or cannot be opened (confined, `O_NOFOLLOW`).
+    fn search_file(
+        &self,
+        workspace: &Workspace,
+        searcher: &mut Searcher,
+        entry: &ignore::DirEntry,
+    ) -> Option<FileHits> {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            return None;
+        }
+        let path = relative(workspace, entry.path())?;
+        if workspace.denied_by(&path, Intent::Read).is_some() {
+            return None;
+        }
+        let (file, _) = workspace.open_file(&path).ok()?;
+        let mut sink = Collect {
+            keep_lines: self.keep_lines,
+            matches: 0,
+            hits: Vec::new(),
+        };
+        let _ = searcher.search_file(&self.matcher, &file, &mut sink);
+        Some(FileHits {
+            path,
+            matches: sink.matches,
+            hits: sink.hits,
+        })
+    }
+}
+
+/// What a walk collected: the files with matches, how many were searched,
+/// and whether it stopped early.
+struct Collected {
+    files: Vec<FileHits>,
+    searched: usize,
+    stopped: bool,
+}
+
+/// Search with the parallel walker: workers send each searched file down a
+/// bounded channel; once the plan's limit is collected they stop.
+fn collect_parallel(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    plan: &SearchPlan,
+) -> ToolResult<Collected> {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let walk = walker_parallel(workspace, base, glob, None)?;
+    let collected = AtomicU64::new(0);
+    let stopped = AtomicBool::new(false);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<FileHits>(256);
+    let (files, searched) = std::thread::scope(|scope| {
+        let gather = scope.spawn(move || {
+            let mut files = Vec::new();
+            let mut searched = 0usize;
+            for file in receiver {
+                searched += 1;
+                if file.matches > 0 {
+                    files.push(file);
+                }
+            }
+            (files, searched)
+        });
+        walk.run(|| {
+            let sender = sender.clone();
+            let mut searcher = plan.searcher.build();
+            let (collected, stopped) = (&collected, &stopped);
+            Box::new(move |entry| {
+                if collected.load(Ordering::Relaxed) >= plan.stop_after {
+                    stopped.store(true, Ordering::Relaxed);
+                    return ignore::WalkState::Quit;
+                }
+                let Ok(entry) = entry else {
+                    return ignore::WalkState::Continue;
+                };
+                let Some(file) = plan.search_file(workspace, &mut searcher, &entry) else {
+                    return ignore::WalkState::Continue;
+                };
+                collected.fetch_add(plan.weight(&file), Ordering::Relaxed);
+                if sender.send(file).is_err() {
+                    return ignore::WalkState::Quit;
+                }
+                ignore::WalkState::Continue
+            })
+        });
+        drop(sender);
+        gather.join()
+    })
+    .map_err(|_| ToolError::new(ErrorCode::Io, "the search stopped unexpectedly"))?;
+    Ok(Collected {
+        files,
+        searched,
+        stopped: stopped.load(Ordering::Relaxed),
+    })
+}
+
+/// [`collect_parallel`] on the serial [`walker`] (the reference the
+/// parallel walk is checked against).
+#[cfg(test)]
+fn collect_serial(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    plan: &SearchPlan,
+) -> ToolResult<Collected> {
+    let mut searcher = plan.searcher.build();
+    let mut collected = Collected {
+        files: Vec::new(),
+        searched: 0,
+        stopped: false,
+    };
+    let mut weight = 0;
+    for entry in walker(workspace, base, glob, None)?.flatten() {
+        if weight >= plan.stop_after {
+            collected.stopped = true;
             break;
         }
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
+        if let Some(file) = plan.search_file(workspace, &mut searcher, &entry) {
+            collected.searched += 1;
+            weight += plan.weight(&file);
+            if file.matches > 0 {
+                collected.files.push(file);
+            }
         }
-        let Some(path) = relative(workspace, entry.path()) else {
-            continue;
-        };
-        if workspace.denied_by(&path, Intent::Read).is_some() {
-            continue;
-        }
-        let Ok((file, _)) = workspace.open_file(&path) else {
-            continue;
-        };
-        files += 1;
-        let shown = path.display_string();
-        let _ = searcher.search_file(
-            &matcher,
-            &file,
-            UTF8(|line_number, line| {
-                let line = line.trim_end_matches(['\n', '\r']);
-                let line: String = line.chars().take(MAX_MATCH_LINE).collect();
-                found.push(json!({ "path": shown, "line": line_number, "text": line }));
-                Ok(found.len() < max)
-            }),
-        );
     }
-    Ok(json!({
-        "matches": found,
-        "files_searched": files,
-        "truncated": found.len() >= max,
-    }))
+    Ok(collected)
+}
+
+/// The answer, from what a walk collected: files in path order (the
+/// serial walker's order), then lines in file order, at most `max`.
+fn search_answer(mut collected: Collected, mode: OutputMode, max: usize) -> Value {
+    collected
+        .files
+        .sort_by(|a, b| a.path.components().cmp(b.path.components()));
+    let mut truncated = collected.stopped;
+    let files = collected.files;
+    let mut answer = match mode {
+        OutputMode::Content => {
+            let mut matches = Vec::new();
+            let mut shown = 0usize;
+            'files: for file in &files {
+                let path = file.path.display_string();
+                for hit in &file.hits {
+                    if hit.matched {
+                        if shown == max {
+                            truncated = true;
+                            break 'files;
+                        }
+                        shown += 1;
+                    }
+                    matches.push(json!({
+                        "path": path,
+                        "line": hit.line,
+                        "text": hit.text,
+                        "kind": if hit.matched { "match" } else { "context" },
+                    }));
+                }
+            }
+            json!({ "matches": matches })
+        }
+        OutputMode::Files => {
+            truncated |= files.len() > max;
+            let paths: Vec<String> = files
+                .iter()
+                .take(max)
+                .map(|file| file.path.display_string())
+                .collect();
+            json!({ "files": paths })
+        }
+        OutputMode::Count => {
+            truncated |= files.len() > max;
+            let total: u64 = files.iter().map(|file| file.matches).sum();
+            let counts: Vec<Value> = files
+                .iter()
+                .take(max)
+                .map(|file| json!({ "path": file.path.display_string(), "count": file.matches }))
+                .collect();
+            json!({ "counts": counts, "total": total })
+        }
+    };
+    if let Value::Object(map) = &mut answer {
+        map.insert("files_searched".to_owned(), json!(collected.searched));
+        map.insert("truncated".to_owned(), json!(truncated));
+    }
+    answer
+}
+
+/// `search_files`: a regex (or literal) over the workspace's text files,
+/// `.gitignore` honoured, denied paths pruned; matching lines with
+/// optional context, the matching files, or counts per file. The walk runs
+/// on several threads; the answer is sorted, so it does not depend on them.
+pub(crate) fn search(workspace: &Workspace, args: Value) -> ToolResult<Value> {
+    let args: SearchArgs = parse(args)?;
+    let max = args
+        .max_results
+        .unwrap_or(DEFAULT_SEARCH_RESULTS)
+        .clamp(1, 1000);
+    let plan = SearchPlan::new(&args, max)?;
+    let base = base_dir(workspace, args.path.as_deref())?;
+    let collected = collect_parallel(workspace, &base, args.glob.as_deref(), &plan)?;
+    Ok(search_answer(collected, plan.mode, max))
 }
 
 #[derive(Deserialize)]
@@ -1335,6 +1655,182 @@ mod tests {
             &find_files(&ws, json!({ "pattern": "credentials", "fuzzy": true })).expect("find"),
         );
         assert!(creds.is_empty(), "{creds:?}");
+    }
+
+    fn lines(result: &serde_json::Value) -> Vec<(String, u64, String)> {
+        result["matches"]
+            .as_array()
+            .expect("matches")
+            .iter()
+            .map(|hit| {
+                (
+                    hit["kind"].as_str().expect("kind").to_owned(),
+                    hit["line"].as_u64().expect("line"),
+                    hit["text"].as_str().expect("text").to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn search_context_lines() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "a.txt", "1\n2\n3\nneedle\n5\n6\n7\n8\nneedle\n10\n");
+        let found = search(&ws, json!({ "pattern": "needle", "context": 2 })).expect("search");
+        let got: Vec<(String, u64)> = lines(&found)
+            .into_iter()
+            .map(|(kind, line, _)| (kind, line))
+            .collect();
+        let want: Vec<(String, u64)> = [
+            ("context", 2),
+            ("context", 3),
+            ("match", 4),
+            ("context", 5),
+            ("context", 6),
+            ("context", 7),
+            ("context", 8),
+            ("match", 9),
+            ("context", 10),
+        ]
+        .iter()
+        .map(|(kind, line)| ((*kind).to_owned(), *line))
+        .collect();
+        // Adjacent groups merge: line 6 to 8 appear once.
+        assert_eq!(got, want);
+        // -B / -A win over -C.
+        let after = search(
+            &ws,
+            json!({ "pattern": "needle", "context": 3, "context_before": 0, "context_after": 1 }),
+        )
+        .expect("search");
+        let got: Vec<u64> = lines(&after).iter().map(|(_, line, _)| *line).collect();
+        assert_eq!(got, [4, 5, 9, 10]);
+        // Old calls keep their shape: path, line, text.
+        let plain = search(&ws, json!({ "pattern": "needle" })).expect("search");
+        assert_eq!(plain["matches"][0]["path"], "a.txt");
+        assert_eq!(plain["matches"][0]["text"], "needle");
+        assert_eq!(plain["matches"].as_array().expect("array").len(), 2);
+    }
+
+    #[test]
+    fn search_files_and_count_modes() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "b.rs", "x\nx\nx\n");
+        seed(&dir, "a/one.rs", "x\n");
+        seed(&dir, "c.rs", "none\n");
+        let files = search(&ws, json!({ "pattern": "x", "output_mode": "files" })).expect("files");
+        assert_eq!(files["files"], json!(["a/one.rs", "b.rs"]));
+        assert_eq!(files["files_searched"], 3);
+        let counts = search(&ws, json!({ "pattern": "x", "output_mode": "count" })).expect("count");
+        assert_eq!(
+            counts["counts"],
+            json!([{ "path": "a/one.rs", "count": 1 }, { "path": "b.rs", "count": 3 }])
+        );
+        assert_eq!(counts["total"], 4);
+        // max_per_file caps every mode.
+        let capped = search(
+            &ws,
+            json!({ "pattern": "x", "output_mode": "count", "max_per_file": 2 }),
+        )
+        .expect("count");
+        assert_eq!(capped["total"], 3);
+        let content = search(&ws, json!({ "pattern": "x", "max_per_file": 1 })).expect("content");
+        assert_eq!(content["matches"].as_array().expect("array").len(), 2);
+        // max_results counts files in files mode.
+        let one = search(
+            &ws,
+            json!({ "pattern": "x", "output_mode": "files", "max_results": 1 }),
+        )
+        .expect("files");
+        assert_eq!(one["files"].as_array().expect("array").len(), 1);
+        assert_eq!(one["truncated"], true);
+        assert_eq!(
+            search(&ws, json!({ "pattern": "x", "output_mode": "lines" }))
+                .expect_err("bad mode")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn search_multiline() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "a.rs", "fn main() {\n    run();\n}\nfn other() {}\n");
+        let single = search(&ws, json!({ "pattern": r"\{\n\s+run" })).expect("search");
+        assert_eq!(single["matches"], json!([]));
+        let multi =
+            search(&ws, json!({ "pattern": r"\{\n\s+run", "multiline": true })).expect("search");
+        assert_eq!(
+            lines(&multi),
+            [
+                ("match".to_owned(), 1, "fn main() {".to_owned()),
+                ("match".to_owned(), 2, "    run();".to_owned()),
+            ]
+        );
+        let counted = search(
+            &ws,
+            json!({ "pattern": r"\{\n\s+run", "multiline": true, "output_mode": "count" }),
+        )
+        .expect("search");
+        assert_eq!(counted["total"], 1);
+    }
+
+    #[test]
+    fn search_parallel_matches_serial() {
+        let (dir, ws, _ledger) = setup(&["deny/**"]);
+        seed(&dir, ".gitignore", "ignored/\n");
+        for d in ["a", "a/b", "a/b/c", "a.d", "z", "ignored", "deny"] {
+            for f in 0..12 {
+                let body: String = (0..30)
+                    .map(|line| {
+                        if (line + f) % 7 == 0 {
+                            format!("hit {d} {f} {line}\n")
+                        } else {
+                            format!("plain {line}\n")
+                        }
+                    })
+                    .collect();
+                seed(&dir, &format!("{d}/f{f:02}.txt"), &body);
+            }
+        }
+        seed(&dir, "a.txt", "hit top\n");
+        for args in [
+            json!({ "pattern": "hit", "context": 1, "max_results": 1000 }),
+            json!({ "pattern": "hit", "output_mode": "files" }),
+            json!({ "pattern": "hit", "output_mode": "count", "max_per_file": 3 }),
+            json!({ "pattern": "hit", "glob": "a/**", "max_results": 1000 }),
+        ] {
+            let parsed: super::SearchArgs = serde_json::from_value(args.clone()).expect("args");
+            let max = parsed.max_results.unwrap_or(200);
+            let plan = super::SearchPlan::new(&parsed, max).expect("plan");
+            let base = crate::workspace::WsPath::root();
+            let glob = parsed.glob.as_deref();
+            let serial = super::search_answer(
+                super::collect_serial(&ws, &base, glob, &plan).expect("serial"),
+                plan.mode,
+                max,
+            );
+            let serial_order: Vec<String> = serial
+                .get("matches")
+                .or_else(|| serial.get("files"))
+                .or_else(|| serial.get("counts"))
+                .and_then(serde_json::Value::as_array)
+                .expect("list")
+                .iter()
+                .map(|v| v.get("path").unwrap_or(v).to_string())
+                .collect();
+            // The serial walker's own order is the sorted order.
+            assert!(!serial_order.is_empty(), "{args}");
+            for _ in 0..5 {
+                assert_eq!(
+                    search(&ws, args.clone()).expect("parallel"),
+                    serial,
+                    "{args}"
+                );
+            }
+            assert!(!serial.to_string().contains("ignored/"), "{serial}");
+            assert!(!serial.to_string().contains("deny/"), "{serial}");
+        }
     }
 
     #[test]
