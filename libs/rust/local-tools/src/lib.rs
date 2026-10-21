@@ -38,4 +38,5 @@ pub mod provider;
 pub mod sandbox;
 pub mod session;
 pub mod shell;
+pub mod test_report;
 pub mod workspace;
