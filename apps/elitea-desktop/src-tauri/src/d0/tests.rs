@@ -5907,6 +5907,17 @@ async fn accepting_the_plan_continues_the_same_session_in_build_mode() {
     assert_eq!(proposed.payload["call_id"], "call-plan");
     let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
     assert!(at("plan_proposed") < at("plan_accepted"));
+    // The model wrote no plan: the host copied the accepted one in, once.
+    let seeded: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(seeded.len(), 1);
+    assert_eq!(seeded[0].payload["plan"]["title"], "Notes");
+    assert_eq!(
+        seeded[0].payload["plan"]["steps"],
+        json!([
+            {"n": 1, "step": "Write notes.txt", "status": "pending"},
+            {"n": 2, "step": "Say done", "status": "pending"}
+        ])
+    );
     assert_eq!(kinds.iter().filter(|k| **k == "done").count(), 1);
     assert!(
         !events.iter().any(|e| e.kind == "approval_request"),
@@ -6028,4 +6039,66 @@ fn feedback_travels_only_with_a_denial_and_is_bounded_and_clean() {
     };
     assert!(cut.len() <= 2048 && cut.chars().all(|c| c == 'é'));
     assert_eq!(UiDecision::parse("approve_with_feedback", Some("x")), None);
+}
+
+/// #1225 conformance (ADR-0029 Verification): the same Codex-shaped
+/// `update_plan` call as the worker's
+/// `ordinary_tests::internal_tools_graph::a_codex_shaped_update_plan_answers_as_on_the_desktop`
+/// gets the same answer here; the todo pane gets `plan_updated`, live and
+/// from the thread history after a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_plan_conforms_to_the_cloud_and_the_pane_replays_it() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "update_plan",
+                    &json!({
+                        "title": "Rename X",
+                        "steps": [
+                            {"step": "Find the callers", "status": "in_progress"},
+                            "Rename it"
+                        ]
+                    }),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Planned."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(
+        tool_messages(&llm[1])[0],
+        "Plan created:\n\n📋 Rename X\n   Progress: 0/2 completed, 1 in progress\n\n   ▶ 1. Find the callers (in progress)\n   ☐ 2. Rename it"
+    );
+    let expected = json!({"plan": {
+        "title": "Rename X",
+        "status": "in_progress",
+        "steps": [
+            {"n": 1, "step": "Find the callers", "status": "in_progress"},
+            {"n": 2, "step": "Rename it", "status": "pending"}
+        ]
+    }});
+    let updated: Vec<&AgentEvent> = events.iter().filter(|e| e.kind == "plan_updated").collect();
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].payload, expected);
+
+    let h = h.restarted(false).await;
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let replayed: Vec<_> = turns[0]
+        .events
+        .iter()
+        .filter(|e| e.kind == "plan_updated")
+        .collect();
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(replayed[0].payload, expected);
 }

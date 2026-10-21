@@ -12,14 +12,18 @@ import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/r
 
 import {
   lastLocation,
+  plan,
   readThreads,
+  replayView,
   recordThread,
   threadsQueryKey,
   useWorkspaceTurn,
   type WorkspaceCommandId,
   type WorkspaceTurn,
 } from '@/features/workspace';
+import type { PlanView } from '@/shared/desktop/planIpc';
 import type { ApprovalDecision, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { t } from '@/shared/i18n';
 import { useSelectedProject } from '@/widgets/app-shell';
 import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 
@@ -99,6 +103,19 @@ function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: 
   return sets.reverse();
 }
 
+/**
+ * The thread's checklist: the newest `plan_updated` of its turns — the
+ * session's own, else the recorded ones (so the Plan tab replays after a
+ * restart); `null` when none sent one or it was deleted.
+ */
+function threadPlan(history: ThreadHistory, shown: ReadonlySet<string>, turn: WorkspaceTurn): PlanView | null {
+  const session = [...turn.earlier.map((entry) => entry.view), ...(turn.turnId === null ? [] : [turn.view])];
+  if (session.some((view) => view.plan !== undefined)) return plan.latest(session);
+  if (history.kind !== 'local') return null;
+  const recorded = history.turns.filter((stored) => !shown.has(stored.turn_id) && stored.events.some((event) => event.kind === 'plan_updated'));
+  return plan.latest(recorded.map((stored) => replayView(stored.events)));
+}
+
 export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send' | 'prewarm'> {
   raw: AgentSelection;
   selection: AgentSelection;
@@ -107,7 +124,9 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
   run: (command: WorkspaceCommandId) => void;
   prompts: readonly string[];
   decided: readonly DecidedApproval[];
-  answer: (requestId: string, decision: ApprovalDecision) => void;
+  answer: (requestId: string, decision: ApprovalDecision, feedback?: string) => void;
+  /** The agent's checklist for the Plan tab. */
+  plan: PlanView | null;
   undoTurnId: string | null;
   /** The thread's earlier turns (recorded here, or the server's messages). */
   history: ThreadHistory;
@@ -198,12 +217,13 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     void navigate({ to: '/agents/create' });
   };
 
-  const answer = (requestId: string, decision: ApprovalDecision): void => {
+  const answer = (requestId: string, decision: ApprovalDecision, feedback?: string): void => {
     const request = turn.view.approvals.find((a) => a.request_id === requestId);
-    if (request !== undefined) setDecided((current) => [...current, { requestId, title: request.title, decision }]);
+    const title = request?.title ?? (turn.view.planProposal?.request_id === requestId ? t('workspace.plan.decidedTitle', 'Plan') : undefined);
+    if (title !== undefined) setDecided((current) => [...current, { requestId, title, decision }]);
     // The activity feed (island) stops waiting on it too: nothing else closes an approval but its turn ending.
     useActivityFeed.getState().answerApproval(requestId);
-    void turn.answer(requestId, decision);
+    void (feedback === undefined ? turn.answer(requestId, decision) : turn.answer(requestId, decision, feedback));
   };
 
   return {
@@ -215,6 +235,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     prompts,
     decided,
     answer,
+    plan: threadPlan(history, shown, turn),
     undoTurnId,
     history,
     shown,

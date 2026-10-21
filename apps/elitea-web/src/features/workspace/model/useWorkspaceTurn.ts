@@ -45,7 +45,8 @@ export interface WorkspaceTurn {
   /** Send a turn's failed commit again; a refusal comes back as another `commit_failed` on the turn. */
   retryCommit(turnId: string, executionId: string): Promise<void>;
   cancel(): Promise<void>;
-  answer(requestId: string, decision: ApprovalDecision): Promise<void>;
+  /** `feedback` goes only with `decline` / `deny_with_feedback`. */
+  answer(requestId: string, decision: ApprovalDecision, feedback?: string): Promise<void>;
   /** Forget the shown turn (the transcript only; nothing on the host changes). Ignored while a turn runs. */
   clear(): void;
   /** Take over a turn still running from an earlier visit (its recorded events), so its live events, Stop and `done` land here. */
@@ -149,12 +150,12 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
   }, [ipc, turnId, resync]);
 
   const answer = useCallback(
-    async (requestId: string, decision: ApprovalDecision) => {
+    async (requestId: string, decision: ApprovalDecision, feedback?: string) => {
       if (turnId === null) return;
       // Drop it from the queue first: the dialog must move on even if the host is slow to ack.
       dispatch({ type: 'approval-resolved', turnId, requestId });
       try {
-        await ipc.respondApproval(requestId, decision);
+        await (feedback === undefined ? ipc.respondApproval(requestId, decision) : ipc.respondApproval(requestId, decision, feedback));
       } catch (error) {
         setStartError(describeWorkspaceError(error));
       }

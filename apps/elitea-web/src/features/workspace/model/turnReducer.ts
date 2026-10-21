@@ -16,6 +16,8 @@
  * ([`MAX_UNCLAIMED_TURNS`]): one of them may be the turn whose start has not
  * returned yet.
  */
+import { isPlanEvent, type PlanEvent } from '@/shared/desktop/planEvents';
+import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
 export type TranscriptItem =
@@ -51,6 +53,12 @@ export interface TurnView {
   commitFailed?: { executionId: string; code: string; message: string; seq: number };
   /** The latest model call's context occupancy (the composer's meter). */
   context?: ContextMeter;
+  /** The agent's checklist as this turn last sent it (`plan_updated`); `null` once deleted, absent when the turn sent none. */
+  plan?: PlanView | null;
+  /** The plan `exit_plan_mode` proposed, waiting for Accept / Decline. */
+  planProposal?: PlanProposalPayload;
+  /** The person accepted a plan in this turn (its `call_id`): the session left plan mode. */
+  planAccepted?: string;
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -116,8 +124,19 @@ function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
   if (event.payload.message !== undefined) next.message = event.payload.message;
   else delete next.message;
   if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
-  if (isTerminalPhase(event.payload.phase)) next.approvals = [];
+  if (isTerminalPhase(event.payload.phase)) return withoutProposal({ ...next, approvals: [] });
   return next;
+}
+
+function withoutProposal(view: TurnView): TurnView {
+  if (view.planProposal === undefined) return view;
+  const { planProposal: _answered, ...rest } = view;
+  return rest;
+}
+
+function onPlanProposed(view: TurnView, event: EventOf<'plan_proposed'>, resolved: readonly string[]): TurnView {
+  if (resolved.includes(event.payload.request_id) || isTerminalPhase(view.phase)) return view;
+  return { ...view, planProposal: event.payload };
 }
 
 function onTextDelta(view: TurnView, event: EventOf<'text_delta'>): TurnView {
@@ -137,8 +156,9 @@ function onToolCall(view: TurnView, event: EventOf<'tool_call'>): TurnView {
 
 /** A sign-in card belongs to its tool call: once the call ends (its wait timed out, say), the card goes. */
 function onToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
-  const next = withToolResult(view, event);
   const callId = event.payload.call_id;
+  const answered = withToolResult(view, event);
+  const next = answered.planProposal?.call_id === callId ? withoutProposal(answered) : answered;
   if (!next.approvals.some((a) => a.call_id === callId)) return next;
   return { ...next, approvals: next.approvals.filter((a) => a.call_id !== callId) };
 }
@@ -163,7 +183,18 @@ function onApprovalRequest(view: TurnView, event: EventOf<'approval_request'>, r
 
 function onDone(view: TurnView, event: EventOf<'done'>): TurnView {
   const { committed, conversation_id: conversationId, message_ids: messageIds, changed_files: changedFiles } = event.payload;
-  return { ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] };
+  return withoutProposal({ ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] });
+}
+
+function applyPlanEvent(view: TurnView, event: PlanEvent, resolved: readonly string[]): TurnView {
+  switch (event.kind) {
+    case 'plan_updated':
+      return { ...view, plan: event.payload.plan };
+    case 'plan_proposed':
+      return onPlanProposed(view, event, resolved);
+    case 'plan_accepted':
+      return { ...withoutProposal(view), planAccepted: event.payload.call_id };
+  }
 }
 
 /** `usage` (the meter of a call that ended) or `context` (a phase change, sent at once). */
@@ -183,6 +214,7 @@ function onMeter(view: TurnView, event: EventOf<'usage'> | EventOf<'context'>): 
 
 function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
   if (isMeterEvent(event)) return onMeter(view, event);
+  if (isPlanEvent(event)) return applyPlanEvent(view, event, resolved);
   switch (event.kind) {
     case 'status':
       return onStatus(view, event);
@@ -197,7 +229,7 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
     case 'approval_closed':
       return { ...view, approvals: view.approvals.filter((a) => a.request_id !== event.payload.request_id) };
     case 'error':
-      return { ...view, error: event.payload, approvals: [] };
+      return withoutProposal({ ...view, error: event.payload, approvals: [] });
     case 'done':
       return onDone(view, event);
     case 'commit_failed': {
@@ -240,7 +272,8 @@ function withoutSaved(view: TurnView, savedThrough: number | undefined): TurnVie
 }
 
 function withoutResolved(view: TurnView, requestId: string): TurnView {
-  return { ...view, approvals: view.approvals.filter((a) => a.request_id !== requestId) };
+  const next = { ...view, approvals: view.approvals.filter((a) => a.request_id !== requestId) };
+  return next.planProposal?.request_id === requestId ? withoutProposal(next) : next;
 }
 
 function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
@@ -255,7 +288,16 @@ function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
  * no approvals.
  */
 export function replayView(events: readonly AgentEvent[]): TurnView {
-  return { ...fold(sortedUnique(events), []), approvals: [] };
+  return withoutProposal({ ...fold(sortedUnique(events), []), approvals: [] });
+}
+
+/** The thread's checklist: the newest `plan` any of `views` (oldest first) sent; `null` when none did or it was deleted. */
+export function latestPlan(views: readonly TurnView[]): PlanView | null {
+  for (let i = views.length - 1; i >= 0; i -= 1) {
+    const plan = views[i]?.plan;
+    if (plan !== undefined) return plan;
+  }
+  return null;
 }
 
 function appended(events: readonly StoredEvent[], event: AgentEvent): StoredEvent[] {

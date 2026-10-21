@@ -32,6 +32,15 @@ describe('the inspector layout', () => {
     expect(lone.groups).toHaveLength(1);
   });
 
+  it('leaves the Plan tab out of the default layout: it joins the top group when offered', () => {
+    expect(defaultInspectorLayout('local').groups[0]?.tabs).toEqual(['changes', 'approvals', 'index']);
+    const split = moveTab(defaultInspectorLayout('local'), 'index', 1);
+    expect(viewOf(split, [...LOCAL, 'plan'])).toEqual([
+      { index: 0, tabs: ['changes', 'approvals', 'plan'], active: 'changes' },
+      { index: 1, tabs: ['index'], active: 'index' },
+    ]);
+  });
+
   it('closes a tab until it is reopened, in its place', () => {
     const closed = closeTab(moveTab(defaultInspectorLayout('local'), 'index', 1), 'index');
     // The bottom group has nothing to show: it collapses on screen.

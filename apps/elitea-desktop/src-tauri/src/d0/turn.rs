@@ -1839,7 +1839,7 @@ impl AgentHost {
         session.begin_turn(&checkpoint_label(&request.prompt));
         events.running(&project.paths());
 
-        let sink = Arc::new(TurnSink::default());
+        let sink = Arc::new(TurnSink::with_events(events.clone()));
         let turn_context = TurnContext::default();
         let run = self.run_agent(
             &request,
@@ -3541,9 +3541,12 @@ fn execution_request(
 
 /// The runtime's [`EventSink`] on the desktop: the adk events in order
 /// (the UI gets its events from the model adapter and the tool wrapper),
-/// keeping the last model text as the answer of a run that failed late.
+/// keeping the last model text as the answer of a run that failed late,
+/// and sending each plan change the planner's events carry as
+/// `plan_updated` (#1225).
 #[derive(Default)]
 pub struct TurnSink {
+    events: Option<Arc<TurnEvents>>,
     last_text: Mutex<String>,
     /// The model's last text, with tool calls or without (what it said it
     /// was doing): the "Continue?" question shows it.
@@ -3552,6 +3555,13 @@ pub struct TurnSink {
 }
 
 impl TurnSink {
+    fn with_events(events: Arc<TurnEvents>) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::default()
+        }
+    }
+
     fn last_text(&self) -> String {
         self.last_text
             .lock()
@@ -3572,6 +3582,14 @@ impl EventSink for TurnSink {
     async fn emit(&self, event: &Event) -> Result<(), HostError> {
         if event.llm_response.partial {
             return Ok(());
+        }
+        // The planner's state rides its tool-result events: the todo pane's
+        // feed, stored in the thread history like every event.
+        if let (Some(events), Some(plan)) = (
+            &self.events,
+            planner::plan_update(&event.actions.state_delta),
+        ) {
+            events.send("plan_updated", json!({ "plan": plan }));
         }
         if let Some(content) = &event.llm_response.content {
             let has_calls = content

@@ -29,6 +29,13 @@ export interface SessionCommands {
 
 export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTurn, canUndo: boolean): SessionCommands {
   const [planMode, setPlanMode] = useState(false);
+  // An accepted plan left plan mode on the host (`plan_accepted`): the switch follows, once per accept.
+  const accepted = turn.view.planAccepted;
+  const [followed, setFollowed] = useState<string | undefined>(undefined);
+  if (accepted !== undefined && accepted !== followed) {
+    setFollowed(accepted);
+    setPlanMode(false);
+  }
   const [notice, setNotice] = useState<SessionNotice>(null);
   const [undoRequest, setUndoRequest] = useState(0);
   const [compactNext, setCompactNext] = useState(false);
