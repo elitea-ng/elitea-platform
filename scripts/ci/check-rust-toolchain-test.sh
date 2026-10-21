@@ -157,10 +157,10 @@ fresh; edit libs/rust/vendor/zavora-slide/Cargo.toml '/^rust-version/d'
 expect "(c)(d) a vendored crate with no rust-version" fail "libs/rust/vendor/zavora-slide/Cargo.toml: vendored crate with no readable"
 
 # (e) release literals
-fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/rust_revision != "1\.99\.1"/rust_revision != "1.96.0"/'
-expect "(e) the worker validator states another release" fail "cargo_dependency_bundle.rs:97: toolchain release 1.96.0"
-fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/Profile\.Rust != "1\.99\.1"/Profile.Rust != "1.98.0"/'
-expect "(e) the Main validator states another release" fail "sandbox_native_bundle.go:219: toolchain release 1.98.0"
+fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/rust_revision == "1\.99\.1"/rust_revision == "1.96.0"/'
+expect "(e) the worker's current release states another release" fail "cargo_dependency_bundle.rs:79: toolchain release 1.96.0"
+fresh; put services/elitea-main/internal/infra/storage/probe.go 'package storage\n\nvar _ = p.Profile.Rust != "1.98.0"\n'
+expect "(e) Main pins an off-pin release again" fail "storage/probe.go:3: toolchain release 1.98.0"
 fresh; edit scripts/runtime/rust_compiled_release_manifest.py 's/^RUST_RELEASE = "1\.99\.1"/RUST_RELEASE = "1.96.0"/'
 expect "(e) the release audit states another release" fail "rust_compiled_release_manifest.py:22: toolchain release 1.96.0"
 fresh; edit services/elitea-code-runner/fixtures/cargo-native-v2.json 's/"rust_revision":"1\.99\.1"/"rust_revision":"1.96.0"/'
@@ -171,14 +171,14 @@ fresh; put services/elitea-code-runner/probe.py "if profile['rust_revision'] == 
 expect "(e) a single-quoted Python release" fail "services/elitea-code-runner/probe.py:1: toolchain release 1.98.0"
 fresh; put services/elitea-code-runner/probe.yaml 'profile:\n  rust_revision: 1.98.0\n'
 expect "(e) an unquoted YAML release" fail "services/elitea-code-runner/probe.yaml:2: toolchain release 1.98.0"
-fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/p\.Profile\.Rust != "1\.99\.1"/"1.98.0" != p.Profile.Rust/'
-expect "(e) a reversed Go comparison" fail "sandbox_native_bundle.go:219: toolchain release 1.98.0"
-fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/self\.profile\.rust_revision != "1\.99\.1"/self.profile.rust_revision != RUST_RELEASE/'
+fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/rust_revision == "1\.99\.1"/"1.98.0" == rust_revision/'
+expect "(e) a reversed Rust comparison" fail "cargo_dependency_bundle.rs:79: toolchain release 1.98.0"
+fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/rust_revision == "1\.99\.1"/rust_revision == RUST_RELEASE/'
 expect "(e) a checker literal moved to a constant (test data cannot stand in)" fail "cargo_dependency_bundle.rs: carries no toolchain release literal on its comparison line"
 fresh; edit scripts/runtime/rust_compiled_release_manifest.py 's/profile\["rust_revision"\] == RUST_RELEASE/profile["rust_revision"] == OTHER/'
 expect "(e) the audit stops comparing its constant" fail "rust_compiled_release_manifest.py: no longer checks"
-fresh; edit services/elitea-main/internal/infra/storage/sandbox_native_bundle.go 's/Profile\.Rust != "1\.99\.1"/Profile.Rust != wantRust/'
-expect "(e) a validator whose literal moved out of sight" fail "sandbox_native_bundle.go: carries no toolchain release literal"
+fresh; edit services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs 's/^    rust_revision == "1\.99\.1"$/    revision_is(rust_revision, "1.99.1")/'
+expect "(e) a validator whose literal moved out of sight" fail "cargo_dependency_bundle.rs: carries no toolchain release literal"
 fresh; for f in services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs scripts/runtime/test_rust_compiled_release_manifest.py services/elitea-code-runner/fixtures/cargo-native-v2.json services/elitea-main/internal/infra/storage/testdata/native-cargo-v2.json services/elitea-worker-rust/src/sandbox/native-cargo-v2.json; do git -C "$WORK/tree" rm -qf "$f"; done
 expect "(e)(d) release literals below the floor" fail "toolchain release literal(s), expected at least 6"
 

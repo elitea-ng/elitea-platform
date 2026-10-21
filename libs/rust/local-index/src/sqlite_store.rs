@@ -1329,11 +1329,7 @@ fn decode(bytes: &[u8]) -> Vec<f64> {
         .as_chunks::<8>()
         .0
         .iter()
-        .map(|chunk| {
-            let mut word = [0_u8; 8];
-            word.copy_from_slice(chunk);
-            f64::from_le_bytes(word)
-        })
+        .map(|chunk| f64::from_le_bytes(*chunk))
         .collect()
 }
 
@@ -2164,7 +2160,7 @@ fn status_document(conn: &Connection, key: GraphKey) -> Result<Value> {
 
 #[allow(
     clippy::unused_async_trait_impl,
-    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+    reason = "synchronous SQLite I/O inside async fns holds a tokio worker; moving it off the executor is tracked in #1377"
 )]
 impl GraphStore for SqliteGraphStore {
     type Error = StoreError;

@@ -35,7 +35,7 @@ pub fn standin_embedding(text: &str) -> Vec<f64> {
         .0
         .iter()
         .take(STANDIN_DIM)
-        .map(|word| f64::from(u16::from_be_bytes([word[0], word[1]])) / 65535.0 - 0.5)
+        .map(|word| f64::from(u16::from_be_bytes(*word)) / 65535.0 - 0.5)
         .collect();
     let mut squares = 0.0;
     for x in &vector {

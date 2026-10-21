@@ -56,9 +56,7 @@ const EXEMPT_CRATES = {
 const VERSION = String.raw`['"]?(\d+\.\d+\.\d+)['"]?`;
 const CHECKER_LINES = {
   "services/elitea-worker-rust/src/sandbox/cargo_dependency_bundle.rs":
-    new RegExp(String.raw`\|\|\s*self\.profile\.rust_revision\s*!=\s*` + VERSION),
-  "services/elitea-main/internal/infra/storage/sandbox_native_bundle.go":
-    new RegExp(String.raw`p\.Profile\.Rust\s*!=\s*` + VERSION),
+    new RegExp(String.raw`^\s*rust_revision\s*==\s*` + VERSION + String.raw`\s*$`),
   "scripts/runtime/rust_compiled_release_manifest.py":
     new RegExp(String.raw`^RUST_RELEASE\s*=\s*` + VERSION + String.raw`\s*\n?$`),
 };
