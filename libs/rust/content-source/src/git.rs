@@ -85,6 +85,10 @@ impl GitSource {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl ContentSource for GitSource {
     async fn list(&self) -> Result<Vec<DocumentRef>, SourceError> {
         let mut references = Vec::new();

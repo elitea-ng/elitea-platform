@@ -510,6 +510,10 @@ async fn statuses_are_classified() {
 /// Embeds by keyword, in the fake's 3-dimensional space.
 struct KeywordEmbedder;
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl QueryEmbedder for KeywordEmbedder {
     async fn embed_query(&self, text: &str, space: &pb::EmbeddingSpace) -> Result<Vec<f32>, Error> {
         let text = text.to_lowercase();
@@ -533,6 +537,10 @@ struct ScriptedModel {
     prompts: std::sync::Mutex<Vec<String>>,
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl StepbackModel for ScriptedModel {
     async fn invoke(&self, prompt: &str) -> Result<Value, Error> {
         self.prompts.lock().unwrap().push(prompt.to_owned());
@@ -1003,6 +1011,10 @@ struct SilentModel {
     reply: Value,
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl StepbackModel for SilentModel {
     async fn invoke(&self, prompt: &str) -> Result<Value, Error> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1238,6 +1250,10 @@ async fn a_search_excludes_a_build_in_progress_but_keeps_unversioned_points() {
 /// it.
 struct CountingModel(std::sync::atomic::AtomicUsize);
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl StepbackModel for CountingModel {
     async fn invoke(&self, _prompt: &str) -> Result<Value, Error> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

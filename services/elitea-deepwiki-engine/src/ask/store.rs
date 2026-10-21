@@ -685,6 +685,10 @@ fn under(rel_path: &str, prefix: Option<&str>) -> bool {
     }
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl IndexStore for ReplayIndex {
     async fn wiki_exists(&self) -> Result<bool, EngineError> {
         Ok(true)

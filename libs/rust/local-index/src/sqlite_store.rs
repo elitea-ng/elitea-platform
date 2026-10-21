@@ -2162,6 +2162,10 @@ fn status_document(conn: &Connection, key: GraphKey) -> Result<Value> {
     Ok(json!({"sources": sources, "last_modified": last_modified}))
 }
 
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "a synchronous implementation of an async trait; its work stays lazy (runs when polled, as in the async implementations)"
+)]
 impl GraphStore for SqliteGraphStore {
     type Error = StoreError;
     type Lease = Lease;
