@@ -80,3 +80,12 @@ fn every_edit_profile_offers_the_same_tools_locally_and_in_the_cloud() {
         }
     }
 }
+
+/// #1225: `exit_plan_mode` is local-only (the cloud executor has no plan
+/// mode): in neither table, and its name is no other tool's.
+#[test]
+fn exit_plan_mode_is_local_only() {
+    let name = elitea_local_tools::session::EXIT_PLAN_MODE.name;
+    assert!(TOOLS.iter().all(|spec| spec.name != name));
+    assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
+}

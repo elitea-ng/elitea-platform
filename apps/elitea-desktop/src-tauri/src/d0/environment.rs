@@ -130,7 +130,9 @@ pub fn preamble(facts: &Facts) -> String {
     }
     if facts.plan_mode {
         lines.push(
-            "- Mode: plan (read-only): explore and propose; nothing can be changed this turn"
+            "- Mode: plan (read-only): explore, then present your plan with exit_plan_mode; \
+             nothing can be changed until the person accepts it, and then every tool is \
+             offered in this same turn"
                 .to_owned(),
         );
     }
@@ -249,6 +251,13 @@ fn tool_guidance(tools: &[String]) -> Vec<String> {
             "use {} rather than git in run_command",
             git_reads.join("/")
         ));
+    }
+    if has("update_plan") {
+        clauses.push(
+            "for multi-step work keep a checklist with update_plan (one step in_progress at a \
+             time) and mark steps done with complete_step"
+                .to_owned(),
+        );
     }
     if writes || has("run_command") {
         clauses.push("denied paths and .git are not writable".to_owned());
@@ -570,6 +579,13 @@ mod tests {
         for absent in ["edit", "tests", "run_command", "sudo"] {
             assert!(!text.contains(absent), "{absent}: {text}");
         }
+        assert!(text.contains("exit_plan_mode"), "{text}");
+        assert!(!text.contains("update_plan"), "{text}");
+        facts.tools.push("update_plan".to_owned());
+        assert!(
+            preamble(&facts).contains("keep a checklist with update_plan"),
+            "#1225: the planner is named when offered"
+        );
         facts.tools.clear();
         assert!(!preamble(&facts).contains("- Tools:"));
     }

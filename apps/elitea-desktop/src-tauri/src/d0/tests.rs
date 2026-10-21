@@ -301,7 +301,7 @@ fn build_host(
         .lock()
         .unwrap()
         .replace(Box::new(move |event: &AgentEvent| {
-            if event.kind == "approval_request" {
+            if event.kind == "approval_request" || event.kind == "plan_proposed" {
                 let id = event.payload["request_id"].as_str().unwrap().to_owned();
                 let _ = answers.send(id);
             }
@@ -310,7 +310,7 @@ fn build_host(
         let host = host.clone();
         async move {
             while let Some(id) = questions.recv().await {
-                assert!(host.respond(&id, decision));
+                assert!(host.respond(&id, decision.clone()));
             }
         }
     });
@@ -345,7 +345,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         &policy,
         &emitter,
         &index,
-        decision,
+        decision.clone(),
     );
     Harness {
         server,
@@ -3217,7 +3217,7 @@ impl Harness {
             &policy,
             &emitter,
             &index,
-            decision,
+            decision.clone(),
         );
         Self {
             server,
@@ -5540,7 +5540,10 @@ async fn long_session_compacts_under_small_window() {
 async fn compaction_marker_reused_next_turn() {
     let convo = Arc::new(Mutex::new(Convo::default()));
     let summaries = Arc::new(AtomicUsize::new(0));
-    let server = small_window_platform(8_192, convo, reading_script(summaries.clone())).await;
+    // 12k, not 8k: with the planner's tools (#1225) offered every turn, the
+    // schemas alone are ~2.7k tokens, so a compacted 8k request no longer
+    // leaves room for the next turn's prompt and it would compact again.
+    let server = small_window_platform(12_288, convo, reading_script(summaries.clone())).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     write_big(&h);
     run_turn(&h, "read big.txt 8 times").await;
@@ -5792,4 +5795,172 @@ async fn run_tests_is_offered_only_with_shell() {
             "{system}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// #1225: plan mode as a profile, `exit_plan_mode`, and the planner.
+// ---------------------------------------------------------------------------
+
+const PLAN_MARKDOWN: &str = "# Notes\n\n1. Write notes.txt\n2. Say done";
+
+/// A model that proposes a plan, then (after the answer) writes a file, then
+/// answers; every request is seen by `seen`.
+async fn planning_platform() -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-plan",
+                    "exit_plan_mode",
+                    &json!({ "plan": PLAN_MARKDOWN }),
+                ),
+                1 => tool_call(
+                    "call-write",
+                    "write_file",
+                    &json!({"path": "notes.txt", "content": "hello\n"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn tool_names_of(request: &Req) -> Vec<String> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|t| t["function"]["name"].as_str().unwrap().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The tool messages of a model request, as the model reads them.
+fn tool_messages(request: &Req) -> Vec<Value> {
+    let body: Value = serde_json::from_str(&request.body).unwrap();
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| {
+            let content = m["content"].as_str().unwrap_or_default();
+            serde_json::from_str(content).unwrap_or(Value::String(content.to_owned()))
+        })
+        .collect()
+}
+
+/// Accept continues the SAME run on the SAME session in Build: the next
+/// model step is offered the write tools and the remote toolkits (adk
+/// resolves the toolsets again after the tool batch), the write lands, one
+/// turn is committed, and the UI hears `plan_proposed` then `plan_accepted`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepting_the_plan_continues_the_same_session_in_build_mode() {
+    let h = harness(planning_platform().await, allowed(), UiDecision::Accept).await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(llm.len(), 3, "one run: plan, write, answer");
+    let planning = tool_names_of(&llm[0]);
+    for name in [
+        "exit_plan_mode",
+        "update_plan",
+        "complete_step",
+        "read_file",
+    ] {
+        assert!(planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    for name in ["write_file", "run_command", "Jira_create_issue"] {
+        assert!(!planning.iter().any(|t| t == name), "{name}: {planning:?}");
+    }
+    let building = tool_names_of(&llm[1]);
+    for name in [
+        "write_file",
+        "run_command",
+        "Jira_create_issue",
+        "update_plan",
+    ] {
+        assert!(building.iter().any(|t| t == name), "{name}: {building:?}");
+    }
+    assert!(!building.iter().any(|t| t == "exit_plan_mode"));
+    assert_eq!(tool_messages(&llm[1])[0]["accepted"], true);
+    assert_eq!(
+        std::fs::read_to_string(h.folder.path().join("notes.txt")).unwrap(),
+        "hello\n"
+    );
+
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind).collect();
+    let proposed = events.iter().find(|e| e.kind == "plan_proposed").unwrap();
+    assert_eq!(proposed.payload["plan"], PLAN_MARKDOWN);
+    assert_eq!(proposed.payload["call_id"], "call-plan");
+    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    assert!(at("plan_proposed") < at("plan_accepted"));
+    assert_eq!(kinds.iter().filter(|k| **k == "done").count(), 1);
+    assert!(
+        !events.iter().any(|e| e.kind == "approval_request"),
+        "the plan is a plan card, never a tool approval"
+    );
+    // One local turn started, one committed, the plan's exchange in it.
+    assert_eq!(
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["kind"], "plan_approval");
+    assert_eq!(exchange["decision"], "accept");
+    assert_eq!(exchange["tool_run_id"], "call-plan");
+}
+
+/// Decline with feedback: the model reads the person's text as the tool's
+/// answer, stays in plan mode (no write tool on the next step), and nothing
+/// is changed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn declining_the_plan_returns_the_feedback_and_stays_in_plan_mode() {
+    let h = harness(
+        planning_platform().await,
+        allowed(),
+        UiDecision::Decline(Some("Keep the old file too.".into())),
+    )
+    .await;
+    let mut req = request(&h.workspace_id);
+    req.plan_mode = true;
+    h.host.start(req).await.unwrap();
+    let events = until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answer = &tool_messages(&llm[1])[0];
+    assert_eq!(answer["accepted"], false, "{answer}");
+    assert_eq!(answer["feedback"], "Keep the old file too.");
+    assert!(!tool_names_of(&llm[1]).iter().any(|t| t == "write_file"));
+    assert!(tool_names_of(&llm[1]).iter().any(|t| t == "exit_plan_mode"));
+    assert!(!h.folder.path().join("notes.txt").exists());
+    assert!(!events.iter().any(|e| e.kind == "plan_accepted"));
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let exchange = &body["hitl_exchanges"][0];
+    assert_eq!(exchange["decision"], "decline");
+    assert_eq!(exchange["value"], "Keep the old file too.");
 }

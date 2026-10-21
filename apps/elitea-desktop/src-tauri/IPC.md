@@ -229,7 +229,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
-| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "continue" \| "cancel"}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
+| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `feedback`, taken by `decline`, is the person's text for the model, kept to 2 KiB, control characters other than newlines and tabs dropped) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
@@ -283,7 +283,29 @@ under another identity. `host_sign_out`, `host_wipe`, `host_sign_in` and a
 ends `cancelled` → `done`, `committed: false`) and forget every workspace
 session and kept turn: an earlier turn then answers `turn_unknown`.
 
-`plan_mode: true` offers read-only local tools only and no remote toolkits.
+**Plan mode** (#1225) is the session's permission profile, not a second
+agent. `plan_mode: true` starts the turn in the `plan` profile: read-only
+local tools, the index tools, the planner (`update_plan`, `start_step`,
+`complete_step`, `get_plan_status`, `delete_plan`, offered to every turn)
+and `exit_plan_mode {plan}` (Markdown, at most 16 KiB; offered only in
+plan mode, and local-only: the cloud executor has no plan mode). No
+writes, no `run_command` or `run_tests` (a remembered "always allow" for a
+test runner does not apply; `read_output` stays) and no remote toolkits.
+`exit_plan_mode` sends `plan_proposed {request_id, call_id, plan}`; it is
+answered with
+`approval_respond` `accept` or `decline` (with `feedback`), never by a rule
+or a remembered choice, and "always" is never offered. On `accept` the
+session switches to the `build` profile and the **same run** goes on: adk
+2.2 resolves the toolsets again after every tool batch, so the model's next
+step is offered every tool (remote toolkits included), and the host sends
+`plan_accepted {call_id}` (the UI turns its plan switch off). The tool
+answers `{accepted: true, message}`. When the model wrote no plan with
+`update_plan`, the host copies the accepted Markdown into the planner once
+(a `# heading` is the title, each list item a step). On `decline` the turn
+stays in plan mode and the tool answers `{accepted: false, feedback?,
+message}`; the model revises the plan. The turn's `hitl_exchanges` record
+it as `kind: "plan_approval"`, `decision: "accept" | "decline"`, `value`
+the feedback. The next turn starts in the profile its own `plan_mode` says.
 
 **Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
 MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved
@@ -1245,13 +1267,15 @@ order. Kinds and payloads:
 | `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, context?: ContextMeter}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `plan_proposed` | `{request_id, call_id, plan}` — the agent's `exit_plan_mode`: the plan (Markdown, model-written) as a card with Accept / Decline; answered with `approval_respond` `accept` or `decline` (+ `feedback`). See **Plan mode** |
+| `plan_accepted` | `{call_id}` — the person accepted the plan: the session left plan mode and the same turn goes on with every tool; the composer's plan switch turns off |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `approval_closed`, `tool_result`, `usage`, `context`)* →
+`running` → (`text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `approval_closed`, `tool_result`, `usage`, `context`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

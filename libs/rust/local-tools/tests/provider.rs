@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use elitea_agent_runtime::host::{
     ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, ToolProvider, ToolsetRequest,
 };
-use elitea_local_tools::approvals::{MemoryChoices, WorkspaceSettings};
+use elitea_local_tools::approvals::{MemoryChoices, PermissionProfile, WorkspaceSettings};
 use elitea_local_tools::policy::LocalWorkPolicy;
 use elitea_local_tools::provider::LocalToolProvider;
 use elitea_local_tools::session::{LocalSession, SessionConfig};
@@ -244,11 +244,20 @@ async fn the_toolset_follows_policy_and_plan_mode() {
             .all(|tool| tool.parameters_schema().is_some())
     );
 
-    fixture.session.set_plan_mode(true);
+    fixture.session.set_profile(PermissionProfile::Plan);
     let plan = names(&tools(&fixture).await);
     assert!(plan.contains(&"read_file".to_owned()));
     assert!(!plan.contains(&"write_file".to_owned()));
     assert!(!plan.contains(&"run_command".to_owned()));
+    // No commands in plan mode: `run_tests` goes with `run_command`, while
+    // `read_output` (read-only) stays.
+    assert!(!plan.contains(&"run_tests".to_owned()));
+    assert!(plan.contains(&"read_output".to_owned()));
+    assert_eq!(plan.last().map(String::as_str), Some("exit_plan_mode"));
+    assert!(
+        !all.contains(&"exit_plan_mode".to_owned()),
+        "plan mode only"
+    );
     let refused = fixture
         .session
         .call("write_file", "c", json!({ "path": "x", "content": "y" }))
@@ -510,7 +519,7 @@ async fn large_outputs_spill_and_read_output_pages_them() {
     assert!(spilled.is_file());
     assert!(!spilled.starts_with(fixture.session.workspace().root()));
 
-    fixture.session.set_plan_mode(true);
+    fixture.session.set_profile(PermissionProfile::Plan);
     let page = call(
         &fixture,
         "read_output",
@@ -526,7 +535,7 @@ async fn large_outputs_spill_and_read_output_pages_them() {
     )
     .await;
     assert_eq!(path["code"], "local_tools.invalid_argument", "{path}");
-    fixture.session.set_plan_mode(false);
+    fixture.session.set_profile(PermissionProfile::Build);
 
     std::fs::write(
         fixture.session.workspace().root().join("main.rs"),
@@ -576,4 +585,58 @@ async fn large_outputs_spill_and_read_output_pages_them() {
     reopened.clear();
     assert!(!out_dir.exists());
     drop(dir);
+}
+
+/// #1225: `exit_plan_mode` asks the person (never a rule) with `accept` /
+/// `decline` and the plan; a decline keeps plan mode and carries the
+/// person's feedback, bounded; an accept leaves it, and the toolset offers
+/// every tool again.
+#[tokio::test]
+async fn exit_plan_mode_asks_the_person_and_an_accept_leaves_plan_mode() {
+    let fixture = fixture(open_policy());
+    fixture.session.set_profile(PermissionProfile::Plan);
+    let plan = "# Rename\n\n1. Find the callers\n2. Rename";
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "decline".to_owned(),
+        value: json!({ "feedback": format!("Keep the old name as an alias. {}", "x".repeat(4096)) }),
+    });
+    let declined = call(&fixture, "exit_plan_mode", json!({ "plan": plan })).await;
+    assert_eq!(declined["accepted"], false, "{declined}");
+    let feedback = declined["feedback"].as_str().expect("feedback");
+    assert!(feedback.starts_with("Keep the old name as an alias."));
+    assert!(feedback.len() <= elitea_local_tools::session::MAX_FEEDBACK_BYTES);
+    assert_eq!(fixture.session.profile(), PermissionProfile::Plan);
+    {
+        let asked = fixture.person.asked.lock().expect("lock");
+        let request = asked.last().expect("asked");
+        assert_eq!(request.available_actions, ["accept", "decline"]);
+        assert_eq!(request.payload["plan_proposal"]["plan"], plan);
+    }
+    // An approve (a tool card's answer) is not an accept.
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "approve".to_owned(),
+        value: Value::Null,
+    });
+    let not_accepted = call(&fixture, "exit_plan_mode", json!({ "plan": plan })).await;
+    assert_eq!(not_accepted["accepted"], false, "{not_accepted}");
+    assert_eq!(fixture.session.profile(), PermissionProfile::Plan);
+
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "accept".to_owned(),
+        value: Value::Null,
+    });
+    let accepted = call(&fixture, "exit_plan_mode", json!({ "plan": plan })).await;
+    assert_eq!(accepted["accepted"], true, "{accepted}");
+    assert_eq!(fixture.session.profile(), PermissionProfile::Build);
+    let now = names(&tools(&fixture).await);
+    assert!(now.contains(&"write_file".to_owned()) && now.contains(&"run_command".to_owned()));
+    assert!(!now.contains(&"exit_plan_mode".to_owned()));
+    // Out of plan mode it is not offered, and a call is refused unasked.
+    let asked = fixture.person.asked();
+    let refused = fixture
+        .session
+        .call("exit_plan_mode", "c", json!({ "plan": plan }))
+        .await;
+    assert_eq!(refused["code"], "local_tools.denied", "{refused}");
+    assert_eq!(fixture.person.asked(), asked);
 }

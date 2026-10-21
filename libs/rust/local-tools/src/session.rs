@@ -24,7 +24,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::approvals::{
-    ChoiceStore, PAYLOAD_KEY, RuleApprovals, RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
+    ACCEPT, ChoiceStore, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, PermissionProfile, RuleApprovals,
+    RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
 };
 use crate::budget::{self, Budgets, SpillStore};
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
@@ -381,6 +382,34 @@ pub static APPLY_PATCH_ENVELOPE: ToolSpec = ToolSpec {
     kind: ToolKind::ApplyPatch,
     description: APPLY_PATCH_ENVELOPE_DESCRIPTION,
     parameters: patch_param,
+};
+
+/// The longest plan `exit_plan_mode` takes, in bytes.
+pub const MAX_PLAN_BYTES: usize = 16 * 1024;
+
+/// The longest feedback a person's decline carries to the model, in bytes.
+pub const MAX_FEEDBACK_BYTES: usize = 2 * 1024;
+
+/// `exit_plan_mode` (#1225), offered in [`PermissionProfile::Plan`] only and
+/// after every tool of [`TOOLS`]. Local-only: the cloud executor has no plan
+/// mode, so it is not in [`TOOLS`] and not in the workspace tool contract.
+pub static EXIT_PLAN_MODE: ToolSpec = ToolSpec {
+    name: "exit_plan_mode",
+    kind: ToolKind::ExitPlanMode,
+    description: "Present your plan to the person and ask to leave plan mode. Call it once the plan is ready (after reading what you need). If the person accepts, every tool becomes available and you carry the plan out in this same turn; if they decline, you stay in plan mode and get their feedback: revise the plan and call it again.",
+    parameters: || {
+        json!({
+            "type": "object",
+            "properties": {
+                "plan": {
+                    "type": "string",
+                    "maxLength": MAX_PLAN_BYTES,
+                    "description": "The plan in Markdown, for the person to accept or decline."
+                }
+            },
+            "required": ["plan"]
+        })
+    },
 };
 
 /// The tools a turn with `profile` may be offered, in model order:
@@ -766,9 +795,16 @@ impl LocalSession {
         &self.engine
     }
 
-    /// Enter or leave plan mode: read-only tools only.
-    pub fn set_plan_mode(&self, on: bool) {
-        self.engine.set_plan_mode(on);
+    /// Switch the [`PermissionProfile`]: [`PermissionProfile::Plan`] offers
+    /// the read-only tools and `exit_plan_mode` only. A host sets it at each
+    /// turn's start; the person accepting the plan sets `Build`.
+    pub fn set_profile(&self, profile: PermissionProfile) {
+        self.engine.set_profile(profile);
+    }
+
+    #[must_use]
+    pub fn profile(&self) -> PermissionProfile {
+        self.engine.profile()
     }
 
     /// Start a turn: its first change takes a checkpoint labelled `label`.
@@ -867,8 +903,8 @@ impl LocalSession {
 
     /// The tools the model is offered now: none when local work is off, no
     /// shell when the policy says so, no git tools outside git, only
-    /// read-only tools in plan mode, and the edit tools of the session's
-    /// [`EditProfile`].
+    /// read-only tools and `exit_plan_mode` in plan mode, and the edit tools
+    /// of the session's [`EditProfile`].
     #[must_use]
     pub fn available_tools(&self) -> Vec<&'static ToolSpec> {
         let policy = self.engine.policy();
@@ -879,12 +915,16 @@ impl LocalSession {
         // refusal, so the agent and the person see why.
         let git = self.checkpoints.kind() == "git" || self.checkpoints.git_refusal().is_some();
         let plan = self.engine.plan_mode();
-        tools_for(self.edit_profile())
+        let mut tools: Vec<&'static ToolSpec> = tools_for(self.edit_profile())
             .into_iter()
             .filter(|tool| !tool.kind.runs_commands() || policy.shell)
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
-            .filter(|tool| !plan || tool.kind.is_read_only())
-            .collect()
+            .filter(|tool| !plan || tool.kind.plan_allows())
+            .collect();
+        if plan {
+            tools.push(&EXIT_PLAN_MODE);
+        }
+        tools
     }
 
     /// What a command in `mode` would run under now, decided as
@@ -1038,6 +1078,76 @@ impl LocalSession {
             }
             ToolKind::RunCommand => self.run_command(call_id, args).await,
             ToolKind::RunTests => self.run_tests(call_id, args).await,
+            ToolKind::ExitPlanMode => self.exit_plan_mode(call_id, &args).await,
+        }
+    }
+
+    /// `exit_plan_mode`: the plan goes to the person (never a rule). Accepted:
+    /// the session leaves plan mode, so the next model step of the same run
+    /// is offered every tool (adk resolves the toolsets again after each
+    /// tool batch). Declined: it stays in plan mode, and the person's
+    /// feedback, if any, goes back to the model.
+    async fn exit_plan_mode(&self, call_id: &str, args: &Value) -> ToolResult<Value> {
+        let plan = args
+            .get("plan")
+            .and_then(Value::as_str)
+            .filter(|plan| !plan.trim().is_empty())
+            .ok_or_else(|| ToolError::invalid("`plan` is required"))?;
+        if plan.len() > MAX_PLAN_BYTES {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "the plan is longer than {} KiB; shorten it",
+                    MAX_PLAN_BYTES / 1024
+                ),
+            ));
+        }
+        let request = ApprovalRequest {
+            subject: call_id.to_owned(),
+            message: "accept the plan".to_owned(),
+            available_actions: vec![ACCEPT.to_owned(), DECLINE.to_owned()],
+            payload: json!({
+                PAYLOAD_KEY: ToolCall::new(ToolKind::ExitPlanMode),
+                PLAN_PAYLOAD_KEY: { "plan": plan },
+            }),
+        };
+        let outcome = self
+            .approvals
+            .request(request)
+            .await
+            .map_err(|error| ToolError::new(ErrorCode::ApprovalPending, error.to_string()))?;
+        match outcome {
+            ApprovalOutcome::Decided { action, .. } if action == ACCEPT => {
+                self.engine.set_profile(PermissionProfile::Build);
+                Ok(json!({
+                    "accepted": true,
+                    "message": "The person accepted the plan. Plan mode is over: every tool is available now. Carry out the plan.",
+                }))
+            }
+            ApprovalOutcome::Decided { action, value } if action == DECLINE => {
+                let mut result = json!({
+                    "accepted": false,
+                    "message": "The person declined the plan. You are still in plan mode: revise the plan and call exit_plan_mode again.",
+                });
+                if let Some(feedback) = feedback_of(&value) {
+                    result["feedback"] = Value::String(feedback);
+                }
+                Ok(result)
+            }
+            ApprovalOutcome::Decided { value, .. } => {
+                let reason = value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the session is not in plan mode");
+                Err(ToolError::new(
+                    ErrorCode::Denied,
+                    format!("not allowed: {reason}"),
+                ))
+            }
+            ApprovalOutcome::Deferred => Err(ToolError::new(
+                ErrorCode::ApprovalPending,
+                "waiting for the person's approval",
+            )),
         }
     }
 
@@ -1629,6 +1739,21 @@ impl LocalSession {
 /// `{"error": "forbidden_by_rule", "justification": "…", "rule":
 /// "workspace#3"}` beside the usual fields, so it can take the suggested
 /// alternative instead of retrying.
+/// The person's feedback in a decision's value (`feedback`), bounded to
+/// [`MAX_FEEDBACK_BYTES`] at a character boundary; `None` when empty.
+#[must_use]
+pub fn feedback_of(value: &Value) -> Option<String> {
+    let text = value.get("feedback").and_then(Value::as_str)?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let mut end = text.len().min(MAX_FEEDBACK_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(text[..end].to_owned())
+}
+
 fn forbidden_by_rule(value: &Value, reason: &str) -> Option<ToolError> {
     if value.get("decision").and_then(Value::as_str) != Some("forbidden") {
         return None;
