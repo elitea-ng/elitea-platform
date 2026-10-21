@@ -3324,6 +3324,16 @@
       "responseSchema": "ConversationSummary",
       "fixture": null,
       "usedBy": ["features/chat-conversation-list", "processes/chat", "pages/chat", "widgets/desktop-shell", "pages/workspace"]
+    },
+    {
+      "id": "conversation.read",
+      "method": "PUT",
+      "path": "/elitea_core/conversation_read/prompt_lib/{project_id}/{conversation_id}",
+      "operationId": "markConversationRead",
+      "source": "generated",
+      "responseSchema": "ConversationReadState",
+      "fixture": null,
+      "usedBy": ["features/chat-conversation-list"]
     }
   ]
 }

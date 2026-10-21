@@ -1424,6 +1424,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if liveNATSBus != nil {
 		workspaceBus = liveNATSBus
 	}
+	// Conversation activity frames (client contract 1.12) on the same
+	// live-update plane: the runtime plane publishes the turn transitions,
+	// the read route the read markers. nil without the plane.
+	conversationActivity := newConversationActivity(workspaceBus, pool, logger)
 	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
 		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), logger)
 	if err != nil {
@@ -1878,7 +1882,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			AuditRecorder: auditRecorder,
 			// ...and their per-turn summaries live in the database, so every
 			// Main replica merges the same rows and one writes the event.
-			EgressAuditStore: dbrepos.NewEgressRunSummaries(pool),
+			EgressAuditStore:     dbrepos.NewEgressRunSummaries(pool),
+			ConversationActivity: conversationActivity,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -2676,6 +2681,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Redis arm is deleted; #152 is the record of that two-arm fallback
 		// shipping with both arms nil.
 		EventSource: eventSource,
+		// Client contract 1.12: the read frame of markConversationRead.
+		ConversationActivity: conversationActivity,
 		// Cross-replica canvas presence: roster store + live-update bus.
 		// The zero value keeps the in-process roster and publishes nothing.
 		CanvasPresence: canvasPresence,

@@ -927,7 +927,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// chat_messages_attachment (bucket, name) for the deletes' "another row
 	// still names this object" probe (a fork can share an object). An index,
 	// no permission.
-	require.EqualValues(t, 152, Head(tenant))
+	// 153: tenant/0153_chat_conversation_reads.sql, the per-user read
+	// markers of the conversation list's `unread` (client contract 1.12),
+	// the turn-only conversation sync bump, and the newest-group and paused
+	// indexes the list's `activity` reads. markConversationRead reuses
+	// models.chat.conversation.details, so no shared sibling.
+	require.EqualValues(t, 153, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

@@ -45,6 +45,10 @@ import (
 // fork's source is read from `meta.forked_from` (forkedFrom); its name is
 // on getConversation only, where the caller's sight of the source is
 // checked.
+//
+// `activity`, `last_activity_at` and `unread` (client contract 1.12) are
+// added after the scan, for the whole page in one statement
+// (annotateActivity).
 func conversationSelectSQL(s, projectID string, withSync bool) string {
 	sync := ""
 	if withSync {
@@ -229,7 +233,9 @@ type conversationChangesQuery struct {
 	archivedStated bool
 	args           []any
 	admin          bool
-	raw            string
+	// actorID is the caller, the reader of the rows' `unread`.
+	actorID int64
+	raw     string
 }
 
 // ConversationChanges is the delta shape of the conversation list
@@ -410,6 +416,9 @@ func loadConversationChanges(ctx context.Context, pool *pgxpool.Pool, q conversa
 	}
 	annotateWorkspaceExecutors(ctx, pool, s, q.projectID, page.Rows)
 	annotateArchivers(ctx, pool, page.Rows)
+	if err := annotateActivity(ctx, pool, s, q.actorID, page.Rows); err != nil {
+		return ConversationChanges{}, fmt.Errorf("conversations: list changes: %w", err)
+	}
 
 	// Tombstones. Which ones this caller is told about:
 	//   conversation        a deletion — of a public conversation to everyone;

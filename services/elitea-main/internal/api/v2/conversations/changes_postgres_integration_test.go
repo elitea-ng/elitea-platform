@@ -39,6 +39,7 @@ func newChangesPool(t *testing.T) *pgxpool.Pool {
 		"tenant/0123_agent_chat_message_tables.sql",
 		"tenant/0144_chat_sync.sql",
 		"tenant/0151_chat_conversation_archives.sql", // client contract 1.10: is_archived
+		"tenant/0153_chat_conversation_reads.sql",    // client contract 1.12: activity, unread
 	} {
 		sql, err := platformmigrations.Files.ReadFile(path)
 		if err != nil {
@@ -183,11 +184,13 @@ func TestConversationDeltaLegacyResponseIsUnchanged(t *testing.T) {
 	}
 	var rows []map[string]json.RawMessage
 	_ = json.Unmarshal(keys["rows"], &rows)
-	// Twelve keys: the seven of the legacy row, `is_pinned` (client contract
-	// 1.4), `workspace_executor` (client contract 1.8), `is_archived`
-	// (client contract 1.10), and `uuid` and `source` (client contract 1.11),
-	// all additive. `forked_from` is present only on a fork.
-	if len(rows) != 1 || len(rows[0]) != 12 || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
+	// Fifteen keys: the seven of the legacy row, `is_pinned` (client
+	// contract 1.4), `workspace_executor` (client contract 1.8),
+	// `is_archived` (client contract 1.10), `uuid` and `source` (client
+	// contract 1.11), and `activity`, `last_activity_at` and `unread`
+	// (client contract 1.12), all additive. `forked_from` is present only on
+	// a fork.
+	if len(rows) != 1 || len(rows[0]) != 15 || string(rows[0]["unread"]) != "false" || rows[0]["activity"] == nil || rows[0]["sync_at"] != nil || string(rows[0]["is_pinned"]) != "false" ||
 		string(rows[0]["workspace_executor"]) != `"local"` || string(rows[0]["is_archived"]) != "false" ||
 		string(rows[0]["source"]) != `"elitea"` || len(rows[0]["uuid"]) != 38 || rows[0]["forked_from"] != nil {
 		t.Fatalf("legacy row shape changed: %s", body)

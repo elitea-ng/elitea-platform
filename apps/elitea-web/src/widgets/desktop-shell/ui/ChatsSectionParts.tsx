@@ -18,6 +18,7 @@ import type { Theme } from '@mui/material/styles';
 import type { Conversation } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
 import { isLocalWorkConversation } from '@/shared/lib/localWork';
+import { GroupActivitySummary } from '@/shared/ui/ConversationActivity';
 
 import type { ChatRail } from '../model/chatRail';
 import { folderDropId, UNGROUPED_DROP_ID, type useSidebarChatDrag } from '../model/useSidebarChatDrag';
@@ -35,6 +36,9 @@ interface GroupProps {
   readonly open: boolean;
   readonly onToggle: () => void;
   readonly children: ReactNode;
+  /** The group's rows and the listing's `needs_you` (client contract 1.12), for the "N needs you" summary. */
+  readonly rows?: readonly Conversation[];
+  readonly serverNeedsYou?: number | undefined;
 }
 
 /**
@@ -42,7 +46,7 @@ interface GroupProps {
  * column, the caption on the text edge its chats share, the count at the right
  * while it is closed.
  */
-export function Group({ caption, count, open, onToggle, children }: GroupProps): React.JSX.Element {
+export function Group({ caption, count, open, onToggle, children, rows, serverNeedsYou }: GroupProps): React.JSX.Element {
   return (
     <li>
       <Box component="h3" sx={{ margin: 0, font: 'inherit' }}>
@@ -55,6 +59,7 @@ export function Group({ caption, count, open, onToggle, children }: GroupProps):
           labelClassName="shell-group-caption"
           metaTestId="shell-chats-group-count"
           {...(open ? {} : { meta: String(count) })}
+          {...(rows !== undefined ? { status: <GroupActivitySummary rows={rows} serverNeedsYou={serverNeedsYou} /> } : {})}
           onClick={onToggle}
         />
       </Box>
@@ -128,6 +133,7 @@ export function FolderItem({ rail, folder, expanded, onToggle, onExpand, openId,
           ariaExpanded={expanded}
           label={folder.name}
           meta={String(count)}
+          status={<GroupActivitySummary rows={folder.conversations} serverNeedsYou={folder.needsYou} />}
           dropActive={dropActive}
           onClick={onToggle}
         />

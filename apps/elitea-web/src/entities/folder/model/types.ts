@@ -15,6 +15,8 @@
  * conversation, per the dependency-cruiser `no-sideways-entities` rule.
  */
 
+import type { ConversationActivityState } from '@/shared/lib/conversationActivity';
+
 export const DEFAULT_FOLDER_NAME = 'New folder';
 
 export interface FolderConversationRef {
@@ -34,6 +36,14 @@ export interface FolderConversationRef {
   readonly isPlayback?: boolean;
   /** `chat_conversations.source` — `local_work` marks a desktop Local work thread (see `shared/lib/localWork.ts`). */
   readonly source?: string;
+  /** Client contract 1.11: the conversation's UUID (the Local work threads know a thread by it). */
+  readonly uuid?: string;
+  /** Client contract 1.12: the activity status (`running` / `needs_you` / `idle`) and since when. */
+  readonly activity?: { readonly state: ConversationActivityState; readonly since?: string };
+  /** Client contract 1.12: the last write of any message of the conversation. */
+  readonly lastActivityAt?: string;
+  /** Client contract 1.12: the caller has an answer here they did not open yet. */
+  readonly unread?: boolean;
 }
 
 export interface Folder {
@@ -43,6 +53,8 @@ export interface Folder {
   readonly total?: number;
   readonly offset?: number;
   readonly isPinned?: boolean;
+  /** Client contract 1.12: how many conversations of the whole folder need the person. */
+  readonly needsYou?: number;
   /**
    * Client-only: not-yet-persisted folder, synthetic id, not a wire field.
    * apps/elitea-ui/src/[fsd]/features/chat/conversation-list/lib/hooks/
@@ -71,11 +83,13 @@ export interface DateGroup {
   readonly conversations: readonly FolderConversationRef[];
   readonly total?: number;
   readonly offset?: number;
+  /** Client contract 1.12: how many conversations of the whole bucket need the person. */
+  readonly needsYou?: number;
 }
 
 /** The full `?grouped=true` response envelope — see the module doc citation. */
 export interface GroupedFoldersResponse {
-  readonly pinned: { readonly conversations: readonly FolderConversationRef[] };
+  readonly pinned: { readonly conversations: readonly FolderConversationRef[]; readonly needsYou?: number };
   readonly dateGroups: readonly DateGroup[];
   readonly folders: readonly Folder[];
   readonly selectedConversationId?: string;

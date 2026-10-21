@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
@@ -133,6 +134,10 @@ CREATE TABLE centry.social_pins (
     CONSTRAINT _pin_unique UNIQUE (entity, project_id, entity_id)
 );`); err != nil {
 		t.Fatalf("create the pinned-listing fixture schema: %v", err)
+	}
+	// Client contract 1.12: the list rows read the activity columns.
+	if _, err := pool.Exec(ctx, chatactivitytest.Schema("p_1")); err != nil {
+		t.Fatalf("apply the activity fixture: %v", err)
 	}
 	return pool
 }

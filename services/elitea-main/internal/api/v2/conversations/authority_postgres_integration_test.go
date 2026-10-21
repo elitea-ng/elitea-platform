@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/chatactivity/chatactivitytest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/testpg"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,10 @@ CREATE TABLE p_1.chat_selected_conversations(id serial PRIMARY KEY,conversation_
 `)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Client contract 1.12: the list rows read the activity columns.
+	if _, err := pool.Exec(ctx, chatactivitytest.Schema("p_1")); err != nil {
+		t.Fatalf("apply the activity fixture: %v", err)
 	}
 	return pool
 }

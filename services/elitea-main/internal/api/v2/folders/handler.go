@@ -142,6 +142,12 @@ type conversationItem struct {
 	// does not revise the conversation row, so without the message read a
 	// conversation someone writes in stays in the bucket of its creation.
 	activity time.Time
+	// Client contract 1.12: the activity status of the row (annotateActivity).
+	// Filled for the rows a response carries; a client treats an absent
+	// `activity` as idle and an absent `unread` as read.
+	Activity       *activityWire `json:"activity,omitempty"`
+	LastActivityAt string        `json:"last_activity_at,omitempty"`
+	Unread         bool          `json:"unread"`
 }
 
 type dateGroup struct {
@@ -155,6 +161,9 @@ type dateGroup struct {
 	// Offset is where the next page starts: the number of rows this response
 	// carries. The client sends it back as `?date_group=…&offset=…`.
 	Offset int `json:"offset"`
+	// NeedsYou (client contract 1.12) is how many conversations of the WHOLE
+	// bucket wait for the user (activity state needs_you), not of this page.
+	NeedsYou int `json:"needs_you"`
 }
 
 // groupOrder is the sidebar's date-group order, newest bucket first. Also
@@ -529,12 +538,23 @@ func (h *Handler) listFolderConversations(w http.ResponseWriter, r *http.Request
 	}
 
 	limit, offset := pageParams(r)
+	page := paginate(inFolder, limit, offset)
+	paused, err := h.pausedSet(ctx, projectID, inFolder)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := h.annotateActivity(ctx, projectID, page); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"folder_id":     folderID,
 		"total":         len(inFolder),
 		"limit":         limit,
 		"offset":        offset,
-		"conversations": paginate(inFolder, limit, offset),
+		"needs_you":     countNeedsYou(inFolder, paused),
+		"conversations": page,
 	})
 }
 
@@ -568,13 +588,24 @@ func (h *Handler) listDateGroupConversations(w http.ResponseWriter, r *http.Requ
 	}
 
 	limit, offset := pageParams(r)
+	page := paginate(matched, limit, offset)
+	paused, err := h.pausedSet(ctx, projectID, matched)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := h.annotateActivity(ctx, projectID, page); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"date_group":               dateGroup,
 		"total":                    len(matched),
 		"limit":                    limit,
 		"offset":                   offset,
+		"needs_you":                countNeedsYou(matched, paused),
 		"selected_conversation_id": h.selectedConversationID(ctx, projectID),
-		"conversations":            paginate(matched, limit, offset),
+		"conversations":            page,
 	})
 }
 
@@ -589,6 +620,15 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 
 	pinned, foldered, ungrouped := partitionConversations(conversations)
 	groups := groupByDate(ungrouped, time.Now(), r)
+	// Client contract 1.12: which conversations wait for the user, for each
+	// bucket's `needs_you`, read once for the whole listing.
+	paused, err := h.pausedSet(ctx, projectID, conversations)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	// The pages the response carries, annotated in one statement below.
+	pages := [][]conversationItem{pinned}
 
 	// One page per bucket, and a `total` that says how much is behind it.
 	// See firstPage for why a filtered listing is served whole.
@@ -600,11 +640,13 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		convs := groups[label]
 		if len(convs) > 0 {
 			page, total, offset := firstPage(convs, pageSize, paged)
+			pages = append(pages, page)
 			dateGroups = append(dateGroups, dateGroup{
 				Name:          label,
 				Conversations: page,
 				Total:         total,
 				Offset:        offset,
+				NeedsYou:      countNeedsYou(convs, paused),
 			})
 		}
 	}
@@ -629,6 +671,7 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		// `?folder_id=…&offset=…` is already served, so leaving folders whole
 		// here would keep half of #852 alive.
 		page, total, offset := firstPage(convs, pageSize, paged)
+		pages = append(pages, page)
 		row := map[string]any{
 			"id":            f.ID,
 			"name":          f.Name,
@@ -638,6 +681,7 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 			"conversations": page,
 			"total":         total,
 			"offset":        offset,
+			"needs_you":     countNeedsYou(convs, paused),
 		}
 		if f.Position != nil {
 			row["position"] = *f.Position
@@ -645,10 +689,15 @@ func (h *Handler) listGrouped(w http.ResponseWriter, r *http.Request, projectID 
 		foldersResponse = append(foldersResponse, row)
 	}
 
+	if err := h.annotateActivity(ctx, projectID, pages...); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"date_groups":              dateGroups,
 		"folders":                  foldersResponse,
-		"pinned":                   map[string]any{"conversations": pinned},
+		"pinned":                   map[string]any{"conversations": pinned, "needs_you": countNeedsYou(pinned, paused)},
 		"selected_conversation_id": h.selectedConversationID(ctx, projectID),
 		"total_folders":            len(folders),
 	})

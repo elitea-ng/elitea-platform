@@ -15,6 +15,7 @@ import (
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/conversationactivity"
 	egressaudit "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/egressaudit"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
@@ -177,6 +178,12 @@ type Dependencies struct {
 	// Config.EgressAuditClients is set: the summaries are never held in a
 	// replica's memory.
 	EgressAuditStore egressaudit.Store
+	// ConversationActivity publishes the conversation activity frames
+	// (client contract 1.12) when a turn is admitted, its result projects,
+	// it settles or it is stopped (conversation_activity.go). nil (no
+	// live-update plane) publishes none; the list rows still carry the
+	// state.
+	ConversationActivity *conversationactivity.Notifier
 }
 
 func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtime, error) {
@@ -630,8 +637,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if inputErr != nil {
 			return nil, fmt.Errorf("construct agent execution input bundle factory: %w", inputErr)
 		}
+		var agentAdmissionStore agentexecutionapp.AtomicAdmissionStore = agentJobs
+		if dependencies.ConversationActivity != nil {
+			agentAdmissionStore = activityAdmissionStore{next: agentJobs, activity: dependencies.ConversationActivity}
+		}
 		agentAdmissions, admissionErr := agentexecutionapp.NewAdmissionService(
-			agentJobs,
+			agentAdmissionStore,
 			agentInputs,
 			nil,
 			currentRuntimeID,
@@ -676,7 +687,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation repository: %w", cancelErr)
 		}
-		agentCancel, cancelErr = agentexecutionapp.NewCurrentAgentCancellationService(agentCancellation)
+		var agentCancellationStore agentexecutionapp.CurrentAgentCancellationStore = agentCancellation
+		if dependencies.ConversationActivity != nil {
+			agentCancellationStore = activityCancellationStore{next: agentCancellation, activity: dependencies.ConversationActivity}
+		}
+		agentCancel, cancelErr = agentexecutionapp.NewCurrentAgentCancellationService(agentCancellationStore)
 		if cancelErr != nil {
 			return nil, fmt.Errorf("construct current agent cancellation service: %w", cancelErr)
 		}
@@ -1136,6 +1151,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			executionapp.WithAfterSettleHooks(pipelineruns.NewSettlementHook(dependencies.PipelineRuns, dependencies.DomainEvents)))
 	}
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
+	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err

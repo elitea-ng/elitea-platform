@@ -79,7 +79,8 @@ describe('DesktopFrame sidebar', () => {
     const { router } = mount();
 
     const folders = await screen.findAllByTestId('shell-folder');
-    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing', 'docsNo project']);
+    // A folder with threads shows their count after its name.
+    expect(folders.map((f) => within(f).getAllByRole('button')[0]?.textContent)).toEqual(['appMarketing2', 'docsNo project']);
     const threads = await within(folders[0] as HTMLElement).findAllByTestId('shell-thread');
     expect(threads.map((thread) => thread.textContent)).toEqual(['quick overview', 'fix the build']);
 

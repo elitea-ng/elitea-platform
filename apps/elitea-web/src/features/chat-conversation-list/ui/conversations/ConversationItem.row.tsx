@@ -7,6 +7,8 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { activityGlyph, activityTitleBold, useRowActivity, type ActivityGlyphKind, type ActivityRowFields } from '@/shared/lib/conversationActivity';
+import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 import type { ControlsDropdownItem } from '@/shared/ui/ControlsDropdown';
 import { ControlsDropdown } from '@/shared/ui/ControlsDropdown';
 import { PinIcon } from '@/shared/ui/icons/pin-icon';
@@ -28,6 +30,8 @@ import type { getConversationType } from './ConversationItem.menu';
  */
 export interface ConversationItemRowProps {
   readonly conversationId: string;
+  /** The row's activity fields (client contract 1.12): the glyph and the bold title follow from them. */
+  readonly activityRow: ActivityRowFields;
   readonly name: string;
   readonly firstMessagePreview: string;
   readonly isPlayback: boolean;
@@ -42,8 +46,16 @@ export interface ConversationItemRowProps {
   readonly onMouseLeave: () => void;
 }
 
+/** The row's activity (client contract 1.12): the bold title and the glyph; none for a playback or a row being named. */
+function useRowStatus(activityRow: ActivityRowFields, hidden: boolean): { readonly bold: boolean; readonly glyph: ActivityGlyphKind | null } {
+  const activity = useRowActivity(activityRow);
+  if (hidden) return { bold: false, glyph: null };
+  return { bold: activityTitleBold(activity), glyph: activityGlyph(activity) };
+}
+
 export function ConversationItemRow(props: ConversationItemRowProps): ReactNode {
-  const { conversationId, name, firstMessagePreview, isPlayback, isPinned, isNamingPending, conversationType, mainBodyWidth, styles, menuItems, onClick, onMouseEnter, onMouseLeave } = props;
+  const { conversationId, activityRow, name, firstMessagePreview, isPlayback, isPinned, isNamingPending, conversationType, mainBodyWidth, styles, menuItems, onClick, onMouseEnter, onMouseLeave } = props;
+  const { bold, glyph } = useRowStatus(activityRow, isPlayback || isNamingPending);
 
   return (
     <Box
@@ -84,10 +96,11 @@ export function ConversationItemRow(props: ConversationItemRowProps): ReactNode 
             </Box>
           ) : (
             <Typography
-              sx={styles.nameText}
+              sx={bold ? { ...styles.nameText, fontWeight: 700 } : styles.nameText}
               component="div"
               variant="bodySmall"
               color="text.secondary"
+              data-unread={bold ? 'true' : undefined}
             >
               {name || firstMessagePreview}
             </Typography>
@@ -95,6 +108,7 @@ export function ConversationItemRow(props: ConversationItemRowProps): ReactNode 
         </Box>
       </Box>
       <Box sx={styles.conversationIconWrapper}>
+        <ConversationActivityGlyph kind={glyph} />
         <ConversationTypeIcon conversationType={conversationType} />
         {isPinned && !isPlayback && <PinIcon style={{ width: '.875rem', height: '.875rem' }} />}
       </Box>

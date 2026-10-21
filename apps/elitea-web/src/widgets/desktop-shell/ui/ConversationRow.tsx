@@ -30,6 +30,8 @@ import type { Theme } from '@mui/material/styles';
 
 import type { Conversation } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { activityGlyph, activityTitleBold, useRowActivity } from '@/shared/lib/conversationActivity';
+import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
@@ -184,6 +186,8 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
   const label = conversation.name === '' ? t('desktop.chats.untitled', 'Untitled chat') : conversation.name;
   const asks: RowAsks = { rename: () => setRenaming(true), move: () => setMoving(true), archive: () => setArchiving(true), remove: () => setDeleting(true) };
   const items = conversationActions(conversation, actions, asks);
+  // Client contract 1.12: the activity glyph and the bold title of an unread answer.
+  const activity = useRowActivity(conversation);
 
   return (
     <>
@@ -214,6 +218,8 @@ export function ConversationRow({ conversation, selected, indent, actions }: Con
             selected={selected}
             onClick={() => actions.open(conversation)}
             onContextMenu={(event) => showMenu(event, items)}
+            bold={activityTitleBold(activity)}
+            status={<ConversationActivityGlyph kind={activityGlyph(activity)} />}
             trailingOnHover
             trailing={<RowMenu items={items} label={t('desktop.chats.more', 'More for {{name}}', { name: label })} />}
           />

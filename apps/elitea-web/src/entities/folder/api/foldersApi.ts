@@ -35,6 +35,7 @@
 import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { parseActivityWire } from '@/shared/lib/conversationActivity';
 
 import type { Folder, FolderConversationRef, GroupedFoldersResponse } from '../model/types';
 
@@ -59,7 +60,28 @@ interface FolderConversationRefWire {
   readonly created_at?: string;
   readonly isPlayback?: boolean;
   readonly source?: string;
+  readonly uuid?: string;
+  /** Client contract 1.12: `{state, since}`, `last_activity_at` and the caller's `unread`. */
+  readonly activity?: unknown;
+  readonly last_activity_at?: string;
+  readonly unread?: boolean;
   readonly [key: string]: unknown;
+}
+
+/** The activity fields of a row (client contract 1.12); a server before 1.12 sends none. */
+function activityFields(wire: FolderConversationRefWire): Pick<FolderConversationRef, 'uuid' | 'activity' | 'lastActivityAt' | 'unread'> {
+  const activity = parseActivityWire(wire.activity);
+  return {
+    ...(typeof wire.uuid === 'string' && wire.uuid !== '' ? { uuid: wire.uuid } : {}),
+    ...(activity !== undefined ? { activity } : {}),
+    ...(typeof wire.last_activity_at === 'string' && wire.last_activity_at !== '' ? { lastActivityAt: wire.last_activity_at } : {}),
+    ...(typeof wire.unread === 'boolean' ? { unread: wire.unread } : {}),
+  };
+}
+
+/** A bucket's `needs_you` (client contract 1.12), when the server sent one. */
+function needsYouField(value: unknown): { readonly needsYou?: number } {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? { needsYou: value } : {};
 }
 
 function normaliseFolderConversationRef(wire: FolderConversationRefWire): FolderConversationRef {
@@ -79,6 +101,7 @@ function normaliseFolderConversationRef(wire: FolderConversationRefWire): Folder
     ...(wire.created_at !== undefined ? { createdAt: wire.created_at } : {}),
     ...(wire.isPlayback !== undefined ? { isPlayback: wire.isPlayback } : {}),
     ...(typeof wire.source === 'string' && wire.source !== '' ? { source: wire.source } : {}),
+    ...activityFields(wire),
   };
 }
 
@@ -101,6 +124,7 @@ function normaliseFolder(wire: FolderWire): Folder {
     ...(wire.total !== undefined ? { total: wire.total } : {}),
     ...(wire.offset !== undefined ? { offset: wire.offset } : {}),
     ...(wire.meta?.is_pinned !== undefined ? { isPinned: wire.meta.is_pinned } : {}),
+    ...needsYouField(wire['needs_you']),
   };
 }
 
@@ -115,10 +139,11 @@ interface DateGroupWire {
   readonly conversations?: readonly FolderConversationRefWire[];
   readonly total?: number;
   readonly offset?: number;
+  readonly needs_you?: number;
 }
 
 interface GroupedFoldersResponseWire {
-  readonly pinned?: { readonly conversations?: readonly FolderConversationRefWire[] };
+  readonly pinned?: { readonly conversations?: readonly FolderConversationRefWire[]; readonly needs_you?: number };
   readonly date_groups?: readonly DateGroupWire[];
   readonly folders?: readonly FolderWire[];
   readonly selected_conversation_id?: string;
@@ -127,12 +152,13 @@ interface GroupedFoldersResponseWire {
 
 function normaliseGroupedFoldersResponse(wire: GroupedFoldersResponseWire): GroupedFoldersResponse {
   return {
-    pinned: { conversations: (wire.pinned?.conversations ?? []).map(normaliseFolderConversationRef) },
+    pinned: { conversations: (wire.pinned?.conversations ?? []).map(normaliseFolderConversationRef), ...needsYouField(wire.pinned?.needs_you) },
     dateGroups: (wire.date_groups ?? []).map((group) => ({
       name: group.name,
       conversations: (group.conversations ?? []).map(normaliseFolderConversationRef),
       ...(group.total !== undefined ? { total: group.total } : {}),
       ...(group.offset !== undefined ? { offset: group.offset } : {}),
+      ...needsYouField(group.needs_you),
     })),
     folders: (wire.folders ?? []).map(normaliseFolder),
     ...(wire.selected_conversation_id !== undefined ? { selectedConversationId: wire.selected_conversation_id } : {}),

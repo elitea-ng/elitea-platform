@@ -7,7 +7,9 @@
  *
  * The workspace, index and native-shell IPC are the in-memory fakes the tests use;
  * the few API calls the workspace screens make are answered from canned data.
- * `window.__harness.playTurn()` scripts an agent turn against the fake host.
+ * `window.__harness.playTurn()` scripts an agent turn against the fake host;
+ * `window.__harness.playActivity()` puts the Local work threads (`&threads`)
+ * in the four activity states (running, needs you, unread, read).
  *
  * `main.tsx` imports this behind `import.meta.env.DEV`, so no production build
  * contains it.
@@ -44,15 +46,36 @@ const FOLDERS: Workspace[] = [
 ];
 
 const hoursAgo = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
-const chat = (id: string, name: string, hours: number) => ({ id, name, is_private: true, author_id: 3, updated_at: hoursAgo(hours), created_at: hoursAgo(hours) });
+type ChatActivity = { readonly state: 'running' | 'needs_you' | 'idle'; readonly unread?: boolean };
+const chat = (id: string, name: string, hours: number, activity?: ChatActivity) => ({
+  id,
+  name,
+  is_private: true,
+  author_id: 3,
+  updated_at: hoursAgo(hours),
+  created_at: hoursAgo(hours),
+  // Client contract 1.12: the row's activity status.
+  ...(activity === undefined ? {} : { activity: { state: activity.state, since: hoursAgo(hours) }, last_activity_at: hoursAgo(hours), unread: activity.unread === true }),
+});
 
 /** The Chats list (`&chats`): the grouped folders listing the sidebar reads. */
 const GROUPED_CHATS = {
   pinned: { conversations: [chat('81', 'Release checklist', 30)] },
   folders: [{ id: '5', name: 'Research', meta: { is_pinned: false }, total: 2, offset: 2, conversations: [chat('91', 'Vector stores compared', 50), chat('92', 'Embedding model picks', 70)] }],
   date_groups: [
-    { name: 'Today', total: 12, offset: 3, conversations: [chat('72', 'quick overview', 1), chat('73', 'Fix flaky gateway test', 2), chat('74', 'Draft the Q4 roadmap email', 3)] },
-    { name: 'Yesterday', total: 2, offset: 2, conversations: [chat('75', 'Postgres connection math', 26), chat('76', 'Explain ADR-0034', 28)] },
+    {
+      name: 'Today',
+      total: 12,
+      offset: 4,
+      needs_you: 1,
+      conversations: [
+        chat('72', 'quick overview', 0, { state: 'running' }),
+        chat('73', 'Fix flaky gateway test', 1, { state: 'needs_you' }),
+        chat('74', 'Draft the Q4 roadmap email', 2, { state: 'idle', unread: true }),
+        chat('79', 'Rename the config keys', 3, { state: 'idle' }),
+      ],
+    },
+    { name: 'Yesterday', total: 2, offset: 2, conversations: [chat('75', 'Postgres connection math', 26, { state: 'idle', unread: true }), chat('76', 'Explain ADR-0034', 28)] },
     { name: 'This week', total: 1, offset: 1, conversations: [chat('77', 'Helm values for staging', 80)] },
     { name: 'This month', total: 0, offset: 0, conversations: [] },
     { name: 'Older', total: 1, offset: 1, conversations: [chat('78', 'Onboarding notes', 900)] },
@@ -167,6 +190,8 @@ export function mountDesktopHarness(container: HTMLElement): void {
   if (params.has('threads')) {
     recordThread('w1', { id: '71', title: 'fix CI on the gateway', updatedAt: 1 });
     recordThread('w1', { id: '72', title: 'quick overview', updatedAt: 2 });
+    recordThread('w1', { id: '73', title: 'rename the config keys', updatedAt: 3 });
+    recordThread('w1', { id: '74', title: 'bump the chart version', updatedAt: 4 });
   }
   const ipc = createFakeWorkspaceIpc({
     workspaces: params.has('empty') ? [] : FOLDERS,
@@ -304,6 +329,22 @@ export function mountDesktopHarness(container: HTMLElement): void {
     /** A send to the cloud, part way through the upload. */
     playHandoff(done = 3, total = 10) {
       handoffIpc.emit({ conversation_uuid: 'c0ffee00-0000-4000-8000-000000000072', phase: 'upload', done, total, message: null });
+    },
+    /** The Local work threads (`&threads`) in the four activity states: 71 runs, 72 needs you, 73 is unread, 74 is open and read. */
+    async playActivity() {
+      const feed = useActivityFeed.getState();
+      const owner = (conversationId: string) => ({ workspaceId: 'w1', workspaceName: 'elitea-platform', conversationId });
+      const play = (turnId: string, conversationId: string, end: 'running' | 'approval' | 'done') => {
+        feed.registerTurn(turnId, owner(conversationId));
+        ipc.emit({ turn_id: turnId, seq: 1, kind: 'status', payload: { phase: 'running' } });
+        if (end === 'approval') ipc.emit({ turn_id: turnId, seq: 2, kind: 'approval_request', payload: { request_id: `r-${turnId}`, tool: 'run_command', title: 'Run cargo test', detail: '', reason: '', can_remember: false } });
+        if (end === 'done') ipc.emit({ turn_id: turnId, seq: 2, kind: 'done', payload: { committed: true, conversation_id: conversationId, message_ids: [], changed_files: 0 } });
+      };
+      await router.navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: 'w1' }, search: { conversation: '74' } });
+      play('act-71', '71', 'running');
+      play('act-72', '72', 'approval');
+      play('act-73', '73', 'done');
+      play('act-74', '74', 'done');
     },
     playTurn(stage: 'running' | 'approval' | 'done' = 'done') {
       const id = turnId();

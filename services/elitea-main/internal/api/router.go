@@ -68,6 +68,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/artifactbootstrap"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/conversationactivity"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/nativepolicy"
 	notificationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/notifications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/patexpiry"
@@ -340,6 +341,11 @@ type RouterConfig struct {
 	// NATS bus (internal/infra/natsbus). nil means the deployment has no
 	// live-update plane and /events/prompt_lib/{projectID} is not registered.
 	EventSource v2events.EventSource
+	// ConversationActivity publishes the conversation activity frames
+	// (client contract 1.12) on the live-update plane: here, the read frame
+	// markConversationRead sends to the reader's other devices. nil (no
+	// live-update plane) sends none.
+	ConversationActivity *conversationactivity.Notifier
 	// CanvasPresence is canvas presence's cross-replica wiring (roster store
 	// plus the bus the roster is published on). The zero value serves the
 	// route on the in-process roster; it is not a registration gate.
@@ -1822,7 +1828,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			WithUserContextDefaults(newUserContextDefaults(cfg.Pool)).
 			WithContextManagementGate(defaults).
 			WithReasoningModels(defaults).
-			WithEvents(cfg.DomainEvents)
+			WithEvents(cfg.DomainEvents).
+			WithReadEvents(cfg.ConversationActivity)
 		if cfg.Pool != nil {
 			convHandler.WithParticipantCandidates(dbrepos.NewParticipantCandidatesRepo(cfg.Pool))
 		}
@@ -3615,6 +3622,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// The repository applies the detail rule to the source.
 					r.With(projectPermission("models.chat.conversations.create"), requireConversationRead).
 						Post("/conversation_fork/prompt_lib/{projectID}/{conversationID}", convHandler.Fork)
+					// Conversation read marker (client contract 1.12). The
+					// marker is the caller's own state, so reading the
+					// conversation is enough: it declares the read
+					// permission, and the repository applies the detail
+					// rule. No permission migration needed.
+					r.With(requireConversationRead).
+						Put("/conversation_read/prompt_lib/{projectID}/{conversationID}", convHandler.MarkRead)
 					r.With(projectPermission("models.chat.messages.list")).
 						Get("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.ListMessages)
 					// Conversation export (#851). It reads the TRANSCRIPT, so

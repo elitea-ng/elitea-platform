@@ -753,7 +753,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 337 -> 338 (client contract 1.11): forkConversation, "Fork from here" in
 // the chat and Local work views of the web, desktop and mobile apps. Its
 // manifest entries land with the screens that call it.
-const GENERATED_OPERATION_COUNT = 338;
+// 338 -> 339 (client contract 1.12): markConversationRead, the per-user
+// read marker behind the unread state of the chat and Local work lists of
+// the web, desktop and mobile apps. Its manifest entries land with the
+// screens that call it.
+const GENERATED_OPERATION_COUNT = 339;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -962,8 +966,13 @@ const GENERATED_OPERATION_COUNT = 338;
  * 281 -> 282 (client contract 1.11): conversation.fork, "Fork" on a chat
  * list row and "Fork from here" on a message, in the web and desktop chat
  * and in the desktop's Local work view. Generated.
+ *
+ * 282 -> 283 (client contract 1.12): conversation.read, the read marker
+ * the open chat moves (features/chat-conversation-list
+ * `useMarkConversationReadOnView`, called by the web and desktop chat
+ * page). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 282;
+const MANIFEST_ENTRY_COUNT = 283;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
