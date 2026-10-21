@@ -117,6 +117,14 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.9.0
+          # No `golangci-lint config verify`: it validates against a JSON
+          # schema it downloads from golangci-lint.run at run time, so an
+          # outage of that site redded this gate on code nobody had touched
+          # (#1359). The lint run below loads the same .golangci.yml and
+          # refuses a configuration it cannot load (malformed YAML, an
+          # unknown linter or formatter); ci-go.yml's workspace lint applies
+          # the same file without the schema step.
+          verify: false
           # Reads the lint cache everywhere, saves it only on a push to main
           # (the rule in .github/actions/main-write-cache).
           skip-save-cache: ${{ !(github.ref == 'refs/heads/main' && github.event_name == 'push') }}

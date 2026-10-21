@@ -36,8 +36,13 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
-      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      # The build.rs of the gRPC crates compile these contracts (#1359):
+      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
+      # the artifact and internal-tool services of elitea.runtime.v1.
       - "libs/proto/elitea/engine/**"
+      - "libs/proto/elitea/llm/**"
+      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
+      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The agent runtime's SDK schema gate reads both
@@ -59,8 +64,13 @@ on:
       - "scripts/ci/assert-rust-toolchain.sh"
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
-      # The engine sidecar's build.rs compiles elitea.engine.v1 (#1359).
+      # The build.rs of the gRPC crates compile these contracts (#1359):
+      # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
+      # the artifact and internal-tool services of elitea.runtime.v1.
       - "libs/proto/elitea/engine/**"
+      - "libs/proto/elitea/llm/**"
+      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
+      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The agent runtime's SDK schema gate reads both
