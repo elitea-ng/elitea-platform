@@ -200,7 +200,15 @@ WITH target AS MATERIALIZED (
            item_count.value AS item_count,
            COALESCE(conversation.source = 'editor_test', FALSE)
                AS keep_empty_editor_test,
-           latest_trace.text AS latest_trace_text
+           latest_trace.text AS latest_trace_text,
+           -- A regeneration (ResetCurrentAgentResponse) rewrites an answered
+           -- turn in place: its question is the original one, so a Stop with
+           -- no output keeps the pair and settles the answer empty (#1093).
+           COALESCE(
+               response.meta ->> 'regeneration_execution_generation'
+                   = $1::text,
+               FALSE
+           ) AS is_regeneration
     FROM chat_message_group AS response
     JOIN chat_message_group AS question
       ON question.id = response.reply_to_id
@@ -222,11 +230,11 @@ WITH target AS MATERIALIZED (
         ORDER BY trace.finished_at DESC NULLS LAST, trace.id DESC
         LIMIT 1
     ) AS latest_trace ON TRUE
-    WHERE response.id = $1::integer
-      AND question.id = $2::integer
-      AND response.task_id = $3::text
+    WHERE response.id = $2::integer
+      AND question.id = $3::integer
+      AND response.task_id = $4::text
       AND response.meta ->> 'execution_generation'
-          = $4::text
+          = $1::text
     FOR UPDATE OF response, question
 ), retained AS (
     UPDATE chat_message_group AS response
@@ -247,6 +255,7 @@ WITH target AS MATERIALIZED (
       AND (
           target.item_count > 0
           OR target.keep_empty_editor_test
+          OR target.is_regeneration
           OR COALESCE(target.latest_trace_text, '') <> ''
       )
     RETURNING response.id
@@ -277,6 +286,7 @@ WITH target AS MATERIALIZED (
     WHERE response.id = target.response_message_group_id
       AND target.item_count = 0
       AND NOT target.keep_empty_editor_test
+      AND NOT target.is_regeneration
       AND COALESCE(target.latest_trace_text, '') = ''
     RETURNING response.id
 ), deleted_question_items AS (
@@ -298,10 +308,10 @@ SELECT EXISTS (SELECT 1 FROM deleted_response) AS deleted,
 `
 
 type ProjectCurrentAgentStopParams struct {
+	ExecutionGeneration    string `db:"execution_generation" json:"execution_generation"`
 	ResponseMessageGroupID int32  `db:"response_message_group_id" json:"response_message_group_id"`
 	QuestionMessageGroupID int32  `db:"question_message_group_id" json:"question_message_group_id"`
 	ExecutionID            string `db:"execution_id" json:"execution_id"`
-	ExecutionGeneration    string `db:"execution_generation" json:"execution_generation"`
 }
 
 type ProjectCurrentAgentStopRow struct {
@@ -313,10 +323,10 @@ type ProjectCurrentAgentStopRow struct {
 
 func (q *Queries) ProjectCurrentAgentStop(ctx context.Context, arg ProjectCurrentAgentStopParams) (ProjectCurrentAgentStopRow, error) {
 	row := q.db.QueryRow(ctx, projectCurrentAgentStop,
+		arg.ExecutionGeneration,
 		arg.ResponseMessageGroupID,
 		arg.QuestionMessageGroupID,
 		arg.ExecutionID,
-		arg.ExecutionGeneration,
 	)
 	var i ProjectCurrentAgentStopRow
 	err := row.Scan(

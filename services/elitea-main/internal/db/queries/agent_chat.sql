@@ -2614,7 +2614,13 @@ WITH resolved AS MATERIALIZED (
             - 'workspace_epoch'
             - 'workspace_commit'
         ) || jsonb_build_object(
-            'execution_generation', sqlc.arg(execution_generation)::text
+            'execution_generation', sqlc.arg(execution_generation)::text,
+            -- The answer is rewritten in place, so a Stop before its first
+            -- output must not read it as a fresh turn's empty answer and
+            -- delete it with its (already answered) question (#1093):
+            -- ProjectCurrentAgentStop keeps both while this names the
+            -- generation it stops.
+            'regeneration_execution_generation', sqlc.arg(execution_generation)::text
         ),
         is_streaming = TRUE,
         task_id = sqlc.arg(execution_id)::text,

@@ -19939,7 +19939,9 @@ paths:
         NOT stop the run; it keeps spending the budget.
 
         What happens to the answer: a turn stopped before any output is
-        removed together with its question; a turn with partial output keeps
+        removed together with its question; a regeneration stopped before
+        any output keeps its question and its answer, settled empty (the
+        previous text is not restored); a turn with partial output keeps
         what was written. After a 204, close the stream and reload the
         transcript rather than waiting for a terminal frame.
 
