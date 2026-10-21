@@ -65,6 +65,7 @@ import type {
   MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
+  OkResponse,
   ParticipantCandidatesPage,
   StaticPipelineContinuationReceipt,
   SupportAssistantConfig,
@@ -276,6 +277,14 @@ export const getHeartbeatCanvasPresenceResponseMock = (
   ...overrideResponse,
 });
 
+export const getArchiveConversationResponseMock = (
+  overrideResponse: Partial<Extract<OkResponse, object>> = {},
+): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
+export const getUnarchiveConversationResponseMock = (
+  overrideResponse: Partial<Extract<OkResponse, object>> = {},
+): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
+
 export const getExportConversationResponseMock = (
   overrideResponse: Partial<Extract<string | ConversationExport, object>> = {},
 ): string | ConversationExport =>
@@ -342,6 +351,18 @@ export const getListConversationsResponseMock = (
       undefined,
     ]),
     is_pinned: faker.datatype.boolean(),
+    is_archived: faker.datatype.boolean(),
+    archived_by: faker.helpers.arrayElement([
+      {
+        id: faker.number.int(),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      undefined,
+    ]),
+    archived_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      undefined,
+    ]),
     meta: faker.helpers.arrayElement([
       faker.helpers.arrayElement([null]),
       undefined,
@@ -2016,6 +2037,58 @@ export const getHeartbeatCanvasPresenceMockHandler = (
   );
 };
 
+export const getArchiveConversationMockHandler = (
+  overrideResponse?:
+    | OkResponse
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<OkResponse> | OkResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getArchiveConversationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUnarchiveConversationMockHandler = (
+  overrideResponse?:
+    | OkResponse
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<OkResponse> | OkResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/conversation_archive/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUnarchiveConversationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getExportConversationMockHandler = (
   overrideResponse?:
     | string
@@ -3209,6 +3282,8 @@ export const getChatMock = () => [
   getGetSupportConversationMockHandler(),
   getStartSupportTurnMockHandler(),
   getHeartbeatCanvasPresenceMockHandler(),
+  getArchiveConversationMockHandler(),
+  getUnarchiveConversationMockHandler(),
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),
   getCreateConversationMockHandler(),

@@ -1,5 +1,4 @@
 import { eliteaFetch } from '@/shared/api/generated/mutator';
-import { listApplicationSkills } from '@/shared/api/generated/skills/skills';
 
 /**
  * The agent↔skill link, as the Go service already serves it.
@@ -48,15 +47,22 @@ interface SkillListEnvelope {
 }
 
 /**
- * The skills attached to one agent version.
+ * The skills attached to one agent version, out of the RAW
+ * `listApplicationSkills` envelope.
  *
  * NOTE(#367): this route pointed at the project-wide skills List handler until
  * #367 and answered with EVERY skill in the project, at 200, in the same
  * envelope — so no caller could tell. It reads the attachment now.
+ *
+ * The query cache must hold the envelope, not this array: the generated
+ * `useListApplicationSkills` (the instructions `/skill` mention, mounted in
+ * the same agent editor) shares the query key, so caching the array here made
+ * whichever query landed second read the other's shape — `attached.map is
+ * not a function` on opening an agent. Callers pass this as `select`.
  */
-export async function fetchAttachedSkills(projectId: string, appVersionId: number): Promise<readonly AgentSkill[]> {
-  const envelope = await listApplicationSkills(projectId, appVersionId);
-  return body<SkillListEnvelope>(envelope).items ?? [];
+export function selectAttachedSkills(envelope: unknown): readonly AgentSkill[] {
+  const items = body<SkillListEnvelope | undefined>(envelope)?.items;
+  return Array.isArray(items) ? (items as readonly AgentSkill[]) : [];
 }
 
 /**

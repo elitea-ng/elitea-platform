@@ -69,6 +69,14 @@ export const styles = {
       background: 'background.participant.hover',
     },
   }),
+  /** The desktop inspector: one person per line, as its agent and toolkit sections list theirs. */
+  usersColumn: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: '0.125rem',
+    width: '100%',
+  },
   usersDisplay: {
     display: 'flex',
     flexDirection: 'row',

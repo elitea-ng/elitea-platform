@@ -1355,7 +1355,8 @@
       "responseSchema": "ConversationListing",
       "fixture": null,
       "usedBy": [
-        "entities/run-history"
+        "entities/run-history",
+        "pages/chat-archived"
       ]
     },
     {
@@ -3293,6 +3294,26 @@
       "responseSchema": "ProjectCloudExecutorSwitch",
       "fixture": null,
       "usedBy": ["features/cloud-executor-switch"]
+    },
+    {
+      "id": "conversation.archive",
+      "method": "PUT",
+      "path": "/elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}",
+      "operationId": "archiveConversation",
+      "source": "generated",
+      "responseSchema": "OkResponse",
+      "fixture": null,
+      "usedBy": ["features/chat-conversation-list", "processes/chat", "widgets/desktop-shell"]
+    },
+    {
+      "id": "conversation.unarchive",
+      "method": "DELETE",
+      "path": "/elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}",
+      "operationId": "unarchiveConversation",
+      "source": "generated",
+      "responseSchema": "OkResponse",
+      "fixture": null,
+      "usedBy": ["features/chat-conversation-list", "pages/chat-archived"]
     }
   ]
 }

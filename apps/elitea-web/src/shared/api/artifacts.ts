@@ -23,6 +23,7 @@
  * ZIP was reachable in the UI at all (issue #138).
  */
 import { resolveCredentialsMode } from './http';
+import { sendRaw } from './httpNative';
 import type { HttpFailure, HttpResult } from './http';
 import { boundedArtifactBlob } from './boundedArtifactBlob';
 
@@ -176,7 +177,7 @@ export async function uploadArtifactObject(params: UploadArtifactObjectParams): 
 
   let response: Response;
   try {
-    response = await fetch(url, { method: 'POST', headers, body, credentials, signal: params.signal ?? null });
+    response = await sendRaw(fetch, url, { method: 'POST', headers, body, credentials, signal: params.signal ?? null });
   } catch (cause) {
     return { ok: false, error: networkFailure(cause, url) };
   }
@@ -210,7 +211,7 @@ export async function listBuckets(params: ListBucketsParams): Promise<HttpResult
   const credentials = credentialsFor(params.baseUrl);
   let response: Response;
   try {
-    response = await fetch(url, { credentials, signal: params.signal ?? null });
+    response = await sendRaw(fetch, url, { credentials, signal: params.signal ?? null });
   } catch (cause) {
     return { ok: false, error: networkFailure(cause, url) };
   }
@@ -242,7 +243,7 @@ export async function listArtifacts(params: ListArtifactsParams): Promise<HttpRe
   const credentials = credentialsFor(params.baseUrl);
   let response: Response;
   try {
-    response = await fetch(url, { credentials, signal: params.signal ?? null });
+    response = await sendRaw(fetch, url, { credentials, signal: params.signal ?? null });
   } catch (cause) {
     return { ok: false, error: networkFailure(cause, url) };
   }
@@ -290,7 +291,7 @@ export async function fetchArtifactBlob(params: FetchArtifactBlobParams): Promis
   const credentials = credentialsFor(params.baseUrl);
   let response: Response;
   try {
-    response = await fetch(url, { headers, credentials, signal: params.signal ?? null });
+    response = await sendRaw(fetch, url, { headers, credentials, signal: params.signal ?? null });
   } catch (cause) {
     return { ok: false, error: networkFailure(cause, url) };
   }

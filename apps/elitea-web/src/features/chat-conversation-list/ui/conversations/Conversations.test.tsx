@@ -200,3 +200,17 @@ describe('Conversations — Local work filter', () => {
     expect(screen.queryByRole('button', { name: 'Local work' })).toBeNull();
   });
 });
+
+describe('Conversations — Archived chats entry', () => {
+  it('opens the archived chats page from the header', async () => {
+    const onOpenArchived = vi.fn();
+    renderConversations({ onOpenArchived });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Archived chats' }));
+    expect(onOpenArchived).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no entry without a page to open', () => {
+    renderConversations();
+    expect(screen.queryByRole('button', { name: 'Archived chats' })).toBeNull();
+  });
+});

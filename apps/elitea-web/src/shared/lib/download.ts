@@ -19,6 +19,7 @@
  * file; it was not edited for this).
  */
 import { resolveCredentialsMode } from '../api/http';
+import { sendRaw } from '../api/httpNative';
 
 /* ── row 4a: the reusable blob → anchor-click primitive ──────────────────── */
 
@@ -118,7 +119,7 @@ export async function exportMarkdown(params: ExportMarkdownParams, fallbackName:
 
   let response: Response;
   try {
-    response = await fetch(url, { headers, credentials, signal: params.signal ?? null });
+    response = await sendRaw(fetch, url, { headers, credentials, signal: params.signal ?? null });
   } catch (cause) {
     return { ok: false, error: toExportFailure(cause) };
   }
@@ -178,7 +179,7 @@ export async function downloadFromApi(params: ApiDownloadParams): Promise<ApiDow
 
   let response: Response;
   try {
-    response = await fetch(url, { credentials, signal: params.signal ?? null });
+    response = await sendRaw(fetch, url, { credentials, signal: params.signal ?? null });
   } catch (cause) {
     return { ok: false, error: toExportFailure(cause) };
   }
