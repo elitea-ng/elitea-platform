@@ -1,30 +1,63 @@
 /**
- * The desktop frame's inspector: a full-height pane at the window's right
- * edge that a page fills with its own content (the chat's participants,
- * agents and context budget).
+ * The desktop frame's inspector: ONE right panel whose tabs the page on
+ * screen contributes (Local work: Changes, Approvals, Index; the chat:
+ * Conversation). The panel stacks its tabs in one or two groups, and a tab can
+ * open in a window of its own.
  *
- * The frame (`widgets/desktop-shell`) owns the pane and provides this
- * context; a page renders `<InspectorPortal>` with what belongs there. The
- * portal keeps the page's React tree (its queries, router and state), so the
- * content behaves as it does inline — only its place on screen changes. A
- * mounted portal also tells the frame that the page has an inspector, so the
- * frame shows the toggle in the title bar.
+ * The frame (`widgets/desktop-shell`) owns the panel and provides this
+ * context; a page renders one `<InspectorTab>` per tab it offers. The tab's
+ * content is portalled to wherever the frame shows it — its group's body, or
+ * the body of its own window — so it stays in the page's React tree (its
+ * queries, router, state and handlers): only its place on screen changes,
+ * and it is live in a window exactly as it is in the panel. A tab the frame
+ * does not show (another tab of its group is active, the panel is hidden)
+ * renders nothing.
  *
  * Outside the desktop frame (the web build, a test without it) there is no
  * context: `useInspectorSlot()` is `null` and the page renders the content
- * inline, as before.
+ * its own way (the chat keeps its participants rail inline).
  */
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-/** Which page's inspector it is: the frame names the pane after it (its strings are desktop-only). */
-export type InspectorKind = 'chat';
+import { ThemeProvider, type Theme } from '@mui/material/styles';
+
+/** Every tab a page can contribute. Ids are unique across pages, so a tab id names its page too. */
+export type InspectorTabId = 'changes' | 'approvals' | 'index' | 'conversation';
+
+/** The kind of page an inspector belongs to: the layout (groups, widths) is remembered per kind. */
+export type InspectorPage = 'local' | 'chat';
+
+export const INSPECTOR_TAB_PAGE: Readonly<Record<InspectorTabId, InspectorPage>> = {
+  changes: 'local',
+  approvals: 'local',
+  index: 'local',
+  conversation: 'chat',
+};
+
+/** What a page says about one of its tabs. */
+export interface InspectorTabInfo {
+  readonly id: InspectorTabId;
+  /** The chip's label ("Changes"). */
+  readonly title: string;
+  /** What the tab shows (the thread or conversation name): its own window is titled "<title> — <subject>". */
+  readonly subject: string;
+  /** A count that needs the person (approvals waiting): shown on the chip. 0 or absent: none. */
+  readonly attention?: number;
+}
+
+/** Where the frame shows a tab's content right now. */
+export interface InspectorTarget {
+  readonly node: HTMLElement;
+  /** Set while the tab is in its own window: its popovers and menus open there, not in the main window. */
+  readonly popout?: { readonly body: HTMLElement };
+}
 
 export interface InspectorSlot {
-  /** The pane's body, while the pane is open; `null` while it is hidden. */
-  readonly target: HTMLElement | null;
-  /** A page announces its inspector; the returned function withdraws it. */
-  readonly register: (kind: InspectorKind) => () => void;
+  /** A page offers a tab (and re-offers it when its info changes); the returned function withdraws it. */
+  readonly register: (info: InspectorTabInfo) => () => void;
+  /** Where each shown tab's content goes; a tab without an entry is not on screen. */
+  readonly targets: ReadonlyMap<InspectorTabId, InspectorTarget>;
 }
 
 const InspectorSlotContext = createContext<InspectorSlot | null>(null);
@@ -36,11 +69,35 @@ export function useInspectorSlot(): InspectorSlot | null {
   return useContext(InspectorSlotContext);
 }
 
-/** Puts `children` in the frame's inspector pane (nothing while the pane is hidden). */
-export function InspectorPortal({ kind, children }: { readonly kind: InspectorKind; readonly children: ReactNode }): ReactNode {
+/**
+ * MUI portals its popovers, menus and tooltips to the global `document.body`
+ * — the main window's. Content shown in a tab's own window portals into that
+ * window's body instead.
+ */
+function PopoutScope({ body, children }: { readonly body: HTMLElement | undefined; readonly children: ReactNode }): ReactNode {
+  const theme = useMemo(
+    () =>
+      body === undefined
+        ? (outer: Theme): Theme => outer
+        : (outer: Theme): Theme => ({
+            ...outer,
+            components: {
+              ...outer.components,
+              MuiModal: { ...outer.components?.MuiModal, defaultProps: { ...outer.components?.MuiModal?.defaultProps, container: body } },
+              MuiPopper: { ...outer.components?.MuiPopper, defaultProps: { ...outer.components?.MuiPopper?.defaultProps, container: body } },
+            },
+          }),
+    [body],
+  );
+  return <ThemeProvider theme={theme}>{children}</ThemeProvider>;
+}
+
+/** One tab of the frame's inspector: `children` render wherever the frame shows the tab, and nowhere while it is not shown. */
+export function InspectorTab({ id, title, subject, attention = 0, children }: InspectorTabInfo & { readonly children: ReactNode }): ReactNode {
   const slot = useInspectorSlot();
   const register = slot?.register;
-  useEffect(() => register?.(kind), [register, kind]);
-  if (slot === null || slot.target === null) return null;
-  return createPortal(children, slot.target);
+  useEffect(() => register?.({ id, title, subject, attention }), [register, id, title, subject, attention]);
+  const target = slot?.targets.get(id);
+  if (target === undefined) return null;
+  return createPortal(<PopoutScope body={target.popout?.body}>{children}</PopoutScope>, target.node, id);
 }

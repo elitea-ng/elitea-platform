@@ -951,8 +951,18 @@ installer, a file with an execute bit): offer `reveal_path` instead. An OS
 failure rejects with `os_refused`. The webview's drag region works through
 `core:window:allow-start-dragging` and `core:window:allow-internal-toggle-maximize`
 (double-click to zoom); `core:window:allow-set-theme` lets the UI make the
-native window follow its light/dark mode. Those are the only window
-permissions granted. `log:allow-log` (`plugin:log|log`) lets the UI append
+native window follow its light/dark mode; `core:window:allow-set-focus`
+lets it bring an inspector tab's own window (`panel-<tab>`) to the front.
+Those are the only window permissions granted.
+
+An inspector tab opens in a window of its own through
+`window.open("about:blank#elitea-panel=<tab>")` (`<tab>`: lowercase letters
+and dashes). The host creates the native window `panel-<tab>` for it (one per
+tab: asking again raises it), titled after its document, its size and
+position remembered by the window-state plugin. The window shows the empty
+same-origin document the page fills itself; it may not navigate, and no
+capability names its label, so it has no IPC of its own. Every other
+`window.open` is refused. `log:allow-log` (`plugin:log|log`) lets the UI append
 scrubbed diagnostics to the host log file (README, "Logs").
 
 ### `app://command`
@@ -970,7 +980,7 @@ type AppCommand = { id: string; args?: object };
 | `settings` | — | Elitea ▸ Settings… (⌘, ; File ▸ Settings… on Linux/Windows) |
 | `command_palette` | — | View ▸ Command Palette… (⌘K) |
 | `toggle_sidebar` | — | View ▸ Toggle Sidebar (⌘\\) |
-| `toggle_changes` | — | View ▸ Toggle Changes Panel (⌘⌥\\) |
+| `toggle_changes` | — | View ▸ Toggle Inspector (⌘⌥\\) |
 | `back` | — | View ▸ Back (⌘[) |
 | `forward` | — | View ▸ Forward (⌘]) |
 | `send_to_cloud` | — | Thread ▸ Send to Cloud… (⇧⌘U): open the Send to cloud sheet of the thread on screen. |

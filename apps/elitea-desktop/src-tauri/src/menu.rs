@@ -25,7 +25,7 @@ pub const FORWARDED: &[(&str, &str, Option<&str>)] = &[
     ("toggle_sidebar", "Toggle Sidebar", Some("CmdOrCtrl+\\")),
     (
         "toggle_changes",
-        "Toggle Changes Panel",
+        "Toggle Inspector",
         Some("CmdOrCtrl+Alt+\\"),
     ),
     ("back", "Back", Some("CmdOrCtrl+[")),

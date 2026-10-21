@@ -21,7 +21,7 @@ import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspa
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { createFakeAppIpc, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
-import { AppIpcProvider } from '@/widgets/desktop-shell';
+import { AppIpcProvider, InspectorScope } from '@/widgets/desktop-shell';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -48,7 +48,12 @@ function mount(ipc: FakeWorkspaceIpc, path: string, indexIpc?: FakeIndexIpc, app
     routeTree: rootRoute.addChildren([list, session, chat, createAgent]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
-  const pages = <RouterProvider router={router} />;
+  // The frame's inspector beside the pages (the thread's Changes, Approvals and Index tabs), without the rest of the frame.
+  const pages = (
+    <InspectorScope>
+      <RouterProvider router={router} />
+    </InspectorScope>
+  );
   const withIndex = indexIpc === undefined ? pages : <IndexIpcProvider ipc={indexIpc}>{pages}</IndexIpcProvider>;
   render(
     <AppProviders>
@@ -275,9 +280,9 @@ describe('WorkspaceSessionPage', () => {
     await waitFor(() => expect(indexIpc.calls.opened).toEqual(['w1']));
     await userEvent.click(within(session).getByRole('button', { name: 'More' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Index settings…' }));
-    // The inspector opens on its Index segment.
+    // The inspector opens on its Index tab.
     expect(await screen.findByTestId('index-panel')).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Index' })).toBeChecked();
+    expect(screen.getByRole('tab', { name: 'Index' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('asks to bind a project first when the folder has none', async () => {
@@ -327,9 +332,13 @@ describe('WorkspaceSessionPage', () => {
 
     ipc.emit({ ...at(4), kind: 'approval_request', payload: { request_id: 'r1', tool: 'run_command', title: 'Run cargo build', detail: 'Build it', command: ['cargo', 'build'], reason: 'unlisted', can_remember: true } });
     const dialog = await screen.findByRole('dialog', { name: 'Run cargo build' });
+    // The inspector's Approvals chip counts it.
+    expect(screen.getByTestId('inspector-chip-attention-approvals')).toHaveTextContent('1');
+    expect(screen.getByRole('tab', { name: 'Approvals, 1 waiting', hidden: true })).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Allow once' }));
     expect(ipc.calls.approvals).toEqual([{ requestId: 'r1', decision: 'allow_once' }]);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByTestId('inspector-chip-attention-approvals')).toBeNull();
 
     ipc.emit({ ...at(5), kind: 'tool_result', payload: { call_id: 'c1', ok: true, summary: 'Finished dev profile', truncated: false } });
     ipc.emit({ ...at(6), kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: ['m1'], changed_files: 1 } });

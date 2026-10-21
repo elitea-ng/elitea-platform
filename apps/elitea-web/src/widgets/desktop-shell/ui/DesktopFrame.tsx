@@ -10,7 +10,8 @@
  * (`PageTitle.tsx`: `Chats ▸ folder ▸ conversation`, or the page's name) and
  * the sidebar and inspector toggles. The sidebar is the way to everything, so
  * the row has no "back" button. A page with an inspector (the chat's
- * participants) fills the frame's full-height right pane through
+ * participants, Local work's changes, approvals and index) contributes tabs
+ * to the frame's ONE full-height right panel through
  * `shared/desktop/inspectorSlot` (`InspectorPane.tsx`).
  *
  * The chat page shows no conversation list of its own in the frame: the
@@ -42,7 +43,7 @@ import { useShellActions } from '../model/useShellActions';
 import { useShellLocation } from '../model/useShellLocation';
 import { CommandPalette } from './CommandPalette';
 import { DesktopSidebar } from './DesktopSidebar';
-import { InspectorPane, InspectorSlotScope, InspectorToggle, useInspectorHost } from './InspectorPane';
+import { InspectorPane, InspectorSlotScope, InspectorToggle, InspectorWindows, useInspectorHost, useInspectorView } from './InspectorPane';
 import { NativeLook } from './NativeLook';
 import { BannerStack, NoticeBanner } from './NoticeBanner';
 import { PageTitle } from './PageTitle';
@@ -100,7 +101,13 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
   const location = useShellLocation();
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   const items = useMemo(() => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)), [permissions, selectedProjectId]);
-  const inspector = useInspectorHost();
+  const inspector = useInspectorHost(ipc);
+  const inspectorOpen = useDesktopLayout((state) => state.changesOpen);
+  const maximized = useDesktopLayout((state) => state.inspectorMaximized);
+  // A maximized inspector takes the main column's place while it is on screen; the page stays mounted under it.
+  const inspectorGroups = useInspectorView(inspector);
+  const inspectorShown = inspectorOpen && inspectorGroups.length > 0;
+  const mainHidden = maximized && inspectorShown;
 
   return (
     <NativeLook>
@@ -124,7 +131,7 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
                 flex: 1,
                 minWidth: 0,
                 height: '100vh',
-                display: 'flex',
+                display: mainHidden ? 'none' : 'flex',
                 flexDirection: 'column',
                 background: theme.vars.palette.background.default,
                 position: 'relative',
@@ -145,6 +152,7 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
               </BannerStack>
             </Box>
             <InspectorPane host={inspector} />
+            <InspectorWindows host={inspector} />
             <CommandPalette items={items} run={run} />
           </Box>
         </InspectorSlotScope>

@@ -5,10 +5,11 @@
  *  - the web build: the right rail of the chat page, collapsible, default
  *    collapsed (the baseline, `NewChat.jsx:166`);
  *  - inside the desktop frame (`shared/desktop/inspectorSlot` has a slot):
- *    the frame's full-height inspector pane, which owns the width and the
- *    show / hide toggle (⌘⌥\). The same `ParticipantsWrapper` renders there
- *    with `appearance="inspector"`, through a portal, so every handler and
- *    query below is the page's own either way.
+ *    the Conversation tab of the frame's inspector, which owns the width,
+ *    the show / hide toggle (⌘⌥\), the tab's group and its own window. The
+ *    same `ParticipantsWrapper` renders there with `appearance="inspector"`,
+ *    through a portal, so every handler and query below is the page's own
+ *    wherever the tab is shown.
  *
  * Split out of `index.tsx` (the page is at its §3.5 complexity ceiling).
  */
@@ -16,7 +17,8 @@ import type { ComponentProps, ReactNode } from 'react';
 import { useState } from 'react';
 
 import { ParticipantsWrapper } from '@/features/chat-participants';
-import { InspectorPortal, useInspectorSlot } from '@/shared/desktop/inspectorSlot';
+import { InspectorTab, useInspectorSlot } from '@/shared/desktop/inspectorSlot';
+import { t } from '@/shared/i18n';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ContextBudget } from '@/widgets/context-budget';
 
@@ -74,5 +76,11 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
     />
   );
 
-  return inspector ? <InspectorPortal kind="chat">{panel}</InspectorPortal> : panel;
+  return inspector ? (
+    <InspectorTab id="conversation" title={t('desktop.inspector.chat', 'Conversation')} subject={activeConversation?.name ?? ''}>
+      {panel}
+    </InspectorTab>
+  ) : (
+    panel
+  );
 }

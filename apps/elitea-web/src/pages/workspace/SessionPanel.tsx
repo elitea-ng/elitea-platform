@@ -1,14 +1,13 @@
 /**
- * The thread's inspector (toggle ⌘⌥\, resizable), Changes | Approvals | Index: what the thread's
- * turns changed, newest first — diff, Reveal in Finder / Open, and for a
- * turn the host still keeps per-file revert and undo — and the
- * approvals of this thread (the one being asked is a modal dialog; the panel
- * shows the queue behind it and what was decided).
+ * The thread's tabs in the frame's inspector (toggle ⌘⌥\): Changes — what
+ * the thread's turns changed, newest first: diff, Reveal in Finder / Open,
+ * and for a turn the host still keeps per-file revert and undo; Approvals —
+ * the approvals of this thread (the one being asked is a modal dialog; the
+ * tab shows the queue behind it and what was decided); Index — the folder's
+ * local code index.
  */
 import { useState } from 'react';
-import type { KeyboardEvent, PointerEvent } from 'react';
 
-import CloseIcon from '@mui/icons-material/Close';
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import LaunchOutlinedIcon from '@mui/icons-material/LaunchOutlined';
 import Box from '@mui/material/Box';
@@ -19,10 +18,11 @@ import Typography from '@mui/material/Typography';
 
 import { ChangedFilesCard } from '@/features/workspace';
 import type { AppIpc } from '@/shared/desktop/appEvents';
+import { InspectorTab } from '@/shared/desktop/inspectorSlot';
 import type { ApprovalDecision, ApprovalRequestPayload, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { IndexPanelHost } from '@/features/workspace-index';
-import { CHANGES_WIDTH, copyText, Segmented, TitleBarSpacer, useContextMenu, useDesktopLayout, type InspectorTab } from '@/widgets/desktop-shell';
+import { copyText, useContextMenu } from '@/widgets/desktop-shell';
 
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
 
@@ -30,7 +30,9 @@ export interface SessionPanelProps {
   ipc: WorkspaceIpc;
   appIpc: AppIpc | undefined;
   workspaceId: string;
-  /** The host has a local index to show in the Index segment. */
+  /** What the tabs show (the thread's title, or the folder's name): a tab's own window is named after it. */
+  subject: string;
+  /** The host has a local index to show in the Index tab. */
   hasIndex: boolean;
   /** Every turn of the thread that changed files, newest first. */
   changeSets: readonly ChangeSet[];
@@ -50,50 +52,6 @@ function decisionLabel(decision: ApprovalDecision): string {
     case 'deny':
       return t('workspace.panel.denied', 'Denied');
   }
-}
-
-function ResizeHandle(): React.JSX.Element {
-  const width = useDesktopLayout((state) => state.changesWidth);
-  const setWidth = useDesktopLayout((state) => state.setChangesWidth);
-  const [drag, setDrag] = useState<{ x: number; width: number } | null>(null);
-  const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({ x: event.clientX, width });
-  };
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
-    // The panel is on the right: dragging left widens it.
-    if (drag !== null) setWidth(drag.width + (drag.x - event.clientX));
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'ArrowLeft') setWidth(width + 16);
-    else if (event.key === 'ArrowRight') setWidth(width - 16);
-  };
-  return (
-    <Box
-      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a focusable, draggable splitter (WAI-ARIA window splitter); an <hr> takes neither
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={t('workspace.panel.resize', 'Resize changes panel')}
-      aria-valuemin={CHANGES_WIDTH.min}
-      aria-valuemax={CHANGES_WIDTH.max}
-      aria-valuenow={width}
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => setDrag(null)}
-      onKeyDown={onKeyDown}
-      sx={(theme: Theme) => ({
-        width: '0.3125rem',
-        marginRight: '-0.1875rem',
-        flexShrink: 0,
-        cursor: 'col-resize',
-        position: 'relative',
-        zIndex: 1,
-        borderLeft: `1px solid ${theme.vars.palette.divider}`,
-        '&:hover, &:focus-visible': { borderLeftColor: theme.vars.palette.primary.main, outline: 'none' },
-      })}
-    />
-  );
 }
 
 function SectionTitle({ children }: { children: string }): React.JSX.Element {
@@ -219,57 +177,38 @@ function ApprovalsPane({ waiting, decided }: Pick<SessionPanelProps, 'waiting' |
   );
 }
 
-function Pane({ tab, props }: { tab: InspectorTab; props: SessionPanelProps }): React.JSX.Element | null {
-  if (tab === 'approvals') return <ApprovalsPane waiting={props.waiting} decided={props.decided} />;
-  if (tab === 'index') return <IndexPanelHost workspaceId={props.workspaceId} />;
-  return <ChangesPane {...props} />;
+/** A tab's body: scrolls on its own, padded like the rest of the inspector. */
+function TabBody({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</Box>;
 }
 
-/** The inspector: Changes | Approvals | Index. */
-export function SessionPanel(props: SessionPanelProps): React.JSX.Element {
-  const width = useDesktopLayout((state) => state.changesWidth);
-  const stored = useDesktopLayout((state) => state.inspectorTab);
-  const tab: InspectorTab = stored === 'index' && !props.hasIndex ? 'changes' : stored;
-  const pending = props.waiting.length;
-  const options: { value: InspectorTab; label: string }[] = [
-    { value: 'changes', label: t('workspace.panel.changes', 'Changes') },
-    { value: 'approvals', label: pending > 0 ? t('workspace.panel.approvalsCount', 'Approvals · {{n}}', { n: pending }) : t('workspace.panel.approvals', 'Approvals') },
-    ...(props.hasIndex ? [{ value: 'index' as const, label: t('workspace.panel.index', 'Index') }] : []),
-  ];
+/**
+ * The thread's tabs in the frame's inspector: Changes, Approvals (its chip
+ * counts the approvals waiting) and, when the host keeps a local index,
+ * Index. Each is a tab of its own, so it can share a group with the others,
+ * sit in the other group, or open in a window of its own.
+ */
+export function SessionInspector(props: SessionPanelProps): React.JSX.Element {
+  const { subject } = props;
   return (
     <>
-      <ResizeHandle />
-      <Box
-        component="aside"
-        data-testid="session-panel"
-        aria-label={t('workspace.panel.label', 'Changes and approvals')}
-        sx={(theme: Theme) => ({
-          width: `${String(width / 16)}rem`,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          background: theme.vars.palette.background.default,
-        })}
-      >
-        <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-          <TitleBarSpacer
-            logo={false}
-            trailing={
-              <Tooltip title={t('workspace.panel.hide', 'Hide panel')}>
-                <IconButton size="small" aria-label={t('workspace.panel.hide', 'Hide panel')} onClick={() => useDesktopLayout.getState().setChangesOpen(false)}>
-                  <CloseIcon fontSize="inherit" />
-                </IconButton>
-              </Tooltip>
-            }
-          >
-            <Segmented ariaLabel={t('workspace.panel.label', 'Changes and approvals')} value={tab} options={options} onChange={(next) => useDesktopLayout.getState().setInspectorTab(next)} testId="inspector-tabs" />
-          </TitleBarSpacer>
-        </Box>
-        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Pane tab={tab} props={props} />
-        </Box>
-      </Box>
+      <InspectorTab id="changes" title={t('workspace.panel.changes', 'Changes')} subject={subject}>
+        <TabBody>
+          <ChangesPane {...props} />
+        </TabBody>
+      </InspectorTab>
+      <InspectorTab id="approvals" title={t('workspace.panel.approvals', 'Approvals')} subject={subject} attention={props.waiting.length}>
+        <TabBody>
+          <ApprovalsPane waiting={props.waiting} decided={props.decided} />
+        </TabBody>
+      </InspectorTab>
+      {props.hasIndex && (
+        <InspectorTab id="index" title={t('workspace.panel.index', 'Index')} subject={subject}>
+          <TabBody>
+            <IndexPanelHost workspaceId={props.workspaceId} />
+          </TabBody>
+        </InspectorTab>
+      )}
     </>
   );
 }

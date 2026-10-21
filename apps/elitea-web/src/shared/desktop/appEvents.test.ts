@@ -13,6 +13,7 @@ describe('createAppIpc', () => {
     await ipc.openPath('w1', '');
     await ipc.setWindowTheme('dark');
     await ipc.setWindowTheme(null);
+    await ipc.focusWindow('panel-changes');
     await ipc.ready();
     expect(invoke.mock.calls).toEqual([
       ['app_platform'],
@@ -20,6 +21,7 @@ describe('createAppIpc', () => {
       ['open_path', { workspace_id: 'w1', path: '' }],
       ['plugin:window|set_theme', { label: 'main', value: 'dark' }],
       ['plugin:window|set_theme', { label: 'main', value: null }],
+      ['plugin:window|set_focus', { label: 'panel-changes' }],
       ['app_ready'],
     ]);
   });

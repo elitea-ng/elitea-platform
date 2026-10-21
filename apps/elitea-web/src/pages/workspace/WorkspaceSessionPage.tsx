@@ -5,7 +5,8 @@
  * Toolbar: the folder ▸ thread title (its path card re-binds the project).
  * Composer footer: agent·version, Act | Plan, where it runs. Body: the thread's exchanges — your prompt, then what the
  * agent did (text, collapsible tool lines). Bottom: the composer ("@" files,
- * "/" commands). Right (⌘⌥\): the changes panel (`SessionPanel`).
+ * "/" commands). Right (⌘⌥\): the thread's tabs in the frame's inspector —
+ * Changes, Approvals, Index (`SessionPanel.tsx`).
  *
  * The thread is the URL's `conversation`. A new thread has none; its first
  * send creates the conversation and the URL then names it (without
@@ -23,9 +24,9 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
+import { ApprovalDialog, readThreads, threadsQueryKey, useWorkspaceIpc } from '@/features/workspace';
 import { useHasIndexHost } from '@/features/workspace-index';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
@@ -33,7 +34,7 @@ import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
 import { HandoffDialogs } from './HandoffControls';
 import { COLUMN, EarlierTurns, Exchanges, ForkNotices, ThreadIntro } from './sessionParts';
-import { SessionPanel } from './SessionPanel';
+import { SessionInspector } from './SessionPanel';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
@@ -51,17 +52,27 @@ const LIST_KEY = ['workspace', 'list'] as const;
 /** What the inspector's badge counts: approvals waiting, and a turn that can be undone. */
 const attentionOf = (session: ThreadSession): number => session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
 
+/**
+ * What the thread's inspector tabs show: the thread's title, or its folder's
+ * name (a new thread). Read through the sidebar's threads query (the same
+ * key, invalidated after `recordThread`), not from storage on every render.
+ */
+function useThreadSubject(workspace: Workspace, conversationId: string): string {
+  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
+  return threads.data?.find((x) => x.id === conversationId)?.title ?? workspace.name;
+}
+
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
+  const subject = useThreadSubject(workspace, conversationId);
   const { turn, commands, raw } = session;
   const skills = useAgentSkills(projectId, raw.versionId);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const hasIndex = useHasIndexHost();
   const appIpc = useAppIpc();
-  const changesOpen = useDesktopLayout((state) => state.changesOpen);
   // "Continue?" at the step limit is a card in the transcript; the rest are the dialog's queue.
   const continueRequest = turn.view.approvals.find((approval) => approval.kind === 'continue');
   const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => approval.kind !== 'continue');
@@ -125,19 +136,18 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           <ThreadComposer ipc={ipc} workspaceId={workspace.id} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} />
         </Box>
       </Box>
-      {changesOpen && (
-        <SessionPanel
-          ipc={ipc}
-          appIpc={appIpc}
-          workspaceId={workspace.id}
-          hasIndex={hasIndex}
-          changeSets={session.changeSets}
-          undoTurnId={session.undoTurnId}
-          undoRequest={commands.undoRequest}
-          waiting={turn.view.approvals}
-          decided={session.decided}
-        />
-      )}
+      <SessionInspector
+        ipc={ipc}
+        appIpc={appIpc}
+        workspaceId={workspace.id}
+        subject={subject}
+        hasIndex={hasIndex}
+        changeSets={session.changeSets}
+        undoTurnId={session.undoTurnId}
+        undoRequest={commands.undoRequest}
+        waiting={turn.view.approvals}
+        decided={session.decided}
+      />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
       <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
     </Box>
