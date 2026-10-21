@@ -329,6 +329,14 @@ and as the `tool_name` enum; when the guardrails blocked some, the platform
 lists the remaining ones in `selected_tools` and each becomes its own tool
 with its own description.
 
+The edit tools follow the agent's model (#1214): a model named `gpt-5*`,
+`*codex*`, `o3*` or `o4*` is offered `write_file` and `apply_patch`
+described as the Codex `*** Begin Patch` envelope; every other model
+`write_file`, `edit_file`, `multi_edit` and `apply_patch` (described as a
+unified diff first). The agent's `version_details.meta.edit_format`
+(`"auto"`, `"str_replace"`, `"patch"`) overrides the model. Tool names never
+change, and `apply_patch` accepts both formats whatever its description.
+
 `mentions` are the workspace-relative paths the person referenced with "@"
 (a folder may end with `/`; at most 50). Each must resolve inside the
 workspace, exist as a file or folder (not a symlink), not match

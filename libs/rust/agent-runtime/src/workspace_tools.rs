@@ -19,6 +19,7 @@ use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::edit_profile::{APPLY_PATCH_ENVELOPE_DESCRIPTION, EditProfile};
 use crate::host::{HostError, ToolProvider, ToolsetRequest};
 
 /// The toolset's name: the local toolset's (`elitea_local_tools::provider::TOOLSET_NAME`).
@@ -280,6 +281,40 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     },
 ];
 
+fn patch_param() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "patch": { "type": "string" } },
+        "required": ["patch"]
+    })
+}
+
+/// `apply_patch` as [`EditProfile::Patch`] offers it: the same name and
+/// schema, described as the Codex envelope.
+pub static APPLY_PATCH_ENVELOPE: WorkspaceToolSpec = WorkspaceToolSpec {
+    name: "apply_patch",
+    read_only: false,
+    description: APPLY_PATCH_ENVELOPE_DESCRIPTION,
+    parameters: patch_param,
+};
+
+/// The tools a turn with `profile` is offered, in model order: the same
+/// selection as `elitea-local-tools`' `session::tools_for`.
+#[must_use]
+pub fn workspace_tools_for(profile: EditProfile) -> Vec<&'static WorkspaceToolSpec> {
+    WORKSPACE_TOOLS
+        .iter()
+        .filter(|spec| profile.offers(spec.name))
+        .map(|spec| {
+            if profile == EditProfile::Patch && spec.name == APPLY_PATCH_ENVELOPE.name {
+                &APPLY_PATCH_ENVELOPE
+            } else {
+                spec
+            }
+        })
+        .collect()
+}
+
 /// Runs one tool call in the sandbox's workspace runner.
 #[async_trait]
 pub trait WorkspaceRunner: Send + Sync {
@@ -470,6 +505,7 @@ impl Toolset for WorkspaceToolset {
 pub struct WorkspaceToolProvider {
     runner: Arc<dyn WorkspaceRunner>,
     shell: bool,
+    edit_profile: EditProfile,
     approved_calls: Option<Arc<dyn ApprovedCallLedger>>,
 }
 
@@ -481,8 +517,17 @@ impl WorkspaceToolProvider {
         Self {
             runner,
             shell,
+            edit_profile: EditProfile::default(),
             approved_calls: None,
         }
+    }
+
+    /// Offer the edit tools that suit the turn's model
+    /// ([`EditProfile`]); the default is [`EditProfile::StrReplace`].
+    #[must_use]
+    pub fn with_edit_profile(mut self, profile: EditProfile) -> Self {
+        self.edit_profile = profile;
+        self
     }
 
     /// Make every approved call one-shot through `ledger`
@@ -496,8 +541,8 @@ impl WorkspaceToolProvider {
     /// The tools offered, in model order.
     #[must_use]
     pub fn specs(&self) -> Vec<&'static WorkspaceToolSpec> {
-        WORKSPACE_TOOLS
-            .iter()
+        workspace_tools_for(self.edit_profile)
+            .into_iter()
             .filter(|spec| self.shell || spec.name != "run_command")
             .collect()
     }
@@ -571,6 +616,16 @@ mod tests {
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
         assert_eq!(names(true).len(), 15);
+        let patch = WorkspaceToolProvider::new(runner.clone(), true)
+            .with_edit_profile(EditProfile::Patch)
+            .specs();
+        let patch_names: Vec<_> = patch.iter().map(|spec| spec.name).collect();
+        assert!(!patch_names.contains(&"edit_file") && !patch_names.contains(&"multi_edit"));
+        let apply = patch
+            .iter()
+            .find(|spec| spec.name == "apply_patch")
+            .expect("apply_patch");
+        assert!(apply.description.contains("*** Begin Patch"));
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

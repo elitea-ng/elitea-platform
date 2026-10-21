@@ -102,6 +102,19 @@ changed since is refused, whatever the format.
   marked `...` (per file, `path:` first, for `apply_patch`), at most 4 KiB
   per call (`snippet_truncated: true` when cut).
 
+* The edit tools a turn is offered follow the model family
+  (`EditProfile`, in `elitea-agent-runtime`'s `edit_profile` so the cloud
+  executor shares it): `StrReplace` (the default; Claude, Gemini, Qwen,
+  others) offers `write_file`, `edit_file`, `multi_edit` and
+  `apply_patch` described as a unified diff first; `Patch` (`gpt-5*`,
+  `*codex*`, `o3*`, `o4*`) offers `write_file` and `apply_patch` described
+  as the Codex envelope. The agent's `meta.edit_format` (`auto`,
+  `str_replace`, `patch`) overrides it. `session::tools_for(profile)` and
+  the executor's `workspace_tools::workspace_tools_for(profile)` give the
+  same names, descriptions and schemas per profile (the workspace
+  runner's contract test checks both); the host sets it per turn with
+  `LocalSession::set_edit_profile`.
+
 The envelope parser and the ladder are adapted from OpenAI Codex
 (Apache-2.0); see `NOTICE`.
 

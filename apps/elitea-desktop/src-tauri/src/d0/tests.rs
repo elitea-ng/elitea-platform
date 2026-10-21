@@ -935,6 +935,72 @@ async fn answering_platform() -> MockServer {
     .await
 }
 
+/// #1214: a GPT-5 agent's turn is offered `write_file` and `apply_patch`
+/// described as the Codex envelope, not the str-replace tools; a Claude
+/// agent's turn (the default fixture's model is neither) is offered all.
+#[tokio::test]
+async fn the_edit_tools_follow_the_agents_model() {
+    let offered = |details: Value| async move {
+        let inner = platform(details, &[]);
+        let server = serve(move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                return sse(&[
+                    json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}),
+                ]);
+            }
+            inner(req)
+        })
+        .await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let llm = seen(&h.server, "/llm/v1/chat/completions");
+        let body: Value = serde_json::from_str(&llm[0].body).unwrap();
+        body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                (
+                    t["function"]["name"].as_str().unwrap().to_owned(),
+                    t["function"]["description"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut gpt5 = agent_details();
+    gpt5["llm_settings"]["model_name"] = json!("gpt-5");
+    let tools = offered(gpt5.clone()).await;
+    let names: Vec<&str> = tools.iter().map(|(name, _)| name.as_str()).collect();
+    assert!(
+        names.contains(&"write_file") && names.contains(&"apply_patch"),
+        "{names:?}"
+    );
+    assert!(
+        !names.contains(&"edit_file") && !names.contains(&"multi_edit"),
+        "{names:?}"
+    );
+    let apply = &tools
+        .iter()
+        .find(|(name, _)| name == "apply_patch")
+        .unwrap()
+        .1;
+    assert!(apply.contains("*** Begin Patch"), "{apply}");
+
+    let tools = offered(agent_details()).await;
+    let names: Vec<&str> = tools.iter().map(|(name, _)| name.as_str()).collect();
+    for tool in ["write_file", "edit_file", "multi_edit", "apply_patch"] {
+        assert!(names.contains(&tool), "{tool} in {names:?}");
+    }
+    // meta.edit_format pins it.
+    gpt5["meta"] = json!({"edit_format": "str_replace"});
+    let tools = offered(gpt5).await;
+    assert!(tools.iter().any(|(name, _)| name == "multi_edit"));
+}
+
 #[tokio::test]
 async fn only_the_last_turns_of_a_workspace_are_kept() {
     let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
