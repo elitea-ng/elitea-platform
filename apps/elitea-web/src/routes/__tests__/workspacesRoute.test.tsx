@@ -110,8 +110,10 @@ describe('the Workspaces route in the real app shell', () => {
 
     fireEvent.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
-    // Off the folders, the way back is in the title row.
-    expect(await screen.findByRole('button', { name: 'Local work' })).toBeInTheDocument();
+    // Off the folders, the title row names the page (no back button); Local work stays in the sidebar.
+    expect(await screen.findByTestId('page-title')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Local work' })).toBeNull();
+    expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
   });
 
   it('desktop build: /workspaces/$id reaches the session page', async () => {
