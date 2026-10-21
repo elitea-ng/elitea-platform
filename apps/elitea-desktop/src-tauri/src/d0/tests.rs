@@ -5964,3 +5964,68 @@ async fn declining_the_plan_returns_the_feedback_and_stays_in_plan_mode() {
     assert_eq!(exchange["decision"], "decline");
     assert_eq!(exchange["value"], "Keep the old file too.");
 }
+
+/// #1225: denying a call with feedback returns `declined_by_person` and the
+/// person's text as the call's result, the model's next request carries
+/// it, and the HITL exchange records the denial with the feedback.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deny_with_feedback_reaches_the_model() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(
+        server,
+        allowed(),
+        UiDecision::DenyWithFeedback("File it tomorrow, not now.".into()),
+    )
+    .await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done(&h).await;
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let answers = tool_messages(&llm[2]);
+    let declined = &answers[1];
+    assert_eq!(declined["ok"], false, "{declined}");
+    assert_eq!(declined["error"]["code"], "declined_by_person");
+    assert_eq!(declined["error"]["feedback"], "File it tomorrow, not now.");
+    // The remote call was never confirmed.
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
+    assert_eq!(
+        body["hitl_exchanges"][0]["value"],
+        "File it tomorrow, not now."
+    );
+}
+
+#[test]
+fn feedback_travels_only_with_a_denial_and_is_bounded_and_clean() {
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", None),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("  ")),
+        Some(UiDecision::Deny)
+    );
+    assert_eq!(
+        UiDecision::parse("deny_with_feedback", Some("no\u{0}pe")),
+        Some(UiDecision::DenyWithFeedback("nope".into()))
+    );
+    assert_eq!(
+        UiDecision::parse("allow_once", Some("ignored")),
+        Some(UiDecision::AllowOnce)
+    );
+    let long = "é".repeat(3000);
+    let Some(UiDecision::DenyWithFeedback(cut)) =
+        UiDecision::parse("deny_with_feedback", Some(&long))
+    else {
+        panic!("a denial");
+    };
+    assert!(cut.len() <= 2048 && cut.chars().all(|c| c == 'é'));
+    assert_eq!(UiDecision::parse("approve_with_feedback", Some("x")), None);
+}

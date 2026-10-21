@@ -26,6 +26,7 @@ use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
 use elitea_local_tools::approvals::{
     ACCEPT, APPROVE_ALWAYS, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, ToolCall,
 };
+use elitea_local_tools::session::{BY_PERSON, DECIDED_BY};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -45,6 +46,17 @@ pub const WAIT_PAYLOAD_KEY: &str = "wait_ms";
 /// The action a question closed by its wait is answered with.
 pub const TIMEOUT_ACTION: &str = "timeout";
 
+impl UiDecision {
+    /// The person's text for the model, carried by a denial or a decline.
+    fn feedback(&self) -> Option<String> {
+        match self {
+            Self::Decline(feedback) => feedback.clone(),
+            Self::DenyWithFeedback(feedback) => Some(feedback.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// The `hitl_exchanges` kind of a plan card.
 pub const PLAN_KIND: &str = "plan_approval";
 
@@ -60,13 +72,18 @@ pub enum UiDecision {
     Accept,
     /// Decline a proposed plan, with the person's feedback for the model.
     Decline(Option<String>),
+    /// Deny any card and tell the agent why (#1225): the model reads the
+    /// text as the call's typed failure (`declined_by_person`).
+    DenyWithFeedback(String),
 }
 
 impl UiDecision {
     /// `decision` as `approval_respond` sends it, with its `feedback`
-    /// (taken by `decline` only).
+    /// (taken by `decline` and `deny_with_feedback`; without any,
+    /// `deny_with_feedback` is a plain `deny`).
     #[must_use]
     pub fn parse(value: &str, feedback: Option<&str>) -> Option<Self> {
+        // Feedback is never an approval: it only travels with a denial.
         let feedback = feedback
             .map(clean)
             .map(|text| cut(text.trim(), FEEDBACK_BYTES))
@@ -77,6 +94,7 @@ impl UiDecision {
             "deny" | "cancel" => Some(Self::Deny),
             "accept" => Some(Self::Accept),
             "decline" => Some(Self::Decline(feedback)),
+            "deny_with_feedback" => Some(feedback.map_or(Self::Deny, Self::DenyWithFeedback)),
             _ => None,
         }
     }
@@ -236,13 +254,18 @@ impl ApprovalChannel for UiPrompt {
             }
         };
         let approved = matches!(decision, UiDecision::AllowOnce | UiDecision::AllowAlways);
-        binding.recorder.hitl_exchange(exchange_of(
+        let feedback = decision.feedback();
+        let mut exchange = exchange_of(
             &request,
             &request_id,
             kind,
             &title,
             if approved { "approve" } else { "reject" },
-        ));
+        );
+        if let Some(feedback) = &feedback {
+            exchange["value"] = Value::String(feedback.clone());
+        }
+        binding.recorder.hitl_exchange(exchange);
         Ok(match decision {
             UiDecision::AllowAlways if can_remember => ApprovalOutcome::Decided {
                 action: APPROVE_ALWAYS.to_owned(),
@@ -253,10 +276,20 @@ impl ApprovalChannel for UiPrompt {
                 value: json!({}),
             },
             // `accept` and `decline` belong to plan cards: here they deny.
-            UiDecision::Deny | UiDecision::Accept | UiDecision::Decline(_) => {
+            UiDecision::Deny
+            | UiDecision::Accept
+            | UiDecision::Decline(_)
+            | UiDecision::DenyWithFeedback(_) => {
+                let mut value = json!({
+                    "reason": "the person rejected it",
+                    DECIDED_BY: BY_PERSON,
+                });
+                if let Some(feedback) = feedback {
+                    value["feedback"] = Value::String(feedback);
+                }
                 ApprovalOutcome::Decided {
                     action: "reject".to_owned(),
-                    value: json!({ "reason": "the person rejected it" }),
+                    value,
                 }
             }
         })
@@ -288,7 +321,9 @@ impl UiPrompt {
         let decision = answer.await.map_err(|_| ended())?;
         let (action, value) = match decision {
             UiDecision::Accept => (ACCEPT, json!({})),
-            UiDecision::Decline(Some(feedback)) => (DECLINE, json!({ "feedback": feedback })),
+            UiDecision::Decline(Some(feedback)) | UiDecision::DenyWithFeedback(feedback) => {
+                (DECLINE, json!({ "feedback": feedback }))
+            }
             _ => (DECLINE, json!({})),
         };
         let mut exchange = exchange_of(request, &request_id, PLAN_KIND, &clean(plan), action);

@@ -1254,6 +1254,13 @@ impl LocalSession {
                 if let Some(refusal) = forbidden_by_rule(&value, reason) {
                     return Err(refusal);
                 }
+                if value.get(DECIDED_BY).and_then(Value::as_str) == Some(BY_PERSON) {
+                    return Err(ToolError::new(
+                        ErrorCode::Rejected,
+                        format!("not allowed: {reason}"),
+                    )
+                    .with_details(declined_details(feedback_of(&value).as_deref())));
+                }
                 Err(ToolError::new(
                     ErrorCode::Rejected,
                     format!("not allowed: {reason}"),
@@ -1739,6 +1746,41 @@ impl LocalSession {
 /// `{"error": "forbidden_by_rule", "justification": "…", "rule":
 /// "workspace#3"}` beside the usual fields, so it can take the suggested
 /// alternative instead of retrying.
+/// The key of a decision's value that says who decided; [`BY_PERSON`] for
+/// the person's own answer (a host's prompt sets it), absent for a rule.
+pub const DECIDED_BY: &str = "by";
+
+/// [`DECIDED_BY`]'s value for the person's own answer.
+pub const BY_PERSON: &str = "person";
+
+/// The code of a call the person declined (#1225).
+pub const DECLINED_BY_PERSON: &str = "declined_by_person";
+
+/// The typed failure a call the person declined carries in its result
+/// (#1225): `ok: false` and `error: {code: "declined_by_person", message,
+/// feedback?}`. `feedback` is the person's own text, why they declined (not
+/// repository data, and never an approval): the model reads it and
+/// adjusts its next step. Hosts add these fields to a declined remote
+/// call's result too.
+#[must_use]
+pub fn declined_details(feedback: Option<&str>) -> serde_json::Map<String, Value> {
+    let mut error = json!({
+        "code": DECLINED_BY_PERSON,
+        "message": if feedback.is_some() {
+            "The person declined this call. `feedback` is what they wrote, in their own words."
+        } else {
+            "The person declined this call."
+        },
+    });
+    if let Some(feedback) = feedback {
+        error["feedback"] = Value::String(feedback.to_owned());
+    }
+    let mut details = serde_json::Map::new();
+    details.insert("ok".to_owned(), Value::Bool(false));
+    details.insert("error".to_owned(), error);
+    details
+}
+
 /// The person's feedback in a decision's value (`feedback`), bounded to
 /// [`MAX_FEEDBACK_BYTES`] at a character boundary; `None` when empty.
 #[must_use]

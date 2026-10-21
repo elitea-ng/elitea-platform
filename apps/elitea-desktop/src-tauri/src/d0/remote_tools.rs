@@ -288,8 +288,18 @@ pub async fn call(
                 else {
                     return error_result("invalid_response", "the confirmation request had no id");
                 };
-                if !confirmed(context, spec, call_id, tool_name, &interrupt, &message).await {
-                    return error_result("rejected", "the person rejected this call");
+                if let Err(feedback) =
+                    confirmed(context, spec, call_id, tool_name, &interrupt, &message).await
+                {
+                    // #1225: the person's denial is a typed failure, with
+                    // their feedback when they wrote one.
+                    let mut result = error_result("rejected", "the person rejected this call");
+                    if let Value::Object(fields) = &mut result {
+                        fields.extend(elitea_local_tools::session::declined_details(
+                            feedback.as_deref(),
+                        ));
+                    }
+                    return result;
                 }
                 confirmation = Some(json!({
                     "approved": true,
@@ -352,6 +362,8 @@ pub async fn call(
     }
 }
 
+/// Ask the person to confirm a sensitive remote call. `Err` is a denial,
+/// with the person's feedback when they wrote one (#1225).
 async fn confirmed(
     context: &RemoteContext,
     spec: &RemoteToolSpec,
@@ -359,7 +371,7 @@ async fn confirmed(
     tool_name: &str,
     interrupt: &Value,
     message: &str,
-) -> bool {
+) -> Result<(), Option<String>> {
     let text = |key: &str| {
         interrupt
             .get(key)
@@ -388,10 +400,13 @@ async fn confirmed(
             "reason": reason,
         }}),
     };
-    matches!(
-        context.prompt.request(request).await,
-        Ok(ApprovalOutcome::Decided { action, .. }) if action == "approve"
-    )
+    match context.prompt.request(request).await {
+        Ok(ApprovalOutcome::Decided { action, .. }) if action == "approve" => Ok(()),
+        Ok(ApprovalOutcome::Decided { value, .. }) => {
+            Err(elitea_local_tools::session::feedback_of(&value))
+        }
+        _ => Err(None),
+    }
 }
 
 enum Authorization {

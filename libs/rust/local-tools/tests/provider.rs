@@ -640,3 +640,85 @@ async fn exit_plan_mode_asks_the_person_and_an_accept_leaves_plan_mode() {
     assert_eq!(refused["code"], "local_tools.denied", "{refused}");
     assert_eq!(fixture.person.asked(), asked);
 }
+
+/// #1225: a call the person denies with feedback is a typed failure the
+/// model reads: `declined_by_person` and the person's text, bounded. A
+/// denial without feedback is typed too; a rule's refusal is not.
+#[tokio::test]
+async fn a_denial_with_feedback_is_a_typed_failure_with_the_persons_text() {
+    let fixture = fixture(open_policy());
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "reject".to_owned(),
+        value: json!({ "reason": "the person rejected it", "by": "person",
+                       "feedback": "Do not reset; stash nothing, just diff." }),
+    });
+    let denied = call(
+        &fixture,
+        "run_command",
+        json!({ "command": "git reset --hard HEAD" }),
+    )
+    .await;
+    assert_eq!(fixture.person.asked(), 1, "asked: {denied}");
+    assert_eq!(denied["status"], "error");
+    assert_eq!(denied["code"], "local_tools.rejected");
+    assert_eq!(denied["ok"], false);
+    assert_eq!(denied["error"]["code"], "declined_by_person");
+    assert_eq!(
+        denied["error"]["feedback"],
+        "Do not reset; stash nothing, just diff."
+    );
+
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "reject".to_owned(),
+        value: json!({ "reason": "the person rejected it", "by": "person" }),
+    });
+    let plain = call(
+        &fixture,
+        "run_command",
+        json!({ "command": "git reset --hard HEAD" }),
+    )
+    .await;
+    assert_eq!(plain["error"]["code"], "declined_by_person");
+    assert!(plain["error"].get("feedback").is_none());
+
+    // A rule's denial says which layer refused, never "the person".
+    let ruled = call(&fixture, "run_command", json!({ "command": "rm -rf x" })).await;
+    assert!(
+        ruled["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("denied by policy")),
+        "{ruled}"
+    );
+    assert!(
+        ruled.get("error").is_none() && ruled.get("ok").is_none(),
+        "{ruled}"
+    );
+}
+
+/// #1225 × #1224: a `run_tests` approval (a test run with the network)
+/// declined with feedback answers the model the same typed failure, and the
+/// tests do not run.
+#[tokio::test]
+async fn a_run_tests_denial_with_feedback_is_a_typed_failure() {
+    let fixture = fixture(LocalWorkPolicy {
+        network: true,
+        ..open_policy()
+    });
+    let root = fixture.session.workspace().root().to_path_buf();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"declined\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("manifest");
+    fixture.person.answer(ApprovalOutcome::Decided {
+        action: "reject".to_owned(),
+        value: json!({ "reason": "the person rejected it", "by": "person",
+                       "feedback": "Run them offline." }),
+    });
+    let denied = call(&fixture, "run_tests", json!({ "network": true })).await;
+    assert_eq!(fixture.person.asked(), 1, "asked: {denied}");
+    assert_eq!(denied["code"], "local_tools.rejected", "{denied}");
+    assert_eq!(denied["error"]["code"], "declined_by_person");
+    assert_eq!(denied["error"]["feedback"], "Run them offline.");
+    assert!(!root.join("target").exists(), "the tests did not run");
+}
