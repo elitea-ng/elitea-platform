@@ -24,7 +24,7 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/workspaceIpc';
 
-import { ruleSourceLabel } from '../model/ruleSource';
+import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
 
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */

@@ -21,7 +21,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
-import { ruleSourceLabel } from '../model/ruleSource';
+import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
 
 export interface ApprovalCardProps {
   /** What is asked: the tool's name or the question. */
