@@ -2507,8 +2507,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose resolved version route: %w", err)
 	}
+	// Bound by the router to the MCP server it builds: a platform MCP tool of a
+	// local turn runs through the same dispatch a cloud turn's does.
+	platformMCPTools := desktopopsapi.NewPlatformToolBridge()
 	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
-		nativePolicy, auditRecorder, apiGroupAuth, logger)
+		nativePolicy, auditRecorder, platformMCPTools, apiGroupAuth, logger)
 	if err != nil {
 		return fmt.Errorf("compose remote toolkit route: %w", err)
 	}
@@ -2634,6 +2637,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CloudExecutorStorageEncryption: workspaceHandoff.Encryption,
 		CurrentResolvedVersion:         currentResolvedVersion,
 		CurrentRemoteToolkit:           currentRemoteToolkit,
+		PlatformMCPTools:               platformMCPTools,
 		CurrentNodeRecovery:            currentNodeRecovery,
 		CurrentExecutionInterrupts:     currentExecutionInterrupts,
 		CurrentApplicationTask:         currentApplicationTask,

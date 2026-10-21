@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.15"
+  x-elitea-client-contract: "1.16"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -4379,14 +4379,15 @@ components:
               it (internal/infra/storage/client_application_version.go:335).
         server_name:
           type: string
-          description: A `platform_mcp` tool's server.
+          description: A `platform_mcp` tool's server (its internal builder type, `mcp_elitea_internal_*`).
         selected_tools:
           type: array
           items: { type: string }
           description: >-
-            A `remote_toolkit`'s tools the version may call, after the
-            guardrails removed blocked ones. Read it with `all_tools`: an empty
-            list means every tool only when `all_tools` is true.
+            A `remote_toolkit`'s (and, from client contract 1.16, a
+            `platform_mcp`'s) tools the version may call, after the guardrails
+            removed blocked ones. Read it with `all_tools`: an empty list means
+            every tool only when `all_tools` is true.
         all_tools:
           type: boolean
           description: >-
@@ -4394,7 +4395,9 @@ components:
             means every tool of the toolkit (as in chat; the guardrails still
             block theirs). False with an empty `selected_tools` means the
             guardrails blocked every selected tool: the agent may call none.
-            executeRemoteToolkitTool admits exactly this selection.
+            executeRemoteToolkitTool admits exactly this selection. A
+            `platform_mcp`'s (client contract 1.16) is true: a cloud turn's
+            internal MCP has every tool of the server.
         toolkit_ref:
           $ref: '#/components/schemas/ResolvedToolkitRef'
     ResolvedToolkitRef:
@@ -4408,7 +4411,12 @@ components:
         (`ClientToolkitRef`).
       required: [toolkit_id, project_id, ref]
       properties:
-        toolkit_id: { type: integer, format: int64 }
+        toolkit_id:
+          type: integer
+          format: int64
+          description: >-
+            The saved toolkit, or 0 for a `platform_mcp` server (client
+            contract 1.16), whose `ref` is derived with the server's type.
         project_id: { type: integer, format: int64 }
         ref: { type: string, pattern: '^tkr1_[0-9a-f]{32}$' }
     RemoteToolkitCallConfirmation:
@@ -19747,7 +19755,10 @@ paths:
         run its tools with executeRemoteToolkitTool. `application`: a nested
         agent; resolve it with this operation and its
         `application_id`/`application_version_id`. `platform_mcp`: an internal
-        platform MCP server the version selects (`server_name`). No credential,
+        platform MCP server the version selects (`server_name`); from client
+        contract 1.16 it also carries `selected_tools`/`all_tools` and a
+        `toolkit_ref` whose `toolkit_id` is 0, so its tools run through
+        executeRemoteToolkitTool too (an older server sends no ref). No credential,
         vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
         the document; a secret reference outside the tools reads
         `[secret withheld]`, and `withheld_secrets` names each such string by
@@ -19854,8 +19865,11 @@ paths:
       - name: toolkit_id
         in: path
         required: true
-        schema: { type: integer, minimum: 1 }
-        description: The saved toolkit (a `remote_toolkit` tool's `toolkit_ref.toolkit_id`), or a project MCP server toolkit.
+        schema: { type: integer, minimum: 0 }
+        description: >-
+          The saved toolkit (a `remote_toolkit` tool's
+          `toolkit_ref.toolkit_id`), or a project MCP server toolkit; 0 for a
+          `platform_mcp` server (client contract 1.16).
     post:
       operationId: executeRemoteToolkitTool
       summary: Run one tool of one saved toolkit on a cloud worker
@@ -19921,6 +19935,23 @@ paths:
         the worker refuses (the Rust worker runs only read-only, non-sensitive
         tools in this path) answers `reason: worker_refused`. A deployment
         with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+
+        PLATFORM MCP SERVERS (client contract 1.16). `toolkit_id` 0 with a
+        `platform_mcp` tool's `toolkit_ref` runs one tool of that internal
+        builder (`mcp_elitea_internal_*`). The same checks apply: the ref must
+        name a server of this version (`toolkit_ref_mismatch`), the frozen
+        version must select it (`tool_not_in_agent`), the guardrails' blocks
+        (`tool_blocked`), the sensitive-tool confirmation, the rate and the
+        audit. Main runs it in process through the dispatch its internal MCP
+        endpoint serves a cloud turn, AS THE CALLER: each operation re-checks
+        its own permission (an operation's refusal is 200 `ok: false`,
+        `status: tool_error`). No worker runs, so there is no `task_id`;
+        `mcp_authorization_reference` is refused (400); an unknown tool
+        answers 422 `reason: unknown_tool` naming the server's tools, and MCP
+        exposure switched off answers 422 `reason: unsupported_toolkit`. A
+        retry with the same Idempotency-Key and body answers the first call's
+        result (remembered per server replica for 15 minutes; 409
+        `remote_toolkit_in_progress` while it runs).
       tags: [toolkits, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'

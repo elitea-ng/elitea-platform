@@ -337,8 +337,21 @@ func projectClientTool(identity ClientVersionIdentity, tool map[string]any, save
 		return projected, true
 	}
 	if _, internal := mcpregistry.InternalBuilderForType(toolType); internal {
+		// A platform MCP server is addressed through executeRemoteToolkitTool
+		// like a saved toolkit (ADR-0029 decision 3, issue 1231): toolkit id
+		// 0 (it is no saved row) and a reference domain-separated by the
+		// builder's type. Its selection is the frozen one, which is every
+		// tool of the category, as a cloud turn's internal MCP has it.
 		projected := common(ClientToolKindPlatformMCP)
 		projected["server_name"] = toolType
+		selected, allTools := clientToolkitSelection(nil, selectedToolNames(tool))
+		projected["selected_tools"] = selected
+		projected["all_tools"] = allTools
+		projected["toolkit_ref"] = map[string]any{
+			"toolkit_id": int64(0),
+			"project_id": identity.ProjectID,
+			"ref":        ClientToolkitRef(identity, 0, toolType),
+		}
 		return projected, true
 	}
 	toolkitID, ok := positiveClientJSONInteger(tool["id"])

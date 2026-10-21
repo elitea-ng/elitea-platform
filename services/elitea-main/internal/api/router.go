@@ -611,6 +611,10 @@ type RouterConfig struct {
 	// case. Composed wherever a database is configured; 501 where no toolkit
 	// worker is.
 	CurrentRemoteToolkit http.Handler
+	// PlatformMCPTools is the bridge CurrentRemoteToolkit runs a platform MCP
+	// server's tool through (issue 1231); the router binds it to the MCP
+	// server it builds (mountMCPServerRoutes). Nil when not composed.
+	PlatformMCPTools *desktopopsapi.PlatformToolBridge
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.
@@ -1171,6 +1175,7 @@ func mountMCPServerRoutes(
 	toolkitDiscovery discovery.UseCase,
 	conversationHandler *v2convs.Handler,
 	folderHandler *v2folders.Handler,
+	platformTools *desktopopsapi.PlatformToolBridge,
 ) {
 	// The resolver ASKS for the personal project it could not find, for the
 	// reason stated at `withPersonalProjects`: an MCP client authenticates
@@ -1196,6 +1201,10 @@ func mountMCPServerRoutes(
 		v2mcp.WithResumeCursorCodec(mcpResponseCursorCodec()),
 		v2mcp.WithToolkitDiscovery(toolkitDiscovery),
 	)
+	// The desktop's executeRemoteToolkitTool runs a platform MCP server's
+	// tool through THIS handler's dispatch, so a local turn and a cloud turn
+	// reach the same operations under the same permission checks.
+	platformTools.Bind(platformToolAdapter{handler: handler})
 	r.Group(func(r chi.Router) {
 		r.Use(authenticate)
 		r.Use(apimw.RequireProjectAccess(pool))
@@ -1204,6 +1213,21 @@ func mountMCPServerRoutes(
 		r.Get("/app/{projectID}/mcp/*", handler.Endpoint)
 		r.Post("/app/{projectID}/mcp/*", handler.Endpoint)
 	})
+}
+
+// platformToolAdapter serves desktopops.PlatformToolCaller from the MCP
+// server's in-process entry (v2mcp.Handler.CallPlatformTool).
+type platformToolAdapter struct{ handler *v2mcp.Handler }
+
+func (a platformToolAdapter) CallPlatformTool(r *http.Request, call desktopopsapi.PlatformToolCall) (desktopopsapi.PlatformToolResult, error) {
+	outcome, err := a.handler.CallPlatformTool(r, call.ProjectID, call.ToolkitType, call.ToolName, call.Arguments)
+	if err != nil {
+		return desktopopsapi.PlatformToolResult{}, err
+	}
+	return desktopopsapi.PlatformToolResult{
+		Disabled: outcome.Disabled, Unknown: outcome.Unknown, Available: outcome.Available,
+		IsError: outcome.IsError, Text: outcome.Text,
+	}, nil
 }
 
 // newToolkitHandler builds the one toolkit handler shared by REST and the
@@ -1841,6 +1865,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		toolkitHandler, configurationsHandler, coreHandler, prebuiltMCPVault, cfg.CurrentNotificationStore,
 		cfg.ToolkitArgumentSchemas, cfg.MCPToolkitRun, personalProjects,
 		cfg.InternalConfigurationTools, draftHandler, cfg.ToolkitDiscovery, convHandler, folderHandler,
+		cfg.PlatformMCPTools,
 	)
 
 	// SCIM 2.0 provisioning (shared migrations 0096, 0098, 0134).

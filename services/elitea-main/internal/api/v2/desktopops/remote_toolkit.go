@@ -96,6 +96,10 @@ type RemoteToolkitDependencies struct {
 	Audit audit.Recorder
 	// Limiter counts calls per caller; nil uses RemoteToolkitCallsPerMinute.
 	Limiter *failurelimit.Limiter
+	// Platform runs a platform MCP server's tool (toolkit id 0) in process
+	// (*PlatformToolBridge, bound by the router). Nil answers 501 for those
+	// calls only.
+	Platform PlatformToolCaller
 }
 
 // RemoteToolkitUseCase is the toolkit.call_tool.v1 producer — the SAME
@@ -157,10 +161,13 @@ func newRemoteToolkitHandler(deps RemoteToolkitDependencies) *remoteToolkitHandl
 	if recorder == nil {
 		recorder = discardAudit{}
 	}
-	return &remoteToolkitHandler{
+	handler := &remoteToolkitHandler{
 		useCase: deps.Runs, worker: deps.Worker, authorizer: deps.Authorizer, turns: deps.Turns,
 		confirmations: deps.Confirmations, audit: recorder, limiter: limiter, now: time.Now,
+		platform: deps.Platform,
 	}
+	handler.replays = newPlatformReplays(func() time.Time { return handler.now() })
+	return handler
 }
 
 type discardAudit struct{}
@@ -176,6 +183,8 @@ type remoteToolkitHandler struct {
 	audit         audit.Recorder
 	limiter       *failurelimit.Limiter
 	now           func() time.Time
+	platform      PlatformToolCaller
+	replays       *platformReplays
 }
 
 // remoteToolkitConfirmation is the user's approval of ONE sensitive call: it
@@ -217,6 +226,12 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	started := h.now()
 	projectID, okProject := desktopwire.PositiveID(chi.URLParam(request, "projectID"))
 	toolkitID, okToolkit := desktopwire.PositiveID(chi.URLParam(request, "toolkitID"))
+	// Toolkit id 0 is a platform MCP server (a `platform_mcp` tool's
+	// toolkit_ref): no saved row, Main's own internal builder.
+	platform := chi.URLParam(request, "toolkitID") == "0"
+	if platform {
+		toolkitID, okToolkit = 0, true
+	}
 	if !okProject || !okToolkit {
 		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid project or toolkit id.")
 		return
@@ -236,7 +251,8 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 			"Remote toolkit calls need a native app token or a personal access token.")
 		return
 	}
-	if h.useCase == nil || h.authorizer == nil || h.turns == nil || h.confirmations == nil {
+	if (!platform && h.useCase == nil) || (platform && h.platform == nil) ||
+		h.authorizer == nil || h.turns == nil || h.confirmations == nil {
 		desktopwire.WriteError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
 			"This deployment runs no cloud worker that can execute toolkit tools.")
 		return
@@ -284,7 +300,14 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		EnforceSensitiveGate: true,
 	}
 	confirmedAt, confirmationFresh, confirmationOK := h.validConfirmation(body.Confirmation)
-	if err := runRequest.Validate(); err != nil || !localturn.ValidExecutionID(body.ExecutionID) ||
+	// RunRequest refuses toolkit id 0, so a platform call's bounds (the same
+	// tool name, arguments and key rules) are checked on a copy that names a
+	// placeholder toolkit. A platform server has no MCP authorisation.
+	bounds := runRequest
+	if platform {
+		bounds.ToolkitID = math.MaxInt32
+	}
+	if err := bounds.Validate(); err != nil || (platform && body.MCPAuthorizationReference != "") || !localturn.ValidExecutionID(body.ExecutionID) ||
 		!positiveInt32(body.ApplicationID) || !positiveInt32(body.VersionID) ||
 		!validToolkitRef(body.ToolkitRef) || !confirmationOK {
 		call.outcome = "invalid"
@@ -314,13 +337,26 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		return
 	}
 	call.toolkitType = grant.ToolkitType
+	if platform != grant.PlatformMCP {
+		// The authorizer resolved a different kind of tool than the path
+		// names: never run it.
+		call.outcome = "refused"
+		writeAuthorizationError(request.Context(), writer, storage.ErrRemoteToolkitRefMismatch)
+		return
+	}
 	runRequest.LLMModel = grant.LLMModel
 	runRequest.LLMSettings = append(json.RawMessage(nil), grant.LLMSettings...)
 	if grant.Sensitive != nil {
+		confirmationTool := call.toolName
+		if platform {
+			// Every platform server is toolkit 0: its type keeps one server's
+			// confirmation from approving another's tool of the same name.
+			confirmationTool = grant.ToolkitType + "." + call.toolName
+		}
 		confirmationCall := localturn.ConfirmationCall{
 			ExecutionID: body.ExecutionID, ToolkitID: toolkitID,
 			ApplicationID: body.ApplicationID, VersionID: body.VersionID,
-			ToolName: call.toolName, ArgumentsSHA256: call.argumentsSHA256,
+			ToolName: confirmationTool, ArgumentsSHA256: call.argumentsSHA256,
 		}.Digest()
 		next := ""
 		if body.Confirmation != nil {
@@ -362,6 +398,20 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	// above: a refused or invalid call, and a retry whose Idempotency-Key
 	// already admitted its run (a poll for the result), cost nothing.
 	limitKey := "actor:" + strconv.FormatInt(actor, 10)
+	if platform {
+		h.runPlatformTool(writer, request, call, runRequest.IdempotencyKey, arguments, func() bool {
+			if blocked, retry := h.limiter.Blocked(limitKey); blocked {
+				call.outcome = "rate_limited"
+				writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
+				desktopwire.WriteError(writer, http.StatusTooManyRequests, "rate_limited",
+					"Too many remote toolkit calls from this caller. Retry after the interval in Retry-After.")
+				return false
+			}
+			h.limiter.Fail(limitKey)
+			return true
+		})
+		return
+	}
 	if blocked, retry := h.limiter.Blocked(limitKey); blocked {
 		call.outcome = "rate_limited"
 		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
