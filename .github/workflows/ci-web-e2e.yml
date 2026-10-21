@@ -127,19 +127,24 @@ on:
       - "scripts/ci/e2e-lane-filter.sh"
       - "scripts/ci/e2e-lane-filter-test.sh"
       # The rest of what the stack images COPY and what this workflow runs:
-      # scripts/ci/check_e2e_paths.py derives that set from the compose
-      # files' Containerfiles and this workflow's `scripts/` calls, and fails
+      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
+      # files' Containerfiles and this workflow's `scripts/` calls (with what
+      # each .mjs one imports), and fails
       # when this list stops covering it (the scheduler, the inventory engine,
       # the shared Go libraries and the protos were missing until it ran).
       - "services/elitea-scheduler/**"
       - "services/elitea-inventory-engine/**"
       - "libs/go/**"
       - "libs/proto/**"
-      - "scripts/ci/stack_images.py"
+      - "scripts/ci/stack-images.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/package.json"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/pull-third-party-images.sh"
-      - "scripts/ci/check_ci_image_references.py"
-      - "scripts/ci/check_workflow_cache_writes.py"
-      - "scripts/ci/check_e2e_paths.py"
+      - "scripts/ci/check-ci-image-references.mjs"
+      - "scripts/ci/check-workflow-cache-writes.mjs"
+      - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
   push:
     branches:
@@ -179,19 +184,24 @@ on:
       - "scripts/ci/e2e-lane-filter.sh"
       - "scripts/ci/e2e-lane-filter-test.sh"
       # The rest of what the stack images COPY and what this workflow runs:
-      # scripts/ci/check_e2e_paths.py derives that set from the compose
-      # files' Containerfiles and this workflow's `scripts/` calls, and fails
+      # scripts/ci/check-e2e-paths.mjs derives that set from the compose
+      # files' Containerfiles and this workflow's `scripts/` calls (with what
+      # each .mjs one imports), and fails
       # when this list stops covering it (the scheduler, the inventory engine,
       # the shared Go libraries and the protos were missing until it ran).
       - "services/elitea-scheduler/**"
       - "services/elitea-inventory-engine/**"
       - "libs/go/**"
       - "libs/proto/**"
-      - "scripts/ci/stack_images.py"
+      - "scripts/ci/stack-images.mjs"
+      - "scripts/ci/py-compat.mjs"
+      - "scripts/ci/ci-compat.mjs"
+      - "scripts/ci/package.json"
+      - "scripts/ci/package-lock.json"
       - "scripts/ci/pull-third-party-images.sh"
-      - "scripts/ci/check_ci_image_references.py"
-      - "scripts/ci/check_workflow_cache_writes.py"
-      - "scripts/ci/check_e2e_paths.py"
+      - "scripts/ci/check-ci-image-references.mjs"
+      - "scripts/ci/check-workflow-cache-writes.mjs"
+      - "scripts/ci/check-e2e-paths.mjs"
       - ".github/workflows/ci-web-e2e.yml"
     # NO `tags: v*` — issue #309, Gate 2; see the identical note in ci-web.yml.
     # A GITHUB_TOKEN-created tag starts no workflow run, so this arm has never
@@ -199,9 +209,13 @@ on:
     # workflow_dispatch on their own, which is what has actually been running
     # them; removing the dead arm changes no execution, only the claim.
 
+# A newer push cancels a pull request's run; main runs finish, because a
+# main run is the only writer of the build caches the next runs read (a
+# cancelled writer saves nothing). GitHub still holds at most one pending run
+# per group, so main cannot pile up a backlog.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Minimal token scope — these jobs only read the checked-out repo.
 permissions:
@@ -248,7 +262,7 @@ jobs:
       # The ONLY jobs in this workflow that write packages: they push the
       # CI-only `ghcr.io/elitea-ng/ci-<image>` and, on a push to main, the
       # `ci-cache-<image>` layer cache. Nothing that ships references either
-      # (scripts/ci/check_ci_image_references.py).
+      # (scripts/ci/check-ci-image-references.mjs).
       packages: write
     strategy:
       fail-fast: false
@@ -285,7 +299,7 @@ jobs:
           # The superset stack: every image any lane runs is a `build:`
           # service here, with the SAME build spec the e2e compose declares
           # (elitea-main at its `e2e` target, the others at their default).
-          # stack_images.py records each spec and the pulling lane refuses an
+          # stack-images.mjs records each spec and the pulling lane refuses an
           # entry whose spec differs from its own compose.
           compose-files: |
             docker-compose.standalone-full.yml

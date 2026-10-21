@@ -25,7 +25,7 @@ description: >-
 #      digest the build job recorded for THIS run's commit; a tag that moved
 #      cannot be picked up. The map also records each image's build spec
 #      (context, Containerfile, target, args) and a lane whose compose names a
-#      different variant fails (scripts/ci/stack_images.py `resolve`).
+#      different variant fails (scripts/ci/stack-images.mjs `resolve`).
 #   2. The presence assertion is kept and made stronger: every image a compose
 #      file would build must exist locally under its compose name, and its
 #      RepoDigests must contain the pulled digest. Compose `up` (no --build)
@@ -90,7 +90,7 @@ runs:
           [ -n "$f" ] && args+=(-f "$f")
         done <<< "$COMPOSE_FILES"
         docker compose "${args[@]}" config --format json > "${RUNNER_TEMP}/lane-config.json"
-        python3 "${GITHUB_WORKSPACE}/scripts/ci/stack_images.py" resolve \
+        node "${GITHUB_WORKSPACE}/scripts/ci/stack-images.mjs" resolve \
           "${RUNNER_TEMP}/lane-config.json" "$GITHUB_WORKSPACE" "${RUNNER_TEMP}/stack-image-digests" \
           > "${RUNNER_TEMP}/stack-pulls.tsv"
         # Distinct remotes once each, with a bounded retry: ghcr is a network.

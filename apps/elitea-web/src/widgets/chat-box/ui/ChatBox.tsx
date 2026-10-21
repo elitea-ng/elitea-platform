@@ -65,6 +65,7 @@ import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizati
 import { useChatBoxSend } from './hooks/useChatBoxSend';
 import { useReattachSeededTurn } from './hooks/useReattachSeededTurn';
 import { useStableRef } from './hooks/useStableRef';
+import { useTurnActivity } from './hooks/useTurnActivity';
 
 /** `NewChatInputHandle` stays unexported from `features/chat-input`'s barrel — derived via `ComponentRef`, matching that barrel's own documented convention. */
 type NewChatInputHandle = ComponentRef<typeof NewChatInput>;
@@ -88,7 +89,7 @@ const ChatBoxInner = memo(function ChatBox({
   const { editorTest, editorCallbacks, entitySubmenus, onAgentEvent, contextIndicator, readOnlyNotice, noRegenerate } = extensions ?? {};
   const chatInputRef = useRef<NewChatInputHandle>(null);
   const attachmentButtonRef = useRef<AttachmentButtonHandle>(null); const voiceButtonRef = useRef<VoiceButtonHandle>(null);
-  const { activeConversation, isLoadingConversation, onConversationCreated } = unwrapChatBoxConversation(conversation);
+  const { activeConversation, isLoadingConversation, onConversationCreated, onTurn } = unwrapChatBoxConversation(conversation);
   const { userId, userName, userAvatar, llmSettings, onSetLLMSettings, onDeleteAnswer, onDeleteAllMessages } = flattenChatBoxProps({ user, llm, onDelete });
   const { conversationId, conversationParticipants, conversationUuid, conversationMeta, isConversationSending, projectIdString } = deriveChatBoxIds(activeConversation, projectId);
   const { activeParticipant, onChangeParticipant } = useActiveParticipantSelection(participant, conversationParticipants);
@@ -172,6 +173,7 @@ const ChatBoxInner = memo(function ChatBox({
   // in-flight flag while an SSE turn runs — without the transport's own flag the
   // composer never offers Stop for the turn Stop exists to cancel (#328).
   const isStreaming = [data.streaming.isStreamingNow, data.messageList.isStreamingFromHistory, isStreamedExecution].some(Boolean);
+  useTurnActivity(isStreaming, conversationId, onTurn); // the conversation lists move it to Today
 
   // Action handlers — real socket protocol (chat_predict / chat_continue_predict),
   // real REST mutations, real conversation-creation-first send ordering.

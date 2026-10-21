@@ -1,0 +1,9 @@
+{
+  "name": "elitea-ci-scripts",
+  "private": true,
+  "description": "The scripts/ci checks run with the runner's node; yaml is their one dependency.",
+  "type": "module",
+  "dependencies": {
+    "yaml": "2.9.1"
+  }
+}

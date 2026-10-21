@@ -3597,6 +3597,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
 					r.With(projectPermission("models.chat.conversations.delete")).
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
+					// Conversation archive (client contract 1.10), shared by
+					// the project as the conversation pin is. An archive
+					// changes every member's default list, so it is a write
+					// of the conversation: it takes the conversation EDIT
+					// permission (shared 0068 grants it to admin and editor,
+					// not to viewer), and the repository applies the chat
+					// detail rule on top, so the caller must also see the
+					// conversation. No permission migration needed.
+					r.With(requireConversationEdit).
+						Put("/conversation_archive/prompt_lib/{projectID}/{conversationID}", convHandler.Archive)
+					r.With(requireConversationEdit).
+						Delete("/conversation_archive/prompt_lib/{projectID}/{conversationID}", convHandler.Unarchive)
 					r.With(projectPermission("models.chat.messages.list")).
 						Get("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.ListMessages)
 					// Conversation export (#851). It reads the TRANSCRIPT, so

@@ -49,7 +49,8 @@ const FOLDER_QUERY_ROOT = ['folder'] as const;
 /* ── wire types + normalisers ── */
 
 interface FolderConversationRefWire {
-  readonly id: string;
+  /** An integer on the wire (`folders` handler `conversationItem.ID`). */
+  readonly id: string | number;
   readonly name?: string;
   readonly is_private?: boolean;
   /** Integer on the wire (`folders` handler `conversationItem.AuthorID`). */
@@ -63,7 +64,10 @@ interface FolderConversationRefWire {
 
 function normaliseFolderConversationRef(wire: FolderConversationRefWire): FolderConversationRef {
   return {
-    id: wire.id,
+    // A string, as the type says: the route's `$conversationId` is one, and a
+    // number passed through made every `id === openId` false, so the open
+    // chat was never the selected row with real data.
+    id: String(wire.id),
     ...(wire.name !== undefined ? { name: wire.name } : {}),
     ...(wire.is_private !== undefined ? { isPrivate: wire.is_private } : {}),
     // Keep the value as a string. Every consumer compares it against a

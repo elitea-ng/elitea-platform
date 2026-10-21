@@ -19,6 +19,7 @@
   "/auth-callback",
   "/chat",
   "/chat/:conversationId",
+  "/chat/archived",
   "/credentials",
   "/credentials/:tab",
   "/credentials/:tab/:credential_uid",

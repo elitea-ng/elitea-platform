@@ -965,3 +965,34 @@ describe('useConversationSidebar — opening a Local work thread', () => {
     expect(asked).toEqual([]);
   });
 });
+
+/**
+ * A rename, a visibility change and a delete in this list mark the cached
+ * grouped listing stale, so the other list over the same cache (the desktop
+ * sidebar's chats) reads the change instead of keeping the old row.
+ */
+describe('useConversationSidebar — the shared listing learns of an edit', () => {
+  it('reads the grouped listing again after a rename, Make public and a delete', async () => {
+    seedProjectSeven();
+    let listingReads = 0;
+    server.use(
+      http.get('/api/v2/auth/permissions/prompt_lib/7', () => HttpResponse.json([{ name: PERMISSIONS.chat.folders.get, enabled: true }])),
+      http.get('/api/v2/elitea_core/folder/prompt_lib/7', () => {
+        listingReads += 1;
+        return HttpResponse.json({ pinned: { conversations: [] }, date_groups: [{ name: 'Today', conversations: [{ id: 'c1', name: 'Old name', is_private: true }] }], folders: [], total_folders: 0 });
+      }),
+      http.put('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ id: 'c1' })),
+      http.delete('/api/v2/elitea_core/conversation/prompt_lib/7/c1', () => HttpResponse.json({ ok: true })),
+    );
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(listingReads).toBe(1));
+
+    act(() => result.current.conversationsProps.onEditConversation({ ...conversation, name: 'Renamed' }));
+    await waitFor(() => expect(listingReads).toBe(2));
+    act(() => result.current.conversationsProps.onEditConversation({ ...conversation, isPrivate: false }));
+    await waitFor(() => expect(listingReads).toBe(3));
+    act(() => result.current.conversationsProps.onDeleteConversation(conversation));
+    await waitFor(() => expect(listingReads).toBe(4));
+  });
+});

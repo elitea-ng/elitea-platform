@@ -28,7 +28,6 @@
  * landed) keeps compiling unchanged. See `ChatWithEditors.tsx`'s own module
  * doc comment for who actually supplies real (non-no-op) callbacks here.
  */
-import type { ComponentProps } from 'react';
 import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,28 +36,23 @@ import Box from '@mui/material/Box';
 
 import { conversationNavigation, useChatSessionStore } from '@/entities/conversation';
 import { useDeleteParticipantMutation, type Participant } from '@/entities/participant';
+import { useConversationActivity } from '@/features/chat-conversation-list';
 import type { AnswerCanvasSelection, CanvasEditPayload, CodeBlockInfo } from '@/features/chat-messages';
 import {
   AddNewUserModal,
   canParticipantBeActiveInChat,
-  ParticipantsWrapper,
   useIsMcpVisible,
   useLocalActiveParticipant,
 } from '@/features/chat-participants';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
-import { ContextBudget, ContextBudgetIndicator } from '@/widgets/context-budget';
+import { ContextBudgetIndicator } from '@/widgets/context-budget';
 
+import { ChatParticipantsPanel } from './ChatParticipantsPanel';
 import { handoffExtensions } from './handoffExtensions';
 import { useChatPageData } from './useChatPageData';
 import { useChatModelSettings } from './useChatModelSettings';
 import { useAddParticipants } from './useAddParticipants';
-
-/**
- * Baseline `rightPanelWidth` (`NewChat.jsx:187`). `ParticipantsWrapper`'s own
- * default is 320, which is not the production width.
- */
-const PARTICIPANTS_PANEL_WIDTH = 276;
 
 /** The two deep-link search params a notification href carries — `src/features/notifications/lib/routes.ts`'s `chatHref`. */
 interface ChatDeepLinkSearch {
@@ -190,8 +184,6 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   useMessageIdToView(messageId, conversationIdOf(activeConversation));
 
   const [activeParticipant, setActiveParticipant] = useState<unknown>(undefined);
-  // Baseline default: collapsed (`NewChat.jsx:166`).
-  const [participantsCollapsed, setParticipantsCollapsed] = useState(true);
   // The panel's add-participant picker — see `useAddParticipants` for what
   // was missing and why `open` can be `undefined`.
   const addParticipants = useAddParticipants({ projectId, conversationId });
@@ -235,6 +227,9 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
     // Only re-run when the conversation identity or its participant list changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, activeConversation?.participants]);
+
+  // A turn moves the conversation to the top of Today in the conversation lists (not out of a folder).
+  const onConversationActivity = useConversationActivity();
 
   const handleChangeParticipant = (participant: unknown) => {
     setActiveParticipant(participant);
@@ -285,6 +280,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
             ...(activeConversation ? { active: activeConversation } : {}),
             isLoading: isLoadingConversation,
             onCreated: handleConversationCreated,
+            onTurn: onConversationActivity,
           }}
           {...(projectId !== undefined ? { projectId } : {})}
           {...(user ? { user } : {})}
@@ -305,56 +301,24 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
         />
       </Box>
       {/*
-        * The participants rail. `features/chat-participants` was complete —
-        * wrapper, layout, expanded list, collapsed strip, collapsed dropdown,
-        * the collapse chevron, all tested — and had ZERO call sites, so `/chat`
-        * rendered the conversation rail and the chat box and nothing on the
-        * right. `ChatWithEditors`'s own comment already said the chat column
-        * runs to the edge "so the participants rail can dock there"; nothing
-        * docked.
-        *
+        * The participants rail. `features/chat-participants` was complete and
+        * had ZERO call sites, so `/chat` rendered nothing on the right.
         * Mounted HERE rather than in `ChatWithEditors` because the rail needs
         * `activeConversation` and `activeParticipant`, and this is the
-        * component that owns both. Mounting a layer up would mean lifting that
-        * state out of the page for no other reason.
-        *
-        * Default COLLAPSED, matching the baseline (`NewChat.jsx:166`
-        * `collapsedParticipants` starts `true`) — which is why production shows
-        * the `»` chevron at the top right on load rather than an open panel.
+        * component that owns both. In the desktop frame it moves to the
+        * frame's inspector pane (see `ChatParticipantsPanel`).
         */}
-      <ParticipantsWrapper
-        collapsed={participantsCollapsed}
-        onCollapsed={() => setParticipantsCollapsed((prev) => !prev)}
-        panelWidth={PARTICIPANTS_PANEL_WIDTH}
+      <ChatParticipantsPanel
+        activeConversation={activeConversation}
+        activeParticipant={activeParticipant}
+        projectId={projectId}
         isMcpVisible={isMcpVisible}
-        {...(activeConversation
-          // `ChatBoxActiveConversation` types `participants` as `unknown[]`,
-          // the rail's own prop as `Record<string, unknown>[]`. Same rows, two
-          // slices of the app describing them at different precision; the cast
-          // is the boundary, not a claim about the data.
-          ? { activeConversation: activeConversation as NonNullable<ComponentProps<typeof ParticipantsWrapper>['activeConversation']> }
-          : {})}
-        {...(activeParticipant ? { activeParticipant: activeParticipant as Record<string, unknown> } : {})}
-        onSelectParticipant={handleChangeParticipant}
-        onDeleteParticipant={handleDeleteParticipant}
-        onEditParticipant={handleEditParticipant}
-        onAddParticipants={addParticipants.open}
-        /*
-         * The context-budget panel. `ParticipantsWrapper` has always accepted
-         * this slot (and gates the `conversationId` it hands over on the
-         * conversation being neither new nor playback); nothing supplied it, so
-         * the foot of the rail was empty. `features/` may not import
-         * `widgets/`, which is why the slot is filled HERE — the page is the
-         * lowest layer allowed to name the widget. `projectId` comes from
-         * `useChatPageData`, which already resolves it for `ChatBox`.
-         */
-        renderContextBudget={({ conversationId: budgetConversationId, collapsed: budgetCollapsed }) => (
-          <ContextBudget
-            conversationId={activeConversation?.isNew || activeConversation?.isPlayback ? undefined : budgetConversationId}
-            projectId={projectId}
-            collapsed={budgetCollapsed ?? false}
-          />
-        )}
+        handlers={{
+          onSelectParticipant: handleChangeParticipant,
+          onDeleteParticipant: handleDeleteParticipant,
+          onEditParticipant: handleEditParticipant,
+          onAddParticipants: addParticipants.open,
+        }}
       />
       <AddNewUserModal
         open={addParticipants.isOpen}

@@ -353,7 +353,7 @@ jobs:
           # are most of each build). The second read is ci-web-e2e.yml's
           # build-once cache of the same Containerfile (amd64), so a release
           # starts from main's latest CI layers. The cache is a cache: nothing
-          # a release ships is a ci-* image (scripts/ci/check_ci_image_references.py).
+          # a release ships is a ci-* image (scripts/ci/check-ci-image-references.mjs).
           cache-from: |
             type=registry,ref=ghcr.io/elitea-ng/ci-cache-${{ matrix.image.name }}:release-${{ matrix.platform.suffix }}
             type=registry,ref=ghcr.io/elitea-ng/ci-cache-${{ matrix.image.name }}:${{ matrix.platform.suffix }}
