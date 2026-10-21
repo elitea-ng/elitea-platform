@@ -5708,4 +5708,47 @@ async fn commit_carries_context_summary() {
         !context.to_string().contains("big.txt"),
         "no content in the meter"
     );
+    // The summary call's phase reached the meter while it ran, before the
+    // step's usage: a `context` event per phase change.
+    let phases: Vec<(u64, String)> = events
+        .iter()
+        .filter(|event| event.kind == "context")
+        .map(|event| {
+            (
+                event.seq,
+                event.payload["phase"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(phases[0].1, "compacting", "{phases:?}");
+    assert_eq!(phases[1].1, "compacted", "{phases:?}");
+    let first_usage = events.iter().find(|event| event.kind == "usage").unwrap();
+    assert!(phases[1].0 < first_usage.seq);
+}
+
+#[tokio::test]
+async fn a_transient_catalogue_answer_is_asked_again_next_turn() {
+    // 429 first: the turn runs on the fallback and the next turn asks
+    // again; the 200 then is kept for the session.
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let inner = memory_platform(convo, reading_script(Arc::new(AtomicUsize::new(0))));
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = asked.clone();
+    let server = serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                Res::json(429, &json!({"error": "slow down"}))
+            } else {
+                Res::json(200, &catalogue(200_000))
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for _ in 0..3 {
+        run_turn(&h, "hello").await;
+        commits_settled(&h.host).await;
+    }
+    assert_eq!(asked.load(Ordering::SeqCst), 2);
 }

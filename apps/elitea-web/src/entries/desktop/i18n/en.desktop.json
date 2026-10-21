@@ -618,7 +618,8 @@
   "workspace.context.aria": "Context in use: {{label}}",
   "workspace.context.compactedAt": "Summarized at {{time}}",
   "workspace.context.compacting": "Summarizing the conversation…",
-  "workspace.context.fallback": "The model’s window is unknown: 32K is assumed.",
+  "workspace.context.fallback": "The model’s window is unknown: 128K is assumed.",
   "workspace.context.label": "{{percent}}% of {{window}}",
+  "workspace.context.summarizing": "Summarizing…",
   "workspace.context.used": "{{used}} of {{window}} tokens of context in use"
 }

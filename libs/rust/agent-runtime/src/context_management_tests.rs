@@ -12,7 +12,7 @@ use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
 
 use super::*;
-use crate::context_budget::{RequestContextBudget, RequestContextUsage};
+use crate::context_budget::RequestContextBudget;
 use crate::request::ModelContextLimits;
 
 /// Measures the contents' JSON, as a provider body would carry them.
@@ -451,11 +451,66 @@ async fn system_contents_stay_pinned_and_are_never_folded() {
     assert!(!prompt.contains("Skill catalogue"));
 }
 
-/// A model that refuses the first `overflows` calls as too long, then answers.
+/// How [`Overflowing`] runs out of window.
+#[derive(Clone, Copy)]
+enum Overflow {
+    /// The provider refuses the request as too long.
+    Refused,
+    /// A `length` finish after `tokens` output tokens: reasoning only, or
+    /// answer text too.
+    Length { text: bool, tokens: i32 },
+    /// Some text streams, then the provider fails as too long.
+    AfterText,
+}
+
+/// A model that runs out of window on the first `overflows` calls, then answers.
 struct Overflowing {
     overflows: Mutex<usize>,
-    early_length: bool,
+    how: Overflow,
     seen: Mutex<Vec<usize>>,
+}
+
+impl Overflowing {
+    fn new(overflows: usize, how: Overflow) -> Arc<Self> {
+        Arc::new(Self {
+            overflows: Mutex::new(overflows),
+            how,
+            seen: Mutex::default(),
+        })
+    }
+
+    fn calls(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+}
+
+fn length_response(text: bool, tokens: i32) -> LlmResponse {
+    let content = if text {
+        Content::new("model").with_text("I")
+    } else {
+        Content {
+            role: "model".to_owned(),
+            parts: vec![Part::Thinking {
+                thinking: "Let me think".to_owned(),
+                signature: None,
+            }],
+        }
+    };
+    LlmResponse {
+        content: Some(content),
+        finish_reason: Some(FinishReason::MaxTokens),
+        usage_metadata: Some(UsageMetadata {
+            prompt_token_count: 7_000,
+            candidates_token_count: tokens,
+            total_token_count: 7_000 + tokens,
+            ..UsageMetadata::default()
+        }),
+        ..LlmResponse::default()
+    }
+}
+
+fn too_long() -> adk_core::AdkError {
+    adk_core::AdkError::model("model_gateway.context_length_exceeded: the request is too long")
 }
 
 #[async_trait]
@@ -473,23 +528,20 @@ impl Llm for Overflowing {
         let mut left = self.overflows.lock().unwrap();
         if *left > 0 {
             *left -= 1;
-            if self.early_length {
-                let response = LlmResponse {
-                    content: Some(Content::new("model").with_text("I")),
-                    finish_reason: Some(FinishReason::MaxTokens),
-                    usage_metadata: Some(UsageMetadata {
-                        prompt_token_count: 7_000,
-                        candidates_token_count: 1,
-                        total_token_count: 7_001,
-                        ..UsageMetadata::default()
-                    }),
-                    ..LlmResponse::default()
-                };
-                return Ok(Box::pin(futures::stream::iter([Ok(response)])));
-            }
-            return Err(adk_core::AdkError::model(
-                "model_gateway.context_length_exceeded: the request is too long",
-            ));
+            return match self.how {
+                Overflow::Refused => Err(too_long()),
+                Overflow::Length { text, tokens } => Ok(Box::pin(futures::stream::iter([Ok(
+                    length_response(text, tokens),
+                )]))),
+                Overflow::AfterText => {
+                    let mut partial = text_response("Partial");
+                    partial.partial = true;
+                    Ok(Box::pin(futures::stream::iter([
+                        Ok(partial),
+                        Err(too_long()),
+                    ])))
+                }
+            };
         }
         Ok(Box::pin(futures::stream::iter([Ok(text_response("done"))])))
     }
@@ -508,14 +560,15 @@ async fn answer(model: &Arc<dyn Llm>, contents: Vec<Content>) -> adk_core::Resul
 
 #[tokio::test]
 async fn an_overflow_compacts_and_retries_the_step_once() {
-    for early_length in [false, true] {
+    let thinking_only = Overflow::Length {
+        text: false,
+        tokens: 1,
+    };
+    for how in [Overflow::Refused, thinking_only] {
+        let early_length = matches!(how, Overflow::Length { .. });
         let summarizer = Summarizer::answering(&[&summary("Fix it."), &summary("Fix it.")]);
         let compaction = compaction_with(summarizer.clone());
-        let inner = Arc::new(Overflowing {
-            overflows: Mutex::new(1),
-            early_length,
-            seen: Mutex::default(),
-        });
+        let inner = Overflowing::new(1, how);
         let model = compaction.wrap(inner.clone());
         // Under the trigger: the first call goes out whole, overflows, and
         // the retry is compacted.
@@ -529,17 +582,184 @@ async fn an_overflow_compacts_and_retries_the_step_once() {
 
         // Twice: the turn fails with context_overflow.
         let compaction = compaction_with(Summarizer::answering(&[&summary("Fix it.")]));
-        let inner = Arc::new(Overflowing {
-            overflows: Mutex::new(2),
-            early_length,
-            seen: Mutex::default(),
-        });
+        let inner = Overflowing::new(2, how);
         let model = compaction.wrap(inner.clone());
         let error = answer(&model, session(3, 2, 600)).await.unwrap_err();
         assert_eq!(error.code, "context_overflow");
         assert!(error.message.contains("Start a new thread"));
         assert_eq!(inner.seen.lock().unwrap().len(), 2, "exactly one retry");
     }
+}
+
+#[tokio::test]
+async fn an_attempt_that_carried_text_is_never_retried() {
+    // A host may have shown that text as it streamed: a retry would show a
+    // second answer after the dropped one.
+    let summarizer = Summarizer::answering(&[&summary("Fix it.")]);
+    let compaction = compaction_with(summarizer.clone());
+    let inner = Overflowing::new(
+        1,
+        Overflow::Length {
+            text: true,
+            tokens: 1,
+        },
+    );
+    let model = compaction.wrap(inner.clone());
+    assert_eq!(answer(&model, session(3, 2, 600)).await.unwrap(), "I");
+    assert_eq!(inner.calls(), 1);
+    // An overflow error after some text is the error, not a retry.
+    let inner = Overflowing::new(1, Overflow::AfterText);
+    let model = compaction.wrap(inner.clone());
+    let error = answer(&model, session(3, 2, 600)).await.unwrap_err();
+    assert!(is_overflow(&error), "{error:?}");
+    assert_eq!(inner.calls(), 1);
+    assert_eq!(summarizer.asked().len(), 0);
+}
+
+#[tokio::test]
+async fn an_answer_that_used_its_own_output_limit_is_not_an_overflow() {
+    // The budget's output is 256 tokens: a reasoning-only `length` finish
+    // after 200 of them ran out of output, not of window.
+    let compaction = compaction_with(Summarizer::answering(&[&summary("Fix it.")]));
+    let used = Overflowing::new(
+        1,
+        Overflow::Length {
+            text: false,
+            tokens: 200,
+        },
+    );
+    let model = compaction.wrap(used.clone());
+    assert_eq!(answer(&model, session(3, 2, 600)).await.unwrap(), "");
+    assert_eq!(used.calls(), 1);
+    assert_eq!(compaction.summary_calls(), 0);
+    // A request's own limit under 512 counts too: 60 of 100 is most of it,
+    // 10 of 100 is not.
+    for (tokens, calls) in [(60, 1), (10, 2)] {
+        let compaction = compaction_with(Summarizer::answering(&[&summary("Fix it.")]));
+        let inner = Overflowing::new(
+            1,
+            Overflow::Length {
+                text: false,
+                tokens,
+            },
+        );
+        let model = compaction.wrap(inner.clone());
+        let mut request = LlmRequest::new("m", session(3, 2, 600));
+        request.config = Some(adk_core::GenerateContentConfig {
+            max_output_tokens: Some(100),
+            ..adk_core::GenerateContentConfig::default()
+        });
+        let mut stream = model.generate_content(request, false).await.unwrap();
+        while stream.next().await.is_some() {}
+        assert_eq!(inner.calls(), calls, "{tokens} of 100");
+    }
+}
+
+#[tokio::test]
+async fn a_second_compaction_of_one_turn_keeps_its_request() {
+    // One long turn compacts twice: the second summary content still
+    // repeats the turn's request, which the first one folded.
+    let summarizer = Summarizer::answering(&[&summary("Fix it."), &summary("Fix it.")]);
+    let compaction = compaction_with(summarizer.clone());
+    let mut contents = session(1, 20, 1_200);
+    contents.pop();
+    let first = compaction
+        .prepare(LlmRequest::new("m", contents.clone()), false)
+        .await
+        .unwrap();
+    assert!(text_of(&first.contents[0]).contains("turn 0: read the files"));
+    for step in 20..40 {
+        let id = format!("call-0-{step}");
+        contents.push(call(&id, &format!("src/g{step}.rs")));
+        contents.push(result(&id, 1_200));
+    }
+    let second = compaction
+        .prepare(LlmRequest::new("m", contents), false)
+        .await
+        .unwrap();
+    assert_eq!(summarizer.asked().len(), 2);
+    let head = text_of(&second.contents[0]);
+    assert!(head.contains("turn 0: read the files"), "{head}");
+    assert_eq!(head.matches(CURRENT_REQUEST_HEADER).count(), 1, "{head}");
+}
+
+/// A summary model that always fails.
+struct FailingSummarizer;
+
+#[async_trait]
+impl Llm for FailingSummarizer {
+    fn name(&self) -> &'static str {
+        "summary-model"
+    }
+
+    async fn generate_content(
+        &self,
+        _request: LlmRequest,
+        _stream: bool,
+    ) -> adk_core::Result<LlmResponseStream> {
+        Err(adk_core::AdkError::model(
+            "model_gateway.unavailable: could not reach the model gateway",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_failed_summary_sends_what_fits_and_ends_a_retry_as_overflow() {
+    // `/compact` of a short history: the request goes out as it is, and
+    // the host is told it was measured, not compacted.
+    let host = Arc::new(Host::default());
+    let compaction = Arc::new(StepCompaction::new(
+        policy(),
+        budget(8_000),
+        Arc::new(FailingSummarizer),
+        host.clone(),
+    ));
+    compaction.force_next();
+    let contents = session(3, 1, 200);
+    let prepared = compaction
+        .prepare(LlmRequest::new("m", contents.clone()), false)
+        .await
+        .unwrap();
+    assert!(same_all(&prepared.contents, &contents));
+    assert!(host.compactions.lock().unwrap().is_empty());
+    assert_eq!(
+        host.phases.lock().unwrap().as_slice(),
+        [ContextPhase::Compacting, ContextPhase::Measured]
+    );
+    // A request that does not fit keeps the summary model's error.
+    let error = compaction
+        .prepare(LlmRequest::new("m", session(6, 3, 2_000)), false)
+        .await
+        .unwrap_err();
+    assert!(
+        error.message.contains("model_gateway.unavailable"),
+        "{error:?}"
+    );
+    // On the overflow retry it ends as context_overflow.
+    let inner = Overflowing::new(1, Overflow::Refused);
+    let model = compaction.wrap(inner.clone());
+    let error = answer(&model, session(3, 2, 600)).await.unwrap_err();
+    assert_eq!(error.code, "context_overflow");
+    assert_eq!(inner.calls(), 1);
+}
+
+#[tokio::test]
+async fn a_reseeded_history_does_not_reuse_the_summary() {
+    let summarizer = Summarizer::answering(&[&summary("Fix it."), &summary("Fix it.")]);
+    let compaction = compaction_with(summarizer.clone());
+    let contents = session(6, 3, 2_000);
+    compaction
+        .prepare(LlmRequest::new("m", contents.clone()), false)
+        .await
+        .unwrap();
+    let mut reseeded = contents;
+    reseeded[0] = Content::new("user").with_text("another thread");
+    let prepared = compaction
+        .prepare(LlmRequest::new("m", reseeded), false)
+        .await
+        .unwrap();
+    assert_eq!(summarizer.asked().len(), 2);
+    assert!(summary_of(&prepared.contents[0]).is_some());
 }
 
 #[tokio::test]

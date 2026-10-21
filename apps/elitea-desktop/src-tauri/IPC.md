@@ -1242,7 +1242,8 @@ order. Kinds and payloads:
 | `text_delta` | `{text}` — model text as it streams |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, context?: ContextMeter}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total. `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
+| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, context?: ContextMeter}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
+| `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
@@ -1250,7 +1251,7 @@ order. Kinds and payloads:
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `approval_closed`, `tool_result`, `usage`)* →
+`running` → (`text_delta`, `tool_call`, `approval_request`, `approval_closed`, `tool_result`, `usage`, `context`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after
@@ -1313,10 +1314,12 @@ model catalogue's row for the model
 (`GET /api/v2/configurations/models/{project_id}?section=llm&include_shared=true`:
 `context_window`, `max_output_tokens`, `max_input_tokens`; the turn's
 project's own row before a shared one), read once per app session (a
-sign-out, sign-in or deployment switch reads again; a catalogue that could
-not be reached is asked again next turn). A model the catalogue does not
-describe runs on a 32k window with 4k output, marked
-`window_fallback: true`. The order inside a long session: the older tool
+sign-out, sign-in or deployment switch reads again). Only a definitive
+answer is kept: a 2xx, or a 404 (the model is not described); a catalogue
+that could not answer now (a network error, 401, 403, 408, 429, a 5xx) is
+asked again next turn, the turn running on the fallback meanwhile. A model
+the catalogue does not describe runs on a 128k window (the elision's
+default) with 4k output, marked `window_fallback: true`. The order inside a long session: the older tool
 results are elided first (above); then, before every model call, the step
 compaction (`elitea-agent-runtime` `context_management::StepCompaction`)
 measures the provider body the host will send (messages, system
@@ -1328,16 +1331,24 @@ newest 20k tokens (at most half the trigger) verbatim. A cut is at a turn's
 start or at a step with no tool call open (a call and its result are never
 parted). The summary is asked of the agent's own model through the same
 `/llm` route and execution id (its spend is the turn's), without tools and
-without prompt-cache directives, and streams nothing to the UI; it carries
+without prompt-cache directives, and streams nothing to the UI (the meter's
+`context` event says `compacting` while it runs); it carries
 the previous summary's objective and a cumulative `files_touched` entry
 (`[{path, op: read|edit|write|delete}]`, in `key_facts`). A summary that
 ignores the template is asked for once more without tools, then kept as a
 plain-text v1 record (≤ 32 KiB). When even the kept tail does not fit, the
 step starts from the summary, the last user message and the last tool
-result cut short. A model refusal for a too-long request
-(`context_length_exceeded`, or a `length` finish with almost no output and no tool call) compacts and
-retries the step once; a second one fails the turn with `context_overflow`
-("… Start a new thread to continue."). After a compaction the host appends
+result cut short. When the summary model fails, a request that still fits
+(or a `/compact` one) goes out uncompacted and the meter says `measured`;
+one that does not fit fails the turn with the summary call's error. A model
+refusal for a too-long request (`context_length_exceeded`, or a `length`
+finish with no answer text, no tool call and fewer than 512 output tokens
+and under half the request's own `max_tokens`, so an agent with a small
+`max_tokens` that uses it is not an overflow) compacts and retries the
+step once; a second one, or a summary that fails on that retry, fails the
+turn with `context_overflow` ("… Start a new thread to continue."). An
+answer whose text already streamed (`text_delta`) is never retried, so the
+UI never shows a dropped answer before a new one. After a compaction the host appends
 an adk `EventCompaction` marker to the turn's session after the last event
 it folds, so the next turn's history starts from the summary instead of
 summarising the thread again; the turn's commit carries the latest summary
@@ -1355,7 +1366,7 @@ type ContextMeter = {
   phase: "measured" | "compacting" | "compacted";
   compacted: boolean;       // this turn compacted
   compacted_at?: string;    // when it last did (RFC 3339, UTC)
-  window_fallback: boolean; // the 32k default: the catalogue did not name the model's
+  window_fallback: boolean; // the 128k default: the catalogue did not name the model's
 };
 ```
 

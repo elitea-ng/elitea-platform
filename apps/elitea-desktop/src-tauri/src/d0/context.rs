@@ -5,9 +5,11 @@
 //! * **Limits.** The resolved version's frozen `model_context_limits` when
 //!   it carries them, else the model catalogue of the turn's project
 //!   (`GET /configurations/models/{project}?section=llm&include_shared=true`),
-//!   kept for the app's session ([`TurnCaches`]); a model the catalogue
-//!   does not describe runs on [`FALLBACK_LIMITS`] (32k window, 4k output,
-//!   marked as a fallback).
+//!   kept for the app's session ([`TurnCaches`]) once it answered for
+//!   good (a 2xx, or a 404); a model the catalogue does not describe runs
+//!   on [`FALLBACK_LIMITS`] (the runtime's 128k elision window, 4k output,
+//!   marked as a fallback). A catalogue that could not answer now (a
+//!   network error, 401, 403, 408, 429, a 5xx) is asked again next turn.
 //! * **Order.** Older tool results are elided first (past 60% of the window,
 //!   `elitea_agent_runtime::context`, a `before_model` callback); the step
 //!   compaction wraps the model, so it measures the request the elision
@@ -25,7 +27,9 @@
 //!   summarising the thread again. The commit carries the latest summary
 //!   (`context_summary`, the shared v1 record), for the cloud executor.
 //! * **Meter.** Each model call's occupancy goes to the next `usage`
-//!   event ([`super::events::ContextMeter`]): estimates, never content.
+//!   event ([`super::events::ContextMeter`]), and to a `context` event of
+//!   its own when its phase changes (a compaction starts or ends):
+//!   estimates, never content.
 
 use std::sync::{Arc, Mutex};
 
@@ -51,9 +55,11 @@ use super::events::{ContextMeter, TurnEvents};
 use super::recorder::{Recorder, ToolCalls};
 use super::session::AGENT_AUTHOR;
 
-/// The limits of a model the catalogue does not describe.
+/// The limits of a model the catalogue does not describe: the runtime's
+/// elision window (`elitea_agent_runtime::context::FALLBACK_WINDOW_TOKENS`),
+/// so a large model missing from the catalogue keeps the room it had.
 pub const FALLBACK_LIMITS: ModelContextLimits = ModelContextLimits {
-    context_window_tokens: 32_768,
+    context_window_tokens: 128_000,
     max_output_tokens: 4_096,
     context_window_fallback: true,
     max_output_fallback: true,
@@ -91,9 +97,9 @@ pub async fn model_limits(
     if let Some(cached) = key.as_ref().and_then(|key| caches.limits(key)) {
         return cached;
     }
-    // An answered catalogue is kept, whatever it said (a model it does not
-    // describe stays on the fallback for the session); a catalogue that
-    // could not be reached is asked again next turn.
+    // A definitive answer is kept, whatever it said (a model it does not
+    // describe stays on the fallback for the session); a transient one is
+    // asked again next turn.
     let Some(answer) = catalogue_limits(api, project_id, model_name).await else {
         return FALLBACK_LIMITS;
     };
@@ -104,8 +110,8 @@ pub async fn model_limits(
     limits
 }
 
-/// `None` when the catalogue could not be read; `Some(None)` when it does
-/// not describe the model.
+/// `None` when the catalogue could not answer now ([`definitive`]);
+/// `Some(None)` when it does not describe the model.
 async fn catalogue_limits(
     api: &PlatformApi,
     project_id: i64,
@@ -125,7 +131,7 @@ async fn catalogue_limits(
             "the model catalogue answered {}; the turn uses the default context window",
             answer.status
         );
-        return (answer.status != 401 && answer.status < 500).then_some(None);
+        return definitive(answer.status).then_some(None);
     }
     let Some(items) = answer.body.get("items").and_then(Value::as_array) else {
         return Some(None);
@@ -138,6 +144,13 @@ async fn catalogue_limits(
             .min_by_key(|item| item.get("project_id").and_then(Value::as_i64) != Some(project_id))
             .and_then(limits_of),
     )
+}
+
+/// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
+/// for the project: it describes no model). Any other (401, 403, 408, 429,
+/// a 5xx) may answer differently on the next turn.
+fn definitive(status: u16) -> bool {
+    (200..300).contains(&status) || status == 404
 }
 
 /// A catalogue row's limits (`context_window`, `max_output_tokens`,
@@ -450,10 +463,25 @@ mod tests {
         assert_eq!(full.max_input_tokens, Some(180_000));
         assert!(!full.context_window_fallback && !full.max_output_fallback);
         let bare = limits_of(&json!({"name": "m"})).unwrap();
-        assert_eq!(bare.context_window_tokens, 32_768);
+        assert_eq!(bare.context_window_tokens, 128_000);
+        assert_eq!(bare.max_output_tokens, 4_096);
         assert!(bare.context_window_fallback && bare.max_output_fallback);
+        // The window of a row that names only its output is the fallback's.
+        let output_only = limits_of(&json!({"max_output_tokens": 64_000})).unwrap();
+        assert_eq!(output_only.context_window_tokens, 128_000);
+        assert!(output_only.context_window_fallback && !output_only.max_output_fallback);
         assert!(limits_of(&json!({"context_window": -1})).is_none());
         assert!(limits_of(&json!({"context_window": 1000, "max_output_tokens": 1000})).is_none());
+    }
+
+    #[test]
+    fn only_a_definitive_catalogue_answer_is_kept() {
+        for status in [200, 204, 404] {
+            assert!(definitive(status), "{status}");
+        }
+        for status in [401, 403, 408, 429, 500, 502, 503, 504] {
+            assert!(!definitive(status), "{status}");
+        }
     }
 
     #[test]

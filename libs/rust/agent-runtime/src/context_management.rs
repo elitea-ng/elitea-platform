@@ -78,8 +78,14 @@
 //!   (opencode), then the text is kept as a v1 summary of its own
 //!   ([`crate::context_summary::plain_text`]).
 //! * **Retry once.** A provider context-length refusal, or an early
-//!   `length` finish with no tool call, compacts and retries the step once;
-//!   a second one fails with `context_overflow` (pi).
+//!   `length` finish (well under the request's own output limit) with no
+//!   text and no tool call, compacts and retries the step once; a second
+//!   one, or a summary that fails on the way, fails with `context_overflow`
+//!   (pi). An attempt that already carried text is never retried: a host
+//!   may have shown it as it streamed.
+//! * **A failed summary.** When the summary model fails outside a retry,
+//!   a request that still fits (or a `/compact` one) is sent as it is, and
+//!   the host is told it was measured, not compacted.
 //! * **Fresh window.** When even the kept tail does not fit, the step starts
 //!   from the summary, the last user message and the last call with its
 //!   results cut short (Codex), when [`CompactionPolicy::fresh_window`] is on.
@@ -109,7 +115,9 @@ use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
 
 use crate::assembly_error::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
-use crate::context_budget::{ModelRequestBudget, RequestContextBudget, estimate_tokens};
+use crate::context_budget::{
+    ModelRequestBudget, RequestContextBudget, RequestContextUsage, estimate_tokens,
+};
 use crate::context_status::{ContextPhase, ModelContextStatus};
 use crate::context_summary;
 
@@ -550,9 +558,10 @@ const FRESH_WINDOW_RESPONSE_BYTES: usize = 4 * 1_024;
 /// Estimated tokens the summary prompt itself needs besides its records.
 const SUMMARY_PROMPT_TOKENS: u64 = 4_096;
 
-/// An answer that ends on `length` having produced fewer tokens than this
-/// (and no tool call) ran out of window, not out of output.
-const EARLY_LENGTH_TOKENS: i32 = 512;
+/// An answer that ends on `length` having produced fewer tokens than this,
+/// and under half the request's own output limit (with no text and no tool
+/// call), ran out of window, not out of output.
+const EARLY_LENGTH_TOKENS: u64 = 512;
 
 /// The longest files-touched entry (the contract's string limit).
 const MAX_FILES_ENTRY_BYTES: usize = 2_000;
@@ -736,8 +745,26 @@ impl CompactionHost for NoCompactionHost {}
 #[derive(Clone)]
 struct Record {
     covered: usize,
-    digest: [u8; 32],
+    /// [`prefix_ends`] of the covered prefix.
+    ends: [u8; 32],
     summary_content: Content,
+}
+
+/// Why a step compacts whatever the budget says.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Force {
+    No,
+    /// `/compact` ([`StepCompaction::force_next`]) or a caller's `force`.
+    Asked,
+    /// The retry after an overflow.
+    Overflow,
+}
+
+/// A prepared request and the output limit it runs under (the early-`length`
+/// check's measure).
+struct Prepared {
+    request: LlmRequest,
+    max_output: u64,
 }
 
 #[derive(Default)]
@@ -813,13 +840,23 @@ impl StepCompaction {
     /// # Errors
     ///
     /// The budget could not measure the request, or the summary model
-    /// failed.
-    pub async fn prepare(
+    /// failed for a request that does not fit (one that fits, or a forced
+    /// one, is sent uncompacted).
+    pub async fn prepare(&self, request: LlmRequest, force: bool) -> adk_core::Result<LlmRequest> {
+        let force = if force { Force::Asked } else { Force::No };
+        Ok(self.prepare_step(request, force).await?.request)
+    }
+
+    async fn prepare_step(
         &self,
         mut request: LlmRequest,
-        force: bool,
-    ) -> adk_core::Result<LlmRequest> {
-        let force = force || std::mem::take(&mut self.state().force_next);
+        force: Force,
+    ) -> adk_core::Result<Prepared> {
+        let asked = std::mem::take(&mut self.state().force_next);
+        let force = match force {
+            Force::No if asked => Force::Asked,
+            other => other,
+        };
         let (pinned, original) = split_pinned(std::mem::take(&mut request.contents));
         let (working, offset) = self.apply_record(&original);
         let previous = working.first().and_then(summary_of);
@@ -829,36 +866,45 @@ impl StepCompaction {
         }
         request.contents = joined(&pinned, &working);
         let usage = self.budget.measure(&request)?;
+        let max_output = max_output(&request, &usage.budget);
         let trigger = self.policy.trigger_tokens(&usage.budget);
-        if !force && usage.estimated_input <= trigger && usage.fits() {
-            self.host
-                .status(&ModelContextStatus::new(ContextPhase::Measured, usage));
-            return Ok(request);
-        }
         let keep = self.policy.keep_recent_for(&usage.budget);
-        let Some(cut) = choose_cut(&working, base, keep, trigger) else {
-            // Nothing complete to fold (one open tool batch): send as it is.
+        let under = force == Force::No && usage.estimated_input <= trigger && usage.fits();
+        // Under the trigger, or nothing complete to fold (one open tool
+        // batch): send as it is.
+        let cut = (!under)
+            .then(|| choose_cut(&working, base, keep, trigger))
+            .flatten();
+        let Some(cut) = cut else {
             self.host
                 .status(&ModelContextStatus::new(ContextPhase::Measured, usage));
-            return Ok(request);
+            return Ok(Prepared {
+                request,
+                max_output,
+            });
         };
         self.host
             .status(&ModelContextStatus::new(ContextPhase::Compacting, usage));
         let files = self.files_entry(previous.as_deref(), &working[base..cut]);
-        let summary = self
+        let summary = match self
             .summarize(
                 previous.as_deref(),
                 &working[base..cut],
                 files.as_deref(),
                 usage.budget.input_limit,
             )
-            .await?;
-        // A cut inside the current turn keeps its request verbatim.
-        let current = working[..cut]
-            .iter()
-            .rposition(is_turn_start)
-            .filter(|index| *index >= base && !working[cut..].iter().any(is_turn_start))
-            .map(|index| text_of(&working[index]));
+            .await
+        {
+            Ok(summary) => summary,
+            Err(error) => {
+                self.summary_failed(error, force, usage)?;
+                return Ok(Prepared {
+                    request,
+                    max_output,
+                });
+            }
+        };
+        let current = current_request(&working, base, cut);
         let summary_content = summary_content(&summary, current.as_deref());
         let mut compacted = Vec::with_capacity(1 + working.len() - cut);
         compacted.push(summary_content.clone());
@@ -879,24 +925,13 @@ impl StepCompaction {
         }
         let consumed = if offset > 0 { offset } else { base };
         let covered = consumed + (cut - base);
-        let original_base = usize::from(original.first().is_some_and(|c| summary_of(c).is_some()));
-        let compaction = Compaction {
-            summary: summary.clone(),
-            summary_content: summary_content.clone(),
-            based_on: (original_base == 1).then(|| original[0].clone()),
-            covered_events: covered.saturating_sub(original_base),
-            events_digest: history_digest(&original[original_base.min(covered)..covered]),
-            forced: force,
-        };
-        {
-            let mut state = self.state();
-            state.record = Some(Record {
-                covered,
-                digest: history_digest(&original[..covered]),
-                summary_content,
-            });
-            state.latest = Some(summary);
-        }
+        let compaction = self.remember(
+            &original,
+            covered,
+            summary,
+            summary_content,
+            force != Force::No,
+        );
         tracing::info!(
             event = "context_compacted",
             folded = cut - base,
@@ -904,13 +939,77 @@ impl StepCompaction {
             input_before = usage.estimated_input,
             input_after = after.estimated_input,
             trigger,
-            forced = force,
+            forced = force != Force::No,
             "compacted the model request"
         );
         self.host.compacted(&compaction).await;
         self.host
             .status(&ModelContextStatus::new(ContextPhase::Compacted, after));
-        Ok(request)
+        Ok(Prepared {
+            request,
+            max_output,
+        })
+    }
+
+    /// Keep the summary for the rest of the invocation (it stands for the
+    /// first `covered` of `original`), and what the host persists of it.
+    fn remember(
+        &self,
+        original: &[Content],
+        covered: usize,
+        summary: String,
+        summary_content: Content,
+        forced: bool,
+    ) -> Compaction {
+        let original_base = usize::from(original.first().is_some_and(|c| summary_of(c).is_some()));
+        let compaction = Compaction {
+            summary: summary.clone(),
+            summary_content: summary_content.clone(),
+            based_on: (original_base == 1).then(|| original[0].clone()),
+            covered_events: covered.saturating_sub(original_base),
+            events_digest: history_digest(&original[original_base.min(covered)..covered]),
+            forced,
+        };
+        let mut state = self.state();
+        state.record = Some(Record {
+            covered,
+            ends: prefix_ends(&original[..covered]),
+            summary_content,
+        });
+        state.latest = Some(summary);
+        compaction
+    }
+
+    /// The summary model failed. On the overflow retry the step fails with
+    /// `context_overflow`; a request that still fits, or a `/compact` one,
+    /// goes out uncompacted (the host is told it was only measured); any
+    /// other keeps the error.
+    fn summary_failed(
+        &self,
+        error: AdkError,
+        force: Force,
+        usage: RequestContextUsage,
+    ) -> adk_core::Result<()> {
+        if force == Force::Overflow {
+            tracing::warn!(
+                event = "context_compaction_failed",
+                code = error.code,
+                "the summary failed on the overflow retry: the step fails with context_overflow"
+            );
+            return Err(context_overflow());
+        }
+        if !usage.fits() && force != Force::Asked {
+            return Err(error);
+        }
+        tracing::warn!(
+            event = "context_compaction_failed",
+            code = error.code,
+            forced = force == Force::Asked,
+            "the summary failed: the request goes out uncompacted"
+        );
+        self.host
+            .status(&ModelContextStatus::new(ContextPhase::Measured, usage));
+        Ok(())
     }
 
     /// The working history: `original` with this invocation's summary
@@ -930,7 +1029,7 @@ impl StepCompaction {
             }
             Some(record)
                 if original.len() >= record.covered
-                    && history_digest(&original[..record.covered]) == record.digest =>
+                    && prefix_ends(&original[..record.covered]) == record.ends =>
             {
                 let mut working = Vec::with_capacity(1 + original.len() - record.covered);
                 working.push(record.summary_content);
@@ -1080,6 +1179,23 @@ impl StepCompaction {
     }
 }
 
+/// The check that a covered prefix is still the one summarized:
+/// [`history_digest`] of its first and last contents and its length, a
+/// constant cost per call. Within one invocation adk rebuilds the same
+/// history each step and only appends to it (an elided result body does not
+/// change the digest), so a re-seeded or edited history shows at the
+/// prefix's ends; hashing the whole prefix on every call would repeat that.
+fn prefix_ends(prefix: &[Content]) -> [u8; 32] {
+    let (Some(first), Some(last)) = (prefix.first(), prefix.last()) else {
+        return history_digest(&[]);
+    };
+    history_digest(&[
+        Content::new("prefix").with_text(prefix.len().to_string()),
+        first.clone(),
+        last.clone(),
+    ])
+}
+
 /// [`StepCompaction::wrap`]'s model.
 struct CompactingModel {
     inner: Arc<dyn Llm>,
@@ -1092,10 +1208,14 @@ enum Attempt {
 }
 
 impl CompactingModel {
-    /// One call, its responses gathered (the early-`length` check needs the
-    /// whole answer).
-    async fn attempt(&self, request: LlmRequest, stream: bool) -> adk_core::Result<Attempt> {
-        let mut answer = match self.inner.generate_content(request, stream).await {
+    /// One call, its responses gathered before any is returned (the
+    /// early-`length` check needs the whole answer), so the wrapped model's
+    /// stream reaches the caller at once at its end. A host that shows the
+    /// answer as it streams does so through a side channel of its own (the
+    /// desktop's `text_delta` events). An attempt that already carried text
+    /// is never retried, so nothing such a channel showed is dropped.
+    async fn attempt(&self, prepared: Prepared, stream: bool) -> adk_core::Result<Attempt> {
+        let mut answer = match self.inner.generate_content(prepared.request, stream).await {
             Ok(answer) => answer,
             Err(error) if is_overflow(&error) => return Ok(Attempt::Overflowed),
             Err(error) => return Err(error),
@@ -1104,11 +1224,13 @@ impl CompactingModel {
         while let Some(response) = answer.next().await {
             match response {
                 Ok(response) => responses.push(response),
-                Err(error) if is_overflow(&error) => return Ok(Attempt::Overflowed),
+                Err(error) if is_overflow(&error) && !carries_text(&responses) => {
+                    return Ok(Attempt::Overflowed);
+                }
                 Err(error) => return Err(error),
             }
         }
-        if ended_early_on_length(&responses) {
+        if ended_early_on_length(&responses, prepared.max_output) {
             return Ok(Attempt::Overflowed);
         }
         Ok(Attempt::Answered(responses))
@@ -1134,7 +1256,10 @@ impl Llm for CompactingModel {
         request: LlmRequest,
         stream: bool,
     ) -> adk_core::Result<LlmResponseStream> {
-        let prepared = self.compaction.prepare(request.clone(), false).await?;
+        let prepared = self
+            .compaction
+            .prepare_step(request.clone(), Force::No)
+            .await?;
         let responses = match self.attempt(prepared, stream).await? {
             Attempt::Answered(responses) => responses,
             Attempt::Overflowed => {
@@ -1142,7 +1267,10 @@ impl Llm for CompactingModel {
                     event = "context_overflow_retry",
                     "the model ran out of context: compacting and retrying the step once"
                 );
-                let retried = self.compaction.prepare(request, true).await?;
+                let retried = self
+                    .compaction
+                    .prepare_step(request, Force::Overflow)
+                    .await?;
                 match self.attempt(retried, stream).await? {
                     Attempt::Answered(responses) => responses,
                     Attempt::Overflowed => return Err(context_overflow()),
@@ -1176,13 +1304,43 @@ pub fn is_overflow(error: &AdkError) -> bool {
     ) || error.message.contains("context_length_exceeded")
 }
 
-/// An answer that ended on `length` with no tool call after only a few
-/// tokens: the input left no room for output.
-fn ended_early_on_length(responses: &[LlmResponse]) -> bool {
+/// The output limit `request` runs under: its own `max_output_tokens`, else
+/// the budget's reservation when one was chosen, else the model's maximum.
+fn max_output(request: &LlmRequest, budget: &RequestContextBudget) -> u64 {
+    request
+        .config
+        .as_ref()
+        .and_then(|config| config.max_output_tokens)
+        .and_then(|tokens| u64::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
+        .unwrap_or_else(|| {
+            u64::from(if budget.auto_output {
+                budget.limits.max_output_tokens
+            } else {
+                budget.output_reservation
+            })
+        })
+}
+
+/// Some response carries answer text (what a host streams as it arrives).
+fn carries_text(responses: &[LlmResponse]) -> bool {
+    responses
+        .iter()
+        .filter_map(|response| response.content.as_ref())
+        .flat_map(|content| &content.parts)
+        .any(|part| matches!(part, Part::Text { text } if !text.is_empty()))
+}
+
+/// An answer that ended on `length` with no text and no tool call after
+/// only a few tokens, well under `max_output` (the request's own limit):
+/// the input left no room for output. An answer that used most of its
+/// limit (a configured `max_tokens` under [`EARLY_LENGTH_TOKENS`] included)
+/// ran out of output, not of window.
+fn ended_early_on_length(responses: &[LlmResponse], max_output: u64) -> bool {
     let Some(last) = responses.iter().rev().find(|response| !response.partial) else {
         return false;
     };
-    if last.finish_reason != Some(FinishReason::MaxTokens) {
+    if last.finish_reason != Some(FinishReason::MaxTokens) || carries_text(responses) {
         return false;
     }
     let calls = responses.iter().any(|response| {
@@ -1196,17 +1354,23 @@ fn ended_early_on_length(responses: &[LlmResponse]) -> bool {
     if calls {
         return false;
     }
+    let early = EARLY_LENGTH_TOKENS.min(max_output / 2);
     match &last.usage_metadata {
         Some(usage) if usage.candidates_token_count > 0 => {
-            usage.candidates_token_count < EARLY_LENGTH_TOKENS
+            u64::try_from(usage.candidates_token_count).unwrap_or(u64::MAX) < early
         }
         _ => {
+            // Without usage: the reasoning's bytes (there is no text).
             let bytes: usize = responses
                 .iter()
                 .filter_map(|response| response.content.as_ref())
-                .map(|content| text_of(content).len())
+                .flat_map(|content| &content.parts)
+                .map(|part| match part {
+                    Part::Thinking { thinking, .. } => thinking.len(),
+                    _ => 0,
+                })
                 .sum();
-            estimate_tokens(bytes) < u64::try_from(EARLY_LENGTH_TOKENS).unwrap_or(0)
+            estimate_tokens(bytes) < early
         }
     }
 }
@@ -1257,6 +1421,37 @@ pub fn summary_content(summary: &str, current_request: Option<&str>) -> Content 
         text.push_str(request);
     }
     Content::new("user").with_text(text)
+}
+
+/// The request a cut inside the current turn keeps verbatim: the turn's
+/// start when the cut folds it, else (an earlier compaction of the turn
+/// folded it) the one the previous summary, `working[0]` when `base` is 1,
+/// kept. `None` when the turn's start stays in the tail.
+fn current_request(working: &[Content], base: usize, cut: usize) -> Option<String> {
+    if working[cut..].iter().any(is_turn_start) {
+        return None;
+    }
+    working[base..cut]
+        .iter()
+        .rposition(is_turn_start)
+        .map(|index| text_of(&working[base + index]))
+        .or_else(|| {
+            working[..base]
+                .first()
+                .and_then(current_request_of)
+                .map(str::to_owned)
+        })
+}
+
+/// The request a summary content repeats verbatim ([`summary_content`]).
+fn current_request_of(content: &Content) -> Option<&str> {
+    summary_of(content)?;
+    let [Part::Text { text }] = content.parts.as_slice() else {
+        return None;
+    };
+    let marker = format!("\n\n{CURRENT_REQUEST_HEADER}\n");
+    let (_, request) = text.split_once(marker.as_str())?;
+    Some(request)
 }
 
 /// Does `content` start a turn (a person's message, not a tool result)?
@@ -1361,10 +1556,7 @@ fn choose_cut(working: &[Content], base: usize, keep: u64, trigger: u64) -> Opti
     let turn = (base + 1..chosen)
         .rev()
         .find(|index| valid[*index] && is_turn_start(&working[*index]))
-        .filter(|turn| tails[*turn] <= upper)
-        // Not past the turn's start: a turn start before an open call
-        // would orphan nothing, but the turn must begin there.
-        .filter(|turn| working[*turn + 1..chosen].iter().all(|c| !is_turn_start(c)));
+        .filter(|turn| tails[*turn] <= upper);
     Some(turn.unwrap_or(chosen))
 }
 

@@ -43,7 +43,7 @@ export interface ContextMeter {
   compacted: boolean;
   /** When it last did (RFC 3339). */
   compacted_at?: string;
-  /** The catalogue did not name the model's window: the host's 32k default. */
+  /** The catalogue did not name the model's window: the host's 128k default. */
   window_fallback: boolean;
 }
 
@@ -187,6 +187,8 @@ export type AgentEvent =
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
   /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
   | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; context?: ContextMeter } })
+  /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
+  | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   /** The host closed an open request nobody answered within its wait (an MCP sign-in): it no longer waits. */
   | (EventBase & { kind: 'approval_closed'; payload: { request_id: string; reason: string } })

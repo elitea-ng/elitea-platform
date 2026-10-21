@@ -166,7 +166,23 @@ function onDone(view: TurnView, event: EventOf<'done'>): TurnView {
   return { ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] };
 }
 
+/** `usage` (the meter of a call that ended) or `context` (a phase change, sent at once). */
+function isMeterEvent(event: AgentEvent): event is EventOf<'usage'> | EventOf<'context'> {
+  return event.kind === 'usage' || event.kind === 'context';
+}
+
+/**
+ * Not part of the transcript: the activity island shows a turn's tokens; the
+ * composer's meter the latest context occupancy, which a `context` event
+ * carries while a summary call runs.
+ */
+function onMeter(view: TurnView, event: EventOf<'usage'> | EventOf<'context'>): TurnView {
+  const context = event.kind === 'context' ? event.payload : event.payload.context;
+  return context === undefined ? view : { ...view, context };
+}
+
 function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+  if (isMeterEvent(event)) return onMeter(view, event);
   switch (event.kind) {
     case 'status':
       return onStatus(view, event);
@@ -180,10 +196,6 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
       return onApprovalRequest(view, event, resolved);
     case 'approval_closed':
       return { ...view, approvals: view.approvals.filter((a) => a.request_id !== event.payload.request_id) };
-    case 'usage':
-      // Not part of the transcript: the activity island shows a turn's
-      // tokens; the composer's meter the latest call's context.
-      return event.payload.context === undefined ? view : { ...view, context: event.payload.context };
     case 'error':
       return { ...view, error: event.payload, approvals: [] };
     case 'done':

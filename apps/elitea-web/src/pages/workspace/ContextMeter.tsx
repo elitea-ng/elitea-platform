@@ -1,9 +1,11 @@
 /**
  * The composer's context meter (#1217): how full the model's window was at
  * the turn's latest model call, as a small ring and "62% of 200K"; the
- * tooltip names the tokens and the last compaction. The numbers are the
- * host's estimates of the request it sent, never its content (IPC.md
- * "Context window"). Loaded lazily by `ThreadComposer`.
+ * tooltip names the tokens and the last compaction. While a summary call
+ * runs (a `context` event's `compacting` phase) the label says
+ * "Summarizing…". The numbers are the host's estimates of the request it
+ * sent, never its content (IPC.md "Context window"). Loaded lazily by
+ * `ThreadComposer`.
  *
  * The activity island keeps its own token counts per turn; one context
  * display, here, is the meter (#1227 folds the island's into it).
@@ -31,13 +33,13 @@ export interface MeterText {
 export function describeMeter(meter: Meter): MeterText {
   const percent = meter.window_tokens > 0 ? Math.min(100, Math.round((meter.used_tokens / meter.window_tokens) * 100)) : 0;
   const window = compactNumber(meter.window_tokens);
-  const label = t('workspace.context.label', '{{percent}}% of {{window}}', { percent, window });
+  const label = meter.phase === 'compacting' ? t('workspace.context.summarizing', 'Summarizing…') : t('workspace.context.label', '{{percent}}% of {{window}}', { percent, window });
   const lines = [t('workspace.context.used', '{{used}} of {{window}} tokens of context in use', { used: compactNumber(meter.used_tokens), window })];
   if (meter.phase === 'compacting') lines.push(t('workspace.context.compacting', 'Summarizing the conversation…'));
   else if (meter.compacted_at !== undefined) {
     lines.push(t('workspace.context.compactedAt', 'Summarized at {{time}}', { time: new Date(meter.compacted_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) }));
   }
-  if (meter.window_fallback) lines.push(t('workspace.context.fallback', 'The model’s window is unknown: 32K is assumed.'));
+  if (meter.window_fallback) lines.push(t('workspace.context.fallback', 'The model’s window is unknown: 128K is assumed.'));
   return { percent, label, detail: lines.join(' · ') };
 }
 

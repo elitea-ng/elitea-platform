@@ -25,10 +25,10 @@ describe('ContextMeter', () => {
   });
 
   it('names the last compaction and a guessed window in its tooltip text', () => {
-    const text = describeMeter(meter({ used_tokens: 40_000, window_tokens: 32_768, compacted: true, compacted_at: '2026-10-21T10:15:00.000Z', window_fallback: true, phase: 'compacted' }));
+    const text = describeMeter(meter({ used_tokens: 140_000, window_tokens: 128_000, compacted: true, compacted_at: '2026-10-21T10:15:00.000Z', window_fallback: true, phase: 'compacted' }));
     expect(text.percent).toBe(100);
     expect(text.detail).toContain('Summarized at');
-    expect(text.detail).toContain('32K is assumed');
+    expect(text.detail).toContain('128K is assumed');
     expect(describeMeter(meter({ phase: 'compacting' })).detail).toContain('Summarizing');
     expect(describeMeter(meter()).detail).not.toContain('Summarized');
   });
@@ -43,5 +43,20 @@ describe('ContextMeter', () => {
     const view = replayView([usage(0, meter({ used_tokens: 10 })), usage(1, meter({ used_tokens: 20, phase: 'compacted', compacted: true })), usage(2)]);
     expect(view.context?.used_tokens).toBe(20);
     expect(view.context?.compacted).toBe(true);
+  });
+
+  it('says Summarizing while a summary call runs, from the context event', () => {
+    const context = (seq: number, over: Partial<Meter>): AgentEvent => ({ turn_id: 't', seq, kind: 'context', payload: meter(over) });
+    const shown = (events: AgentEvent[]): Meter => {
+      const latest = replayView(events).context;
+      if (latest === undefined) throw new Error('no meter');
+      return latest;
+    };
+    const running = shown([context(0, { phase: 'compacting', used_tokens: 190_000 })]);
+    expect(running.phase).toBe('compacting');
+    render(<ContextMeter meter={running} />);
+    expect(screen.getByTestId('context-meter')).toHaveTextContent('Summarizing…');
+    const done = shown([context(0, { phase: 'compacting' }), context(1, { phase: 'compacted', used_tokens: 30_000, compacted: true, compacted_at: '2026-10-21T10:15:00.000Z' })]);
+    expect(describeMeter(done).label).toBe('15% of 200K');
   });
 });
