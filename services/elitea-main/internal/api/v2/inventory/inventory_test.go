@@ -31,6 +31,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 )
 
@@ -167,6 +168,28 @@ func TestEachFacadePathMapsToItsProviderPath(t *testing.T) {
 	}
 	if len(*seen) != len(cases) {
 		t.Fatalf("the provider saw %d requests for %d routes", len(*seen), len(cases))
+	}
+}
+
+// WithHop forwards over the hop the composition root built (and handed the
+// provider registrar too) instead of dialling a second one: the route's own
+// configuration names no reachable provider here, and the call still lands.
+func TestWithHopForwardsOverTheGivenHop(t *testing.T) {
+	seen, cfg := recordingProvider(t)
+	hop, err := proxy.New(cfg, inventory.EnvNames.Target, silent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hop.Close() })
+	elsewhere := cfg
+	elsewhere.Target = "127.0.0.1:1"
+	built, err := inventory.NewRoute(elsewhere, authConfig(),
+		permissions(inventory.ReadPermission), nil, silent(), inventory.WithHop(hop))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := request(t, built, http.MethodGet, "/api/v2/inventory/slots/7"); response.Code != http.StatusOK || len(*seen) != 1 {
+		t.Fatalf("slots over the given hop: %d %s, provider saw %d", response.Code, response.Body.String(), len(*seen))
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	providerproxy "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/routes"
 	"github.com/go-chi/chi/v5"
 )
@@ -70,7 +71,19 @@ func NewRoute(
 		return nil, ErrInvalidRoute
 	}
 
-	proxy, err := NewProxy(cfg, logger)
+	// The options are applied BEFORE the table is built, because one of them
+	// (WithHistory) supplies the poll hop and the invoke wrapper the table
+	// then mounts, and another (WithHop) the hop itself. A variadic tail
+	// rather than another positional parameter: every caller of this
+	// constructor that does not record a transcript is unchanged, and a
+	// facade whose composition root cannot build a repository must still
+	// mount.
+	settings := routeOptions{}
+	for _, option := range options {
+		option(&settings)
+	}
+
+	proxy, err := newProxyOver(cfg, settings.hop, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -87,17 +100,6 @@ func NewRoute(
 	}
 	if logger == nil {
 		logger = slog.Default()
-	}
-
-	// The options are applied BEFORE the table is built, because one of them
-	// (WithHistory) supplies the poll hop and the invoke wrapper the table
-	// then mounts. A variadic tail rather than another positional parameter:
-	// every caller of this constructor that does not record a transcript is
-	// unchanged, and a facade whose composition root cannot build a
-	// repository must still mount.
-	settings := routeOptions{}
-	for _, option := range options {
-		option(&settings)
 	}
 
 	// The rewriting invoke handler, and — when a transcript is being kept —
@@ -163,6 +165,14 @@ type Option func(*routeOptions)
 
 type routeOptions struct {
 	history *History
+	hop     *providerproxy.Proxy
+}
+
+// WithHop forwards over an already built hop to the provider: the one the
+// composition root also hands the provider registrar, so the facade holds
+// one connection (and one certificate reloader) to its provider, not two.
+func WithHop(hop *providerproxy.Proxy) Option {
+	return func(o *routeOptions) { o.hop = hop }
 }
 
 // WithHistory records every wiki chat turn this facade serves. A nil History

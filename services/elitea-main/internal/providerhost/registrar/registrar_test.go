@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy/providertest"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/registrar"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhub"
@@ -83,8 +84,14 @@ func newProvider(t *testing.T) *provider {
 
 func newRegistrar(t *testing.T, p *provider, store registrar.Store, interval time.Duration) *registrar.Registrar {
 	t.Helper()
+	hop, err := proxy.New(p.cfg, "TEST_PLATFORM_GRPC_TARGET", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = hop.Close() })
 	r, err := registrar.New(p.cfg, "TEST_PLATFORM_GRPC_TARGET", store, registrar.Options{
 		ProjectID: 7, Actor: "facade:test", Interval: interval, Timeout: 2 * time.Second,
+		Provider: hop.Client(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -242,8 +249,9 @@ func TestNewRefusesWhatItCannotRegisterWith(t *testing.T) {
 	if _, err := registrar.New(facade.Config{Target: "https://p:8080"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1}, nil); err == nil {
 		t.Fatal("a URL target (the retired BASE_URL) accepted")
 	}
-	if _, err := registrar.New(facade.Config{Target: "p:9443", ClientCertFile: "/nonexistent/tls.crt", ClientKeyFile: "/nonexistent/tls.key", CAFile: "/nonexistent/ca.crt"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1}, nil); err == nil {
-		t.Fatal("missing client material accepted")
+	// The registrar dials nothing of its own: it rides the facade's client.
+	if _, err := registrar.New(facade.Config{Target: "p:9443"}, "X", &fakeStore{}, registrar.Options{ProjectID: 1}, nil); err == nil {
+		t.Fatal("no provider client accepted")
 	}
 }
 

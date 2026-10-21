@@ -87,6 +87,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
+	providerproxy "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/proxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
@@ -1492,12 +1493,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("read Inventory facade configuration: %w", err)
 	}
 	if inventoryConfig.Enabled {
+		// One hop to the provider, shared by the registrar and the route:
+		// one connection and one certificate reloader, not two.
+		inventoryHop, hopErr := providerproxy.New(inventoryConfig, v2inventory.EnvNames.Target, logger)
+		if hopErr != nil {
+			return fmt.Errorf("build the Inventory facade: %w", hopErr)
+		}
 		// The registrar starts FIRST: it is what learns the provider's own
 		// name, and the gate the route carries reads that name per request.
 		inventoryConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"inventory", inventoryConfig, v2inventory.EnvNames.Target))
+				"inventory", inventoryConfig, v2inventory.EnvNames.Target, inventoryHop.Client()))
 		// The source expander (ADR-0023 H4c I2). Built only where the
 		// Configurations graph that can claim a credential exists (the engine
 		// calls back over the platform gRPC listener, at no configured origin,
@@ -1547,6 +1554,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			legacyrbac.NewPostgresResolver(pool),
 			inventorySources,
 			logger,
+			v2inventory.WithHop(inventoryHop),
 		)
 		if err != nil {
 			return fmt.Errorf("build the Inventory facade: %w", err)
@@ -1614,19 +1622,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Registered before the route is built, for the reason the Inventory
 		// facade gives above: the gate needs the provider's own name, and
 		// only the registrar ever learns it.
+		// One hop to the provider, shared by the registrar and the route, as
+		// for Inventory above.
+		deepwikiHop, hopErr := providerproxy.New(deepwikiConfig.HopConfig(), v2deepwiki.TargetEnv, logger)
+		if hopErr != nil {
+			return fmt.Errorf("compose DeepWiki facade: %w", hopErr)
+		}
 		deepwikiConfig.Admission = providerAdmissionGate(logger, pool,
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
-				"deepwiki", facade.Config{
-					Enabled:        true,
-					Target:         deepwikiConfig.Target,
-					ClientCertFile: deepwikiConfig.ClientCertFile,
-					ClientKeyFile:  deepwikiConfig.ClientKeyFile,
-					CAFile:         deepwikiConfig.CAFile,
-					ServerName:     deepwikiConfig.ServerName,
-					IdentitySecret: deepwikiConfig.IdentitySecret,
-					Timeout:        deepwikiConfig.Timeout,
-				}, v2deepwiki.TargetEnv))
+				"deepwiki", deepwikiConfig.HopConfig(), v2deepwiki.TargetEnv, deepwikiHop.Client()))
 
 		// The application-toolkit reader, for the `wikis_query` rewrite: a
 		// query toolkit names a Wikis toolkit, and its OWN code toolkit is
@@ -1678,6 +1683,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			slog.Default(),
 			v2deepwiki.WithHistory(
 				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
+			v2deepwiki.WithHop(deepwikiHop),
 		)
 		if err != nil {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)

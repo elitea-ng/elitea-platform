@@ -50,7 +50,10 @@ type Options struct {
 	Interval time.Duration
 	// Timeout for one probe request.
 	Timeout time.Duration
-	// Provider overrides the mTLS client built from the facade config (tests).
+	// Provider is the facade's own client to the provider (proxy.Proxy's
+	// Client): the registrar shares the facade's connection and certificate
+	// reloader rather than dialling the same listener a second time.
+	// Required.
 	Provider subappv1.ProviderServiceClient
 }
 
@@ -68,9 +71,9 @@ type Registrar struct {
 
 const maxDescriptorBytes = 1 << 20
 
-// New builds a registrar for the provider behind cfg. envName names the
-// setting in error messages, as the proxy does. It shares nothing with the
-// proxy but the material: one more connection to the same listener.
+// New builds a registrar for the provider behind cfg, over the facade's own
+// client to it (opts.Provider). envName names the setting in error
+// messages, as the proxy does.
 func New(cfg facade.Config, envName string, store Store, opts Options, logger *slog.Logger) (*Registrar, error) {
 	if store == nil {
 		return nil, errors.New("registrar: a store is required")
@@ -86,11 +89,7 @@ func New(cfg facade.Config, envName string, store Store, opts Options, logger *s
 	}
 	provider := opts.Provider
 	if provider == nil {
-		hopProxy, err := proxy.New(cfg, envName, logger)
-		if err != nil {
-			return nil, fmt.Errorf("registrar: %w", err)
-		}
-		provider = hopProxy.Client()
+		return nil, errors.New("registrar: the facade's provider client is required")
 	}
 	if opts.Interval <= 0 {
 		opts.Interval = time.Minute

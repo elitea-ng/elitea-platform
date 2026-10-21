@@ -89,6 +89,20 @@ const (
 // Route serves the Inventory facade.
 type Route struct{ handler http.Handler }
 
+// RouteOption tunes NewRoute.
+type RouteOption func(*routeOptions)
+
+type routeOptions struct {
+	hop *proxy.Proxy
+}
+
+// WithHop forwards over an already built hop to the provider: the one the
+// composition root also hands the provider registrar, so the facade holds
+// one connection (and one certificate reloader) to its provider, not two.
+func WithHop(hop *proxy.Proxy) RouteOption {
+	return func(o *routeOptions) { o.hop = hop }
+}
+
 // NewRoute mounts the three SPI paths behind their permissions.
 //
 // sources may be nil, and that is a deployment with no source expansion — no
@@ -102,13 +116,22 @@ func NewRoute(
 	permissions auth.PermissionResolver,
 	sources *Sources,
 	logger *slog.Logger,
+	options ...RouteOption,
 ) (*Route, error) {
 	if !facade.Composable(authConfig, permissions) {
 		return nil, ErrInvalidRoute
 	}
-	hop, err := proxy.New(cfg, EnvNames.Target, logger)
-	if err != nil {
-		return nil, err
+	var settings routeOptions
+	for _, option := range options {
+		option(&settings)
+	}
+	hop := settings.hop
+	if hop == nil {
+		built, err := proxy.New(cfg, EnvNames.Target, logger)
+		if err != nil {
+			return nil, err
+		}
+		hop = built
 	}
 	handler, err := routes.Build(routes.Table{
 		Invoke:           sources.invoke(hop.Forward, logger),

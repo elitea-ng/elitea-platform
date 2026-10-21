@@ -26,11 +26,20 @@ type Proxy struct {
 
 // NewProxy builds the hop from the facade's configuration.
 func NewProxy(cfg Config, logger *slog.Logger) (*Proxy, error) {
+	return newProxyOver(cfg, nil, logger)
+}
+
+// newProxyOver is NewProxy over built, when the composition root built the
+// hop already (WithHop); nil builds one.
+func newProxyOver(cfg Config, built *proxy.Proxy, logger *slog.Logger) (*Proxy, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if !cfg.Enabled {
 		return nil, fmt.Errorf("%w: not enabled", ErrInvalidProxy)
+	}
+	if built != nil {
+		return &Proxy{hop: built}, nil
 	}
 	hop, err := proxy.New(cfg.hop(), TargetEnv, logger)
 	if err != nil {
@@ -53,6 +62,10 @@ func (p *Proxy) Forward(
 	}
 	p.hop.Forward(w, r, providerPath, projectID, userID)
 }
+
+// HopConfig is the shared facade configuration this one carries, for the
+// composition root that builds the hop (and the provider registrar) itself.
+func (c Config) HopConfig() facade.Config { return c.hop() }
 
 // hop is the shared facade configuration this one carries; the DeepWiki
 // extras (callback base, token lifetime, git egress) stay on the facade.
