@@ -86,8 +86,8 @@ pub struct LocalSession {
     checkpoints: Checkpoints,
     shell: ShellConfig,
     budgets: Budgets,
-    /// The session's spilled outputs (under the data directory; emptied
-    /// when the session opens, removed when it ends).
+    /// The session's spilled outputs, per conversation (under the data
+    /// directory; kept across a reopen for [`budget::SPILL_RETENTION`]).
     spill: SpillStore,
     turn: Mutex<Turn>,
 }
@@ -118,13 +118,14 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_file",
         kind: ToolKind::ReadFile,
-        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit. Reading a file is required before changing it.",
+        description: "Read a UTF-8 text file in the workspace, with line numbers. Page long files with offset/limit; a line too long for one page is cut, and next_offset with next_column continue inside it. Reading a file is required before changing it.",
         parameters: || {
             json!({
                 "type": "object",
                 "properties": {
                     "path": path_param("Path relative to the workspace root."),
                     "offset": { "type": "integer", "minimum": 1, "description": "First line to return (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
                     "limit": { "type": "integer", "minimum": 1, "description": "Number of lines (default 2000)." }
                 },
                 "required": ["path"]
@@ -174,12 +175,12 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "find_files",
         kind: ToolKind::FindFiles,
-        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). Lists paths only and opens nothing; .gitignore honoured. For text inside files use search_files.",
+        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml, !*.md for every file but those; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). A glob with / matches the path under `path` (or from the workspace root); one without matches the file name. Lists paths only and opens nothing; .gitignore always honoured. For text inside files use search_files.",
         parameters: || {
             json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs) or, with fuzzy=true, a name fragment (usrctrl)." },
+                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs, !*.md) or, with fuzzy=true, a name fragment (usrctrl)." },
                     "path": path_param("Directory relative to the workspace root (default: the root)."),
                     "fuzzy": { "type": "boolean", "description": "Rank by fuzzy match instead of glob filtering." },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
@@ -203,13 +204,14 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_output",
         kind: ToolKind::ReadOutput,
-        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this session's outputs; page with offset/limit.",
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
         parameters: || {
             json!({
                 "type": "object",
                 "properties": {
                     "output_id": { "type": "string" },
                     "offset": { "type": "integer", "minimum": 1, "description": "First line (1-based)." },
+                    "column": { "type": "integer", "minimum": 0, "description": "Byte offset inside the first line to continue from: the next_column of a cut line." },
                     "limit": { "type": "integer", "minimum": 1 }
                 },
                 "required": ["output_id"]
@@ -575,10 +577,11 @@ impl LocalSession {
             &shell.sandbox,
         )?
         .with_git_global_config(shell.git_global_config.clone());
-        // A session opens on a fresh output store: what an earlier session
-        // of this id spilled (before a policy change, or a crash) goes.
-        let spill = SpillStore::new(&config.data_dir, &config.session_id, workspace.root());
-        spill.clear();
+        // What an earlier session of this id spilled (before a policy
+        // change, or an app restart) stays readable within its retention:
+        // the conversations' history names those ids. Expired ones go now.
+        let spill = SpillStore::new(&config.data_dir, &config.session_id);
+        spill.sweep();
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),
@@ -601,6 +604,14 @@ impl LocalSession {
     #[must_use]
     pub fn spill_store(&self) -> &SpillStore {
         &self.spill
+    }
+
+    /// The conversation the next turn runs for: the outputs its tools
+    /// spill are its own, and `read_output` sees only those
+    /// ([`SpillStore::set_conversation`]). Hosts set it with
+    /// [`Self::begin_turn`]; `None` is the default scope.
+    pub fn set_conversation(&self, conversation: Option<&str>) {
+        self.spill.set_conversation(conversation);
     }
 
     /// The session's deny list (built once at open).

@@ -911,7 +911,7 @@ mod tests {
         .expect("run");
         assert!(output.stdout_bytes >= 1_000_000, "{}", output.stdout_bytes);
         assert!(!output.stdout_truncated, "the capture keeps it all");
-        let spill = SpillStore::new(&dir.path().join("data"), "s", workspace.root());
+        let spill = SpillStore::new(&dir.path().join("data"), "s");
         budget::shape_command(
             &mut output,
             budget::bytes(Budgets::default().run_command),

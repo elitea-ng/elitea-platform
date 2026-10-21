@@ -440,7 +440,8 @@ async fn the_session_channel_is_the_hosts_approval_channel() {
 
 /// Output over a budget: a large command and a large diff answer within
 /// the budget with an `output_id`, `read_output` pages them, plan mode
-/// keeps it, and the spill files go when the session ends.
+/// keeps it, and the spill files outlive the session (a reopen pages them)
+/// until their retention ends or the conversation is forgotten.
 #[tokio::test]
 async fn large_outputs_spill_and_read_output_pages_them() {
     let fixture = fixture(open_policy());
@@ -456,8 +457,9 @@ async fn large_outputs_spill_and_read_output_pages_them() {
     assert!(shown.div_ceil(4) <= 6_000, "{shown}");
     assert!(ran["stdout_bytes"].as_u64().expect("bytes") > 900_000);
     let id = ran["output_id"].as_str().expect("output_id").to_owned();
-    let out_dir = fixture.dir.path().join("app-data/sessions/conv-1/out");
+    let out_dir = fixture.session.spill_store().conversation_dir();
     let spilled = out_dir.join(format!("{id}.txt"));
+    assert!(out_dir.starts_with(fixture.dir.path().join("app-data/sessions/conv-1/out")));
     assert!(spilled.is_file());
     assert!(!spilled.starts_with(fixture.session.workspace().root()));
 
@@ -508,9 +510,23 @@ async fn large_outputs_spill_and_read_output_pages_them() {
         provider,
     } = fixture;
     drop((person, session, provider));
-    assert!(
-        !out_dir.exists(),
-        "the spill directory goes with the session"
+    assert!(spilled.is_file(), "the outputs outlive the session");
+    let reopened =
+        elitea_local_tools::budget::SpillStore::new(&dir.path().join("app-data"), "conv-1");
+    assert_eq!(
+        reopened.read(&id).expect("kept").lines().last(),
+        Some("150000")
     );
+    elitea_local_tools::budget::forget_conversation_outputs(
+        &dir.path().join("app-data"),
+        "conv-1",
+        "unrelated",
+    );
+    assert!(
+        spilled.is_file(),
+        "another conversation's forget keeps them"
+    );
+    reopened.clear();
+    assert!(!out_dir.exists());
     drop(dir);
 }

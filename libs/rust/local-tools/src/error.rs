@@ -40,6 +40,10 @@ pub enum ErrorCode {
     /// git (filter drivers, gpg.program, core.worktree, includes, a
     /// relocated `.git`, submodules): the host does not run git there.
     UnsafeRepository,
+    /// A spilled output `read_output` was asked for is no longer kept
+    /// (past its retention, dropped by the cap, or another
+    /// conversation's): re-run the tool that produced it.
+    OutputExpired,
     Io,
 }
 
@@ -62,6 +66,7 @@ impl ErrorCode {
             Self::Unsupported => "local_tools.unsupported",
             Self::Git => "local_tools.git",
             Self::UnsafeRepository => "local_tools.unsafe_repository",
+            Self::OutputExpired => "local_tools.output_expired",
             Self::Io => "local_tools.io",
         }
     }

@@ -70,12 +70,16 @@ pub(crate) struct ReadArgs {
     /// First line, 1-based.
     #[serde(default)]
     pub offset: Option<usize>,
+    /// Byte offset inside the first line (a cut line's `next_column`).
+    #[serde(default)]
+    pub column: Option<usize>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
 
 /// `read_file`: at most `max_bytes` of numbered lines (the token budget,
-/// never more than [`MAX_READ_OUTPUT`]), stopping at the last whole line.
+/// never more than [`MAX_READ_OUTPUT`]), stopping at the last whole line;
+/// a line longer than a page is cut and continues at `next_column`.
 pub(crate) fn read(
     workspace: &Workspace,
     ledger: &ReadLedger,
@@ -106,8 +110,11 @@ pub(crate) fn read(
     ledger.record(&file.path, file.stamp.clone());
     let mut page = budget::page(
         &text,
-        args.offset,
-        Some(args.limit.unwrap_or(DEFAULT_READ_LINES)),
+        budget::PageRequest {
+            offset: args.offset,
+            column: args.column,
+            limit: Some(args.limit.unwrap_or(DEFAULT_READ_LINES)),
+        },
         max_bytes.min(MAX_READ_OUTPUT),
     );
     if let Value::Object(map) = &mut page {
@@ -465,37 +472,67 @@ fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     }
 }
 
-/// A glob over workspace files, as `search_files` and `find_files` take it:
-/// one with a `/` matches the path from the workspace root
-/// (`src/**/*.rs`), one without matches the file name at any depth
-/// (`*.rs`); a leading `./` or `/` is dropped.
-fn file_glob(glob: &str) -> ToolResult<(globset::GlobMatcher, bool)> {
-    let trimmed = glob.trim();
-    let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    let trimmed = trimmed.trim_start_matches('/');
-    if trimmed.is_empty() {
-        return Err(ToolError::invalid("the glob is empty"));
-    }
-    let matcher = globset::GlobBuilder::new(trimmed)
-        .literal_separator(true)
-        .build()
-        .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?
-        .compile_matcher();
-    Ok((matcher, trimmed.contains('/')))
+/// `find_files`' glob: one with a `/` matches the path under the call's
+/// `path` (or, failing that, from the workspace root), one without matches
+/// the file name at any depth; a leading `./` or `/` is dropped, and a
+/// leading `!` keeps the files that do *not* match. It filters what the
+/// walk yields, so `.gitignore` always applies (unlike `search_files`'
+/// glob, an override as `rg -g` takes it, see [`walker`]).
+struct FileGlob {
+    matcher: globset::GlobMatcher,
+    whole_path: bool,
+    negated: bool,
 }
 
-/// The walk every listing tool shares (see [`walker`]); the glob is a
-/// filter on files, so `.gitignore` still applies under it.
-fn walk_builder(
-    workspace: &Workspace,
-    base: &WsPath,
-    glob: Option<&str>,
-    depth: Option<usize>,
-) -> ToolResult<ignore::WalkBuilder> {
+impl FileGlob {
+    fn new(glob: &str) -> ToolResult<Self> {
+        let trimmed = glob.trim();
+        let (negated, trimmed) = trimmed
+            .strip_prefix('!')
+            .map_or((false, trimmed), |rest| (true, rest.trim_start()));
+        let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
+        let trimmed = trimmed.trim_start_matches('/');
+        if trimmed.is_empty() {
+            return Err(ToolError::invalid("the glob is empty"));
+        }
+        if trimmed.starts_with('!') {
+            return Err(ToolError::invalid(format!(
+                "`{glob}`: one leading `!` negates the glob; `!!` is not a glob"
+            )));
+        }
+        let matcher = globset::GlobBuilder::new(trimmed)
+            .literal_separator(true)
+            .build()
+            .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?
+            .compile_matcher();
+        Ok(Self {
+            matcher,
+            whole_path: trimmed.contains('/'),
+            negated,
+        })
+    }
+
+    /// Whether the file `path` (under `base`) is kept.
+    fn keeps(&self, path: &WsPath, base: &WsPath) -> bool {
+        let shown = path.display_string();
+        let matched = if self.whole_path {
+            let under = path
+                .components()
+                .strip_prefix(base.components())
+                .map(|rest| rest.join("/"));
+            under.is_some_and(|under| self.matcher.is_match(under)) || self.matcher.is_match(&shown)
+        } else {
+            path.file_name()
+                .is_some_and(|name| self.matcher.is_match(name))
+        };
+        matched != self.negated
+    }
+}
+
+/// The walk every listing tool shares (see [`walker`]), without a glob.
+fn walk_builder(workspace: &Workspace, base: &WsPath, depth: Option<usize>) -> ignore::WalkBuilder {
     let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
     let denied = workspace.read_denied_filter();
-    let glob = glob.map(file_glob).transpose()?;
-    let root = workspace.root().to_path_buf();
     builder
         .hidden(false)
         .require_git(false)
@@ -503,35 +540,20 @@ fn walk_builder(
         .max_depth(depth)
         // `.git`, `path_deny` and the session's deny list are pruned here,
         // never filtered after: a denied tree is never descended into, so
-        // it cannot use up a walk's limit (nor a parallel walker's time).
+        // it cannot use up a walk's limit.
         .filter_entry(move |entry| {
-            if entry.file_name().to_str().is_some_and(is_protected_name) || denied(entry.path()) {
-                return false;
-            }
-            let Some((glob, whole_path)) = &glob else {
-                return true;
-            };
-            if entry.file_type().is_some_and(|kind| kind.is_dir()) {
-                return true;
-            }
-            if *whole_path {
-                entry
-                    .path()
-                    .strip_prefix(&root)
-                    .is_ok_and(|relative| glob.is_match(relative))
-            } else {
-                glob.is_match(entry.file_name())
-            }
+            !entry.file_name().to_str().is_some_and(is_protected_name) && !denied(entry.path())
         });
-    Ok(builder)
+    builder
 }
 
 /// A walk of the workspace from `base` the way every listing tool walks it:
 /// `.gitignore` honoured (with or without a git repository), hidden files
 /// included, `.git` and `path_deny` matches pruned (never descended into),
 /// symlinks yielded as entries but never followed, names in byte order.
-/// `glob` narrows it to matching files (`.gitignore` still applies);
-/// `depth` limits it.
+/// `glob` narrows it to matching paths as an override (`rg -g`): rooted at
+/// the workspace root, `!` excludes, and a matching file is listed even
+/// when `.gitignore` ignores it; `depth` limits it.
 ///
 /// Public for the desktop's local index (ADR-0029 decision 7), which lists
 /// a workspace exactly as the agent's tools see it. A caller that wants
@@ -546,8 +568,19 @@ pub fn walker(
     glob: Option<&str>,
     depth: Option<usize>,
 ) -> ToolResult<ignore::Walk> {
-    let mut builder = walk_builder(workspace, base, glob, depth)?;
+    let mut builder = walk_builder(workspace, base, depth);
     builder.sort_by_file_name(Ord::cmp);
+    if let Some(glob) = glob {
+        let mut overrides = ignore::overrides::OverrideBuilder::new(workspace.root());
+        overrides
+            .add(glob)
+            .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?;
+        builder.overrides(
+            overrides
+                .build()
+                .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?,
+        );
+    }
     Ok(builder.build())
 }
 
@@ -556,26 +589,6 @@ pub fn walker(
 #[must_use]
 pub fn relative(workspace: &Workspace, path: &Path) -> Option<WsPath> {
     WsPath::from_relative(path.strip_prefix(workspace.root()).ok()?).ok()
-}
-
-/// [`walker`] for many threads: the same pruning (`.git`, `path_deny`
-/// and the session's deny list in `filter_entry`, never filtered after),
-/// the same glob, symlinks never followed; entries arrive in no particular
-/// order, so a caller sorts what it collects.
-///
-/// # Errors
-///
-/// `glob` is not a glob.
-pub fn walker_parallel(
-    workspace: &Workspace,
-    base: &WsPath,
-    glob: Option<&str>,
-    depth: Option<usize>,
-) -> ToolResult<ignore::WalkParallel> {
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
-    let mut builder = walk_builder(workspace, base, glob, depth)?;
-    builder.threads(threads);
-    Ok(builder.build_parallel())
 }
 
 /// One line a search shows.
@@ -590,6 +603,8 @@ struct FileHits {
     path: WsPath,
     matches: u64,
     hits: Vec<Hit>,
+    /// The search stopped at the result limit with more matches left.
+    cut: bool,
 }
 
 fn shown_line(bytes: &[u8]) -> String {
@@ -601,21 +616,33 @@ fn shown_line(bytes: &[u8]) -> String {
 }
 
 /// A sink keeping one file's matches (each line of a multiline match) and
-/// context lines, in file order.
+/// context lines, in file order; it stops the file's search once it holds
+/// `limit` matching lines (the whole search's result limit: one file
+/// never collects more than a search shows).
 struct Collect {
     keep_lines: bool,
+    limit: u64,
+    matched_lines: u64,
     matches: u64,
     hits: Vec<Hit>,
+    cut: bool,
 }
 
 impl Sink for Collect {
     type Error = std::io::Error;
 
     fn matched(&mut self, _: &Searcher, found: &SinkMatch<'_>) -> Result<bool, std::io::Error> {
+        if self.keep_lines && self.matched_lines >= self.limit {
+            // One more match than the search shows: stop here. The
+            // previous match's after-context has been kept already.
+            self.cut = true;
+            return Ok(false);
+        }
         self.matches += 1;
         if self.keep_lines {
             let first = found.line_number().unwrap_or(0);
             for (line, text) in (first..).zip(found.lines()) {
+                self.matched_lines += 1;
                 self.hits.push(Hit {
                     line,
                     text: shown_line(text),
@@ -638,13 +665,13 @@ impl Sink for Collect {
     }
 }
 
-/// What one search runs with, shared by every walker thread.
+/// What one search runs with, shared by every searching thread.
 struct SearchPlan {
     matcher: RegexMatcher,
     /// Each thread builds its own searcher (a searcher is not `Sync`).
     searcher: SearcherBuilder,
     keep_lines: bool,
-    /// The walk stops once this many results are collected.
+    /// The search stops once this many results are collected.
     stop_after: u64,
     mode: OutputMode,
 }
@@ -695,7 +722,9 @@ impl SearchPlan {
     }
 
     /// Search one walked file: `None` when it is not a regular file, is
-    /// denied or cannot be opened (confined, `O_NOFOLLOW`).
+    /// denied or cannot be opened (confined, `O_NOFOLLOW`). What it finds
+    /// depends on the file only (never on other files or timing), so a
+    /// search over several threads finds what a serial one does.
     fn search_file(
         &self,
         workspace: &Workspace,
@@ -712,14 +741,18 @@ impl SearchPlan {
         let (file, _) = workspace.open_file(&path).ok()?;
         let mut sink = Collect {
             keep_lines: self.keep_lines,
+            limit: self.stop_after,
+            matched_lines: 0,
             matches: 0,
             hits: Vec::new(),
+            cut: false,
         };
         let _ = searcher.search_file(&self.matcher, &file, &mut sink);
         Some(FileHits {
             path,
             matches: sink.matches,
             hits: sink.hits,
+            cut: sink.cut,
         })
     }
 }
@@ -732,66 +765,124 @@ struct Collected {
     stopped: bool,
 }
 
-/// Search with the parallel walker: workers send each searched file down a
-/// bounded channel; once the plan's limit is collected they stop.
-fn collect_parallel(
+impl Collected {
+    const fn new() -> Self {
+        Self {
+            files: Vec::new(),
+            searched: 0,
+            stopped: false,
+        }
+    }
+
+    /// Take one searched file, in walk order: `false` once the limit is
+    /// reached (this file is then not taken, and the search stopped).
+    fn take(&mut self, plan: &SearchPlan, weight: &mut u64, file: Option<FileHits>) -> bool {
+        if *weight >= plan.stop_after {
+            self.stopped = true;
+            return false;
+        }
+        if let Some(file) = file {
+            self.searched += 1;
+            *weight += plan.weight(&file);
+            self.stopped |= file.cut;
+            if file.matches > 0 {
+                self.files.push(file);
+            }
+        }
+        true
+    }
+}
+
+/// Files searched per batch of [`collect`].
+const SEARCH_BATCH: usize = 256;
+
+/// Search `batch` on up to `threads` threads; the results in `batch`'s
+/// order.
+fn search_batch(
+    workspace: &Workspace,
+    plan: &SearchPlan,
+    batch: &[ignore::DirEntry],
+    threads: usize,
+) -> Vec<Option<FileHits>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if threads <= 1 || batch.len() <= 1 {
+        let mut searcher = plan.searcher.build();
+        return batch
+            .iter()
+            .map(|entry| plan.search_file(workspace, &mut searcher, entry))
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let mut results: Vec<Option<FileHits>> =
+        std::iter::repeat_with(|| None).take(batch.len()).collect();
+    let found: Vec<Vec<(usize, Option<FileHits>)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.min(batch.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut searcher = plan.searcher.build();
+                    let mut found = Vec::new();
+                    loop {
+                        let at = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(entry) = batch.get(at) else {
+                            return found;
+                        };
+                        found.push((at, plan.search_file(workspace, &mut searcher, entry)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap_or_default())
+            .collect()
+    });
+    for (at, file) in found.into_iter().flatten() {
+        results[at] = file;
+    }
+    results
+}
+
+/// Search the walk's files in walk (path) order, a batch at a time, each
+/// batch on several threads: the files are taken in that order up to the
+/// plan's limit, so the answer, a truncated one included, is the serial
+/// search's ([`collect_serial`]) whatever the threads do.
+fn collect(
     workspace: &Workspace,
     base: &WsPath,
     glob: Option<&str>,
     plan: &SearchPlan,
 ) -> ToolResult<Collected> {
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    let walk = walker_parallel(workspace, base, glob, None)?;
-    let collected = AtomicU64::new(0);
-    let stopped = AtomicBool::new(false);
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<FileHits>(256);
-    let (files, searched) = std::thread::scope(|scope| {
-        let gather = scope.spawn(move || {
-            let mut files = Vec::new();
-            let mut searched = 0usize;
-            for file in receiver {
-                searched += 1;
-                if file.matches > 0 {
-                    files.push(file);
-                }
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    let mut files = walker(workspace, base, glob, None)?
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()));
+    let mut collected = Collected::new();
+    let mut weight = 0u64;
+    loop {
+        let batch: Vec<ignore::DirEntry> = files.by_ref().take(SEARCH_BATCH).collect();
+        if batch.is_empty() {
+            break;
+        }
+        if weight >= plan.stop_after {
+            collected.stopped = true;
+            break;
+        }
+        let mut stopped = false;
+        for file in search_batch(workspace, plan, &batch, threads) {
+            if !collected.take(plan, &mut weight, file) {
+                stopped = true;
+                break;
             }
-            (files, searched)
-        });
-        walk.run(|| {
-            let sender = sender.clone();
-            let mut searcher = plan.searcher.build();
-            let (collected, stopped) = (&collected, &stopped);
-            Box::new(move |entry| {
-                if collected.load(Ordering::Relaxed) >= plan.stop_after {
-                    stopped.store(true, Ordering::Relaxed);
-                    return ignore::WalkState::Quit;
-                }
-                let Ok(entry) = entry else {
-                    return ignore::WalkState::Continue;
-                };
-                let Some(file) = plan.search_file(workspace, &mut searcher, &entry) else {
-                    return ignore::WalkState::Continue;
-                };
-                collected.fetch_add(plan.weight(&file), Ordering::Relaxed);
-                if sender.send(file).is_err() {
-                    return ignore::WalkState::Quit;
-                }
-                ignore::WalkState::Continue
-            })
-        });
-        drop(sender);
-        gather.join()
-    })
-    .map_err(|_| ToolError::new(ErrorCode::Io, "the search stopped unexpectedly"))?;
-    Ok(Collected {
-        files,
-        searched,
-        stopped: stopped.load(Ordering::Relaxed),
-    })
+        }
+        if stopped {
+            break;
+        }
+    }
+    Ok(collected)
 }
 
-/// [`collect_parallel`] on the serial [`walker`] (the reference the
-/// parallel walk is checked against).
+/// [`collect`] on one thread, file by file (the reference the batched
+/// search is checked against).
 #[cfg(test)]
 fn collect_serial(
     workspace: &Workspace,
@@ -800,23 +891,15 @@ fn collect_serial(
     plan: &SearchPlan,
 ) -> ToolResult<Collected> {
     let mut searcher = plan.searcher.build();
-    let mut collected = Collected {
-        files: Vec::new(),
-        searched: 0,
-        stopped: false,
-    };
+    let mut collected = Collected::new();
     let mut weight = 0;
-    for entry in walker(workspace, base, glob, None)?.flatten() {
-        if weight >= plan.stop_after {
-            collected.stopped = true;
+    for entry in walker(workspace, base, glob, None)?
+        .flatten()
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+    {
+        let file = plan.search_file(workspace, &mut searcher, &entry);
+        if !collected.take(plan, &mut weight, file) {
             break;
-        }
-        if let Some(file) = plan.search_file(workspace, &mut searcher, &entry) {
-            collected.searched += 1;
-            weight += plan.weight(&file);
-            if file.matches > 0 {
-                collected.files.push(file);
-            }
         }
     }
     Ok(collected)
@@ -910,8 +993,9 @@ fn search_answer(
 
 /// `search_files`: a regex (or literal) over the workspace's text files,
 /// `.gitignore` honoured, denied paths pruned; matching lines with
-/// optional context, the matching files, or counts per file. The walk runs
-/// on several threads; the answer is sorted, so it does not depend on them.
+/// optional context, the matching files, or counts per file. Files are
+/// searched on several threads but taken in path order, so the answer (a
+/// truncated one too) does not depend on them.
 pub(crate) fn search(workspace: &Workspace, args: Value, max_bytes: usize) -> ToolResult<Value> {
     let args: SearchArgs = parse(args)?;
     let max = args
@@ -920,7 +1004,7 @@ pub(crate) fn search(workspace: &Workspace, args: Value, max_bytes: usize) -> To
         .clamp(1, 1000);
     let plan = SearchPlan::new(&args, max)?;
     let base = base_dir(workspace, args.path.as_deref())?;
-    let collected = collect_parallel(workspace, &base, args.glob.as_deref(), &plan)?;
+    let collected = collect(workspace, &base, args.glob.as_deref(), &plan)?;
     Ok(search_answer(collected, plan.mode, max, max_bytes))
 }
 
@@ -984,18 +1068,18 @@ const DEFAULT_FIND_RESULTS: usize = 100;
 /// from its first part rather than stalling the turn.
 pub const MAX_FIND_VISITED: usize = 200_000;
 
-/// The regular files [`walker`] yields under `base` (narrowed by `glob`),
+/// The regular files [`walker`] yields under `base` (those `glob` keeps),
 /// as workspace paths, with their modification time; at most `limit`
-/// looked at. `true` when the limit cut the walk short.
+/// entries looked at. `true` when the limit cut the walk short.
 fn walked_files(
     workspace: &Workspace,
     base: &WsPath,
-    glob: Option<&str>,
+    glob: Option<&FileGlob>,
     limit: usize,
 ) -> ToolResult<(Vec<(WsPath, std::time::SystemTime)>, bool)> {
     let mut files = Vec::new();
     let mut visited = 0usize;
-    for entry in walker(workspace, base, glob, None)?.flatten() {
+    for entry in walker(workspace, base, None, None)?.flatten() {
         visited += 1;
         if visited > limit {
             return Ok((files, true));
@@ -1007,7 +1091,9 @@ fn walked_files(
         let Some(path) = relative(workspace, entry.path()) else {
             continue;
         };
-        if workspace.denied_by(&path, Intent::Read).is_some() {
+        if workspace.denied_by(&path, Intent::Read).is_some()
+            || glob.is_some_and(|glob| !glob.keeps(&path, base))
+        {
             continue;
         }
         let modified = entry
@@ -1056,7 +1142,8 @@ pub(crate) fn find_files(
             "matched": total,
         }));
     }
-    let (mut files, cut) = walked_files(workspace, &base, Some(pattern), MAX_FIND_VISITED)?;
+    let glob = FileGlob::new(pattern)?;
+    let (mut files, cut) = walked_files(workspace, &base, Some(&glob), MAX_FIND_VISITED)?;
     // Newest first; equal times in path order, so the answer is stable.
     files.sort_by(|a, b| {
         b.1.cmp(&a.1)
@@ -1205,7 +1292,7 @@ mod tests {
         ws: &Workspace,
         args: serde_json::Value,
     ) -> crate::error::ToolResult<serde_json::Value> {
-        let spill = SpillStore::new(&ws.root().join("..").join("spill"), "t", ws.root());
+        let spill = SpillStore::new(&ws.root().join("..").join("spill"), "t");
         super::document(ws, args, &spill, ROOMY)
     }
 
@@ -1911,6 +1998,157 @@ mod tests {
             }
             assert!(!serial.to_string().contains("ignored/"), "{serial}");
             assert!(!serial.to_string().contains("deny/"), "{serial}");
+        }
+    }
+
+    /// Regression: one file with thousands of matches stops at the
+    /// result limit instead of collecting every line.
+    #[test]
+    fn one_file_stops_at_the_result_limit() {
+        let (dir, ws, _ledger) = setup(&[]);
+        let body: String = (0..5_000)
+            .map(|n| "hit ".to_owned() + &n.to_string() + "\n")
+            .collect();
+        seed(&dir, "many.txt", &body);
+        let parsed: super::SearchArgs =
+            serde_json::from_value(json!({ "pattern": "hit", "max_results": 3, "context": 1 }))
+                .expect("args");
+        let plan = super::SearchPlan::new(&parsed, 3).expect("plan");
+        let collected =
+            super::collect(&ws, &crate::workspace::WsPath::root(), None, &plan).expect("collect");
+        let file = &collected.files[0];
+        assert_eq!(file.hits.iter().filter(|hit| hit.matched).count(), 3);
+        assert!(file.hits.len() <= 3 * 2 + 1, "{}", file.hits.len());
+        assert!(collected.stopped);
+        let answer = search(&ws, json!({ "pattern": "hit", "max_results": 3 })).expect("search");
+        assert_eq!(answer["matches"].as_array().expect("array").len(), 3);
+        assert_eq!(answer["truncated"], true);
+        // Count mode still counts every match of the file.
+        let count =
+            search(&ws, json!({ "pattern": "hit", "output_mode": "count" })).expect("count");
+        assert_eq!(count["total"], 5_000);
+    }
+
+    /// Regression: a search cut short by its limit answers the same files
+    /// and lines on every run, the serial search's, whatever the threads.
+    #[test]
+    fn a_truncated_search_is_deterministic() {
+        let (dir, ws, _ledger) = setup(&[]);
+        for d in 0..6 {
+            for f in 0..120 {
+                let body: String = (0..8)
+                    .map(|line| {
+                        if (line + f + d) % 3 == 0 {
+                            format!("hit {d} {f} {line}\n")
+                        } else {
+                            format!("plain {line}\n")
+                        }
+                    })
+                    .collect();
+                seed(&dir, &format!("d{d}/f{f:03}.txt"), &body);
+            }
+        }
+        for args in [
+            json!({ "pattern": "hit", "max_results": 700 }),
+            json!({ "pattern": "hit", "max_results": 37, "context": 1 }),
+            json!({ "pattern": "hit", "output_mode": "files", "max_results": 300 }),
+            json!({ "pattern": "hit", "output_mode": "count", "max_results": 450 }),
+        ] {
+            let parsed: super::SearchArgs = serde_json::from_value(args.clone()).expect("args");
+            let max = parsed.max_results.unwrap_or(200);
+            let plan = super::SearchPlan::new(&parsed, max).expect("plan");
+            let base = crate::workspace::WsPath::root();
+            let serial = super::search_answer(
+                super::collect_serial(&ws, &base, None, &plan).expect("serial"),
+                plan.mode,
+                max,
+                ROOMY,
+            );
+            assert_eq!(serial["truncated"], true, "{args}");
+            for _ in 0..5 {
+                assert_eq!(
+                    search(&ws, args.clone()).expect("batched"),
+                    serial,
+                    "{args}"
+                );
+            }
+        }
+    }
+
+    /// `search_files`' glob is an override, as before `find_files` (and as
+    /// `rg -g`): it can name a gitignored file the walk reaches, `!`
+    /// excludes, and a glob with `/` is rooted at the workspace root. The local index's walk
+    /// (no glob) is unchanged.
+    #[test]
+    fn search_globs_keep_their_override_semantics() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, ".gitignore", "gen/\n*.log\n");
+        seed(&dir, "src/a.rs", "needle\n");
+        seed(&dir, "src/b.md", "needle\n");
+        seed(&dir, "gen/out.rs", "needle\n");
+        seed(&dir, "debug.log", "needle\n");
+        let paths = |glob: &str, path: Option<&str>| {
+            let mut args = json!({ "pattern": "needle", "glob": glob, "output_mode": "files" });
+            if let Some(path) = path {
+                args["path"] = json!(path);
+            }
+            search(&ws, args).expect("search")["files"].clone()
+        };
+        assert_eq!(paths("*.log", None), json!(["debug.log"]));
+        // An ignored directory stays pruned (as before): only files the
+        // walk reaches are re-included.
+        assert_eq!(paths("gen/*.rs", None), json!([]));
+        assert_eq!(paths("!*.md", None), json!(["src/a.rs"]));
+        assert_eq!(paths("src/*.rs", Some("src")), json!(["src/a.rs"]));
+        let listed: Vec<String> = super::walker(&ws, &crate::workspace::WsPath::root(), None, None)
+            .expect("walk")
+            .flatten()
+            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+            .filter_map(|entry| super::relative(&ws, entry.path()))
+            .map(|path| path.display_string())
+            .collect();
+        assert_eq!(listed, [".gitignore", "src/a.rs", "src/b.md"]);
+    }
+
+    /// `find_files`' glob filters the walk: `.gitignore` always wins, `!`
+    /// keeps the files that do not match, and a glob with `/` matches
+    /// under `path` as well as from the root.
+    #[test]
+    fn find_files_globs_filter_negate_and_are_relative_to_path() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, ".gitignore", "gen/\n*.log\n");
+        seed(&dir, "src/deep/a.rs", "");
+        seed(&dir, "src/b.md", "");
+        seed(&dir, "gen/out.rs", "");
+        seed(&dir, "debug.log", "");
+        let files = |args: serde_json::Value| {
+            let mut found = found(&find_files(&ws, args).expect("find"));
+            found.sort();
+            found
+        };
+        assert!(files(json!({ "pattern": "*.log" })).is_empty());
+        assert!(files(json!({ "pattern": "gen/*.rs" })).is_empty());
+        assert_eq!(
+            files(json!({ "pattern": "!*.md" })),
+            [".gitignore", "src/deep/a.rs"]
+        );
+        assert_eq!(
+            files(json!({ "pattern": "deep/*.rs", "path": "src" })),
+            ["src/deep/a.rs"]
+        );
+        assert_eq!(
+            files(json!({ "pattern": "src/deep/*.rs", "path": "src" })),
+            ["src/deep/a.rs"]
+        );
+        assert!(files(json!({ "pattern": "deep/*.rs" })).is_empty());
+        for bad in ["!", "!!*.rs", "["] {
+            assert_eq!(
+                find_files(&ws, json!({ "pattern": bad }))
+                    .expect_err("bad glob")
+                    .code(),
+                ErrorCode::InvalidArgument,
+                "{bad}"
+            );
         }
     }
 

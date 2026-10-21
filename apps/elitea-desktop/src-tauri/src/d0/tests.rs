@@ -1737,6 +1737,20 @@ async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
     assert!(!after[0].live, "but the turn is no longer reviewable");
     assert_eq!(seen(&h.server, "/social/author").len(), 2);
 
+    // A thread's spilled outputs are its own (a turn scopes the
+    // workspace's store to its thread); another thread of the folder has
+    // its own.
+    let session = h
+        .host
+        .local_session_for_tests(&h.workspace_id, h.folder.path().to_owned());
+    let store = session.spill_store();
+    store.set_conversation(Some("42"));
+    let ours = store.spill("the turn's output\n").unwrap();
+    store.set_conversation(Some("43"));
+    let theirs = store.spill("another thread's output\n").unwrap();
+    store.set_conversation(Some("42"));
+    assert_eq!(store.ids(), std::slice::from_ref(&ours));
+
     assert_eq!(
         h.host
             .delete_thread_history(&h.workspace_id, "42")
@@ -1751,6 +1765,14 @@ async fn a_finished_turn_is_in_its_threads_history_as_it_was_emitted() {
             .unwrap()
             .is_empty()
     );
+    // Deleting the thread's history removed its outputs, not the other's.
+    assert!(store.ids().is_empty());
+    assert_eq!(
+        store.read(&ours).unwrap_err().code(),
+        elitea_local_tools::error::ErrorCode::OutputExpired
+    );
+    store.set_conversation(Some("43"));
+    assert_eq!(store.ids(), [theirs]);
 }
 
 #[tokio::test]
