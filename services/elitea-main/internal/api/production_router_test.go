@@ -2053,6 +2053,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"HEAD /artifacts/s3/{bucket}/*",
 		"PATCH /api/v2/artifacts/buckets/{projectID}/{bucket}",
 		"PATCH /api/v2/elitea_core/application_relation/prompt_lib/{projectID}/{appID}/{versionID}",
+		"PATCH /api/v2/elitea_core/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}",
 		"PATCH /api/v2/elitea_core/default_version/prompt_lib/{projectID}/{applicationID}/{versionID}",
 		"PATCH /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}",
 		"PATCH /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",

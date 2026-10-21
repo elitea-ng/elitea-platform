@@ -65,7 +65,9 @@ export const UpdateConversationRequest = zod
     meta: zod
       .record(zod.string(), zod.unknown())
       .optional()
-      .describe("Replaces the whole settings document when present."),
+      .describe(
+        "Replaces the whole settings document when present, except `internal_tools`: a document without that key keeps the stored list (client contract 1.14). To change the list alone, use updateConversationInternalTools.",
+      ),
   })
   .describe(
     "The body of updateConversation. Every key is optional and only the keys present are written; a native client renames with `name` alone. NOTE(W2): internal/api/v2/conversations/handler.go (`Update`, `conversationNameFromBody`) reads these keys and ignores any other.\n",

@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.13"
+  x-elitea-client-contract: "1.14"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -3047,12 +3047,32 @@ components:
         meta:
           type: object
           additionalProperties: true
-          description: Replaces the whole settings document when present.
+          description: >-
+            Replaces the whole settings document when present, except
+            `internal_tools`: a document without that key keeps the stored
+            list (client contract 1.14). To change the list alone, use
+            updateConversationInternalTools.
           x-elitea-passthrough: >-
             NOTE(W2): the `chat_conversations.meta` jsonb column, written whole
             (internal/infra/db/repos/conversations.go:768). Several writers own
             keys in it (steps_limit, internal_tools, is_hidden,
             single_participant), so its key set is not fixed by this route.
+
+    UpdateConversationInternalToolsRequest:
+      type: object
+      description: >
+        The body of updateConversationInternalTools. NOTE(W2):
+        internal/api/v2/conversations/internal_tools.go:67 (the decoded
+        body; unknown keys are refused).
+      required: [internal_tools]
+      additionalProperties: false
+      properties:
+        internal_tools:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+          description: The whole new list of internal tool names; `[]` clears it.
 
     UpdatedConversation:
       type: object
@@ -17320,6 +17340,88 @@ paths:
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
+  /elitea_core/conversation_internal_tools/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    patch:
+      operationId: updateConversationInternalTools
+      summary: Replace a conversation's internal tools and nothing else
+      description: |
+        Client contract 1.14. Sets the conversation's `meta.internal_tools`
+        (the built-in tools a turn may use, such as `attachments` or
+        `ask_user`) and no other key, in one statement, so it never loses or
+        undoes a concurrent write of other settings, from this client or
+        another. updateConversation replaces the whole settings document and
+        keeps the stored list only when its document has no
+        `internal_tools` key.
+
+        The body is `{"internal_tools": [names]}`, the whole new list (an
+        empty list clears it); repeated names are stored once. Every name
+        must be in the internal-tools catalogue the agent turn admits:
+        `ask_user`, `attachments`, `data_analysis`, `image_generation`,
+        `internal_mcp`, `lazy_tools_mode`, `planner`,
+        `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
+        name outside it, a missing or non-array `internal_tools`, or any
+        other key answers 400 and writes nothing. Whether the configured
+        worker runs a tool is a separate question (runtime capabilities).
+
+        Needs `models.chat.conversation.update` (the PUT's permission) and
+        access to the conversation (the chat authority's detail rule); a
+        conversation the caller cannot see answers 404. The answer is the
+        conversation as updateConversation answers it. NOTE(W2):
+        internal/api/v2/conversations/internal_tools.go:53
+        (`UpdateInternalTools`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConversationInternalToolsRequest"
+      responses:
+        "200":
+          description: The updated conversation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdatedConversation"
+        "400":
+          description: >
+            A body that is not `{"internal_tools": [names]}`, a name outside
+            the catalogue, or a native client version that does not parse
+            (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+        "501":
+          description: A composition without a conversation database.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"

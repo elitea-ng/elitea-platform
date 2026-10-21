@@ -55,7 +55,6 @@ import type {
   ConversationListing,
   ConversationMessageListing,
   ConversationParticipant,
-  ConversationReadState,
   ConversationSummary,
   CreatedConversation,
   ExecutionInterruptDecisionResult,
@@ -287,16 +286,29 @@ export const getUnarchiveConversationResponseMock = (
   overrideResponse: Partial<Extract<OkResponse, object>> = {},
 ): OkResponse => ({ ok: faker.datatype.boolean(), ...overrideResponse });
 
-export const getMarkConversationReadResponseMock = (
-  overrideResponse: Partial<Extract<ConversationReadState, object>> = {},
-): ConversationReadState => ({
-  conversation_id: faker.number.int(),
-  read_at: faker.date.past().toISOString().slice(0, 19) + "Z",
-  last_read_message_id: faker.helpers.arrayElement([
-    faker.number.int(),
+export const getUpdateConversationInternalToolsResponseMock = (
+  overrideResponse: Partial<Extract<UpdatedConversation, object>> = {},
+): UpdatedConversation => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.string.uuid(),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  folder_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
     undefined,
   ]),
-  unread: faker.datatype.boolean(),
+  is_private: faker.datatype.boolean(),
+  instructions: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  meta: faker.helpers.arrayElement([{}, undefined]),
   ...overrideResponse,
 });
 
@@ -356,18 +368,6 @@ export const getForkConversationResponseMock = (
     },
     undefined,
   ]),
-  activity: faker.helpers.arrayElement([
-    {
-      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-      since: faker.date.past().toISOString().slice(0, 19) + "Z",
-    },
-    undefined,
-  ]),
-  last_activity_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  unread: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
   meta: faker.helpers.arrayElement([
     faker.helpers.arrayElement([null]),
     undefined,
@@ -483,18 +483,6 @@ export const getListConversationsResponseMock = (
       },
       undefined,
     ]),
-    activity: faker.helpers.arrayElement([
-      {
-        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-        since: faker.date.past().toISOString().slice(0, 19) + "Z",
-      },
-      undefined,
-    ]),
-    last_activity_at: faker.helpers.arrayElement([
-      faker.date.past().toISOString().slice(0, 19) + "Z",
-      undefined,
-    ]),
-    unread: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
     meta: faker.helpers.arrayElement([
       faker.helpers.arrayElement([null]),
       undefined,
@@ -2255,17 +2243,17 @@ export const getUnarchiveConversationMockHandler = (
   );
 };
 
-export const getMarkConversationReadMockHandler = (
+export const getUpdateConversationInternalToolsMockHandler = (
   overrideResponse?:
-    | ConversationReadState
+    | UpdatedConversation
     | ((
-        info: Parameters<Parameters<typeof http.put>[1]>[0],
-      ) => Promise<ConversationReadState> | ConversationReadState),
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) => Promise<UpdatedConversation> | UpdatedConversation),
   options?: RequestHandlerOptions,
 ) => {
-  return http.put(
-    "*/elitea_core/conversation_read/prompt_lib/:projectId/:conversationId",
-    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+  return http.patch(
+    "*/elitea_core/conversation_internal_tools/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
       await delay(0);
 
       return HttpResponse.json(
@@ -2273,7 +2261,7 @@ export const getMarkConversationReadMockHandler = (
           ? typeof overrideResponse === "function"
             ? await overrideResponse(info)
             : overrideResponse
-          : getMarkConversationReadResponseMock(),
+          : getUpdateConversationInternalToolsResponseMock(),
         { status: 200 },
       );
     },
@@ -3524,7 +3512,7 @@ export const getChatMock = () => [
   getHeartbeatCanvasPresenceMockHandler(),
   getArchiveConversationMockHandler(),
   getUnarchiveConversationMockHandler(),
-  getMarkConversationReadMockHandler(),
+  getUpdateConversationInternalToolsMockHandler(),
   getForkConversationMockHandler(),
   getExportConversationMockHandler(),
   getListConversationsMockHandler(),

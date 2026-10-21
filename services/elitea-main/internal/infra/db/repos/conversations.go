@@ -761,12 +761,24 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	// rename never touches the column while a settings write replaces the
 	// whole document — which is what the client sends (it PUTs the previous
 	// document plus its one change).
+	//
+	// EXCEPT `internal_tools` when the stated document has no such key
+	// (issue 1060): the stored list is kept, read from the row inside this
+	// same UPDATE, so a client that writes other settings and never sends
+	// the list cannot erase it, nor undo a concurrent
+	// updateConversationInternalTools. A document that states the key
+	// (the web's settings write always does) still replaces it.
 	if conv.Meta != nil {
 		encodedMeta, err := json.Marshal(conv.Meta)
 		if err != nil {
 			return conversations.Conversation{}, fmt.Errorf("conversations: update: encode meta: %w", err)
 		}
-		setClauses += fmt.Sprintf(", meta = $%d::jsonb", argIdx)
+		if _, stated := conv.Meta[internalToolsMetaKey]; stated {
+			setClauses += fmt.Sprintf(", meta = $%d::jsonb", argIdx)
+		} else {
+			setClauses += fmt.Sprintf(`, meta = $%d::jsonb || CASE WHEN meta ? 'internal_tools'
+				THEN jsonb_build_object('internal_tools', meta -> 'internal_tools') ELSE '{}'::jsonb END`, argIdx)
+		}
 		args = append(args, encodedMeta)
 		argIdx++
 	}
@@ -814,6 +826,70 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	}
 	return c, nil
 }
+
+// internalToolsMetaKey is the conversation meta key that lists the internal
+// tools a turn may use (agent_chat.sql's admission reads it).
+const internalToolsMetaKey = "internal_tools"
+
+// UpdateInternalTools replaces `meta.internal_tools` and nothing else
+// (updateConversationInternalTools, issue 1060). One statement: jsonb_set
+// over the row's current meta, so a concurrent write of any other meta key
+// is neither lost nor undone. Every name must be in the internal-tools
+// catalogue the agent admission applies (currentAuthorableInternalTools,
+// equal to the list in agent_chat.sql), so the write can never store a list
+// that refuses every later send.
+func (r *ConversationsRepo) UpdateInternalTools(ctx context.Context, projectID, conversationID string, tools []string) (conversations.Conversation, error) {
+	for _, name := range tools {
+		if !currentAuthorableInternalTools[name] {
+			return conversations.Conversation{}, apierr.BadRequest("unknown internal tool " + strconv.Quote(name))
+		}
+	}
+	current, err := r.Get(ctx, projectID, conversationID)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	id, err := r.resolveConversationID(ctx, projectID, conversationID)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	if tools == nil {
+		tools = []string{}
+	}
+	encoded, err := json.Marshal(tools)
+	if err != nil {
+		return conversations.Conversation{}, fmt.Errorf("conversations: update internal tools: encode: %w", err)
+	}
+	q := fmt.Sprintf(`UPDATE %s.chat_conversations
+		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{internal_tools}', $1::jsonb, true),
+		    updated_at = (now() AT TIME ZONE 'UTC')
+		WHERE id = $2
+		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta, is_private, COALESCE(instructions,'')`,
+		schema(projectID))
+	var c conversations.Conversation
+	var authorID int
+	var folderID *string
+	var metaBytes []byte
+	var isPrivate bool
+	if err := r.pool.QueryRow(ctx, q, encoded, id).Scan(
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Instructions,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return conversations.Conversation{}, apierr.NotFound("conversation not found")
+		}
+		return conversations.Conversation{}, fmt.Errorf("conversations: update internal tools: %w", err)
+	}
+	c.ProjectID = projectID
+	c.CreatedBy = fmt.Sprintf("%d", authorID)
+	c.FolderID = folderID
+	c.Meta = decodeConversationMeta(metaBytes)
+	c.IsPrivate = &isPrivate
+	if current.Source == conversations.EditorTestSource {
+		c.Source = current.Source
+	}
+	return c, nil
+}
+
+var _ conversations.ConversationInternalToolsWriter = (*ConversationsRepo)(nil)
 
 // attachmentQuerier is the part of pgx.Tx the attachment collection needs.
 // Stated as an interface so the two delete paths share one scan without either

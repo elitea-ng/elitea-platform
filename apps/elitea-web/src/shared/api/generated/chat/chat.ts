@@ -72,7 +72,6 @@ import type {
   ConversationMessageListing,
   ConversationParticipant,
   ConversationParticipantCreate,
-  ConversationReadState,
   ConversationSummary,
   CreateSupportConversationBody,
   CreatedConversation,
@@ -99,7 +98,6 @@ import type {
   LocalTurnError,
   LocalTurnStartRequest,
   LocalTurnStarted,
-  MarkConversationReadRequest,
   MemoryEntry,
   MemoryEntryList,
   MemoryEntryWriteRequest,
@@ -128,6 +126,7 @@ import type {
   SupportPredictResponse,
   SyncCursorError,
   SyncCursorExpiredResponse,
+  UpdateConversationInternalToolsRequest,
   UpdateConversationRequest,
   UpdatedConversation,
   UploadConversationAttachmentBody,
@@ -2253,94 +2252,106 @@ export function useUnarchiveConversation<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
-export type markConversationReadResponse200 = {
-  data: ConversationReadState;
+export type updateConversationInternalToolsResponse200 = {
+  data: UpdatedConversation;
   status: 200;
 };
 
-export type markConversationReadResponse400 = {
+export type updateConversationInternalToolsResponse400 = {
   data: ErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
-export type markConversationReadResponse401 = {
+export type updateConversationInternalToolsResponse401 = {
   data: N401Response;
   status: 401;
 };
 
-export type markConversationReadResponse403 = {
+export type updateConversationInternalToolsResponse403 = {
   data: N403Response;
   status: 403;
 };
 
-export type markConversationReadResponse404 = {
+export type updateConversationInternalToolsResponse404 = {
   data: N404Response;
   status: 404;
 };
 
-export type markConversationReadResponse426 = {
+export type updateConversationInternalToolsResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
 };
 
-export type markConversationReadResponse500 = {
+export type updateConversationInternalToolsResponse500 = {
   data: N500Response;
   status: 500;
 };
 
-export type markConversationReadResponseSuccess =
-  markConversationReadResponse200 & {
+export type updateConversationInternalToolsResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type updateConversationInternalToolsResponseSuccess =
+  updateConversationInternalToolsResponse200 & {
     headers: Headers;
   };
-export type markConversationReadResponseError = (
-  | markConversationReadResponse400
-  | markConversationReadResponse401
-  | markConversationReadResponse403
-  | markConversationReadResponse404
-  | markConversationReadResponse426
-  | markConversationReadResponse500
+export type updateConversationInternalToolsResponseError = (
+  | updateConversationInternalToolsResponse400
+  | updateConversationInternalToolsResponse401
+  | updateConversationInternalToolsResponse403
+  | updateConversationInternalToolsResponse404
+  | updateConversationInternalToolsResponse426
+  | updateConversationInternalToolsResponse500
+  | updateConversationInternalToolsResponse501
 ) & {
   headers: Headers;
 };
 
-export type markConversationReadResponse =
-  markConversationReadResponseSuccess | markConversationReadResponseError;
+export type updateConversationInternalToolsResponse =
+  | updateConversationInternalToolsResponseSuccess
+  | updateConversationInternalToolsResponseError;
 
-export const getMarkConversationReadUrl = (
+export const getUpdateConversationInternalToolsUrl = (
   projectId: string,
   conversationId: string,
 ) => {
-  return `/elitea_core/conversation_read/prompt_lib/${projectId}/${conversationId}`;
+  return `/elitea_core/conversation_internal_tools/prompt_lib/${projectId}/${conversationId}`;
 };
 
 /**
- * Client contract 1.12. Moves the CALLER's read marker of the
- * conversation: up to `message_id`, or up to now without it. The list
- * rows' `unread` (listConversations and its `changes_since` delta)
- * compares the newest answer with this marker. A client calls it when
- * the user opens the conversation, and again when new messages arrive
- * while the conversation is on screen.
+ * Client contract 1.14. Sets the conversation's `meta.internal_tools`
+ * (the built-in tools a turn may use, such as `attachments` or
+ * `ask_user`) and no other key, in one statement, so it never loses or
+ * undoes a concurrent write of other settings, from this client or
+ * another. updateConversation replaces the whole settings document and
+ * keeps the stored list only when its document has no
+ * `internal_tools` key.
  *
- * The marker is personal state, so read access is enough: the chat
- * authority's detail rule (the rule of getConversation) and
- * `models.chat.conversation.details`. A conversation the caller cannot
- * see answers 404 and writes nothing. A `message_id` that is not a
- * message of the conversation answers 404.
+ * The body is `{"internal_tools": [names]}`, the whole new list (an
+ * empty list clears it); repeated names are stored once. Every name
+ * must be in the internal-tools catalogue the agent turn admits:
+ * `ask_user`, `attachments`, `data_analysis`, `image_generation`,
+ * `internal_mcp`, `lazy_tools_mode`, `planner`,
+ * `project_context_builder`, `pyodide`, `skills_builder`, `swarm`. A
+ * name outside it, a missing or non-array `internal_tools`, or any
+ * other key answers 400 and writes nothing. Whether the configured
+ * worker runs a tool is a separate question (runtime capabilities).
  *
- * The request is idempotent, and the marker never moves back. The read
- * does not re-deliver the row in the `changes_since` delta of any
- * member and does not change `updated_at`. The project event stream
- * sends a `conversation_activity` event with `unread_hint: false` to the
- * caller's other devices only. A delete of the conversation deletes its
- * markers. A fork starts read for the member who forked it.
- * @summary Mark a conversation read for the caller
+ * Needs `models.chat.conversation.update` (the PUT's permission) and
+ * access to the conversation (the chat authority's detail rule); a
+ * conversation the caller cannot see answers 404. The answer is the
+ * conversation as updateConversation answers it. NOTE(W2):
+ * internal/api/v2/conversations/internal_tools.go:53
+ * (`UpdateInternalTools`).
+ * @summary Replace a conversation's internal tools and nothing else
  */
-export const markConversationRead = async (
+export const updateConversationInternalTools = async (
   projectId: string,
   conversationId: string,
-  markConversationReadRequest?: MarkConversationReadRequest,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
   options?: Parameters<typeof eliteaFetch>[1],
-): Promise<markConversationReadResponse> => {
+): Promise<updateConversationInternalToolsResponse> => {
   const getHeaders = (
     h?: NonNullable<RequestInit["headers"]>,
   ): Record<string, string | readonly string[]> => {
@@ -2362,34 +2373,34 @@ export const markConversationRead = async (
     }
     return headers;
   };
-  return eliteaFetch<markConversationReadResponse>(
-    getMarkConversationReadUrl(projectId, conversationId),
+  return eliteaFetch<updateConversationInternalToolsResponse>(
+    getUpdateConversationInternalToolsUrl(projectId, conversationId),
     {
       ...options,
-      method: "PUT",
+      method: "PATCH",
       headers: {
         "Content-Type": "application/json",
         ...getHeaders(options?.headers),
       },
-      body: JSON.stringify(markConversationReadRequest),
+      body: JSON.stringify(updateConversationInternalToolsRequest),
     },
   );
 };
 
-export const getMarkConversationReadQueryKey = (
+export const getUpdateConversationInternalToolsQueryKey = (
   projectId: string,
   conversationId: string,
-  markConversationReadRequest?: MarkConversationReadRequest,
+  updateConversationInternalToolsRequest?: UpdateConversationInternalToolsRequest,
 ) => {
   return [
-    "PUT",
-    `/elitea_core/conversation_read/prompt_lib/${projectId}/${conversationId}`,
-    markConversationReadRequest,
+    "PATCH",
+    `/elitea_core/conversation_internal_tools/prompt_lib/${projectId}/${conversationId}`,
+    updateConversationInternalToolsRequest,
   ] as const;
 };
 
-export const getMarkConversationReadQueryOptions = <
-  TData = Awaited<ReturnType<typeof markConversationRead>>,
+export const getUpdateConversationInternalToolsQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
   TError =
     | ErrorResponse
     | InvalidClientVersionError
@@ -2401,11 +2412,11 @@ export const getMarkConversationReadQueryOptions = <
 >(
   projectId: string,
   conversationId: string,
-  markConversationReadRequest?: MarkConversationReadRequest,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
-        Awaited<ReturnType<typeof markConversationRead>>,
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
         TError,
         TData
       >
@@ -2417,19 +2428,19 @@ export const getMarkConversationReadQueryOptions = <
 
   const queryKey =
     queryOptions?.queryKey ??
-    getMarkConversationReadQueryKey(
+    getUpdateConversationInternalToolsQueryKey(
       projectId,
       conversationId,
-      markConversationReadRequest,
+      updateConversationInternalToolsRequest,
     );
 
   const queryFn: QueryFunction<
-    Awaited<ReturnType<typeof markConversationRead>>
+    Awaited<ReturnType<typeof updateConversationInternalTools>>
   > = ({ signal }) =>
-    markConversationRead(
+    updateConversationInternalTools(
       projectId,
       conversationId,
-      markConversationReadRequest,
+      updateConversationInternalToolsRequest,
       { signal, ...requestOptions },
     );
 
@@ -2443,16 +2454,16 @@ export const getMarkConversationReadQueryOptions = <
       conversationId !== undefined,
     ...queryOptions,
   } as UseQueryOptions<
-    Awaited<ReturnType<typeof markConversationRead>>,
+    Awaited<ReturnType<typeof updateConversationInternalTools>>,
     TError,
     TData
   > & { queryKey: DataTag<QueryKey, TData, TError> };
 };
 
-export type MarkConversationReadQueryResult = NonNullable<
-  Awaited<ReturnType<typeof markConversationRead>>
+export type UpdateConversationInternalToolsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateConversationInternalTools>>
 >;
-export type MarkConversationReadQueryError =
+export type UpdateConversationInternalToolsQueryError =
   | ErrorResponse
   | InvalidClientVersionError
   | N401Response
@@ -2461,8 +2472,8 @@ export type MarkConversationReadQueryError =
   | ClientUpgradeRequiredResponse
   | N500Response;
 
-export function useMarkConversationRead<
-  TData = Awaited<ReturnType<typeof markConversationRead>>,
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
   TError =
     | ErrorResponse
     | InvalidClientVersionError
@@ -2474,20 +2485,20 @@ export function useMarkConversationRead<
 >(
   projectId: string,
   conversationId: string,
-  markConversationReadRequest: undefined | MarkConversationReadRequest,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
   options: {
     query: Partial<
       UseQueryOptions<
-        Awaited<ReturnType<typeof markConversationRead>>,
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
         TError,
         TData
       >
     > &
       Pick<
         DefinedInitialDataOptions<
-          Awaited<ReturnType<typeof markConversationRead>>,
+          Awaited<ReturnType<typeof updateConversationInternalTools>>,
           TError,
-          Awaited<ReturnType<typeof markConversationRead>>
+          Awaited<ReturnType<typeof updateConversationInternalTools>>
         >,
         "initialData"
       >;
@@ -2497,8 +2508,8 @@ export function useMarkConversationRead<
 ): DefinedUseQueryResult<TData, TError> & {
   queryKey: DataTag<QueryKey, TData, TError>;
 };
-export function useMarkConversationRead<
-  TData = Awaited<ReturnType<typeof markConversationRead>>,
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
   TError =
     | ErrorResponse
     | InvalidClientVersionError
@@ -2510,20 +2521,20 @@ export function useMarkConversationRead<
 >(
   projectId: string,
   conversationId: string,
-  markConversationReadRequest?: MarkConversationReadRequest,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
-        Awaited<ReturnType<typeof markConversationRead>>,
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
         TError,
         TData
       >
     > &
       Pick<
         UndefinedInitialDataOptions<
-          Awaited<ReturnType<typeof markConversationRead>>,
+          Awaited<ReturnType<typeof updateConversationInternalTools>>,
           TError,
-          Awaited<ReturnType<typeof markConversationRead>>
+          Awaited<ReturnType<typeof updateConversationInternalTools>>
         >,
         "initialData"
       >;
@@ -2533,8 +2544,8 @@ export function useMarkConversationRead<
 ): UseQueryResult<TData, TError> & {
   queryKey: DataTag<QueryKey, TData, TError>;
 };
-export function useMarkConversationRead<
-  TData = Awaited<ReturnType<typeof markConversationRead>>,
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
   TError =
     | ErrorResponse
     | InvalidClientVersionError
@@ -2546,11 +2557,11 @@ export function useMarkConversationRead<
 >(
   projectId: string,
   conversationId: string,
-  markConversationReadRequest?: MarkConversationReadRequest,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
-        Awaited<ReturnType<typeof markConversationRead>>,
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
         TError,
         TData
       >
@@ -2562,11 +2573,11 @@ export function useMarkConversationRead<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Mark a conversation read for the caller
+ * @summary Replace a conversation's internal tools and nothing else
  */
 
-export function useMarkConversationRead<
-  TData = Awaited<ReturnType<typeof markConversationRead>>,
+export function useUpdateConversationInternalTools<
+  TData = Awaited<ReturnType<typeof updateConversationInternalTools>>,
   TError =
     | ErrorResponse
     | InvalidClientVersionError
@@ -2578,11 +2589,11 @@ export function useMarkConversationRead<
 >(
   projectId: string,
   conversationId: string,
-  markConversationReadRequest?: MarkConversationReadRequest,
+  updateConversationInternalToolsRequest: UpdateConversationInternalToolsRequest,
   options?: {
     query?: Partial<
       UseQueryOptions<
-        Awaited<ReturnType<typeof markConversationRead>>,
+        Awaited<ReturnType<typeof updateConversationInternalTools>>,
         TError,
         TData
       >
@@ -2593,10 +2604,10 @@ export function useMarkConversationRead<
 ): UseQueryResult<TData, TError> & {
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
-  const queryOptions = getMarkConversationReadQueryOptions(
+  const queryOptions = getUpdateConversationInternalToolsQueryOptions(
     projectId,
     conversationId,
-    markConversationReadRequest,
+    updateConversationInternalToolsRequest,
     options,
   );
 

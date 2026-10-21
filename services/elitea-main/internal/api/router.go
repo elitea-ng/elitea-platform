@@ -3605,6 +3605,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Get)
 					r.With(projectPermission("models.chat.conversation.update")).
 						Put("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Update)
+					// Client contract 1.14: `meta.internal_tools` alone, in one
+					// statement, under the PUT's permission (internal_tools.go).
+					r.With(projectPermission("models.chat.conversation.update")).
+						Patch("/conversation_internal_tools/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateInternalTools)
 					r.With(projectPermission("models.chat.conversations.delete")).
 						Delete("/conversation/prompt_lib/{projectID}/{conversationID}", convHandler.Delete)
 					// Conversation archive (client contract 1.10), shared by

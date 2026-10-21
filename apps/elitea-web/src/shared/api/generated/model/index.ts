@@ -681,6 +681,8 @@ export * from "./unpublishSkill200.zod";
 export * from "./unpublishSkillBody.zod";
 export * from "./updateBucketRequest.zod";
 export * from "./updateConversationHeaders.zod";
+export * from "./updateConversationInternalToolsHeaders.zod";
+export * from "./updateConversationInternalToolsRequest.zod";
 export * from "./updateConversationRequest.zod";
 export * from "./updateCurrentAuthorThemeHeaders.zod";
 export * from "./updateSecretBody.zod";
