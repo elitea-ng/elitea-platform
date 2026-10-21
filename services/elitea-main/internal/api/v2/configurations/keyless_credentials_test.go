@@ -107,11 +107,52 @@ func TestCreateKeylessCredentialMatrix(t *testing.T) {
 	}
 }
 
+// TestOtherTypesKeepTheirOwnAuthMode: `auth_mode` is the keyless field of
+// vertex_ai and ai_dial only. Another type's own `auth_mode` ("basic",
+// "oauth", even its own "workload_identity") passes every keyless rule on the
+// project routes.
+func TestOtherTypesKeepTheirOwnAuthMode(t *testing.T) {
+	ctx := context.Background()
+	for _, configType := range []string{"github", "jira", "mcp_custom"} {
+		for _, mode := range []string{"basic", "oauth", "workload_identity"} {
+			data := map[string]any{"auth_mode": mode, "token_audience": 1}
+			if failure := refuseKeylessCredentialWrite(ctx, configType, data); failure != nil {
+				t.Errorf("%s auth_mode %q: write refused: %+v", configType, mode, failure)
+			}
+			if failure := admitKeylessCredentialData(ctx, configType, data); failure != nil {
+				t.Errorf("%s auth_mode %q: admit refused: %+v", configType, mode, failure)
+			}
+			if message, refused := refuseUnsavedKeylessCheck(configType, data); refused {
+				t.Errorf("%s auth_mode %q: unsaved check refused: %s", configType, mode, message)
+			}
+		}
+	}
+	// The admin providers surface still refuses the mode on a non-keyless type.
+	if failure := admitKeylessCredentialData(withPlatformCredentialWrite(ctx), "open_ai",
+		map[string]any{"auth_mode": "workload_identity"}); failure == nil {
+		t.Error("the admin surface accepted workload_identity on open_ai")
+	}
+	// End to end through Create: a github credential with auth_mode "oauth"
+	// gets past the keyless rules (it reaches the store, which this pool-less
+	// handler answers with a non-400).
+	recorder := keylessCreate(t, map[string]any{
+		"elitea_title": "gh", "label": "GH", "type": "github",
+		"data": map[string]any{"auth_mode": "oauth", "base_url": "https://api.github.com", "access_token": "t"},
+	}, false)
+	if strings.Contains(recorder.Body.String(), "auth_mode") {
+		t.Fatalf("status = %d, body = %s: a github auth_mode was judged by the keyless rule",
+			recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestUpdateRefusesKeylessModeOnTheProjectRoute: the refusal answers before
 // the database is read, so a project PUT cannot arm the mode on a row it owns.
 func TestUpdateRefusesKeylessModeOnTheProjectRoute(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	body := map[string]any{"data": map[string]any{"api_base": "https://dial.example.com", "auth_mode": "workload_identity"}}
+	body := map[string]any{
+		"type": "ai_dial",
+		"data": map[string]any{"api_base": "https://dial.example.com", "auth_mode": "workload_identity"},
+	}
 	keylessHandler(t).Update(recorder, keylessRequest(t, http.MethodPut, body, false,
 		map[string]string{"projectID": "1", "configID": "5"}))
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "platform provider") {
@@ -127,7 +168,7 @@ func TestSwitchToKeylessClearsTheStoredKey(t *testing.T) {
 		"api_base": "https://dial.example.com", "auth_mode": "workload_identity",
 		"api_key": "{{secret.platform_dial_key}}", "api_token": "",
 	}
-	if failure := admitKeylessCredentialData("ai_dial", data); failure != nil {
+	if failure := admitKeylessCredentialData(context.Background(), "ai_dial", data); failure != nil {
 		t.Fatalf("refused: %+v", failure)
 	}
 	for _, field := range []string{"api_key", "api_token"} {
@@ -137,7 +178,7 @@ func TestSwitchToKeylessClearsTheStoredKey(t *testing.T) {
 	}
 	// The key mode is untouched.
 	keyed := map[string]any{"api_base": "https://dial.example.com", "api_key": "{{secret.k}}"}
-	if failure := admitKeylessCredentialData("ai_dial", keyed); failure != nil || keyed["api_key"] != "{{secret.k}}" {
+	if failure := admitKeylessCredentialData(context.Background(), "ai_dial", keyed); failure != nil || keyed["api_key"] != "{{secret.k}}" {
 		t.Fatalf("the key mode was changed: %+v, %v", failure, keyed)
 	}
 }

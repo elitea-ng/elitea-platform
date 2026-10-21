@@ -275,14 +275,23 @@ export function providerTypeLabel(type: string): string {
  * `editing` relaxes every SECRET field: on an edit a blank secret means "keep
  * the stored one", so requiring it would force an operator renaming a credential
  * to re-enter a key they cannot read back.
+ *
+ * Except when the edit switches a STORED workload-identity row back to a key:
+ * that row holds no key (the switch to workload identity cleared it), so a
+ * blank key keeps nothing and the save would store a key-mode row with no key.
+ * `storedAuthMode` is the row's `auth_mode` as listed.
  */
 export function missingProviderFields(
   type: LlmProviderType,
   values: Readonly<Record<string, string>>,
   editing: boolean,
+  storedAuthMode?: string,
 ): readonly string[] {
-  return providerFields(type, providerAuthMode(values))
-    .filter((field) => field.required && (field.secret ? !editing : true))
+  const authMode = providerAuthMode(values);
+  const keepsStoredSecrets =
+    editing && !(supportsWorkloadIdentity(type) && storedAuthMode === 'workload_identity' && authMode === 'key');
+  return providerFields(type, authMode)
+    .filter((field) => field.required && (field.secret ? !keepsStoredSecrets : true))
     .filter((field) => (values[field.key] ?? '').trim() === '')
     .map((field) => field.label);
 }

@@ -104,6 +104,24 @@ func TestADCAccessTokenHonoursTheContext(t *testing.T) {
 	}
 }
 
+// TestADCAccessTokenBuildHonoursTheContext: the first AccessToken builds its
+// source through FindDefaultCredentials, which can block on the metadata
+// server; a cancelled request must not wait for it.
+func TestADCAccessTokenBuildHonoursTheContext(t *testing.T) {
+	a := NewADC()
+	block := make(chan struct{})
+	defer close(block)
+	a.newAccessSource = func(context.Context) (oauth2.TokenSource, error) {
+		<-block
+		return nil, errors.New("unreachable")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.AccessToken(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the context's cancellation", err)
+	}
+}
+
 type tokenSourceFunc func() (*oauth2.Token, error)
 
 func (f tokenSourceFunc) Token() (*oauth2.Token, error) { return f() }

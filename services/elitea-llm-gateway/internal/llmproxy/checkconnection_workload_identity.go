@@ -19,7 +19,10 @@ import (
 //  1. the operator flag, as the account reads it;
 //  2. the SIGNED project of the request is the public project. elitea-main
 //     signs the stored check of a platform provider as the public project, and
-//     it refuses auth_mode=workload_identity on every tenant surface before a
+//     so a tenant's MODEL test whose credential it resolved, on the server, to
+//     the shared keyless row of the public project — the row the runtime
+//     serves to every project (modelProbeSigningProject). It refuses
+//     auth_mode=workload_identity in every caller-supplied payload before a
 //     probe is sent. The signed header is the one fact here that a caller
 //     cannot choose; a body field saying "this is a platform credential" would
 //     be one it can.

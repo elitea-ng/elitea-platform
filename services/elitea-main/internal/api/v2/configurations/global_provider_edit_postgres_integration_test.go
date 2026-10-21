@@ -189,3 +189,90 @@ func TestAnAdminProviderSwitchToWorkloadIdentityStillClearsTheStoredKey(t *testi
 		t.Fatalf("data.auth_mode = %#v, want workload_identity", after["auth_mode"])
 	}
 }
+
+// TestAnAdminProviderSwitchToWorkloadIdentityClearsAStoredKeyOfAnyForm — the
+// merge brings back whatever the row holds, and a legacy row can hold a key in
+// clear text, as a legacy reference, or as a JSON object. None of them is a
+// key the operator typed in this request, so the switch removes them all
+// instead of refusing with a field the dialog does not show. A key the
+// operator DID type is still refused.
+func TestAnAdminProviderSwitchToWorkloadIdentityClearsAStoredKeyOfAnyForm(t *testing.T) {
+	pool := newStoredCheckPool(t)
+	router := storedCheckRouter(t, pool, &fakeConnectionChecker{})
+
+	id := createAdminProvider(t, router, map[string]any{
+		"elitea_title": "autotest_platform_dial_legacy",
+		"type":         "ai_dial",
+		"data": map[string]any{
+			"api_key":   "dial-key",
+			"api_base":  "https://dial.autotest.invalid",
+			"auth_mode": "key",
+		},
+	})
+	// A legacy row: plaintext api_key, an object-shaped api_token.
+	if _, err := pool.Exec(context.Background(), fmt.Sprintf(
+		`UPDATE p_%d.configuration
+		    SET data = data || '{"api_key":"legacy-plaintext-key","api_token":{"value":"x"}}'::jsonb
+		  WHERE id = $1`, storedCheckProject), id); err != nil {
+		t.Fatalf("seed the legacy key: %v", err)
+	}
+
+	typed := adminProviderDo(t, router, http.MethodPut,
+		fmt.Sprintf("/api/v2/admin/gateway/providers/%d", id), map[string]any{
+			"type": "ai_dial",
+			"data": map[string]any{
+				"api_base": "https://dial.autotest.invalid", "auth_mode": "workload_identity",
+				"api_key": "a-key-typed-now",
+			},
+		})
+	if typed.Code != http.StatusBadRequest || !strings.Contains(typed.Body.String(), "data.api_key") {
+		t.Fatalf("PUT with a typed key = %d: %s, want the 400 naming data.api_key", typed.Code, typed.Body.String())
+	}
+
+	recorder := adminProviderDo(t, router, http.MethodPut,
+		fmt.Sprintf("/api/v2/admin/gateway/providers/%d", id), map[string]any{
+			"type": "ai_dial",
+			"data": map[string]any{"api_base": "https://dial.autotest.invalid", "auth_mode": "workload_identity"},
+		})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	after := storedProviderData(t, pool, id)
+	for _, field := range []string{"api_key", "api_token"} {
+		if _, present := after[field]; present {
+			t.Errorf("a keyless row kept data.%s = %#v", field, after[field])
+		}
+	}
+}
+
+// TestAnAdminProviderSwitchBackToKeyDropsTheTokenAudience — token_audience
+// means something only in the keyless mode. The dialog does not send it in the
+// key mode, and the merge must not bring the stale value back.
+func TestAnAdminProviderSwitchBackToKeyDropsTheTokenAudience(t *testing.T) {
+	pool := newStoredCheckPool(t)
+	router := storedCheckRouter(t, pool, &fakeConnectionChecker{})
+
+	id := createAdminProvider(t, router, map[string]any{
+		"elitea_title": "autotest_platform_dial_audience",
+		"type":         "ai_dial",
+		"data": map[string]any{
+			"api_base": "https://dial.autotest.invalid", "auth_mode": "workload_identity",
+			"token_audience": "stale-audience",
+		},
+	})
+	recorder := adminProviderDo(t, router, http.MethodPut,
+		fmt.Sprintf("/api/v2/admin/gateway/providers/%d", id), map[string]any{
+			"type": "ai_dial",
+			"data": map[string]any{
+				"api_base": "https://dial.autotest.invalid", "auth_mode": "key", "api_key": "dial-key",
+			},
+		})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	after := storedProviderData(t, pool, id)
+	if _, present := after["token_audience"]; present {
+		t.Fatalf("a key-mode row kept data.token_audience = %#v", after["token_audience"])
+	}
+	sealedReference(t, after, "api_key")
+}

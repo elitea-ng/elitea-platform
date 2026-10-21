@@ -358,7 +358,7 @@ func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "message": err.Error()})
 		return
 	}
-	if message, refused := refuseUnsavedKeylessCheck(data); refused {
+	if message, refused := refuseUnsavedKeylessCheck(configType, data); refused {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"success": false, "message": message, "reason": unsavedKeylessCheckReason,
 		})
@@ -503,7 +503,7 @@ func (h *Handler) checkBatchItem(ctx context.Context, projectID string, item map
 	if err := validateNotSelfReferential(data, selfLLMOrigins()); err != nil {
 		return map[string]any{"id": id, "success": false, "message": err.Error()}
 	}
-	if message, refused := refuseUnsavedKeylessCheck(data); refused {
+	if message, refused := refuseUnsavedKeylessCheck(configType, data); refused {
 		return map[string]any{"id": id, "success": false, "message": message, "reason": unsavedKeylessCheckReason}
 	}
 

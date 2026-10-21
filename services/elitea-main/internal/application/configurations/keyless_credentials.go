@@ -66,7 +66,13 @@ func CredentialAuthMode(data map[string]any) (mode string, ok bool) {
 // service. This service serves the PROJECT routes only, so a keyless mode is
 // always refused here. The admin providers surface writes through the
 // compatibility handler, which has the platform-write marker.
-func refuseCurrentKeylessCredential(data map[string]any) error {
+//
+// It reads `auth_mode` of the two keyless types only: a toolkit or MCP
+// configuration may carry an `auth_mode` of its own with another meaning.
+func refuseCurrentKeylessCredential(typeName string, data map[string]any) error {
+	if _, keyless := KeylessCredentialKeyField(typeName); !keyless {
+		return nil
+	}
 	mode, ok := CredentialAuthMode(data)
 	if !ok {
 		return currentMutationFieldError(CurrentConfigurationMutationInvalid, "data."+CredentialAuthModeField)

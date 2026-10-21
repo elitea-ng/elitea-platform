@@ -506,11 +506,12 @@ func (s *CurrentConfigurationMutationService) normalizeData(
 	if data == nil {
 		return nil, currentMutationFieldError(CurrentConfigurationMutationInvalid, "data")
 	}
-	// Before the normalizer, for every type and both operations: the create
-	// normalizers rebuild `data` from known fields and would DROP the mode,
-	// which stores a key-mode row with no key — a silent fallback. An update
-	// keeps `data` as sent, so without this a project PUT could arm the mode.
-	if err := refuseCurrentKeylessCredential(data); err != nil {
+	// Before the normalizer, for both operations of the two keyless types:
+	// the create normalizers rebuild `data` from known fields and would DROP
+	// the mode, which stores a key-mode row with no key — a silent fallback.
+	// An update keeps `data` as sent, so without this a project PUT could arm
+	// the mode.
+	if err := refuseCurrentKeylessCredential(typeName, data); err != nil {
 		return nil, err
 	}
 	result, err := s.normalizer.Normalize(ctx, CurrentConfigurationNormalizationRequest{

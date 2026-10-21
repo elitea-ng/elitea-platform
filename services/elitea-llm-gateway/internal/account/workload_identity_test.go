@@ -256,35 +256,120 @@ func TestWorkloadIdentityTokenAudienceOverride(t *testing.T) {
 	}
 }
 
-// TestWorkloadIdentityDialKeyIsServedAlone: the context token is per request,
-// so a workload-identity DIAL key must never be offered beside a keyed one —
-// bifrost would send the platform's ID token with the tenant's key selected.
-// The keyed credential wins, and a stale token from an earlier resolution of
-// the same request is cleared.
-func TestWorkloadIdentityDialKeyIsServedAlone(t *testing.T) {
-	tokens := &fakeTokens{token: "google-id-token"}
+// mixedDialAccount holds a tenant's own keyed DIAL credential ("own") and the
+// platform's shared keyless one ("d").
+func mixedDialAccount(t *testing.T, enabled bool, tokens *fakeTokens) *EliteaAccount {
+	t.Helper()
 	tenantRow := wiRow("own", DialCredentialType, false, map[string]any{
 		"api_base": "https://tenant-dial.example.com", "api_key": "tenant-key",
 	})
-	a := wiAccount(t, true, tokens, map[string][][]any{
+	return wiAccount(t, enabled, tokens, map[string][][]any{
 		callerProject: {tenantRow},
 		publicProject: {wiRow("d", DialCredentialType, true, dialWIData("https://dial.example.com"))},
 	})
-	ctx := bifrostCtx(callerProject)
-	ctx.SetValue(azure.AzureAuthorizationTokenKey, "stale-token")
-	keys, err := a.GetKeysForProvider(ctx, schemas.Azure)
-	if err != nil {
-		t.Fatalf("GetKeysForProvider: %v", err)
-	}
-	if len(keys) != 1 || keys[0].ID != "own" || keys[0].Value.Val != "tenant-key" {
-		t.Fatalf("keys = %+v, want the tenant's keyed credential alone", keys)
-	}
-	if v, _ := ctx.Value(azure.AzureAuthorizationTokenKey).(string); v != "" {
-		t.Errorf("context token = %q, want it cleared beside a keyed credential", v)
-	}
-	if asked := tokens.asked(); len(asked) != 0 {
-		t.Errorf("minted tokens for %v although no keyless key was served", asked)
-	}
+}
+
+// TestWorkloadIdentityDialKeySelectionFollowsTheModelLink: the context token is
+// per request and every key serves every model (Models ["*"]), so bifrost
+// cannot keep a keyless DIAL key apart from a keyed one. The model's link is
+// the one statement of which credential serves it:
+//
+//   - linked to the tenant's key: that key alone, no token minted, a stale
+//     token cleared — the platform token never reaches the tenant endpoint;
+//   - linked to the platform's keyless row: that row alone, with its token —
+//     the platform model never goes to the tenant endpoint;
+//   - unlinked: refused with the named reason rather than guessed.
+func TestWorkloadIdentityDialKeySelectionFollowsTheModelLink(t *testing.T) {
+	t.Run("linked to the tenant key", func(t *testing.T) {
+		tokens := &fakeTokens{token: "google-id-token"}
+		ctx := bifrostCtx(callerProject)
+		ctx.SetValue(azure.AzureAuthorizationTokenKey, "stale-token")
+		ctx.SetValue(ContextKeyLinkedCredential, LinkedCredential{ProjectID: callerProject, ConfigID: "own"})
+		keys, err := mixedDialAccount(t, true, tokens).GetKeysForProvider(ctx, schemas.Azure)
+		if err != nil || len(keys) != 1 || keys[0].ID != "own" || keys[0].Value.Val != "tenant-key" {
+			t.Fatalf("keys = %+v, err = %v, want the tenant's keyed credential alone", keys, err)
+		}
+		if v, _ := ctx.Value(azure.AzureAuthorizationTokenKey).(string); v != "" {
+			t.Errorf("context token = %q, want it cleared for a keyed credential", v)
+		}
+		if asked := tokens.asked(); len(asked) != 0 {
+			t.Errorf("minted tokens for %v although no keyless key was served", asked)
+		}
+	})
+	t.Run("linked to the platform keyless row", func(t *testing.T) {
+		tokens := &fakeTokens{token: "google-id-token"}
+		ctx := bifrostCtx(callerProject)
+		ctx.SetValue(ContextKeyLinkedCredential, LinkedCredential{ProjectID: publicProject, ConfigID: "d"})
+		keys, err := mixedDialAccount(t, true, tokens).GetKeysForProvider(ctx, schemas.Azure)
+		if err != nil || len(keys) != 1 || keys[0].Value.Val != "" ||
+			keys[0].AzureKeyConfig == nil || keys[0].AzureKeyConfig.Endpoint.Val != "https://dial.example.com" {
+			t.Fatalf("keys = %+v, err = %v, want the platform keyless credential alone", keys, err)
+		}
+		if v, _ := ctx.Value(azure.AzureAuthorizationTokenKey).(string); v != "google-id-token" {
+			t.Errorf("context token = %q, want the minted ID token", v)
+		}
+	})
+	t.Run("unlinked", func(t *testing.T) {
+		tokens := &fakeTokens{token: "google-id-token"}
+		ctx := bifrostCtx(callerProject)
+		ctx.SetValue(azure.AzureAuthorizationTokenKey, "stale-token")
+		keys, err := mixedDialAccount(t, true, tokens).GetKeysForProvider(ctx, schemas.Azure)
+		if !errors.Is(err, ErrWorkloadIdentityAmbiguous) || len(keys) != 0 {
+			t.Fatalf("keys = %+v, err = %v, want WORKLOAD_IDENTITY_CREDENTIAL_AMBIGUOUS", keys, err)
+		}
+		if got := credentialRejectionReason(err); got != WorkloadIdentityAmbiguousReason {
+			t.Errorf("reason = %q", got)
+		}
+		if v, _ := ctx.Value(azure.AzureAuthorizationTokenKey).(string); v != "" {
+			t.Errorf("context token = %q, want it cleared on the refusal", v)
+		}
+		if asked := tokens.asked(); len(asked) != 0 {
+			t.Errorf("minted tokens for %v on a refused request", asked)
+		}
+	})
+}
+
+// TestRefusedKeylessRowDoesNotPoisonTheProvider: a keyless row the account
+// refuses (here: the flag is off) is skipped on an unlinked request, so the
+// tenant's own credential still serves. A request whose model LINKS the
+// refused row still fails with the named reason.
+func TestRefusedKeylessRowDoesNotPoisonTheProvider(t *testing.T) {
+	t.Run("unlinked: skipped", func(t *testing.T) {
+		tokens := &fakeTokens{token: "google-id-token"}
+		keys, err := mixedDialAccount(t, false, tokens).GetKeysForProvider(bifrostCtx(callerProject), schemas.Azure)
+		if err != nil || len(keys) != 1 || keys[0].ID != "own" {
+			t.Fatalf("keys = %+v, err = %v, want the tenant credential with the refused row skipped", keys, err)
+		}
+		if asked := tokens.asked(); len(asked) != 0 {
+			t.Errorf("minted tokens for %v", asked)
+		}
+	})
+	t.Run("vertex unlinked: skipped beside a keyed row", func(t *testing.T) {
+		keyed := map[string]any{
+			"vertex_project": "tenant-gcp", "vertex_location": "us-central1",
+			"vertex_credentials": `{"type":"service_account"}`,
+		}
+		a := wiAccount(t, false, &fakeTokens{}, map[string][][]any{
+			callerProject: {wiRow("own-v", "vertex_ai", false, keyed)},
+			publicProject: {wiRow("v", "vertex_ai", true, vertexWIData())},
+		})
+		keys, err := a.GetKeysForProvider(bifrostCtx(callerProject), schemas.Vertex)
+		if err != nil || len(keys) != 1 || keys[0].ID != "own-v" {
+			t.Fatalf("keys = %+v, err = %v, want the tenant's keyed Vertex credential", keys, err)
+		}
+	})
+	t.Run("linked: the named reason", func(t *testing.T) {
+		tokens := &fakeTokens{token: "google-id-token"}
+		ctx := bifrostCtx(callerProject)
+		ctx.SetValue(ContextKeyLinkedCredential, LinkedCredential{ProjectID: publicProject, ConfigID: "d"})
+		keys, err := mixedDialAccount(t, false, tokens).GetKeysForProvider(ctx, schemas.Azure)
+		if !errors.Is(err, ErrWorkloadIdentityNotAllowed) || len(keys) != 0 {
+			t.Fatalf("keys = %+v, err = %v, want WORKLOAD_IDENTITY_NOT_ALLOWED for the linked row", keys, err)
+		}
+		if asked := tokens.asked(); len(asked) != 0 {
+			t.Errorf("minted tokens for %v", asked)
+		}
+	})
 }
 
 // TestWorkloadIdentityDialWireCarriesTheBearerOnEveryRoute drives a real

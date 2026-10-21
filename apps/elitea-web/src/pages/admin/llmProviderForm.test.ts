@@ -76,6 +76,27 @@ describe('keyless provider authentication', () => {
     expect(missingProviderFields('ai_dial', { auth_mode: 'workload_identity', api_base: 'https://d' }, false)).toEqual([]);
   });
 
+  it('requires the key again when an edit switches a stored keyless row back to key', () => {
+    const values = { auth_mode: 'key', api_base: 'https://dial.example.com' };
+    // The stored row holds no key, so a blank key keeps nothing.
+    expect(missingProviderFields('ai_dial', values, true, 'workload_identity')).toEqual(['API key']);
+    expect(
+      missingProviderFields(
+        'vertex_ai',
+        { auth_mode: 'key', vertex_project: 'p', vertex_location: 'l' },
+        true,
+        'workload_identity',
+      ),
+    ).toHaveLength(1);
+    // An edit of a stored key row still keeps the blank key.
+    expect(missingProviderFields('ai_dial', values, true, 'key')).toEqual([]);
+    expect(missingProviderFields('ai_dial', values, true)).toEqual([]);
+    // Staying keyless needs no key.
+    expect(
+      missingProviderFields('ai_dial', { ...values, auth_mode: 'workload_identity' }, true, 'workload_identity'),
+    ).toEqual([]);
+  });
+
   it('sends auth_mode key explicitly, so a switch back is stored', () => {
     const data = providerDataFor('ai_dial', { api_base: 'https://dial.example.com', api_key: 'k' });
     expect(data).toMatchObject({ auth_mode: 'key', api_key: 'k' });

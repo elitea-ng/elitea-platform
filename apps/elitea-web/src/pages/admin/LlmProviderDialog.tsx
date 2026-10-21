@@ -68,8 +68,8 @@ export interface LlmProviderDialogProps {
    * `LLM_PROVIDER_TYPES`, which is only what this app can draw a form for.
    */
   readonly providerTypes: readonly string[];
-  /** `undefined` ⇒ create; a row ⇒ edit it. */
-  readonly editing: LlmProvider | undefined;
+  /** `undefined` ⇒ create; a row ⇒ edit it. Its `auth_mode` is the top-level listing field. */
+  readonly editing: (LlmProvider & KeylessProviderListing) | undefined;
   readonly isSaving: boolean;
   /** The server's own words when the last attempt was refused. */
   readonly serverError: string | undefined;
@@ -80,8 +80,8 @@ export interface LlmProviderDialogProps {
 /**
  * The non-secret values an edit can pre-fill, from what the listing published.
  *
- * `auth_mode` and `token_audience` are read from `settings` or from the row
- * itself, whichever the server sends them in. Absent is the key mode.
+ * `auth_mode` and `token_audience` are read from the row itself (top-level
+ * fields of the listing, never `settings`). Absent is the key mode.
  */
 function initialValuesFor(
   editing: (LlmProvider & KeylessProviderListing) | undefined,
@@ -138,7 +138,7 @@ export function LlmProviderDialog({
 
   const authMode = providerAuthMode(values);
   const fields = providerFields(type, authMode);
-  const missing = missingProviderFields(type, values, editing !== undefined);
+  const missing = missingProviderFields(type, values, editing !== undefined, editing?.auth_mode);
   const canSubmit = name.trim() !== '' && missing.length === 0 && !isSaving;
 
   return (

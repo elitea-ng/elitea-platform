@@ -1126,11 +1126,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// walk: that walk reads the mode to decide whether the key is required,
 	// so a project body must be refused for the mode and not for the key.
 	if keylessData, isObject := body["data"].(map[string]any); isObject {
-		if failure := refuseKeylessCredentialWrite(ctx, keylessData); failure != nil {
+		if failure := refuseKeylessCredentialWrite(ctx, strVal(body, "type"), keylessData); failure != nil {
 			failure.write(w)
 			return
 		}
-		if failure := admitKeylessCredentialData(strVal(body, "type"), keylessData); failure != nil {
+		if failure := admitKeylessCredentialData(ctx, strVal(body, "type"), keylessData); failure != nil {
 			failure.write(w)
 			return
 		}
@@ -1391,10 +1391,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		failure.write(w)
 		return
 	}
-	// The mode is checked before the database is read, like the guard above.
-	// The type-dependent half runs in applyConfigurationUpdate.
+	// The mode is checked before the database is read when the body names the
+	// type, like the guard above. applyConfigurationUpdate runs it again on the
+	// STORED type, which a body may omit.
 	if keylessData, isObject := body["data"].(map[string]any); isObject {
-		if failure := refuseKeylessCredentialWrite(ctx, keylessData); failure != nil {
+		if failure := refuseKeylessCredentialWrite(ctx, strVal(body, "type"), keylessData); failure != nil {
 			failure.write(w)
 			return
 		}
@@ -1493,7 +1494,10 @@ func (h *Handler) applyConfigurationUpdate(
 	// A switch to the keyless mode clears the stored key fields here, before
 	// sealing, because `data` is written whole.
 	if keylessData, isObject := body["data"].(map[string]any); isObject {
-		if failure := admitKeylessCredentialData(configType, keylessData); failure != nil {
+		if failure := refuseKeylessCredentialWrite(ctx, configType, keylessData); failure != nil {
+			return c, failure, nil
+		}
+		if failure := admitKeylessCredentialData(ctx, configType, keylessData); failure != nil {
 			return c, failure, nil
 		}
 	}

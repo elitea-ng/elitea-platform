@@ -378,7 +378,6 @@ var globalProviderSecretFields = []string{
 var globalProviderSettingFields = []string{
 	"api_version", "aws_access_key_id", "aws_region_name",
 	"vertex_project", "vertex_location", "use_anthropic_endpoints",
-	"auth_mode", "token_audience",
 }
 
 // listGlobalProvidersSQL reads the public project's shared credential rows.
@@ -688,12 +687,51 @@ func (h *Handler) mergeStoredGlobalProviderData(
 			return false
 		}
 	}
+	sent := make(map[string]struct{}, len(incoming))
+	for key := range incoming {
+		sent[key] = struct{}{}
+	}
 	for key, value := range stored {
 		if _, present := incoming[key]; !present {
 			incoming[key] = value
 		}
 	}
+	dropMergedModeFields(incoming, sent)
 	return true
+}
+
+// keyModeOnlyFields are the `data` keys that mean something only in the
+// keyless mode. A switch back to the key mode must not keep them: the merge
+// above would otherwise resurrect a stale `token_audience` the dialog no
+// longer shows or sends.
+var keyModeOnlyFields = []string{configurationapp.CredentialTokenAudienceField}
+
+// dropMergedModeFields removes what the merge brought back that the merged
+// auth mode does not use. Only keys the body did NOT send are touched: a value
+// the operator typed is still judged by admitKeylessCredentialData.
+//
+//   - keyless mode: every stored key field. A stored key in ANY form (a
+//     `{{secret.NAME}}` reference, a legacy reference, plaintext, a JSON
+//     object) is the old mode's key; refusing it would fail the switch with
+//     a 400 naming a field the dialog does not even show.
+//   - key mode: the keyless-only fields.
+//
+// The stored row is read outside the update's transaction, so two concurrent
+// edits are last-writer-wins, as every edit of this surface already is.
+func dropMergedModeFields(data map[string]any, sent map[string]struct{}) {
+	mode, ok := configurationapp.CredentialAuthMode(data)
+	if !ok {
+		return // refused later with its own message
+	}
+	drop := keyModeOnlyFields
+	if mode == configurationapp.CredentialAuthModeWorkloadIdentity {
+		drop = globalProviderSecretFields
+	}
+	for _, field := range drop {
+		if _, typed := sent[field]; !typed {
+			delete(data, field)
+		}
+	}
 }
 
 // completeGlobalRowLabel gives a CREATE the display label the row contract

@@ -185,7 +185,12 @@ func (a *ADC) AccessToken(ctx context.Context) (string, error) {
 	src := a.access
 	a.mu.Unlock()
 	if src == nil {
-		built, err := a.newAccessSource(context.Background())
+		// FindDefaultCredentials can probe the metadata server, so the build is
+		// bounded by the request context like idSource's. The source itself is
+		// built with context.Background: it is cached past this request.
+		built, err := buildBounded(ctx, func() (oauth2.TokenSource, error) {
+			return a.newAccessSource(context.Background())
+		})
 		if err != nil {
 			return "", fmt.Errorf("workloadidentity: find default credentials: %w", err)
 		}

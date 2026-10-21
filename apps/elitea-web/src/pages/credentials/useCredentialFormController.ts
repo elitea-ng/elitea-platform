@@ -21,6 +21,7 @@ import {
 import { t } from '@/shared/i18n';
 import type { ConfigSchemaNode, ConfigurationTypeDescriptor } from '@/features/credentials';
 
+import { credentialRequiredFields } from './CredentialFormSection';
 import { useCredentialConnectionTest } from './useCredentialConnectionTest';
 import { useCredentialDeleteGuard } from './useCredentialDeleteGuard';
 import { useTypeSections } from './useTypeSections';
@@ -273,7 +274,9 @@ export function useCredentialFormController(props: CredentialFormControllerProps
   // not a style nit — `save` would never actually stay referentially stable).
   const schemaProperties = useMemo(() => dataSchema?.properties ?? {}, [dataSchema]);
   const schemaSections = useMemo(() => dataSchema?.metadata?.sections ?? {}, [dataSchema]);
-  const schemaRequiredFields = useMemo(() => dataSchema?.required ?? [], [dataSchema]);
+  // Reads the schema's `if`/`then`/`else` too (vertex_ai states its key that
+  // way), so it depends on the values as well as on the schema.
+  const schemaRequiredFields = useMemo(() => credentialRequiredFields(dataSchema, data), [dataSchema, data]);
 
   useFormSeeding(mode, detail.data, dataSchema, { setName, setEliteaTitle, setShared, setData });
 

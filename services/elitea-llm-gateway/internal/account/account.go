@@ -515,6 +515,11 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 	// dialAudiences maps the Key ID of every admitted workload-identity DIAL
 	// key to its ID-token audience (workload_identity.go).
 	dialAudiences := map[string]string{}
+	// skipped is the first refused keyless row of an unlinked request. It is
+	// returned only when no other credential is left, so a set of nothing but
+	// refused rows still fails with the named reason, not as "no key".
+	_, linked := linkedCredentialFromContext(ctx)
+	var skipped error
 	for _, c := range creds {
 		// Self-referential guard: reject any credential pointing back at the
 		// platform's own /llm origin before its secret is ever resolved.
@@ -556,7 +561,21 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 		// Keyless platform credentials (workload_identity.go). Decided from the
 		// ROW before any secret is resolved, so a refused row never causes a
 		// decrypt, and a refusal is never a fallback to the key mode.
+		//
+		// A refused keyless row is SKIPPED on an unlinked request: it is one
+		// row's state (the flag off, a tenant row, an ambiguous row) and must
+		// not take every other credential of the provider down with it. A
+		// request whose model LINKS that row still fails with the named
+		// reason: the model named it, and serving another credential instead
+		// is the silent substitution credential_selector.go forbids.
 		wi, err := a.admitWorkloadIdentity(provider, c)
+		var audience string
+		if err == nil && wi && provider == schemas.Azure {
+			var aerr error
+			if audience, aerr = workloadidentity.Audience(c.apiBase, c.tokenAudience); aerr != nil {
+				err = fmt.Errorf("%w: api_base", ErrIncompleteCredential)
+			}
+		}
 		if err != nil {
 			a.logger.WarnContext(ctx, "rejected provider credential",
 				"reason", credentialRejectionReason(err),
@@ -564,15 +583,19 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 				"credential_project_id", c.ownerProjectID,
 				"provider", string(provider),
 				"config_id", c.configID,
+				"skipped", !linked,
 			)
-			return nil, fmt.Errorf("account: credential %s: %w", c.configID, err)
+			refusal := fmt.Errorf("account: credential %s: %w", c.configID, err)
+			if linked {
+				return nil, refusal
+			}
+			if skipped == nil {
+				skipped = refusal
+			}
+			continue
 		}
 		c.workloadIdentity = wi
-		if wi && provider == schemas.Azure {
-			audience, aerr := workloadidentity.Audience(c.apiBase, c.tokenAudience)
-			if aerr != nil {
-				return nil, fmt.Errorf("account: credential %s: %w: api_base", c.configID, ErrIncompleteCredential)
-			}
+		if audience != "" {
 			dialAudiences[c.keyID] = audience
 		}
 
@@ -610,6 +633,11 @@ func (a *EliteaAccount) GetKeysForProvider(ctx context.Context, provider schemas
 			return nil, fmt.Errorf("account: credential %s: %w", c.configID, err)
 		}
 		keys = append(keys, key)
+	}
+	if len(keys) == 0 && skipped != nil {
+		bctx, _ := ctx.(*schemas.BifrostContext)
+		clearDialIdentityToken(bctx)
+		return nil, skipped
 	}
 	if provider == schemas.Azure {
 		return a.bindDialIdentityToken(ctx, projectID, keys, dialAudiences)
@@ -661,6 +689,8 @@ func credentialRejectionReason(err error) string {
 		return WorkloadIdentityTokenUnavailableReason
 	case errors.Is(err, ErrInvalidAuthMode):
 		return InvalidAuthModeReason
+	case errors.Is(err, ErrWorkloadIdentityAmbiguous):
+		return WorkloadIdentityAmbiguousReason
 	default:
 		return "INVALID_PROVIDER_CREDENTIAL"
 	}

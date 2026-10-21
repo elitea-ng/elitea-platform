@@ -91,6 +91,52 @@ export function isPlatformOnlyCredentialField(type: string | undefined, fieldKey
   return PLATFORM_ONLY_CREDENTIAL_FIELDS[type]?.has(fieldKey) ?? false;
 }
 
+/**
+ * The fields a credential form requires for the values it holds: the schema's
+ * own `required`, plus the `required` of the `then` or the `else` branch of
+ * its `if`.
+ *
+ * The catalogue states vertex_ai's `vertex_credentials` that way: required in
+ * the key mode (`else`), not with `auth_mode: "workload_identity"` (`then`).
+ * A project credential is always in the key mode, so reading `required` alone
+ * would stop marking the document required for every tenant.
+ *
+ * Narrow on purpose, like the server's `conditionalRequired`
+ * (required_fields.go): an `if` is read only as `required` plus
+ * `properties.<name>.const`. Any other shape does not match, so the `else`
+ * branch — the stricter one in the catalogue — applies.
+ */
+export function credentialRequiredFields(
+  schema: ConfigSchemaNode | undefined,
+  data: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const base = schema?.required ?? [];
+  const condition = schema?.['if'];
+  if (!isPlainObject(condition)) return base;
+  const branch = schema?.[conditionMatches(condition, data) ? 'then' : 'else'];
+  const extra = isPlainObject(branch) && Array.isArray(branch['required']) ? branch['required'] : [];
+  const required = new Set<string>(base);
+  for (const name of extra) if (typeof name === 'string') required.add(name);
+  return [...required];
+}
+
+function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function conditionMatches(condition: Readonly<Record<string, unknown>>, data: Readonly<Record<string, unknown>>): boolean {
+  if (Object.keys(condition).some((key) => key !== 'required' && key !== 'properties')) return false;
+  const required = Array.isArray(condition['required']) ? condition['required'] : [];
+  if (required.some((name) => typeof name !== 'string' || !(name in data))) return false;
+  const properties = condition['properties'];
+  if (properties === undefined) return true;
+  if (!isPlainObject(properties)) return false;
+  return Object.entries(properties).every(([name, property]) => {
+    if (!isPlainObject(property) || Object.keys(property).length !== 1 || !('const' in property)) return false;
+    return !(name in data) || data[name] === property['const'];
+  });
+}
+
 /** Return all field keys that a section owns. */
 export function credentialSectionFieldKeys(section: ConfigSchemaSection): readonly string[] {
   const keys = new Set<string>();

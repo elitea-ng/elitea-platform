@@ -21,7 +21,10 @@
 // prefix nor its absence says what the row is; ownerProjectID and shared do.
 //
 // Every other combination is refused with WORKLOAD_IDENTITY_NOT_ALLOWED before
-// any secret is resolved. It is never a silent fallback to the key mode.
+// any secret is resolved. It is never a silent fallback to the key mode. A
+// refused row is skipped on an unlinked request, so one platform row's state
+// does not take the provider's other credentials down; a request whose model
+// links that row fails with the reason.
 //
 // # How the token reaches the provider
 //
@@ -37,11 +40,18 @@
 //     headers through that one function.
 //
 // The context token is per REQUEST, not per key. bifrost would send it with
-// whichever Azure key it selects, so a request that offered a tenant's own key
-// beside a workload-identity key could send the platform's ID token to the
-// tenant's endpoint. bindDialIdentityToken therefore serves a
-// workload-identity DIAL key ALONE, and clears the context token on every
-// Azure resolution that does not serve one.
+// whichever Azure key it selects (every key is built with Models ["*"], so
+// bifrost has no per-model filter that could keep them apart), and a request
+// that offered a tenant's own key beside a workload-identity key could send the
+// platform's ID token to the tenant's endpoint. The one statement of which
+// credential serves a model is the model row's link (credential_selector.go):
+// a linked request reaches this file with exactly one credential.
+// bindDialIdentityToken therefore serves a workload-identity DIAL key only
+// when it is the ONLY key of the request, and refuses an unlinked request that
+// would offer it beside another key (WORKLOAD_IDENTITY_CREDENTIAL_AMBIGUOUS):
+// dropping either side would be a guess about which endpoint serves the model.
+// It clears the context token on every Azure resolution that does not serve
+// a workload-identity key.
 //
 // If the token cannot be minted the request FAILS with
 // WORKLOAD_IDENTITY_TOKEN_UNAVAILABLE. Letting it through with no token would
@@ -76,6 +86,14 @@ const WorkloadIdentityTokenUnavailableReason = "WORKLOAD_IDENTITY_TOKEN_UNAVAILA
 // ErrWorkloadIdentityTokenUnavailable carries
 // WorkloadIdentityTokenUnavailableReason.
 var ErrWorkloadIdentityTokenUnavailable = errors.New(WorkloadIdentityTokenUnavailableReason)
+
+// WorkloadIdentityAmbiguousReason is the rejection reason for an unlinked
+// Azure request whose credential set holds a workload-identity DIAL key beside
+// another key: nothing says which one serves the requested model.
+const WorkloadIdentityAmbiguousReason = "WORKLOAD_IDENTITY_CREDENTIAL_AMBIGUOUS"
+
+// ErrWorkloadIdentityAmbiguous carries WorkloadIdentityAmbiguousReason.
+var ErrWorkloadIdentityAmbiguous = errors.New(WorkloadIdentityAmbiguousReason)
 
 // InvalidAuthModeReason is the rejection reason for a credential whose
 // auth_mode is unknown, or that is ambiguous: a workload-identity row that also
@@ -136,7 +154,7 @@ func (a *EliteaAccount) admitWorkloadIdentity(provider schemas.ModelProvider, c 
 }
 
 // bindDialIdentityToken puts the ID token for the one workload-identity DIAL
-// key on the request context, and keeps that key alone.
+// key on the request context.
 //
 // audiences maps the Key ID of every workload-identity DIAL key in keys to its
 // audience. It is empty for a request that serves none, and then any token a
@@ -152,24 +170,16 @@ func (a *EliteaAccount) bindDialIdentityToken(
 	}
 
 	if len(keys) > 1 {
-		// Serve the workload-identity key ALONE (see the file header). With a
-		// key-mode credential in the set, those win: they are the caller's own
-		// or a keyed platform credential, and neither needs the context token.
-		// With only workload-identity keys, the first one wins — the caller's
-		// own rows are read first, so this keeps the legacy precedence.
-		var keyed []schemas.Key
-		for _, k := range keys {
-			if _, wi := audiences[k.ID]; !wi {
-				keyed = append(keyed, k)
-			}
-		}
-		a.logger.WarnContext(ctx, "workload-identity DIAL credential not served beside other credentials; link the model to one credential",
-			"project_id", projectID, "keys", len(keys), "keyed", len(keyed))
-		if len(keyed) > 0 {
-			clearDialIdentityToken(bctx)
-			return keyed, nil
-		}
-		keys = keys[:1]
+		// Only an UNLINKED request gets here: a linked one was narrowed to the
+		// one credential its model names. bifrost would pick among these keys
+		// by its own rotation, and the context token would ride whichever it
+		// picked (see the file header). Nothing says which credential serves
+		// the requested model, so the request is refused rather than guessed.
+		clearDialIdentityToken(bctx)
+		a.logger.WarnContext(ctx, "rejected request: a workload-identity DIAL credential is offered beside other "+
+			"credentials; link the model to one credential",
+			"reason", WorkloadIdentityAmbiguousReason, "project_id", projectID, "keys", len(keys))
+		return nil, fmt.Errorf("account: %w: link the model to one credential", ErrWorkloadIdentityAmbiguous)
 	}
 
 	key := keys[0]
