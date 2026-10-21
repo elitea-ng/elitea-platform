@@ -14,14 +14,13 @@ package run
 // one. The terminal body carries the whole answer either way, so that is
 // what is recorded.
 //
-// THE READ IS A COPY, NOT A CONSUMPTION. providerhost/proxy buffers the
-// response in its ModifyResponse hook and puts the bytes back in front of the
-// stream, so the caller receives exactly what the provider sent, byte for
-// byte, whether or not anybody is watching. It is done there rather than by
-// wrapping the ResponseWriter for two reasons written out in that package: a
-// wrapper has to forward Flush or a streaming response stops streaming, and it
-// puts a Write on a caller-influenced body, which CodeQL reads as a
-// reflected-XSS sink.
+// THE READ IS A COPY, NOT A CONSUMPTION. providerhost/proxy receives the
+// provider's whole answer from the ProviderService RPC, writes it to the
+// caller, and hands a prefix of the same bytes back through the Outcome, so
+// the caller receives exactly what the provider sent, byte for byte, whether
+// or not anybody is watching. It is done there rather than by wrapping the
+// ResponseWriter because a wrapper puts a Write on a caller-influenced body,
+// which CodeQL reads as a reflected-XSS sink.
 
 import (
 	"context"

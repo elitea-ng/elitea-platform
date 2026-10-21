@@ -4,14 +4,19 @@
 // Spec: §2.4 — the gateway forwarding hop must not add more than 50 ms p99 to
 // the round-trip measured at the caller.
 //
-// Usage (against a staging gateway):
+// Usage (against a staging deployment's public /llm):
 //
-//   k6 run \
+//   API_KEY=<personal-access-token> k6 run \
 //     --summary-export summary.json \
-//     -e GATEWAY_URL=http://gateway.staging.elitea.internal:8083 \
-//     -e API_KEY=<staging-api-key> \
-//     -e PROJECT_ID=<staging-project-id> \
+//     -e BASE_URL=https://staging.elitea.example \
+//     -e PROJECTS=<project-id>[,<project-id>...] \
 //     testdata/overhead_loadtest.js
+//
+// The gateway serves /llm only as GatewayService over gRPC with mutual TLS
+// (#1359), so this script — HTTP — loads elitea-main's public /llm with a
+// personal access token, as an external caller does. X-Elapsed-Ms is stamped
+// by the gateway's own handler and reaches the caller through the edge
+// unchanged, so the metric below is still the gateway's own overhead.
 //
 // Then feed the export to the gate:
 //
@@ -23,14 +28,15 @@
 //   - It sends non-streaming POST /llm/v1/chat/completions requests with a
 //     trivial prompt to minimise model-side latency variance.
 //   - After each HTTP 200 response it reads the gateway's X-Elapsed-Ms response
-//     header (the gateway's own wall-clock time for the hop, set by the gateway
-//     middleware in internal/middleware/timing.go). Non-200 responses are NOT
+//     header (the gateway's own overhead up to the instant it holds the
+//     provider credential, set by its /llm handler — setElapsedHeader in
+//     services/elitea-llm-gateway/internal/llmproxy/httpio.go). Non-200 responses are NOT
 //     recorded: an error path's latency is not a measurement of the hop, and a
 //     run full of fast 4xx/5xx responses must not look like a fast gateway.
 //   - Each X-Elapsed-Ms value is recorded into the custom Trend metric
 //     "gateway_overhead_ms". The overhead-check gate reads exactly this metric's
 //     p(99) from the exported summary.
-//   - If X-Elapsed-Ms is absent (e.g. the reverse proxy strips it), the script
+//   - If X-Elapsed-Ms is absent (e.g. a hop on the way strips it), the script
 //     falls back to recording the full round-trip AND increments the
 //     "gateway_overhead_fallback" counter. The gate fails on a non-zero counter
 //     unless --allow-roundtrip-fallback is passed, so this degradation can never
@@ -59,10 +65,9 @@ const gatewayOverheadMs = new Trend('gateway_overhead_ms', true);
 const gatewayOverheadFallback = new Counter('gateway_overhead_fallback');
 
 // ── Configuration ────────────────────────────────────────────────────────────
-const GATEWAY_URL = __ENV.GATEWAY_URL || 'http://localhost:8083';
-const API_KEY     = __ENV.API_KEY     || 'test-api-key';
-const PROJECT_ID  = __ENV.PROJECT_ID  || 'test-project';
-const MODEL       = __ENV.MODEL       || 'gpt-4o-mini';
+const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+const API_KEY  = __ENV.API_KEY || '';
+const MODEL    = __ENV.MODEL   || 'gpt-4o-mini';
 
 // Request body: non-streaming, minimal prompt to keep upstream latency low.
 const REQUEST_BODY = JSON.stringify({
@@ -75,45 +80,21 @@ const REQUEST_BODY = JSON.stringify({
 const HEADERS = {
   'Content-Type': 'application/json',
   'Authorization': `Bearer ${API_KEY}`,
-  'X-Project-ID': PROJECT_ID,
 };
 
-// Signed edge-identity headers (required whenever the gateway runs with
-// GATEWAY_IDENTITY_SECRET set — FIX #9 makes that mandatory with NATS on).
-// The overhead-check subcommand pre-signs the tuple(s) and passes them via -e;
-// the secret itself never reaches this script.
-//
-// IDENTITIES (JSON array of {project,user,tenant,signature}) spreads the load
-// across many (project, model) tuples. This is REQUIRED against a production
-// gateway: the §2.6 circular-routing breaker opens a tuple's circuit at
-// >=5 req/1s, so a single-identity 50-VU run measures 429s, not overhead.
-// Each VU keeps ONE identity (vu id modulo the set) and paces itself below
-// the breaker threshold (see sleep() in the scenario).
-const IDENTITIES = (() => {
-  if (__ENV.IDENTITIES) {
-    try { return JSON.parse(__ENV.IDENTITIES); } catch (e) { return []; }
-  }
-  if (__ENV.IDENTITY_PROJECT) {
-    return [{
-      project: __ENV.IDENTITY_PROJECT,
-      user: __ENV.IDENTITY_USER || '',
-      tenant: __ENV.IDENTITY_TENANT || '',
-      signature: __ENV.IDENTITY_SIGNATURE || '',
-    }];
-  }
-  return [];
-})();
+// PROJECTS (comma-separated project ids) spreads the load across many
+// (project, model) tuples, each sent as the edge's X-Project-Id selector; the
+// token owner must be a member of every one. Spreading is REQUIRED against a
+// production gateway: the §2.6 circular-routing breaker opens a tuple's
+// circuit at >=5 req/1s, so a single-project 50-VU run measures 429s, not
+// overhead. Each VU keeps ONE project (vu id modulo the set) and paces itself
+// below the breaker threshold (see sleep() in the scenario). Empty = the token
+// owner's personal project.
+const PROJECTS = (__ENV.PROJECTS || '').split(',').map((p) => p.trim()).filter((p) => p !== '');
 
-function identityHeaders() {
-  if (IDENTITIES.length === 0) return {};
-  const id = IDENTITIES[(exec.vu.idInTest - 1) % IDENTITIES.length];
-  const h = {
-    'X-Elitea-Project-Id': id.project,
-    'X-Elitea-User-Id': id.user,
-    'X-Elitea-Tenant-Id': id.tenant,
-  };
-  if (id.signature) h['X-Elitea-Identity-Signature'] = id.signature;
-  return h;
+function projectHeaders() {
+  if (PROJECTS.length === 0) return {};
+  return { 'X-Project-Id': PROJECTS[(exec.vu.idInTest - 1) % PROJECTS.length] };
 }
 
 // ── Load profile ─────────────────────────────────────────────────────────────
@@ -139,9 +120,9 @@ export const options = {
 // ── Virtual user scenario ─────────────────────────────────────────────────────
 export default function () {
   const res = http.post(
-    `${GATEWAY_URL}/llm/v1/chat/completions`,
+    `${BASE_URL}/llm/v1/chat/completions`,
     REQUEST_BODY,
-    { headers: Object.assign({}, HEADERS, identityHeaders()), timeout: '10s' },
+    { headers: Object.assign({}, HEADERS, projectHeaders()), timeout: '10s' },
   );
 
   // Basic response checks.
@@ -156,7 +137,7 @@ export default function () {
   // only. Timing an error response measures how fast the gateway said "no",
   // which would let a wholly failing run report an excellent p99.
   // The gateway sets this header to its internal elapsed time in milliseconds
-  // (float, e.g. "12.34"). If absent (stripped by a proxy), fall back to the
+  // (float, e.g. "12.34"). If absent (stripped on the way), fall back to the
   // full round-trip duration so the test still records a conservative bound.
   if (res.status === 200) {
     const elapsedHeader = res.headers['X-Elapsed-Ms'] || res.headers['x-elapsed-ms'];
@@ -181,13 +162,21 @@ export default function () {
 
 // ── Setup / teardown (optional) ───────────────────────────────────────────────
 export function setup() {
-  // Verify the gateway is reachable before the test starts.
-  const health = http.get(`${GATEWAY_URL}/healthz`, { timeout: '5s' });
-  if (health.status !== 200) {
+  if (API_KEY === '') {
+    throw new Error('API_KEY is not set: /llm authenticates every caller with a personal access token.');
+  }
+  // Verify the token reaches the gateway before the test starts: one models
+  // listing, which crosses the same edge and GatewayService hop as the load.
+  // setup() runs outside any VU, so it names the first project directly.
+  const probe = http.get(`${BASE_URL}/llm/v1/models`, {
+    headers: Object.assign({}, HEADERS, PROJECTS.length ? { 'X-Project-Id': PROJECTS[0] } : {}),
+    timeout: '10s',
+  });
+  if (probe.status !== 200) {
     throw new Error(
-      `Gateway health check failed (status ${health.status}). ` +
-      `Is GATEWAY_URL=${GATEWAY_URL} correct?`
+      `/llm/v1/models answered ${probe.status}. ` +
+      `Is BASE_URL=${BASE_URL} correct and API_KEY valid for the project(s)?`
     );
   }
-  console.log(`Gateway healthy at ${GATEWAY_URL}. Starting overhead load test.`);
+  console.log(`/llm reachable at ${BASE_URL}. Starting overhead load test.`);
 }

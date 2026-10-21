@@ -1,22 +1,13 @@
 package llmproxy
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -342,86 +333,4 @@ func (d *deadlineWriter) SetWriteDeadline(tm time.Time) error {
 		d.deadlineCleared = true
 	}
 	return nil
-}
-
-func TestNewMTLSTransport(t *testing.T) {
-	dir := t.TempDir()
-	certFile, keyFile, caFile := writeTestCerts(t, dir)
-
-	tr, err := NewMTLSTransport(certFile, keyFile, caFile, "gateway.local")
-	if err != nil {
-		t.Fatalf("NewMTLSTransport: %v", err)
-	}
-	if tr.TLSClientConfig.ServerName != "gateway.local" {
-		t.Errorf("ServerName = %q, want gateway.local", tr.TLSClientConfig.ServerName)
-	}
-	if len(tr.TLSClientConfig.Certificates) != 1 {
-		t.Errorf("expected 1 client cert, got %d", len(tr.TLSClientConfig.Certificates))
-	}
-	if tr.ForceAttemptHTTP2 {
-		t.Errorf("HTTP/2 must be disabled for the HTTP/1.1 streaming proxy")
-	}
-	if got := tr.TLSClientConfig.NextProtos; len(got) != 1 || got[0] != "http/1.1" {
-		t.Errorf("NextProtos = %v, want [http/1.1]", got)
-	}
-}
-
-func TestNewMTLSTransport_Errors(t *testing.T) {
-	dir := t.TempDir()
-	certFile, keyFile, caFile := writeTestCerts(t, dir)
-
-	if _, err := NewMTLSTransport("/nope", "/nope", caFile, ""); err == nil {
-		t.Error("expected error for missing cert/key")
-	}
-	if _, err := NewMTLSTransport(certFile, keyFile, "/nope", ""); err == nil {
-		t.Error("expected error for missing ca file")
-	}
-	// CA file with no valid PEM.
-	badCA := filepath.Join(dir, "bad-ca.pem")
-	if err := os.WriteFile(badCA, []byte("not a pem"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewMTLSTransport(certFile, keyFile, badCA, ""); err == nil {
-		t.Error("expected error for CA bundle with no certificates")
-	}
-}
-
-// writeTestCerts generates a self-signed cert usable as both client cert and CA
-// and writes cert.pem, key.pem, ca.pem into dir.
-func writeTestCerts(t *testing.T, dir string) (certFile, keyFile, caFile string) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test"},
-		NotBefore:             time.Unix(0, 0),
-		NotAfter:              time.Unix(1<<31-1, 0),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-
-	certFile = filepath.Join(dir, "cert.pem")
-	keyFile = filepath.Join(dir, "key.pem")
-	caFile = filepath.Join(dir, "ca.pem")
-	for f, b := range map[string][]byte{certFile: certPEM, keyFile: keyPEM, caFile: certPEM} {
-		if err := os.WriteFile(f, b, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return certFile, keyFile, caFile
 }

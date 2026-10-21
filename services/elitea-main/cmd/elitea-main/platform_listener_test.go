@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 // The platform listener used to serve the public HTTP handler with the
@@ -20,11 +22,38 @@ import (
 // that gate over real TLS (HTTP/1.1 refused, per-service allowlist, health
 // only to verified peers); this file holds the composition root to it.
 func TestPlatformListenerRegistersOnlyAllowlistedServices(t *testing.T) {
-	for _, service := range platformServices() {
+	services, err := platformServices(http.NotFoundHandler(), "dns:elitea-worker, spiffe://elitea.test/sa/agent-worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, service := range services {
 		if service.Name == "" || !service.Clients.Configured() || service.Register == nil {
 			t.Errorf("platform service %+v is not fully declared", service)
 		}
+		names[service.Name] = true
+		if !service.Clients.Allows("dns:elitea-worker") || service.Clients.Allows("dns:elitea-scheduler") {
+			t.Errorf("platform service %s does not admit exactly the configured clients", service.Name)
+		}
 	}
+	if !names["elitea.llm.v1.ModelService"] {
+		t.Errorf("ModelService is not registered on the platform listener: %v", names)
+	}
+}
+
+// A platform listener with no ModelService clients would serve a model plane
+// nobody may call: boot refuses it, naming the variable.
+func TestPlatformListenerRefusesNoModelServiceClients(t *testing.T) {
+	for _, clients := range []string{"", " , ", "elitea-worker"} {
+		if _, err := platformServices(http.NotFoundHandler(), clients, nil); err == nil ||
+			!strings.Contains(err.Error(), ModelServiceClientsEnv) {
+			t.Errorf("clients %q: err=%v", clients, err)
+		}
+	}
+}
+
+func testPlatformServices() ([]runtimegrpc.PlatformService, error) {
+	return platformServices(http.NotFoundHandler(), "dns:elitea-worker", nil)
 }
 
 func TestNoPlatformListenerWithoutConfiguration(t *testing.T) {
@@ -33,7 +62,7 @@ func TestNoPlatformListenerWithoutConfiguration(t *testing.T) {
 		"runtime on, no addr":  {Enabled: true},
 		"runtime off, no addr": {},
 	} {
-		server, err := newPlatformServer(config, platformServices())
+		server, err := newPlatformServer(config, testPlatformServices)
 		if err != nil || server != nil {
 			t.Fatalf("%s: server=%v err=%v", name, server, err)
 		}
@@ -45,7 +74,7 @@ func TestPlatformListenerRefusesUnreadableMaterial(t *testing.T) {
 	config.PlatformTLS.CertificateChainPath = "/nonexistent/content-server.crt"
 	config.PlatformTLS.PrivateKeyPath = "/nonexistent/content-server.key"
 	config.PlatformTLS.ClientCAPath = "/nonexistent/runtime-ca.crt"
-	if _, err := newPlatformServer(config, platformServices()); err == nil {
+	if _, err := newPlatformServer(config, testPlatformServices); err == nil {
 		t.Fatal("a platform listener started without readable TLS material")
 	}
 }

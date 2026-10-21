@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"google.golang.org/grpc"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/modelgrpc"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
@@ -18,26 +23,49 @@ import (
 // the handshake — and every call passes grpcauth's per-service allowlist
 // (runtimegrpc.PlatformServer).
 //
-// It no longer serves the public HTTP handler. Until the units that move the
-// worker's HTTP calls onto gRPC services land (#1359 U2 ModelService, U3
-// ArtifactObjectService, U5 InternalToolService), only grpc.health.v1 answers
-// here, and those worker calls fail.
+// It serves no HTTP. The worker's and the engines' model calls are
+// elitea.llm.v1.ModelService (#1359 U2), which runs each call through the
+// public handler's /llm pipeline in process (internal/transport/modelgrpc).
+// Until the artifact and internal-MCP units land (#1359 U3/U5:
+// ArtifactObjectService, InternalToolService), those worker calls still fail
+// here.
+
+// ModelServiceClientsEnv lists the workload identities admitted to
+// elitea.llm.v1.ModelService: the agent worker's and the sub-application
+// callback identity the DeepWiki/Inventory engines present, as "dns:<name>"
+// or spiffe:// URIs, comma-separated. Required when the platform listener is
+// open: a model plane nobody may call is a configuration error.
+const ModelServiceClientsEnv = "ELITEA_MODEL_SERVICE_CLIENTS"
 
 // platformServices are the gRPC services the platform listener serves beside
 // grpc.health.v1. Each names its fully qualified service, the workload
-// identities allowed to call it, and how it registers.
+// identities allowed to call it, and how it registers. publicHandler is the
+// public HTTP handler, whose /llm pipeline ModelService runs; modelClients is
+// the raw ELITEA_MODEL_SERVICE_CLIENTS value.
 //
-// TODO(#1359 U2/U3/U5): ModelService, ArtifactObjectService and
-// InternalToolService register here.
-func platformServices() []runtimegrpc.PlatformService {
-	return nil
+// TODO(#1359 U3/U5): ArtifactObjectService and InternalToolService register
+// here.
+func platformServices(publicHandler http.Handler, modelClients string, logger *slog.Logger) ([]runtimegrpc.PlatformService, error) {
+	clients, err := grpcauth.NewAllowlist(strings.Split(modelClients, ","))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ModelServiceClientsEnv, err)
+	}
+	models, err := modelgrpc.NewServer(publicHandler, logger)
+	if err != nil {
+		return nil, err
+	}
+	return []runtimegrpc.PlatformService{models.PlatformService(clients)}, nil
 }
 
 // newPlatformServer builds the platform listener, or returns nil when the
 // configuration opens none (the runtime is off, or no address is named).
-func newPlatformServer(config runtimecomposition.Config, services []runtimegrpc.PlatformService) (*runtimegrpc.PlatformServer, error) {
+func newPlatformServer(config runtimecomposition.Config, services func() ([]runtimegrpc.PlatformService, error)) (*runtimegrpc.PlatformServer, error) {
 	if !config.Enabled || config.PlatformAddress == "" {
 		return nil, nil
+	}
+	platform, err := services()
+	if err != nil {
+		return nil, err
 	}
 	tlsConfig, err := runtimegrpc.LoadPlatformServerTLSConfig(config.PlatformTLS)
 	if err != nil {
@@ -47,7 +75,7 @@ func newPlatformServer(config runtimecomposition.Config, services []runtimegrpc.
 		Address: config.PlatformAddress,
 		TLS:     tlsConfig,
 		Policy:  runtimegrpc.DefaultPlatformGRPCPolicy(),
-	}, services...)
+	}, platform...)
 }
 
 // platformLifecycle is the part of *runtimegrpc.PlatformServer the

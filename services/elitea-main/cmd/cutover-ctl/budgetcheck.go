@@ -168,7 +168,7 @@ func checkBudgetResult(r budgetCheckResult, alertLatencyS float64) budgetCheckOu
 // Flags:
 //
 //	--alert-latency-s   Max seconds from 80% crossing to alert (default 10).
-//	--gateway-url       Gateway base URL (default http://localhost:8083).
+//	--gateway-url       Gateway gRPC listener, https://<host>:<port> (default $LLM_GATEWAY_URL).
 //	--nats-url          NATS URL for the soft-alert subscription (default
 //	                    $ELITEA_EVENTS_NATS_URL, else nats://localhost:4222).
 //	--projects-file     JSON fixture: {over_budget, soft_alert, under_budget}

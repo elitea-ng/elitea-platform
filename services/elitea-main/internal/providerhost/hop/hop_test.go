@@ -11,61 +11,38 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/hop"
 )
 
-// The message has to name the setting an operator would edit.
-//
-// Both hops previously failed with a message that named neither the variable
-// nor the value — "llmproxy: target url missing scheme or host" and "invalid
-// DeepWiki proxy" — which tells an operator with twenty-odd variables nothing
-// about which one to look at.
+// The message has to name the setting an operator would edit and the value
+// it holds: "invalid target" tells an operator with twenty-odd variables
+// nothing about which one to look at.
 func TestARefusedTargetNamesTheSettingAndTheValue(t *testing.T) {
-	_, err := hop.ParseTarget("elitea-deepwiki:8443", hop.TargetOptions{
-		EnvName: "DEEPWIKI_BASE_URL",
-	})
+	err := hop.ParseGRPCTarget("https://elitea-deepwiki:8443", "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET")
 	if err == nil {
-		t.Fatal("a URL with no scheme was accepted")
+		t.Fatal("a URL was accepted as a gRPC target")
 	}
 	if !errors.Is(err, hop.ErrInvalidTarget) {
 		t.Errorf("error is not ErrInvalidTarget: %v", err)
 	}
-	if !strings.Contains(err.Error(), "DEEPWIKI_BASE_URL") {
+	if !strings.Contains(err.Error(), "ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET") {
 		t.Errorf("the message does not name the setting: %v", err)
 	}
-	if !strings.Contains(err.Error(), "elitea-deepwiki:8443") {
+	if !strings.Contains(err.Error(), "https://elitea-deepwiki:8443") {
 		t.Errorf("the message does not name the value: %v", err)
 	}
 }
 
-// RequireTLS differs between the two hops ON PURPOSE, and both directions are
-// pinned so that "unifying" them fails here rather than in production.
-func TestRequireTLSIsPerHop(t *testing.T) {
-	plain := "http://elitea-deepwiki:8080"
-
-	if _, err := hop.ParseTarget(plain, hop.TargetOptions{
-		EnvName:    "DEEPWIKI_BASE_URL",
-		RequireTLS: true,
-	}); err == nil {
-		t.Error("a plain-HTTP target was accepted for a peer that refuses non-mTLS traffic")
+// A gRPC target is host:port and nothing else. What the retired BASE_URL
+// held (a URL, possibly with a path) is the likeliest thing an operator
+// carries over, so each shape of it is refused at construction.
+func TestOnlyHostPortIsAGRPCTarget(t *testing.T) {
+	for _, raw := range []string{"", "elitea-deepwiki", ":8443", "elitea-deepwiki:", "https://elitea-deepwiki:8443", "elitea-deepwiki:8443/base"} {
+		if err := hop.ParseGRPCTarget(raw, "X"); err == nil {
+			t.Errorf("ParseGRPCTarget(%q) accepted it", raw)
+		}
 	}
-
-	// The /llm gateway is reachable over plain HTTP in a development stack.
-	// Refusing it here would break a supported configuration.
-	if _, err := hop.ParseTarget(plain, hop.TargetOptions{
-		EnvName: "LLM_GATEWAY_URL",
-	}); err != nil {
-		t.Errorf("a plain-HTTP target was refused for a hop that permits it: %v", err)
-	}
-}
-
-func TestAValidTargetIsReturnedWhole(t *testing.T) {
-	target, err := hop.ParseTarget("https://elitea-deepwiki:8443/base", hop.TargetOptions{
-		EnvName:    "DEEPWIKI_BASE_URL",
-		RequireTLS: true,
-	})
-	if err != nil {
-		t.Fatalf("a valid target was refused: %v", err)
-	}
-	if target.Scheme != "https" || target.Host != "elitea-deepwiki:8443" || target.Path != "/base" {
-		t.Errorf("target was altered: %#v", target)
+	for _, raw := range []string{"elitea-deepwiki:8443", "10.0.0.1:9443", "[::1]:9443"} {
+		if err := hop.ParseGRPCTarget(raw, "X"); err != nil {
+			t.Errorf("ParseGRPCTarget(%q) = %v, want accepted", raw, err)
+		}
 	}
 }
 

@@ -1,0 +1,169 @@
+syntax = "proto3";
+
+// ModelService is served by elitea-main on its platform gRPC listener
+// (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446) and called by the agent worker and
+// the DeepWiki/Inventory engines (#1359 U2). It replaces the HTTP /llm/v1
+// calls those workloads made to the platform listener.
+//
+// WHAT RUNS. Each call goes through the same pipeline a browser /llm request
+// does, in process: the bearer is authenticated, the billing project is
+// selected and the caller's membership checked, the execution id is kept only
+// for a live execution of the caller, and the request is handed to
+// elitea-llm-gateway (elitea.gateway.v1.GatewayService), whose budget and
+// policy gates and usage accounting run unchanged.
+//
+// WHAT TRAVELS. Bodies are the provider-native wire format, as bytes: the
+// OpenAI or Anthropic JSON the caller would have POSTed, and on the way back
+// the exact bytes the gateway answered, SSE framing included. The callers'
+// shared parsing (libs/rust/llm-wire) therefore reads the same bytes it read
+// over HTTP.
+//
+// WHO MAY CALL. The listener requires a runtime-CA client certificate, and
+// only the workload identities in ELITEA_MODEL_SERVICE_CLIENTS are admitted
+// (grpcauth). The credential the call is made under travels as
+// `authorization: Bearer <token>` metadata: the worker's claim token, or the
+// callback bearer an engine was handed in llm_settings.api_key.
+//
+// ERRORS. A refusal the pipeline or the gateway decides (401 bearer, 400
+// project selector, budget 402, policy 403, rate limit 429, an upstream
+// provider error) ends the call with a gRPC status mapped from the HTTP
+// status (ModelRefusal documents the mapping) and carries the refusal itself
+// in the `elitea-model-refusal-bin` trailer: a ModelRefusal with the HTTP
+// status and body, so a caller classifies it exactly as it classified the
+// HTTP answer. A status WITHOUT that trailer is the hop failing (an
+// unadmitted peer, the gateway unreachable, a malformed call).
+//
+// CANCELLATION. Cancelling the call cancels the request the gateway serves.
+
+package elitea.llm.v1;
+
+option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/llm/v1;llmv1";
+
+service ModelService {
+  // ChatCompletions is POST /llm/v1/chat/completions (OpenAI dialect). The
+  // response streams: a head, then the body bytes as they are produced.
+  rpc ChatCompletions(ChatCompletionsRequest) returns (stream ChatCompletionsResponse);
+  // Messages is POST /llm/v1/messages (Anthropic dialect), streamed like
+  // ChatCompletions.
+  rpc Messages(MessagesRequest) returns (stream MessagesResponse);
+  // Embeddings is POST /llm/v1/embeddings.
+  rpc Embeddings(EmbeddingsRequest) returns (EmbeddingsResponse);
+  // ImageGenerate is POST /llm/v1/images/generations.
+  rpc ImageGenerate(ImageGenerateRequest) returns (ImageGenerateResponse);
+  // ImageEdit is POST /llm/v1/images/edits. The multipart body streams: the
+  // head first, then body chunks.
+  rpc ImageEdit(stream ImageEditRequest) returns (ImageEditResponse);
+}
+
+// ModelCall is who and what a call is for, beside the bearer in metadata.
+message ModelCall {
+  // project_id selects the billing project, as the X-Project-Id header did.
+  // A bearer bound to a project is refused with any other (400
+  // project_scope_conflict). Empty selects the caller's personal project.
+  string project_id = 1;
+  // execution_id is the run the gateway attributes the spend to, as the
+  // X-Elitea-Execution-Id header did. It is kept only while it names a live
+  // execution of the caller (or the callback token the call is made with);
+  // anything else is dropped, never refused.
+  string execution_id = 2;
+}
+
+// ResponseHead is the success head of a response.
+message ResponseHead {
+  // content_type is the gateway's Content-Type ("text/event-stream" for a
+  // stream, "application/json" otherwise).
+  string content_type = 1;
+}
+
+// ModelRefusal is the `elitea-model-refusal-bin` trailer of a refused call.
+// The gRPC code is mapped from http_status: 400, 413, 422 INVALID_ARGUMENT;
+// 401 UNAUTHENTICATED; 402, 429 RESOURCE_EXHAUSTED; 403 PERMISSION_DENIED;
+// 404 NOT_FOUND; 408, 504 DEADLINE_EXCEEDED; 409 ABORTED; 501
+// UNIMPLEMENTED; 502, 503 UNAVAILABLE; anything else INTERNAL (5xx) or
+// FAILED_PRECONDITION (4xx).
+message ModelRefusal {
+  // http_status is the status the HTTP edge answered.
+  int32 http_status = 1;
+  // content_type is that answer's Content-Type.
+  string content_type = 2;
+  // body is that answer's body, cut at 64 KiB.
+  bytes body = 3;
+  // retry_after is the answer's Retry-After header, when it had one.
+  string retry_after = 4;
+}
+
+message ChatCompletionsRequest {
+  ModelCall call = 1;
+  // body is the OpenAI chat-completions JSON.
+  bytes body = 2;
+}
+
+// ChatCompletionsResponse is one frame of the response: the head first, then
+// the body bytes in order.
+message ChatCompletionsResponse {
+  oneof frame {
+    ResponseHead head = 1;
+    bytes data = 2;
+  }
+}
+
+message MessagesRequest {
+  ModelCall call = 1;
+  // body is the Anthropic messages JSON.
+  bytes body = 2;
+  // anthropic_version is the anthropic-version header ("2023-06-01").
+  string anthropic_version = 3;
+  // anthropic_beta are the anthropic-beta header values.
+  repeated string anthropic_beta = 4;
+}
+
+// MessagesResponse is one frame of the response, as ChatCompletionsResponse.
+message MessagesResponse {
+  oneof frame {
+    ResponseHead head = 1;
+    bytes data = 2;
+  }
+}
+
+message EmbeddingsRequest {
+  ModelCall call = 1;
+  // body is the OpenAI embeddings JSON.
+  bytes body = 2;
+}
+
+message EmbeddingsResponse {
+  ResponseHead head = 1;
+  bytes body = 2;
+}
+
+message ImageGenerateRequest {
+  ModelCall call = 1;
+  // body is the OpenAI images/generations JSON.
+  bytes body = 2;
+}
+
+message ImageGenerateResponse {
+  ResponseHead head = 1;
+  bytes body = 2;
+}
+
+// ImageEditHead opens an ImageEdit call.
+message ImageEditHead {
+  ModelCall call = 1;
+  // content_type is the multipart Content-Type, boundary included.
+  string content_type = 2;
+}
+
+// ImageEditRequest is one frame of the request: the head first, then the
+// multipart body in chunks.
+message ImageEditRequest {
+  oneof frame {
+    ImageEditHead head = 1;
+    bytes data = 2;
+  }
+}
+
+message ImageEditResponse {
+  ResponseHead head = 1;
+  bytes body = 2;
+}

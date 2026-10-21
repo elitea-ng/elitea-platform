@@ -297,3 +297,46 @@ func TestSSEFlush_ProbeRequestError(t *testing.T) {
 		t.Fatalf("expected request failure, got %v", err)
 	}
 }
+
+// The probe reaches /llm as an external caller: the token as a bearer and the
+// billed project as the edge's selector header, on the dialect's /llm path.
+// No X-Elitea-* identity is sent; the edge would strip it.
+func TestSSEFlush_ProbeAuthenticatesAsAnEdgeCaller(t *testing.T) {
+	var seen *http.Request
+	inner := flushingStreamHandler("openai", 2, time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Clone(r.Context())
+		inner(w, r)
+	}))
+	defer srv.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	auth := func(req *http.Request) { edgeAuth(req, "pat-123", "4321") }
+	if _, err := probeStream(client, srv.URL+"/", openAIProbe, time.Millisecond, auth); err != nil {
+		t.Fatalf("probeStream: %v", err)
+	}
+	if seen == nil {
+		t.Fatal("the probe never reached the server")
+	}
+	if seen.URL.Path != "/llm/v1/chat/completions" {
+		t.Errorf("path = %q, want /llm/v1/chat/completions", seen.URL.Path)
+	}
+	if h := seen.Header.Get("Authorization"); h != "Bearer pat-123" {
+		t.Errorf("Authorization = %q, want Bearer pat-123", h)
+	}
+	if h := seen.Header.Get("X-Project-Id"); h != "4321" {
+		t.Errorf("X-Project-Id = %q, want 4321", h)
+	}
+	for name := range seen.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-elitea-") {
+			t.Errorf("the probe sent identity header %s; only the edge may", name)
+		}
+	}
+
+	// No project: the token owner's personal project, so no selector at all.
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
+	edgeAuth(req, "pat-123", "")
+	if _, ok := req.Header["X-Project-Id"]; ok {
+		t.Error("an empty project id still sent a selector header")
+	}
+}

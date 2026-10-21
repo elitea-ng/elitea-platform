@@ -21,10 +21,10 @@
 // the response body, whatever `await_task_timeout` says — see
 // resolveRequestTimeout for the bounded meaning it is given instead.
 //
-// THE LLM HOP. The completion is performed by services/elitea-llm-gateway over
-// the same mTLS-internal transport, with the same signed identity headers, the
-// /llm reverse proxy and the configurations check-connection client already
-// use (internal/llmproxy.NewMTLSTransport + SignIdentityHeaders). The gateway
+// THE LLM HOP. The completion is performed by services/elitea-llm-gateway
+// through the same llmproxy.Gateway the /llm surface uses: GatewayService
+// over gRPC with mutual TLS, the caller's identity carried as signed
+// metadata (#1359). The gateway
 // is the only LLM data plane: it resolves the project's provider credentials
 // and model definitions itself and owns the SSRF-safe egress allowlist. There
 // is no second client here, no direct provider dial, and no LiteLLM facade to

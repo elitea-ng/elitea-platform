@@ -87,6 +87,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 func main() {
@@ -2758,7 +2759,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	srv := newHTTPServer(publicAddress, r)
 	// The internal platform gRPC listener (#1359 D1), when the runtime
 	// configuration opens one.
-	platformSrv, err := newPlatformServer(runtimeConfig, platformServices())
+	platformSrv, err := newPlatformServer(runtimeConfig, func() ([]runtimegrpc.PlatformService, error) {
+		return platformServices(r, os.Getenv(ModelServiceClientsEnv), logger)
+	})
 	if err != nil {
 		return fmt.Errorf("configure platform listener: %w", err)
 	}
