@@ -399,7 +399,7 @@ export function commands(line, source) {
  * The command's own words: VAR=value assignments and prefix commands removed.
  *
  * `env X=1 cargo …`, `time cargo …` and `timeout 600 cargo …` run cargo, and
- * so does `cargo +1.97.1 test …` (handled by the caller).
+ * so does `cargo +1.99.1 test …` (handled by the caller).
  */
 export function program(words) {
   let index = 0;
@@ -462,7 +462,7 @@ export function parseCommand(line, source, cwd = WORKER_DIRECTORY) {
         here = changeDirectory(cwd, words[i + 1]);
       }
     });
-    // `cargo +1.97.1 test`: rustup's toolchain override, still cargo test.
+    // `cargo +1.99.1 test`: rustup's toolchain override, still cargo test.
     if (argv[0] === "cargo" && argv.length > 1 && argv[1].startsWith("+")) argv = [argv[0], ...argv.slice(2)];
     // The ledger wrapper, run directly or by a Python interpreter.
     const script = argv.length > 1 && pathName(argv[0]).startsWith("python") ? argv[1] : argv[0];

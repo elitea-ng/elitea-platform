@@ -415,7 +415,7 @@ test("redirections are not a background run", () => {
 });
 
 test("a rustup toolchain override is still cargo test", () => {
-  const workflow = withStep("- run: cargo +1.97.1 test --lib unrun::test -- --ignored");
+  const workflow = withStep("- run: cargo +1.99.1 test --lib unrun::test -- --ignored");
   const [code, out] = run({ workflow, listing: UNRUN_LIST });
   assert.equal(code, 0, out);
 });

@@ -94,7 +94,7 @@ impl CargoPayload {
             || !sha256(&self.declaration_sha256)
             || !image(&self.profile.preparation_image)
             || !image(&self.profile.execution_image)
-            || self.profile.rust_revision != "1.97.1"
+            || self.profile.rust_revision != "1.99.1"
             || self.profile.os != "linux"
             || self.profile.target != expected_target
             || !identifier(&self.profile.policy_revision)
@@ -181,7 +181,7 @@ mod tests {
             profile: CargoProfile {
                 preparation_image: format!("sha256:{}", "c".repeat(64)),
                 execution_image: format!("sha256:{}", "d".repeat(64)),
-                rust_revision: "1.97.1".into(),
+                rust_revision: "1.99.1".into(),
                 os: "linux".into(),
                 arch: "amd64".into(),
                 target: "x86_64-unknown-linux-gnu".into(),

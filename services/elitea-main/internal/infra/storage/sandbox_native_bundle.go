@@ -216,7 +216,7 @@ func nativeCargoFiles(r nativeRecord) ([]sandboxBundleFile, error) {
 	if r.Platform.Arch == "arm64" {
 		target = "aarch64-unknown-linux-gnu"
 	}
-	if p.Revision != 1 || p.Preparation != r.Preparation || p.Declaration != r.Source || p.Profile.Execution != r.Image || p.Profile.Policy != r.Policy || p.Profile.OS != r.Platform.OS || p.Profile.Arch != r.Platform.Arch || p.Profile.Target != target || p.Profile.Rust != "1.97.1" || !strings.HasPrefix(p.Profile.Preparation, "sha256:") || !sandboxDigest(strings.TrimPrefix(p.Profile.Preparation, "sha256:")) || len(p.Objects) != 2 {
+	if p.Revision != 1 || p.Preparation != r.Preparation || p.Declaration != r.Source || p.Profile.Execution != r.Image || p.Profile.Policy != r.Policy || p.Profile.OS != r.Platform.OS || p.Profile.Arch != r.Platform.Arch || p.Profile.Target != target || p.Profile.Rust != "1.99.1" || !strings.HasPrefix(p.Profile.Preparation, "sha256:") || !sandboxDigest(strings.TrimPrefix(p.Profile.Preparation, "sha256:")) || len(p.Objects) != 2 {
 		return nil, ErrContentRejected
 	}
 	files := make([]sandboxBundleFile, 2)
