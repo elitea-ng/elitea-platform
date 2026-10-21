@@ -51,7 +51,10 @@ NS=elitea
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
 # The sub-application hosts on (#1359): their cancellation fan-out identities.
-"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
+# On the standalone profile's runtime plane: their engines make model calls
+# over ModelService on elitea-main's platform listener (#1359 U2), so the
+# chart refuses them without it.
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" \
   --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
   --set inventory.enabled=true --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=github.com \
   --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.secretName=elitea-inventory-db --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL.key=url \

@@ -152,11 +152,22 @@ spec:
               value: {{ $value | quote }}
             {{- end }}
             {{- end }}
-            {{- with .Values.inventory.engine.callbackCa.secretName }}
-            # Model calls and artifact reads go to the callback origin; when
-            # that is TLS under a private CA, trust it.
+            {{- if include "elitea-inventory.modelCalls" . }}
+            # Model calls go over elitea.llm.v1.ModelService on elitea-main's
+            # platform listener (#1359 U2): the listener serves no HTTP and the
+            # engine refuses a cleartext model origin, so the callback base
+            # (llm_settings.api_base, http://elitea-main:8080 in-cluster) only
+            # names the route and stays the artifact hop's origin. The runtime
+            # CA signs the listener's certificate, and the listener admits the
+            # callback client identity (dns:elitea-subapp-callback).
+            - name: ELITEA_INVENTORY_MODEL_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_INVENTORY_CALLBACK_CA_FILE
-              value: {{ $.Values.inventory.engine.callbackCa.mountPath }}/{{ $.Values.inventory.engine.callbackCa.key }}
+              value: {{ include "elitea-inventory.runtimeCaPath" . }}/runtime-ca.crt
+            - name: ELITEA_INVENTORY_CALLBACK_CERT_FILE
+              value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.crt
+            - name: ELITEA_INVENTORY_CALLBACK_KEY_FILE
+              value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.key
             {{- end }}
             # ELITEA_INVENTORY_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).
@@ -186,9 +197,12 @@ spec:
               mountPath: {{ .Values.inventory.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.inventory.engine.socketDir }}
-            {{- if .Values.inventory.engine.callbackCa.secretName }}
-            - name: callback-ca
-              mountPath: {{ .Values.inventory.engine.callbackCa.mountPath }}
+            {{- if include "elitea-inventory.modelCalls" . }}
+            - name: runtime-ca
+              mountPath: {{ include "elitea-inventory.runtimeCaPath" . }}
+              readOnly: true
+            - name: callback-client
+              mountPath: {{ include "elitea-inventory.callbackClientPath" . }}
               readOnly: true
             {{- end }}
         {{- end }}
@@ -202,14 +216,27 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        {{- if and (include "elitea-inventory.sidecar" .) .Values.inventory.engine.callbackCa.secretName }}
-        # Only the CA key of the named Secret: nothing else in it is mounted.
-        - name: callback-ca
+        {{- if include "elitea-inventory.modelCalls" . }}
+        # ONLY the runtime CA from the worker's material Secret: the Secret
+        # also holds the worker's client key and signing keys, none of which
+        # this pod may read.
+        - name: runtime-ca
           secret:
-            secretName: {{ .Values.inventory.engine.callbackCa.secretName }}
+            secretName: {{ .Values.worker.materialSecretName }}
             items:
-              - key: {{ .Values.inventory.engine.callbackCa.key }}
-                path: {{ .Values.inventory.engine.callbackCa.key }}
+              - key: runtime-ca.crt
+                path: runtime-ca.crt
+        # The engine's own client identity on the platform listener: a
+        # runtime-CA certificate that is NOT the worker's.
+        - name: callback-client
+          secret:
+            secretName: {{ .Values.inventory.callbackClient.secretName }}
+            defaultMode: {{ .Values.inventory.callbackClient.defaultMode }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
         {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "inventory") | trim) }}{{- . | nindent 8 }}{{- end }}
         {{- if .Values.nats.tls.enabled }}

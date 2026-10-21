@@ -203,7 +203,13 @@ if main:
     plat = [p["containerPort"] for p in ctr if p["name"] == "runtime-platform"]
     check(bool(rt) == bool(plat), f"main: declares runtime ports {rt} but platform listener {plat}")
     rts = [k for k in by if k != (8080,) and k != tuple(plat)]
-    want_platform = sorted(([WORKER] if worker else []) + ([DW] if deepwiki == "platform" else []))
+    # The providers' native engines make their model calls over ModelService
+    # on the platform listener (#1359 U2) whatever the artifact hop does, so
+    # both are admitted there whenever the listener exists (every composed
+    # install here runs the native engine).
+    want_platform = sorted(([WORKER] if worker else [])
+                           + ([DW] if deepwiki != "none" and plat else [])
+                           + ([INV] if inventory and plat else []))
     if rt and worker:
         check(rts == [tuple(rt)], f"main: runtime rule ports {rts}, want {[tuple(rt)]}")
         if rts:

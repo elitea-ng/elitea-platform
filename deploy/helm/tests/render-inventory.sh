@@ -33,7 +33,12 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 
 # A complete, correct Inventory install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
+RUNTIME="-f $CHART/values-standalone.yaml"
+# $RUNTIME (the standalone profile's runtime plane) is part of a complete
+# install: the engine sidecar makes its model calls over ModelService on
+# elitea-main's platform listener (#1359 U2).
 COMPLETE="\
+$RUNTIME \
 --set inventory.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.enabled=true \
 --set main.fileConfig.inventoryClientMaterial.secretName=elitea-main-inventory-client-tls \
@@ -433,6 +438,49 @@ if render --set main.env.ELITEA_INVENTORY_PLATFORM_GRPC_TARGET=elitea-inventory-
 else
   note "refused: a target with the facade off"
 fi
+
+# ── The model hop: ModelService on the platform listener (#1359 U2) ─────────
+#
+# The engine sidecar dials ModelService on the platform origin with the
+# runtime CA (that one key of the worker's material Secret) and
+# inventory.callbackClient, and elitea-main admits it as
+# dns:elitea-subapp-callback and lets the pods reach the platform port.
+
+echo "== the engine's model calls go to ModelService =="
+ie() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-inventory\") | $1" -; }
+ienv() { ie ".spec.template.spec.containers[1].env[] | select(.name == \"$1\") | .value"; }
+expect "engine MODEL_SERVICE_URL" "$(ienv ELITEA_INVENTORY_MODEL_SERVICE_URL)" "https://elitea-main:9446"
+expect "engine callback CA" "$(ienv ELITEA_INVENTORY_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "engine callback certificate" "$(ienv ELITEA_INVENTORY_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
+expect "engine callback key" "$(ienv ELITEA_INVENTORY_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
+expect "engine mounts" "$(ie '.spec.template.spec.containers[1].volumeMounts[] | select(.name == "runtime-ca" or .name == "callback-client") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-callback-client "
+expect "the host gets none of it" "$(ie '.spec.template.spec.containers[0] | [(.env[].name | select(test("CALLBACK_(CA|CERT|KEY)_FILE|MODEL_SERVICE_URL"))), (.volumeMounts[].name | select(. == "runtime-ca" or . == "callback-client"))] | length')" "0"
+expect "only runtime-ca.crt leaves the worker Secret" "$(ie '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
+expect "the callback client comes from its own Secret" "$(ie '.spec.template.spec.volumes[] | select(.name == "callback-client") | .secret.secretName')" "elitea-inventory-callback-client"
+expect "elitea-main admits the callback identity" \
+  "$(main_env "$manifest" ELITEA_MODEL_SERVICE_CLIENTS | tr ',' '\n' | grep -cx 'dns:elitea-subapp-callback')" "1"
+expect "elitea-main admits Inventory on the platform port" \
+  "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-main-netpol") | .spec.ingress[] | select(.ports[0].port == 9446) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | grep -cx elitea-inventory)" "1"
+refuses_with() {
+  local description="$1" text="$2"; shift 2
+  local output
+  if output="$(render "$@" 2>&1)"; then
+    fail "accepted: $description"
+  elif printf '%s' "$output" | grep -q -- "$text"; then
+    note "refused: $description"
+  else
+    fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
+  fi
+}
+refuses_with "the engine without the runtime plane" "main.runtime.enabled is false, so there is no such listener" \
+  ${COMPLETE#"$RUNTIME "}
+refuses_with "the engine without a callback client Secret" "inventory.callbackClient.secretName is empty" \
+  $COMPLETE --set inventory.callbackClient.secretName=
+refuses_with "the retired engine.callbackCa" "inventory.engine.callbackCa was removed" \
+  $COMPLETE --set inventory.engine.callbackCa.secretName=private-ca
+for name in ELITEA_INVENTORY_MODEL_SERVICE_URL ELITEA_INVENTORY_CALLBACK_CA_FILE ELITEA_INVENTORY_CALLBACK_CERT_FILE ELITEA_INVENTORY_CALLBACK_KEY_FILE; do
+  refuses_with "inventory.env.$name set by hand" "inventory.env sets $name" $COMPLETE --set inventory.env.$name=x
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "render-inventory: $failures assertion(s) failed" >&2

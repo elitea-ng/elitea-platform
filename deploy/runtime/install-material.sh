@@ -106,6 +106,20 @@ install_files "$WORKER" 10001:10001 0600 \
   worker-output-spool-key \
   agent-checkpoint-connection
 
+# ── the DeepWiki / Inventory engines (uid 10001) ─────────────────────────────
+# Their model calls go over elitea.llm.v1.ModelService on elitea-main's
+# platform listener (#1359 U2): they trust the runtime CA and present the
+# sub-application callback identity (DNS:elitea-subapp-callback). Only those
+# three files. A bind mount would hand the 0600 key to container uid 0 under
+# rootless podman, unreadable by the engines' uid. Installed only when the
+# compose file mounts the volume.
+SUBAPP=/dst/subapp
+if [ -d "$SUBAPP" ]; then
+  chown 10001:10001 "$SUBAPP"; chmod 700 "$SUBAPP"
+  install_files "$SUBAPP" 10001:10001 0644 runtime-ca.crt subapp-callback-client.crt
+  install_files "$SUBAPP" 10001:10001 0600 subapp-callback-client.key
+fi
+
 # There is no platform-edge volume any more (#1359): elitea-main serves the
 # worker's platform_origin itself, on its mTLS platform listener (:9446), with
 # the content listener's keypair above.

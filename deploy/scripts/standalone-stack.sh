@@ -1908,6 +1908,49 @@ sys.stdout.write(reply)
       *) fail "platform listener :9446 did not complete a handshake for the http/1.1 probe: $(printf '%s' "$platform_http" | tail -1)" ;;
     esac
 
+    # elitea.llm.v1.ModelService (#1359 U2): the worker's and the engines'
+    # model calls. grpcurl reads the service from the repository's own proto
+    # (the listener serves no reflection) and calls Embeddings as the engines
+    # do: the sub-application callback certificate, a bearer in metadata. The
+    # bearer is deliberately invalid, so no model runs and nothing is billed.
+    # Admitted, the call reaches the /llm pipeline, whose 401 comes back as
+    # Unauthenticated WITH the elitea-model-refusal-bin trailer: proof the
+    # service is mounted, the callback identity is in
+    # ELITEA_MODEL_SERVICE_CLIENTS, and the pipeline answers. A status without
+    # that trailer is the hop failing instead (grpcauth, the gateway).
+    model_rpc() { # model_rpc <cert dir> <cert basename>
+      $ENGINE run --rm --network "$NETWORK" --user 0:0 \
+        -v "${RUNTIME_CERTS}:/m:ro" -v "$1:/c:ro" -v "${REPO_ROOT}/libs/proto:/proto:ro" \
+        docker.io/fullstorydev/grpcurl:v1.9.1 -v \
+        -cacert /m/runtime-ca.crt -cert "/c/$2.crt" -key "/c/$2.key" \
+        -import-path /proto -proto elitea/llm/v1/model.proto \
+        -H 'authorization: Bearer standalone-stack-invalid-bearer' \
+        -d '{"call":{},"body":""}' \
+        elitea-main:9446 elitea.llm.v1.ModelService/Embeddings 2>&1 || true
+    }
+    model="$(model_rpc "$RUNTIME_CERTS" subapp-callback-client)"
+    case "$model" in
+      *"elitea-model-refusal-bin"*"Code: Unauthenticated"*)
+        ok "ModelService on :9446 admits the callback identity and answers an invalid bearer with the pipeline's 401 (Unauthenticated + refusal trailer)" ;;
+      *"Code: PermissionDenied"*)
+        fail "ModelService on :9446 refused dns:elitea-subapp-callback — it is missing from ELITEA_MODEL_SERVICE_CLIENTS" ;;
+      *) fail "ModelService on :9446 did not answer as the /llm pipeline: $(printf '%s' "$model" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
+    esac
+    # And the allowlist is an allowlist: a runtime-CA client certificate that
+    # is NOT listed (elitea-main's own elitea-vector client, DNS:elitea-main)
+    # is PermissionDenied by grpcauth before the pipeline runs, so with no
+    # refusal trailer.
+    if [ -f "${REPO_ROOT}/deploy/certs/vector/main-client.crt" ]; then
+      unlisted="$(model_rpc "${REPO_ROOT}/deploy/certs/vector" main-client)"
+      case "$unlisted" in
+        *"elitea-model-refusal-bin"*) fail "ModelService ran the pipeline for dns:elitea-main, which ELITEA_MODEL_SERVICE_CLIENTS does not list" ;;
+        *"Code: PermissionDenied"*) ok "ModelService refuses a runtime-CA identity it does not list (PermissionDenied, no refusal trailer)" ;;
+        *) fail "ModelService answered an unlisted identity unexpectedly: $(printf '%s' "$unlisted" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
+      esac
+    else
+      skip "no deploy/certs/vector/main-client.crt to probe an unlisted ModelService identity with (run: deploy/scripts/gen-vector-certs.sh)"
+    fi
+
     # ── Client identity headers, from inside the network ────────────────────
     # The signed X-Auth-* projection an authenticating edge used to add is gone
     # (#1359): elitea-main reads no X-Auth-* header at all, signed or not. These

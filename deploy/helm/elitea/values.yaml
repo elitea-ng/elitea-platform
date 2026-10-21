@@ -493,8 +493,10 @@ platform:
 #   elitea-main     HTTP 8080 admits the provider pods that call back directly,
 #                   main.ingressFrom / extraIngressFrom and probeFrom. The
 #                   runtime listeners (9443-9446) admit the worker pods only;
-#                   the platform listener (9446) also admits DeepWiki when
-#                   deepwiki.callbackViaPlatformListener is set.
+#                   the platform listener (9446) also admits the DeepWiki and
+#                   Inventory pods, whose engines make their model calls there
+#                   (ModelService, #1359 U2). deepwiki.callbackViaPlatformListener
+#                   only takes DeepWiki's artifact hop off 8080.
 #   worker          no inbound connections. Worker egress is NOT restricted (the
 #                   worker reaches NATS, PostgreSQL, elitea-main, the sandbox
 #                   supervisors and, through toolkits, external hosts); egress
@@ -1527,11 +1529,13 @@ main:
     # which is right whenever the certificate was issued for that name.
     ELITEA_DEEPWIKI_SERVER_NAME: ""
     ELITEA_DEEPWIKI_TIMEOUT_SECONDS: ""
-    # The origin the PROVIDER calls back to for artifacts and models. Required
-    # whenever the facade is on: the engine derives the artifact API base by
-    # stripping `/llm/v1` off the api_base it is handed, so this one value is
-    # both, and configuring them apart is not expressible. Set it to the
-    # in-cluster origin of elitea-main, e.g. http://elitea-main:8080.
+    # The origin the PROVIDER calls back to for artifacts. Required whenever
+    # the facade is on: it is handed to the engine as llm_settings.api_base,
+    # and the engine derives the artifact API base by stripping `/llm/v1` off
+    # it. Model calls no longer go here (#1359 U2): the engine makes them over
+    # ModelService at ELITEA_DEEPWIKI_MODEL_SERVICE_URL (see deepwiki: below),
+    # and api_base only names the route. Set it to the in-cluster origin of
+    # elitea-main, e.g. http://elitea-main:8080.
     ELITEA_DEEPWIKI_CALLBACK_BASE_URL: ""
     # How long a minted callback bearer lives. It must outlast the longest
     # generation this deployment expects: a token that dies mid-run makes the
@@ -1703,7 +1707,11 @@ main:
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
-    # The origin the Inventory provider calls back to for artifacts and models.
+    # The origin the Inventory provider calls back to for artifacts, handed to
+    # the engine as llm_settings.api_base. Model calls no longer go here
+    # (#1359 U2): the engine makes them over ModelService at
+    # ELITEA_INVENTORY_MODEL_SERVICE_URL (see inventory: below), and api_base
+    # only names the route.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
     # Inventory tools that only read an existing graph still work, and the
     # three that name a source get the provider's own refusal. Set it to the
@@ -2045,10 +2053,11 @@ main:
     # The chart opens the ports on the container and the Service when the runtime
     # is enabled.
     #
-    # platformAddress (#1359) serves elitea-main's ordinary product API (the
-    # same handler as :8080) over mutual TLS: the worker's platform_origin
-    # (worker.runtime.platformOrigin), the internal MCP origin, and the DeepWiki
-    # callback (deepwiki.callbackViaPlatformListener). It reuses the content
+    # platformAddress (#1359) is elitea-main's internal gRPC port: the worker's
+    # platform_origin (worker.runtime.platformOrigin) and the origin the
+    # DeepWiki and Inventory engines make their model calls to. It serves gRPC
+    # ONLY (elitea.llm.v1.ModelService today; the artifact and internal-MCP
+    # services follow in #1359 U3/U5) and no HTTP. It reuses the content
     # listener's keypair and requires a client certificate the runtime CA
     # signed. It replaced the platform-edge Traefik. Not 8080.
     listeners:
@@ -2056,6 +2065,22 @@ main:
       outputAddress: ":9444"
       contentAddress: ":9445"
       platformAddress: ":9446"
+
+    # elitea.llm.v1.ModelService on the platform listener (#1359 U2): the
+    # model calls of the agent worker and the DeepWiki/Inventory engines, run
+    # through the same /llm pipeline a browser request takes. It admits only
+    # the workload identities in ELITEA_MODEL_SERVICE_CLIENTS, which the chart
+    # renders (main.env may not set it) from:
+    #   * worker.runtimeSession.expectedIdentity, REQUIRED when worker.enabled;
+    #   * dns:elitea-subapp-callback, the callback client certificate's SAN,
+    #     when a DeepWiki or Inventory engine sidecar runs;
+    #   * extraClients below: callers deployed outside this release (a worker
+    #     fleet of its own, a callback certificate minted with another SAN),
+    #     as "dns:<name>" or "spiffe://..." identities.
+    # elitea-main refuses to start while the list is empty, so the render
+    # refuses that too.
+    modelService:
+      extraClients: []
 
     # Where the runtime keys, passwords and certificates come from, and where the
     # service reads them.
@@ -2822,6 +2847,14 @@ llmGateway:
     # the request-time guard inert (the elitea-main upsert-time guard remains).
     # e.g. "https://dev.elitea.ai/llm/v1,http://elitea-main:8080/llm/v1"
     #
+    # NOT elitea-main's platform listener (https://elitea-main:9446). The
+    # worker's and the engines' model calls reach /llm there over gRPC
+    # (elitea.llm.v1.ModelService, #1359 U2), not as an HTTP /llm origin: a
+    # credential naming it would be an HTTP call to a gRPC-only listener that
+    # also demands a runtime-CA client certificate, which fails at the
+    # handshake and cannot loop. This list is a string match on HTTP api_base
+    # origins only.
+    #
     # ISSUE #467: this MUST be set. The chart refuses to render while it is empty
     # (elitea-llm-gateway.validateGuards in templates/_helpers.tpl), because an
     # empty value makes the guard admit every credential and the process then
@@ -3220,22 +3253,31 @@ deepwiki:
   enabled: false
   replicaCount: 1
 
-  # The provider's CALLBACK hop — its model calls through /llm and its
-  # artifact uploads, both to main.env ELITEA_DEEPWIKI_CALLBACK_BASE_URL — over
-  # mutual TLS to elitea-main's platform listener
-  # (main.runtime.listeners.platformAddress, #1359), as the agent worker
-  # reaches it, instead of cleartext to elitea-main:8080. Needs
-  # main.runtime.enabled. When on:
+  # MODEL CALLS (#1359 U2) do not depend on the flag below. The engine sidecar
+  # makes them over elitea.llm.v1.ModelService on elitea-main's platform
+  # listener (main.runtime.listeners.platformAddress) at
+  # ELITEA_DEEPWIKI_MODEL_SERVICE_URL = worker.runtime.platformOrigin, trusting
+  # the runtime CA (the runtime-ca.crt key of worker.materialSecretName and
+  # NOTHING else from that Secret) and presenting callbackClient below, which
+  # elitea-main admits as dns:elitea-subapp-callback. So the engine sidecar
+  # running the native engine (engine.runner native; fixture calls no model)
+  # needs main.runtime.enabled and callbackClient.secretName, and the render
+  # refuses it without them.
+  #
+  # callbackViaPlatformListener moves the ARTIFACT hop — the host's artifact
+  # uploads and the engine's artifact-folder reads, both HTTP to main.env
+  # ELITEA_DEEPWIKI_CALLBACK_BASE_URL — onto the platform listener too. When
+  # on:
   #   * an unset main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL becomes
   #     worker.runtime.platformOrigin (a different explicit value is refused);
-  #   * both containers trust the runtime CA through
-  #     ELITEA_DEEPWIKI_CALLBACK_CA_FILE — the runtime-ca.crt key of
-  #     worker.materialSecretName and NOTHING else from that Secret;
-  #   * both containers present callbackClient below through
-  #     ELITEA_DEEPWIKI_CALLBACK_CERT_FILE / _KEY_FILE, because the listener
-  #     requires a runtime-CA client certificate;
-  #   * elitea-main's NetworkPolicy admits these pods on the platform port
-  #     instead of 8080.
+  #   * the HOST container also trusts the runtime CA and presents
+  #     callbackClient (ELITEA_DEEPWIKI_CALLBACK_CA_FILE / _CERT_FILE /
+  #     _KEY_FILE);
+  #   * elitea-main's NetworkPolicy stops admitting these pods on 8080.
+  # KNOWN GAP until #1359 U5: the platform listener serves gRPC only, so the
+  # artifact hop's HTTP requests fail there. Keep the flag OFF, with the
+  # callback base at http://elitea-main:8080, until the artifact service
+  # lands.
   #
   # This replaced callbackViaPlatformEdge (ADR-0027), which went with the
   # platform-edge Traefik. Setting the old key to true fails the render with a
@@ -3483,6 +3525,32 @@ inventory:
   enabled: false
   replicaCount: 1
 
+  # MODEL CALLS (#1359 U2). The engine sidecar makes them over
+  # elitea.llm.v1.ModelService on elitea-main's platform listener
+  # (main.runtime.listeners.platformAddress) at
+  # ELITEA_INVENTORY_MODEL_SERVICE_URL = worker.runtime.platformOrigin,
+  # trusting the runtime CA (the runtime-ca.crt key of
+  # worker.materialSecretName and NOTHING else from that Secret) and
+  # presenting the client certificate below, which elitea-main admits as
+  # dns:elitea-subapp-callback. So the engine sidecar running the native engine
+  # (engine.runner native; fixture calls no model) needs main.runtime.enabled
+  # and callbackClient.secretName, and the render refuses it without them. The
+  # artifact hop (main.env.ELITEA_INVENTORY_CALLBACK_BASE_URL) stays HTTP until
+  # #1359 U5 and does not use this certificate.
+  callbackClient:
+    # A Secret with tls.crt / tls.key: a client certificate (extendedKeyUsage
+    # clientAuth) the runtime CA signed. deploy/scripts/gen-runtime-certs.sh
+    # mints one as subapp-callback-client.crt / .key:
+    #
+    #   kubectl create secret generic elitea-inventory-callback-client \
+    #     --from-file=tls.crt=subapp-callback-client.crt \
+    #     --from-file=tls.key=subapp-callback-client.key
+    #
+    # Both engines present the same identity, so DeepWiki's Secret
+    # (deepwiki.callbackClient.secretName) can be named here instead.
+    secretName: elitea-inventory-callback-client
+    defaultMode: 0440
+
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
   # env.ELITEA_INVENTORY_RUNNER=sidecar — the Rust-native engine sidecar
@@ -3514,14 +3582,9 @@ inventory:
     # (`legacy`, the Python engine, is refused.)
     runner: native
     socketDir: /run/inventory
-    # A private CA for the callback origin (main.env.ELITEA_INVENTORY_CALLBACK_
-    # BASE_URL), when it is https under a CA the platform roots do not cover.
-    # Names a Secret in this namespace; only `key` is mounted, at `mountPath`,
-    # and ELITEA_INVENTORY_CALLBACK_CA_FILE points at it. Empty: not mounted.
-    callbackCa:
-      secretName: ""
-      key: ca.crt
-      mountPath: /run/elitea-callback-ca
+    # (engine.callbackCa is gone, #1359 U2: the model origin is always the
+    # platform listener, whose runtime CA the chart mounts itself. The render
+    # refuses the old key.)
     resources:
       requests:
         cpu: 250m
@@ -4402,10 +4465,17 @@ worker:
     # having been provisioned at all.
     ttl: "2160h"
 
-    # Optional assertion, not an input. When set, the Job fails if the identity
-    # it reads out of the worker's certificate is not this exact string — useful
-    # when the certificate is minted by a pipeline this chart does not own and a
-    # silent re-issue under a different SPIFFE ID would otherwise just work.
+    # The worker certificate's SPIFFE ID (its one URI SAN), e.g.
+    # spiffe://elitea.standalone/ns/default/sa/agent-worker, the default of
+    # deploy/scripts/gen-runtime-certs.sh (RUNTIME_WORKER_SPIFFE_ID).
+    #
+    # REQUIRED while worker.enabled (#1359 U2): it is the identity
+    # elitea-main's ModelService admits for the worker's model calls
+    # (ELITEA_MODEL_SERVICE_CLIENTS), and the chart cannot read the
+    # certificate to find it. It is still an assertion too: the Job fails if
+    # the identity it reads out of the certificate is not this exact string,
+    # so a wrong value fails the install rather than every chat turn, and a
+    # silent re-issue under a different SPIFFE ID is caught.
     expectedIdentity: ""
 
     # The schema arrives with elitea-main's migration, which on a fresh install

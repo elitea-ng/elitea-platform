@@ -111,6 +111,10 @@ spec:
             # The callback hop (artifact uploads) is mTLS to elitea-main's
             # platform listener: trust the runtime CA there, apart from the
             # listener's client CA, and present the callback client identity.
+            # KNOWN GAP until #1359 U5: the uploads are HTTP and the listener
+            # serves gRPC only, so with this flag on they fail; leave it off
+            # (callback base http://elitea-main:8080) until ArtifactObjectService
+            # lands. Model calls do not depend on it (the engine below).
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
             - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
@@ -191,10 +195,17 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if .Values.deepwiki.callbackViaPlatformListener }}
-            # Model calls and artifact-folder reads go to the callback origin,
-            # elitea-main's platform listener: the runtime CA signs its
-            # certificate, and it requires the callback client identity.
+            {{- if include "elitea-deepwiki.callbackMaterial" . }}
+            # Model calls go over elitea.llm.v1.ModelService on elitea-main's
+            # platform listener (#1359 U2) ALWAYS, not only with
+            # callbackViaPlatformListener: the listener serves no HTTP and the
+            # engine refuses a cleartext model origin, so an http:// callback
+            # base alone would leave it no model path. llm_settings.api_base
+            # (the callback base) then only names the route. The runtime CA
+            # signs the listener's certificate, and the listener admits the
+            # callback client identity (dns:elitea-subapp-callback).
+            - name: ELITEA_DEEPWIKI_MODEL_SERVICE_URL
+              value: {{ include "elitea-main.modelServiceOrigin" . | quote }}
             - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
               value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
             - name: ELITEA_DEEPWIKI_CALLBACK_CERT_FILE
@@ -229,7 +240,7 @@ spec:
               mountPath: {{ .Values.deepwiki.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
-            {{- if .Values.deepwiki.callbackViaPlatformListener }}
+            {{- if include "elitea-deepwiki.callbackMaterial" . }}
             - name: runtime-ca
               mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
               readOnly: true
@@ -248,7 +259,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        {{- if .Values.deepwiki.callbackViaPlatformListener }}
+        {{- if include "elitea-deepwiki.callbackMaterial" . }}
         # ONLY the runtime CA from the worker's material Secret: the Secret
         # also holds the worker's client key and signing keys, none of which
         # this pod may read.

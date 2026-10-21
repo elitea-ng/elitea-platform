@@ -371,6 +371,14 @@ services:
 
   # The engine sidecar: one distroless binary on the socket the host dials.
   # No port, no TLS, no identity — the shared volume is the only way in.
+  #
+  # KNOWN LIMIT (#1359 U2): the native runner makes its model calls over
+  # elitea.llm.v1.ModelService on elitea-main's platform listener
+  # (ELITEA_DEEPWIKI_MODEL_SERVICE_URL), which this stack does not open (no
+  # runtime plane). Without it the engine refuses the cleartext callback base
+  # as a model origin, so generation needs a model here only on
+  # docker-compose.standalone-full.yml; DEEPWIKI_NATIVE_RUNNER=fixture runs
+  # without one.
   elitea-deepwiki-engine:
     profiles: ["deepwiki"]
     build:

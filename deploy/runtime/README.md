@@ -183,6 +183,26 @@ and it serves no HTTP route — probe it with `/elitea-grpc-health` from the
 elitea-main image, not curl. It replaced `platform-edge`, a second Traefik that
 used to terminate TLS for this origin. It is not the browser edge and publishes
 no host port.
+
+**Model calls are `elitea.llm.v1.ModelService` on that listener** (#1359 U2,
+`libs/proto/elitea/llm/v1/model.proto`), not HTTP `/llm`. elitea-main admits
+only the identities in `ELITEA_MODEL_SERVICE_CLIENTS` and refuses to start
+with none while the listener is open: the worker's SPIFFE ID (its
+certificate's one URI SAN, `RUNTIME_WORKER_SPIFFE_ID` in
+`gen-runtime-certs.sh`; in Helm, `worker.runtimeSession.expectedIdentity`) and
+`dns:elitea-subapp-callback`, the identity the DeepWiki and Inventory engines
+present with `subapp-callback-client.crt` / `.key`. The engines dial
+`ELITEA_<APP>_MODEL_SERVICE_URL=https://elitea-main:9446` with the runtime CA
+(`ELITEA_<APP>_CALLBACK_CA_FILE`) and that certificate
+(`ELITEA_<APP>_CALLBACK_CERT_FILE` / `_KEY_FILE`); compose installs the three
+files into the `standalone_runtime_subapp` volume (`install-material.sh`), the
+chart mounts `runtime-ca.crt` of `worker.materialSecretName` plus
+`deepwiki.callbackClient` / `inventory.callbackClient`. Their artifact hop
+stays HTTP on `ELITEA_<APP>_CALLBACK_BASE_URL` (`http://elitea-main:8080`)
+until #1359 U5. `standalone-stack.sh check` calls ModelService with grpcurl:
+the callback identity with an invalid bearer must get `Unauthenticated` plus
+the `elitea-model-refusal-bin` trailer (the pipeline's 401), and an unlisted
+runtime-CA identity `PermissionDenied` without it.
 (`content_origin` is different: that one is elitea-main's
 own :9445 listener, reached over mTLS, and the worker requires **HTTP/2** on it
 specifically — `serve.py:721` sets `http1=False`.)

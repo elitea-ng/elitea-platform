@@ -23,7 +23,11 @@
 #   3. the HTTPRoute rendered from main.ingress removes the floor;
 #   4. the two chart guards (plain Ingress with Form sign-in; Gateway API list
 #      missing a required name) refuse to render, and the acknowledged or
-#      compliant configurations render.
+#      compliant configurations render;
+#   5. ModelService's allowlist (ELITEA_MODEL_SERVICE_CLIENTS, #1359 U2) names
+#      the worker, takes extraClients, and its guards refuse a worker without
+#      a SPIFFE ID, an empty list, a hand-set env value, a malformed entry and
+#      extraClients with the runtime off.
 #
 # Usage: deploy/helm/tests/render-platform-listener.sh
 # Needs: helm, yq. No cluster, no network.
@@ -173,6 +177,41 @@ renders "Gateway API list in a different case" \
   --set main.ingress.enabled=true --set main.ingress.gatewayApi=true \
   --set-string main.ingress.gateway.name=elitea \
   --set-json 'main.ingress.stripIdentityHeaders=["x-auth-type","x-auth-id","x-auth-user-id","x-auth-signature"]'
+
+# ---------------------------------------------------------------------------
+# 5. ModelService's allowlist (#1359 U2): ELITEA_MODEL_SERVICE_CLIENTS.
+# ---------------------------------------------------------------------------
+# The standalone + worker render: the worker's SPIFFE ID (values-standalone
+# states it twice, as expectedIdentity and as an extra client; it renders once).
+expect "ModelService admits the worker" "$(cm ELITEA_MODEL_SERVICE_CLIENTS)" "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+expect "the default render (runtime off) names no ModelService client" \
+  "$(grep -c 'ELITEA_MODEL_SERVICE_CLIENTS' "$WORK/default.yaml" || true)" "0"
+helm template "${GATEWAY_RENDER_POSTURE[@]}" "${STANDALONE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
+  --set-json 'main.runtime.modelService.extraClients=["dns:elitea-subapp-callback","spiffe://x.test/ns/a/sa/worker","dns:elitea-subapp-callback"]' >"$WORK/extra.yaml"
+expect "extraClients render as given, without repeats" \
+  "$(yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_MODEL_SERVICE_CLIENTS' "$WORK/extra.yaml")" \
+  "dns:elitea-subapp-callback,spiffe://x.test/ns/a/sa/worker"
+
+refuses "the worker without its SPIFFE ID" "needs worker.runtimeSession.expectedIdentity" \
+  --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
+  --set-string worker.runtimeSession.expectedIdentity=
+refuses "a worker identity that is not spiffe://" "carries exactly one spiffe:// URI SAN" \
+  --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream= \
+  --set-string worker.runtimeSession.expectedIdentity=dns:agent-worker
+refuses "the platform listener open with nobody admitted" "ELITEA_MODEL_SERVICE_CLIENTS would be empty" \
+  --set-json 'main.runtime.modelService.extraClients=[]'
+refuses "ELITEA_MODEL_SERVICE_CLIENTS set by hand" "main.env.ELITEA_MODEL_SERVICE_CLIENTS must not be set" \
+  --set-string main.env.ELITEA_MODEL_SERVICE_CLIENTS=dns:someone
+refuses "an extra client that is not a workload identity" "is not a workload identity" \
+  --set-json 'main.runtime.modelService.extraClients=["agent-worker"]'
+if helm template "${GATEWAY_RENDER_POSTURE[@]}" "${ONLY_MAIN[@]}" t "$CHART" \
+  --set-json 'main.runtime.modelService.extraClients=["dns:someone"]' >/dev/null 2>"$WORK/err.txt"; then
+  fail "extraClients with the runtime off: the chart rendered, but must refuse"
+elif grep -q "main.runtime.enabled is false, so elitea-main opens no platform listener" "$WORK/err.txt"; then
+  pass "extraClients with the runtime off: refused"
+else
+  fail "extraClients with the runtime off: refused for another reason: $(tail -1 "$WORK/err.txt")"
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "render-platform-listener.sh: $failures assertion(s) failed" >&2

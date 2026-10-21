@@ -321,6 +321,8 @@ services:
       - ./certs/runtime:/src:ro
       - standalone_runtime_main:/dst/main
       - standalone_runtime_worker:/dst/worker
+      # The engines' ModelService client material (#1359 U2).
+      - standalone_runtime_subapp:/dst/subapp
     restart: "no"
 
   # ── Schema bootstrap ────────────────────────────────────────────────────────
@@ -621,7 +623,10 @@ services:
       # Issue #467 — circular-routing guard #1 at request time. Names every
       # origin that reaches this stack's /llm surface, so a credential whose
       # api_base points back at the platform is refused with
-      # SELF_REFERENTIAL_CREDENTIAL instead of looping.
+      # SELF_REFERENTIAL_CREDENTIAL instead of looping. Not
+      # https://elitea-main:9446: that platform listener carries the worker's
+      # and the engines' model calls as gRPC (ModelService, #1359 U2), not an
+      # HTTP /llm origin a credential could name.
       GATEWAY_SELF_LLM_ORIGINS: "${GATEWAY_SELF_LLM_ORIGINS-http://elitea-main:8080/llm/v1,http://localhost:8080/llm/v1}"
       GATEWAY_LOG_LEVEL: "${GATEWAY_LOG_LEVEL:-info}"
     volumes:
@@ -1262,15 +1267,21 @@ services:
       ELITEA_RUNTIME_CONTENT_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
       ELITEA_RUNTIME_CONTENT_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
       ELITEA_RUNTIME_CONTENT_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
-      # The platform listener (#1359): the SAME handler as :8080 — the product
-      # API — over mutual TLS, for the worker's platform_origin and the
-      # internal MCP origin. It replaced the `platform-edge` Traefik. Same
-      # keypair as the content listener (same process, same SAN); a client
-      # without a runtime-CA certificate is refused at the handshake.
+      # The platform listener (#1359): elitea-main's internal gRPC port, the
+      # worker's platform_origin and the engines' model origin. gRPC only, no
+      # HTTP. It replaced the `platform-edge` Traefik. Same keypair as the
+      # content listener (same process, same SAN); a client without a
+      # runtime-CA certificate is refused at the handshake.
       ELITEA_RUNTIME_PLATFORM_ADDRESS: ":9446"
       ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: /run/elitea-runtime/content-server.crt
       ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: /run/elitea-runtime/content-server.key
       ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: /run/elitea-runtime/runtime-ca.crt
+      # Who may call elitea.llm.v1.ModelService there (#1359 U2): the agent
+      # worker (its certificate's one URI SAN, gen-runtime-certs.sh's
+      # RUNTIME_WORKER_SPIFFE_ID) and the DeepWiki/Inventory engines (the
+      # sub-application callback certificate, DNS:elitea-subapp-callback).
+      # elitea-main refuses to start with this empty.
+      ELITEA_MODEL_SERVICE_CLIENTS: "${RUNTIME_WORKER_SPIFFE_ID:-spiffe://elitea.standalone/ns/default/sa/agent-worker},dns:elitea-subapp-callback"
 
       # ── elitea-vector token introspection (ADR-0031 V0) ─────────────────
       # The client identities admitted to TokenIntrospectionService on the
@@ -1531,16 +1542,30 @@ services:
       # A generation worker's limits, at the engine defaults, stated so a
       # reader of this file sees them: 16 GiB of address space, 4 h of CPU.
       # There is no ELITEA_DEEPWIKI_MODEL_ALLOWLIST: the native engine
-      # downloads no model; every model call goes to the invocation's
-      # llm_settings.api_base (the platform's /llm/v1).
+      # downloads no model; every model call goes to elitea-main.
       ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES: "17179869184"
       ELITEA_DEEPWIKI_WORKER_CPU_SECONDS: "14400"
+      # The native runner's model calls (#1359 U2): elitea.llm.v1.ModelService
+      # on elitea-main's platform listener, trusting the runtime CA and
+      # presenting the sub-application callback identity, which elitea-main
+      # admits through ELITEA_MODEL_SERVICE_CLIENTS. The invocation's
+      # llm_settings.api_base (http://elitea-main:8080/llm/v1) then only names
+      # the route and stays the artifact hop's origin. The fixture runner
+      # calls no model and ignores them.
+      ELITEA_DEEPWIKI_MODEL_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_DEEPWIKI_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
+      ELITEA_DEEPWIKI_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
+      ELITEA_DEEPWIKI_CALLBACK_KEY_FILE: /run/elitea-subapp/subapp-callback-client.key
     volumes:
       - deepwiki-engine-sock:/run/deepwiki
+      # Installed by runtime-material (owner 10001, key 0600).
+      - standalone_runtime_subapp:/run/elitea-subapp:ro
     depends_on:
       postgres:
         condition: service_healthy
       elitea-deepwiki-migrate:
+        condition: service_completed_successfully
+      runtime-material:
         condition: service_completed_successfully
     healthcheck:
       # Distroless: no shell, no python. The binary probes its own socket
@@ -1682,13 +1707,27 @@ services:
       # bind-mounted copy below instead, the repository's own
       # conformance/provider/fixtures/inventory, editable without a rebuild.
       ELITEA_INVENTORY_FIXTURES: "${INVENTORY_FIXTURES:-}"
+      # The native runner's model calls (#1359 U2): elitea.llm.v1.ModelService
+      # on elitea-main's platform listener, trusting the runtime CA and
+      # presenting the sub-application callback identity, which elitea-main
+      # admits through ELITEA_MODEL_SERVICE_CLIENTS. The invocation's
+      # llm_settings.api_base (http://elitea-main:8080/llm/v1) then only names
+      # the route. The fixture runner calls no model and ignores them.
+      ELITEA_INVENTORY_MODEL_SERVICE_URL: "https://elitea-main:9446"
+      ELITEA_INVENTORY_CALLBACK_CA_FILE: /run/elitea-subapp/runtime-ca.crt
+      ELITEA_INVENTORY_CALLBACK_CERT_FILE: /run/elitea-subapp/subapp-callback-client.crt
+      ELITEA_INVENTORY_CALLBACK_KEY_FILE: /run/elitea-subapp/subapp-callback-client.key
     volumes:
       - inventory-engine-sock:/run/inventory
       - ../conformance/provider/fixtures/inventory:/fixtures/inventory:ro
+      # Installed by runtime-material (owner 10001, key 0600).
+      - standalone_runtime_subapp:/run/elitea-subapp:ro
     depends_on:
       postgres:
         condition: service_healthy
       elitea-inventory-migrate:
+        condition: service_completed_successfully
+      runtime-material:
         condition: service_completed_successfully
     healthcheck:
       # Distroless: no shell, no python. The binary probes its own socket.
@@ -2027,6 +2066,9 @@ volumes:
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:
   standalone_runtime_worker:
+  # The DeepWiki/Inventory engines' ModelService client: runtime CA plus the
+  # sub-application callback certificate and key (#1359 U2).
+  standalone_runtime_subapp:
   # The worker's output spool. Private (0700, uid 10001) — prepared by
   # worker-spool-init because a fresh named volume starts 0755 root-owned.
   standalone_worker_spool:

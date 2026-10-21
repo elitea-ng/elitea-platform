@@ -344,6 +344,16 @@ main:
       outputAddress: ":9444"
       contentAddress: ":9445"
 
+    # elitea.llm.v1.ModelService on the platform listener (#1359 U2) admits
+    # only the identities in ELITEA_MODEL_SERVICE_CLIENTS, and elitea-main
+    # refuses to start with none. This profile does not turn worker.enabled on,
+    # so it names the worker identity gen-runtime-certs.sh mints by default
+    # (RUNTIME_WORKER_SPIFFE_ID) for a worker run beside this release. Change
+    # it, and worker.runtimeSession.expectedIdentity below, if you mint another.
+    modelService:
+      extraClients:
+        - "spiffe://elitea.standalone/ns/default/sa/agent-worker"
+
     material:
       mountPath: /run/elitea-runtime
       # A plain Kubernetes Secret, one key for each file name in this file's
@@ -363,6 +373,14 @@ main:
       # Use runtime.material.volume instead only when another mechanism already
       # writes these as real, owner-owned files at mountPath.
       secretName: elitea-runtime-material
+
+# The worker's SPIFFE ID, for when worker.enabled is turned on with this
+# profile: required then (#1359 U2), because it is the identity ModelService
+# admits for the worker's model calls, and the runtime-session Job checks it
+# against the certificate. gen-runtime-certs.sh's default.
+worker:
+  runtimeSession:
+    expectedIdentity: "spiffe://elitea.standalone/ns/default/sa/agent-worker"
 
 # This profile ships no edge in front of elitea-main, so nothing outside the
 # chart's own pods is admitted to elitea-main:8080. A deployment that fronts it

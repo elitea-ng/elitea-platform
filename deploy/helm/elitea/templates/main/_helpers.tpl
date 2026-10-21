@@ -283,6 +283,7 @@ because it passes a manifest the binary then rejects.
 {{- include "elitea-main.validateVectorClient" . -}}
 {{- include "elitea-main.validateSelfLLMOrigins" . -}}
 {{- include "elitea-main.validateRuntime" . -}}
+{{- include "elitea-main.validateModelService" . -}}
 {{- include "elitea-main.validateConnectionBudget" . -}}
 {{- include "elitea-main.validateAuthMaterial" . -}}
 {{- end }}
@@ -967,6 +968,102 @@ and the term that actually moves is the one this counts.
 {{- end -}}
 {{- end }}
 
+{{/*
+elitea-main.subappCallbackIdentity — the workload identity the DeepWiki and
+Inventory engines present on elitea-main's platform listener: the one DNS SAN
+of the sub-application callback client certificate
+(deploy/scripts/gen-runtime-certs.sh mints it as subapp-callback-client.crt,
+the Secret deepwiki.callbackClient / inventory.callbackClient names). The
+chart cannot read that certificate, so the name is the minting script's; a
+certificate minted with another SAN is admitted through
+main.runtime.modelService.extraClients instead.
+*/}}
+{{- define "elitea-main.subappCallbackIdentity" -}}dns:elitea-subapp-callback{{- end -}}
+
+{{/*
+elitea-main.modelServiceOrigin — the origin a DeepWiki/Inventory engine dials
+for elitea.llm.v1.ModelService: elitea-main's platform listener, the same
+origin the worker is handed (worker.runtime.platformOrigin), so the two
+cannot name different listeners.
+*/}}
+{{- define "elitea-main.modelServiceOrigin" -}}{{- .Values.worker.runtime.platformOrigin | toString -}}{{- end -}}
+
+{{/*
+elitea-main.modelServiceClients — ELITEA_MODEL_SERVICE_CLIENTS, the workload
+identities admitted to elitea.llm.v1.ModelService (#1359 U2), comma-separated:
+
+  * the agent worker's SPIFFE ID, worker.runtimeSession.expectedIdentity, when
+    this release runs the worker. The chart cannot read the certificate, and
+    that value is the one the runtime-session Job asserts against the
+    certificate itself, so the allowlist and the certificate cannot disagree
+    without that Job failing;
+  * the sub-application callback identity, when a DeepWiki or Inventory
+    engine sidecar makes model calls (elitea-deepwiki.modelCalls,
+    elitea-inventory.modelCalls);
+  * main.runtime.modelService.extraClients, for callers deployed elsewhere.
+*/}}
+{{- define "elitea-main.modelServiceClients" -}}
+{{- $clients := list -}}
+{{- if .Values.worker.enabled -}}
+{{- with ((.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString) -}}
+{{- $clients = append $clients . -}}
+{{- end -}}
+{{- end -}}
+{{- if or (include "elitea-deepwiki.modelCalls" .) (include "elitea-inventory.modelCalls" .) -}}
+{{- $clients = append $clients (include "elitea-main.subappCallbackIdentity" .) -}}
+{{- end -}}
+{{- range ((.Values.main.runtime.modelService | default dict).extraClients | default list) -}}
+{{- $clients = append $clients (toString .) -}}
+{{- end -}}
+{{- join "," ($clients | uniq) -}}
+{{- end }}
+
+{{/*
+elitea-main.validateModelService — the ModelService allowlist (#1359 U2).
+
+cmd/elitea-main refuses to start while the platform listener is open
+(runtime.enabled, which requires listeners.platformAddress) and
+ELITEA_MODEL_SERVICE_CLIENTS names nobody, and refuses an entry that is not a
+"dns:" or "spiffe://" identity. Both are a CrashLoopBackOff, so both are
+refused here. The quieter failure is a worker the list does not name: elitea-
+main boots (DeepWiki's identity keeps the list non-empty) and every model call
+the worker makes is PermissionDenied, so every chat turn fails. That is why
+the worker's identity is required, not optional, whenever the worker runs.
+*/}}
+{{- define "elitea-main.validateModelService" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- $modelService := (.Values.main.runtime | default dict).modelService | default dict -}}
+{{- if hasKey $env "ELITEA_MODEL_SERVICE_CLIENTS" -}}
+{{- fail "main.env.ELITEA_MODEL_SERVICE_CLIENTS must not be set: the chart renders it from the worker's identity (worker.runtimeSession.expectedIdentity), the sub-application callback identity (when DeepWiki or Inventory runs) and main.runtime.modelService.extraClients. A name in both maps makes a duplicate ConfigMap key. Move extra identities to main.runtime.modelService.extraClients." -}}
+{{- end -}}
+{{- $extra := $modelService.extraClients | default list -}}
+{{- if not (kindIs "slice" $extra) -}}
+{{- fail (printf "main.runtime.modelService.extraClients must be a list of identities, got %v." $extra) -}}
+{{- end -}}
+{{- range $extra -}}
+{{- $id := toString . -}}
+{{- if not (or (regexMatch "^dns:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $id) (hasPrefix "spiffe://" $id)) -}}
+{{- fail (printf "main.runtime.modelService.extraClients entry %q is not a workload identity: write dns:<lower-case DNS SAN> or a spiffe:// URI (internal/transport/grpcauth). cmd/elitea-main refuses anything else at boot." $id) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.main.runtime.enabled -}}
+{{- if .Values.worker.enabled -}}
+{{- $worker := (.Values.worker.runtimeSession | default dict).expectedIdentity | default "" | toString -}}
+{{- if not $worker -}}
+{{- fail "worker.enabled=true needs worker.runtimeSession.expectedIdentity: the SPIFFE ID in the worker certificate's one URI SAN (deploy/scripts/gen-runtime-certs.sh: RUNTIME_WORKER_SPIFFE_ID, default spiffe://elitea.standalone/ns/default/sa/agent-worker). The worker makes its model calls over elitea.llm.v1.ModelService (#1359 U2), which admits only the identities in ELITEA_MODEL_SERVICE_CLIENTS, and the chart cannot read the certificate to find it. Without it every model call the worker makes is refused and every chat turn fails. The runtime-session Job checks the value against the certificate, so a wrong one fails the install instead of the first turn." -}}
+{{- end -}}
+{{- if not (hasPrefix "spiffe://" $worker) -}}
+{{- fail (printf "worker.runtimeSession.expectedIdentity is %q, but the worker certificate carries exactly one spiffe:// URI SAN (internal/auth/workloadidentity), so nothing else can name it." $worker) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (include "elitea-main.modelServiceClients" .) -}}
+{{- fail "main.runtime.enabled=true opens elitea-main's platform listener, and ELITEA_MODEL_SERVICE_CLIENTS would be empty: no worker (worker.enabled), no DeepWiki or Inventory engine, and no main.runtime.modelService.extraClients. cmd/elitea-main refuses to start with a ModelService nobody may call. Run the worker in this release, or list the identities of the callers deployed elsewhere (dns:<name> or spiffe:// URIs) in main.runtime.modelService.extraClients." -}}
+{{- end -}}
+{{- else if $extra -}}
+{{- fail "main.runtime.modelService.extraClients is set but main.runtime.enabled is false, so elitea-main opens no platform listener and serves no ModelService. Turn the runtime on, or clear the list." -}}
+{{- end -}}
+{{- end }}
+
 {{- define "elitea-main.validateRuntime" -}}
 {{- include "elitea.codeNodes.validate" . -}}
 {{- $runtime := .Values.main.runtime | default dict -}}
@@ -1310,6 +1407,10 @@ ELITEA_RUNTIME_PLATFORM_ADDRESS: {{ $listeners.platformAddress | quote }}
 ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE: {{ printf "%s/content-server.crt" $dir | quote }}
 ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE: {{ printf "%s/content-server.key" $dir | quote }}
 ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* #1359 U2: who may call elitea.llm.v1.ModelService on that listener.
+     cmd/elitea-main refuses to start without one while the listener is open;
+     elitea-main.validateModelService refuses the empty list at render. */}}
+ELITEA_MODEL_SERVICE_CLIENTS: {{ include "elitea-main.modelServiceClients" . | quote }}
 {{- if .Values.vector.enabled }}
 {{/* ADR-0031: the client identities admitted to TokenIntrospectionService on
      the control listener above — elitea-vector's client certificate, whose

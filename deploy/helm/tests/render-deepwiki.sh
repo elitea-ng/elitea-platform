@@ -21,9 +21,15 @@ CHART="deploy/helm/elitea"
 # (.invalid is reserved by RFC 2606).
 GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
 
+# The runtime plane (the standalone profile): the engine sidecar makes its
+# model calls over ModelService on elitea-main's platform listener (#1359 U2),
+# so DeepWiki renders only beside it.
+RUNTIME="-f $CHART/values-standalone.yaml"
+
 # A complete, correct DeepWiki install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
 COMPLETE="\
+$RUNTIME \
 --set deepwiki.enabled=true \
 --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com \
 --set main.fileConfig.deepwikiClientMaterial.enabled=true \
@@ -345,8 +351,55 @@ expect "runtime CA mounted in both containers" "$(ed '.spec.template.spec.contai
 expect "callback client mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "callback-client") | .mountPath' | tr '\n' ' ')" "/run/elitea-callback-client /run/elitea-callback-client "
 expect "only runtime-ca.crt leaves the worker Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
 expect "the callback client comes from its own Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "callback-client") | .secret.secretName')" "elitea-deepwiki-callback-client"
-expect "the flag off mounts nothing" "$(printf '%s' "$manifest" | grep -c 'runtime-ca\|CALLBACK_CA_FILE\|CALLBACK_CERT_FILE\|callback-client')" "0"
-if render $COMPLETE --set deepwiki.callbackViaPlatformListener=true --set main.runtime.enabled=false >/dev/null 2>&1; then
+fo() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "the flag off: the HOST gets no callback material" \
+  "$(fo '.spec.template.spec.containers[0] | [(.env[].name | select(test("CALLBACK_(CA|CERT|KEY)_FILE"))), (.volumeMounts[].name | select(. == "runtime-ca" or . == "callback-client"))] | length')" "0"
+
+# ── The model hop: ModelService on the platform listener (#1359 U2) ─────────
+#
+# Independent of the flag: the engine sidecar ALWAYS dials ModelService on the
+# platform origin with the runtime CA and the callback client certificate,
+# and elitea-main admits it as dns:elitea-subapp-callback. Without the runtime
+# plane or the callback Secret the render is refused.
+echo "== the engine's model calls go to ModelService, flag off or on =="
+for pair in "flag off:$manifest" "flag on:$via"; do
+  label="${pair%%:*}"; doc="${pair#*:}"
+  en() { printf '%s' "$doc" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | .spec.template.spec.containers[1].env[] | select(.name == \"$1\") | .value" -; }
+  expect "$label: engine MODEL_SERVICE_URL" "$(en ELITEA_DEEPWIKI_MODEL_SERVICE_URL)" "https://elitea-main:9446"
+  expect "$label: engine callback CA" "$(en ELITEA_DEEPWIKI_CALLBACK_CA_FILE)" "/run/elitea-runtime-ca/runtime-ca.crt"
+  expect "$label: engine callback certificate" "$(en ELITEA_DEEPWIKI_CALLBACK_CERT_FILE)" "/run/elitea-callback-client/tls.crt"
+  expect "$label: engine callback key" "$(en ELITEA_DEEPWIKI_CALLBACK_KEY_FILE)" "/run/elitea-callback-client/tls.key"
+  expect "$label: elitea-main admits the callback identity" \
+    "$(printf '%s' "$doc" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_MODEL_SERVICE_CLIENTS' - | tr ',' '\n' | grep -cx 'dns:elitea-subapp-callback')" "1"
+  expect "$label: elitea-main admits DeepWiki on the platform port" \
+    "$(printf '%s' "$doc" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-main-netpol") | .spec.ingress[] | select(.ports[0].port == 9446) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | grep -cx elitea-deepwiki)" "1"
+done
+expect "flag off: the artifact hop still reaches 8080" \
+  "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-main-netpol") | .spec.ingress[] | select(.ports[0].port == 8080) | .from[].podSelector.matchLabels."app.kubernetes.io/name"' - | grep -cx elitea-deepwiki)" "1"
+refuses_with() {
+  local description="$1" text="$2"; shift 2
+  local output
+  if output="$(render "$@" 2>&1)"; then
+    fail "accepted: $description"
+  elif printf '%s' "$output" | grep -q -- "$text"; then
+    note "refused: $description"
+  else
+    fail "refused for another reason ($description): $(printf '%s' "$output" | grep Error | tail -1)"
+  fi
+}
+refuses_with "the engine without the runtime plane" "main.runtime.enabled is false, so there is no such listener" \
+  ${COMPLETE#"$RUNTIME "}
+refuses_with "the engine without a callback client Secret" "deepwiki.callbackClient.secretName is empty" \
+  $COMPLETE --set deepwiki.callbackClient.secretName=
+for name in ELITEA_DEEPWIKI_MODEL_SERVICE_URL ELITEA_DEEPWIKI_CALLBACK_CA_FILE ELITEA_DEEPWIKI_CALLBACK_CERT_FILE ELITEA_DEEPWIKI_CALLBACK_KEY_FILE; do
+  refuses_with "deepwiki.env.$name set by hand" "deepwiki.env sets $name" $COMPLETE --set deepwiki.env.$name=x
+done
+# No sidecar (the host's runner unavailable): no model calls, so neither the
+# runtime plane nor the callback identity is required.
+hostonly="$(render --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=unavailable)" \
+  || fail "a host-only DeepWiki (no engine sidecar) without the runtime plane does not render: $hostonly"
+expect "host-only: no engine container" "$(printf '%s' "$hostonly" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[].name' - | tr '\n' ' ')" "elitea-deepwiki "
+if render ${COMPLETE#"$RUNTIME "} --set deepwiki.callbackViaPlatformListener=true >/dev/null 2>&1; then
   fail "callbackViaPlatformListener renders with no runtime plane, so no platform listener to dial"
 else
   note "refused without main.runtime"
@@ -432,7 +485,7 @@ expect "on: the target is the Service and the platform port" "$(main_env "$grpc"
 explicit="$(render $COMPLETE --set 'deepwiki.platformGrpc.clients={elitea-main}' --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=deepwiki.elsewhere:9443)" \
   || fail "an explicit target does not render: $explicit"
 expect "an explicit target wins" "$(main_env "$explicit" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" "deepwiki.elsewhere:9443"
-facade_off="$(render --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
+facade_off="$(render $RUNTIME --set deepwiki.enabled=true --set deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST=github.com --set 'deepwiki.platformGrpc.clients={elitea-main}')" \
   || fail "the engine with its service on and the facade off does not render: $facade_off"
 expect "facade off: nothing derived for a caller that is not composed" "$(main_env "$facade_off" ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET)" ""
 if render --set main.env.ELITEA_DEEPWIKI_PLATFORM_GRPC_TARGET=elitea-deepwiki-svc:9443 >/dev/null 2>&1; then

@@ -119,6 +119,8 @@ spec:
         # GATEWAY_SELF_LLM_ORIGINS lists every origin that reaches this
         # deployment's /llm surface, public and in-cluster, comma-separated.
         # Example: "https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1"
+        # Not https://elitea-main:9446: that platform listener carries model
+        # calls as gRPC (ModelService, #1359 U2), not an HTTP /llm origin.
         - name: llmGateway.env.GATEWAY_SELF_LLM_ORIGINS
           value: ""
         # egressPosture takes "allowlist" or "public-unrestricted". Read the

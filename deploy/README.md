@@ -389,6 +389,14 @@ would guard a name nobody uses and read as armed. The chart REFUSES to render
 while either is empty, so a sync of the committed file reports SyncFailed and
 names the field. It does not install a gateway with a disarmed guard.
 
+`GATEWAY_SELF_LLM_ORIGINS` lists HTTP `/llm` origins only: the public one and
+`http://elitea-main:8080/llm/v1`. Leave elitea-main's platform listener
+(`https://elitea-main:9446`) out. The worker and the DeepWiki/Inventory engines
+reach the model pipeline there over gRPC (`elitea.llm.v1.ModelService`, #1359
+U2), which is not an origin a credential's `api_base` can name: an HTTP call to
+it fails the TLS handshake (gRPC-only, runtime-CA client certificate required)
+and cannot loop.
+
 Fill them in your own GitOps copy of the Application, or with:
 
 ```bash

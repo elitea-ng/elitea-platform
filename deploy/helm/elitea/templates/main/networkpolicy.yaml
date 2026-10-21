@@ -1,11 +1,16 @@
 {{- if and .Values.main.enabled .Values.networkPolicies.enabled }}
 {{- $np := .Values.networkPolicies }}
 {{- $worker := .Values.worker.enabled }}
+{{- /* The artifact hop: 8080 unless callbackViaPlatformListener moved it. */ -}}
 {{- $deepwikiViaPlatform := and .Values.deepwiki.enabled .Values.deepwiki.callbackViaPlatformListener .Values.main.runtime.enabled }}
 {{- $deepwiki := and .Values.deepwiki.enabled (not $deepwikiViaPlatform) }}
 {{- $inventory := .Values.inventory.enabled }}
+{{- /* The model hop (#1359 U2): both engines call ModelService on the
+       platform listener whatever the artifact hop does. */ -}}
+{{- $deepwikiPlatform := and .Values.main.runtime.enabled (or (include "elitea-deepwiki.modelCalls" .) $deepwikiViaPlatform) }}
+{{- $inventoryPlatform := and .Values.main.runtime.enabled (include "elitea-inventory.modelCalls" .) }}
 {{- $runtimePeers := and .Values.main.runtime.enabled $worker }}
-{{- $platformPeers := or $runtimePeers $deepwikiViaPlatform }}
+{{- $platformPeers := or $runtimePeers $deepwikiPlatform $inventoryPlatform }}
 {{- $vectorPeers := and .Values.main.runtime.enabled .Values.vector.enabled }}
 {{- $egressAuditPeers := and .Values.main.runtime.enabled (include "elitea-egress-proxy.auditEnabled" .) }}
 {{- $httpPeers := or $deepwiki $inventory $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
@@ -17,9 +22,11 @@
 #                gateway or ingress controller) and networkPolicies.probeFrom.
 #   runtime      the worker pods only, on the control / output / content
 #                listeners, when the runtime plane is composed.
-#   platform     the worker pods, and DeepWiki when its callback hop uses the
-#                platform listener (deepwiki.callbackViaPlatformListener), on
-#                the platform listener (#1359; it replaced platform-edge).
+#   platform     the worker pods, DeepWiki and Inventory, on the platform
+#                listener (#1359; it replaced platform-edge). The engines make
+#                their model calls there (ModelService, #1359 U2) whatever
+#                deepwiki.callbackViaPlatformListener says; that flag only
+#                takes DeepWiki's artifact hop off 8080.
 #   control      elitea-vector, on the control listener only, for token
 #                introspection (ADR-0031), when vector is enabled.
 #
@@ -81,8 +88,11 @@ spec:
         {{- if $runtimePeers }}
         {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
         {{- end }}
-        {{- if $deepwikiViaPlatform }}
+        {{- if $deepwikiPlatform }}
         {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "deepwiki") | nindent 8 }}
+        {{- end }}
+        {{- if $inventoryPlatform }}
+        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "inventory") | nindent 8 }}
         {{- end }}
     {{- end }}
     {{- if $vectorPeers }}
