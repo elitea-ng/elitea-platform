@@ -33,6 +33,18 @@ describe('ApprovalDialog', () => {
     expect(screen.getByText('Why: Not on the allow list')).toBeInTheDocument();
   });
 
+  it("shows a rule's justification and which rule asks", () => {
+    renderWithTheme(<ApprovalDialog request={{ ...REQUEST, source: 'workspace', rule: 'workspace#3', justification: 'Resets go through review.' }} queued={0} onRespond={vi.fn()} />);
+    expect(screen.getByText('Why: Resets go through review.')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-rule-source')).toHaveTextContent('Asked by workspace rule 3');
+  });
+
+  it('names the defaults when no rule asks', () => {
+    renderWithTheme(<ApprovalDialog request={{ ...REQUEST, source: 'default' }} queued={0} onRespond={vi.fn()} />);
+    expect(screen.getByText('Why: Not on the allow list')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-rule-source')).toHaveTextContent('Asked by the defaults');
+  });
+
   it('answers with each button', async () => {
     const onRespond = vi.fn();
     const user = userEvent.setup();

@@ -105,6 +105,12 @@ export interface ApprovalRequestPayload {
   command?: string[];
   paths?: string[];
   reason: string;
+  /** The layer that asks: `workspace` / `user` (a rule), `default`, … (#1216). */
+  source?: string;
+  /** The rule that asks (`workspace#3`, `user#1`), when a rule does. */
+  rule?: string;
+  /** The rule's justification, shown in place of the classifier's reason. */
+  justification?: string;
   can_remember: boolean;
 }
 

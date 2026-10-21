@@ -544,5 +544,14 @@
   "desktop.inspector.restore": "Restore (Esc)",
   "desktop.inspector.tabsBottom": "Inspector tabs, bottom group",
   "desktop.inspector.tabsTop": "Inspector tabs",
-  "desktop.inspector.windowFailed": "That tab could not open in a window of its own."
+  "desktop.inspector.windowFailed": "That tab could not open in a window of its own.",
+  "workspace.approval.source": "Asked by {{source}}",
+  "workspace.rules.sourceDefault": "the defaults",
+  "workspace.rules.sourcePlanMode": "plan mode",
+  "workspace.rules.sourcePolicy": "your organisation’s policy",
+  "workspace.rules.sourceRemembered": "an earlier “always allow”",
+  "workspace.rules.sourceUser": "one of your rules",
+  "workspace.rules.sourceUserRule": "your rule {{n}} (every workspace)",
+  "workspace.rules.sourceWorkspace": "a workspace rule",
+  "workspace.rules.sourceWorkspaceRule": "workspace rule {{n}}"
 }

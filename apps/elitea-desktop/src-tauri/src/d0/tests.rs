@@ -4645,3 +4645,49 @@ async fn always_allow_appends_a_workspace_prefix_rule() {
         Source::Workspace
     );
 }
+
+/// A workspace `forbidden` rule refuses the model's command with the
+/// rule's justification in the tool result, so the model can take the
+/// alternative instead of retrying; no approval is asked.
+#[tokio::test]
+async fn a_forbidden_rule_reaches_the_model_with_its_justification() {
+    let inner = platform(agent_details(), &[]);
+    let calls = AtomicUsize::new(0);
+    let server = serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            return match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => tool_call(
+                    "call-publish",
+                    "run_command",
+                    &json!({"command": "sh -c 'npm publish --tag next'"}),
+                ),
+                _ => sse(&[
+                    json!({"choices": [{"delta": {"content": "Opened a PR instead."}, "finish_reason": "stop"}]}),
+                ]),
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_rules(
+        &h.workspaces.data_dir(&h.workspace_id).join("rules.json"),
+        r#"{"version":1,"rules":[{"pattern":["npm","publish"],"decision":"forbidden",
+            "justification":"Publishing goes through the release pipeline; open a PR instead.",
+            "match":["npm publish --tag next"]}]}"#,
+    );
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    assert!(
+        of_kind(&events, "approval_request").is_empty(),
+        "refused inline"
+    );
+    let bodies = llm_bodies(&h.server);
+    let second = bodies[1].to_string();
+    assert!(second.contains("forbidden_by_rule"), "{second}");
+    assert!(second.contains("workspace#1"), "{second}");
+    assert!(
+        second.contains("Publishing goes through the release pipeline; open a PR instead."),
+        "{second}"
+    );
+}

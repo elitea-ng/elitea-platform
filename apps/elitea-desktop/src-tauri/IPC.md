@@ -202,6 +202,12 @@ sandbox, network}` to the workspace's rules file. Command choices an older
 host kept in `choices.json` are moved into it once; file choices stay in
 `choices.json`.
 
+A `forbidden` rule refuses the call inline (no question) and the model sees
+`{"status": "error", "code": "local_tools.denied", "message": "forbidden by
+workspace#3: …", "error": "forbidden_by_rule", "justification": "…",
+"rule": "workspace#3"}`, so it can take the alternative the justification
+names instead of retrying.
+
 ## The local agent turn (D0, `src/d0/`)
 
 | Command | Arguments | Result |
@@ -1165,7 +1171,7 @@ order. Kinds and payloads:
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
 | `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
-| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below) |
+| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
