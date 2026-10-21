@@ -437,7 +437,10 @@ impl Activity {
     /// Look the folder up once per turn, never on a streamed token and never
     /// while the state lock is held.
     fn remember_name(&self, event: &AgentEvent) {
-        if matches!(event.kind, "text_delta" | "usage" | "tool_result") {
+        if matches!(
+            event.kind,
+            "text_delta" | "usage" | "context" | "tool_result"
+        ) {
             return;
         }
         let known = self

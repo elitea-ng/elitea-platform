@@ -170,8 +170,14 @@ function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
   return { ...turn, phase, tool: null, approvals: [], finished: turn.commit === 'none' };
 }
 
+/** Streamed text and the composer's meter (`context`): nothing the feed shows. */
+function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text_delta' | 'context' }> {
+  return event.kind === 'text_delta' || event.kind === 'context';
+}
+
 /** Folds one agent event into a turn. Pure. */
 export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
+  if (changesNothing(event)) return turn;
   switch (event.kind) {
     case 'status':
       return TERMINAL_PHASES.has(event.payload.phase) ? ended(turn, event.payload.phase) : { ...turn, phase: event.payload.phase };
@@ -179,8 +185,6 @@ export function foldTurn(turn: TrackedTurn, event: AgentEvent): TrackedTurn {
       return { ...turn, tool: event.payload.tool, steps: turn.steps + 1 };
     case 'tool_result':
       return { ...turn, tool: null };
-    case 'text_delta':
-      return turn;
     case 'approval_request':
       return withApproval(turn, event.payload);
     case 'approval_closed':

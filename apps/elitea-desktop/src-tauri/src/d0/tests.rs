@@ -136,6 +136,14 @@ pub(crate) fn tool_call(id: &str, name: &str, args: &Value) -> Res {
     ])
 }
 
+/// The model catalogue of project 1: `gpt-test` with a `window` window.
+pub(crate) fn catalogue(window: u64) -> Value {
+    json!({"total": 1, "items": [{
+        "name": "gpt-test", "project_id": 1, "section": "llm",
+        "context_window": window, "max_output_tokens": window / 8,
+    }]})
+}
+
 /// The platform: one agent, one conversation, a model that writes a local
 /// file, then calls the remote toolkit (sensitive: 409 first), then answers.
 fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) -> Res {
@@ -145,6 +153,10 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
         let path = req.path.as_str();
         if path == "/api/v2/social/author" {
             return Res::json(200, &json!({"id": 1, "name": "Me"}));
+        }
+        // The model catalogue: the agent's model has a 200k window.
+        if path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(200, &catalogue(200_000));
         }
         if path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/5/9" {
             return Res::json(200, &resolved(&details, withheld));
@@ -361,6 +373,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         plan_mode: false,
         mentions: Vec::new(),
         skills: Vec::new(),
+        compact: false,
     }
 }
 
@@ -5337,4 +5350,405 @@ async fn a_forbidden_rule_reaches_the_model_with_its_justification() {
         second.contains("Publishing goes through the release pipeline; open a PR instead."),
         "{second}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Context compaction (#1217)
+// ---------------------------------------------------------------------------
+
+/// A v1 `context_summary` record, as a summary model answers it.
+fn summary_record(objective: &str) -> String {
+    json!({"version": 1, "objective": objective, "constraints": [], "decisions": [],
+        "key_facts": ["big.txt holds numbered lines."], "completed_work": [],
+        "open_work": ["Answer the question."], "next_steps": [], "unresolved_issues": [],
+        "references": []})
+    .to_string()
+}
+
+/// A summary call: no tools, one user message holding the template.
+fn is_summary_call(body: &Value) -> bool {
+    body.get("tools").is_none()
+}
+
+/// The compaction tests' model: "read big.txt N times" reads it N times,
+/// then answers; a summary call answers [`summary_record`]; anything else
+/// is "ok". `summaries` counts the summary calls.
+fn reading_script(summaries: Arc<AtomicUsize>) -> Script {
+    let remaining = Arc::new(AtomicUsize::new(0));
+    Box::new(move |body: &Value| {
+        if is_summary_call(body) {
+            summaries.fetch_add(1, Ordering::SeqCst);
+            return say(&summary_record("Read big.txt and report."));
+        }
+        let last = last_message(body);
+        if last["role"] == "tool" {
+            if remaining.load(Ordering::SeqCst) == 0 {
+                return say("Done reading.");
+            }
+            remaining.fetch_sub(1, Ordering::SeqCst);
+            let n = remaining.load(Ordering::SeqCst);
+            return tool_call(
+                &format!("call-read-{n}"),
+                "read_file",
+                &json!({"path": "big.txt"}),
+            );
+        }
+        let prompt = last["content"].as_str().unwrap_or_default();
+        if let Some(times) = prompt
+            .strip_prefix("read big.txt ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.parse::<usize>().ok())
+        {
+            remaining.store(times - 1, Ordering::SeqCst);
+            return tool_call("call-read-first", "read_file", &json!({"path": "big.txt"}));
+        }
+        say("ok")
+    })
+}
+
+/// [`memory_platform`] whose catalogue gives `gpt-test` a `window` window.
+async fn small_window_platform(
+    window: u64,
+    convo: Arc<Mutex<Convo>>,
+    script: Script,
+) -> MockServer {
+    let inner = memory_platform(convo, script);
+    serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return Res::json(200, &catalogue(window));
+        }
+        inner(req)
+    })
+    .await
+}
+
+fn all_commit_bodies(server: &MockServer) -> Vec<Value> {
+    seen(server, "")
+        .iter()
+        .filter(|req| req.path.contains("/local_turn_commit/"))
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+fn write_big(h: &Harness) {
+    let text: String = (0..100)
+        .map(|n| format!("line {n} of the big file, padded to be long enough\n"))
+        .collect();
+    std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
+}
+
+/// The agent's requests (summary calls left out).
+fn agent_bodies(server: &MockServer) -> Vec<Value> {
+    llm_bodies(server)
+        .into_iter()
+        .filter(|body| !is_summary_call(body))
+        .collect()
+}
+
+/// Every tool result answers a call the same request made before it.
+fn assert_paired(body: &Value) {
+    let mut called = std::collections::HashSet::new();
+    for message in body["messages"].as_array().unwrap() {
+        for call in message["tool_calls"].as_array().into_iter().flatten() {
+            called.insert(call["id"].as_str().unwrap().to_owned());
+        }
+        if message["role"] == "tool" {
+            let id = message["tool_call_id"].as_str().unwrap();
+            assert!(called.contains(id), "orphaned result {id}: {body}");
+        }
+    }
+}
+
+/// The first message after the system one, as text.
+fn first_message(body: &Value) -> String {
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] != "system")
+        .map(|m| m["content"].to_string())
+        .unwrap_or_default()
+}
+
+const SUMMARY_MARK: &str = "[context summary v1]";
+
+/// The events of one turn, in order.
+fn events_of(h: &Harness, turn_id: &str) -> Vec<AgentEvent> {
+    h.emitter
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.turn_id == turn_id)
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn long_session_compacts_under_small_window() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let server = small_window_platform(8_192, convo, reading_script(summaries.clone())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_big(&h);
+    for prompt in [
+        "read big.txt 2 times",
+        "read big.txt 2 times",
+        "read big.txt 8 times",
+    ] {
+        let started = h.host.start(turn(&h, prompt)).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let events = events_of(&h, &started.turn_id);
+        assert!(of_kind(&events, "error").is_empty(), "{events:?}");
+    }
+    commits_settled(&h.host).await;
+    assert!(
+        summaries.load(Ordering::SeqCst) >= 1,
+        "the session never compacted"
+    );
+    let bodies = agent_bodies(&h.server);
+    // 3 + 3 + 9 model steps: the session kept running through compactions.
+    assert_eq!(bodies.len(), 15);
+    for body in &bodies {
+        assert_paired(body);
+        // Within the 8k window: every request after the first compaction
+        // fits (a token is 4 bytes in the estimate).
+        if first_message(body).contains(SUMMARY_MARK) {
+            assert!(
+                body.to_string().len() / 4 <= 8_192,
+                "{}",
+                body.to_string().len()
+            );
+        }
+    }
+    assert!(
+        bodies
+            .iter()
+            .any(|body| first_message(body).contains(SUMMARY_MARK)),
+        "no request started from the summary"
+    );
+    let commits = all_commit_bodies(&h.server);
+    assert_eq!(commits.len(), 3);
+    assert_eq!(
+        commits[2]["assistant_message"]["content"], "Done reading.",
+        "{}",
+        commits[2]
+    );
+}
+
+#[tokio::test]
+async fn compaction_marker_reused_next_turn() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let server = small_window_platform(8_192, convo, reading_script(summaries.clone())).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_big(&h);
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    let after_first = summaries.load(Ordering::SeqCst);
+    assert!(after_first >= 1, "the first turn never compacted");
+    // The marker is in the session, after the events it covers.
+    let rows = h.session_rows();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.3 == super::context::MARKER_AUTHOR)
+            .count(),
+        after_first,
+        "{rows:?}"
+    );
+    run_turn(&h, "what next?").await;
+    commits_settled(&h.host).await;
+    // No second summarisation of the same events: the next turn starts
+    // from the stored summary.
+    assert_eq!(summaries.load(Ordering::SeqCst), after_first);
+    let last = agent_bodies(&h.server).pop().unwrap();
+    assert!(first_message(&last).contains(SUMMARY_MARK), "{last}");
+    assert!(last.to_string().contains("what next?"));
+    assert!(
+        !last.to_string().contains("call-read-first"),
+        "folded events came back: {last}"
+    );
+    assert_paired(&last);
+}
+
+/// A model that refuses a request as too long: `always`, or until the
+/// request starts from a summary.
+fn overflowing_script(summaries: Arc<AtomicUsize>, always: bool) -> Script {
+    let inner = reading_script(summaries);
+    Box::new(move |body: &Value| {
+        let prompt = body.to_string();
+        if !is_summary_call(body)
+            && prompt.contains("overflow")
+            && (always || !first_message(body).contains(SUMMARY_MARK))
+        {
+            return Res::json(
+                400,
+                &json!({"error": {"message": "This model's maximum context length is 8192 tokens.",
+                    "type": "invalid_request_error", "code": "context_length_exceeded"}}),
+            );
+        }
+        if prompt.contains("overflow") && !is_summary_call(body) {
+            return say("Fits now.");
+        }
+        inner(body)
+    })
+}
+
+#[tokio::test]
+async fn overflow_compacts_and_retries_once() {
+    for always in [false, true] {
+        let convo = Arc::new(Mutex::new(Convo::default()));
+        let summaries = Arc::new(AtomicUsize::new(0));
+        let server = small_window_platform(
+            200_000,
+            convo,
+            overflowing_script(summaries.clone(), always),
+        )
+        .await;
+        let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+        write_big(&h);
+        run_turn(&h, "read big.txt 2 times").await;
+        assert_eq!(
+            summaries.load(Ordering::SeqCst),
+            0,
+            "a 200k window needs no compaction"
+        );
+        let before = agent_bodies(&h.server).len();
+        let started = h.host.start(turn(&h, "overflow, please")).await.unwrap();
+        until_done_of(&h, &started.turn_id).await;
+        let events = events_of(&h, &started.turn_id);
+        commits_settled(&h.host).await;
+        // One compaction, one retry: two requests for the step.
+        assert_eq!(summaries.load(Ordering::SeqCst), 1, "always={always}");
+        assert_eq!(agent_bodies(&h.server).len() - before, 2, "always={always}");
+        let errors: Vec<Value> = of_kind(&events, "error")
+            .into_iter()
+            .filter(|error| error["code"] == "context_overflow")
+            .collect();
+        let commits = all_commit_bodies(&h.server);
+        let last = commits.last().unwrap();
+        if always {
+            assert_eq!(errors.len(), 1, "{events:?}");
+            assert!(
+                errors[0]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Start a new thread")
+            );
+            assert_eq!(last["assistant_message"]["is_error"], true);
+        } else {
+            assert!(errors.is_empty(), "{events:?}");
+            assert_eq!(last["assistant_message"]["content"], "Fits now.");
+        }
+    }
+}
+
+fn say_with_usage(text: &str) -> Res {
+    sse(&[
+        json!({"choices": [{"delta": {"content": text}}]}),
+        json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        json!({"choices": [], "usage": {"prompt_tokens": 1000, "completion_tokens": 5, "total_tokens": 1005}}),
+    ])
+}
+
+#[tokio::test]
+async fn commit_carries_context_summary() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let summaries = Arc::new(AtomicUsize::new(0));
+    let inner = reading_script(summaries.clone());
+    let script: Script = Box::new(move |body: &Value| {
+        let last = last_message(body);
+        if !is_summary_call(body) && last["content"].to_string().contains("go on") {
+            return say_with_usage("Going on.");
+        }
+        inner(body)
+    });
+    let server = small_window_platform(200_000, convo, script).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    write_big(&h);
+    run_turn(&h, "read big.txt 2 times").await;
+    commits_settled(&h.host).await;
+    assert!(
+        all_commit_bodies(&h.server)[0]
+            .get("context_summary")
+            .is_none()
+    );
+    // `/compact`: the next turn compacts first, whatever its size.
+    let started = h
+        .host
+        .start(TurnRequest {
+            compact: true,
+            ..turn(&h, "go on")
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let events = events_of(&h, &started.turn_id);
+    commits_settled(&h.host).await;
+    assert_eq!(summaries.load(Ordering::SeqCst), 1);
+    let commit = all_commit_bodies(&h.server).pop().unwrap();
+    let summary = &commit["context_summary"];
+    assert_eq!(summary["version"], 1, "{commit}");
+    assert_eq!(summary["objective"], "Read big.txt and report.");
+    let facts = summary["key_facts"].to_string();
+    assert!(
+        facts.contains("files_touched") && facts.contains("big.txt"),
+        "{facts}"
+    );
+    assert!(summary.to_string().len() <= 32 * 1024);
+    // The meter: the step's usage carries the request's occupancy.
+    let usage = of_kind(&events, "usage");
+    let context = &usage.last().expect("a usage event")["context"];
+    assert_eq!(context["window_tokens"], 200_000);
+    assert_eq!(context["compacted"], true);
+    assert!(context["compacted_at"].is_string());
+    assert!(context["used_tokens"].as_u64().unwrap() > 0);
+    assert_eq!(context["window_fallback"], false);
+    assert!(
+        !context.to_string().contains("big.txt"),
+        "no content in the meter"
+    );
+    // The summary call's phase reached the meter while it ran, before the
+    // step's usage: a `context` event per phase change.
+    let phases: Vec<(u64, String)> = events
+        .iter()
+        .filter(|event| event.kind == "context")
+        .map(|event| {
+            (
+                event.seq,
+                event.payload["phase"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(phases[0].1, "compacting", "{phases:?}");
+    assert_eq!(phases[1].1, "compacted", "{phases:?}");
+    let first_usage = events.iter().find(|event| event.kind == "usage").unwrap();
+    assert!(phases[1].0 < first_usage.seq);
+}
+
+#[tokio::test]
+async fn a_transient_catalogue_answer_is_asked_again_next_turn() {
+    // 429 first: the turn runs on the fallback and the next turn asks
+    // again; the 200 then is kept for the session.
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let inner = memory_platform(convo, reading_script(Arc::new(AtomicUsize::new(0))));
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = asked.clone();
+    let server = serve(move |req: &Req| {
+        if req.path.starts_with("/api/v2/configurations/models/1?") {
+            return if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                Res::json(429, &json!({"error": "slow down"}))
+            } else {
+                Res::json(200, &catalogue(200_000))
+            };
+        }
+        inner(req)
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    for _ in 0..3 {
+        run_turn(&h, "hello").await;
+        commits_settled(&h.host).await;
+    }
+    assert_eq!(asked.load(Ordering::SeqCst), 2);
 }

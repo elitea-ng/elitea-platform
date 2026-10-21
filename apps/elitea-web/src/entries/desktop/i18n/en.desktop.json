@@ -612,5 +612,14 @@
   "workspace.rules.proposedConflict": "The repository’s proposal changed since it was shown, so nothing was imported. Review it again below.",
   "workspace.rules.proposedTitle": "Proposed by the repository",
   "workspace.rules.proposedWarnings": "An import grants less than the repository asks:",
-  "workspace.rules.sourceLegacyRule": "workspace setting {{n}} (from an earlier version)"
+  "workspace.rules.sourceLegacyRule": "workspace setting {{n}} (from an earlier version)",
+  "workspace.command.compact": "Summarize the conversation so far at the next message",
+  "workspace.compactNext": "Your next message first summarizes this conversation, so the agent continues with more room.",
+  "workspace.context.aria": "Context in use: {{label}}",
+  "workspace.context.compactedAt": "Summarized at {{time}}",
+  "workspace.context.compacting": "Summarizing the conversation…",
+  "workspace.context.fallback": "The model’s window is unknown: 128K is assumed.",
+  "workspace.context.label": "{{percent}}% of {{window}}",
+  "workspace.context.summarizing": "Summarizing…",
+  "workspace.context.used": "{{used}} of {{window}} tokens of context in use"
 }

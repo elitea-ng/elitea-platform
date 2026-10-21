@@ -353,7 +353,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
       ipc.emit({ ...at(2), kind: 'text_delta', payload: { text: 'Reading the repository layout first.' } });
       ipc.emit({ ...at(3), kind: 'tool_call', payload: { call_id: 'c1', tool: 'read_file', args_summary: 'README.md', remote: false } });
       ipc.emit({ ...at(4), kind: 'tool_result', payload: { call_id: 'c1', ok: true, summary: '# Elitea platform\nGo monorepo…', truncated: false } });
-      ipc.emit({ ...at(4), kind: 'usage', payload: { prompt_tokens: 12_400, completion_tokens: 1200, total_tokens: 13_600 } });
+      ipc.emit({ ...at(4), kind: 'usage', payload: { prompt_tokens: 12_400, completion_tokens: 1200, total_tokens: 13_600, context: { used_tokens: 12_900, window_tokens: 200_000, phase: 'measured', compacted: false, window_fallback: false } } });
       ipc.emit({ ...at(5), kind: 'tool_call', payload: { call_id: 'c2', tool: 'run_command', args_summary: 'cargo test -p worker', remote: false } });
       if (stage === 'running') return;
       ipc.emit({

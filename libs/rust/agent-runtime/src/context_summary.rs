@@ -440,6 +440,120 @@ fn invalid(code: &'static str) -> AdkError {
     )
 }
 
+/// The `key_facts` entry that carries the files a session touched
+/// (`files_touched: [{"path": …, "op": "read|edit|write|delete"}, …]`):
+/// a plain string of the v1 contract, so the summary stays the shared
+/// format on every host (`context_management::StepCompaction`).
+pub const FILES_TOUCHED_PREFIX: &str = "files_touched: ";
+
+/// The objective of a summary [`validate`] accepted; `None` for text that
+/// is not one.
+pub fn objective(text: &str) -> Option<String> {
+    let summary: ContinuationSummary = serde_json::from_str(summary_json(text).ok()?).ok()?;
+    Some(summary.objective)
+}
+
+/// The [`FILES_TOUCHED_PREFIX`] entry of a summary, as it is written
+/// (without the prefix); `None` when it has none.
+pub fn files_touched_entry(text: &str) -> Option<String> {
+    let summary: ContinuationSummary = serde_json::from_str(summary_json(text).ok()?).ok()?;
+    summary
+        .key_facts
+        .iter()
+        .rev()
+        .find_map(|fact| fact.strip_prefix(FILES_TOUCHED_PREFIX))
+        .map(str::to_owned)
+}
+
+/// Carry what a later summary must not lose into a validated one: the
+/// previous summary's `objective` (the original task; corrections belong
+/// in `constraints`) and the cumulative files-touched entry, which
+/// replaces any such entry the model wrote. The result is validated
+/// against `source` again.
+pub fn carry_forward(
+    validated: &str,
+    objective: Option<&str>,
+    files_touched: Option<&str>,
+    source: &serde_json::Value,
+) -> adk_core::Result<String> {
+    let mut summary: ContinuationSummary = serde_json::from_str(summary_json(validated)?)
+        .map_err(|_| invalid("context_summary_schema"))?;
+    if let Some(objective) = objective.filter(|text| valid_text(text)) {
+        objective.clone_into(&mut summary.objective);
+    }
+    if let Some(files) = files_touched {
+        summary
+            .key_facts
+            .retain(|fact| !fact.starts_with(FILES_TOUCHED_PREFIX));
+        let entry = format!("{FILES_TOUCHED_PREFIX}{files}");
+        if valid_text(&entry) {
+            summary.key_facts.truncate(MAX_ITEMS - 1);
+            summary.key_facts.push(entry);
+        }
+    }
+    let text = serde_json::to_string(&summary).map_err(|_| invalid("context_summary_json"))?;
+    validate(&text, source)
+}
+
+/// A v1 summary built from text a model wrote outside the contract (its
+/// answer ignored the template twice): the `objective`, the text cut into
+/// `key_facts` (the whole record below [`MAX_SUMMARY_BYTES`]) and the
+/// files-touched entry. It cites nothing, so it needs no source evidence.
+pub fn plain_text(objective: &str, text: &str, files_touched: Option<&str>) -> String {
+    let objective = clip(objective.replace('\0', " ").trim(), MAX_TEXT_BYTES);
+    let objective = if objective.trim().is_empty() {
+        "Continue the conversation's task.".to_owned()
+    } else {
+        objective
+    };
+    let mut facts = Vec::new();
+    let files = files_touched
+        .map(|files| format!("{FILES_TOUCHED_PREFIX}{files}"))
+        .filter(|entry| valid_text(entry));
+    let mut budget = MAX_SUMMARY_BYTES
+        .saturating_sub(1024 + objective.len() + files.as_ref().map_or(0, String::len));
+    let text = text.replace('\0', " ");
+    let mut rest = text.trim();
+    let limit = MAX_ITEMS - usize::from(files.is_some());
+    while !rest.is_empty() && facts.len() < limit && budget > 64 {
+        // A JSON string may double its bytes (escapes): cut at half.
+        let piece = clip(rest, (MAX_TEXT_BYTES / 2).min(budget / 2));
+        if piece.is_empty() {
+            break;
+        }
+        rest = rest[piece.len()..].trim_start();
+        budget = budget.saturating_sub(piece.len() * 2);
+        if !piece.trim().is_empty() {
+            facts.push(piece.trim().to_owned());
+        }
+    }
+    facts.extend(files);
+    let summary = ContinuationSummary {
+        version: 1,
+        objective,
+        constraints: Vec::new(),
+        decisions: Vec::new(),
+        key_facts: facts,
+        completed_work: Vec::new(),
+        open_work: Vec::new(),
+        next_steps: Vec::new(),
+        unresolved_issues: vec![
+            "This summary is the model's own text: it did not follow the summary template."
+                .to_owned(),
+        ],
+        references: Vec::new(),
+    };
+    serde_json::to_string(&summary).unwrap_or_default()
+}
+
+/// `text` cut to at most `max` bytes on a character boundary.
+fn clip(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    text[..text.floor_char_boundary(max)].to_owned()
+}
+
 #[cfg(any(test, feature = "test-support"))]
 pub fn fixture() -> String {
     serde_json::json!({"version":1,"objective":"Continue the original task.",

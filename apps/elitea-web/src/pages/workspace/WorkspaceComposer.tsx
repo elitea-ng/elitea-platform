@@ -64,6 +64,8 @@ export interface WorkspaceComposerProps {
   /** Act | Plan: off for a cloud thread, whose turns have no plan mode. */
   showMode?: boolean;
   runLocation?: ReactNode;
+  /** The context meter (`ContextMeter`), after the run location. */
+  contextMeter?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
   /** The selected agent's skills, offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
@@ -107,10 +109,11 @@ interface FooterControlsProps {
   showMode: boolean;
   agentPicker: ReactNode;
   runLocation: ReactNode;
+  contextMeter: ReactNode;
 }
 
-/** The footer's left side: Act | Plan, the agent·version picker, where the thread runs. */
-function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, runLocation }: FooterControlsProps): React.JSX.Element {
+/** The footer's left side: Act | Plan, the agent·version picker, where the thread runs, the context meter. */
+function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
       {showMode && (
@@ -127,6 +130,7 @@ function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, run
       )}
       {agentPicker}
       {runLocation}
+      {contextMeter}
     </Box>
   );
 }
@@ -274,7 +278,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           modelSelector: null,
-          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} runLocation={props.runLocation} />,
+          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton
               data-testid="workspace-send-button"

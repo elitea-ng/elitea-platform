@@ -16,7 +16,7 @@
  * ([`MAX_UNCLAIMED_TURNS`]): one of them may be the turn whose start has not
  * returned yet.
  */
-import type { AgentEvent, ApprovalRequestPayload, TurnPhase } from '@/shared/desktop/workspaceIpc';
+import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
 export type TranscriptItem =
   | { type: 'text'; key: string; text: string }
@@ -49,6 +49,8 @@ export interface TurnView {
   projectInstructions?: string[];
   /** The turn's commit (after `done`) did not land: "Retry" sends it again. */
   commitFailed?: { executionId: string; code: string; message: string; seq: number };
+  /** The latest model call's context occupancy (the composer's meter). */
+  context?: ContextMeter;
 }
 
 /** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
@@ -164,7 +166,23 @@ function onDone(view: TurnView, event: EventOf<'done'>): TurnView {
   return { ...view, done: { committed, conversationId, messageIds, changedFiles }, approvals: [] };
 }
 
+/** `usage` (the meter of a call that ended) or `context` (a phase change, sent at once). */
+function isMeterEvent(event: AgentEvent): event is EventOf<'usage'> | EventOf<'context'> {
+  return event.kind === 'usage' || event.kind === 'context';
+}
+
+/**
+ * Not part of the transcript: the activity island shows a turn's tokens; the
+ * composer's meter the latest context occupancy, which a `context` event
+ * carries while a summary call runs.
+ */
+function onMeter(view: TurnView, event: EventOf<'usage'> | EventOf<'context'>): TurnView {
+  const context = event.kind === 'context' ? event.payload : event.payload.context;
+  return context === undefined ? view : { ...view, context };
+}
+
 function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string[]): TurnView {
+  if (isMeterEvent(event)) return onMeter(view, event);
   switch (event.kind) {
     case 'status':
       return onStatus(view, event);
@@ -178,9 +196,6 @@ function applyEvent(view: TurnView, event: AgentEvent, resolved: readonly string
       return onApprovalRequest(view, event, resolved);
     case 'approval_closed':
       return { ...view, approvals: view.approvals.filter((a) => a.request_id !== event.payload.request_id) };
-    case 'usage':
-      // Not part of the transcript: the activity island shows a turn's tokens.
-      return view;
     case 'error':
       return { ...view, error: event.payload, approvals: [] };
     case 'done':

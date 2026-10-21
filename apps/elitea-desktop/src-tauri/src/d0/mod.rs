@@ -28,12 +28,15 @@
 //! * [`session`] — a turn's session: reopened from `sessions.sqlite`, seeded
 //!   from the server conversation when it has nothing (the execution
 //!   request's `chat_history` stays empty: the session carries the history);
+//! * [`context`] — the model's context limits, the step compaction's budget,
+//!   marker and meter (#1217);
 //! * [`turn`] — the assembler and the host's turn table.
 
 pub mod api;
 pub mod approvals;
 pub mod cache;
 pub mod commits;
+pub mod context;
 pub mod definition;
 pub mod environment;
 pub mod events;

@@ -124,6 +124,41 @@ pub struct TurnEvents {
     emitter: Arc<dyn EventEmitter>,
     seq: Mutex<u64>,
     clock: Mutex<Clock>,
+    context: Mutex<Option<ContextMeter>>,
+}
+
+/// The request occupancy the next `usage` event carries (#1217), and a
+/// `context` event when its phase changes: the step compaction's estimate
+/// of what the model call sends, never its content.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContextMeter {
+    /// The request's estimated input tokens.
+    pub used_tokens: u64,
+    /// The window the budget uses (the model's, at most 272k).
+    pub window_tokens: u32,
+    /// `measured`, `compacting` or `compacted`.
+    pub phase: &'static str,
+    /// The window is the desktop's default (128k): the catalogue did not
+    /// name the model's.
+    pub window_fallback: bool,
+    /// When this turn last compacted (RFC 3339, UTC).
+    pub compacted_at: Option<String>,
+}
+
+impl ContextMeter {
+    fn payload(&self) -> Value {
+        let mut value = json!({
+            "used_tokens": self.used_tokens,
+            "window_tokens": self.window_tokens,
+            "phase": self.phase,
+            "compacted": self.compacted_at.is_some(),
+            "window_fallback": self.window_fallback,
+        });
+        if let Some(at) = &self.compacted_at {
+            value["compacted_at"] = json!(at);
+        }
+        value
+    }
 }
 
 impl TurnEvents {
@@ -144,7 +179,43 @@ impl TurnEvents {
                 tools_busy: Duration::ZERO,
                 tools_ran: false,
             }),
+            context: Mutex::new(None),
         }
+    }
+
+    /// The occupancy of the model call about to be made; a `compacted`
+    /// phase stamps the compaction time, which later steps keep. A phase
+    /// other than the last one's (a turn starts `measured`) is sent at once
+    /// as a `context` event, so the meter shows a summary call while it
+    /// runs; the rest ride on the next `usage` event.
+    pub fn context(&self, mut meter: ContextMeter) {
+        let changed = {
+            let mut slot = self
+                .context
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if meter.phase == "compacted" {
+                meter.compacted_at =
+                    Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+            } else if meter.compacted_at.is_none() {
+                meter.compacted_at = slot.as_ref().and_then(|last| last.compacted_at.clone());
+            }
+            let last = slot.as_ref().map_or("measured", |last| last.phase);
+            let changed = (last != meter.phase).then(|| meter.payload());
+            *slot = Some(meter);
+            changed
+        };
+        if let Some(payload) = changed {
+            self.send("context", payload);
+        }
+    }
+
+    fn context_payload(&self) -> Option<Value> {
+        self.context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(ContextMeter::payload)
     }
 
     fn clock(&self) -> std::sync::MutexGuard<'_, Clock> {
@@ -314,16 +385,18 @@ impl TurnEvents {
     /// One model call's token usage, as the gateway reported it (`prompt_tokens`
     /// is what that call sent: the context in use; `completion_tokens` what it
     /// produced). Sent once the call's stream has ended, only when the gateway
-    /// reported usage.
+    /// reported usage. `context` is the call's request occupancy when the
+    /// step compaction measured it (#1217): the composer's context meter.
     pub fn usage(&self, prompt_tokens: u32, completion_tokens: u32, total_tokens: u32) {
-        self.send(
-            "usage",
-            json!({
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }),
-        );
+        let mut payload = json!({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        });
+        if let Some(context) = self.context_payload() {
+            payload["context"] = context;
+        }
+        self.send("usage", payload);
     }
 
     pub fn error(&self, code: &str, message: &str) {
@@ -367,6 +440,50 @@ impl EventEmitter for VecEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_context_phase_change_is_sent_at_once() {
+        let emitter = Arc::new(VecEmitter::default());
+        let events = TurnEvents::new("t".into(), emitter.clone());
+        let meter = |phase: &'static str, used_tokens: u64| ContextMeter {
+            used_tokens,
+            window_tokens: 8_192,
+            phase,
+            ..ContextMeter::default()
+        };
+        events.context(meter("measured", 100));
+        events.context(meter("measured", 200));
+        events.context(meter("compacting", 7_000));
+        events.context(meter("compacted", 1_500));
+        events.context(meter("compacted", 1_600));
+        events.context(meter("measured", 1_700));
+        events.usage(1, 1, 2);
+        let all = emitter.all();
+        let sent: Vec<(&str, &str)> = all
+            .iter()
+            .map(|event| {
+                let payload = if event.kind == "usage" {
+                    &event.payload["context"]
+                } else {
+                    &event.payload
+                };
+                (event.kind, payload["phase"].as_str().unwrap())
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("context", "compacting"),
+                ("context", "compacted"),
+                ("context", "measured"),
+                ("usage", "measured"),
+            ]
+        );
+        assert_eq!(all[0].payload["used_tokens"], 7_000);
+        assert_eq!(all[0].payload["compacted"], false);
+        assert!(all[1].payload["compacted_at"].is_string());
+        assert_eq!(all[2].payload["compacted"], true, "the compaction is kept");
+    }
 
     #[test]
     fn a_status_carries_the_phases_timed_since_the_last_one() {

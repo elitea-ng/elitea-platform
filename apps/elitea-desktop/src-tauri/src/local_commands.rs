@@ -534,6 +534,7 @@ pub async fn agent_turn_start(
     plan_mode: bool,
     mentions: Option<Vec<String>>,
     skills: Option<Vec<String>>,
+    compact: Option<bool>,
 ) -> Result<TurnStarted, IpcError> {
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
     // platform refuses it too).
@@ -557,6 +558,7 @@ pub async fn agent_turn_start(
             plan_mode,
             mentions: mentions.unwrap_or_default(),
             skills: skills.unwrap_or_default(),
+            compact: compact.unwrap_or(false),
         })
         .await?)
 }

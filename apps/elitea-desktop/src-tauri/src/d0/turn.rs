@@ -26,17 +26,20 @@ use std::time::Duration;
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{
-    Agent, Content, Event, Part, RunConfig, StreamingMode, ToolConcurrencyConfig,
+    Agent, Content, Event, Llm, Part, RunConfig, StreamingMode, ToolConcurrencyConfig,
     ToolExecutionStrategy, Toolset,
 };
 use adk_runner::Runner;
 use async_trait::async_trait;
 use elitea_agent_runtime::context::ToolResultElision;
+use elitea_agent_runtime::context_budget::RequestContextBudget;
+use elitea_agent_runtime::context_management::{SUMMARY_MAX_OUTPUT_TOKENS, StepCompaction};
 use elitea_agent_runtime::host::{
     EventSink, ExecutionGuard, HostError, LocalExecutionGuard, LocalStop, ModelRequest,
     ModelTransport, RunOutcome, ToolProvider, ToolsetRequest,
 };
 use elitea_agent_runtime::instruction_authority::InstructionPlan;
+use elitea_agent_runtime::request::ModelContextLimits;
 use elitea_agent_runtime::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, ProjectContextSnapshot, UserInput,
@@ -59,6 +62,7 @@ use super::api::{
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::cache::{ParticipantKey, TurnCaches, VersionKey};
 use super::commits::{self, CommitQueues, CommitRetry, lane_key};
+use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents};
@@ -157,6 +161,9 @@ pub struct TurnRequest {
     /// Skills the person picked with "/" (names, or frozen ids, of the
     /// agent version's own skills), applied to this turn up front.
     pub skills: Vec<String>,
+    /// `/compact`: compact the session's context at the turn's first model
+    /// call, whatever its size (#1217).
+    pub compact: bool,
 }
 
 /// `agent_turn_start`'s answer.
@@ -1412,6 +1419,7 @@ impl AgentHost {
             plan_mode: false,
             mentions: Vec::new(),
             skills: Vec::new(),
+            compact: false,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -1452,6 +1460,19 @@ impl AgentHost {
         }
         if let (Some(Ok(answering)), Some(key)) = (participant, &participant_key) {
             self.caches.keep_participant(key.clone(), &answering);
+        }
+        // The model's context limits (#1217), so the turn reads none.
+        if let Some(cached) = self.caches.version(&version_key)
+            && let Ok(admitted) = definition::admit(&cached.resolved, &local_tool_names())
+        {
+            context::model_limits(
+                &api,
+                &self.caches,
+                request.project_id,
+                &admitted.model.model_name,
+                &admitted.version_details,
+            )
+            .await;
         }
         Ok(Prewarmed {
             version: self.caches.version(&version_key).is_some(),
@@ -1801,9 +1822,21 @@ impl AgentHost {
         events.running(&project.paths());
 
         let sink = Arc::new(TurnSink::default());
+        let turn_context = TurnContext::default();
         let run = self.run_agent(
-            &request, &events, &workspace, &admitted, &project, &invoked, &started, &recorder,
-            &sink, &api, &memory, &folder,
+            &request,
+            &events,
+            &workspace,
+            &admitted,
+            &project,
+            &invoked,
+            &started,
+            &recorder,
+            &sink,
+            &api,
+            &memory,
+            &folder,
+            &turn_context,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -1909,6 +1942,7 @@ impl AgentHost {
             tool_calls: recorder.tool_calls(),
             hitl_exchanges: recorder.hitl_exchanges(),
             local_work: recorder.work_report(sandbox_mode.as_str()),
+            context_summary: turn_context.take_summary(),
         }
         .encode();
         // The workspace stays held by the commit (below) until it settles:
@@ -2121,6 +2155,69 @@ impl AgentHost {
         )
     }
 
+    /// The agent's model behind the step compaction (#1217, `context.rs`),
+    /// or as it is when the agent's settings turn compaction off or its
+    /// limits admit no budget.
+    #[allow(clippy::too_many_arguments)]
+    fn compacting_model(
+        &self,
+        transport: &GatewayTransport,
+        model_request: ModelRequest,
+        model: Arc<dyn Llm>,
+        limits: ModelContextLimits,
+        admitted: &Admitted,
+        host: ContextHost,
+        compact: bool,
+        turn_context: &TurnContext,
+    ) -> Result<Arc<dyn Llm>, TurnError> {
+        let Some(policy) = context::policy(&admitted.version_details) else {
+            return Ok(model);
+        };
+        let budget = match RequestContextBudget::resolve(
+            Some(limits),
+            &Map::new(),
+            admitted.model.max_tokens,
+        ) {
+            Ok(Some(budget)) => budget,
+            Ok(None) | Err(_) => {
+                log::warn!(
+                    "the model's limits admit no context budget; the turn runs without compaction"
+                );
+                return Ok(model);
+            }
+        };
+        // The summary model: the agent's own, quiet, on the turn's transport
+        // (its execution id: the spend is the turn's).
+        let summarizer = GatewayTransport {
+            quiet: true,
+            ..transport.clone()
+        }
+        .bind(ModelRequest {
+            system_instruction: String::new(),
+            max_tokens: Some(SUMMARY_MAX_OUTPUT_TOKENS.min(limits.max_output_tokens)),
+            temperature: None,
+            reasoning_effort: None,
+            max_model_turns: 1,
+            ..model_request.clone()
+        })
+        .map_err(|e| TurnError::new("model_unavailable", e.to_string()))?
+        .adk_model();
+        let compaction = Arc::new(StepCompaction::new(
+            policy,
+            Arc::new(context::ProviderBudget {
+                model: model_request,
+                budget,
+            }),
+            summarizer,
+            Arc::new(host),
+        ));
+        if compact {
+            compaction.force_next();
+        }
+        turn_context.bind(compaction.clone());
+        Ok(compaction.wrap(model))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn run_agent(
         &self,
@@ -2136,6 +2233,7 @@ impl AgentHost {
         api: &Arc<PlatformApi>,
         memory: &SessionPlan,
         folder: &str,
+        turn_context: &TurnContext,
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
@@ -2151,7 +2249,9 @@ impl AgentHost {
             .iter()
             .map(|tool| tool.name.to_owned())
             .collect();
-        let (index, mut facts) = tokio::join!(
+        // The model's context limits (the frozen ones, else the catalogue's,
+        // kept for the app's session) are read beside them.
+        let (index, mut facts, limits) = tokio::join!(
             async {
                 match &self.deps.index {
                     Some(registry) => registry.for_turn(&request.workspace_id).await,
@@ -2164,6 +2264,13 @@ impl AgentHost {
                 &workspace.policy,
                 request.plan_mode,
                 local_offered,
+            ),
+            context::model_limits(
+                api,
+                &self.caches,
+                request.project_id,
+                &admitted.model.model_name,
+                &admitted.version_details,
             ),
         );
         if index.is_some() {
@@ -2178,6 +2285,7 @@ impl AgentHost {
             project_id: request.project_id,
             execution_id: started.execution_id.clone(),
             events: events.clone(),
+            quiet: false,
         };
         let instruction = system_instruction(
             &admitted.instructions,
@@ -2192,27 +2300,45 @@ impl AgentHost {
         // elision below counts it as the provider request carries it.
         let instruction_tokens =
             elitea_agent_runtime::context_budget::estimate_tokens(instruction.len());
+        let model_request = ModelRequest {
+            model_project_id: check_project_id(request.project_id)?,
+            model_name: admitted.model.model_name.clone(),
+            system_instruction: instruction,
+            max_tokens: admitted.model.max_tokens,
+            temperature: admitted.model.temperature,
+            reasoning_effort: admitted.model.reasoning_effort,
+            response_schema: None,
+            allow_text_continuation: false,
+            max_model_turns: admitted.step_limit,
+        };
         let bound = transport
-            .bind(ModelRequest {
-                model_project_id: check_project_id(request.project_id)?,
-                model_name: admitted.model.model_name.clone(),
-                system_instruction: instruction,
-                max_tokens: admitted.model.max_tokens,
-                temperature: admitted.model.temperature,
-                reasoning_effort: admitted.model.reasoning_effort,
-                response_schema: None,
-                allow_text_continuation: false,
-                max_model_turns: admitted.step_limit,
-            })
+            .bind(model_request.clone())
             .map_err(|e| failed("model_unavailable", &e.to_string()))?;
+        let model = self.compacting_model(
+            &transport,
+            model_request,
+            bound.adk_model(),
+            limits,
+            admitted,
+            ContextHost {
+                events: events.clone(),
+                recorder: recorder.clone(),
+                service: memory.service.clone(),
+                session_id: memory.session_id.clone(),
+                limits,
+            },
+            request.compact,
+            turn_context,
+        )?;
 
         // Skills and project context: the runtime's instruction authority.
-        let execution = execution_request(
+        let mut execution = execution_request(
             request,
             admitted,
             &started.execution_id,
             &started.question_id,
         );
+        execution.payload.model_context_limits = Some(limits);
         let plan = InstructionPlan::admit(&execution).map_err(|_| {
             failed(
                 "skills_invalid",
@@ -2258,7 +2384,7 @@ impl AgentHost {
         };
 
         let mut builder = LlmAgentBuilder::new(AGENT_NAME)
-            .model(bound.adk_model())
+            .model(model)
             .max_iterations(admitted.step_limit)
             .tool_timeout(TOOL_TIMEOUT)
             .disallow_transfer_to_parent(true)
@@ -2271,9 +2397,9 @@ impl AgentHost {
         builder = plan.bind_builder(builder);
         // A long turn's older tool results go to the model as notes once
         // the request passes 60% of the model's window; the session keeps
-        // them whole. The window is the execution request's model limits;
-        // the desktop resolves none yet (#1217 stage 1 resolves them from
-        // the model catalogue), so today it is the runtime's 128k fallback.
+        // them whole. The window is the model's limits (`context.rs`). The
+        // elision runs first (a callback before the model); the step
+        // compaction wrapping the model then measures what it left.
         builder = ToolResultElision::for_limits(execution.payload.model_context_limits)
             .with_fixed_tokens(instruction_tokens)
             .bind_builder(builder);
@@ -3178,6 +3304,11 @@ struct CommitBody {
     tool_calls: ToolCalls,
     hitl_exchanges: Vec<Value>,
     local_work: Value,
+    /// The latest `context_summary` v1 record the turn's requests carried
+    /// (#1217): the cloud executor continues from it. Additive: a server
+    /// that does not know it ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_summary: Option<Value>,
 }
 
 impl CommitBody {
@@ -3263,6 +3394,13 @@ async fn run_once(
 }
 
 fn model_failure(text: &str) -> TurnError {
+    // A second overflow after the step compaction's one retry (#1217).
+    if let Some(start) = text.find("context_overflow: ") {
+        return TurnError::new(
+            "context_overflow",
+            text[start + "context_overflow: ".len()..].to_owned(),
+        );
+    }
     // `model_gateway.<code>: message` from the model adapter keeps its code,
     // whatever prefix the adk error's display adds.
     text.find("model_gateway.")
@@ -3706,5 +3844,14 @@ mod tests {
         assert_eq!(error.code, "model_gateway.member_budget_exhausted");
         assert_eq!(error.message, "your budget");
         assert_eq!(model_failure("boom").code, "agent_failed");
+        let overflow = model_failure(
+            &elitea_agent_runtime::context_management::context_overflow().to_string(),
+        );
+        assert_eq!(overflow.code, "context_overflow");
+        assert!(
+            overflow
+                .message
+                .starts_with("The conversation no longer fits")
+        );
     }
 }

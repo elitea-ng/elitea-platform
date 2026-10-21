@@ -4,7 +4,7 @@
  */
 import { t } from '@/shared/i18n';
 
-export type WorkspaceCommandId = 'new' | 'plan' | 'undo' | 'agent' | 'clear' | 'help';
+export type WorkspaceCommandId = 'new' | 'plan' | 'undo' | 'agent' | 'clear' | 'compact' | 'help';
 
 export interface WorkspaceCommand {
   id: WorkspaceCommandId;
@@ -21,6 +21,7 @@ export function workspaceCommands(): WorkspaceCommand[] {
     { id: 'undo', name: '/undo', description: t('workspace.command.undo', 'Undo the files the last turn changed') },
     { id: 'agent', name: '/agent', description: t('workspace.command.agent', 'Choose the agent') },
     { id: 'clear', name: '/clear', description: t('workspace.command.clear', 'Clear the transcript on this screen') },
+    { id: 'compact', name: '/compact', description: t('workspace.command.compact', 'Summarize the conversation so far at the next message') },
     { id: 'help', name: '/help', description: t('workspace.command.help', 'List these commands') },
   ];
 }
