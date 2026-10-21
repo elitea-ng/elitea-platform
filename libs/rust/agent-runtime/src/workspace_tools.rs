@@ -19,6 +19,10 @@ use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use crate::edit_profile::{
+    APPLY_PATCH, APPLY_PATCH_DESCRIPTION, APPLY_PATCH_ENVELOPE_DESCRIPTION, EditProfile,
+    MULTI_EDIT_DESCRIPTION, multi_edit_params, patch_param,
+};
 use crate::host::{HostError, ToolProvider, ToolsetRequest};
 
 /// The toolset's name: the local toolset's (`elitea_local_tools::provider::TOOLSET_NAME`).
@@ -163,7 +167,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "edit_file",
         read_only: false,
-        description: "Replace an exact string in a file you have read. old_string must occur exactly once unless replace_all is true.",
+        description: "Replace a string in a file you have read. old_string must occur exactly once unless replace_all is true; when it is not there exactly, a match ignoring line endings, trailing whitespace and a uniform indentation shift is used and reported. The result shows the changed lines.",
         parameters: || {
             json!({
                 "type": "object",
@@ -178,16 +182,16 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
         },
     },
     WorkspaceToolSpec {
-        name: "apply_patch",
+        name: "multi_edit",
         read_only: false,
-        description: "Apply a unified diff (git diff format) to files in the workspace. Every hunk must match exactly; nothing is written if one does not.",
-        parameters: || {
-            json!({
-                "type": "object",
-                "properties": { "patch": { "type": "string" } },
-                "required": ["patch"]
-            })
-        },
+        description: MULTI_EDIT_DESCRIPTION,
+        parameters: multi_edit_params,
+    },
+    WorkspaceToolSpec {
+        name: APPLY_PATCH,
+        read_only: false,
+        description: APPLY_PATCH_DESCRIPTION,
+        parameters: patch_param,
     },
     WorkspaceToolSpec {
         name: "run_command",
@@ -251,6 +255,22 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
         parameters: || json!({ "type": "object", "properties": {} }),
     },
 ];
+
+/// `apply_patch` as [`EditProfile::Patch`] offers it: the same name and
+/// schema, described as the Codex envelope.
+pub static APPLY_PATCH_ENVELOPE: WorkspaceToolSpec = WorkspaceToolSpec {
+    name: APPLY_PATCH,
+    read_only: false,
+    description: APPLY_PATCH_ENVELOPE_DESCRIPTION,
+    parameters: patch_param,
+};
+
+/// The tools a turn with `profile` is offered, in model order: the same
+/// selection as `elitea-local-tools`' `session::tools_for`.
+#[must_use]
+pub fn workspace_tools_for(profile: EditProfile) -> Vec<&'static WorkspaceToolSpec> {
+    profile.select_specs(WORKSPACE_TOOLS, |spec| spec.name, &APPLY_PATCH_ENVELOPE)
+}
 
 /// Runs one tool call in the sandbox's workspace runner.
 #[async_trait]
@@ -442,6 +462,7 @@ impl Toolset for WorkspaceToolset {
 pub struct WorkspaceToolProvider {
     runner: Arc<dyn WorkspaceRunner>,
     shell: bool,
+    edit_profile: EditProfile,
     approved_calls: Option<Arc<dyn ApprovedCallLedger>>,
 }
 
@@ -453,8 +474,17 @@ impl WorkspaceToolProvider {
         Self {
             runner,
             shell,
+            edit_profile: EditProfile::default(),
             approved_calls: None,
         }
+    }
+
+    /// Offer the edit tools that suit the turn's model
+    /// ([`EditProfile`]); the default is [`EditProfile::StrReplace`].
+    #[must_use]
+    pub fn with_edit_profile(mut self, profile: EditProfile) -> Self {
+        self.edit_profile = profile;
+        self
     }
 
     /// Make every approved call one-shot through `ledger`
@@ -468,8 +498,8 @@ impl WorkspaceToolProvider {
     /// The tools offered, in model order.
     #[must_use]
     pub fn specs(&self) -> Vec<&'static WorkspaceToolSpec> {
-        WORKSPACE_TOOLS
-            .iter()
+        workspace_tools_for(self.edit_profile)
+            .into_iter()
             .filter(|spec| self.shell || spec.name != "run_command")
             .collect()
     }
@@ -542,7 +572,17 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 14);
+        assert_eq!(names(true).len(), 15);
+        let patch = WorkspaceToolProvider::new(runner.clone(), true)
+            .with_edit_profile(EditProfile::Patch)
+            .specs();
+        let patch_names: Vec<_> = patch.iter().map(|spec| spec.name).collect();
+        assert!(!patch_names.contains(&"edit_file") && !patch_names.contains(&"multi_edit"));
+        let apply = patch
+            .iter()
+            .find(|spec| spec.name == "apply_patch")
+            .expect("apply_patch");
+        assert!(apply.description.contains("*** Begin Patch"));
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

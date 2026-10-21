@@ -1794,6 +1794,9 @@ impl AgentHost {
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));
+        // The edit tools that suit the admitted model (#1214): stable for
+        // the thread unless its model or meta.edit_format changes.
+        session.set_edit_profile(admitted.edit_profile);
         session.begin_turn(&checkpoint_label(&request.prompt));
         events.running(&project.paths());
 

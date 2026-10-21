@@ -3,7 +3,8 @@
 //! paths touched, and a before-image of every file a local file tool was
 //! about to change.
 //!
-//! Before-images cover `write_file`, `edit_file` and `apply_patch`. A file a
+//! Before-images cover `write_file`, `edit_file`, `multi_edit` and
+//! `apply_patch`. A file a
 //! shell command changes is in the turn's checkpoint (undo works) but not
 //! in [`Recorder::changes`]: D0 has no checkpoint diff yet.
 

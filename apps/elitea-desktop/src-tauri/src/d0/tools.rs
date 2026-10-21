@@ -92,7 +92,7 @@ fn args_summary(args: &Value) -> String {
 /// The paths a local file tool is about to change.
 fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)>) {
     match tool {
-        "write_file" | "edit_file" => (
+        "write_file" | "edit_file" | "multi_edit" => (
             args.get("path")
                 .and_then(Value::as_str)
                 .map(|p| vec![p.to_owned()])
@@ -103,6 +103,9 @@ fn changed_paths(tool: &str, args: &Value) -> (Vec<String>, Vec<(String, String)
             let Some(patch) = args.get("patch").and_then(Value::as_str) else {
                 return (Vec::new(), Vec::new());
             };
+            if elitea_local_tools::apply_patch::is_envelope(patch) {
+                return elitea_local_tools::apply_patch::named_paths(patch).unwrap_or_default();
+            }
             let Ok(files) = elitea_local_tools::patch::parse(patch) else {
                 return (Vec::new(), Vec::new());
             };
@@ -277,8 +280,14 @@ mod tests {
         assert!(paths.contains(&"new.txt".to_owned()));
         assert!(paths.contains(&"x.txt".to_owned()));
         assert_eq!(renames, vec![("old.txt".to_owned(), "new.txt".to_owned())]);
+        let envelope = "*** Begin Patch\n*** Add File: n.txt\n+x\n*** Delete File: d.txt\n*** Update File: u.txt\n*** Move to: v.txt\n@@\n-a\n+b\n*** End Patch";
+        let (paths, renames) = changed_paths("apply_patch", &json!({ "patch": envelope }));
+        assert_eq!(paths, ["n.txt", "d.txt", "u.txt", "v.txt"]);
+        assert_eq!(renames, vec![("u.txt".to_owned(), "v.txt".to_owned())]);
         let (paths, _) = changed_paths("write_file", &json!({"path": "a.rs", "content": ""}));
         assert_eq!(paths, ["a.rs"]);
+        let (paths, _) = changed_paths("multi_edit", &json!({"path": "m.rs", "edits": []}));
+        assert_eq!(paths, ["m.rs"]);
         assert!(
             changed_paths("read_file", &json!({"path": "a.rs"}))
                 .0

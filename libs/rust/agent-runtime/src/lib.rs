@@ -55,6 +55,7 @@ pub mod context_budget;
 pub mod context_management;
 pub mod context_status;
 pub mod context_summary;
+pub mod edit_profile;
 pub mod exact_number;
 pub mod graph;
 pub mod host;

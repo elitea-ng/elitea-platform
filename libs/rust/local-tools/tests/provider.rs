@@ -219,6 +219,7 @@ async fn the_toolset_follows_policy_and_plan_mode() {
         "read_file",
         "write_file",
         "edit_file",
+        "multi_edit",
         "apply_patch",
         "search_files",
         "find_files",
@@ -338,6 +339,52 @@ async fn a_turn_reads_checkpoints_changes_and_can_be_undone() {
         "a restore drops every read stamp"
     );
     drop(fixture.dir);
+}
+
+/// `multi_edit` and a Codex envelope run through the provider with the
+/// edit rows' defaults: allowed in the workspace, a `path_deny` file refused.
+#[tokio::test]
+async fn multi_edit_and_codex_envelopes_run_through_the_provider() {
+    let fixture = fixture(open_policy());
+    let root = fixture.session.workspace().root().to_path_buf();
+    std::fs::write(root.join(".env"), "KEY=1\n").expect("env");
+    fixture.session.begin_turn("edits");
+    call(&fixture, "read_file", json!({ "path": "main.rs" })).await;
+    let edited = call(
+        &fixture,
+        "multi_edit",
+        json!({ "path": "main.rs", "edits": [
+            { "old_string": "main", "new_string": "start" },
+            { "old_string": "{}", "new_string": "{ run(); }" }
+        ] }),
+    )
+    .await;
+    assert_eq!(edited["status"], "ok", "{edited}");
+    assert_eq!(edited["snippet"], "     1\tfn start() { run(); }\n");
+    assert_eq!(fixture.person.asked(), 0);
+    let patched = call(
+        &fixture,
+        "apply_patch",
+        json!({ "patch": "*** Begin Patch\n*** Update File: main.rs\n@@\n-fn start() { run(); }\n+fn start() {}\n*** Add File: lib.rs\n+pub fn run() {}\n*** End Patch" }),
+    )
+    .await;
+    assert_eq!(patched["status"], "ok", "{patched}");
+    assert_eq!(patched["changed"], json!(["main.rs", "lib.rs"]));
+    assert_eq!(
+        std::fs::read_to_string(root.join("main.rs")).expect("main"),
+        "fn start() {}\n"
+    );
+    let denied = call(
+        &fixture,
+        "apply_patch",
+        json!({ "patch": "*** Begin Patch\n*** Add File: .env\n+KEY=2\n*** End Patch" }),
+    )
+    .await;
+    assert_eq!(denied["code"], "local_tools.denied", "{denied}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".env")).expect("env"),
+        "KEY=1\n"
+    );
 }
 
 #[tokio::test]

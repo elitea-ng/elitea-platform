@@ -12,7 +12,7 @@ destructive.**
 | Call | Default |
 |---|---|
 | `read_file`, `list_tree`, `search_files`, `find_files`, `read_output`, `read_document`, git reads | allowed |
-| `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
+| `write_file`, `edit_file`, `multi_edit`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 | `run_command` that is destructive (below), asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; decided per command, from the sandbox chosen for it) | asked |
@@ -57,6 +57,77 @@ workspace sits).
   file through the workspace (`O_NOFOLLOW`). The desktop index's
   `search_workspace` is a ranked search over the index; these are exact
   name and text matches over the folder as it is now.
+
+## Edits
+
+Every edit goes through the workspace (`O_NOFOLLOW`, temp file and
+`renameat`) and the read ledger: a file must have been read, and one
+changed since is refused, whatever the format.
+
+* `apply_patch` takes a unified diff (`git diff`) or the Codex envelope
+  GPT-5 and codex-family models write (`*** Begin Patch`, `*** Add File:`,
+  `*** Update File:` with `@@ <anchor>` chunks, `*** Move to:`,
+  `*** Delete File:`, `*** End of File`, `*** End Patch`; a heredoc around
+  it is unwrapped). Envelope paths are workspace-relative: an absolute
+  path, `~` or any `..` step (even one that resolves back inside, like
+  `src/../secrets/x`) is refused, and `path_deny`, the deny list and `.git`
+  are checked for every file before anything is written. An add over an
+  existing file needs it read, as `write_file` does; a move onto an
+  existing file is refused. Every file applies or none does.
+* Chunks are located with Codex's `seek_sequence` ladder: exact, then
+  trailing whitespace ignored (`trim_end`), then both ends (`trim`), then
+  typographic dashes, quotes and spaces read as ASCII (`unicode`). The
+  result's `files[].matches` names the pass per chunk and a `note` counts
+  the fuzzy ones: a fuzzy match is never silent, and a fuzzy pass that
+  finds more than one position fails with the candidates' line numbers.
+* A unified diff's hunk is placed exactly first, searching outward from
+  the header's line numbers; only when its context matches exactly
+  nowhere is the same fuzzy ladder tried (after the previous hunk), with
+  the same uniqueness rule and the same report.
+* A chunk with only `+` lines goes right after its `@@ <anchor>` line;
+  without an anchor it appends at the end of the file (Codex's rule).
+  Only `\n` and `\r\n` end a line (a lone `\r` is content). Unchanged
+  lines keep their endings; a file's final line without a newline stays
+  so unless the patch replaces it or adds lines after it.
+* Line endings for new lines, in every format: the nearest replaced line's
+  ending where there is one, else the file's majority ending (CRLF only
+  when more lines end in `\r\n` than `\n`; a tie or none is LF).
+
+* `multi_edit` takes `{path, edits: [{old_string, new_string,
+  replace_all?}]}` (1 to 50): every `old_string` is matched against the
+  original file, must be unique unless `replace_all`, and must not overlap
+  another; a failure names the edit (`edits[2]: …`, `edits[0] and
+  edits[3] overlap`) and nothing is written. One freshness check, one
+  atomic write. Same approval row as `edit_file` (`ToolKind::EditFile`).
+* `edit_file` and `multi_edit` match exactly first; when an `old_string`
+  is nowhere exactly, a whitespace-normalised match (CRLF read as LF,
+  trailing whitespace ignored, one uniform indentation shift, whole lines
+  only) is accepted only when unique (or with `replace_all`), re-indents
+  `new_string` by the same shift (refused, rather than flattened, when a
+  `new_string` line has less indentation than a shift removes) and is
+  reported (`match` /
+  `matches[]`: `exact` or `normalised`). A replacement takes the line
+  ending of the text it replaces.
+* `edit_file`, `multi_edit` and `apply_patch` results carry `snippet`: the
+  new text 3 lines around each change, numbered like `read_file`, gaps
+  marked `...` (per file, `path:` first, for `apply_patch`), at most 4 KiB
+  per call (`snippet_truncated: true` when cut).
+
+* The edit tools a turn is offered follow the model family
+  (`EditProfile`, in `elitea-agent-runtime`'s `edit_profile` so the cloud
+  executor shares it): `StrReplace` (the default; Claude, Gemini, Qwen,
+  others) offers `write_file`, `edit_file`, `multi_edit` and
+  `apply_patch` described as a unified diff first; `Patch` (`gpt-5*`,
+  `*codex*`, `o3*`, `o4*`) offers `write_file` and `apply_patch` described
+  as the Codex envelope. The agent's `meta.edit_format` (`auto`,
+  `str_replace`, `patch`) overrides it. `session::tools_for(profile)` and
+  the executor's `workspace_tools::workspace_tools_for(profile)` give the
+  same names, descriptions and schemas per profile (the workspace
+  runner's contract test checks both); the host sets it per turn with
+  `LocalSession::set_edit_profile`.
+
+The envelope parser and the ladder are adapted from OpenAI Codex
+(Apache-2.0); see `NOTICE`.
 
 ## Output budgets and spill files
 

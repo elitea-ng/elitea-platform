@@ -14,6 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+pub use elitea_agent_runtime::edit_profile::EditProfile;
+use elitea_agent_runtime::edit_profile::{
+    APPLY_PATCH, APPLY_PATCH_DESCRIPTION, APPLY_PATCH_ENVELOPE_DESCRIPTION, MULTI_EDIT_DESCRIPTION,
+    multi_edit_params, patch_param,
+};
 use elitea_agent_runtime::host::{ApprovalChannel, ApprovalOutcome, ApprovalRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -90,6 +95,8 @@ pub struct LocalSession {
     /// directory; kept across a reopen for [`budget::SPILL_RETENTION`]).
     spill: SpillStore,
     turn: Mutex<Turn>,
+    /// The edit tools the current model is offered.
+    edit_profile: Mutex<EditProfile>,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -236,7 +243,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "edit_file",
         kind: ToolKind::EditFile,
-        description: "Replace an exact string in a file you have read. old_string must occur exactly once unless replace_all is true.",
+        description: "Replace a string in a file you have read. old_string must occur exactly once unless replace_all is true; when it is not there exactly, a match ignoring line endings, trailing whitespace and a uniform indentation shift is used and reported. The result shows the changed lines.",
         parameters: || {
             json!({
                 "type": "object",
@@ -251,16 +258,16 @@ pub const TOOLS: &[ToolSpec] = &[
         },
     },
     ToolSpec {
-        name: "apply_patch",
+        name: "multi_edit",
+        kind: ToolKind::EditFile,
+        description: MULTI_EDIT_DESCRIPTION,
+        parameters: multi_edit_params,
+    },
+    ToolSpec {
+        name: APPLY_PATCH,
         kind: ToolKind::ApplyPatch,
-        description: "Apply a unified diff (git diff format) to files in the workspace. Every hunk must match exactly; nothing is written if one does not.",
-        parameters: || {
-            json!({
-                "type": "object",
-                "properties": { "patch": { "type": "string" } },
-                "required": ["patch"]
-            })
-        },
+        description: APPLY_PATCH_DESCRIPTION,
+        parameters: patch_param,
     },
     ToolSpec {
         name: "run_command",
@@ -340,6 +347,25 @@ pub const TOOLS: &[ToolSpec] = &[
     },
 ];
 
+/// `apply_patch` as [`EditProfile::Patch`] offers it: the same name, kind
+/// and schema, described as the Codex envelope.
+pub static APPLY_PATCH_ENVELOPE: ToolSpec = ToolSpec {
+    name: APPLY_PATCH,
+    kind: ToolKind::ApplyPatch,
+    description: APPLY_PATCH_ENVELOPE_DESCRIPTION,
+    parameters: patch_param,
+};
+
+/// The tools a turn with `profile` may be offered, in model order:
+/// [`EditProfile::StrReplace`] is [`TOOLS`]; [`EditProfile::Patch`] leaves
+/// out `edit_file` and `multi_edit` and describes `apply_patch` as the
+/// Codex envelope. Names never change, so the cloud executor's contract
+/// holds per profile (`elitea_agent_runtime::workspace_tools::workspace_tools_for`).
+#[must_use]
+pub fn tools_for(profile: EditProfile) -> Vec<&'static ToolSpec> {
+    profile.select_specs(TOOLS, |spec| spec.name, &APPLY_PATCH_ENVELOPE)
+}
+
 #[derive(Deserialize)]
 struct CommandArgs {
     command: String,
@@ -351,6 +377,28 @@ struct CommandArgs {
     sandbox: Option<SandboxMode>,
     #[serde(default)]
     network: bool,
+}
+
+/// An `edit_file` or a `multi_edit` call.
+enum EditCall {
+    One(files::EditArgs),
+    Many(files::MultiEditArgs),
+}
+
+impl EditCall {
+    fn path(&self) -> &str {
+        match self {
+            EditCall::One(args) => &args.path,
+            EditCall::Many(args) => &args.path,
+        }
+    }
+
+    fn set_path(&mut self, path: String) {
+        match self {
+            EditCall::One(args) => args.path = path,
+            EditCall::Many(args) => args.path = path,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -592,6 +640,7 @@ impl LocalSession {
             budgets: config.budgets,
             spill,
             turn: Mutex::new(Turn::default()),
+            edit_profile: Mutex::new(EditProfile::default()),
         }))
     }
 
@@ -725,9 +774,27 @@ impl LocalSession {
         self.checkpoints.list()
     }
 
+    /// Offer the edit tools that suit the turn's model ([`EditProfile`]);
+    /// [`EditProfile::StrReplace`] until set. Set it per turn from the
+    /// admitted model, like plan mode.
+    pub fn set_edit_profile(&self, profile: EditProfile) {
+        if let Ok(mut current) = self.edit_profile.lock() {
+            *current = profile;
+        }
+    }
+
+    #[must_use]
+    pub fn edit_profile(&self) -> EditProfile {
+        self.edit_profile
+            .lock()
+            .map(|profile| *profile)
+            .unwrap_or_default()
+    }
+
     /// The tools the model is offered now: none when local work is off, no
-    /// shell when the policy says so, no git tools outside git, and only
-    /// read-only tools in plan mode.
+    /// shell when the policy says so, no git tools outside git, only
+    /// read-only tools in plan mode, and the edit tools of the session's
+    /// [`EditProfile`].
     #[must_use]
     pub fn available_tools(&self) -> Vec<&'static ToolSpec> {
         let policy = self.engine.policy();
@@ -738,8 +805,8 @@ impl LocalSession {
         // refusal, so the agent and the person see why.
         let git = self.checkpoints.kind() == "git" || self.checkpoints.git_refusal().is_some();
         let plan = self.engine.plan_mode();
-        TOOLS
-            .iter()
+        tools_for(self.edit_profile())
+            .into_iter()
             .filter(|tool| tool.kind != ToolKind::RunCommand || policy.shell)
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.is_read_only())
@@ -873,25 +940,7 @@ impl LocalSession {
                 })
                 .await
             }
-            ToolKind::EditFile => {
-                let mut args: files::EditArgs = parse(args)?;
-                let (typed, target) = self.write_target(&args.path)?;
-                self.blocking({
-                    let target = target.clone();
-                    move |this| {
-                        files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
-                    }
-                })
-                .await?;
-                self.authorize_change(call_id, ToolKind::EditFile, &typed, &target, "edit a file")
-                    .await?;
-                args.path = target.display_string();
-                self.blocking(move |this| {
-                    this.unchanged_target(&target)?;
-                    files::edit(&this.workspace, &this.ledger, &args)
-                })
-                .await
-            }
+            ToolKind::EditFile => self.edit_file(spec, call_id, args).await,
             ToolKind::ApplyPatch => {
                 let patch = args
                     .get("patch")
@@ -923,6 +972,37 @@ impl LocalSession {
             }
             ToolKind::RunCommand => self.run_command(call_id, args).await,
         }
+    }
+
+    /// `edit_file` and `multi_edit`: one path, the same approval row.
+    async fn edit_file(
+        self: &Arc<Self>,
+        spec: &ToolSpec,
+        call_id: &str,
+        args: Value,
+    ) -> ToolResult<Value> {
+        let mut edit = if spec.name == "multi_edit" {
+            EditCall::Many(parse(args)?)
+        } else {
+            EditCall::One(parse(args)?)
+        };
+        let (typed, target) = self.write_target(edit.path())?;
+        self.blocking({
+            let target = target.clone();
+            move |this| files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
+        })
+        .await?;
+        self.authorize_change(call_id, ToolKind::EditFile, &typed, &target, "edit a file")
+            .await?;
+        edit.set_path(target.display_string());
+        self.blocking(move |this| {
+            this.unchanged_target(&target)?;
+            match &edit {
+                EditCall::One(args) => files::edit(&this.workspace, &this.ledger, args),
+                EditCall::Many(args) => files::multi_edit(&this.workspace, &this.ledger, args),
+            }
+        })
+        .await
     }
 
     async fn read_only(
@@ -1409,9 +1489,62 @@ fn forbidden_by_rule(value: &Value, reason: &str) -> Option<ToolError> {
 mod tests {
     use std::path::Path;
 
-    use super::denied_staged;
+    use super::{EditProfile, TOOLS, denied_staged, tools_for};
     use crate::deny::DenyList;
     use crate::workspace::{CASE_INSENSITIVE_FS, Workspace};
+
+    /// #1214: a GPT-5 / codex agent is offered `write_file` and
+    /// `apply_patch` described as the Codex envelope; a Claude agent the
+    /// str-replace tools too. Names and order never change otherwise.
+    #[test]
+    fn tools_for_patch_profile_hides_str_replace() {
+        let names = |profile| {
+            tools_for(profile)
+                .into_iter()
+                .map(|spec| spec.name)
+                .collect::<Vec<_>>()
+        };
+        let patch = tools_for(EditProfile::select("gpt-5", None));
+        let patch_names: Vec<_> = patch.iter().map(|spec| spec.name).collect();
+        assert!(patch_names.contains(&"write_file") && patch_names.contains(&"apply_patch"));
+        assert!(!patch_names.contains(&"edit_file") && !patch_names.contains(&"multi_edit"));
+        let apply = patch
+            .iter()
+            .find(|spec| spec.name == "apply_patch")
+            .expect("apply_patch");
+        assert!(apply.description.contains("*** Begin Patch"));
+        assert!(apply.description.contains("*** Update File:"));
+        let claude = tools_for(EditProfile::select("claude-sonnet-4-5", None));
+        let claude_names: Vec<_> = claude.iter().map(|spec| spec.name).collect();
+        for tool in ["edit_file", "multi_edit", "apply_patch", "write_file"] {
+            assert!(claude_names.contains(&tool), "{tool}");
+        }
+        assert!(
+            claude
+                .iter()
+                .find(|spec| spec.name == "apply_patch")
+                .expect("apply_patch")
+                .description
+                .starts_with("Apply a patch to files in the workspace: a unified diff")
+        );
+        assert_eq!(
+            claude_names,
+            TOOLS.iter().map(|spec| spec.name).collect::<Vec<_>>()
+        );
+        // meta.edit_format overrides the model in both directions.
+        assert_eq!(
+            names(EditProfile::select("claude-sonnet-4-5", Some("patch"))),
+            patch_names
+        );
+        assert_eq!(
+            names(EditProfile::select("gpt-5", Some("str_replace"))),
+            claude_names
+        );
+        // Patch is the str-replace list minus two names, in the same order.
+        let mut expected = claude_names.clone();
+        expected.retain(|name| !matches!(*name, "edit_file" | "multi_edit"));
+        assert_eq!(patch_names, expected);
+    }
 
     #[test]
     fn staged_paths_under_path_deny_are_found() {

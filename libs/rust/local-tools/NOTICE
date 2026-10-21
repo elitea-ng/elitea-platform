@@ -1,0 +1,19 @@
+elitea-local-tools
+Copyright (c) 2026 EPAM Systems and Contributors
+
+This crate includes software adapted from OpenAI Codex
+(https://github.com/openai/codex), licensed under the Apache License,
+Version 2.0:
+
+OpenAI Codex
+Copyright 2025 OpenAI
+
+Adapted from codex-rs/apply-patch/src at commit be9060f:
+
+  src/apply_patch/parser.rs         from parser.rs and streaming_parser.rs
+  src/apply_patch/seek_sequence.rs  from seek_sequence.rs
+  src/apply_patch/mod.rs            from file_update.rs and text_file.rs
+  src/apply_patch/tests.rs          from the unit tests of seek_sequence.rs and lib.rs
+
+Each of these files starts with a notice naming its source and the changes
+made.

@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use super::api::ResolvedVersion;
 use elitea_agent_runtime::host::ReasoningEffort;
+use elitea_local_tools::session::EditProfile;
 
 /// Model steps of a workspace turn's run when neither the workspace's
 /// settings nor the agent (`meta.step_limit`) set them. At the limit
@@ -89,6 +90,10 @@ pub struct Admitted {
     /// `meta.step_limit`, else [`DEFAULT_STEP_LIMIT`]; at most
     /// [`MAX_STEP_LIMIT`].
     pub step_limit: u32,
+    /// The edit tools the model is offered: the agent's
+    /// `meta.edit_format` (`auto`, `str_replace`, `patch`), else the
+    /// model family's ([`EditProfile::for_model`]).
+    pub edit_profile: EditProfile,
     /// The version document, for the runtime's instruction authority.
     pub version_details: Map<String, Value>,
 }
@@ -148,15 +153,18 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
         }
     }
     name_tools(&mut remote_tools, reserved);
+    let model = model_settings(details)?;
+    let edit_profile = EditProfile::select(&model.model_name, agent_edit_format(details));
     Ok(Admitted {
         instructions: details
             .get("instructions")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-        model: model_settings(details)?,
+        model,
         remote_tools,
         step_limit: agent_step_limit(details).unwrap_or(DEFAULT_STEP_LIMIT),
+        edit_profile,
         version_details: details.clone(),
     })
 }
@@ -219,6 +227,14 @@ fn model_settings(details: &Map<String, Value>) -> Result<ModelSettings, Refusal
             .filter(|_| reasoning_effort.is_none_or(|e| e == ReasoningEffort::None)),
         reasoning_effort,
     })
+}
+
+/// The agent's `meta.edit_format`, when it is a string.
+fn agent_edit_format(details: &Map<String, Value>) -> Option<&str> {
+    details
+        .get("meta")
+        .and_then(|meta| meta.get("edit_format"))
+        .and_then(Value::as_str)
 }
 
 /// The agent's own `meta.step_limit`, capped at [`MAX_STEP_LIMIT`].
@@ -441,6 +457,45 @@ mod tests {
         assert_eq!(admit_meta(json!({"step_limit": 5000})).step_limit, 200);
         assert_eq!(admit_meta(json!({"step_limit": 0})).step_limit, 100);
         assert_eq!(admit_meta(json!({"step_limit": "many"})).step_limit, 100);
+    }
+
+    /// #1214: the edit tools follow the model family; the agent's
+    /// `meta.edit_format` overrides it.
+    #[test]
+    fn the_edit_profile_follows_the_model_and_meta_edit_format() {
+        let admit_with = |model: &str, meta: Value| {
+            admit(
+                &resolved(json!({
+                    "llm_settings": {"model_name": model},
+                    "meta": meta,
+                })),
+                &[],
+            )
+            .unwrap()
+            .edit_profile
+        };
+        assert_eq!(admit_with("gpt-5", json!({})), EditProfile::Patch);
+        assert_eq!(admit_with("gpt-5.1-codex", json!({})), EditProfile::Patch);
+        assert_eq!(
+            admit_with("claude-sonnet-4-5", json!({})),
+            EditProfile::StrReplace
+        );
+        assert_eq!(
+            admit_with("claude-sonnet-4-5", json!({"edit_format": "patch"})),
+            EditProfile::Patch
+        );
+        assert_eq!(
+            admit_with("gpt-5", json!({"edit_format": "str_replace"})),
+            EditProfile::StrReplace
+        );
+        assert_eq!(
+            admit_with("gpt-5", json!({"edit_format": "auto"})),
+            EditProfile::Patch
+        );
+        assert_eq!(
+            admit_with("gpt-5", json!({"edit_format": 3})),
+            EditProfile::Patch
+        );
     }
 
     #[test]

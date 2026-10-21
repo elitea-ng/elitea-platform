@@ -301,10 +301,16 @@ pub async fn handle_line(session: &Arc<LocalSession>, line: &str) -> Value {
 }
 
 /// The tools that can grow the workspace.
-const MUTATING_TOOLS: &[&str] = &["run_command", "write_file", "edit_file", "apply_patch"];
+const MUTATING_TOOLS: &[&str] = &[
+    "run_command",
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+];
 /// The tools refused while the workspace is over its cap: `run_command`
 /// stays, so the agent can remove what it made.
-const GROWING_TOOLS: &[&str] = &["write_file", "edit_file", "apply_patch"];
+const GROWING_TOOLS: &[&str] = &["write_file", "edit_file", "multi_edit", "apply_patch"];
 
 /// The bytes the workspace holds on its volume (every file, `.git`
 /// included: it is on the same volume), symlinks not followed.
