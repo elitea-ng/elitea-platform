@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.12",
+  "client_contract": "1.13",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -95,6 +95,170 @@
           "headers": {
             "x-min-client-version": {
               "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "DELETE /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}/{name}": {
+      "operation_id": "deleteConversationAttachment",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "path:name": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "204": {},
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "501": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
             }
           }
         }
@@ -6369,6 +6533,18 @@
                       },
                       "metadata": {
                         "type": "object",
+                        "properties": {
+                          "mentioned_user_ids": {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "format": "int64"
+                            }
+                          },
+                          "mentions_everyone": {
+                            "type": "boolean"
+                          }
+                        },
                         "open": true
                       },
                       "reply_to_id": {

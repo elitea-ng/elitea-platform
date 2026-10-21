@@ -74,6 +74,11 @@ type PublicRoutes struct {
 	// (ADR-0029 decision 5a). It is built from the agent plane's own freezer
 	// and nested-version reader, so it is nil exactly when that plane is.
 	ClientApplicationVersions *storage.ClientApplicationVersionService
+	// AttachmentExtraction is the attachment text reader the content plane
+	// serves turns from. The upload route uses it to warm an attachment's
+	// extraction (issue 1062). It is nil exactly when that reader is: no
+	// agent plane or no object store.
+	AttachmentExtraction *storage.RuntimeAttachmentObjectService
 }
 
 // Durable PostgreSQL replay remains authoritative. The advisory waiter wakes

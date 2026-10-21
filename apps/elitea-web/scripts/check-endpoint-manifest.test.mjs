@@ -760,7 +760,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 339 -> 340 (issue 1057): resetBrandingSettings, the server-side Reset of
 // Admin › Branding (DELETE of the section's rows). Admin routes are not in
 // the manifest, so its count is unchanged.
-const GENERATED_OPERATION_COUNT = 340;
+// 340 -> 341 (client contract 1.13, issue 1062): deleteConversationAttachment,
+// one uploaded file's delete for the native composers. No web code calls it
+// yet, so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 341;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

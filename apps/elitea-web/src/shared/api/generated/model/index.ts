@@ -214,6 +214,7 @@ export * from "./deepWikiSlots.zod";
 export * from "./defaultIcon.zod";
 export * from "./deleteApplicationVersionParams.zod";
 export * from "./deleteBucketPermissionRequest.zod";
+export * from "./deleteConversationAttachmentHeaders.zod";
 export * from "./deleteConversationHeaders.zod";
 export * from "./deleteConversationParticipantHeaders.zod";
 export * from "./deleteMemoryHeaders.zod";

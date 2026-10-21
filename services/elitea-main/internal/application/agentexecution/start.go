@@ -303,10 +303,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	target.VersionDetails = frozenVersion
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
-	questionMeta := json.RawMessage(`{}`)
-	if request.InteractionUUID != "" {
-		questionMeta, _ = json.Marshal(map[string]string{"interaction_uuid": request.InteractionUUID})
-	}
+	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
 	attachments, err := currentTurnAttachmentsWithImages(
 		ctx,
 		int64(request.ProjectID),

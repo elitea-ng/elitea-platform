@@ -1774,6 +1774,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/context_manager/summary/{projectID}/{conversationID}/{summaryID}",
 		"DELETE /api/v2/elitea_core/application/prompt_lib/{projectID}/{applicationID}",
 		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}",
+		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"DELETE /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/conversation_archive/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",

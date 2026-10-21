@@ -292,8 +292,13 @@ type RuntimeAttachmentObjectService struct {
 	flights singleflight.Group
 	// queued counts the extractions that wait for a slot.
 	queued atomic.Int64
-	logger *slog.Logger
-	now    func() time.Time
+	// warmups bounds the upload-time warm-ups waiting on an extraction at
+	// once (WarmAttachmentExtraction); a warm-up past it is skipped.
+	warmups chan struct{}
+	// warmupTimeout bounds how long one warm-up waits for its extraction.
+	warmupTimeout time.Duration
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
 // NewRuntimeAttachmentObjectService wires the route. cache may be nil (every
@@ -318,9 +323,64 @@ func NewRuntimeAttachmentObjectService(
 			chan struct{}, MaxConcurrentAttachmentExtractions,
 		),
 		extractionWait: attachmentExtractionWait,
+		warmups:        make(chan struct{}, maxAttachmentExtractionWarmups),
+		warmupTimeout:  attachmentExtractionWarmupTimeout,
 		logger:         slog.Default(),
 		now:            time.Now,
 	}, nil
+}
+
+const (
+	// maxAttachmentExtractionWarmups bounds the warm-ups in flight. It is
+	// half the extraction queue's bound, so warm-ups alone never fill the
+	// queue a turn's own read waits in.
+	maxAttachmentExtractionWarmups = maxQueuedAttachmentExtractions / 2
+
+	// attachmentExtractionWarmupTimeout bounds one warm-up: the extractor's
+	// own time limit ends the extraction, this ends the wait for it.
+	attachmentExtractionWarmupTimeout = 2 * time.Minute
+)
+
+// WarmAttachmentExtraction extracts a just-uploaded attachment in the
+// background and files the result in the sidecar store, so the first turn
+// that carries the file reads the sidecar instead of waiting for the
+// extraction (issue 1062). It returns at once and never fails the caller.
+//
+// It takes no claim: the upload route calls it, after authorizing the
+// caller for the conversation that names the key, and nothing is served to
+// anyone here — the result is only filed, under the same object version a
+// turn's read looks up (repos.CurrentAttachmentObjectRepository applies the
+// project, system-bucket and metadata-row gates to both). It joins the
+// turn's extraction of the same object version instead of racing it, and
+// it shares the turn path's slots and queue. Without a sidecar store there
+// is nothing to warm, and a warm-up past maxAttachmentExtractionWarmups is
+// skipped: the first turn then extracts, as before.
+func (service *RuntimeAttachmentObjectService) WarmAttachmentExtraction(projectID int64, bucket, name string) {
+	if service == nil || service.cache == nil || service.objects == nil ||
+		service.extractor == nil || service.extractions == nil || projectID <= 0 ||
+		!addressableAttachmentBucket(bucket) || !addressableAttachmentKey(name) {
+		return
+	}
+	select {
+	case service.warmups <- struct{}{}:
+	default:
+		service.logger.Debug("attachment extraction warm-up skipped: too many in flight")
+		return
+	}
+	go func() {
+		defer func() { <-service.warmups }()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				service.logger.Error("attachment extraction warm-up panicked", "panic", recovered)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), service.warmupTimeout)
+		defer cancel()
+		if _, _, _, err := service.extraction(ctx, projectID, bucket, name); err != nil &&
+			!errors.Is(err, ErrContentNotFound) {
+			service.logger.Warn("attachment extraction warm-up failed", "error", err)
+		}
+	}()
 }
 
 // Resolve reads one stored attachment's text for the claimed execution.

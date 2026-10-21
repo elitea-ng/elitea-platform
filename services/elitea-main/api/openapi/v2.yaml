@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.12"
+  x-elitea-client-contract: "1.13"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -3268,6 +3268,23 @@ components:
             what a turn produced (`is_error`, `finish_reason`, tool and HITL
             state) and the key set grows with the runtime, so it is not closed
             here.
+          properties:
+            mentioned_user_ids:
+              type: array
+              items: { type: integer, format: int64 }
+              description: >-
+                Client contract 1.13. On a user's message: the user ids the
+                sender tagged (the send's `user_ids`), deduplicated, in the
+                order sent, at most 64. Absent when the message tags nobody
+                and on messages sent before 1.13. These are who was TAGGED,
+                not who was notified: notification only reaches project
+                members other than the sender.
+            mentions_everyone:
+              type: boolean
+              description: >-
+                Client contract 1.13. On a user's message: true when it
+                tagged `@everyone` (the send's `sending_to_everyone`); absent
+                otherwise.
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -20367,6 +20384,12 @@ paths:
         one name always get two different names. Always send the returned
         `filepath`, never one built from the local file name. A conversation
         that already holds a hundred files of one name answers 409.
+
+        Client contract 1.13: a stored document's text is extracted in the
+        background as soon as it is uploaded, so the first turn that carries
+        it does not wait for the extraction. This never delays or fails the
+        upload. A file uploaded and never sent can be removed with
+        deleteConversationAttachment.
       tags: [chat, client]
       requestBody:
         required: true
@@ -20505,6 +20528,51 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: A composition with no object store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteConversationAttachment
+      summary: Delete one file uploaded to a conversation that no message carries
+      description: |
+        Client contract 1.13. Removes one stored file: the one a user uploaded
+        in the composer and took back before sending. Needs
+        `models.chat.attachments.delete` (the permission of the
+        conversation-wide attachment delete) and access to the conversation;
+        a caller who cannot see the conversation gets 404, as for a file that
+        does not exist. Address it as for downloadConversationAttachment. The
+        bytes go first, then the file's record, so a 500 can be retried.
+
+        A file a message carries answers 409 with
+        `{"error": "attachment_in_use"}` and nothing is deleted: the
+        transcript, the download and every later turn read it from the
+        message. Delete the message with its attachments to remove such a
+        file. A file named by a message of another conversation (a fork
+        that shares it) counts too.
+        NOTE(W2): internal/api/v2/conversations/attachment_delete.go:47
+        (`DeleteAttachment`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204': { description: Deleted. }
+        '400':
+          description: >-
+            A numeric conversation id, an invalid file name, or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
         '500': { $ref: '#/components/responses/500' }
         '501':
           description: A composition with no object store.

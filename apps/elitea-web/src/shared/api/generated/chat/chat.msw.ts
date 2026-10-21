@@ -926,7 +926,22 @@ export const getListConversationMessagesResponseMock = (
     ]),
     sent_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
     reply_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
-    metadata: faker.helpers.arrayElement([{}, undefined]),
+    metadata: faker.helpers.arrayElement([
+      {
+        mentioned_user_ids: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => faker.number.int()),
+          undefined,
+        ]),
+        mentions_everyone: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
     message_items: faker.helpers.arrayElement([
       Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
@@ -3191,6 +3206,28 @@ export const getDownloadConversationAttachmentMockHandler = (
   );
 };
 
+export const getDeleteConversationAttachmentMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/attachments/prompt_lib/:projectId/:conversationId/:name",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getStreamExecutionEventsMockHandler = (
   overrideResponse?:
     | string
@@ -3523,6 +3560,7 @@ export const getChatMock = () => [
   getContinueChatExecutionMockHandler(),
   getUploadConversationAttachmentMockHandler(),
   getDownloadConversationAttachmentMockHandler(),
+  getDeleteConversationAttachmentMockHandler(),
   getStreamExecutionEventsMockHandler(),
   getListMessageTracesMockHandler(),
   getGetMessageTraceMockHandler(),

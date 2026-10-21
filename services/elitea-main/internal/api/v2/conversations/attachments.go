@@ -598,6 +598,10 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 		apierr.Write(w, apierr.Internal("record attachment metadata: "+err.Error()))
 		return
 	}
+	// Extract the text now, in the background (issue 1062): the first turn
+	// that carries the file then reads the filed result. It never blocks or
+	// fails the upload.
+	h.warmAttachmentExtraction(projectID, bucketName, info.Key, fileName)
 
 	writeJSON(w, http.StatusCreated, []attachmentCreated{{
 		Filepath: fmt.Sprintf("/%s/%s", bucketName, info.Key),

@@ -892,6 +892,26 @@ func collectConversationAttachments(ctx context.Context, q attachmentQuerier, s 
 		ORDER BY mi.message_group_id, mi.order_index`, s), conversationID)
 }
 
+// AttachmentReferenced reports whether any attachment row in the project's
+// schema names the stored object (bucket, name) — any message of any
+// conversation, a fork's shared copy included. The per-file attachment
+// delete refuses such a file (issue 1062). Served by the (bucket, name)
+// index of tenant/0152.
+func (r *ConversationsRepo) AttachmentReferenced(ctx context.Context, projectID, bucket, name string) (bool, error) {
+	var referenced bool
+	err := r.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT EXISTS (
+		    SELECT 1 FROM %[1]s.chat_messages_attachment att
+		    JOIN %[1]s.chat_message_items mi ON mi.id = att.id
+		    WHERE att.bucket = $1 AND att.name = $2)`, schema(projectID)), bucket, name).Scan(&referenced)
+	if err != nil {
+		return false, fmt.Errorf("conversations: read attachment references: %w", err)
+	}
+	return referenced, nil
+}
+
+var _ conversations.AttachmentReferenceReader = (*ConversationsRepo)(nil)
+
 func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationID string) ([]conversations.AttachmentRef, error) {
 	s := schema(projectID)
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)

@@ -1793,6 +1793,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
 	// under the same guard so an absent agent plane leaves a NIL interface.
 	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// The upload-time attachment extraction warm-up (issue 1062), assigned
+	// only under the same guard so an absent reader leaves a NIL interface.
+	var attachmentExtractionWarmer v2convs.AttachmentExtractionWarmer
 	// The remote toolkit call's authorizer: the SAME service, under the same
 	// guard, so an absent agent plane leaves a NIL interface and the route
 	// answers 501.
@@ -1984,6 +1987,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if publicRoutes.ClientApplicationVersions != nil {
 			clientApplicationVersions = publicRoutes.ClientApplicationVersions
 			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
+		}
+		if publicRoutes.AttachmentExtraction != nil {
+			attachmentExtractionWarmer = publicRoutes.AttachmentExtraction
 		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
@@ -2592,6 +2598,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentProjectInfo:            currentProjectInfo,
 		CurrentIndexTypes:             currentIndexTypes,
 		AttachmentExtensions:          attachmentExtensions,
+		AttachmentExtractionWarmer:    attachmentExtractionWarmer,
 		CurrentApplicationSkills:      currentApplicationSkills,
 		CurrentPromptContextReads:     currentPromptContextReads,
 		CurrentProjectList:            currentProjectList,

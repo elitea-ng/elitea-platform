@@ -2170,6 +2170,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if clientApplicationVersions != nil {
 		publicRoutes.ClientApplicationVersions = clientApplicationVersions
 	}
+	if attachmentObjects != nil {
+		publicRoutes.AttachmentExtraction = attachmentObjects
+	}
 
 	closeNATS = false
 	return &Runtime{

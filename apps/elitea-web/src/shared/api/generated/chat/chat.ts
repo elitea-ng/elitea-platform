@@ -13719,6 +13719,12 @@ export const getUploadConversationAttachmentUrl = (
  * one name always get two different names. Always send the returned
  * `filepath`, never one built from the local file name. A conversation
  * that already holds a hundred files of one name answers 409.
+ *
+ * Client contract 1.13: a stored document's text is extracted in the
+ * background as soon as it is uploaded, so the first turn that carries
+ * it does not wait for the extraction. This never delays or fails the
+ * upload. A file uploaded and never sent can be removed with
+ * deleteConversationAttachment.
  * @summary Upload a file to attach to the next chat message
  */
 export const uploadConversationAttachment = async (
@@ -14317,6 +14323,341 @@ export function useDownloadConversationAttachment<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getDownloadConversationAttachmentQueryOptions(
+    projectId,
+    conversationId,
+    name,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteConversationAttachmentResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteConversationAttachmentResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type deleteConversationAttachmentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteConversationAttachmentResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteConversationAttachmentResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteConversationAttachmentResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type deleteConversationAttachmentResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type deleteConversationAttachmentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteConversationAttachmentResponse501 = {
+  data: ErrorResponse;
+  status: 501;
+};
+
+export type deleteConversationAttachmentResponseSuccess =
+  deleteConversationAttachmentResponse204 & {
+    headers: Headers;
+  };
+export type deleteConversationAttachmentResponseError = (
+  | deleteConversationAttachmentResponse400
+  | deleteConversationAttachmentResponse401
+  | deleteConversationAttachmentResponse403
+  | deleteConversationAttachmentResponse404
+  | deleteConversationAttachmentResponse409
+  | deleteConversationAttachmentResponse426
+  | deleteConversationAttachmentResponse500
+  | deleteConversationAttachmentResponse501
+) & {
+  headers: Headers;
+};
+
+export type deleteConversationAttachmentResponse =
+  | deleteConversationAttachmentResponseSuccess
+  | deleteConversationAttachmentResponseError;
+
+export const getDeleteConversationAttachmentUrl = (
+  projectId: string,
+  conversationId: string,
+  name: string,
+) => {
+  return `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}/${name}`;
+};
+
+/**
+ * Client contract 1.13. Removes one stored file: the one a user uploaded
+ * in the composer and took back before sending. Needs
+ * `models.chat.attachments.delete` (the permission of the
+ * conversation-wide attachment delete) and access to the conversation;
+ * a caller who cannot see the conversation gets 404, as for a file that
+ * does not exist. Address it as for downloadConversationAttachment. The
+ * bytes go first, then the file's record, so a 500 can be retried.
+ *
+ * A file a message carries answers 409 with
+ * `{"error": "attachment_in_use"}` and nothing is deleted: the
+ * transcript, the download and every later turn read it from the
+ * message. Delete the message with its attachments to remove such a
+ * file. A file named by a message of another conversation (a fork
+ * that shares it) counts too.
+ * NOTE(W2): internal/api/v2/conversations/attachment_delete.go:47
+ * (`DeleteAttachment`).
+ * @summary Delete one file uploaded to a conversation that no message carries
+ */
+export const deleteConversationAttachment = async (
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteConversationAttachmentResponse> => {
+  return eliteaFetch<deleteConversationAttachmentResponse>(
+    getDeleteConversationAttachmentUrl(projectId, conversationId, name),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteConversationAttachmentQueryKey = (
+  projectId: string,
+  conversationId: string,
+  name: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/attachments/prompt_lib/${projectId}/${conversationId}/${name}`,
+  ] as const;
+};
+
+export const getDeleteConversationAttachmentQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteConversationAttachmentQueryKey(projectId, conversationId, name);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteConversationAttachment>>
+  > = ({ signal }) =>
+    deleteConversationAttachment(projectId, conversationId, name, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined &&
+      name !== null &&
+      name !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteConversationAttachment>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteConversationAttachmentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteConversationAttachment>>
+>;
+export type DeleteConversationAttachmentQueryError =
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteConversationAttachment>>,
+          TError,
+          Awaited<ReturnType<typeof deleteConversationAttachment>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete one file uploaded to a conversation that no message carries
+ */
+
+export function useDeleteConversationAttachment<
+  TData = Awaited<ReturnType<typeof deleteConversationAttachment>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  name: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteConversationAttachment>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteConversationAttachmentQueryOptions(
     projectId,
     conversationId,
     name,
