@@ -40,14 +40,16 @@
  */
 import { useMemo } from 'react';
 
+import { EXECUTION_EVENT, parseEventData, type EventData } from '@elitea/client-core/stream';
+
 import { getConfig } from '@/shared/config';
 
 import { useEventSource } from './useEventSource';
 
-/** The durable replay event names this app subscribes to. */
-export const EXECUTION_EVENT_NODE = 'execution.node_event';
-export const EXECUTION_EVENT_FAILED = 'execution.failed';
-export const EXECUTION_EVENT_INDEX_INGEST_COMPLETED = 'index.ingest.completed';
+/** The durable replay event names this app subscribes to (shared with the mobile client). */
+export const EXECUTION_EVENT_NODE = EXECUTION_EVENT.node;
+export const EXECUTION_EVENT_FAILED = EXECUTION_EVENT.failed;
+export const EXECUTION_EVENT_INDEX_INGEST_COMPLETED = EXECUTION_EVENT.indexIngestCompleted;
 /**
  * The durable log was PRUNED past the cursor this client asked to resume
  * from, so an unknown number of progress frames between that cursor and the
@@ -58,14 +60,14 @@ export const EXECUTION_EVENT_INDEX_INGEST_COMPLETED = 'index.ingest.completed';
  * frame arrives, nothing reacts, and a resumed long run shows a continuous
  * transcript with a hole in the middle that nothing on screen discloses.
  */
-export const EXECUTION_EVENT_REPLAY_RESET = 'execution.replay_reset';
+export const EXECUTION_EVENT_REPLAY_RESET = EXECUTION_EVENT.replayReset;
 
 /**
  * A parsed frame body. Deliberately a loose record: every consumer reads it
  * defensively, exactly as `responseMetadataSchema`'s doc comment in
  * `shared/api/socket/events.ts` argues for the socket side of the same wire.
  */
-export type ExecutionEventData = Readonly<Record<string, unknown>>;
+export type ExecutionEventData = EventData;
 
 /**
  * The bound every backend admission route enforces on a client-supplied or
@@ -106,15 +108,7 @@ function isBoundedExecutionId(value: string): boolean {
  * skipped, rather than killing the React event handler that called it.
  */
 export function parseExecutionEventData(event: MessageEvent): ExecutionEventData | undefined {
-  if (typeof event.data !== 'string' || event.data === '') return undefined;
-  try {
-    const parsed: unknown = JSON.parse(event.data);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as ExecutionEventData)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return parseEventData(event.data);
 }
 
 /**

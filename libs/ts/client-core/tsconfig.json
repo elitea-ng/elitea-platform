@@ -1,0 +1,28 @@
+{
+  // The strictest union of the consuming apps' settings (apps/elitea-web and
+  // apps/elitea-mobile compile this source with their own toolchains), so a
+  // file that passes here passes in both. The package has no dependencies: it
+  // borrows the web app's TypeScript and @types/node (see README).
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "allowJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": ["../../../apps/elitea-web/node_modules/@types"]
+  },
+  "include": ["src", "scripts", "test"]
+}

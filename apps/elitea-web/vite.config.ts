@@ -158,7 +158,22 @@ function mainAppPlugins(basePlugins: PluginOption[]): PluginOption[] {
  * import of `AuthCallbackPage` — every other page in the old app is
  * `ChunkHelpers.lazyWithRetry`-wrapped, this one deliberately is not).
  */
-export default defineConfig(({ mode }): UserConfig => {
+export default defineConfig(({ mode }): UserConfig => withClientCoreAccess(configFor(mode)));
+
+/**
+ * `@elitea/client-core` (libs/ts/client-core) is TypeScript source outside
+ * this app's root: `tsconfigPaths()` resolves the import and Vite compiles
+ * it, but the dev server serves only allowed directories. Every mode's dev
+ * server allows this app and that package; a build is not affected.
+ */
+function withClientCoreAccess(config: UserConfig): UserConfig {
+  return {
+    ...config,
+    server: { ...config.server, fs: { allow: [resolvePath('.'), resolvePath('../../libs/ts/client-core')] } },
+  };
+}
+
+function configFor(mode: string): UserConfig {
   const basePlugins: PluginOption[] = [
     compactI18nCatalogue(),
     react(),
@@ -317,7 +332,7 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     server: devServerProxy(),
   };
-});
+}
 
 /**
  * `npm run dev` against a real backend, with HMR.
