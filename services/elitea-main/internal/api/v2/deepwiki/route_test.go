@@ -124,7 +124,6 @@ func provider(t *testing.T) (*[]received, deepwiki.Config) {
 		IdentitySecret: identitySecret,
 		Timeout:        10 * time.Second,
 
-		CallbackBaseURL:  "https://elitea.test",
 		CallbackTokenTTL: time.Hour,
 		GitEgress:        deepwiki.ParseGitEgressPolicy("github.com,api.github.com"),
 	}

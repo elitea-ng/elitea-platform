@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
 // Environment variables this facade reads. All are optional except the enable
@@ -36,12 +37,10 @@ const (
 	IdentitySecretEnv = "ELITEA_DEEPWIKI_IDENTITY_SECRET"
 	TimeoutEnv        = "ELITEA_DEEPWIKI_TIMEOUT_SECONDS"
 
-	// CallbackBaseURLEnv is the platform origin the provider calls back to for
-	// artifacts and models. One value, not two: the engine derives the artifact
-	// API base by stripping `/llm/v1` off the api_base it is given
-	// (artifacts_platform_client.extract_artifact_settings), so configuring
-	// them apart is not expressible.
-	CallbackBaseURLEnv = "ELITEA_DEEPWIKI_CALLBACK_BASE_URL"
+	// RetiredCallbackBaseURLEnv was the platform origin the provider called
+	// back to over HTTP. Retired (#1359 U5): the engine calls back over the
+	// platform gRPC listener, and ConfigFromEnv refuses the variable.
+	RetiredCallbackBaseURLEnv = "ELITEA_DEEPWIKI_CALLBACK_BASE_URL"
 
 	// CallbackTokenTTLEnv is how long a minted callback bearer lives. It must
 	// outlast the longest generation the deployment expects; a token that dies
@@ -75,12 +74,6 @@ type Config struct {
 	IdentitySecret string
 
 	Timeout time.Duration
-
-	// CallbackBaseURL is the origin the provider reaches back on. Required
-	// whenever the facade is enabled: without it an invocation would be
-	// accepted and then fail at its first artifact upload, after the whole
-	// generation had run.
-	CallbackBaseURL string
 
 	// CallbackTokenTTL is the minted bearer's lifetime. Defaults to two hours
 	// — long enough for a large repository's generation, short enough that a
@@ -144,19 +137,20 @@ func ConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	}
 
 	return Config{
-		Enabled:        enabled,
-		Target:         get(TargetEnv),
-		ClientCertFile: get(ClientCertEnv),
-		ClientKeyFile:  get(ClientKeyEnv),
-		CAFile:         get(CAFileEnv),
-		ServerName:     get(ServerNameEnv),
-		IdentitySecret: get(IdentitySecretEnv),
-		Timeout:        timeout,
+			Enabled:        enabled,
+			Target:         get(TargetEnv),
+			ClientCertFile: get(ClientCertEnv),
+			ClientKeyFile:  get(ClientKeyEnv),
+			CAFile:         get(CAFileEnv),
+			ServerName:     get(ServerNameEnv),
+			IdentitySecret: get(IdentitySecretEnv),
+			Timeout:        timeout,
 
-		CallbackBaseURL:  get(CallbackBaseURLEnv),
-		CallbackTokenTTL: callbackTTL,
-		GitEgress:        ParseGitEgressPolicy(get(GitAllowlistEnv)),
-	}, facade.RefuseRetiredBaseURL("ELITEA_DEEPWIKI_BASE_URL", TargetEnv, lookup)
+			CallbackTokenTTL: callbackTTL,
+			GitEgress:        ParseGitEgressPolicy(get(GitAllowlistEnv)),
+		}, errors.Join(
+			facade.RefuseRetiredBaseURL("ELITEA_DEEPWIKI_BASE_URL", TargetEnv, lookup),
+			material.RetiredCallbackBaseURL(RetiredCallbackBaseURLEnv, lookup))
 }
 
 // Validate reports whether an ENABLED config can actually reach the provider.
@@ -183,12 +177,6 @@ func (c Config) Validate() error {
 	}
 	if c.CAFile == "" {
 		missing = append(missing, CAFileEnv)
-	}
-	// Without a callback origin the provider can generate a wiki and then be
-	// unable to hand it back. That failure arrives at the END of the most
-	// expensive operation this facade offers, so it is caught at startup.
-	if c.CallbackBaseURL == "" {
-		missing = append(missing, CallbackBaseURLEnv)
 	}
 
 	if len(missing) > 0 {

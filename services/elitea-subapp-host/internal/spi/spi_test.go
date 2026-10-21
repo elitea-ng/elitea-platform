@@ -179,15 +179,17 @@ func TestTheCallbackCAIsItsOwnSettingWithTheOldFallback(t *testing.T) {
 // listener requires one. Both halves or neither.
 func TestTheCallbackClientCertificateIsAPair(t *testing.T) {
 	s, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(map[string]string{
-		"ELITEA_DEEPWIKI_CALLBACK_CA_FILE":   "/runtime-ca",
-		"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE": "/callback.crt",
-		"ELITEA_DEEPWIKI_CALLBACK_KEY_FILE":  "/callback.key",
+		"ELITEA_DEEPWIKI_CALLBACK_CA_FILE":     "/runtime-ca",
+		"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE":   "/callback.crt",
+		"ELITEA_DEEPWIKI_CALLBACK_KEY_FILE":    "/callback.key",
+		"ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL": "https://elitea-main:9446",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := s.CallbackTLS(); got.CAFile != "/runtime-ca" || got.CertFile != "/callback.crt" || got.KeyFile != "/callback.key" {
-		t.Fatalf("CallbackTLS = %+v", got)
+	if got := s.Callback(); got.CAFile != "/runtime-ca" || got.CertFile != "/callback.crt" || got.KeyFile != "/callback.key" ||
+		got.Target != "https://elitea-main:9446" || got.TargetEnv != "ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL" {
+		t.Fatalf("Callback = %+v", got)
 	}
 	if _, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(map[string]string{
 		"ELITEA_DEEPWIKI_CALLBACK_CERT_FILE": "/callback.crt",

@@ -16,7 +16,6 @@ func codeConsumerEnvironment(t *testing.T) map[string]string {
 	platform := CodePlatformDeploymentConfig{Revision: 1, ContentKeysFile: "/run/elitea-runtime/code-platform-content-keys.json", BrokerPolicies: []storage.CodeBrokerPolicy{{Revision: 1, MaxCalls: 32, MaxTotalBytes: 1048576}}}
 	values := oneDirectoryEnvironment()
 	values["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	values["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
 	values["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	values["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = owner.Supervisors[0].Audience
 	values["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED"] = "true"

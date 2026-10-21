@@ -1498,10 +1498,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			currentConfigurationsConfig.PublicProjectID, admissionPosture,
 			startProviderRegistrar(ctx, logger, pool, currentConfigurationsConfig.PublicProjectID,
 				"inventory", inventoryConfig, v2inventory.EnvNames.Target))
-		// The source expander (ADR-0023 H4c I2). Built only where BOTH halves
-		// exist: the Configurations graph that can claim a credential, and a
-		// callback origin the provider can reach back on. Where either is
-		// absent the facade mounts WITHOUT expansion — the eight tools that
+		// The source expander (ADR-0023 H4c I2). Built only where the
+		// Configurations graph that can claim a credential exists (the engine
+		// calls back over the platform gRPC listener, at no configured origin,
+		// since #1359 U5). Where it is absent the facade mounts WITHOUT expansion — the eight tools that
 		// read the graph still work — rather than failing to boot, which is
 		// what a stack with no vault (the E2E one) needs. What is NOT
 		// tolerated is a half-wired expander: NewSources refuses that.
@@ -1510,12 +1510,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if sourcesErr != nil {
 			return fmt.Errorf("read Inventory source configuration: %w", sourcesErr)
 		}
-		switch {
-		case inventorySourceSettings == nil || inventorySourcesConfig.CallbackBaseURL == "":
+		if inventorySourceSettings == nil {
 			logger.Warn("Inventory mounts without source expansion",
-				"settings_resolver", inventorySourceSettings != nil,
-				"callback_base_url", v2inventory.CallbackBaseURLEnv)
-		default:
+				"settings_resolver", false)
+		} else {
 			inventoryToolkits, toolkitsErr := dbrepos.NewCurrentToolkitsRepository(pool)
 			if toolkitsErr != nil {
 				return fmt.Errorf("compose Inventory toolkit reader: %w", toolkitsErr)
@@ -2772,7 +2770,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The internal platform gRPC listener (#1359 D1), when the runtime
 	// configuration opens one.
 	platformSrv, err := newPlatformServer(runtimeConfig, func() ([]runtimegrpc.PlatformService, error) {
-		return platformServices(r, os.Getenv(ModelServiceClientsEnv), logger)
+		return platformServices(r, platformClientsFromEnv(os.Getenv), logger)
 	})
 	if err != nil {
 		return fmt.Errorf("configure platform listener: %w", err)

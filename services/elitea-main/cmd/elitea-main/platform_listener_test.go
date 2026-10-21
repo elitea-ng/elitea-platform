@@ -22,7 +22,8 @@ import (
 // that gate over real TLS (HTTP/1.1 refused, per-service allowlist, health
 // only to verified peers); this file holds the composition root to it.
 func TestPlatformListenerRegistersOnlyAllowlistedServices(t *testing.T) {
-	services, err := platformServices(http.NotFoundHandler(), "dns:elitea-worker, spiffe://elitea.test/sa/agent-worker", nil)
+	all := "dns:elitea-worker, spiffe://elitea.test/sa/agent-worker"
+	services, err := platformServices(http.NotFoundHandler(), platformClients{Model: all, Artifact: all, InternalTool: all}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,8 +37,28 @@ func TestPlatformListenerRegistersOnlyAllowlistedServices(t *testing.T) {
 			t.Errorf("platform service %s does not admit exactly the configured clients", service.Name)
 		}
 	}
-	if !names["elitea.llm.v1.ModelService"] {
-		t.Errorf("ModelService is not registered on the platform listener: %v", names)
+	for _, name := range []string{"elitea.llm.v1.ModelService", "elitea.runtime.v1.ArtifactObjectService", "elitea.runtime.v1.InternalToolService"} {
+		if !names[name] {
+			t.Errorf("%s is not registered on the platform listener: %v", name, names)
+		}
+	}
+}
+
+// The artifact and internal-tool services are optional: an empty list serves
+// none (its calls are refused), but an entry that is not an identity is a
+// boot error naming the variable.
+func TestPlatformListenerOptionalServices(t *testing.T) {
+	services, err := platformServices(http.NotFoundHandler(), platformClients{Model: "dns:elitea-worker"}, nil)
+	if err != nil || len(services) != 1 {
+		t.Fatalf("services %v, err %v", services, err)
+	}
+	for env, clients := range map[string]platformClients{
+		ArtifactServiceClientsEnv:     {Model: "dns:elitea-worker", Artifact: "elitea-worker"},
+		InternalToolServiceClientsEnv: {Model: "dns:elitea-worker", InternalTool: "elitea-worker"},
+	} {
+		if _, err := platformServices(http.NotFoundHandler(), clients, nil); err == nil || !strings.Contains(err.Error(), env) {
+			t.Errorf("%s: err=%v", env, err)
+		}
 	}
 }
 
@@ -45,7 +66,7 @@ func TestPlatformListenerRegistersOnlyAllowlistedServices(t *testing.T) {
 // nobody may call: boot refuses it, naming the variable.
 func TestPlatformListenerRefusesNoModelServiceClients(t *testing.T) {
 	for _, clients := range []string{"", " , ", "elitea-worker"} {
-		if _, err := platformServices(http.NotFoundHandler(), clients, nil); err == nil ||
+		if _, err := platformServices(http.NotFoundHandler(), platformClients{Model: clients}, nil); err == nil ||
 			!strings.Contains(err.Error(), ModelServiceClientsEnv) {
 			t.Errorf("clients %q: err=%v", clients, err)
 		}
@@ -53,12 +74,11 @@ func TestPlatformListenerRefusesNoModelServiceClients(t *testing.T) {
 }
 
 func testPlatformServices() ([]runtimegrpc.PlatformService, error) {
-	return platformServices(http.NotFoundHandler(), "dns:elitea-worker", nil)
+	return platformServices(http.NotFoundHandler(), platformClients{Model: "dns:elitea-worker"}, nil)
 }
 
 func TestNoPlatformListenerWithoutConfiguration(t *testing.T) {
 	for name, config := range map[string]runtimecomposition.Config{
-		"runtime off":          {PlatformAddress: ":9446"},
 		"runtime on, no addr":  {Enabled: true},
 		"runtime off, no addr": {},
 	} {

@@ -48,12 +48,17 @@ type Settings struct {
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
+	// ArtifactServiceURL is where the CALLBACK hop goes: elitea-main's
+	// platform gRPC listener serving elitea.runtime.v1.ArtifactObjectService
+	// (<PREFIX>ARTIFACT_SERVICE_URL, e.g. https://elitea-main:9446; #1359
+	// U5). Empty stores nothing: an invocation that carries a transport then
+	// fails its uploads with a refusal naming the variable.
+	ArtifactServiceURL string
 	// CallbackCAFile is the bundle trusted on the CALLBACK hop — the
-	// artifact uploads to `llm_settings.api_base` — when that hop is TLS
-	// to elitea-main's platform listener (#1359; it replaced platform-edge,
-	// ADR-0027), whose certificate the runtime CA signs. It is separate from TLSCAFile, which is the client CA of this
-	// process's own mTLS listener. Empty keeps the old behaviour: the
-	// callback trusts TLSCAFile (see CallbackCA).
+	// artifact calls to elitea-main's platform listener (#1359), whose
+	// certificate the runtime CA signs. It is separate from TLSCAFile, which
+	// is the client CA of this process's own mTLS listener. Empty keeps the
+	// old behaviour: the callback trusts TLSCAFile (see CallbackCA).
 	CallbackCAFile string
 	// CallbackCertFile and CallbackKeyFile are the client certificate the
 	// callback hop presents (<PREFIX>CALLBACK_CERT_FILE / _KEY_FILE). The
@@ -156,6 +161,7 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		TLSCertFile:        raw("TLS_CERTFILE", ""),
 		TLSKeyFile:         raw("TLS_KEYFILE", ""),
 		TLSCAFile:          raw("TLS_CA_FILE", ""),
+		ArtifactServiceURL: raw("ARTIFACT_SERVICE_URL", ""),
 		CallbackCAFile:     raw("CALLBACK_CA_FILE", ""),
 		CallbackCertFile:   raw("CALLBACK_CERT_FILE", ""),
 		CallbackKeyFile:    raw("CALLBACK_KEY_FILE", ""),
@@ -218,8 +224,11 @@ func (s Settings) CallbackCA() string {
 	return s.TLSCAFile
 }
 
-// CallbackTLS is the callback hop's TLS: CallbackCA plus the client
-// certificate it presents to the platform listener.
-func (s Settings) CallbackTLS() artifacts.CallbackTLS {
-	return artifacts.CallbackTLS{CAFile: s.CallbackCA(), CertFile: s.CallbackCertFile, KeyFile: s.CallbackKeyFile}
+// Callback is the callback hop: the artifact service's address, CallbackCA,
+// and the client certificate it presents to the platform listener.
+func (s Settings) Callback() artifacts.Callback {
+	return artifacts.Callback{
+		Target: s.ArtifactServiceURL, TargetEnv: s.Prefix + "ARTIFACT_SERVICE_URL",
+		CAFile: s.CallbackCA(), CertFile: s.CallbackCertFile, KeyFile: s.CallbackKeyFile,
+	}
 }

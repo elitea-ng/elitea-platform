@@ -244,7 +244,6 @@ func config() inventory.SourcesConfig {
 		GitEgress: material.ParseGitEgress(
 			"github.com, *.github.com", inventory.GitAllowlistEnv),
 		SourceTypes:      inventory.DefaultSourceTypes,
-		CallbackBaseURL:  "https://elitea.example",
 		CallbackTokenTTL: time.Hour,
 	}
 }
@@ -540,7 +539,7 @@ func TestTheGrantIsMintedOnlyAfterTheSourceResolves(t *testing.T) {
 		t.Fatalf("no llm_settings block: %v", parametersOf(t, decoded))
 	}
 	if block["api_key"] != "bearer-for-token-a" ||
-		block["api_base"] != "https://elitea.example/llm/v1" ||
+		block["api_base"] != "https://elitea-platform.invalid/llm/v1" ||
 		block["organization"] != "42" {
 		t.Errorf("the callback block is not the minted grant's: %v", block)
 	}

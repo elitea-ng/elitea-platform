@@ -33,7 +33,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
@@ -73,7 +72,6 @@ func NewInvokeRewriter(
 	credentials *CredentialResolver,
 	toolkits ToolkitReader,
 	minter CallbackMinter,
-	callbackBase string,
 	lifetime time.Duration,
 ) (*InvokeRewriter, error) {
 	if credentials == nil || minter == nil {
@@ -81,15 +79,9 @@ func NewInvokeRewriter(
 			"%w: a credential resolver and a callback minter are required",
 			ErrCredentialsUnavailable)
 	}
-	base := strings.TrimRight(strings.TrimSpace(callbackBase), "/")
-	if base == "" {
-		return nil, fmt.Errorf(
-			"%w: %s is required — the provider cannot call back to an unnamed origin",
-			ErrCredentialsUnavailable, CallbackBaseURLEnv)
-	}
 	rewriter := &InvokeRewriter{credentials: credentials}
 	shared := material.ReferenceRewriter{
-		Provider: grantDescription, Minter: minter, CallbackBase: base, Lifetime: lifetime,
+		Provider: grantDescription, Minter: minter, CallbackBase: material.PlatformRouteBase, Lifetime: lifetime,
 		Refused: ErrToolkitNotResolvable, Unavailable: ErrCredentialsUnavailable,
 	}
 	rewriter.main = shared

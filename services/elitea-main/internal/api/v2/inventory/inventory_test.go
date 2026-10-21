@@ -103,8 +103,8 @@ func recordingProvider(t *testing.T) (*[]recordedRequest, facade.Config) {
 }
 
 // route composes the facade with a caller holding exactly `granted`, and no
-// source expansion — the deployment shape values.yaml documents as
-// "ELITEA_INVENTORY_CALLBACK_BASE_URL empty".
+// source expansion — the deployment shape with no Configurations settings
+// resolver.
 func route(t *testing.T, cfg facade.Config, granted ...string) *inventory.Route {
 	t.Helper()
 	built, err := inventory.NewRoute(cfg, authConfig(), permissions(granted...), nil, silent())
@@ -220,7 +220,7 @@ func TestReadingIsNotInvoking(t *testing.T) {
 // THIS IS A REGRESSION TEST FOR A LIVE DEFECT, not a style rule.
 // production_router.go mounts these constants on the router ROOT, so the
 // string IS the served path. They read `/inventory/...` until this commit,
-// while DeepWiki's read `/api/v2/deepwiki/...`. The platform edge forwards
+// while DeepWiki's read `/api/v2/deepwiki/...`. The public edge then forwarded
 // `/api/v2` and nothing else, so the facade answered 200 to a request made
 // directly against elitea-main's port inside the compose network and 404 to
 // the identical request through the edge — measured on a running stack. Every

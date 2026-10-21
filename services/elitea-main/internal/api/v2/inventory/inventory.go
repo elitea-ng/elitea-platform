@@ -75,7 +75,7 @@ var ErrInvalidRoute = errors.New("invalid Inventory route")
 // internal/api/v2/deepwiki. production_router.go mounts these strings on the
 // router ROOT — `r.Method(http.MethodGet, SlotsPath, …)` — so a constant
 // without the prefix is a route served at `/inventory/slots/{id}`, which the
-// platform edge does not forward: it routes `/api/v2`. MEASURED on a running
+// public edge of the time did not forward: it routed `/api/v2`. MEASURED on a running
 // stack: the facade answered 200 to a request made directly against
 // elitea-main's port and 404 to the same request through the edge, so every
 // test in this package passed while no browser and no API client could reach

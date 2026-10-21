@@ -733,14 +733,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if targetErr != nil {
 			return nil, fmt.Errorf("construct nested application version reader: %w", targetErr)
 		}
-		// TODO(#1359 U5): CurrentMainBaseURL survives only as the internal
-		// MCP origin handed to the worker (https://elitea-main:9446). When the
-		// worker's internal-MCP client becomes InternalToolService on the
-		// platform gRPC listener, this URL and ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL
-		// retire.
+		// The internal MCP builders are addressed at InternalToolOrigin, a
+		// name the worker resolves to InternalToolService on the platform
+		// gRPC listener (#1359 U5), never to an HTTP origin.
 		agentPrebuiltMCP, prebuiltErr := newCurrentAgentRuntimePrebuiltMCP(
 			mcpregistry.NewPrebuiltStore(dependencies.AdmissionPool),
-			config.CurrentMainBaseURL,
 			dependencies.ActorTokenIssuer,
 		)
 		if prebuiltErr != nil {

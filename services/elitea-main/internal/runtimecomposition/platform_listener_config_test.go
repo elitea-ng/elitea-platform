@@ -31,6 +31,34 @@ func TestPlatformListenerIsOptional(t *testing.T) {
 	}
 }
 
+// The platform listener opens with the runtime OFF too (#1359 U5): its
+// services run the public handler's routes in process, and a stack with no
+// runtime plane (the E2E one) still serves the sub-application hosts'
+// artifact calls on it. Its TLS rules hold the same.
+func TestPlatformListenerOpensWithTheRuntimeOff(t *testing.T) {
+	off := map[string]string{
+		"ELITEA_RUNTIME_PLATFORM_ADDRESS":            ":9446",
+		"ELITEA_RUNTIME_PLATFORM_TLS_CERT_FILE":      "/certs/platform.crt",
+		"ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE":       "/certs/platform.key",
+		"ELITEA_RUNTIME_PLATFORM_TLS_CLIENT_CA_FILE": "/certs/ca.crt",
+	}
+	config, err := ConfigFromEnv(mapLookup(off))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Enabled || config.PlatformAddress != ":9446" || config.PlatformTLS.ClientCAPath != "/certs/ca.crt" {
+		t.Fatalf("config %+v", config)
+	}
+	delete(off, "ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE")
+	if _, err := ConfigFromEnv(mapLookup(off)); err == nil || !strings.Contains(err.Error(), "ELITEA_RUNTIME_PLATFORM_TLS_KEY_FILE") {
+		t.Fatalf("a listener without its key: %v", err)
+	}
+	delete(off, "ELITEA_RUNTIME_PLATFORM_ADDRESS")
+	if _, err := ConfigFromEnv(mapLookup(off)); err == nil {
+		t.Fatal("TLS files without an address were accepted")
+	}
+}
+
 func TestPlatformListenerReadsItsTLSFiles(t *testing.T) {
 	config, err := ConfigFromEnv(mapLookup(platformEnvironment()))
 	if err != nil {
@@ -109,15 +137,15 @@ func TestPlatformListenerRefusals(t *testing.T) {
 	}
 }
 
-// elitea-main no longer calls its own platform listener (#1359 H7: the
-// next-input-suggestion self call is in process), so naming the listener as
-// CURRENT_MAIN_BASE_URL (the internal MCP origin) needs no client identity of
-// Main's own, and the retired main-platform-client files are not material.
+// elitea-main never calls its own platform listener (#1359 H7: the
+// next-input-suggestion self call is in process; U5: the internal MCP builders
+// are InternalToolService, which the worker calls), so it needs no client
+// identity of its own, and the retired main-platform-client files are not
+// material.
 func TestPlatformListenerNeedsNoMainClientIdentity(t *testing.T) {
 	environment := platformEnvironment()
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
-	environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-main:9446"
 	environment["ELITEA_RUNTIME_PLATFORM_CLIENT_CERT_FILE"] = "/run/secrets/main-platform-client.crt"
 	environment["ELITEA_RUNTIME_PLATFORM_CLIENT_KEY_FILE"] = "/run/secrets/main-platform-client.key"
 	config, err := ConfigFromEnv(mapLookup(environment))

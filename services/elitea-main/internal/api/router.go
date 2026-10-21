@@ -1106,7 +1106,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 		// config.py:187-199), the SDK appends "/artifacts/s3" to it with no
 		// api_v2_path (elitea-sdk client.py:115 — note every sibling URL on
 		// the lines above it DOES include /api/v2, so the omission is the
-		// contract, not an oversight), and the platform edge forwards the
+		// contract, not an oversight), and the public origin serves the
 		// path verbatim. Mounting this under /api/v2 would reproduce the
 		// original defect: a 404 the SDK swallows into an empty listing,
 		// leaving an index run green having indexed nothing.

@@ -254,7 +254,7 @@ func TestWithoutATransportNothingIsUploadedAndTheResultIsUnchanged(t *testing.T)
 }
 
 func TestTheDefaultFactoryNeedsBothHalvesOfTheTransport(t *testing.T) {
-	factory := run.ArtifactClientFrom(artifacts.CallbackTLS{})
+	factory := run.ArtifactClientFrom(artifacts.Callback{Target: "elitea-main:9446"})
 	for _, settings := range []map[string]any{{}, {"api_base": "http://x/llm/v1"}, {"api_key": "k"}} {
 		if client, err := factory(settings); client != nil || err != nil {
 			t.Fatalf("%v: %v %v", settings, client, err)
@@ -264,8 +264,8 @@ func TestTheDefaultFactoryNeedsBothHalvesOfTheTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	http, ok := client.(*run.HTTPArtifactClient)
-	if !ok || http.Settings.BaseURL != "http://elitea-main:8080" || http.Settings.ProjectID != "90200" || http.Settings.APIKey != "minted" {
+	bound, ok := client.(*artifacts.GRPCClient)
+	if !ok || bound.Settings.ProjectID != "90200" || bound.Settings.APIKey != "minted" {
 		t.Fatalf("%+v", client)
 	}
 }

@@ -81,7 +81,7 @@ func NewRoute(
 	// would do so having already passed authentication and permissions, which
 	// is the point at which a defect stops looking like a defect.
 	rewriter, err := NewInvokeRewriter(
-		credentials, toolkits, minter, cfg.CallbackBaseURL, cfg.CallbackTokenTTL)
+		credentials, toolkits, minter, cfg.CallbackTokenTTL)
 	if err != nil {
 		return nil, err
 	}

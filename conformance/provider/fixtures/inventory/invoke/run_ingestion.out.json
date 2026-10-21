@@ -6,7 +6,7 @@
       "embedding_model": "text-embedding-3-small",
       "llm_model": "gpt-4o",
       "llm_settings": {
-        "api_base": "https://elitea.example/llm/v1",
+        "api_base": "https://elitea-platform.invalid/llm/v1",
         "api_key": "bearer-for-token-a",
         "execution_id": "callback-token-a",
         "max_tokens": 32000,
