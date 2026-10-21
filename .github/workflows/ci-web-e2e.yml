@@ -514,7 +514,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: The suite's shape still matches this workflow
         # Three seconds, on every leg, and it is here rather than only in
         # ci-web.yml because of what ci-web.yml does NOT fire on: its `paths`
@@ -790,7 +799,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -981,7 +999,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container and the model image (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -1109,7 +1136,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Ask Playwright what the live lanes actually hold
         id: lanes
         # `--list` needs no stack: the gate is computed at config load from the
@@ -1272,7 +1308,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -1428,7 +1473,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
       - name: Pre-pull the pinned Playwright container (background)
         # Started with nohup and left running while the bake below uses the
         # CPU: the runner does not reap a step's background processes. This is
@@ -1530,7 +1584,16 @@ jobs:
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
       - name: Install (locked)
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
 
       # The tag below is asserted against package.json's pinned
       # @playwright/test, so a version bump cannot silently leave baselines
@@ -1781,7 +1844,16 @@ jobs:
         # Also installs sharp's prebuilt linux-x64 binary and tsx — both
         # devDependencies as of this unit — from package-lock.json, the same
         # way this step installs everything else.
-        run: npm ci
+        # npm's fetch retries (the npm-cache action) cover a refused request,
+        # not a registry reset mid-tarball (`read ECONNRESET`), which ends
+        # `npm ci` at once. Three bounded attempts on a clean tree.
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
 
       - name: Playwright container tag matches the pinned library
         run: node scripts/check-playwright-image-tag.mjs

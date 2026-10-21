@@ -42,8 +42,8 @@ runs:
         # npm call later in this job inherits these through GITHUB_ENV.
         {
           echo "NPM_CONFIG_FETCH_RETRIES=6"
-          echo "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000"
-          echo "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=60000"
+          echo "NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000"
+          echo "NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000"
         } >> "$GITHUB_ENV"
         # process.arch (x64, arm64), which is what setup-node put in the key;
         # runner.arch spells it X64.
