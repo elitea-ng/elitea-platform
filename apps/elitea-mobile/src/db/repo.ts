@@ -132,6 +132,35 @@ export async function upsertConversationRow(
 }
 
 /**
+ * SQL for a stored JSON column with `path` set to the next bound value, or the column as it is
+ * when it holds no valid JSON (a row saved before the column was kept). `json`: the bound value
+ * is JSON text (`'true'`, `'false'`), not a string.
+ */
+export function jsonColumnSet(column: 'row_json' | 'detail_json', path: string, json = false): string {
+  return `CASE WHEN ${column} IS NOT NULL AND json_valid(${column}) THEN json_set(${column}, '${path}', ${json ? 'json(?)' : '?'}) ELSE ${column} END`;
+}
+
+/**
+ * Sets one boolean field of a stored list row (`row_json`): a pin, an archive taken, or the
+ * caller's `unread` after a read (client contract 1.12; a read is not re-delivered by the delta,
+ * so without it the offline copy would keep the row unread). The transcript is not marked for a
+ * sync.
+ */
+export async function setRowJsonField(
+  db: SqlExecutor,
+  projectId: number,
+  conversationId: number,
+  field: 'is_pinned' | 'is_archived' | 'unread',
+  value: boolean,
+): Promise<void> {
+  await db.run(`UPDATE conversations SET row_json = ${jsonColumnSet('row_json', `$.${field}`, true)} WHERE project_id = ? AND id = ?`, [
+    value ? 'true' : 'false',
+    projectId,
+    conversationId,
+  ]);
+}
+
+/**
  * Keeps the last full read of a conversation (participants and uuid, without
  * its message groups) so the thread can be shown and addressed offline.
  */

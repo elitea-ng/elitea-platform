@@ -1,5 +1,5 @@
 import type { ActionOutcome, ConversationAction } from '@/api/queries/conversationActions';
-import { deleteConversation } from '@/db/repo';
+import { deleteConversation, jsonColumnSet, setRowJsonField } from '@/db/repo';
 import type { Db, SqlExecutor } from '@/db/sql';
 import { log } from '@/lib/log';
 
@@ -188,31 +188,19 @@ export async function applyTakenOp(tx: SqlExecutor, op: Pick<ConversationOp, 'pr
     }
     case 'rename':
       await tx.run(
-        `UPDATE conversations SET name = ?,
-           row_json = CASE WHEN row_json IS NOT NULL AND json_valid(row_json) THEN json_set(row_json, '$.name', ?) ELSE row_json END,
-           detail_json = CASE WHEN detail_json IS NOT NULL AND json_valid(detail_json) THEN json_set(detail_json, '$.name', ?) ELSE detail_json END
+        `UPDATE conversations SET name = ?, row_json = ${jsonColumnSet('row_json', '$.name')}, detail_json = ${jsonColumnSet('detail_json', '$.name')}
          WHERE ${where}`,
         [op.action.name, op.action.name, op.action.name, ...key],
       );
       return;
     case 'pin':
-      await tx.run(
-        `UPDATE conversations SET
-           row_json = CASE WHEN row_json IS NOT NULL AND json_valid(row_json) THEN json_set(row_json, '$.is_pinned', json(?)) ELSE row_json END
-         WHERE ${where}`,
-        [op.action.pinned ? 'true' : 'false', ...key],
-      );
+      await setRowJsonField(tx, op.projectId, op.conversationId, 'is_pinned', op.action.pinned);
       return;
     case 'archive':
       // The saved Chats list leaves an archived row out at once (src/db/repo.ts), its transcript
       // kept. From client contract 1.10 the delta (`archived=include`) re-delivers the row with
       // `is_archived`; before it, an archive came as an `access_lost` tombstone.
-      await tx.run(
-        `UPDATE conversations SET
-           row_json = CASE WHEN row_json IS NOT NULL AND json_valid(row_json) THEN json_set(row_json, '$.is_archived', json(?)) ELSE row_json END
-         WHERE ${where}`,
-        [op.action.archived ? 'true' : 'false', ...key],
-      );
+      await setRowJsonField(tx, op.projectId, op.conversationId, 'is_archived', op.action.archived);
   }
 }
 

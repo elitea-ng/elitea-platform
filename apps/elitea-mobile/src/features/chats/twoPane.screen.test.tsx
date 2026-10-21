@@ -38,7 +38,9 @@ jest.mock('@/theme/brandFonts', () => ({ useBrandFontFamily: () => undefined }))
 jest.mock('@/features/chat/ThreadView', () => {
   const { Text: RNText } = require('react-native');
   return {
-    ThreadView: ({ id, chrome = 'stack' }: { id: string; chrome?: string }) => <RNText testID={`thread-${chrome}`}>{`thread ${id}`}</RNText>,
+    ThreadView: ({ id, chrome = 'stack', inFront = true }: { id: string; chrome?: string; inFront?: boolean }) => (
+      <RNText testID={`thread-${chrome}`} accessibilityHint={inFront ? 'in front' : 'covered'}>{`thread ${id}`}</RNText>
+    ),
   };
 });
 const mockRows = [
@@ -198,6 +200,16 @@ describe('Chats at regular width (iPad)', () => {
     await render(<ConversationsScreen />);
     await layOut(1024);
     expect(screen.getByTestId('thread-pane')).toHaveTextContent('thread 11');
+  });
+
+  it('a chat on its own screen is not in front while another screen is pushed over it (it is not marked read)', async () => {
+    mockParams = { id: '11' };
+    await render(<ThreadScreen />);
+    expect(screen.getByTestId('thread-stack').props.accessibilityHint).toBe('in front');
+    await screen.unmount();
+    mockFocused = false;
+    await render(<ThreadScreen />);
+    expect(screen.getByTestId('thread-stack').props.accessibilityHint).toBe('covered');
   });
 
   it("closes the detail column when the open chat is deleted", async () => {

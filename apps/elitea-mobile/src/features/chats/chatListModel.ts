@@ -1,6 +1,7 @@
 import type { ConversationSummary } from '@/api/queries/conversations';
 import type { SearchHit } from '@/db/search';
 import type { ChatListItem } from '@/features/chats/ConversationList';
+import { activityGlyphOf, activityStateOf, activityTitleBold, type ActivityRowFields } from '@/features/chats/activity';
 import { filterConversations } from '@/features/chats/filterConversations';
 import { executorOf } from '@/features/localWork/model';
 import { formatAge, parseServerTime } from '@/lib/time';
@@ -42,7 +43,7 @@ export function buildChatRows({
 }
 
 function toItem(
-  row: Pick<ConversationSummary, 'id' | 'name' | 'updated_at' | 'is_pinned'> & { workspace_executor?: string },
+  row: Pick<ConversationSummary, 'id' | 'name' | 'updated_at' | 'is_pinned'> & { workspace_executor?: string } & ActivityRowFields,
   now?: number,
   snippet: ChatListItem['snippet'] = null,
   localWork = false,
@@ -54,6 +55,10 @@ function toItem(
     age: formatAge(row.updated_at, now),
     pinned: row.is_pinned === true,
     snippet,
+    // Client contract 1.12: the activity glyph, the bold unread title, the "needs you" count.
+    activity: activityGlyphOf(row, now),
+    unread: activityTitleBold(row),
+    needsYou: activityStateOf(row) === 'needs_you',
     ...(localWork ? { executor: executorOf(row) } : {}),
   };
 }
@@ -88,6 +93,9 @@ export function buildSearchRows({
     is_archived: hit.row?.is_archived === true,
     snippet: hit.snippet,
     workspace_executor: hit.row?.workspace_executor,
+    activity: hit.row?.activity,
+    last_activity_at: hit.row?.last_activity_at,
+    unread: hit.row?.unread,
   }));
   const seen = new Set(fromIndex.map((hit) => hit.id));
   const byTitle = filterConversations(applyOverlay(loaded, overlay).filter((row) => row.is_archived !== true), query)
@@ -100,6 +108,9 @@ export function buildSearchRows({
       is_archived: false,
       snippet: null,
       workspace_executor: row.workspace_executor,
+      activity: row.activity,
+      last_activity_at: row.last_activity_at,
+      unread: row.unread,
     }));
   return applyOverlay([...fromIndex, ...byTitle], overlay)
     .filter((row) => !hidden?.has(row.id) && row.is_archived !== true)

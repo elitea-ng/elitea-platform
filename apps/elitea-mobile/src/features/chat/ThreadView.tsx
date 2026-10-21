@@ -19,6 +19,7 @@ import { log } from '@/lib/log';
 import { selectChat } from '@/features/chats/selectedChat';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
+import { readRevision, useMarkConversationRead } from '@/features/chat/useMarkConversationRead';
 import { speaksContract } from '@/api/discovery';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
@@ -115,7 +116,10 @@ export function ThreadView({
   id: string;
   intent?: string;
   chrome?: ThreadChrome;
-  /** False while another screen covers it (the detail column under a pushed screen): no announcements. */
+  /**
+   * False while another screen covers it (the detail column under a pushed screen, a screen pushed
+   * over the thread's own): no announcements, and it is not marked read.
+   */
   inFront?: boolean;
 }) {
   const palette = usePalette();
@@ -142,6 +146,8 @@ export function ThreadView({
   const contract13 = speaksContract(workspace?.discovery, 1, 3);
   // Client contract 1.11: fork a conversation ("Fork from here", the "Forked from" link).
   const forkAvailable = speaksContract(workspace?.discovery, 1, 11);
+  // Client contract 1.12: read markers (markConversationRead).
+  const contract112 = speaksContract(workspace?.discovery, 1, 12);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -238,6 +244,14 @@ export function ThreadView({
     answerGroups,
     contractAtLeast1_1 && !isOfflineCopy(detail),
   );
+  // Client contract 1.12: the open conversation is read (the Chats row loses its bold title and
+  // its unread check), again when an answer lands or a turn ends while it is on screen.
+  useMarkConversationRead({
+    projectId,
+    conversationId: Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null,
+    revision: readRevision(messages, live?.settled === true),
+    enabled: contract112 && inFront && !isOfflineCopy(detail),
+  });
   // Before client contract 1.1 a model (adhoc) chat dropped mentions silently.
   const mentionHint =
     people.length > 0 && target.ok && target.kind === 'model' && !contractAtLeast1_1 ? 'Mentions notify only in agent chats.' : null;

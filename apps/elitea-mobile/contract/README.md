@@ -126,3 +126,14 @@ store, and an unarchived one is a row again.
 |---|---|
 | Fork | `forkConversation`: `POST /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}` with `{message_id?, name?}`; 201 answers the new list row. "Fork" on a Chats row (no body: the whole history) and "Fork from here" on a settled message (`message_id`: the group's UUID). Never queued: it needs a connection. 409 `fork_point_unsettled` and `fork_not_supported` are told apart (`src/api/queries/forkConversation.ts`). |
 | Forked from | `ConversationDetail.forked_from`: the thread shows "Forked from <name>" only when `name` is present (the reader can still see the source). |
+
+## Client contract 1.12
+
+| Area | What |
+|---|---|
+| Activity | `ConversationSummary.activity {state, since}`, `last_activity_at` and the caller's `unread` on list rows and their `changes_since` delta. The Chats row draws its glyph (running, needs you, finished unread, finished) and a bold unread title (`src/features/chats/activity.ts`); each section header counts the loaded rows that need the user (the sections are drawn on the device, so there is no server group count to start from). The offline store keeps the fields with the row (`row_json`). |
+| Read markers | `markConversationRead`: `PUT /elitea_core/conversation_read/prompt_lib/{project_id}/{conversation_id}` with no body (read up to now). The thread sends it when it opens, on a new answer and on return to the foreground (`src/features/chat/useMarkConversationRead.ts`); the list row turns read at once and the stored row after the answer, since a read is never re-delivered by the delta. |
+
+The app does not follow the project event stream, so `conversation_activity` events are not
+read: a transition reaches the list with the `changes_since` delta and the list's refetch on
+foreground or pull to refresh.

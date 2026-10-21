@@ -39,7 +39,7 @@ jest.mock('expo-router', () => {
     }
     return p.options?.headerRight?.() ?? null;
   };
-  return { useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen }, router: { replace: jest.fn() } };
+  return { useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen }, router: { replace: jest.fn() } };
 });
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());

@@ -14,7 +14,7 @@ import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspac
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 import { fakeStreamTransport } from '@/test/fakeStreamTransport';
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 // The regeneration id the captured stream and answer carry.

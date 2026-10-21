@@ -5,7 +5,7 @@
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
  * client contract:    1.15
- * operations sha256:  0bab2b4bd6cd24ca017d9e6eb5912bbe131568de50fa8a3a1aa0d4fd5d748563
+ * operations sha256:  a3030f8415c02eae93cf271dec7ea12bb87198aaac3192ca70ea9ff3f6678270
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -647,6 +647,49 @@ export interface paths {
          *     conversation answers 409 `fork_not_supported`.
          */
         post: operations["forkConversation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/conversation_read/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Mark a conversation read for the caller
+         * @description Client contract 1.12. Moves the CALLER's read marker of the
+         *     conversation: up to `message_id`, or up to now without it. The list
+         *     rows' `unread` (listConversations and its `changes_since` delta)
+         *     compares the newest answer with this marker. A client calls it when
+         *     the user opens the conversation, and again when new messages arrive
+         *     while the conversation is on screen.
+         *
+         *     The marker is personal state, so read access is enough: the chat
+         *     authority's detail rule (the rule of getConversation) and
+         *     `models.chat.conversation.details`. A conversation the caller cannot
+         *     see answers 404 and writes nothing. A `message_id` that is not a
+         *     message of the conversation answers 404.
+         *
+         *     The request is idempotent, and the marker never moves back. The read
+         *     does not re-deliver the row in the `changes_since` delta of any
+         *     member and does not change `updated_at`. The project event stream
+         *     sends a `conversation_activity` event with `unread_hint: false` to the
+         *     caller's other devices only. A delete of the conversation deletes its
+         *     markers. A fork starts read for the member who forked it.
+         */
+        put: operations["markConversationRead"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2468,6 +2511,20 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** @description Client contract 1.12. The caller's read marker of a conversation after markConversationRead. */
+        ConversationReadState: {
+            /** @description The conversation's numeric id. */
+            conversation_id: number;
+            /** @description The numeric id of the message group the marker points to. Absent when the conversation has no message. */
+            last_read_message_id?: number;
+            /**
+             * Format: date-time
+             * @description The read marker, in UTC. It never moves back: a read of an older message keeps the newer marker.
+             */
+            read_at: string;
+            /** @description The row's `unread` for the caller after the read. It is true when the caller read up to a message that is older than the newest answer. */
+            unread: boolean;
+        };
         /** @description NOTE(W2): opaque jsonb array round-trip — see items marker. One caveat to the "never inspects" claim: runPublishValidation decodes the column as []string (eliteacore/handler.go:1028-1029), so non-string elements are silently read as an empty list there (spurious "no conversation starters" warning); the store/return round-trip itself is untyped. */
         ConversationStarters: unknown[];
         /** @description One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field. */
@@ -2692,6 +2749,11 @@ export interface components {
             path_deny: string[];
             /** @description Local turns may run shell commands. Default true. */
             shell: boolean;
+        };
+        /** @description Client contract 1.12. The body of markConversationRead. An absent body, or an absent `message_id`, reads the conversation up to now. */
+        MarkConversationReadRequest: {
+            /** @description The numeric id or the UUID of a message group of the conversation: the caller read the conversation up to and including that message. A number is also accepted. */
+            message_id?: string;
         };
         /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in pylon's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
         MemoryContextManagement: {
@@ -4458,6 +4520,52 @@ export interface operations {
             403: components["responses"]["403"];
             404: components["responses"]["404"];
             409: components["responses"]["409"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    markConversationRead: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MarkConversationReadRequest"];
+            };
+        };
+        responses: {
+            /** @description The caller's read marker. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationReadState"];
+                };
+            };
+            /** @description A body that is not a JSON object, a `message_id` that is not a string or a number, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };

@@ -10,7 +10,7 @@ import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 
 const mockReplace = jest.fn();
 let mockParams: Record<string, string> = {};
-jest.mock('expo-router', () => ({
+jest.mock('expo-router', () => ({ useIsFocused: () => true,
   router: { replace: (...args: unknown[]) => mockReplace(...args) },
   useLocalSearchParams: () => mockParams,
   Stack: { Screen: () => null },

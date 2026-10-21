@@ -16,7 +16,7 @@ import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspac
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 import { copyableTexts, selectableTexts } from '@/test/selectable';
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => true) }));

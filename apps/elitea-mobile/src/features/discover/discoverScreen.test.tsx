@@ -20,7 +20,7 @@ const mockBack = jest.fn();
 let mockParams: Record<string, string> = {};
 /** The options the screen last gave its navigation bar (the native search field, the layout button). */
 let mockHeader: Record<string, any> = {};
-jest.mock('expo-router', () => ({
+jest.mock('expo-router', () => ({ useIsFocused: () => true,
   router: {
     push: (...args: unknown[]) => mockPush(...args),
     replace: (...args: unknown[]) => mockReplace(...args),

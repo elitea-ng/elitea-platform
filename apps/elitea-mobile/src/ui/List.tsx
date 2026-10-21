@@ -26,11 +26,14 @@ export function sectionTitle(title: string, on: UiPlatform = uiPlatform): string
  */
 export function ListSection({
   title,
+  accessory,
   footer,
   children,
   style,
 }: {
   title?: string;
+  /** Drawn at the end of the header line, read on its own (the Chats list's "2 needs you"). */
+  accessory?: ReactNode;
   footer?: string;
   children: ReactNode;
   style?: ViewProps['style'];
@@ -39,7 +42,14 @@ export function ListSection({
   const rows = Children.toArray(children).filter(isValidElement);
   return (
     <View style={[styles.section, style]}>
-      {title ? (
+      {title && accessory ? (
+        <View style={styles.sectionHeader} testID="section-header-accessory">
+          <Text heading variant={uiPlatform === 'ios' ? 'footnote' : 'subheadline'} tone={uiPlatform === 'ios' ? 'secondary' : 'accent'} style={styles.headerTitle}>
+            {sectionTitle(title)}
+          </Text>
+          {accessory}
+        </View>
+      ) : title ? (
         <Text
           heading
           variant={uiPlatform === 'ios' ? 'footnote' : 'subheadline'}
@@ -72,6 +82,8 @@ export function ListSection({
 
 export interface ListRowProps {
   title: string;
+  /** The title one weight step up (an unread conversation). */
+  titleEmphasized?: boolean;
   subtitle?: string | null;
   /** Trailing value text ("System", "5 minutes"). */
   value?: string | null;
@@ -118,6 +130,7 @@ export interface ListRowProps {
  */
 export function ListRow({
   title,
+  titleEmphasized = false,
   subtitle,
   value,
   leading,
@@ -149,7 +162,7 @@ export function ListRow({
     <>
       {leading ?? (icon ? <Icon name={icon} size={22} tone={destructive ? 'danger' : 'accent'} /> : null)}
       <View style={[styles.text, centred ? styles.centred : null]}>
-        <Text variant="body" tone={destructive ? 'danger' : 'primary'} numberOfLines={accessibilityLayout ? undefined : numberOfLines}>
+        <Text variant="body" tone={destructive ? 'danger' : 'primary'} emphasized={titleEmphasized} numberOfLines={accessibilityLayout ? undefined : numberOfLines}>
           {title}
         </Text>
         {subtitle ? (
@@ -228,6 +241,8 @@ export function ListRow({
 const styles = StyleSheet.create({
   section: { gap: 6 },
   sectionTitle: { paddingHorizontal: 16 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: 16 },
+  headerTitle: { flexShrink: 1 },
   group: { overflow: 'hidden', borderCurve: 'continuous' },
   mainGroup: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   divider: { height: StyleSheet.hairlineWidth, marginStart: 16 },

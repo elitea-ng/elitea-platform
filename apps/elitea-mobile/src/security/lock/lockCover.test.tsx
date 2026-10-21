@@ -13,7 +13,7 @@ import { __resetSessionForTests, setCredential, setSession } from '@/state/sessi
 import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspaceInfo';
 import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 // A secure device whose unlock prompt never answers: the app stays locked.

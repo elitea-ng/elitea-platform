@@ -31,6 +31,7 @@ import { HANDOFF_CONTRACT } from '@/features/localWork/model';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { WorkspacePill } from '@/features/workspaces/WorkspacePill';
 import { log } from '@/lib/log';
+import { useCoarseClock } from '@/lib/useCoarseClock';
 import { getSession, useSession } from '@/state/session';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { runConversationAction, subscribeActionFailures, useConversationOverlay } from '@/sync/appConversationOps';
@@ -89,6 +90,8 @@ export default function ConversationsScreen() {
   const twoPane = isTwoPane(screen.width);
   const selectedId = useSelectedChat(deleteScope);
   const focused = useIsFocused();
+  // Ages, date sections and the activity checks (a finished turn's lasts a day) move on with it.
+  const now = useCoarseClock(focused);
   // Two panes collapsing into the phone stack with a chat open (rotation, Split View, Stage
   // Manager): that chat is pushed, so it stays open. Only a change seen after the first layout
   // counts: the window's width is a guess until the screen has measured its own.
@@ -123,9 +126,9 @@ export default function ConversationsScreen() {
   const rows = useMemo(
     () =>
       searching
-        ? buildSearchRows({ hits, loaded: all, query, overlay, hidden, localWork: localWorkOnly })
-        : buildChatRows({ loaded: all, savedPinned: actionsAvailable && !localWorkOnly ? savedPinned : [], overlay, hidden, localWork: localWorkOnly }),
-    [searching, hits, all, query, overlay, hidden, savedPinned, actionsAvailable, localWorkOnly],
+        ? buildSearchRows({ hits, loaded: all, query, overlay, hidden, now, localWork: localWorkOnly })
+        : buildChatRows({ loaded: all, savedPinned: actionsAvailable && !localWorkOnly ? savedPinned : [], overlay, hidden, now, localWork: localWorkOnly }),
+    [searching, hits, all, query, overlay, hidden, savedPinned, actionsAvailable, localWorkOnly, now],
   );
 
   // A queued action the workspace refused: the list goes back to what it says; say why. A screen
@@ -259,6 +262,7 @@ export default function ConversationsScreen() {
     <>
       <ConversationList
         rows={rows}
+        now={now}
         results={searching}
         onOpen={open}
         selectedId={twoPane ? selectedId : null}

@@ -14,7 +14,7 @@ import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
 import { fakeStreamTransport } from '@/test/fakeStreamTransport';
 
 const mockDismissTo = jest.fn();
-jest.mock('expo-router', () => ({
+jest.mock('expo-router', () => ({ useIsFocused: () => true,
   useLocalSearchParams: () => ({ id: '3' }),
   Stack: { Screen: () => null },
   router: { push: jest.fn(), replace: jest.fn(), dismissTo: (...args: unknown[]) => mockDismissTo(...args) },
