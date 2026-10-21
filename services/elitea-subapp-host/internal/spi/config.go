@@ -78,7 +78,11 @@ type Settings struct {
 	// DefaultPlatformGRPCAddr. Since #1359 it is the only listener: the
 	// SPI's HTTP listener (<PREFIX>LISTEN_ADDR) is gone.
 	PlatformGRPCAddr string
-	GitAllowlist     string
+	// AdminAddr is where the admin port (AdminHandler: /healthz, /readyz)
+	// listens (<PREFIX>ADMIN_ADDR); empty is DefaultAdminAddr. Plain HTTP,
+	// for the kubelet and the container probe only.
+	AdminAddr    string
+	GitAllowlist string
 	// NATSURL is the NATS server the host fans cancels out over
 	// (<PREFIX>NATS_URL, cancelbus.go); its TLS material is
 	// <PREFIX>NATS_TLS_{CA,CERT,KEY}_FILE (libs/go/natsconn). Empty keeps
@@ -168,6 +172,7 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 		IdentitySecret:     raw("IDENTITY_SECRET", ""),
 		PlatformClients:    PlatformClients(raw("PLATFORM_CLIENTS", "")),
 		PlatformGRPCAddr:   raw("PLATFORM_GRPC_ADDR", ""),
+		AdminAddr:          strings.TrimSpace(raw("ADMIN_ADDR", "")),
 		GitAllowlist:       raw("GIT_ALLOWLIST", ""),
 		NATSURL:            strings.TrimSpace(raw("NATS_URL", "")),
 		EngineSocket:       raw("ENGINE_SOCKET", ""),
@@ -180,6 +185,9 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	}
 	if s.PlatformGRPCAddr == "" {
 		s.PlatformGRPCAddr = DefaultPlatformGRPCAddr
+	}
+	if s.AdminAddr == "" {
+		s.AdminAddr = DefaultAdminAddr
 	}
 	var err error
 	if s.JobsEnabled, err = boolean("SLOTS_MODE", false); err != nil {

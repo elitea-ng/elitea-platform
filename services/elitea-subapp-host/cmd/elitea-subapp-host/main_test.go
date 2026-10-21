@@ -12,6 +12,8 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,31 +95,35 @@ func TestComposeSelectsTheApplicationAndRefusesWhatItCannotServe(t *testing.T) {
 	}
 }
 
-// The container probe: a TCP connect to the gRPC port, which is all a
-// distroless image behind a client-certificate handshake can do from inside.
-func TestTheHealthcheckDialsTheGRPCPort(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
+// The container probe: GET /readyz on the admin port. A ready host passes;
+// one whose readiness fails (a lost owner claim answers 503), a closed port
+// and a misconfigured host do not.
+func TestTheHealthcheckAsksTheAdminReadyz(t *testing.T) {
+	ready := true
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/readyz" {
+			http.NotFound(w, r)
+			return
 		}
-	}()
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	if err := healthcheck(lookup(map[string]string{"ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR": ":" + port})); err != nil {
-		t.Fatalf("a listening port failed the probe: %v", err)
+		if !ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("not ready: owner_claim\n"))
+		}
+	}))
+	defer admin.Close()
+	_, port, _ := net.SplitHostPort(admin.Listener.Addr().String())
+	env := lookup(map[string]string{"ELITEA_DEEPWIKI_ADMIN_ADDR": ":" + port})
+	if err := healthcheck(env); err != nil {
+		t.Fatalf("a ready host failed the probe: %v", err)
+	}
+	ready = false
+	if err := healthcheck(env); err == nil || !strings.Contains(err.Error(), "owner_claim") {
+		t.Fatalf("a host that is not ready passed the probe: %v", err)
 	}
 	closed, _ := net.Listen("tcp", "127.0.0.1:0")
 	_, deadPort, _ := net.SplitHostPort(closed.Addr().String())
 	_ = closed.Close()
-	if err := healthcheck(lookup(map[string]string{"ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR": ":" + deadPort})); err == nil {
+	if err := healthcheck(lookup(map[string]string{"ELITEA_DEEPWIKI_ADMIN_ADDR": ":" + deadPort})); err == nil {
 		t.Fatal("a closed port passed the probe")
 	}
 	if err := healthcheck(lookup(map[string]string{"ELITEA_SUBAPP": "nope"})); !errors.Is(err, spi.ErrConfig) {

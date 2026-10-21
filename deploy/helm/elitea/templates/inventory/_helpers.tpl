@@ -215,6 +215,12 @@ elitea-main
 {{- if or (hasKey $env "ELITEA_INVENTORY_PLATFORM_CLIENTS") (hasKey $env "ELITEA_INVENTORY_PLATFORM_GRPC_ADDR") -}}
 {{- fail "inventory.env sets ELITEA_INVENTORY_PLATFORM_CLIENTS or ELITEA_INVENTORY_PLATFORM_GRPC_ADDR; the chart renders both from inventory.platformGrpc (clients, port). Remove them from env." -}}
 {{- end -}}
+{{- if hasKey $env "ELITEA_INVENTORY_ADMIN_ADDR" -}}
+{{- fail "inventory.env sets ELITEA_INVENTORY_ADMIN_ADDR; the chart renders it from inventory.admin.port, which the probes and the NetworkPolicy also use. Remove it from env." -}}
+{{- end -}}
+{{- if eq ((.Values.inventory.admin | default dict).port | int) (.Values.inventory.platformGrpc.port | int) -}}
+{{- fail "inventory.admin.port equals inventory.platformGrpc.port; the plain-HTTP admin port and the mutual-TLS gRPC listener cannot share a port." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

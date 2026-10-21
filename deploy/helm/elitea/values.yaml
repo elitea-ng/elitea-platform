@@ -3377,6 +3377,14 @@ deepwiki:
     clients: [elitea-main]
     port: 9443
 
+  # The admin port: /healthz and /readyz in plain HTTP, no mTLS, for the
+  # kubelet's probes (<PREFIX>ADMIN_ADDR). /readyz fails while the replica
+  # does not hold its invocation-store owner claim (#1359), so the replica
+  # leaves the Service. Not on the Service; the NetworkPolicy admits only
+  # networkPolicies.probeFrom to it.
+  admin:
+    port: 9090
+
   env:
     # FAIL-CLOSED, and the chart refuses to render while it is empty — see
     # elitea-deepwiki.validateGuards. The SAME value belongs in
@@ -3468,8 +3476,9 @@ deepwiki:
       kind: ClusterIssuer
     mountPath: /etc/deepwiki/tls
 
-  # probes: tcpSocket on the gRPC listener (it requires a client certificate
-  # a kubelet probe cannot present).
+  # probes: httpGet on the admin port — liveness /healthz, readiness /readyz
+  # (the gRPC listener requires a client certificate a kubelet probe cannot
+  # present).
   probes:
     liveness:
       periodSeconds: 10
@@ -3701,6 +3710,14 @@ inventory:
     clients: [elitea-main]
     port: 9443
 
+  # The admin port: /healthz and /readyz in plain HTTP, no mTLS, for the
+  # kubelet's probes (<PREFIX>ADMIN_ADDR). /readyz fails while the replica
+  # does not hold its invocation-store owner claim (#1359), so the replica
+  # leaves the Service. Not on the Service; the NetworkPolicy admits only
+  # networkPolicies.probeFrom to it.
+  admin:
+    port: 9090
+
   # mTLS for the elitea-main -> inventory hop. cert-manager issues a server
   # cert (this Deployment mounts it) and a facade client cert (elitea-main
   # mounts it) from the SAME internal CA issuer the DeepWiki hop uses — one
@@ -3718,8 +3735,9 @@ inventory:
       kind: ClusterIssuer
     mountPath: /etc/inventory/tls
 
-  # probes: tcpSocket on the gRPC listener (it requires a client certificate
-  # a kubelet probe cannot present).
+  # probes: httpGet on the admin port — liveness /healthz, readiness /readyz
+  # (the gRPC listener requires a client certificate a kubelet probe cannot
+  # present).
   probes:
     liveness:
       periodSeconds: 10

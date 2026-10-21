@@ -1482,6 +1482,8 @@ services:
       # CN=elitea-main. Reachable on the compose network only.
       ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_DEEPWIKI_ADMIN_ADDR: ":9090"
       # Cancellation fan-out between replicas (elitea.subapp.deepwiki.cancel.<id>).
       ELITEA_DEEPWIKI_NATS_URL: "nats://nats:4222"
       # Artifact uploads and reads (#1359 U5): elitea.runtime.v1.
@@ -1510,8 +1512,8 @@ services:
       nats-health:
         condition: service_healthy
     healthcheck:
-      # Distroless; the binary's own probe is a TCP accept (the listener is
-      # TLS, so a plain HTTP GET would not be one).
+      # Distroless; the binary probes its own admin port's /readyz, which
+      # fails while the replica does not hold its owner claim (#1359).
       test: ["CMD", "/elitea-subapp-host", "healthcheck"]
       interval: 5s
       timeout: 3s
@@ -1658,6 +1660,8 @@ services:
       # CN=elitea-main. Reachable on the compose network only.
       ELITEA_INVENTORY_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_INVENTORY_ADMIN_ADDR: ":9090"
       # Cancellation fan-out between replicas (elitea.subapp.inventory.cancel.<id>).
       ELITEA_INVENTORY_NATS_URL: "nats://nats:4222"
       # Artifact uploads and reads (#1359 U5): elitea.runtime.v1.
@@ -1686,8 +1690,8 @@ services:
       nats-health:
         condition: service_healthy
     healthcheck:
-      # A TCP accept is the liveness signal: the listener requires a verified
-      # client certificate, so an HTTP GET from inside would never be one.
+      # The binary probes its own admin port's /readyz (plain HTTP; the gRPC
+      # listener requires a verified client certificate).
       test: ["CMD", "/elitea-subapp-host", "healthcheck"]
       interval: 5s
       timeout: 3s

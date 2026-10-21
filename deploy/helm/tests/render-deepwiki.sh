@@ -410,13 +410,20 @@ retired_with "the retired callbackViaPlatformEdge key" "callbackViaPlatformEdge 
 
 echo "== the provider serves one port: gRPC over mutual TLS (#1359) =="
 dep() { printf '%s' "$manifest" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
-expect "one container port, the gRPC listener" "$(dep '.spec.template.spec.containers[0].ports[].name' | tr '\n' ' ')" "platform-grpc "
+expect "two container ports: the gRPC listener and the admin port" "$(dep '.spec.template.spec.containers[0].ports[].name' | tr '\n' ' ')" "platform-grpc admin "
+expect "the admin address" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_ADMIN_ADDR") | .value')" ":9090"
+expect "the admin container port" "$(dep '.spec.template.spec.containers[0].ports[] | select(.name == "admin") | .containerPort')" "9090"
 expect "the default allowlist is elitea-main" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") | .value')" "elitea-main"
 expect "the listener address" "$(dep '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") | .value')" ":9443"
+# The probes ask the plain-HTTP admin port: the gRPC listener needs a client
+# certificate the kubelet does not have, and readiness must carry the owner
+# claim (#1359), which a TCP accept cannot.
 for probe in livenessProbe readinessProbe; do
-  expect "host $probe: tcpSocket on the gRPC port" "$(dep ".spec.template.spec.containers[0].$probe.tcpSocket.port")" "platform-grpc"
-  expect "host $probe: no httpGet (the listener needs a client certificate)" "$(dep ".spec.template.spec.containers[0].$probe.httpGet")" "null"
+  expect "host $probe: httpGet on the admin port" "$(dep ".spec.template.spec.containers[0].$probe.httpGet.port")" "admin"
+  expect "host $probe: no tcpSocket" "$(dep ".spec.template.spec.containers[0].$probe.tcpSocket")" "null"
 done
+expect "host liveness path" "$(dep '.spec.template.spec.containers[0].livenessProbe.httpGet.path')" "/healthz"
+expect "host readiness path" "$(dep '.spec.template.spec.containers[0].readinessProbe.httpGet.path')" "/readyz"
 expect "the Service exposes the gRPC port only" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "Service" and .metadata.name == "elitea-deepwiki-svc") | .spec.ports[] | .name + ":" + (.port | tostring)' - | tr '\n' ' ')" "platform-grpc:9443 "
 expect "the NetworkPolicy admits one port" "$(printf '%s' "$manifest" | yq eval-all 'select(.kind == "NetworkPolicy" and .metadata.name == "elitea-deepwiki-netpol") | .spec.ingress[].ports[].port' - | tr '\n' ' ')" "9443 "
 
@@ -443,6 +450,8 @@ refuses "the provider without mutual TLS" --set deepwiki.mtls.enabled=false
 refuses "an empty allowlist: a listener that admits nobody" --set 'deepwiki.platformGrpc.clients={}'
 refuses "the retired HTTPS service port" --set deepwiki.service.port=8443
 refuses "the platform env set by hand beside the values" --set 'deepwiki.platformGrpc.clients={elitea-main}' --set deepwiki.env.ELITEA_DEEPWIKI_PLATFORM_CLIENTS=elitea-main
+refuses "the admin address set by hand beside the values" --set deepwiki.env.ELITEA_DEEPWIKI_ADMIN_ADDR=:9091
+refuses "the admin port on the gRPC port" --set deepwiki.admin.port=9443
 refuses "an allowlist that does not name elitea-main" --set 'deepwiki.platformGrpc.clients={someone-else}'
 # The expected name follows the client material. Chart-issued (the default):
 # elitea-main, and a stated main.platformClientName that differs is refused.

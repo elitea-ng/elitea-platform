@@ -12,6 +12,8 @@
 //	ELITEA_<APP>_PLATFORM_CLIENTS   certificate identities allowed to call the
 //	                                listener (required; elitea-main)
 //	ELITEA_<APP>_PLATFORM_GRPC_ADDR where it listens (default :9443)
+//	ELITEA_<APP>_ADMIN_ADDR         the admin port: /healthz and /readyz,
+//	                                plain HTTP (default :9090)
 //	ELITEA_<APP>_NATS_URL, _NATS_TLS_{CA,CERT,KEY}_FILE
 //	                                the cancel fan-out across replicas
 //	ELITEA_<APP>_*                  the host settings under the app's prefix
@@ -26,6 +28,12 @@
 // requires and verifies a client certificate at the handshake and an
 // allowlist of the certificate identities that may call. The SPI's HTTP
 // listener is gone: internal service-to-service traffic is gRPC over mTLS.
+//
+// The admin port is the one exception, and it serves nothing but health:
+// /healthz and /readyz in plain HTTP, for the kubelet and the container
+// probe, which present no client certificate. /readyz carries the readiness
+// checks — a replica that lost its invocation-store owner claim answers 503
+// and leaves the Service.
 package main
 
 import (
@@ -34,8 +42,10 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -54,9 +64,7 @@ func main() {
 	slog.SetDefault(logger)
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		// The container probe. The image is distroless — no shell, no curl —
-		// and the listener requires a client certificate at the handshake, so
-		// a gRPC probe from inside the container would need a certificate it
-		// does not have. A TCP connect is what "the listener is up" means.
+		// so the binary asks its own admin port's /readyz.
 		if err := healthcheck(os.LookupEnv); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -104,7 +112,8 @@ func run(logger *slog.Logger) error {
 			logger.Warn("invocations orphaned by a process that is gone were terminated", "count", reconciled)
 		}
 		// A lost owner claim refuses new invocations (spi.ErrClaimLost);
-		// readiness says so, so the caller can route around this replica.
+		// readiness says so — gRPC Health and the admin port's /readyz, which
+		// the kubelet reads — so the replica leaves the Service.
 		options = append(options, spi.WithStore(store), spi.WithReadiness(func(context.Context) map[string]bool {
 			return map[string]bool{"owner_claim": store.ClaimHeld()}
 		}))
@@ -130,10 +139,26 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	errs := make(chan error, 1)
+	adminListener, err := net.Listen("tcp", settings.AdminAddr)
+	if err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("listen for the admin port on %s: %w", settings.AdminAddr, err)
+	}
+	admin := &http.Server{
+		Handler:           spi.AdminHandler(server),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	errs := make(chan error, 2)
+	go func() {
+		if err := admin.Serve(adminListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errs <- fmt.Errorf("the admin port: %w", err)
+		}
+	}()
 	go func() {
 		logger.Info("elitea-subapp-host listening",
-			"app", app.Name, "runner", app.Runner.Name(), "addr", listener.Addr().String(),
+			"app", app.Name, "runner", app.Runner.Name(), "addr", listener.Addr().String(), "admin_addr", adminListener.Addr().String(),
 			"clients", len(settings.PlatformClients), "identity_verified", settings.IdentitySecret != "",
 			"cancel_fanout", bus != nil)
 		errs <- grpcServer.Serve(listener)
@@ -143,8 +168,10 @@ func run(logger *slog.Logger) error {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		stopGRPC(grpcServer, shutdownCtx)
+		_ = admin.Shutdown(shutdownCtx)
 		return nil
 	case err := <-errs:
+		_ = admin.Close()
 		if errors.Is(err, grpc.ErrServerStopped) {
 			return nil
 		}
@@ -229,21 +256,28 @@ func stopGRPC(server *grpc.Server, ctx context.Context) {
 	}
 }
 
-// healthcheck dials the configured gRPC port on loopback.
+// healthcheck asks the admin port's /readyz on loopback: healthy when the
+// host serves and every readiness check passes (an owner claim held).
 func healthcheck(lookup spi.Lookup) error {
 	_, settings, err := compose(lookup)
 	if err != nil {
 		return err
 	}
-	_, port, err := net.SplitHostPort(settings.PlatformGRPCAddr)
+	_, port, err := net.SplitHostPort(settings.AdminAddr)
 	if err != nil {
-		return fmt.Errorf("listen address %q: %w", settings.PlatformGRPCAddr, err)
+		return fmt.Errorf("admin address %q: %w", settings.AdminAddr, err)
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", port), 2*time.Second)
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get("http://" + net.JoinHostPort("127.0.0.1", port) + "/readyz")
 	if err != nil {
 		return err
 	}
-	return conn.Close()
+	defer func() { _ = response.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("readyz answered %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 // compose picks the application and its runner from the environment. Both

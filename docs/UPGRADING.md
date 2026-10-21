@@ -18,9 +18,20 @@ newest entry is first.
   invocations as orphans, at startup and every minute after.
 * The host checks its own lock every 10 seconds. When its session dropped
   (a PostgreSQL restart, a failover, an idle-session kill) it refuses new
-  invocations and reports `owner_claim: false` in its gRPC health readiness
-  until it has re-taken the lock. A run a sibling terminated in that gap
-  keeps the terminated answer.
+  invocations (gRPC `UNAVAILABLE`) and fails readiness until it has re-taken
+  the lock: `owner_claim: false` in its gRPC health, and `503` from
+  `/readyz` on its admin port, which the chart's readiness probe and the
+  compose healthcheck read, so the replica leaves the Service. The host
+  sends GOAWAY to every client connection after a minute, so elitea-main's
+  connection moves to a ready replica. A run a sibling terminated in that
+  gap keeps the terminated answer.
+* The host has a second, plain-HTTP port for its probes only:
+  `ELITEA_<APP>_ADMIN_ADDR` (default `:9090`; chart
+  `deepwiki.admin.port` / `inventory.admin.port`) serves `/healthz` and
+  `/readyz`. The chart's probes moved from `tcpSocket` on `platform-grpc`
+  to `httpGet` on `admin`; the NetworkPolicy admits
+  `networkPolicies.probeFrom` (if any) to it and nothing else. The chart
+  renders the variable itself and refuses it in `<app>.env`.
 * Rows written by this release carry an owner prefixed `claim1:`. Rows from
   an older image carry no prefix, and that image takes no lock, so a free
   lock means nothing for them: a new replica leaves them alone for 15

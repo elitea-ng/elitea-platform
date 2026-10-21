@@ -242,9 +242,21 @@ for key, want_port in (("deepwiki", expect_grpc), ("inventory", expect_inv_grpc)
     ctr = deployments[f"elitea-{key}"]["spec"]["template"]["spec"]["containers"][0]
     declared = {p["name"]: p["containerPort"] for p in ctr["ports"]}
     grpc_port = declared.get("platform-grpc")
-    check(list(declared) == ["platform-grpc"], f"{key}: container ports {declared}, want the gRPC listener only (no HTTP SPI)")
-    check(sorted(by) == [(grpc_port,)], f"{key}: ports admitted {sorted(by)}, want [({grpc_port},)]")
+    admin_port = declared.get("admin")
+    check(list(declared) == ["platform-grpc", "admin"], f"{key}: container ports {declared}, want the gRPC listener and the admin port (no HTTP SPI)")
+    # The admin port (/healthz, /readyz) is admitted only from the probe peers
+    # (networkPolicies.probeFrom), and only when there are any: no in-cluster
+    # workload, elitea-main included, reaches it.
+    probe_rules = [r for r in spec["ingress"] if [p["port"] for p in r["ports"]] == [admin_port]]
+    want_admitted = [(grpc_port,)] + ([(admin_port,)] if probe_rules else [])
+    check(sorted(by) == sorted(want_admitted), f"{key}: ports admitted {sorted(by)}, want {want_admitted}")
+    for rule in probe_rules:
+        check(all("podSelector" not in peer for peer in rule["from"]), f"{key}: the admin port admits a workload: {rule['from']}")
+    ctr_env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
+    check(ctr_env.get(f"ELITEA_{key.upper()}_ADMIN_ADDR") == f":{admin_port}", f"{key}: the admin address does not match the admin port {admin_port}")
     for k, rule in by.items():
+        if k == (admin_port,):
+            continue
         check(peer_targets(rule, f"{key}:{k}") == [MAIN], f"{key}:{k} must admit elitea-main only")
     env = {e["name"]: e.get("value") for e in ctr.get("env", [])}
     service = [d for d in docs if d["kind"] == "Service" and d["metadata"]["name"] == f"elitea-{key}-svc"][0]
@@ -400,6 +412,10 @@ rt = [r for r in pols["elitea-main-netpol"]["spec"]["ingress"] if r is not http]
 assert rt and all(gw not in r["from"] and extra not in r["from"] for r in rt), "operator peers must not reach the runtime or platform listeners"
 for n in ("elitea-sandbox-supervisor-netpol",):
     assert any(probe in r["from"] for r in pols[n]["spec"]["ingress"]), n + " lacks probeFrom"
+for n in ("elitea-deepwiki-netpol", "elitea-inventory-netpol"):
+    if n in pols:
+        admin = [r for r in pols[n]["spec"]["ingress"] if [p["port"] for p in r["ports"]] == [9090]]
+        assert len(admin) == 1 and admin[0]["from"] == [probe], n + ": the admin port must admit probeFrom only: " + str(admin)
 print("peers present: 8080 admits gateway, extra and probe peers; runtime and platform listeners do not; supervisor admits probeFrom")
 PY
 )"; then pass "ingress ($variant) with ingressFrom: $out"; else fail "ingress ($variant) peers: $out"; fi

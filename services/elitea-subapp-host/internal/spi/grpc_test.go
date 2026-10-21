@@ -309,3 +309,37 @@ func TestTheListenerRefusesToBuildWithoutAllowlistOrMutualTLS(t *testing.T) {
 		t.Fatalf("no host: %v", err)
 	}
 }
+
+// claimLostStore refuses every new invocation the way PostgresStore does
+// while it does not hold its owner claim.
+type claimLostStore struct{ *spi.MemoryStore }
+
+func (claimLostStore) Create(context.Context, *spi.Invocation) error { return spi.ErrClaimLost }
+
+// A replica without its owner claim accepted nothing, so the refusal is
+// Unavailable — a code the caller may retry on another replica — and not
+// Internal.
+func TestAnInvokeRefusedForALostOwnerClaimIsUnavailable(t *testing.T) {
+	s, err := spi.SettingsFromEnv("ELITEA_ECHO_", env(map[string]string{"ELITEA_ECHO_IDENTITY_SECRET": sharedSecret}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := spi.NewServer(s, echo.App(0), nil, spi.WithStore(claimLostStore{spi.NewMemoryStore()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Stop)
+	l := spitest.Start(t, server)
+	ctx, cancel := context.WithTimeout(signedContext(spi.Identity{ProjectID: "1", UserID: "7"}), 10*time.Second)
+	defer cancel()
+	stream, err := l.Provider().Invoke(ctx, &subappv1.InvokeRequest{Toolkit: "Echo", Tool: "echo", RequestJson: []byte(`{"parameters":{"query":"hi"}}`)})
+	if err == nil {
+		_, err = stream.Recv()
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("an invoke on a replica without its claim: %v, want Unavailable", err)
+	}
+}

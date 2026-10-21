@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	subappv1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/subapp/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -42,6 +44,11 @@ import (
 // service and the platform operations) listens when
 // <PREFIX>PLATFORM_GRPC_ADDR is not set.
 const DefaultPlatformGRPCAddr = ":9443"
+
+// MaxConnectionAge is how long a client connection to the gRPC listener
+// lives before the server sends GOAWAY and the client opens a new one
+// (newAuthorizedGRPCServer).
+const MaxConnectionAge = time.Minute
 
 // Failures a platform operation reports as such, so the transport can give
 // the caller a code it can act on.
@@ -306,6 +313,14 @@ func newAuthorizedGRPCServer(clients []string, tlsConfig *tls.Config, logger *sl
 	return grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(tlsConfig)),
 		grpc.MaxRecvMsgSize(maxRecv),
+		// elitea-main reaches the host through its Service on one HTTP/2
+		// connection, which stays on the replica it first landed on whatever
+		// that replica's readiness says. The age makes the client reconnect,
+		// and a reconnect goes to a ready replica, so one that lost its owner
+		// claim (#1359) stops receiving work within the age. The grace is
+		// unlimited (grpc-go's default): a call still running on the old
+		// connection finishes.
+		grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionAge: MaxConnectionAge}),
 		grpc.ChainUnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			ctx, err := authorize(ctx, info.FullMethod)
 			if err != nil {

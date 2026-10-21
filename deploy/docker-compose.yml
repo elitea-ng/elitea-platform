@@ -340,6 +340,8 @@ services:
       # CN=elitea-main. Reachable on the compose network only.
       ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_DEEPWIKI_ADMIN_ADDR: ":9090"
       # Cancellation fan-out between replicas (core NATS,
       # elitea.subapp.deepwiki.cancel.<id>): a cancel that lands on a replica
       # not running the invocation reaches the one that is. Plaintext like the
@@ -357,8 +359,8 @@ services:
       nats-health:
         condition: service_healthy
     healthcheck:
-      # Distroless; the binary's own probe is a TCP accept on the gRPC
-      # listener (TLS, so a plain HTTP GET would not be one).
+      # Distroless; the binary probes its own admin port's /readyz, which
+      # fails while the replica does not hold its owner claim (#1359).
       test: ["CMD", "/elitea-subapp-host", "healthcheck"]
       interval: 5s
       timeout: 3s

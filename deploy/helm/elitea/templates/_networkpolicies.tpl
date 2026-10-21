@@ -66,7 +66,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     selectorLabels the provider's pod selector block (the Deployment's)
     title          the provider's name in the comment (DeepWiki, Inventory)
     key            the provider's values key (deepwiki, inventory)
-    grpcPort       the provider's one port (<key>.platformGrpc.port)
+    grpcPort       the provider's gRPC port (<key>.platformGrpc.port)
+    adminPort      the provider's admin port (<key>.admin.port)
 */}}
 {{- define "elitea.netpol.providerIngress" -}}
 {{- $np := .ctx.Values.networkPolicies }}
@@ -79,6 +80,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 #                       gRPC over mutual TLS (#1359): elitea-main, and only
 #                       the identities in {{ .key }}.platformGrpc.clients may
 #                       call it.
+#   {{ .adminPort }} (admin)          /healthz and /readyz, plain HTTP: only
+#                       networkPolicies.probeFrom.
 #
 # The engine sidecar has no port: it answers on a Unix socket in the pod.
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
@@ -106,6 +109,13 @@ spec:
         {{- with $np.probeFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+    {{- with $np.probeFrom }}
+    - ports:
+        - port: {{ $.adminPort }}
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
 {{- end }}
 
 {{- /*

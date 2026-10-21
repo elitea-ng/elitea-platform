@@ -60,6 +60,10 @@ spec:
             - name: platform-grpc
               containerPort: {{ .Values.inventory.platformGrpc.port }}
               protocol: TCP
+            # The admin port: /healthz and /readyz, plain HTTP, for the probes.
+            - name: admin
+              containerPort: {{ .Values.inventory.admin.port }}
+              protocol: TCP
           env:
             {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
@@ -87,6 +91,8 @@ spec:
               value: {{ join "," .Values.inventory.platformGrpc.clients | quote }}
             - name: ELITEA_INVENTORY_PLATFORM_GRPC_ADDR
               value: {{ printf ":%d" (.Values.inventory.platformGrpc.port | int) | quote }}
+            - name: ELITEA_INVENTORY_ADMIN_ADDR
+              value: {{ printf ":%d" (.Values.inventory.admin.port | int) | quote }}
             {{- if not (hasKey $env "ELITEA_INVENTORY_NATS_URL") }}
             # The cancellation fan-out (#1359): a cancel that lands on one
             # replica stops the run on the replica that holds it. Core NATS,
@@ -116,18 +122,22 @@ spec:
             - name: ELITEA_INVENTORY_CALLBACK_KEY_FILE
               value: {{ include "elitea-inventory.callbackClientPath" . }}/tls.key
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
-          # tcpSocket on the gRPC listener: it requires and verifies a client
-          # certificate, and the kubelet presents none, so a probe that speaks
-          # the protocol would fail every time. The SPI's own Health is what
-          # elitea-main's registrar polls.
+          # httpGet on the admin port: the gRPC listener requires and verifies a
+          # client certificate, and the kubelet presents none. Liveness is
+          # /healthz (the process is up); readiness is /readyz, which fails
+          # while this replica does not hold its invocation-store owner claim
+          # (#1359), so a replica that refuses new invocations leaves the
+          # Service instead of receiving them.
           livenessProbe:
-            tcpSocket:
-              port: platform-grpc
+            httpGet:
+              path: /healthz
+              port: admin
             periodSeconds: {{ .Values.inventory.probes.liveness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.liveness.failureThreshold }}
           readinessProbe:
-            tcpSocket:
-              port: platform-grpc
+            httpGet:
+              path: /readyz
+              port: admin
             periodSeconds: {{ .Values.inventory.probes.readiness.periodSeconds }}
             failureThreshold: {{ .Values.inventory.probes.readiness.failureThreshold }}
           resources:

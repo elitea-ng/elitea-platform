@@ -161,6 +161,13 @@ func (p *providerService) Invoke(request *subappv1.InvokeRequest, stream grpc.Se
 		return status.Error(codes.InvalidArgument, "the request body must be a JSON object")
 	}
 	invocation, err := p.server.Accept(ctx, identity, request.GetToolkit(), request.GetTool(), body)
+	if errors.Is(err, ErrClaimLost) {
+		// Nothing was accepted: this replica does not hold its owner claim
+		// (readiness says so). Unavailable, so the caller may retry it on a
+		// ready replica.
+		p.server.logger.Warn("refused an invocation while the owner claim is lost", "toolkit", request.GetToolkit(), "tool", request.GetTool())
+		return status.Error(codes.Unavailable, "this replica is not accepting invocations right now; retry")
+	}
 	if err != nil {
 		p.server.logger.Error("failed to accept an invocation", "toolkit", request.GetToolkit(), "tool", request.GetTool(), "error", err)
 		return status.Error(codes.Internal, "the invocation could not be accepted")

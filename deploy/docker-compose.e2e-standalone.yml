@@ -469,6 +469,8 @@ services:
       # CN=elitea-main. Reachable on the compose network only.
       ELITEA_DEEPWIKI_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_DEEPWIKI_ADMIN_ADDR: ":9090"
       # The artifact hop back to elitea-main's platform listener (#1359 U5),
       # presenting the callback identity elitea-main admits.
       ELITEA_DEEPWIKI_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"
@@ -520,6 +522,8 @@ services:
       # CN=elitea-main. Reachable on the compose network only.
       ELITEA_INVENTORY_PLATFORM_CLIENTS: "elitea-main"
       ELITEA_INVENTORY_PLATFORM_GRPC_ADDR: ":9443"
+      # /healthz and /readyz, plain HTTP, for the healthcheck below.
+      ELITEA_INVENTORY_ADMIN_ADDR: ":9090"
       # The artifact hop back to elitea-main's platform listener (#1359 U5),
       # presenting the callback identity elitea-main admits.
       ELITEA_INVENTORY_ARTIFACT_SERVICE_URL: "https://elitea-main:9446"

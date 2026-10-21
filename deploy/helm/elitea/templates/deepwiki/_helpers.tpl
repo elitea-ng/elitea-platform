@@ -181,6 +181,12 @@ elitea-main
 {{- if or (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_CLIENTS") (hasKey $env "ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR") -}}
 {{- fail "deepwiki.env sets ELITEA_DEEPWIKI_PLATFORM_CLIENTS or ELITEA_DEEPWIKI_PLATFORM_GRPC_ADDR; the chart renders both from deepwiki.platformGrpc (clients, port). Remove them from env." -}}
 {{- end -}}
+{{- if hasKey $env "ELITEA_DEEPWIKI_ADMIN_ADDR" -}}
+{{- fail "deepwiki.env sets ELITEA_DEEPWIKI_ADMIN_ADDR; the chart renders it from deepwiki.admin.port, which the probes and the NetworkPolicy also use. Remove it from env." -}}
+{{- end -}}
+{{- if eq ((.Values.deepwiki.admin | default dict).port | int) (.Values.deepwiki.platformGrpc.port | int) -}}
+{{- fail "deepwiki.admin.port equals deepwiki.platformGrpc.port; the plain-HTTP admin port and the mutual-TLS gRPC listener cannot share a port." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
