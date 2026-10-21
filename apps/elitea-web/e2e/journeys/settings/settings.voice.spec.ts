@@ -168,6 +168,9 @@ async function spokenUtterances(page: Page): Promise<readonly SpokenUtterance[]>
  */
 async function openVoicePanel(page: Page) {
   await page.goto(PERSONALIZATION_URL, { waitUntil: 'domcontentloaded' });
+  // Settle before the reload: on WebKit a reload while boot calls are still in
+  // flight can drop the session cookie and land on the OIDC authorize page.
+  await page.waitForLoadState('networkidle');
   await page.evaluate((key: string) => localStorage.removeItem(key), VOICE_CONFIG_KEY);
   await page.reload({ waitUntil: 'domcontentloaded' });
 
