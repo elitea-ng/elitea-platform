@@ -169,34 +169,3 @@ func runtimeServerCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
 	roots.AddCert(ca)
 	return tls.Certificate{Certificate: [][]byte{serverDER, caDER}, PrivateKey: serverPrivate}, roots
 }
-
-func TestPlatformServerTLSConfigAdmitsHTTP1AndKeepsMutualTLS(t *testing.T) {
-	certificate, roots := runtimeServerCertificate(t)
-	config, err := NewServerTLSConfig(certificate, roots)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.NextProtos = []string{"h2", "http/1.1"}
-	if err := ValidatePlatformServerTLSConfig(config); err != nil {
-		t.Fatalf("the platform profile was refused: %v", err)
-	}
-	// The gRPC listeners' validator still refuses http/1.1.
-	if err := validateServerTLSConfig(config); err == nil {
-		t.Fatal("the gRPC listener validator admitted http/1.1")
-	}
-	for name, weaken := range map[string]func(*tls.Config){
-		"optional client certificates": func(c *tls.Config) { c.ClientAuth = tls.VerifyClientCertIfGiven },
-		"TLS 1.2":                      func(c *tls.Config) { c.MinVersion = tls.VersionTLS12 },
-		"no client CA":                 func(c *tls.Config) { c.ClientCAs = nil },
-		"h2 only":                      func(c *tls.Config) { c.NextProtos = []string{"h2"} },
-		"per-client policy": func(c *tls.Config) {
-			c.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) { return nil, nil }
-		},
-	} {
-		weakened := config.Clone()
-		weaken(weakened)
-		if err := ValidatePlatformServerTLSConfig(weakened); err == nil {
-			t.Errorf("%s: the platform profile admitted a weakened policy", name)
-		}
-	}
-}

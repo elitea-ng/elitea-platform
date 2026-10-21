@@ -177,8 +177,10 @@ spec:
             - name: runtime-content
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.contentAddress }}
               protocol: TCP
-            # The platform listener (#1359): the product API over mTLS, the
-            # worker's platform_origin and the sub-application callback.
+            # The platform listener (#1359): elitea-main's internal gRPC port
+            # (mTLS, per-service workload allowlists) for the worker, the
+            # engines and the sub-application host. gRPC only — no HTTP probe
+            # may target it.
             - name: runtime-platform
               containerPort: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.platformAddress }}
               protocol: TCP

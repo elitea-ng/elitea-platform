@@ -375,6 +375,14 @@ func SignIdentityHeaders(out http.Header, secret []byte, projectID, userID, tena
 	}
 }
 
+// VerifyIdentityHeaders reports whether the identity headers on h carry a
+// valid signature under secret, by exactly the gateway's acceptance rule. A
+// gRPC hop that carries the tuple as metadata (internal/transport/grpcauth)
+// verifies it through this instead of restating the scheme.
+func VerifyIdentityHeaders(h http.Header, secret []byte) bool {
+	return verifyIdentitySignature(h, secret)
+}
+
 // verifyIdentitySignature reports whether the identity headers on h carry a
 // valid signature under secret. It is used by tests here and is safe for the
 // gateway side to mirror. Returns false if the signature header is absent.

@@ -161,10 +161,10 @@ type Config struct {
 	OutputTLS      runtimegrpc.ServerTLSFiles
 	ContentTLS     runtimegrpc.ServerTLSFiles
 
-	// PlatformAddress is the internal mTLS listener that serves elitea-main's
-	// ordinary product API (the same handler as the public HTTP server) to
-	// in-cluster workloads: the worker's platform_origin, the internal MCP
-	// origin, the sub-application callback (ELITEA_RUNTIME_PLATFORM_ADDRESS).
+	// PlatformAddress is the internal platform gRPC listener
+	// (ELITEA_RUNTIME_PLATFORM_ADDRESS, #1359 D1): the port in-cluster
+	// workloads — the worker, the DeepWiki/Inventory engines, the
+	// sub-application host — call elitea-main's internal gRPC services on.
 	// It replaced the Traefik `platform-edge` (#1359). Optional: empty opens
 	// no listener. When set, PlatformTLS is required and a client certificate
 	// that chains to PlatformTLS.ClientCAPath is required at the handshake.
@@ -442,8 +442,8 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 	}
 	if config.PlatformAddress != "" {
-		// The platform listener serves the public handler over TLS, so it
-		// cannot share the public listener's (cleartext) port.
+		// The platform listener is its own gRPC server, so it cannot share
+		// the public listener's (cleartext HTTP) port.
 		publicPort, portErr := publicListenPort(lookup)
 		if portErr != nil {
 			return Config{}, portErr

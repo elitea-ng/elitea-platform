@@ -4,7 +4,7 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
-## The platform-edge Traefik is gone; elitea-main serves the worker over mTLS on :9446
+## The platform-edge Traefik is gone; elitea-main serves the worker over gRPC + mTLS on :9446
 
 **Affects:** every install that runs the agent worker (`worker.enabled=true`),
 sets `main.runtime.currentMainBaseUrl` to an https origin, or sets
@@ -15,12 +15,24 @@ sets `main.runtime.currentMainBaseUrl` to an https origin, or sets
 the Office host, indexing artifact reads and internal MCP tools) used to go
 through `elitea-platform-edge`, a second Traefik with its own certificate.
 elitea-main now serves that surface itself on an internal **platform
-listener**, `main.runtime.listeners.platformAddress` (default `:9446`), the
-same handler as port 8080 over TLS 1.3 that **requires a client certificate
-signed by the runtime CA**. It reuses the content listener's keypair
-(`content-server.crt`, SAN `elitea-main`). The NetworkPolicy admits the worker
-(and, with the new flag below, DeepWiki) to 9446. Caller-supplied identity
-headers are stripped and `/internal/*` answers 404 on that port.
+listener**, `main.runtime.listeners.platformAddress` (default `:9446`), over
+TLS 1.3 that **requires a client certificate signed by the runtime CA**. It
+reuses the content listener's keypair (`content-server.crt`, SAN
+`elitea-main`). The NetworkPolicy admits the worker (and, with the new flag
+below, DeepWiki) to 9446.
+
+**:9446 is a gRPC listener, not HTTP.** Every internal hop is gRPC over mTLS:
+the port speaks HTTP/2 gRPC only (ALPN `h2`), and each gRPC service on it
+admits only the workload identities (certificate SPIFFE URI or DNS SAN)
+configured for it. It serves no REST route: `curl`, `openssl s_client` with an
+HTTP request line, or an HTTP liveness probe against 9446 no longer gets an
+answer. Check it with gRPC health (`grpc.health.v1.Health/Check`, open to any
+runtime-CA client with a workload identity), for example with the
+`elitea-grpc-health` tool in the elitea-main image:
+`/elitea-grpc-health --addr elitea-main:9446 --ca runtime-ca.crt --cert
+agent-worker-client.crt --key agent-worker-client.key`. The address,
+certificate and chart/env names (`ELITEA_RUNTIME_PLATFORM_*`,
+`main.runtime.listeners.platformAddress`) are unchanged.
 
 **What to do.**
 

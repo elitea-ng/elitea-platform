@@ -1,31 +1,36 @@
 package main
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
-	"io"
-	"net"
-	"net/http"
+	"math/big"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
-// TestPlatformListenerAdmitsOnlyRuntimeCAClients is the gate the retired
-// platform-edge Traefik had no equivalent of (#1359): the platform listener —
-// elitea-main's product API on ELITEA_RUNTIME_PLATFORM_ADDRESS — is installed
-// from the same Secret-volume material, loaded through the same config path the
-// composition root uses, and then
+// TestPlatformListenerAdmitsOnlyRuntimeCAClients holds the platform listener
+// (#1359, ELITEA_RUNTIME_PLATFORM_ADDRESS) to its material: installed from the
+// same Secret-volume material and loaded through the same config path the
+// composition root uses, the gRPC listener
 //
-//   - SERVES a client that presents a runtime-CA client certificate, over
-//     both HTTP/1.1 and h2 (it is REST + SSE, not gRPC);
+//   - SERVES grpc.health.v1 to a client that presents a runtime-CA client
+//     certificate;
 //   - REFUSES at the handshake a client with no certificate at all;
 //   - REFUSES a client whose certificate another authority signed.
-//
-// A refusal is checked by the absence of a response, and a success by a body
-// only the handler can produce.
 func TestPlatformListenerAdmitsOnlyRuntimeCAClients(t *testing.T) {
 	fixture := newMaterialFixture(t)
 	pod := newDeployment(t, fixture, secretVolumeMode)
@@ -51,45 +56,43 @@ func TestPlatformListenerAdmitsOnlyRuntimeCAClients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load platform listener TLS: %v", err)
 	}
-
-	server := &http.Server{
-		Addr: config.PlatformAddress,
-		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			_, _ = io.WriteString(writer, "platform listener served "+request.Proto+" "+request.URL.Path)
-		}),
-		TLSConfig:         serverTLS,
-		ReadHeaderTimeout: 5 * time.Second,
+	server, err := runtimegrpc.NewPlatformServer(runtimegrpc.PlatformServerConfig{
+		Address: config.PlatformAddress,
+		TLS:     serverTLS,
+		Policy:  runtimegrpc.DefaultPlatformGRPCPolicy(),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	served := make(chan error, 1)
-	go func() { served <- server.ListenAndServeTLS("", "") }()
+	go func() { served <- server.ListenAndServe() }()
 	awaitPrivateListeners(t, address)
 	defer func() {
-		_ = server.Close()
-		if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		if err := <-served; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			t.Errorf("platform listener: %v", err)
 		}
 	}()
 
-	worker := fixture.clientTLSFor(t, "content.runtime.test")
-	worker.NextProtos = nil
-	for _, testCase := range []struct {
-		name  string
-		http2 bool
-		proto string
-	}{
-		{name: "HTTP/1.1", http2: false, proto: "HTTP/1.1"},
-		{name: "h2", http2: true, proto: "HTTP/2.0"},
-	} {
-		t.Run("a runtime-CA client over "+testCase.name, func(t *testing.T) {
-			body, err := platformGet(address, worker.Clone(), testCase.http2)
-			if err != nil {
-				t.Fatalf("the platform listener did not serve a runtime-CA client: %v", err)
-			}
-			if want := "platform listener served " + testCase.proto + " /api/v2/probe"; body != want {
-				t.Fatalf("body = %q, want %q", body, want)
-			}
-		})
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	t.Run("a runtime-CA client with a workload identity", func(t *testing.T) {
+		response, err := platformHealth(ctx, address, workloadClientTLS(t, fixture, "elitea-worker"))
+		if err != nil || response != healthv1.HealthCheckResponse_SERVING {
+			t.Fatalf("the platform listener did not serve a runtime-CA client: %v, %v", response, err)
+		}
+	})
+
+	// The fixture's generic client certificate also carries an IP SAN, so it
+	// names no single workload: the handshake succeeds, the call does not.
+	t.Run("a runtime-CA client without one workload identity", func(t *testing.T) {
+		if _, err := platformHealth(ctx, address, fixture.clientTLSFor(t, "content.runtime.test")); status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("an ambiguous identity = %v, want Unauthenticated", err)
+		}
+	})
 
 	t.Run("a client with no certificate", func(t *testing.T) {
 		anonymous := &tls.Config{
@@ -97,45 +100,56 @@ func TestPlatformListenerAdmitsOnlyRuntimeCAClients(t *testing.T) {
 			RootCAs:    fixture.rootPool(),
 			ServerName: "content.runtime.test",
 		}
-		if body, err := platformGet(address, anonymous, false); err == nil {
-			t.Fatalf("the platform listener served a client without a certificate: %q", body)
+		if _, err := platformHealth(ctx, address, anonymous); status.Code(err) != codes.Unavailable {
+			t.Fatalf("a client without a certificate = %v, want a handshake failure", err)
 		}
 	})
 
 	t.Run("a client another authority signed", func(t *testing.T) {
 		stranger := newMaterialFixture(t).clientTLSFor(t, "content.runtime.test")
 		stranger.RootCAs = fixture.rootPool()
-		stranger.NextProtos = nil
-		if body, err := platformGet(address, stranger, false); err == nil {
-			t.Fatalf("the platform listener served a client the runtime CA did not sign: %q", body)
+		if _, err := platformHealth(ctx, address, stranger); status.Code(err) != codes.Unavailable {
+			t.Fatalf("a client the runtime CA did not sign = %v, want a handshake failure", err)
 		}
 	})
 }
 
-func platformGet(address string, clientTLS *tls.Config, http2 bool) (string, error) {
-	transport := &http.Transport{
-		TLSClientConfig: clientTLS,
-		Protocols:       new(http.Protocols),
-		DialContext:     (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-	}
-	if http2 {
-		transport.Protocols.SetHTTP2(true)
-	} else {
-		transport.Protocols.SetHTTP1(true)
-	}
-	client := &http.Client{Transport: transport, Timeout: 15 * time.Second}
-	defer client.CloseIdleConnections()
-	response, err := client.Get("https://" + address + "/api/v2/probe")
+// workloadClientTLS is a client certificate from the fixture's CA whose only
+// SAN is one DNS name, as gen-runtime-certs.sh issues them.
+func workloadClientTLS(t *testing.T, fixture materialFixture, dnsName string) *tls.Config {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return "", err
+		t.Fatal(err)
 	}
-	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+	serialCounter++
+	now := time.Now().UTC()
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(serialCounter),
+		Subject:      pkix.Name{CommonName: dnsName},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		DNSNames:     []string{dnsName},
+	}, fixture.ca.certificate, publicKey, fixture.ca.privateKey)
 	if err != nil {
-		return "", err
+		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK {
-		return string(body), errors.New(response.Status)
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: privateKey}},
+		RootCAs:      fixture.rootPool(),
+		ServerName:   "content.runtime.test",
 	}
-	return string(body), nil
+}
+
+func platformHealth(ctx context.Context, address string, clientTLS *tls.Config) (healthv1.HealthCheckResponse_ServingStatus, error) {
+	connection, err := grpc.NewClient(address, grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = connection.Close() }()
+	response, err := healthv1.NewHealthClient(connection).Check(ctx, &healthv1.HealthCheckRequest{})
+	return response.GetStatus(), err
 }

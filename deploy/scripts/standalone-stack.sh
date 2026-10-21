@@ -1538,8 +1538,9 @@ SQL
     # declared here, and counted here, so the lists and the floor cannot
     # disagree. Read scripts/lib/assertion-floor.sh.
     RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445" "platform 9446")
-    IDENTITY_PROBE_TARGETS=("https://elitea-main:9446/api/v2/social/author"
-                            "http://elitea-main:8080/api/v2/social/author")
+    # The platform listener (:9446) left this list when it became gRPC-only
+    # (#1359 D1); the check asserts it serves no HTTP at all instead.
+    IDENTITY_PROBE_TARGETS=("http://elitea-main:8080/api/v2/social/author")
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
     ASSERTION_SITES="$(derive_assertion_floor "$0" "$ASSERTION_SITE_PATTERN" "$ASSERTION_SITE_RANGE")"
@@ -1884,17 +1885,35 @@ sys.stdout.write(reply)
     # refuses a client with no certificate; this proves the worker's own
     # identity is ADMITTED and the chain verifies for elitea-main against the
     # runtime CA alone, which is exactly what the worker's transport checks.
-    platform="$(probe "printf 'GET /healthz HTTP/1.1\\r\\nHost: elitea-main\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -quiet -verify_return_error -connect elitea-main:9446 -CAfile /m/runtime-ca.crt -servername elitea-main -verify_hostname elitea-main -cert /m/agent-worker-client.crt -key /m/agent-worker-client.key -alpn http/1.1")"
+    # The listener is gRPC only (#1359 D1), so the probe is grpc.health.v1
+    # through the elitea-grpc-health tool in the elitea-main image.
+    platform="$($ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+      --entrypoint /elitea-grpc-health ghcr.io/elitea-ng/elitea-main:standalone \
+      --addr elitea-main:9446 --ca /m/runtime-ca.crt --server-name elitea-main \
+      --cert /m/agent-worker-client.crt --key /m/agent-worker-client.key 2>&1 || true)"
     case "$platform" in
-      *"HTTP/1.1 200"*) ok "platform listener :9446 admits the worker identity and verifies as elitea-main" ;;
+      SERVING) ok "platform listener :9446 serves gRPC health to the worker identity and verifies as elitea-main" ;;
       *) fail "platform listener :9446 refused the worker identity or did not verify as elitea-main: $(printf '%s' "$platform" | tail -1)" ;;
+    esac
+    # It used to serve the product HTTP API (the forged-identity probes below
+    # ran against it). Now even the worker's own certificate gets no HTTP
+    # there: an http/1.1 client completes the handshake with no protocol
+    # negotiated — positive evidence the listener does not speak HTTP/1.1 —
+    # and the gRPC server closes the connection without answering
+    # (runtimegrpc/platform_server_test.go holds the same behaviour).
+    platform_http="$(probe "printf 'GET /api/v2/social/author HTTP/1.1\\r\\nHost: elitea-main\\r\\nConnection: close\\r\\n\\r\\n' | openssl s_client -connect elitea-main:9446 -CAfile /m/runtime-ca.crt -servername elitea-main -cert /m/agent-worker-client.crt -key /m/agent-worker-client.key -alpn http/1.1")"
+    case "$platform_http" in
+      *"HTTP/1."*) fail "platform listener :9446 answered HTTP/1.1: $(printf '%s' "$platform_http" | grep -m1 'HTTP/1.')" ;;
+      *"No ALPN negotiated"*) ok "platform listener :9446 serves no HTTP (http/1.1 not negotiated, connection closed)" ;;
+      *) fail "platform listener :9446 did not complete a handshake for the http/1.1 probe: $(printf '%s' "$platform_http" | tail -1)" ;;
     esac
 
     # ── Client identity headers, from inside the network ────────────────────
     # The signed X-Auth-* projection an authenticating edge used to add is gone
     # (#1359): elitea-main reads no X-Auth-* header at all, signed or not. These
-    # probes run where the worker runs: through the platform listener, and straight
-    # at elitea-main:8080, which compose cannot make unreachable. Each forged
+    # probes run where the worker runs, straight at elitea-main:8080, which
+    # compose cannot make unreachable (the platform listener serves no HTTP any
+    # more; the check above proves that). Each forged
     # projection must be refused, and the same request with a real PAT must
     # still answer as the PAT's own user — so a down edge or an unmounted route
     # cannot pass for a refusal.
@@ -1910,7 +1929,6 @@ sys.stdout.write(reply)
           --entrypoint python3 ghcr.io/eliteaai/elitea-mock-llm:standalone -c "
 import ssl, sys, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
-context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 headers = dict(item.split(': ', 1) for item in sys.argv[2:])
 request = urllib.request.Request(sys.argv[1], headers=headers)
 try:
@@ -2106,11 +2124,10 @@ PY
           WRITE_LLM_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
-context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 body = json.dumps({'model': '${WRITE_MODEL}',
                    'messages': [{'role': 'user', 'content': 'api-created credential check'}]}).encode()
 request = urllib.request.Request(
-    'https://elitea-main:9446/llm/v1/chat/completions', data=body,
+    'http://elitea-main:8080/llm/v1/chat/completions', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     print('OK', urllib.request.urlopen(request, context=context, timeout=30).read().decode())
@@ -2217,11 +2234,10 @@ except Exception as error:
       LLM_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
-context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 body = json.dumps({'model': '${CHAT_MODEL_NAME}',
                    'messages': [{'role': 'user', 'content': 'standalone check'}]}).encode()
 request = urllib.request.Request(
-    'https://elitea-main:9446/llm/v1/chat/completions', data=body,
+    'http://elitea-main:8080/llm/v1/chat/completions', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2259,12 +2275,11 @@ except Exception as error:
       EMB_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
-context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 body = json.dumps({'model': '${EMB_MODEL_NAME}',
                    'encoding_format': 'float',
                    'input': 'standalone embedding check'}).encode()
 request = urllib.request.Request(
-    'https://elitea-main:9446/llm/v1/embeddings', data=body,
+    'http://elitea-main:8080/llm/v1/embeddings', data=body,
     headers={'Authorization': 'Bearer ${LLM_JWT}', 'Content-Type': 'application/json'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2308,9 +2323,8 @@ except Exception as error:
       MODELS_OUT="$(llm_probe "
 import json, ssl, urllib.error, urllib.request
 context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
-context.load_cert_chain('/m/agent-worker-client.crt', '/m/agent-worker-client.key')
 request = urllib.request.Request(
-    'https://elitea-main:9446/llm/v1/models',
+    'http://elitea-main:8080/llm/v1/models',
     headers={'Authorization': 'Bearer ${LLM_JWT}'})
 try:
     payload = json.loads(urllib.request.urlopen(request, context=context, timeout=30).read())
@@ -2485,12 +2499,12 @@ except Exception as error:
       if [ -z "$CHAT_PAT" ] || [ -z "$CHAT_USER" ]; then
         skip "no PAT to drive the turn (run: $0 seed-runtime)"
       else
-        # Run INSIDE the compose network, not from the host: the events stream
-        # is only reachable through elitea-main's platform listener (#289,
-        # #1359), which requires a runtime-CA client certificate and serves
-        # DNS:elitea-main — a host client has neither. The mock image is used
-        # purely as a python runtime with the runtime material available;
-        # --user 0:0 so it can read the 0600 signing key and client key.
+        # Run INSIDE the compose network, not from the host, against
+        # elitea-main's public port: the product API (conversations, the
+        # events stream, #289) is HTTP there, and the platform listener
+        # (:9446) is gRPC-only since #1359. The mock image is used purely as a
+        # python runtime with the runtime material available; --user 0:0 so it
+        # can read the 0600 signing key.
         # Drive the turn with the model THIS STACK holds, not chat-smoke.py's
         # compiled-in default.
         #
@@ -2524,10 +2538,7 @@ except Exception as error:
           -v "${REPO_ROOT}/deploy/scripts/chat-smoke.py:/opt/chat-smoke.py:ro" \
           --user 0:0 --entrypoint python3 \
           ghcr.io/eliteaai/elitea-mock-llm:standalone /opt/chat-smoke.py \
-          --base-url "https://elitea-main:9446" \
-          --ca /m/runtime-ca.crt \
-          --cert /m/agent-worker-client.crt \
-          --key /m/agent-worker-client.key \
+          --base-url "http://elitea-main:8080" \
           --pat-uuid "$CHAT_PAT" \
           --signing-key /m/auth-pat-signing-key \
           --user-id "$CHAT_USER" \

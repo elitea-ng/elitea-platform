@@ -4,10 +4,11 @@
 #
 # elitea-main serves the worker's platform_origin itself, on its internal mTLS
 # "platform" listener (:9446, #1359). It replaced the platform-edge Traefik
-# this script used to check. The listener's header strip and /internal refusal
-# live in Go now and are gated by services/elitea-main/cmd/elitea-main/
-# platform_listener_test.go; the mTLS admission (runtime-CA client required) by
-# services/elitea-main/cmd/elitea-runtime-material/platform_listener_test.go.
+# this script used to check. The listener is gRPC-only; that it serves no HTTP
+# and admits each service only to its allowlisted workload identities is gated
+# by services/elitea-main/internal/transport/runtimegrpc/platform_server_test.go;
+# the mTLS admission (runtime-CA client required) from the installed material
+# by services/elitea-main/cmd/elitea-runtime-material/platform_listener_test.go.
 # This script reads the RENDERED YAML and asserts:
 #
 #   1. the standalone + worker render wires the listener: elitea-main's

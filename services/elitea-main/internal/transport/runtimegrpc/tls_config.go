@@ -47,37 +47,14 @@ func LoadServerTLSConfig(files ServerTLSFiles) (*tls.Config, error) {
 	return NewServerTLSConfig(certificate, clientCAs)
 }
 
-// LoadPlatformServerTLSConfig loads the platform listener's profile: the same
-// fail-closed mutual TLS as the gRPC listeners (TLS 1.3, a client certificate
-// that chains to the runtime CA is required at the handshake), but with ALPN
-// h2 AND http/1.1, because that listener serves elitea-main's ordinary REST
-// and SSE surface rather than a gRPC protocol. Its callers — the worker's
-// Office and indexing hosts, the MCP client, Main's own self-call, the
-// sub-application callback — are plain HTTP clients.
+// LoadPlatformServerTLSConfig loads the platform listener's profile. The
+// platform listener is a gRPC server (#1359 D1), so this is exactly the
+// private gRPC listeners' fail-closed mutual TLS: TLS 1.3, ALPN h2 only, a
+// client certificate that chains to the runtime CA required at the
+// handshake. It is a separate name so the platform material can rotate on its
+// own.
 func LoadPlatformServerTLSConfig(files ServerTLSFiles) (*tls.Config, error) {
-	config, err := LoadServerTLSConfig(files)
-	if err != nil {
-		return nil, err
-	}
-	config.NextProtos = []string{"h2", "http/1.1"}
-	if err := ValidatePlatformServerTLSConfig(config); err != nil {
-		return nil, err
-	}
-	return config, nil
-}
-
-// ValidatePlatformServerTLSConfig is validateServerTLSConfig for the platform
-// listener: identical except that http/1.1 is admitted beside h2.
-func ValidatePlatformServerTLSConfig(config *tls.Config) error {
-	if config == nil {
-		return errors.New("runtime listener requires TLS 1.3 mutual authentication")
-	}
-	probe := config.Clone()
-	if len(probe.NextProtos) != 2 || probe.NextProtos[0] != "h2" || probe.NextProtos[1] != "http/1.1" {
-		return errors.New("platform listener requires h2 and http/1.1 ALPN")
-	}
-	probe.NextProtos = []string{"h2"}
-	return validateServerTLSConfig(probe)
+	return LoadServerTLSConfig(files)
 }
 
 func NewServerTLSConfig(certificate tls.Certificate, clientCAs *x509.CertPool) (*tls.Config, error) {

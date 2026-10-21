@@ -4,68 +4,38 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
+
+	"google.golang.org/grpc"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
-// The platform listener (#1359) is elitea-main's ordinary product API — the
-// SAME handler as the public cleartext server — served once more on an
-// internal mutual-TLS port (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446). It is the
-// worker's platform_origin, the internal MCP origin, Main's own self-call and
-// the sub-application callback. It replaced the Traefik `platform-edge`, whose
-// only job was to terminate TLS for those callers and forward cleartext to
-// :8080.
+// The platform listener (#1359 D1) is elitea-main's internal gRPC port
+// (ELITEA_RUNTIME_PLATFORM_ADDRESS, :9446): the port the worker, the
+// DeepWiki/Inventory engines and the sub-application host call. It serves
+// gRPC only — TLS 1.3, ALPN h2, a runtime-CA client certificate required at
+// the handshake — and every call passes grpcauth's per-service allowlist
+// (runtimegrpc.PlatformServer).
 //
-// Authentication on the routes is unchanged (bearer, session cookie): the
-// client certificate only admits the CONNECTION, and must chain to the runtime
-// CA. Nothing here reads the certificate's identity.
+// It no longer serves the public HTTP handler. Until the units that move the
+// worker's HTTP calls onto gRPC services land (#1359 U2 ModelService, U3
+// ArtifactObjectService, U5 InternalToolService), only grpc.health.v1 answers
+// here, and those worker calls fail.
 
-// platformStrippedHeaders are the identity names deleted from every request
-// on the platform listener, the floor the retired edge's
-// strip-caller-auth-context middleware held. No caller of this listener may
-// choose the identity elitea-main believes.
+// platformServices are the gRPC services the platform listener serves beside
+// grpc.health.v1. Each names its fully qualified service, the workload
+// identities allowed to call it, and how it registers.
 //
-// X-Elitea-Execution-Id is deliberately ABSENT: the worker's model calls tag
-// each request with the execution that made it (cost attribution in the LLM
-// gateway), and elitea-main re-signs the value into the identity tuple.
-var platformStrippedHeaders = []string{
-	"X-Auth-Type",
-	"X-Auth-ID",
-	"X-Auth-User-ID",
-	"X-Auth-Reference",
-	"X-Auth-Signature",
-	"X-Auth-Avatar",
-	"X-Auth-Avatar-State",
-	"X-Auth-Session-Id",
-	"X-Auth-Session-Name",
-	"X-Auth-Session-Endpoint",
-	"X-Elitea-Identity-Signature",
-	"X-Elitea-Project-Id",
-	"X-Elitea-User-Id",
-	"X-Elitea-Tenant-Id",
-}
-
-// platformListenerHandler wraps the public handler for the platform listener:
-// it deletes the identity headers above and refuses elitea-main's internal
-// address space (/internal), which the retired edge never routed either.
-func platformListenerHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/internal" || strings.HasPrefix(r.URL.Path, "/internal/") {
-			http.NotFound(w, r)
-			return
-		}
-		for _, name := range platformStrippedHeaders {
-			r.Header.Del(name)
-		}
-		next.ServeHTTP(w, r)
-	})
+// TODO(#1359 U2/U3/U5): ModelService, ArtifactObjectService and
+// InternalToolService register here.
+func platformServices() []runtimegrpc.PlatformService {
+	return nil
 }
 
 // newPlatformServer builds the platform listener, or returns nil when the
 // configuration opens none (the runtime is off, or no address is named).
-func newPlatformServer(config runtimecomposition.Config, handler http.Handler) (*http.Server, error) {
+func newPlatformServer(config runtimecomposition.Config, services []runtimegrpc.PlatformService) (*runtimegrpc.PlatformServer, error) {
 	if !config.Enabled || config.PlatformAddress == "" {
 		return nil, nil
 	}
@@ -73,9 +43,18 @@ func newPlatformServer(config runtimecomposition.Config, handler http.Handler) (
 	if err != nil {
 		return nil, err
 	}
-	server := newHTTPServer(config.PlatformAddress, platformListenerHandler(handler))
-	server.TLSConfig = tlsConfig
-	return server, nil
+	return runtimegrpc.NewPlatformServer(runtimegrpc.PlatformServerConfig{
+		Address: config.PlatformAddress,
+		TLS:     tlsConfig,
+		Policy:  runtimegrpc.DefaultPlatformGRPCPolicy(),
+	}, services...)
+}
+
+// platformLifecycle is the part of *runtimegrpc.PlatformServer the
+// application lifecycle drives.
+type platformLifecycle interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
 }
 
 // applicationServers runs the public server and, when present, the platform
@@ -83,7 +62,7 @@ func newPlatformServer(config runtimecomposition.Config, handler http.Handler) (
 // within one deadline, and either one failing stops both.
 type applicationServers struct {
 	public   *http.Server
-	platform *http.Server
+	platform platformLifecycle
 }
 
 func (servers applicationServers) ListenAndServe() error {
@@ -92,10 +71,21 @@ func (servers applicationServers) ListenAndServe() error {
 	}
 	results := make(chan error, 2)
 	go func() { results <- servers.public.ListenAndServe() }()
-	go func() { results <- servers.platform.ListenAndServeTLS("", "") }()
+	go func() { results <- platformServeResult(servers.platform.ListenAndServe()) }()
 	// The first to stop decides; serveApplication then shuts both down. The
 	// second result lands in the buffered channel and is dropped.
 	return <-results
+}
+
+// platformServeResult speaks the gRPC server's "stopped" in the public
+// server's terms. grpc.Server.Serve returns nil (or ErrServerStopped) after
+// a Stop: that is the drain, not a failure, and serveApplication recognises
+// a drain by http.ErrServerClosed.
+func platformServeResult(err error) error {
+	if err == nil || errors.Is(err, grpc.ErrServerStopped) {
+		return http.ErrServerClosed
+	}
+	return err
 }
 
 func (servers applicationServers) Shutdown(ctx context.Context) error {

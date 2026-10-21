@@ -18,7 +18,7 @@ flowchart TB
     Edge -->|"/api, /auth, /llm, MCP ..."| Main["elitea-main"]
     Main -->|"mTLS /llm hop"| GW["elitea-llm-gateway"]
     GW --> Providers["LLM providers"]
-    Worker -->|"mTLS platform API :9446"| Main
+    Worker -->|"gRPC + mTLS :9446"| Main
     Worker -. "mTLS control, output, content" .-> Main
     Worker -->|"mTLS"| Vector["elitea-vector"]
     Vector --> Qdrant[("Qdrant")]
@@ -47,7 +47,7 @@ flowchart TB
 Every first-party image and chart is public on `ghcr.io/elitea-ng`, so no image pull secret is needed.
 
 <Note title="You do not need Traefik">
-The worker reaches elitea-main's product API on a **private** mTLS listener (port 9446) that elitea-main serves itself, admitting only clients with a certificate from the runtime CA. There is no internal proxy to run. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
+The worker reaches elitea-main over **gRPC** on a **private** mTLS listener (port 9446) that elitea-main serves itself, admitting only clients with a certificate from the runtime CA, and each gRPC service on it only the workload identities configured for it. It serves no HTTP; check it with gRPC health, not an HTTP probe. There is no internal proxy to run. Your public edge can be any Gateway API implementation (Envoy Gateway, Istio, Cilium, NGINX Gateway Fabric, kgateway, and so on). Elitea's MCP endpoint needs a `RegularExpression` path match. Traefik's Gateway API support and the managed GKE Gateway have none, so with those the MCP path needs a workaround or stays unpublished. See [The edge](#step-7-the-edge).
 </Note>
 
 ## Before you start: decide these
