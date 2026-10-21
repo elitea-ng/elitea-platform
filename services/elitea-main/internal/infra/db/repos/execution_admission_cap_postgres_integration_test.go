@@ -80,8 +80,15 @@ WHERE n.nspname = 'elitea_runtime' AND t.relname = $1 AND c.conname = $2`,
 		t.Fatalf("replica on the new cap: %v", err)
 	}
 
-	if written, err := SetAdmissionPolicyMax(ctx, pool, "agent.execute.v1", 3000); err != nil || written != 1 {
+	if written, err := SetAdmissionPolicyMax(ctx, pool, "configuration.validate.v1", 3000); err != nil || written != 1 {
 		t.Fatalf("set one named capability: written=%d err=%v", written, err)
+	}
+	// An id with no policy row is not created: a typo must not mint a policy.
+	if written, err := SetAdmissionPolicyMax(ctx, pool, "agent.execute.v1", 3000); err != nil || written != 0 {
+		t.Fatalf("set an unknown capability: written=%d err=%v, want 0 rows", written, err)
+	}
+	if policies, err := ListAdmissionPolicies(ctx, pool); err != nil || len(policies) != 1 {
+		t.Fatalf("policies after an unknown-capability set = %+v (err %v), want the one row", policies, err)
 	}
 	if _, err := SetAdmissionPolicyMax(ctx, pool, "", MaxSupportedOutstandingJobs+1); err == nil {
 		t.Fatal("accepted a cap above the supported ceiling")

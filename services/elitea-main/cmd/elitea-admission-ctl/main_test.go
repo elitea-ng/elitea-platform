@@ -21,12 +21,14 @@ func (f *fakeStore) List(context.Context) ([]repos.AdmissionPolicy, error) { ret
 func (f *fakeStore) Set(_ context.Context, capabilityID string, maxOutstanding int64) (int64, error) {
 	f.setCalls++
 	f.capability, f.max = capabilityID, maxOutstanding
+	var written int64
 	for i := range f.policies {
 		if capabilityID == "" || f.policies[i].CapabilityID == capabilityID {
 			f.policies[i].MaxOutstanding = maxOutstanding
+			written++
 		}
 	}
-	return int64(len(f.policies)), nil
+	return written, nil
 }
 
 func (f *fakeStore) Close() {}
@@ -48,7 +50,7 @@ func runWith(t *testing.T, store *fakeStore, values map[string]string, args ...s
 
 func TestSetWithoutMaxTakesTheReplicasConfiguredCap(t *testing.T) {
 	store := &fakeStore{policies: []repos.AdmissionPolicy{
-		{CapabilityID: "agent.execute.v1", MaxOutstanding: 1024},
+		{CapabilityID: "agent.execute.application.v1", MaxOutstanding: 1024},
 		{CapabilityID: "index.ingest.v1", MaxOutstanding: 1024},
 	}}
 	code, stdout, stderr := runWith(t, store,
@@ -59,7 +61,7 @@ func TestSetWithoutMaxTakesTheReplicasConfiguredCap(t *testing.T) {
 	if store.setCalls != 1 || store.capability != "" || store.max != 2048 {
 		t.Fatalf("set call: %+v", store)
 	}
-	for _, want := range []string{"every persisted capability to 2048", "agent.execute.v1\t2048", "index.ingest.v1\t2048"} {
+	for _, want := range []string{"every persisted capability to 2048", "agent.execute.application.v1\t2048", "index.ingest.v1\t2048"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout lacks %q: %s", want, stdout)
 		}
@@ -67,11 +69,26 @@ func TestSetWithoutMaxTakesTheReplicasConfiguredCap(t *testing.T) {
 }
 
 func TestSetOneCapabilityWithExplicitMax(t *testing.T) {
-	store := &fakeStore{policies: []repos.AdmissionPolicy{{CapabilityID: "agent.execute.v1", MaxOutstanding: 64}}}
+	store := &fakeStore{policies: []repos.AdmissionPolicy{{CapabilityID: "agent.execute.application.v1", MaxOutstanding: 64}}}
 	code, _, stderr := runWith(t, store, map[string]string{"DATABASE_URL": "postgres://db"},
-		"set", "-max", "4096", "-capability", "agent.execute.v1")
-	if code != exitOK || store.capability != "agent.execute.v1" || store.max != 4096 {
+		"set", "-max", "4096", "-capability", "agent.execute.application.v1")
+	if code != exitOK || store.capability != "agent.execute.application.v1" || store.max != 4096 {
 		t.Fatalf("code=%d stderr=%s store=%+v", code, stderr, store)
+	}
+}
+
+// -capability only changes an existing policy: an id with no row (here the
+// pre-#966 example's agent.execute.v1, which no code admits under) writes
+// nothing and exits non-zero.
+func TestSetAnUnknownCapabilityFailsAndWritesNothing(t *testing.T) {
+	store := &fakeStore{policies: []repos.AdmissionPolicy{{CapabilityID: "agent.execute.application.v1", MaxOutstanding: 64}}}
+	code, stdout, stderr := runWith(t, store, map[string]string{"DATABASE_URL": "postgres://db"},
+		"set", "-max", "128", "-capability", "agent.execute.v1")
+	if code != exitFailed || !strings.Contains(stderr, `"agent.execute.v1" has no persisted admission cap`) {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if strings.Contains(stdout, "set the admission cap") || store.policies[0].MaxOutstanding != 64 {
+		t.Fatalf("stdout=%q policies=%+v", stdout, store.policies)
 	}
 }
 

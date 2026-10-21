@@ -12,9 +12,11 @@
 //
 //	kubectl exec deploy/<release>-main -- /elitea-admission-ctl set
 //	elitea-admission-ctl show
-//	elitea-admission-ctl set -max 2048 [-capability agent.execute.v1]
+//	elitea-admission-ctl set -max 2048 [-capability agent.execute.application.v1]
 //
-// It reads DATABASE_URL, as elitea-migrate does.
+// -capability changes a capability that already has a persisted cap and
+// exits non-zero when none does: a typo must not mint a policy row for a
+// capability nothing admits. It reads DATABASE_URL, as elitea-migrate does.
 package main
 
 import (
@@ -86,23 +88,23 @@ func run(parent context.Context, arguments []string, lookup lookupEnv, stdout, s
 	if command == "set" && *maxOutstanding == 0 {
 		raw, ok := lookup("ELITEA_RUNTIME_MAX_OUTSTANDING")
 		if !ok || raw == "" {
-			fmt.Fprintln(stderr, "elitea-admission-ctl: set needs -max, or ELITEA_RUNTIME_MAX_OUTSTANDING in the environment")
+			sayln(stderr, "elitea-admission-ctl: set needs -max, or ELITEA_RUNTIME_MAX_OUTSTANDING in the environment")
 			return exitInvalidUsage
 		}
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			fmt.Fprintf(stderr, "elitea-admission-ctl: ELITEA_RUNTIME_MAX_OUTSTANDING=%q is not an integer\n", raw)
+			say(stderr, "elitea-admission-ctl: ELITEA_RUNTIME_MAX_OUTSTANDING=%q is not an integer\n", raw)
 			return exitInvalidUsage
 		}
 		*maxOutstanding = parsed
 	}
 	if command == "set" && (*maxOutstanding < 1 || *maxOutstanding > repos.MaxSupportedOutstandingJobs) {
-		fmt.Fprintf(stderr, "elitea-admission-ctl: cap %d is outside 1..%d\n", *maxOutstanding, repos.MaxSupportedOutstandingJobs)
+		say(stderr, "elitea-admission-ctl: cap %d is outside 1..%d\n", *maxOutstanding, repos.MaxSupportedOutstandingJobs)
 		return exitInvalidUsage
 	}
 	databaseURL, ok := lookup("DATABASE_URL")
 	if !ok || databaseURL == "" {
-		fmt.Fprintln(stderr, "elitea-admission-ctl: DATABASE_URL is required")
+		sayln(stderr, "elitea-admission-ctl: DATABASE_URL is required")
 		return exitInvalidUsage
 	}
 
@@ -110,7 +112,7 @@ func run(parent context.Context, arguments []string, lookup lookupEnv, stdout, s
 	defer cancel()
 	store, err := open(ctx, databaseURL)
 	if err != nil {
-		fmt.Fprintf(stderr, "elitea-admission-ctl: open database: %v\n", err)
+		say(stderr, "elitea-admission-ctl: open database: %v\n", err)
 		return exitFailed
 	}
 	defer store.Close()
@@ -118,37 +120,52 @@ func run(parent context.Context, arguments []string, lookup lookupEnv, stdout, s
 	if command == "set" {
 		written, err := store.Set(ctx, *capabilityID, *maxOutstanding)
 		if err != nil {
-			fmt.Fprintf(stderr, "elitea-admission-ctl: %v\n", err)
+			say(stderr, "elitea-admission-ctl: %v\n", err)
+			return exitFailed
+		}
+		if *capabilityID != "" && written == 0 {
+			say(stderr, "elitea-admission-ctl: capability %q has no persisted admission cap; `show` lists the ones that do\n", *capabilityID)
 			return exitFailed
 		}
 		scope := "every persisted capability"
 		if *capabilityID != "" {
 			scope = fmt.Sprintf("capability %q", *capabilityID)
 		}
-		fmt.Fprintf(stdout, "set the admission cap of %s to %d (%d row(s))\n", scope, *maxOutstanding, written)
+		say(stdout, "set the admission cap of %s to %d (%d row(s))\n", scope, *maxOutstanding, written)
 	}
 	policies, err := store.List(ctx)
 	if err != nil {
-		fmt.Fprintf(stderr, "elitea-admission-ctl: %v\n", err)
+		say(stderr, "elitea-admission-ctl: %v\n", err)
 		return exitFailed
 	}
 	if len(policies) == 0 {
-		fmt.Fprintln(stdout, "no capability has a persisted admission cap yet")
+		sayln(stdout, "no capability has a persisted admission cap yet")
 	}
 	for _, policy := range policies {
-		fmt.Fprintf(stdout, "%s\t%d\n", policy.CapabilityID, policy.MaxOutstanding)
+		say(stdout, "%s\t%d\n", policy.CapabilityID, policy.MaxOutstanding)
 	}
 	return exitOK
 }
 
+// say and sayln write the command's output. A failed write to the
+// terminal has nowhere better to be reported, so its error is dropped here,
+// once, instead of at every call.
+func say(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
+}
+
+func sayln(w io.Writer, args ...any) {
+	_, _ = fmt.Fprintln(w, args...)
+}
+
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `usage:
+	say(w, `usage:
   elitea-admission-ctl show
   elitea-admission-ctl set [-max N] [-capability ID]
 
 set writes N (1..%d; default: ELITEA_RUNTIME_MAX_OUTSTANDING) as the persisted
-admission cap of every persisted capability, or of -capability only, then
-prints every persisted cap. Set the same value on every elitea-main replica
+admission cap of every persisted capability, or of -capability only (which
+must already have one), then prints every persisted cap. Set the same value on every elitea-main replica
 first: a replica whose value differs fails every start closed.
 `, repos.MaxSupportedOutstandingJobs)
 }

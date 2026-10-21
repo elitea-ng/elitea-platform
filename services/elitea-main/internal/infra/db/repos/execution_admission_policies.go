@@ -75,8 +75,10 @@ ORDER BY capability_id`)
 
 // SetAdmissionPolicyMax persists maxOutstanding as the admission cap of
 // capabilityID, or of every persisted capability when capabilityID is empty,
-// in one statement. A named capability with no row gets one, so the cap is
-// right before its first start. It returns the number of rows written.
+// in one statement. It only updates: a named capability with no row is left
+// alone and reports 0 rows, so a mistyped id cannot mint a policy nothing
+// admits under (the first admission of a real capability seeds its row from
+// the replica's own cap). It returns the number of rows written.
 //
 // The statement takes the same row locks an admission takes, so it waits for
 // in-flight admissions and the next one reads the new value. Replicas still
@@ -96,9 +98,9 @@ SET max_outstanding = $1`, maxOutstanding)
 		return tag.RowsAffected(), nil
 	}
 	tag, err := q.Exec(ctx, `
-INSERT INTO elitea_runtime.execution_admission_policies (capability_id, max_outstanding)
-VALUES ($1, $2)
-ON CONFLICT (capability_id) DO UPDATE SET max_outstanding = EXCLUDED.max_outstanding`,
+UPDATE elitea_runtime.execution_admission_policies
+SET max_outstanding = $2
+WHERE capability_id = $1`,
 		capabilityID, maxOutstanding)
 	if err != nil {
 		return 0, fmt.Errorf("set execution admission cap for %q: %w", capabilityID, err)
