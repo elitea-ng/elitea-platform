@@ -94,6 +94,8 @@ on:
   pull_request:
     paths:
       - "apps/elitea-web/**"
+      # The shared client package the web image compiles from source.
+      - "libs/ts/client-core/**"
       - "tools/uictl/**"
       - "services/elitea-main/**"
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
@@ -151,6 +153,8 @@ on:
       - main
     paths:
       - "apps/elitea-web/**"
+      # The shared client package the web image compiles from source.
+      - "libs/ts/client-core/**"
       - "tools/uictl/**"
       - "services/elitea-main/**"
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
