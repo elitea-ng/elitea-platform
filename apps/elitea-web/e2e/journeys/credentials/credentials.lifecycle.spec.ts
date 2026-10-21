@@ -97,6 +97,10 @@ test('J19a: the AI-Configuration screen offers credential creation and routes to
  *     AI-Configuration screen actually reads.
  */
 test('J19b: create a credential, verify it persisted, then delete it', async ({ page }) => {
+  // test.slow(): create, two axe scans, edit, a fresh page and a delete. On a
+  // webkit CI leg with four workers it measured past 30 s with no single slow
+  // call, so the default budget cut it off at the delete modal.
+  test.slow();
   // `elitea_title` carries a UNIQUE index (scripts/e2e-stack.sh:252) and the
   // create path submits the typed name as both `label` and `elitea_title`
   // (useCredentialFormController.ts buildTitle), so the name must be unique
