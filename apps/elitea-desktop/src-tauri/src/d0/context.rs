@@ -46,11 +46,11 @@ use elitea_agent_runtime::context_management::{
 use elitea_agent_runtime::context_status::{ContextPhase, ModelContextStatus};
 use elitea_agent_runtime::host::ModelRequest;
 use elitea_agent_runtime::request::ModelContextLimits;
-use reqwest::Method;
 use serde_json::{Map, Value};
 
 use super::api::PlatformApi;
 use super::cache::{LimitsKey, TurnCaches};
+use super::catalogue;
 use super::events::{ContextMeter, TurnEvents};
 use super::recorder::{Recorder, ToolCalls};
 use super::session::AGENT_AUTHOR;
@@ -100,57 +100,18 @@ pub async fn model_limits(
     // A definitive answer is kept, whatever it said (a model it does not
     // describe stays on the fallback for the session); a transient one is
     // asked again next turn.
-    let Some(answer) = catalogue_limits(api, project_id, model_name).await else {
+    // The project's own model wins over a shared one.
+    let Some(catalogue) = catalogue::read(api, &caches.catalogues, project_id).await else {
         return FALLBACK_LIMITS;
     };
-    let limits = answer.unwrap_or(FALLBACK_LIMITS);
+    let limits = catalogue
+        .find(model_name)
+        .and_then(|model| limits_of(&model.row))
+        .unwrap_or(FALLBACK_LIMITS);
     if let Some(key) = key {
         caches.keep_limits(key, limits);
     }
     limits
-}
-
-/// `None` when the catalogue could not answer now ([`definitive`]);
-/// `Some(None)` when it does not describe the model.
-async fn catalogue_limits(
-    api: &PlatformApi,
-    project_id: i64,
-    model_name: &str,
-) -> Option<Option<ModelContextLimits>> {
-    let answer = api
-        .send(
-            Method::GET,
-            &format!("/api/v2/configurations/models/{project_id}?section=llm&include_shared=true"),
-            None,
-            &[],
-        )
-        .await
-        .ok()?;
-    if !(200..300).contains(&answer.status) {
-        log::info!(
-            "the model catalogue answered {}; the turn uses the default context window",
-            answer.status
-        );
-        return definitive(answer.status).then_some(None);
-    }
-    let Some(items) = answer.body.get("items").and_then(Value::as_array) else {
-        return Some(None);
-    };
-    // The turn's project's own model first, then a shared one.
-    Some(
-        items
-            .iter()
-            .filter(|item| item.get("name").and_then(Value::as_str) == Some(model_name))
-            .min_by_key(|item| item.get("project_id").and_then(Value::as_i64) != Some(project_id))
-            .and_then(limits_of),
-    )
-}
-
-/// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
-/// for the project: it describes no model). Any other (401, 403, 408, 429,
-/// a 5xx) may answer differently on the next turn.
-fn definitive(status: u16) -> bool {
-    (200..300).contains(&status) || status == 404
 }
 
 /// A catalogue row's limits (`context_window`, `max_output_tokens`,
@@ -222,11 +183,13 @@ pub fn policy(details: &Map<String, Value>) -> Option<CompactionPolicy> {
 pub struct ProviderBudget {
     pub model: ModelRequest,
     pub budget: RequestContextBudget,
+    /// As the transport sends history (#1228).
+    pub replay: super::catalogue::ReasoningReplay,
 }
 
 impl ModelRequestBudget for ProviderBudget {
     fn measure(&self, request: &LlmRequest) -> adk_core::Result<RequestContextUsage> {
-        let body = super::model::request_body(&self.model, request)?;
+        let body = super::model::request_body(&self.model, request, self.replay)?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| adk_core::AdkError::model("the model request could not be encoded"))?;
         self.budget
@@ -472,16 +435,6 @@ mod tests {
         assert!(output_only.context_window_fallback && !output_only.max_output_fallback);
         assert!(limits_of(&json!({"context_window": -1})).is_none());
         assert!(limits_of(&json!({"context_window": 1000, "max_output_tokens": 1000})).is_none());
-    }
-
-    #[test]
-    fn only_a_definitive_catalogue_answer_is_kept() {
-        for status in [200, 204, 404] {
-            assert!(definitive(status), "{status}");
-        }
-        for status in [401, 403, 408, 429, 500, 502, 503, 504] {
-            assert!(!definitive(status), "{status}");
-        }
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! The chat models of a turn's project (#1228): the catalogue a model
-//! chosen for one turn is checked against before the turn starts.
+//! chosen for one turn is checked against before the turn starts, the
+//! rows the context limits are read from (#1217, `super::context`), and the
+//! family flag that decides whether reasoning goes back to the provider.
 //!
 //! * **Read.** `GET /configurations/models/{project}?section=llm&include_shared=true`
 //!   (the section holds the project's chat models only, its own and the
@@ -12,6 +14,10 @@
 //!   catalogue could not answer, the choice goes to the gateway, which
 //!   decides: governance stays on the server (the gateway refuses a model
 //!   the project may not use, or a request over budget, per request).
+//! * **Family.** `openai_compatible: false` names a provider whose own API
+//!   carries signed reasoning blocks back in history (Anthropic);
+//!   [`ReasoningReplay`] says so. Every other model is spoken to through the
+//!   OpenAI-compatible chat route, whose schema has no reasoning items.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,9 +36,10 @@ pub const CATALOGUE_TTL: Duration = Duration::from_secs(60);
 pub struct CatalogueModel {
     pub name: String,
     pub project_id: i64,
-    pub max_output_tokens: Option<u32>,
-    pub supports_reasoning: Option<bool>,
     pub openai_compatible: Option<bool>,
+    /// The row as the catalogue answered it (the context limits are read
+    /// from it).
+    pub row: Value,
 }
 
 /// A project's chat models, its own first.
@@ -67,19 +74,61 @@ impl Catalogue {
                 Some(CatalogueModel {
                     name,
                     project_id: item.get("project_id").and_then(Value::as_i64).unwrap_or(0),
-                    max_output_tokens: item
-                        .get("max_output_tokens")
-                        .and_then(Value::as_u64)
-                        .and_then(|tokens| u32::try_from(tokens).ok())
-                        .filter(|tokens| *tokens > 0),
-                    supports_reasoning: item.get("supports_reasoning").and_then(Value::as_bool),
                     openai_compatible: item.get("openai_compatible").and_then(Value::as_bool),
+                    row: item.clone(),
                 })
             })
             .collect();
         models.sort_by_key(|model| model.project_id != project_id);
         Self { models }
     }
+}
+
+/// How a model's reasoning is replayed in a later request's history.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReasoningReplay {
+    /// OpenAI-compatible chat completions: reasoning is not part of the
+    /// chat schema and is never sent back.
+    #[default]
+    Never,
+    /// A provider that requires its signed reasoning blocks in history
+    /// (Anthropic thinking with a `signature`).
+    SignedBlocks,
+}
+
+impl ReasoningReplay {
+    /// The family flag of `model` (`openai_compatible: false`: a provider
+    /// of its own); an unknown model is OpenAI-compatible.
+    #[must_use]
+    pub fn of(model: Option<&CatalogueModel>) -> Self {
+        match model.and_then(|model| model.openai_compatible) {
+            Some(false) => Self::SignedBlocks,
+            _ => Self::Never,
+        }
+    }
+}
+
+/// The reasoning replay of `model_name` in the catalogue of `project_id`
+/// (unknown, or a catalogue that cannot answer: [`ReasoningReplay::Never`]).
+pub async fn replay(
+    api: &PlatformApi,
+    kept: &Catalogues,
+    project_id: i64,
+    model_name: &str,
+) -> ReasoningReplay {
+    let catalogue = read(api, kept, project_id).await;
+    ReasoningReplay::of(
+        catalogue
+            .as_deref()
+            .and_then(|catalogue| catalogue.find(model_name)),
+    )
+}
+
+/// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
+/// for the project: it describes no model). Any other (401, 403, 408, 429,
+/// a 5xx) may answer differently on the next turn.
+fn definitive(status: u16) -> bool {
+    (200..300).contains(&status) || status == 404
 }
 
 /// A project's catalogue as one session read it.
@@ -146,15 +195,17 @@ pub async fn read(api: &PlatformApi, kept: &Catalogues, project_id: i64) -> Opti
         )
         .await
         .ok()?;
-    let catalogue = match answer.status {
-        200..=299 => Catalogue::from_body(&answer.body, project_id),
-        404 => Catalogue::default(),
-        status => {
-            log::info!(
-                "the model catalogue answered {status}; a chosen model is left to the gateway"
-            );
-            return None;
-        }
+    if !definitive(answer.status) {
+        log::info!(
+            "the model catalogue answered {}; the turn uses the default context window, and a chosen model is left to the gateway",
+            answer.status
+        );
+        return None;
+    }
+    let catalogue = if answer.status == 404 {
+        Catalogue::default()
+    } else {
+        Catalogue::from_body(&answer.body, project_id)
     };
     let catalogue = Arc::new(catalogue);
     if let Some(key) = key {
@@ -181,7 +232,29 @@ mod tests {
         );
         let names: Vec<&str> = catalogue.models.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, ["mine", "chat", "shared"]);
-        assert_eq!(catalogue.find("mine").unwrap().max_output_tokens, Some(512));
+        assert_eq!(
+            catalogue.find("mine").unwrap().row["max_output_tokens"],
+            512
+        );
+        assert_eq!(
+            ReasoningReplay::of(catalogue.find("shared")),
+            ReasoningReplay::SignedBlocks
+        );
+        assert_eq!(
+            ReasoningReplay::of(catalogue.find("mine")),
+            ReasoningReplay::Never
+        );
+        assert_eq!(ReasoningReplay::of(None), ReasoningReplay::Never);
         assert!(catalogue.find("embed").is_none());
+    }
+
+    #[test]
+    fn only_a_definitive_catalogue_answer_is_kept() {
+        for status in [200, 204, 404] {
+            assert!(definitive(status), "{status}");
+        }
+        for status in [401, 403, 408, 429, 500, 502, 503, 504] {
+            assert!(!definitive(status), "{status}");
+        }
     }
 }

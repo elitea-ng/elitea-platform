@@ -327,10 +327,12 @@ enum Op {
         kind: &'static str,
         payload: String,
     },
-    /// Text deltas, merged: one appended row, numbered by the last delta.
+    /// Text (or reasoning) deltas, merged: one appended row of `kind`
+    /// (`text_delta` or `thinking_delta`), numbered by the last delta.
     Text {
         turn_id: String,
         seq: u64,
+        kind: &'static str,
         text: String,
     },
     Truncated {
@@ -369,13 +371,19 @@ impl Op {
     fn absorb(&mut self, next: Op) -> Option<Op> {
         match (self, next) {
             (
-                Self::Text { turn_id, seq, text },
+                Self::Text {
+                    turn_id,
+                    seq,
+                    kind,
+                    text,
+                },
                 Self::Text {
                     turn_id: next_turn,
                     seq: next_seq,
+                    kind: next_kind,
                     text: more,
                 },
-            ) if *turn_id == next_turn => {
+            ) if *turn_id == next_turn && *kind == next_kind => {
                 text.push_str(&more);
                 *seq = next_seq;
                 None
@@ -1314,9 +1322,14 @@ fn apply(conn: &Connection, op: Op) -> rusqlite::Result<()> {
             kind,
             payload,
         } => insert_event(conn, &turn_id, seq, kind, &payload),
-        Op::Text { turn_id, seq, text } => {
+        Op::Text {
+            turn_id,
+            seq,
+            kind,
+            text,
+        } => {
             let payload = serde_json::json!({ "text": text }).to_string();
-            insert_event(conn, &turn_id, seq, "text_delta", &payload)
+            insert_event(conn, &turn_id, seq, kind, &payload)
         }
         Op::Truncated { turn_id } => conn
             .execute(
@@ -1612,7 +1625,7 @@ impl TurnTap {
 
     fn record(store: &HistoryStore, recording: &mut Recording, event: &AgentEvent) {
         let turn_id = recording.turn.turn_id.clone();
-        if event.kind == "text_delta" {
+        if matches!(event.kind, "text_delta" | "thinking_delta") {
             let delta = event
                 .payload
                 .get("text")
@@ -1625,6 +1638,7 @@ impl TurnTap {
                 let op = Op::Text {
                     turn_id,
                     seq: event.seq,
+                    kind: event.kind,
                     text: delta.to_owned(),
                 };
                 Self::queue(store, recording, op);

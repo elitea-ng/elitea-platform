@@ -13,6 +13,13 @@
 //! Text deltas go to the webview as they arrive; the adk agent receives the
 //! model's response once the stream ended (it runs in
 //! `StreamingMode::None`, so session history holds whole responses).
+//!
+//! Reasoning (#1228) streams to the webview as `thinking_delta` events, and
+//! a `thinking_end` closes each block; each model step's reasoning goes to
+//! the commit's `thinking_steps` ([`Recorder::thinking_step`]) and stays in
+//! the session as a `Part::Thinking`. It goes back to the provider only for
+//! a family that requires it ([`ReasoningReplay`]): never on the
+//! OpenAI-compatible chat route, whose schema has no reasoning items.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,7 +30,7 @@ use adk_core::{
 };
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{
-    BoundModel, HostError, HostErrorCode, ModelRequest, ModelTransport, ReasoningEffort,
+    BoundModel, HostError, HostErrorCode, ModelRequest, ModelTransport,
 };
 use elitea_llm_wire::headers::{EXECUTION_HEADER, PROJECT_HEADER, valid_execution_id};
 use elitea_llm_wire::openai::{self, DoneMatch, TypeCheck};
@@ -37,7 +44,9 @@ use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
 
 use super::api::Credentials;
+use super::catalogue::ReasoningReplay;
 use super::events::TurnEvents;
+use super::recorder::{self, Recorder};
 
 const TOOL_CALL_LIMITS: ToolCallLimits = ToolCallLimits {
     max_calls: 128,
@@ -58,6 +67,11 @@ pub struct GatewayTransport {
     /// A model bound to report nothing to the webview (no text deltas, no
     /// usage, no first-token time): the summary model of a compaction.
     pub quiet: bool,
+    /// Where each model step's reasoning is recorded for the commit (not
+    /// for a quiet model).
+    pub recorder: Option<Arc<Recorder>>,
+    /// Whether reasoning goes back to the provider in history.
+    pub replay: ReasoningReplay,
 }
 
 impl ModelTransport for GatewayTransport {
@@ -76,6 +90,12 @@ impl ModelTransport for GatewayTransport {
                 execution_id: self.execution_id.clone(),
                 events: self.events.clone(),
                 quiet: self.quiet,
+                recorder: if self.quiet {
+                    None
+                } else {
+                    self.recorder.clone()
+                },
+                replay: self.replay,
                 request,
                 completed: Mutex::new(None),
             }),
@@ -112,6 +132,8 @@ pub struct GatewayModel {
     execution_id: String,
     events: Arc<TurnEvents>,
     quiet: bool,
+    recorder: Option<Arc<Recorder>>,
+    replay: ReasoningReplay,
     request: ModelRequest,
     /// The last answer that ended the model's turn (no tool calls).
     completed: Mutex<Option<String>>,
@@ -132,7 +154,8 @@ impl Llm for GatewayModel {
         request: LlmRequest,
         _stream: bool,
     ) -> adk_core::Result<LlmResponseStream> {
-        let body = request_body(&self.request, &request)?;
+        let body = request_body(&self.request, &request, self.replay)?;
+        let started = recorder::now();
         let bearer = self
             .credentials
             .bearer()
@@ -183,6 +206,23 @@ impl Llm for GatewayModel {
             }
         }
         let (responses, completed) = reader.finish()?;
+        if let Some(recorder) = &self.recorder {
+            let thinking: String = responses
+                .iter()
+                .filter_map(|response| response.content.as_ref())
+                .flat_map(|content| &content.parts)
+                .filter_map(|part| match part {
+                    Part::Thinking { thinking, .. } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .collect();
+            recorder.thinking_step(
+                &thinking,
+                &self.request.model_name,
+                &started,
+                &recorder::now(),
+            );
+        }
         if let Some(text) = completed
             && let Ok(mut slot) = self.completed.lock()
         {
@@ -245,7 +285,11 @@ fn refusal_message(code: &str) -> &'static str {
 }
 
 /// The OpenAI-compatible body: the worker facade's shape.
-pub(super) fn request_body(model: &ModelRequest, request: &LlmRequest) -> adk_core::Result<Value> {
+pub(super) fn request_body(
+    model: &ModelRequest,
+    request: &LlmRequest,
+    replay: ReasoningReplay,
+) -> adk_core::Result<Value> {
     let invalid = || {
         model_error(
             "model_gateway.invalid_request",
@@ -277,7 +321,7 @@ pub(super) fn request_body(model: &ModelRequest, request: &LlmRequest) -> adk_co
         messages.push(json!({"role": "system", "content": system}));
     }
     for content in request.contents.iter().filter(|c| c.role != "system") {
-        append_message(content, &mut messages).ok_or_else(invalid)?;
+        append_message(content, &mut messages, replay).ok_or_else(invalid)?;
     }
     let mut body = Map::new();
     body.insert("model".into(), json!(model.model_name));
@@ -297,18 +341,17 @@ pub(super) fn request_body(model: &ModelRequest, request: &LlmRequest) -> adk_co
     if let Some(effort) = model.reasoning_effort {
         body.insert(
             "reasoning_effort".into(),
-            json!(match effort {
-                ReasoningEffort::Low => "low",
-                ReasoningEffort::Medium => "medium",
-                ReasoningEffort::High => "high",
-                ReasoningEffort::None => "none",
-            }),
+            json!(super::definition::effort_name(effort)),
         );
     }
     Ok(Value::Object(body))
 }
 
-fn append_message(content: &Content, messages: &mut Vec<Value>) -> Option<()> {
+fn append_message(
+    content: &Content,
+    messages: &mut Vec<Value>,
+    replay: ReasoningReplay,
+) -> Option<()> {
     match content.role.as_str() {
         "user" => {
             let text: Vec<&str> = content
@@ -337,6 +380,14 @@ fn append_message(content: &Content, messages: &mut Vec<Value>) -> Option<()> {
                         "type": "function",
                         "function": {"name": name, "arguments": serde_json::to_string(args).ok()?},
                     })),
+                    // Reasoning is not part of the chat schema: on this
+                    // route it is never sent back (`ReasoningReplay::Never`).
+                    // TODO(#1227 stage 2): the Anthropic route sends a signed
+                    // thinking block back as the provider requires; until it
+                    // exists there is nowhere to put it.
+                    Part::Thinking {
+                        signature: Some(_), ..
+                    } if replay == ReasoningReplay::SignedBlocks => {}
                     _ => {}
                 }
             }
@@ -402,6 +453,8 @@ struct StreamReader<'a> {
     splitter: SseSplitter,
     text: String,
     reasoning: String,
+    /// The chars of the reasoning block streaming now (`None`: none open).
+    thinking: Option<usize>,
     calls: ToolCallAssembler,
     finish: Option<openai::FinishReason>,
     usage: Option<UsageMetadata>,
@@ -415,6 +468,7 @@ impl<'a> StreamReader<'a> {
             splitter: SseSplitter::new(SseOptions::default()),
             text: String::new(),
             reasoning: String::new(),
+            thinking: None,
             calls: ToolCallAssembler::new(ToolCallProfile::Lenient, TOOL_CALL_LIMITS),
             finish: None,
             usage: None,
@@ -455,10 +509,16 @@ impl<'a> StreamReader<'a> {
                     .and_then(|v| i32::try_from(v).ok())
                     .unwrap_or_default()
             };
+            let reasoning = usage
+                .get("completion_tokens_details")
+                .and_then(|details| details.get("reasoning_tokens"))
+                .and_then(Value::as_i64)
+                .and_then(|v| i32::try_from(v).ok());
             self.usage = Some(UsageMetadata {
                 prompt_token_count: count("prompt_tokens"),
                 candidates_token_count: count("completion_tokens"),
                 total_token_count: count("total_tokens"),
+                thinking_token_count: reasoning,
                 ..UsageMetadata::default()
             });
         }
@@ -470,8 +530,24 @@ impl<'a> StreamReader<'a> {
             return Ok(());
         };
         if let Some(delta) = choice.get("delta") {
-            if let Ok(Some(reasoning)) = openai::reasoning_text(delta, TypeCheck::Lenient) {
+            if let Ok(Some(reasoning)) = openai::reasoning_text(delta, TypeCheck::Lenient)
+                && !reasoning.is_empty()
+            {
                 self.reasoning.push_str(reasoning);
+                *self.thinking.get_or_insert(0) += reasoning.chars().count();
+                if let Some(events) = self.events {
+                    events.thinking_delta(reasoning);
+                }
+            }
+            let answering = delta
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+                || delta
+                    .get("tool_calls")
+                    .is_some_and(|calls| !calls.is_null());
+            if answering {
+                self.end_thinking();
             }
             if let Some(text) = delta.get("content").and_then(Value::as_str) {
                 self.text.push_str(text);
@@ -492,6 +568,13 @@ impl<'a> StreamReader<'a> {
         Ok(())
     }
 
+    /// The reasoning block streaming now, if any, closed (`thinking_end`).
+    fn end_thinking(&mut self) {
+        if let (Some(chars), Some(events)) = (self.thinking.take(), self.events) {
+            events.thinking_end(chars);
+        }
+    }
+
     /// The adk responses and, for an answer without tool calls, its text.
     fn finish(mut self) -> adk_core::Result<(Vec<LlmResponse>, Option<String>)> {
         let mut tail = Vec::new();
@@ -507,6 +590,7 @@ impl<'a> StreamReader<'a> {
                 "the model stream ended before the answer was complete",
             ));
         };
+        self.end_thinking();
         let mut parts = Vec::new();
         if !self.reasoning.is_empty() {
             parts.push(Part::Thinking {
@@ -549,6 +633,7 @@ impl<'a> StreamReader<'a> {
                 count(usage.prompt_token_count),
                 count(usage.candidates_token_count),
                 count(usage.total_token_count),
+                usage.thinking_token_count.map(count).filter(|n| *n > 0),
             );
         }
         let completed = (!has_calls).then(|| self.text.clone());
@@ -606,7 +691,7 @@ mod tests {
             "a_tool".into(),
             json!({"name": "a_tool", "parameters": {"type": "object"}}),
         );
-        let body = request_body(&model_request(), &request).unwrap();
+        let body = request_body(&model_request(), &request, ReasoningReplay::Never).unwrap();
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(
             body["messages"][0]["content"],
@@ -665,6 +750,39 @@ mod tests {
             usage[0].payload,
             json!({"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7})
         );
+    }
+
+    #[test]
+    fn reasoning_in_history_is_sent_back_on_no_route_yet() {
+        let request = LlmRequest {
+            model: "gpt-x".into(),
+            contents: vec![
+                Content::new("user").with_text("hi"),
+                Content {
+                    role: "model".into(),
+                    parts: vec![
+                        Part::Thinking {
+                            thinking: "secret steps".into(),
+                            signature: Some("sig".into()),
+                        },
+                        Part::Text {
+                            text: "hello".into(),
+                        },
+                    ],
+                },
+            ],
+            config: None,
+            tools: HashMap::new(),
+            previous_response_id: None,
+        };
+        for replay in [ReasoningReplay::Never, ReasoningReplay::SignedBlocks] {
+            let body = request_body(&model_request(), &request, replay).unwrap();
+            assert_eq!(
+                body["messages"][2],
+                json!({"role": "assistant", "content": "hello"})
+            );
+            assert!(!body.to_string().contains("secret steps"));
+        }
     }
 
     #[test]

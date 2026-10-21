@@ -6158,8 +6158,13 @@ fn chat_models() -> Value {
 /// [`memory_platform`] with [`chat_models`] as its catalogue, and a gateway
 /// that refuses `gpt-blocked` as a model the project may not use.
 fn choosing_platform(details: Value) -> impl Fn(&Req) -> Res {
+    choosing_platform_with(details, Box::new(|_: &Value| say("ok")))
+}
+
+/// [`choosing_platform`] whose `/llm` answers with `script`.
+fn choosing_platform_with(details: Value, script: Script) -> impl Fn(&Req) -> Res {
     let convo = Arc::new(Mutex::new(Convo::default()));
-    let inner = memory_platform(convo, Box::new(|_: &Value| say("ok")));
+    let inner = memory_platform(convo, script);
     move |req: &Req| {
         if req.path.starts_with("/api/v2/configurations/models/1?") {
             return Res::json(200, &chat_models());
@@ -6347,4 +6352,145 @@ async fn an_override_the_gateway_refuses_fails_the_turn_cleanly() {
     let commits = local_commits(&h.server);
     assert_eq!(commits[0]["assistant_message"]["is_error"], true);
     assert_eq!(commits[0]["assistant_message"]["model_name"], "gpt-blocked");
+}
+
+/// A streamed answer that reasons (`reasoning`, in two chunks) before it
+/// says `text` or, with `call`, calls `write_file`.
+fn reasoned(reasoning: &str, text: &str, call: bool) -> Res {
+    let (first, second) = reasoning.split_at(reasoning.len() / 2);
+    let mut chunks = vec![
+        json!({"choices": [{"delta": {"reasoning_content": first}}]}),
+        json!({"choices": [{"delta": {"reasoning_content": second}}]}),
+    ];
+    if call {
+        chunks.push(
+            json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-think",
+            "type": "function", "function": {"name": "write_file",
+            "arguments": json!({"path": "a.txt", "content": "a"}).to_string()}}]}}]}),
+        );
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}));
+    } else {
+        chunks.push(json!({"choices": [{"delta": {"content": text}}]}));
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}));
+    }
+    chunks.push(
+        json!({"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 7,
+        "total_tokens": 16, "completion_tokens_details": {"reasoning_tokens": 5}}}),
+    );
+    sse(&chunks)
+}
+
+#[tokio::test]
+async fn thinking_delta_events_and_thinking_steps_commit() {
+    let script: Script = Box::new(|body: &Value| {
+        if last_message(body)["role"] == "tool" {
+            reasoned("The file is written; say so.", "Wrote a.txt.", false)
+        } else {
+            reasoned("I should write a.txt first.", "", true)
+        }
+    });
+    let server = serve(choosing_platform_with(agent_details(), script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn_with(&h, "write a.txt", choose("gpt-other", Some("medium"))).await;
+    commits_settled(&h.host).await;
+    let events = h.emitter.all();
+    // Reasoning streams as it comes, and each block closes before the
+    // step's answer or calls.
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|e| e.kind)
+        .filter(|kind| {
+            matches!(
+                *kind,
+                "thinking_delta" | "thinking_end" | "text_delta" | "tool_call"
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "thinking_delta",
+            "thinking_delta",
+            "thinking_end",
+            "tool_call",
+            "thinking_delta",
+            "thinking_delta",
+            "thinking_end",
+            "text_delta",
+        ]
+    );
+    let thought: String = of_kind(&events, "thinking_delta")
+        .iter()
+        .map(|delta| delta["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        thought,
+        "I should write a.txt first.The file is written; say so."
+    );
+    assert_eq!(of_kind(&events, "thinking_end")[0]["chars"], 27);
+    // Reasoning tokens ride on usage.
+    assert_eq!(of_kind(&events, "usage")[0]["reasoning_tokens"], 5);
+    // The commit carries one thinking step per model step, in order, in the
+    // runtime's shape, with the model it ran on.
+    let commit = &local_commits(&h.server)[0];
+    let steps = commit["thinking_steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["thinking"], "I should write a.txt first.");
+    assert_eq!(steps[1]["thinking"], "The file is written; say so.");
+    for step in steps {
+        assert_eq!(step["type"], "ChatGeneration");
+        assert_eq!(
+            step["message"]["response_metadata"]["model_name"],
+            "gpt-other"
+        );
+        assert!(step["timestamp_start"].is_string() && step["timestamp_finish"].is_string());
+        assert!(step["tool_run_id"].is_string());
+    }
+    // The thread's history keeps the reasoning, merged like text, for the
+    // transcript's replay.
+    let turns = h.host.thread_history(&h.workspace_id, "42").await.unwrap();
+    let stored: String = turns[0]
+        .events
+        .iter()
+        .filter(|event| event.kind == "thinking_delta")
+        .map(|event| event.payload["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(stored, thought);
+    assert!(
+        turns[0]
+            .events
+            .iter()
+            .any(|event| event.kind == "thinking_end")
+    );
+}
+
+#[tokio::test]
+async fn reasoning_not_replayed_on_openai_chat() {
+    let script: Script = Box::new(|_: &Value| reasoned("A private chain of thought.", "ok", false));
+    let server = serve(choosing_platform_with(agent_details(), script)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    run_turn(&h, "first").await;
+    run_turn(&h, "second").await;
+    let bodies = llm_bodies(&h.server);
+    assert_eq!(bodies.len(), 2);
+    let second = bodies[1].to_string();
+    assert!(second.contains("first"), "the history is replayed");
+    assert!(
+        !second.contains("private chain of thought"),
+        "reasoning never goes back on the chat route: {second}"
+    );
+    // The session keeps it (its event log, for a provider that needs it).
+    let conn = rusqlite::Connection::open_with_flags(
+        h.app.path().join(crate::sessions::FILE_NAME),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE event LIKE '%private chain of thought%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(kept >= 1);
 }

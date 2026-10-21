@@ -39,6 +39,16 @@ const MAX_TOOL_OUTPUT: usize = 64 * 1024;
 /// counted as the keys of `tool_calls` by `CommitLocalTurn` in
 /// `internal/infra/db/repos/local_turns.go`). Keep the two equal.
 pub const MAX_TOOL_CALLS: usize = 512;
+/// The most thinking steps one commit may carry (`localturn.MaxThinkingSteps`
+/// in `services/elitea-main/internal/application/localturn/localturn.go`).
+pub const MAX_THINKING_STEPS: usize = 512;
+/// One model step's reasoning is committed cut at this many bytes (#1228).
+pub const MAX_THINKING_BYTES: usize = 32 * 1024;
+/// All of a turn's committed reasoning, in bytes: the commit body is at most
+/// 8 MiB, and the answer, its tool steps and the report need the rest. Later
+/// steps past it are not committed (they were shown, and the local thread
+/// history keeps them).
+pub const MAX_THINKING_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 /// The `done` status note of a turn stopped at [`MAX_TOOL_CALLS`].
 pub const TOOL_CALL_LIMIT_REACHED: &str = "tool_call_limit_reached";
 
@@ -98,6 +108,10 @@ struct State {
     /// step): the order the commit lists the steps in.
     planned: Vec<String>,
     hitl: Vec<Value>,
+    /// The model steps' reasoning, in call order (the commit's
+    /// `thinking_steps`), and the bytes of it kept.
+    thinking: Vec<Value>,
+    thinking_bytes: usize,
     commands: Vec<Value>,
     paths: Vec<String>,
     enforcement: Option<String>,
@@ -118,7 +132,7 @@ pub struct Recorder {
     state: Mutex<State>,
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
@@ -206,6 +220,42 @@ impl Recorder {
                 }
             }
         });
+    }
+
+    /// One model step's reasoning (#1228), as the runtime's
+    /// `thinking_steps` entry the cloud worker writes (`type`
+    /// `ChatGeneration`, `thinking`, the step's times, and its model in
+    /// `message.response_metadata.model_name`), bounded by
+    /// [`MAX_THINKING_BYTES`], [`MAX_THINKING_STEPS`] and
+    /// [`MAX_THINKING_TOTAL_BYTES`].
+    pub fn thinking_step(&self, thinking: &str, model_name: &str, started: &str, finished: &str) {
+        if thinking.is_empty() {
+            return;
+        }
+        let thinking = truncate(thinking, MAX_THINKING_BYTES);
+        self.with(|state| {
+            if state.thinking.len() >= MAX_THINKING_STEPS
+                || state.thinking_bytes + thinking.len() > MAX_THINKING_TOTAL_BYTES
+            {
+                return;
+            }
+            state.thinking_bytes += thinking.len();
+            state.thinking.push(json!({
+                "tool_run_id": uuid::Uuid::new_v4().to_string(),
+                "type": "ChatGeneration",
+                "thinking": thinking,
+                "timestamp_start": started,
+                "timestamp_finish": finished,
+                "message": {"response_metadata": {"model_name": model_name}},
+            }));
+        });
+    }
+
+    /// The commit's `thinking_steps`.
+    #[must_use]
+    pub fn thinking_steps(&self) -> Vec<Value> {
+        self.with(|state| state.thinking.clone())
+            .unwrap_or_default()
     }
 
     pub fn hitl_exchange(&self, exchange: Value) {

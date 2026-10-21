@@ -351,6 +351,20 @@ on the agent's model). The model a turn ran on is on its `status`
 `running` event (`model`) and in the commit (`assistant_message.model_name`,
 client contract 1.17).
 
+**Reasoning** (issue 1228). A model's reasoning streams as `thinking_delta`
+events (a `thinking_end` closes each block) and each model step's reasoning
+is committed as one `thinking_steps` entry in the runtime's shape (`type:
+"ChatGeneration"`, `thinking` cut at 32 KiB, `timestamp_start`,
+`timestamp_finish`, `message.response_metadata.model_name`; at most 512
+steps and 2 MiB in all, the rest is not committed), so the web app shows it
+on the answer (`listMessageTraces`). The session keeps it as the step's
+`Part::Thinking`; it is sent back to the provider only for a family that
+requires it (`openai_compatible: false` in the catalogue: signed blocks on
+the Anthropic route, which does not exist yet, issue 1227), never on the
+OpenAI-compatible chat route. Reasoning text is stored only in the server
+transcript, the thread history and the session (the same owner-only files)
+and never logged.
+
 **Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
 MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved
 definition gives it a `toolkit_ref`; issue 1231) are the same kind of tool to
@@ -572,8 +586,9 @@ type StoredTurn = {
 
 The host records every event of a started turn as it emits it, so the
 history survives a webview reload or crash; replaying a turn is folding its
-`events` exactly as the live stream (consecutive `text_delta` events are
-stored as appended chunks, each numbered by the last delta it holds; folding
+`events` exactly as the live stream (consecutive `text_delta` events, and
+consecutive `thinking_delta` events, are stored as appended chunks of their
+kind, each numbered by the last delta it holds; folding
 concatenates them as it does live deltas). Recording never blocks the
 stream: events go to a writer thread that commits them in batches (on every
 non-text event, every 500 ms or 64 KiB, before a read, at a turn's end and
@@ -1306,9 +1321,11 @@ order. Kinds and payloads:
 | --- | --- |
 | `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], model?: TurnModel, continued?: number, host_prompt?: string, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the AGENTS.md paths the turn applies, in order; `model` (on the first `running`) is the model the turn runs on, `{name, reasoning_effort?, chosen, pinned}` (`chosen`: the person's choice over the agent's model; `pinned`: the agent pins its model, so no choice is offered); `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
+| `thinking_delta` | `{text}` — the model's reasoning as it streams (the gateway's `reasoning_content` / `reasoning` deltas), sent next to `text_delta` as it arrives; the transcript folds it into a collapsed "Thinking" block of the step (issue 1228). Never logged |
+| `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
-| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, context?: ContextMeter}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
+| `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number, reasoning_tokens?: number, context?: ContextMeter}` — `reasoning_tokens` (of `completion_tokens`) when the gateway names them (`completion_tokens_details.reasoning_tokens`); one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent; sum the calls for a turn's total (a step retried after a context overflow, below, sends the dropped call's usage too: both calls were billed). `context` (below) is that call's request occupancy as the host measured it before sending: the composer's context meter. |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the meter says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `plan_updated` | `{plan: {title, explanation?, status: "in_progress" \| "completed", steps: [{n, step, status: "pending" \| "in_progress" \| "completed" \| "cancelled"}]} \| null}` — the agent's checklist changed (the runtime planner's `update_plan`, `start_step`, `complete_step`, `delete_plan`, or the host copying an accepted plan in): the whole plan, `null` once deleted. The latest one is the plan; the thread history stores it like every event, so the todo pane replays after a restart. The plan itself lives in the session (`elitea.plan.v1:` state), so the next turn's planner reads it back |
@@ -1320,7 +1337,7 @@ order. Kinds and payloads:
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`)* →
+`running` → (`thinking_delta`, `thinking_end`, `text_delta`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

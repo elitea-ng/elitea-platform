@@ -2061,6 +2061,7 @@ impl AgentHost {
             user_message: json!({ "content": request.prompt }),
             assistant_message: assistant,
             tool_calls: recorder.tool_calls(),
+            thinking_steps: recorder.thinking_steps(),
             hitl_exchanges: recorder.hitl_exchanges(),
             local_work: recorder.work_report(sandbox_mode.as_str()),
             context_summary: turn_context.take_summary(),
@@ -2328,6 +2329,7 @@ impl AgentHost {
             Arc::new(context::ProviderBudget {
                 model: model_request,
                 budget,
+                replay: transport.replay,
             }),
             summarizer,
             Arc::new(host),
@@ -2380,7 +2382,7 @@ impl AgentHost {
         } else {
             &admitted.version_details
         };
-        let (index, mut facts, limits) = tokio::join!(
+        let (index, mut facts, (limits, replay)) = tokio::join!(
             async {
                 match &self.deps.index {
                     Some(registry) => registry.for_turn(&request.workspace_id).await,
@@ -2395,13 +2397,26 @@ impl AgentHost {
                 local_offered,
                 mentioned,
             ),
-            context::model_limits(
-                api,
-                &self.caches,
-                request.project_id,
-                &admitted.model.model_name,
-                frozen_from,
-            ),
+            // Then the model's family (whether reasoning goes back to the
+            // provider), from the catalogue the limits just read.
+            async {
+                let limits = context::model_limits(
+                    api,
+                    &self.caches,
+                    request.project_id,
+                    &admitted.model.model_name,
+                    frozen_from,
+                )
+                .await;
+                let replay = catalogue::replay(
+                    api,
+                    &self.caches.catalogues,
+                    request.project_id,
+                    &admitted.model.model_name,
+                )
+                .await;
+                (limits, replay)
+            },
         );
         // The runtime's planner, offered to every workspace turn (a coding
         // agent needs its checklist), plan mode included: it changes only
@@ -2421,6 +2436,8 @@ impl AgentHost {
             execution_id: started.execution_id.clone(),
             events: events.clone(),
             quiet: false,
+            recorder: Some(recorder.clone()),
+            replay,
         };
         let instruction = system_instruction(
             &admitted.instructions,
@@ -3475,6 +3492,9 @@ struct CommitBody {
     user_message: Value,
     assistant_message: Value,
     tool_calls: ToolCalls,
+    /// Each model step's reasoning (#1228), bounded (`recorder`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    thinking_steps: Vec<Value>,
     hitl_exchanges: Vec<Value>,
     local_work: Value,
     /// The latest `context_summary` v1 record the turn's requests carried
