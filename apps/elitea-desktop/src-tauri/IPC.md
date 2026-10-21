@@ -1288,6 +1288,8 @@ result the model reads stays within a token budget (estimated as
 `ceil(bytes / 4)`): `read_file` and `read_output` 12k (whole lines,
 `next_offset`; a line longer than a page continues at `next_column`),
 `run_command` 6k for stdout and stderr together (head and tail),
+`run_tests` 6k (counts, at most 20 failures or compiler errors of at most
+2 KiB each, the whole log always spilled),
 `search_files` and `find_files` 8k (`truncated`), `git_diff` and
 `git_log` 8k, `read_document` 12k. When a command's, a diff's, a log's or
 a document's output is cut, the whole of it is kept in a file under the
@@ -1419,7 +1421,12 @@ the turn.
 order: the messages the commit writes. `approval_request.can_remember` is true when
 `allow_always` is remembered for this workspace (a simple command or a
 file change); otherwise `allow_always` answers once and the UI does not
-offer it. It is false for a `run_command` that would run unconfined,
+offer it. For `run_tests` the remembered choice is the runner kind
+(`cargo`, `go`, `vitest`, …) for this workspace: a later run of that
+runner, whatever its filter, within the sandbox and network it was
+approved with, is not asked again (one that is destructive with the
+network off still is); it is asked first when it sets `network: true`.
+It is false for a `run_command` that would run unconfined,
 decided per command from the sandbox chosen for it: none (a host that
 allows unenforced sandboxes), Landlock alone (Linux without bubblewrap,
 under partial enforcement), or a bubblewrap walk cut at its cap. Such a

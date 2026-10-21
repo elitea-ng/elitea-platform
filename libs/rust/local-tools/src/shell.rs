@@ -339,6 +339,15 @@ fn environment_from(config: &ShellConfig, passed: Vec<(String, String)>) -> Vec<
         ]
         .map(|(name, value)| (name.to_owned(), value)),
     );
+    // Go's build cache under the home is not writable in the sandbox, and
+    // go then misreports the standard library as missing: the session's
+    // temporary directory holds it unless the host passes its own.
+    if !out.iter().any(|(name, _)| name == "GOCACHE") {
+        out.push((
+            "GOCACHE".to_owned(),
+            config.temp_dir.join("go-build").display().to_string(),
+        ));
+    }
     // A container host's workspace root that git must trust although
     // another uid owns it (empty on the desktop).
     let trust = config.sandbox.git_trust_env();

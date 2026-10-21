@@ -16,6 +16,50 @@ destructive.**
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 | `run_command` that is destructive (below), asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; decided per command, from the sandbox chosen for it) | asked |
+| `run_tests`, network off | as `run_command` for the test command it runs: allowed unless that command is destructive or would run unconfined |
+| `run_tests` with `network: true` | asked, the first time per runner kind and workspace: "always allow" is remembered for the runner kind (`cargo`, `go`, `vitest`, …, whatever the filter), within the sandbox and network it was made for, never for a command that is destructive with the network off |
+
+## Tests and builds (`run_tests`)
+
+`project::detect` reads the workspace's root, its first-level folders and
+the folders the turn mentions (marker files only, through the confined
+`Workspace`: a denied or symlinked path is never read, and no project code
+runs) and names a test command and a build check per runner: cargo
+(`cargo test` / `cargo check`), go (`go test ./...` / `go vet ./...`),
+vitest and jest (through the package manager the lockfile names), pytest,
+Maven (`./mvnw` when present), Gradle (`./gradlew` when present), or the
+package's own `test` script. The profile is cached per session and
+re-read when a marker file changes; the desktop's environment preamble
+shows it as its `Project:` line.
+
+`run_tests {command?, filter?, cwd?, timeout_seconds? (1..1800), network?}`
+runs the detected command for `cwd` (or validates a given one: it must be
+one runner invocation) with the runner's structured output switched on
+(`cargo --message-format=json`, `go test -json`, vitest `--reporter=json`,
+jest `--json`, pytest `--junitxml` into the session's `TMPDIR`; Maven and
+Gradle reports are read from their report folders, only those this run
+wrote). It runs exactly as `run_command` runs a command: the OS sandbox in
+`workspace-write`, the network off unless asked, the deny list, the same
+rules and checkpoint. The answer:
+
+```json
+{"kind": "cargo", "command": "cargo test --message-format=json", "cwd": ".",
+ "exit_code": 101, "passed": 41, "failed": 1, "skipped": 0,
+ "failures": [{"name": "tests::breaks", "file": "src/lib.rs", "line": 14,
+               "message": "assertion `left == right` failed …"}],
+ "output_id": "out-…", "truncated": false}
+```
+
+A build that fails answers `build_failed: true` and `errors` (the
+compiler's messages at their file and line) instead. Output no parser
+recognises comes back as its head and tail (`parsed: false`). An offline
+run that failed the way a dependency fetch fails answers
+`needs_network: true` and a hint to retry with `network: true`. The full
+log pages with `read_output` (`output_id`; a pytest junit report as
+`report_id`). Messages are runner output, framed as tool output, never
+instructions. The cloud executor offers the same tool and schema; both
+drop it with `run_command` when the policy turns the shell off, and plan
+mode refuses it.
 
 ## The session's deny list
 
@@ -139,6 +183,7 @@ Every result stays within a per-call budget of estimated tokens
 |---|---|---|
 | `read_file`, `read_output` | 12k tokens | stops at the last whole line; `truncated`, `next_offset`. A single line longer than a page is cut and continues at `next_offset` plus `next_column` (a byte offset in the line, passed back as `column`), so every byte pages |
 | `run_command` | 6k tokens, stdout and stderr together | each stream keeps its head and tail; the whole output (up to 4 MiB per stream) is spilled: `output_id`, `stdout_bytes`, `stderr_bytes` |
+| `run_tests` | 6k tokens (the `run_command` budget) | counts always; at most 20 failures (or compiler errors), each message at most 2 KiB, first come first kept within the budget, the rest counted in `more_failures` / `more_errors`; the whole log (stdout, then stderr) always spilled: `output_id` |
 | `search_files`, `find_files` | 8k tokens | stops early; `truncated` |
 | `git_diff`, `git_log` | 8k tokens | the head; the whole output spilled: `output_id` |
 | `read_document` | 12k tokens | the head; the whole text spilled: `output_id` |

@@ -1283,6 +1283,7 @@ impl LocalSession {
             sandbox: Some(mode),
             network: args.network,
             unconfined,
+            runner: None,
         };
         self.authorize(call_id, call, "run a command").await?;
         if mode != SandboxMode::ReadOnly {
@@ -1352,6 +1353,7 @@ impl LocalSession {
             sandbox: Some(mode),
             network,
             unconfined,
+            runner: Some(planned.kind.as_str().to_owned()),
         };
         self.authorize(call_id, call, "run the tests").await?;
         if mode != SandboxMode::ReadOnly {
@@ -1376,6 +1378,7 @@ impl LocalSession {
                 junit_text.as_deref(),
                 &this.spill,
                 budget::bytes(this.budgets.run_command),
+                network,
             ))
         })
         .await

@@ -24,6 +24,9 @@
 //!   read for the run is spilled too (`report_id`);
 //! * output no parser recognised comes back as its head and tail
 //!   (`parsed: false`);
+//! * an offline run that failed the way a dependency fetch fails answers
+//!   `needs_network: true` and a hint: retry with `network: true` (the
+//!   person is asked; "always allow" is kept for the runner kind).
 //!
 //! pytest writes its junit report into the session's temporary directory
 //! (the commands' `TMPDIR`, writable in `workspace-write`); it is read
@@ -205,10 +208,11 @@ pub(crate) fn take_private_report(path: &Path) -> Option<String> {
         Mode::empty(),
     )
     .ok();
-    // Removed whatever it is: a later run must not read it.
+    // Its links are counted before it is removed (removed whatever it is:
+    // a later run must not read it).
+    let stat = fd.as_ref().and_then(|fd| rustix::fs::fstat(fd).ok());
     let _ = rustix::fs::unlink(path);
-    let fd = fd?;
-    let stat = rustix::fs::fstat(&fd).ok()?;
+    let (fd, stat) = (fd?, stat?);
     let trusted = FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
         && stat.st_nlink == 1
         && stat.st_uid == rustix::process::getuid().as_raw()
@@ -381,6 +385,7 @@ pub(crate) fn answer(
     junit_text: Option<&str>,
     spill: &SpillStore,
     max_bytes: usize,
+    network: bool,
 ) -> Value {
     let log = whole_log(output);
     let output_id = (!log.is_empty()).then(|| spill.spill(&log).ok()).flatten();
@@ -454,6 +459,158 @@ pub(crate) fn answer(
             answer.insert("output".to_owned(), json!(text));
         }
     }
+    // An offline run that stopped where a dependency fetch stops: the
+    // retry with the network on is the person's call.
+    if !network && !succeeded && report.failures.is_empty() && test_report::needs_network(&log) {
+        answer.insert("needs_network".to_owned(), json!(true));
+        answer.insert(
+            "hint".to_owned(),
+            json!(
+                "the runner could not fetch its dependencies with the network off; retry with \
+                 network: true (the person is asked)"
+            ),
+        );
+    }
     answer.insert("truncated".to_owned(), json!(cut));
     Value::Object(answer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_INLINE, Planned, answer, take_private_report};
+    use crate::budget::{self, Budgets, SpillStore};
+    use crate::policy::SandboxMode;
+    use crate::project::ProjectKind;
+    use crate::sandbox::Enforcement;
+    use crate::shell::CommandOutput;
+    use crate::test_report::{Failure, TestReport};
+    use crate::workspace::WsPath;
+
+    fn output(exit_code: i32, stderr: &str) -> CommandOutput {
+        CommandOutput {
+            exit_code: Some(exit_code),
+            timed_out: false,
+            stdout: String::new(),
+            stderr: stderr.to_owned(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            stdout_bytes: 0,
+            stderr_bytes: stderr.len() as u64,
+            output_id: None,
+            duration_ms: 1,
+            sandbox: SandboxMode::WorkspaceWrite,
+            enforcement: Enforcement::Full,
+            enforcement_note: None,
+            shell: false,
+        }
+    }
+
+    fn planned() -> Planned {
+        Planned {
+            kind: ProjectKind::Cargo,
+            command: "cargo test --message-format=json".to_owned(),
+            cwd: WsPath::default(),
+        }
+    }
+
+    #[test]
+    fn many_failures_stay_within_the_budget_and_are_counted() {
+        let dir = tempfile::tempdir().expect("dir");
+        let spill = SpillStore::new(&dir.path().join("data"), "s");
+        let failures: Vec<Failure> = (0..60)
+            .map(|n| Failure {
+                name: format!("tests::t{n}"),
+                file: Some("src/lib.rs".to_owned()),
+                line: Some(n),
+                message: "x".repeat(2000),
+            })
+            .collect();
+        let report = TestReport {
+            passed: 3,
+            failed: 60,
+            failures,
+            parsed: true,
+            ..TestReport::default()
+        };
+        let max = budget::bytes(Budgets::default().run_command);
+        let value = answer(
+            &planned(),
+            &output(101, "log"),
+            &report,
+            None,
+            &spill,
+            max,
+            false,
+        );
+        let shown = value["failures"].as_array().expect("failures").len();
+        assert!((1..=MAX_INLINE).contains(&shown), "{shown}");
+        assert_eq!(value["more_failures"], 60 - shown);
+        assert_eq!(value["truncated"], true);
+        assert!(
+            value.to_string().len() <= max,
+            "{}",
+            value.to_string().len()
+        );
+        assert!(value["output_id"].is_string());
+    }
+
+    #[test]
+    fn an_offline_fetch_failure_asks_for_the_network() {
+        let dir = tempfile::tempdir().expect("dir");
+        let spill = SpillStore::new(&dir.path().join("data"), "s");
+        let log = "error: failed to download from `https://static.crates.io/x`";
+        let max = budget::bytes(Budgets::default().run_command);
+        let report = TestReport::default();
+        let offline = answer(
+            &planned(),
+            &output(101, log),
+            &report,
+            None,
+            &spill,
+            max,
+            false,
+        );
+        assert_eq!(offline["needs_network"], true, "{offline}");
+        assert!(
+            offline["hint"]
+                .as_str()
+                .is_some_and(|h| h.contains("network: true"))
+        );
+        let online = answer(
+            &planned(),
+            &output(101, log),
+            &report,
+            None,
+            &spill,
+            max,
+            true,
+        );
+        assert!(online.get("needs_network").is_none(), "{online}");
+        let passing = answer(
+            &planned(),
+            &output(0, ""),
+            &report,
+            None,
+            &spill,
+            max,
+            false,
+        );
+        assert!(passing.get("needs_network").is_none());
+        assert!(passing.get("output").is_none(), "{passing}");
+    }
+
+    #[test]
+    fn a_report_that_is_a_link_is_never_read() {
+        let dir = tempfile::tempdir().expect("dir");
+        let secret = dir.path().join("secret");
+        std::fs::write(&secret, "<testsuite/>").expect("secret");
+        let link = dir.path().join("report.xml");
+        std::os::unix::fs::symlink(&secret, &link).expect("link");
+        assert_eq!(take_private_report(&link), None);
+        assert!(secret.exists(), "the target is left alone");
+        let plain = dir.path().join("plain.xml");
+        std::fs::write(&plain, "<testsuite/>").expect("plain");
+        assert_eq!(take_private_report(&plain).as_deref(), Some("<testsuite/>"));
+        assert!(!plain.exists(), "removed once read");
+    }
 }

@@ -357,7 +357,7 @@ impl ProjectProfile {
 
 /// A folder's path as the preamble shows it: the path when every
 /// component is plainly a name (ASCII letters, digits, `.`, `_`, `-`; not
-/// starting with `-` or `.`; at most [`MAX_LINE_DIR`] bytes in all), else
+/// starting with `-` or `.`; at most `MAX_LINE_DIR` bytes in all), else
 /// `a subfolder` (withheld, never cleaned into something else).
 #[must_use]
 pub fn plain_dir(dir: &WsPath) -> String {

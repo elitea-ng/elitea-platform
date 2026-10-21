@@ -29,7 +29,11 @@
 //!    its `match` example. A file choice is the exact paths approved, or a
 //!    glob the person confirmed (never the whole tool), kept in the
 //!    [`ChoiceStore`]; so are command choices without a sink, and those an
-//!    older host stored (the desktop migrates them into rules once).
+//!    older host stored (the desktop migrates them into rules once). A
+//!    `run_tests` choice is its runner kind (`cargo`, `go`, …), within the
+//!    sandbox and network it was made for, in the choice store too: it
+//!    covers that runner's test runs in the workspace whatever their
+//!    filter, and never one that is destructive with the network off.
 //! 5. **Default** (the owner's decision: "do not ask for approval if it's
 //!    not very destructive"):
 //!
@@ -40,6 +44,7 @@
 //! | `git_commit` | allowed (denied paths are never committed: left out of the given paths; a commit of what is staged is refused while the index holds one) |
 //! | `run_command` in `read-only` or `workspace-write`, no network, not destructive (see [`crate::classify`]) | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
 //! | `run_command` that is destructive, asks for the network or `full-access`, or would run unconfined: its sandbox cannot hide what it denies (no sandbox on a host that allows unenforced ones, Landlock alone, a bubblewrap walk cut at its cap; [`ToolCall::unconfined`], decided per command, from the sandbox chosen for it) | asked |
+//! | `run_tests` | as `run_command` (the test command it runs): no network, allowed; `network: true` asked, until "always allow" for that runner kind in this workspace |
 //!
 //! Layers 1 and 2 only tighten these defaults. Layers 3 and 4 can also
 //! loosen them: a workspace allow or a remembered choice allows a call the
@@ -153,6 +158,11 @@ pub struct ToolCall {
     /// that allows unenforced sandboxes.
     #[serde(default)]
     pub unconfined: bool,
+    /// For [`ToolKind::RunTests`]: the runner kind the command is
+    /// (`cargo`, `go`, `vitest`, …: [`crate::project::ProjectKind`]); an
+    /// "always allow" is remembered for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
 }
 
 impl ToolCall {
@@ -165,6 +175,7 @@ impl ToolCall {
             sandbox: None,
             network: false,
             unconfined: false,
+            runner: None,
         }
     }
 
@@ -327,6 +338,10 @@ pub struct RememberedChoice {
     pub sandbox: Option<SandboxMode>,
     #[serde(default)]
     pub network: bool,
+    /// The runner kind, for [`ToolKind::RunTests`]: the choice covers that
+    /// runner's test commands in this workspace, whatever their arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner: Option<String>,
 }
 
 /// Where remembered choices live (the host's data directory).
@@ -943,6 +958,9 @@ impl RulesEngine {
     }
 
     fn remembered(&self, call: &ToolCall, shape: Option<&CommandShape>) -> bool {
+        if call.tool == ToolKind::RunTests {
+            return self.remembered_runner(call);
+        }
         let argv = match shape {
             Some(CommandShape::Simple(argv)) => Some(argv),
             Some(CommandShape::Compound { .. }) => return false,
@@ -959,6 +977,29 @@ impl RulesEngine {
                     (None, None) => Self::covers_paths(choice, &call.paths),
                     _ => false,
                 }
+        })
+    }
+
+    /// A `run_tests` choice: the same runner kind, within the choice's
+    /// sandbox and network bounds, and never a command that would be
+    /// destructive with the network off (the choice vouches for the
+    /// network, not for what the command does).
+    fn remembered_runner(&self, call: &ToolCall) -> bool {
+        let Some(runner) = call.runner.as_deref() else {
+            return false;
+        };
+        let offline = ToolCall {
+            network: false,
+            ..call.clone()
+        };
+        if matches!(self.command_risk(&offline), Risk::Destructive(_)) {
+            return false;
+        }
+        self.choices.list().iter().any(|choice| {
+            choice.tool == ToolKind::RunTests
+                && choice.runner.as_deref() == Some(runner)
+                && call.sandbox_mode() <= choice.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
+                && (!call.network || choice.network)
         })
     }
 
@@ -984,7 +1025,10 @@ impl RulesEngine {
     ///   the program resolved to its file, for the call's sandbox mode and
     ///   network setting;
     /// * a file tool: a glob the person confirmed, which must match every
-    ///   path of the call (`None`: exactly the call's paths).
+    ///   path of the call (`None`: exactly the call's paths);
+    /// * `run_tests`: its runner kind ([`ToolCall::runner`]), for the
+    ///   call's sandbox mode and network setting, in the choice store
+    ///   (`scope` is not used).
     ///
     /// Compound commands and commits are never remembered, and neither is
     /// a command that would run unconfined: it is asked every time
@@ -997,6 +1041,23 @@ impl RulesEngine {
     pub fn remember(&self, call: &ToolCall, scope: Option<&str>) -> ToolResult<()> {
         if let Some(refusal) = self.never_remembered(call) {
             return Err(refusal);
+        }
+        if call.tool == ToolKind::RunTests {
+            // The runner kind, never a prefix rule: the person approved
+            // "cargo's tests here", whatever filter comes next.
+            let runner = call
+                .runner
+                .clone()
+                .ok_or_else(|| ToolError::invalid("a test run names its runner"))?;
+            return self.choices.remember(RememberedChoice {
+                tool: ToolKind::RunTests,
+                command: None,
+                paths: None,
+                glob: None,
+                sandbox: call.sandbox,
+                network: call.network,
+                runner: Some(runner),
+            });
         }
         let command = match call.command.as_deref().map(analyse) {
             None => None,
@@ -1064,6 +1125,7 @@ impl RulesEngine {
             glob,
             sandbox: call.sandbox,
             network: call.network,
+            runner: None,
         })
     }
 }
@@ -1133,6 +1195,9 @@ impl RulesEngine {
                 ErrorCode::Denied,
                 "commits are asked every time",
             ));
+        }
+        if call.tool == ToolKind::RunTests && call.runner.is_none() {
+            return Some(ToolError::invalid("a test run names its runner"));
         }
         if self.runs_unconfined(call) {
             return Some(ToolError::new(
@@ -2108,6 +2173,89 @@ mod tests {
         );
     }
 
+    /// `run_tests` (#1224): offline it is allowed; with the network it is
+    /// asked until "always allow", which is kept for the runner kind (any
+    /// filter, not another runner) and never covers a destructive command;
+    /// the policy and plan mode bound it like `run_command`.
+    #[test]
+    fn run_tests_with_network_is_asked() {
+        let tests = |runner: &str, command: &str, network: bool| ToolCall {
+            command: Some(command.to_owned()),
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            network,
+            runner: Some(runner.to_owned()),
+            ..ToolCall::new(ToolKind::RunTests)
+        };
+        let open = LocalWorkPolicy {
+            network: true,
+            ..policy()
+        };
+        let (_dir, engine) = engine_with(open.clone(), Vec::new());
+        let offline = tests("cargo", "cargo test --message-format=json", false);
+        assert_eq!(
+            verdict(&engine, &offline),
+            (Verdict::Allow, Source::Default)
+        );
+        let online = tests("cargo", "cargo test --message-format=json", true);
+        assert_eq!(verdict(&engine, &online), (Verdict::Ask, Source::Default));
+        assert!(engine.can_remember(&online));
+        engine.remember(&online, None).expect("remember");
+        assert_eq!(
+            verdict(
+                &engine,
+                &tests("cargo", "cargo test --message-format=json parser::", true)
+            ),
+            (Verdict::Allow, Source::Remembered),
+            "the runner kind, whatever the filter"
+        );
+        assert_eq!(
+            verdict(&engine, &tests("go", "go test -json ./...", true)),
+            (Verdict::Ask, Source::Default),
+            "another runner is asked"
+        );
+        assert_eq!(
+            verdict(&engine, &tests("cargo", "git reset --hard", true)),
+            (Verdict::Ask, Source::Default),
+            "never a destructive command"
+        );
+        let shelled = ToolCall {
+            network: true,
+            ..shell("cargo test --message-format=json")
+        };
+        assert_eq!(
+            verdict(&engine, &shelled),
+            (Verdict::Ask, Source::Default),
+            "run_command is not covered by a run_tests choice"
+        );
+        assert!(
+            !engine.can_remember(&ToolCall {
+                runner: None,
+                ..online.clone()
+            }),
+            "a run without its runner is not remembered"
+        );
+
+        // The policy's ceiling and plan mode.
+        let (_dir, closed) = engine_with(policy(), Vec::new());
+        assert_eq!(verdict(&closed, &online), (Verdict::Deny, Source::Policy));
+        let (_dir, no_shell) = engine_with(
+            LocalWorkPolicy {
+                shell: false,
+                ..open
+            },
+            Vec::new(),
+        );
+        assert_eq!(
+            verdict(&no_shell, &offline),
+            (Verdict::Deny, Source::Policy)
+        );
+        engine.set_plan_mode(true);
+        assert_eq!(
+            verdict(&engine, &offline),
+            (Verdict::Deny, Source::PlanMode)
+        );
+    }
+
     /// File choices cover the exact paths, or a glob the person confirmed;
     /// never the whole tool.
     #[test]
@@ -2158,6 +2306,7 @@ mod tests {
                 glob: None,
                 sandbox: None,
                 network: false,
+                runner: None,
             })
             .expect("legacy");
         assert_eq!(
@@ -2265,6 +2414,7 @@ mod tests {
                 glob: None,
                 sandbox: None,
                 network: false,
+                runner: None,
             })
             .expect("remember");
         let reopened = JsonFileChoices::open(path).expect("reopen");
@@ -2955,6 +3105,7 @@ mod tests {
             glob: None,
             sandbox: Some(SandboxMode::ReadOnly),
             network: true,
+            runner: None,
         };
         let rule = super::choice_as_rule(&choice).expect("a command choice");
         assert_eq!(rule.display_pattern(), "/usr/bin/make test");
@@ -2971,6 +3122,7 @@ mod tests {
             glob: None,
             sandbox: None,
             network: false,
+            runner: None,
         };
         assert!(super::choice_as_rule(&file_choice).is_none());
     }
