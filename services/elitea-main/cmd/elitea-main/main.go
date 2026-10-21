@@ -2231,19 +2231,34 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 	}
 
-	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
-	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
-	// the gateway service is reachable.
-	var gatewayProxy http.Handler
-	var gatewayProjectResolver apimw.PersonalProjectResolver
+	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
+	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
+	// surface, the configuration checks, predict_llm and the governance status —
+	// shares it, so an operator configures the gateway hop once. It is nil when
+	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
+	var llmGateway *llmproxy.GatewayClient
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
-		gw, gwErr := llmproxy.New(llmproxy.Config{
-			TargetURL:      gwURL,
+		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
+			Target:         gwURL,
 			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
 			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
 			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
 			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
-			Logger:         logger,
+		})
+		if clientErr != nil {
+			return fmt.Errorf("compose llm gateway client: %w", clientErr)
+		}
+		defer func() { _ = client.Close() }()
+		llmGateway = client
+	}
+
+	// BF0.9c: the browser /llm surface over that client.
+	var gatewayProxy http.Handler
+	var gatewayProjectResolver apimw.PersonalProjectResolver
+	if llmGateway != nil {
+		gw, gwErr := llmproxy.New(llmproxy.Config{
+			Gateway: llmGateway,
+			Logger:  logger,
 			// The analytics reads decide active users and run spend from
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
@@ -2254,24 +2269,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		gatewayProxy = gw
 		gatewayProjectResolver = apimw.NewDBPersonalProjectResolver(pool)
-		slog.Info("llm gateway proxy enabled", "target", gwURL)
+		slog.Info("llm gateway proxy enabled", "target", os.Getenv("LLM_GATEWAY_URL"))
 	}
 
 	// #319: /configurations/check_connection(s) needs a real, minimal round
 	// trip to the provider, which the gateway performs (it owns the SSRF-safe
-	// egress allowlist for a tenant-authored api_base — issue #13). Reuse the
-	// same gateway connection settings as the /llm proxy above so an operator
-	// configures the gateway hop once, not twice.
+	// egress allowlist for a tenant-authored api_base — issue #13). It uses the
+	// shared gateway client above.
 	var configConnectionChecker configurationapi.ConnectionChecker
-	if checker, checkerErr := configurationapi.NewGatewayConnectionCheckerFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-		os.Getenv("GATEWAY_IDENTITY_SECRET"),
-	); checkerErr != nil {
-		return fmt.Errorf("compose configurations check-connection client: %w", checkerErr)
-	} else if checker != nil {
+	if llmGateway != nil {
+		checker := configurationapi.NewGatewayConnectionChecker(llmGateway)
 		// Assigned only when non-nil: boxing a nil *GatewayConnectionChecker
 		// into the ConnectionChecker interface would make
 		// `h.connectionChecker == nil` false (a non-nil interface holding a
@@ -2282,22 +2289,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// #194: POST /elitea_core/predict_llm/prompt_lib/{projectID} runs one
-	// stateless LLM turn through the same gateway hop, configured from the
-	// same four variables. A nil completer is a supported state — the route is
-	// still registered and answers 503 naming LLM_GATEWAY_URL — but it must be
+	// stateless LLM turn through the shared gateway client. A nil completer is
+	// a supported state — the route is still registered and answers 503 naming
+	// LLM_GATEWAY_URL — but it must be
 	// left as a nil INTERFACE, not a boxed nil pointer, or the handler's
 	// `completer == nil` check is false and it calls a method on a nil
 	// receiver instead of reporting "not configured".
 	var predictCompleter predictapi.Completer
-	if completer, completerErr := predictapi.NewGatewayCompleterFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-		os.Getenv("GATEWAY_IDENTITY_SECRET"),
-	); completerErr != nil {
-		return fmt.Errorf("compose predict_llm completion client: %w", completerErr)
-	} else if completer != nil {
+	if llmGateway != nil {
+		completer := predictapi.NewGatewayCompleter(llmGateway)
 		predictCompleter = completer
 		if currentConfigurationsRoot != nil {
 			predictCompleter, err = predictapi.WithDefaultModel(
@@ -2347,18 +2347,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	// The admin LLM Proxy section reads the gateway's own enforcement status.
-	// Same four settings again, for the third and last consumer of the hop, so
-	// an operator configures the gateway once. No identity secret: the gateway
-	// verifies no HMAC on that route.
+	// It uses the shared gateway client; the GovernanceStatus call carries no
+	// identity, because the gateway verifies none on it.
 	var gatewayStatus gateway.StatusReader
-	if statusClient, statusErr := gateway.NewGatewayStatusClientFromConfig(
-		os.Getenv("LLM_GATEWAY_URL"),
-		os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-		os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-		os.Getenv("LLM_GATEWAY_CA_FILE"),
-	); statusErr != nil {
-		return fmt.Errorf("compose gateway status client: %w", statusErr)
-	} else if statusClient != nil {
+	if llmGateway != nil {
+		statusClient := gateway.NewGatewayStatusClient(llmGateway)
 		// Assigned only when non-nil, for the reason spelled out above
 		// configConnectionChecker: a nil pointer boxed into this interface is
 		// not nil, and the handler's "not configured" branch would never run.

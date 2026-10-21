@@ -1,7 +1,8 @@
 package main
 
 // budgetcheck_live_test.go — unit tests for the live BFF.9e plumbing against
-// an httptest gateway double and a fake alert waiter. No NATS or real gateway.
+// a test gateway over real mutual TLS (llmproxy/gatewaytest) and a fake alert
+// waiter. No NATS or real gateway.
 
 import (
 	"crypto/hmac"
@@ -9,42 +10,59 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
-// TestBudgetCheckLive_SignIdentity_GoldenVector pins the v1 signing scheme to
-// the gateway's wire contract: sha256=<hex hmac over "v1\nproject\nuser\ntenant">.
-func TestBudgetCheckLive_SignIdentity_GoldenVector(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", nil)
+// TestBudgetCheckLive_ProbeSignsTheFixtureIdentity pins the probe identity to
+// the gateway's wire contract: the fixture's project, user and tenant arrive
+// signed under the identity secret (v1, no execution id), and the gateway's
+// acceptance rule admits them.
+func TestBudgetCheckLive_ProbeSignsTheFixtureIdentity(t *testing.T) {
 	secret := []byte("test-secret")
-	signIdentity(req, secret, "42", "u1", "t1")
-
-	if got := req.Header.Get(bcHeaderProject); got != "42" {
-		t.Errorf("project header = %q, want 42", got)
+	var got http.Header
+	gw := gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte(`{}`))
+	}), string(secret))
+	if _, err := sendChatProbe(gw, budgetProject{ProjectID: "42", UserID: "u1", TenantID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get(llmproxy.HeaderProjectID) != "42" || got.Get(llmproxy.HeaderUserID) != "u1" || got.Get(llmproxy.HeaderTenantID) != "t1" {
+		t.Errorf("identity = %v", got)
 	}
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte("v1\n42\nu1\nt1"))
-	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	if got := req.Header.Get(bcHeaderSignature); got != want {
-		t.Errorf("signature = %q, want %q", got, want)
+	if want := "sha256=" + hex.EncodeToString(mac.Sum(nil)); got.Get(llmproxy.HeaderSignature) != want {
+		t.Errorf("signature = %q, want %q", got.Get(llmproxy.HeaderSignature), want)
+	}
+	if !llmproxy.VerifyIdentityHeaders(got, secret) {
+		t.Error("the gateway's acceptance rule refuses the probe identity")
 	}
 }
 
-// TestBudgetCheckLive_SignIdentity_EmptySecretNoSignature asserts unsigned
-// deployments get identity headers but no signature header.
-func TestBudgetCheckLive_SignIdentity_EmptySecretNoSignature(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	signIdentity(req, nil, "42", "u", "t")
-	if req.Header.Get(bcHeaderSignature) != "" {
-		t.Error("signature header set despite empty secret")
+// TestBudgetCheckLive_ProbeWithoutSecretIsUnsigned asserts unsigned
+// deployments get the identity but no signature.
+func TestBudgetCheckLive_ProbeWithoutSecretIsUnsigned(t *testing.T) {
+	var got http.Header
+	gw := gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte(`{}`))
+	}), "")
+	if _, err := sendChatProbe(gw, budgetProject{ProjectID: "42", UserID: "u", TenantID: "t"}); err != nil {
+		t.Fatal(err)
 	}
-	if req.Header.Get(bcHeaderProject) != "42" {
-		t.Error("identity headers must be set even without a secret")
+	if got.Get(llmproxy.HeaderSignature) != "" {
+		t.Error("signature set despite empty secret")
+	}
+	if got.Get(llmproxy.HeaderProjectID) != "42" {
+		t.Error("the identity must be sent even without a secret")
 	}
 }
 
@@ -92,15 +110,15 @@ func TestBudgetCheckLive_LoadFixture(t *testing.T) {
 //     (breaker admission runs before the budget gate).
 //   - project "9102" (soft alert):  200.
 //   - project "9103" (under):       200.
-func fakeGateway(t *testing.T) (*httptest.Server, *atomic.Int64) {
+func fakeGateway(t *testing.T) (llmproxy.Gateway, *atomic.Int64) {
 	t.Helper()
 	var overCalls atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/llm/v1/chat/completions" {
 			http.NotFound(w, r)
 			return
 		}
-		switch r.Header.Get(bcHeaderProject) {
+		switch r.Header.Get(llmproxy.HeaderProjectID) {
 		case "9101":
 			n := overCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
@@ -115,8 +133,7 @@ func fakeGateway(t *testing.T) (*httptest.Server, *atomic.Int64) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"ok","choices":[]}`))
 		}
-	}))
-	t.Cleanup(srv.Close)
+	}), "s")
 	return srv, &overCalls
 }
 
@@ -154,11 +171,9 @@ func liveFixture() budgetFixture {
 func TestBudgetCheckLive_AllGatesPass(t *testing.T) {
 	srv, _ := fakeGateway(t)
 	result, err := runLiveBudgetCheck(liveBudgetCheckConfig{
-		gatewayURL:    srv.URL,
-		secret:        []byte("s"),
+		gateway:       srv,
 		fixture:       liveFixture(),
 		alertLatencyS: 10,
-		client:        srv.Client(),
 		waiter:        &fakeWaiter{fired: true, latency: 1500 * time.Millisecond},
 		logf:          t.Logf,
 	})
@@ -182,23 +197,20 @@ func TestBudgetCheckLive_AllGatesPass(t *testing.T) {
 // breaker (never returns 429) fails the circular-guard gate — the assertion
 // that makes this gate meaningful.
 func TestBudgetCheckLive_NoBreaker_Fails(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.Header.Get(bcHeaderProject) == "9101" {
+		if r.Header.Get(llmproxy.HeaderProjectID) == "9101" {
 			w.WriteHeader(http.StatusPaymentRequired)
 			_, _ = w.Write([]byte(`{"error":{"type":"budget_exceeded","code":"insufficient_quota"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"id":"ok"}`))
-	}))
-	t.Cleanup(srv.Close)
+	}), "s")
 
 	result, err := runLiveBudgetCheck(liveBudgetCheckConfig{
-		gatewayURL:    srv.URL,
-		secret:        nil,
+		gateway:       srv,
 		fixture:       liveFixture(),
 		alertLatencyS: 10,
-		client:        srv.Client(),
 		waiter:        &fakeWaiter{fired: true, latency: time.Second},
 		logf:          t.Logf,
 	})
@@ -219,11 +231,9 @@ func TestBudgetCheckLive_NoBreaker_Fails(t *testing.T) {
 func TestBudgetCheckLive_NoAlert_Fails(t *testing.T) {
 	srv, _ := fakeGateway(t)
 	result, err := runLiveBudgetCheck(liveBudgetCheckConfig{
-		gatewayURL:    srv.URL,
-		secret:        nil,
+		gateway:       srv,
 		fixture:       liveFixture(),
 		alertLatencyS: 10,
-		client:        srv.Client(),
 		waiter:        &fakeWaiter{fired: false},
 		logf:          t.Logf,
 	})
@@ -257,22 +267,19 @@ func TestBudgetCheckLive_TipWaitsForSubscription(t *testing.T) {
 	waiter := &orderedWaiter{setupDelay: 150 * time.Millisecond}
 	var tippedAfterReady atomic.Bool
 	var tips atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(bcHeaderProject) == "9102" {
+	srv := gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(llmproxy.HeaderProjectID) == "9102" {
 			tips.Add(1)
 			tippedAfterReady.Store(waiter.ready.Load())
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"ok"}`))
-	}))
-	t.Cleanup(srv.Close)
+	}), "s")
 
 	if _, err := runLiveBudgetCheck(liveBudgetCheckConfig{
-		gatewayURL:    srv.URL,
-		secret:        nil,
+		gateway:       srv,
 		fixture:       liveFixture(),
 		alertLatencyS: 10,
-		client:        srv.Client(),
 		waiter:        waiter,
 		logf:          t.Logf,
 	}); err != nil {
@@ -289,7 +296,7 @@ func TestBudgetCheckLive_TipWaitsForSubscription(t *testing.T) {
 // TestBudgetCheckLive_ProbeDecodesEnvelope pins sendChatProbe's envelope decode.
 func TestBudgetCheckLive_ProbeDecodesEnvelope(t *testing.T) {
 	srv, _ := fakeGateway(t)
-	resp, err := sendChatProbe(srv.Client(), srv.URL, nil, budgetProject{ProjectID: "9101"})
+	resp, err := sendChatProbe(srv, budgetProject{ProjectID: "9101"})
 	if err != nil {
 		t.Fatalf("sendChatProbe: %v", err)
 	}
@@ -302,7 +309,7 @@ func TestBudgetCheckLive_ProbeDecodesEnvelope(t *testing.T) {
 // a decodable chat request carrying the fixture's model.
 func TestBudgetCheckLive_ProbeSendsWellFormedChatBody(t *testing.T) {
 	var gotModel string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := gatewaytest.Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Model    string `json:"model"`
 			Messages []any  `json:"messages"`
@@ -312,10 +319,9 @@ func TestBudgetCheckLive_ProbeSendsWellFormedChatBody(t *testing.T) {
 		}
 		gotModel = body.Model
 		_, _ = w.Write([]byte(`{}`))
-	}))
-	t.Cleanup(srv.Close)
+	}), "s")
 
-	_, err := sendChatProbe(srv.Client(), srv.URL, nil, budgetProject{ProjectID: "1", Model: "openai/gpt-4o-mini"})
+	_, err := sendChatProbe(srv, budgetProject{ProjectID: "1", Model: "openai/gpt-4o-mini"})
 	if err != nil {
 		t.Fatal(err)
 	}

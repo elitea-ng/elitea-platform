@@ -14,12 +14,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 /* ── fakes ─────────────────────────────────────────────────────────────── */
@@ -412,7 +412,7 @@ func TestAnEmptyCatalogueIsAnEmptyListNotNull(t *testing.T) {
 func TestTheGatewayClientReadsTheListing(t *testing.T) {
 	var gotPath, gotBody string
 	var signed bool
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	gateway := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		raw, _ := io.ReadAll(r.Body)
 		gotBody = string(raw)
@@ -420,9 +420,8 @@ func TestTheGatewayClientReadsTheListing(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":true,"reason":"ok","models":["gpt-4o","gpt-4o","  ","gpt-4o-mini"]}`))
 	}))
-	defer gateway.Close()
 
-	client := NewGatewayConnectionChecker(gateway.URL, nil, "shared-secret")
+	client := NewGatewayConnectionChecker(gatewaytest.Client(t, gateway, "shared-secret"))
 	listing, err := client.ListProviderModels(
 		WithConnectionCheckProjectID(context.Background(), "7"), "open_ai",
 		map[string]any{"api_base": "https://api.openai.com/v1", "api_key": "sk-redeemed"})
@@ -451,13 +450,12 @@ func TestTheGatewayClientReadsTheListing(t *testing.T) {
 // A gateway that refuses is reported as a refusal with a safe message, and the
 // gateway's reason vocabulary is what produces it.
 func TestTheGatewayClientRendersARefusal(t *testing.T) {
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	gateway := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":false,"reason":"unauthorized","detail":"the provider rejected the credential","models":[]}`))
 	}))
-	defer gateway.Close()
 
-	client := NewGatewayConnectionChecker(gateway.URL, nil, "shared-secret")
+	client := NewGatewayConnectionChecker(gatewaytest.Client(t, gateway, "shared-secret"))
 	listing, err := client.ListProviderModels(context.Background(), "open_ai", map[string]any{})
 	if err != nil {
 		t.Fatalf("a provider verdict must not be an error: %v", err)
@@ -477,12 +475,11 @@ func TestTheGatewayClientRendersARefusal(t *testing.T) {
 // catalogue: the route answers 200 for every provider verdict, so a non-200 is
 // the hop failing and says nothing about the credential.
 func TestTheGatewayClientTreatsAMissingRouteAsAFailure(t *testing.T) {
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	gateway := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "404 page not found", http.StatusNotFound)
 	}))
-	defer gateway.Close()
 
-	client := NewGatewayConnectionChecker(gateway.URL, nil, "shared-secret")
+	client := NewGatewayConnectionChecker(gatewaytest.Client(t, gateway, "shared-secret"))
 	listing, err := client.ListProviderModels(context.Background(), "open_ai", map[string]any{})
 	if err == nil {
 		t.Fatalf("a 404 from the gateway was reported as a catalogue: %+v", listing)
@@ -505,13 +502,12 @@ func TestTheGatewayClientBoundsWhatItAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	gateway := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(encoded)
 	}))
-	defer gateway.Close()
 
-	client := NewGatewayConnectionChecker(gateway.URL, nil, "shared-secret")
+	client := NewGatewayConnectionChecker(gatewaytest.Client(t, gateway, "shared-secret"))
 	listing, err := client.ListProviderModels(context.Background(), "open_ai", map[string]any{})
 	if err != nil {
 		t.Fatalf("list failed: %v", err)

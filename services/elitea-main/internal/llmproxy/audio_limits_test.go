@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // audioRequest builds an edge-authenticated request for path, as the /llm
@@ -61,7 +62,7 @@ func withAudioLimit(t *testing.T, path string, limit audioRouteLimit) {
 func TestAudio_SpeechForwardsTheAudioBytesUnchanged(t *testing.T) {
 	audio := []byte{0x52, 0x49, 0x46, 0x46, 0x00, 0xff, 0x10}
 	var gotProject, gotBody string
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotProject = r.Header.Get(HeaderProjectID)
 		raw, _ := io.ReadAll(r.Body)
 		gotBody = string(raw)
@@ -70,7 +71,7 @@ func TestAudio_SpeechForwardsTheAudioBytesUnchanged(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	p := proxyTo(t, backend.URL, "sekret")
+	p := proxyTo(t, backend, "sekret")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, audioRequest("/llm/v1/audio/speech", strings.NewReader(`{"model":"tts","input":"hi"}`)))
 
@@ -95,7 +96,7 @@ func TestAudio_SpeechForwardsTheAudioBytesUnchanged(t *testing.T) {
 // past the ceiling never crosses the mTLS hop.
 func TestAudio_OversizeDeclaredBodyIsRefusedBeforeTheGateway(t *testing.T) {
 	var calls atomic.Int32
-	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		calls.Add(1)
 	}))
 	defer backend.Close()
@@ -106,7 +107,7 @@ func TestAudio_OversizeDeclaredBodyIsRefusedBeforeTheGateway(t *testing.T) {
 		"/llm/v1/audio/translations":   maxTranscriptionBody,
 	} {
 		t.Run(path, func(t *testing.T) {
-			p := proxyTo(t, backend.URL, "")
+			p := proxyTo(t, backend, "")
 			req := audioRequest(path, strings.NewReader("x"))
 			req.ContentLength = limit + 1
 			rec := httptest.NewRecorder()
@@ -128,14 +129,14 @@ func TestAudio_OversizeDeclaredBodyIsRefusedBeforeTheGateway(t *testing.T) {
 // TestAudio_OversizeChunkedBodyIsCutOffAtTheCeiling: a body with no declared
 // length is stopped by the streaming ceiling with the same refusal.
 func TestAudio_OversizeChunkedBodyIsCutOffAtTheCeiling(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer backend.Close()
 	withAudioLimit(t, "/llm/v1/audio/speech", audioRouteLimit{maxBody: 1024, timeout: time.Minute})
 
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 	req := audioRequest("/llm/v1/audio/speech", chunkedReader{bytes.NewReader(bytes.Repeat([]byte("a"), 4096))})
 	req.ContentLength = -1
 	rec := httptest.NewRecorder()
@@ -153,7 +154,7 @@ func TestAudio_OversizeChunkedBodyIsCutOffAtTheCeiling(t *testing.T) {
 // of exactly the limit is not refused.
 func TestAudio_BodyAtTheCeilingIsForwarded(t *testing.T) {
 	var got int
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		got = len(raw)
 		w.WriteHeader(http.StatusOK)
@@ -161,7 +162,7 @@ func TestAudio_BodyAtTheCeilingIsForwarded(t *testing.T) {
 	defer backend.Close()
 	withAudioLimit(t, "/llm/v1/audio/transcriptions", audioRouteLimit{maxBody: 1024, timeout: time.Minute})
 
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 	req := audioRequest("/llm/v1/audio/transcriptions", chunkedReader{bytes.NewReader(bytes.Repeat([]byte("a"), 1024))})
 	req.ContentLength = -1
 	rec := httptest.NewRecorder()
@@ -179,14 +180,14 @@ func TestAudio_BodyAtTheCeilingIsForwarded(t *testing.T) {
 // hung upstream into a named refusal instead of an open connection.
 func TestAudio_AProviderThatNeverAnswersTimesOutWith504(t *testing.T) {
 	release := make(chan struct{})
-	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		<-release
 	}))
 	defer backend.Close()
 	defer close(release)
 	withAudioLimit(t, "/llm/v1/audio/speech", audioRouteLimit{maxBody: maxSpeechBody, timeout: 50 * time.Millisecond})
 
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, audioRequest("/llm/v1/audio/speech", strings.NewReader(`{"model":"tts","input":"hi"}`)))
 
@@ -202,7 +203,7 @@ func TestAudio_AProviderThatNeverAnswersTimesOutWith504(t *testing.T) {
 // ceiling and no deadline from this file. A long SSE stream must not be cut.
 func TestAudio_OtherRoutesKeepTheStreamingContract(t *testing.T) {
 	var got int
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := r.Context().Deadline(); ok {
 			t.Errorf("chat request carries a deadline; the audio bound leaked onto it")
 		}
@@ -212,7 +213,7 @@ func TestAudio_OtherRoutesKeepTheStreamingContract(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 	body := bytes.Repeat([]byte("a"), int(maxSpeechBody)+1)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, audioRequest("/llm/v1/chat/completions", bytes.NewReader(body)))
@@ -228,11 +229,10 @@ func TestAudio_OtherRoutesKeepTheStreamingContract(t *testing.T) {
 // TestAudio_ADeadGatewayIsStillA502: the audio refusals do not swallow the
 // ordinary "gateway unavailable" answer.
 func TestAudio_ADeadGatewayIsStillA502(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	url := backend.URL
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	backend.Close()
 
-	p := proxyTo(t, url, "")
+	p := proxyTo(t, backend, "")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, audioRequest("/llm/v1/audio/speech", strings.NewReader(`{}`)))
 

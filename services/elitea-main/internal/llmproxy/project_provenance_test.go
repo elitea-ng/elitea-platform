@@ -10,6 +10,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
 )
 
 // This file proves two rules of the /llm edge over the real chain: the project
@@ -47,7 +48,7 @@ type gatewaySpy struct {
 func provenanceStack(t *testing.T, spy *gatewaySpy, allow map[int32]bool) http.Handler {
 	t.Helper()
 
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		spy.called = true
 		spy.headers = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
@@ -60,7 +61,7 @@ func provenanceStack(t *testing.T, spy *gatewaySpy, allow map[int32]bool) http.H
 		PublicProjectID: 1,
 		Membership:      middleware.NewProjectMembershipWith(stubMemberQuerier{allow: allow}),
 	})
-	return mw(proxyTo(t, backend.URL, "sekret"))
+	return mw(proxyTo(t, backend, "sekret"))
 }
 
 func edgeBody() *strings.Reader {

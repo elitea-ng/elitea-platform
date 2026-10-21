@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 // overhead-check (spec §2.4 / §7.3, gate BFF.9d):
@@ -537,7 +539,7 @@ func cmdOverheadCheck(args []string) {
 			params.IdentityProject = *projectID
 			params.IdentityUser = *userID
 			params.IdentityTenant = *tenantID
-			params.IdentitySignature = sigReq.Header.Get(bcHeaderSignature)
+			params.IdentitySignature = sigReq.Header.Get(llmproxy.HeaderSignature)
 		}
 		fmt.Printf("overhead-check: driving k6 (%s) against %s ...\n", *script, *gatewayURL)
 		data, err = runK6Summary(*k6Bin, params, os.Stdout, os.Stderr)
@@ -627,7 +629,7 @@ func signIdentitiesFromFile(path string, secret []byte) (string, error) {
 			Project:   p.ProjectID,
 			User:      p.UserID,
 			Tenant:    p.TenantID,
-			Signature: sigReq.Header.Get(bcHeaderSignature),
+			Signature: sigReq.Header.Get(llmproxy.HeaderSignature),
 		})
 	}
 	b, err := json.Marshal(out)

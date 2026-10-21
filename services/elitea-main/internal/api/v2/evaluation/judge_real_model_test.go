@@ -3,7 +3,6 @@ package evaluation
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 )
 
 // The AI judge against a REAL model, opt-in.
@@ -37,8 +38,8 @@ import (
 // WHAT IT EXERCISES, AND WHY IT IS THE PRODUCTION CLIENT. The subject is
 // `predict.GatewayCompleter` — the SAME client /predict_llm, the three AI-draft
 // routes and the orchestrator all take — not a second HTTP client written for
-// the test. That client posts to `<base>/llm/v1/chat/completions`, because in
-// production its base is elitea-llm-gateway, which mounts the OpenAI dialect
+// the test. That client calls the gateway ChatCompletions RPC, which serves
+// `/llm/v1/chat/completions`: elitea-llm-gateway mounts the OpenAI dialect
 // under /llm. A raw vLLM serves `/v1/chat/completions` with no prefix, so the
 // test puts a one-line reverse proxy in front of it that strips `/llm`.
 //
@@ -61,20 +62,19 @@ func TestAIJudgeAgainstARealModel(t *testing.T) {
 	}
 	// The /llm prefix strip. See the doc comment: this is the ONLY difference
 	// between the production hop and this one.
-	proxy := httptest.NewServer(&httputil.ReverseProxy{
+	gw := gatewaytest.Client(t, &httputil.ReverseProxy{
 		Director: func(request *http.Request) {
 			request.URL.Scheme = upstream.Scheme
 			request.URL.Host = upstream.Host
 			request.Host = upstream.Host
 			request.URL.Path = strings.TrimPrefix(request.URL.Path, "/llm")
 		},
-	})
-	defer proxy.Close()
+	}, "")
 
-	// No mTLS and no identity secret: a raw vLLM authenticates neither. The
+	// No identity secret: a raw vLLM authenticates none. The
 	// signing path is exercised by the gateway's own tests
 	// (internal/llmproxy); what is under test here is the prompt.
-	judge := NewAIJudge(newRealModelCompleter(proxy.URL))
+	judge := NewAIJudge(newRealModelCompleter(gw))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -138,11 +138,11 @@ func TestAIJudgeAgainstARealModel(t *testing.T) {
 	t.Logf("normalised: %v / 100", normalized)
 }
 
-// newRealModelCompleter builds the PRODUCTION completer against a base URL.
+// newRealModelCompleter builds the PRODUCTION completer over gateway.
 //
-// It is `predict.NewGatewayCompleter` and nothing else: no client-level
-// timeout (the context carries the deadline), no identity secret (a raw vLLM
-// authenticates none), and the default transport rather than mTLS.
-func newRealModelCompleter(baseURL string) Completer {
-	return predict.NewGatewayCompleter(baseURL, http.DefaultTransport, "")
+// It is `predict.NewGatewayCompleter` and nothing else: no timeout of its own
+// (the context carries the deadline) and no identity secret (a raw vLLM
+// authenticates none).
+func newRealModelCompleter(gateway llmproxy.Gateway) Completer {
+	return predict.NewGatewayCompleter(gateway)
 }

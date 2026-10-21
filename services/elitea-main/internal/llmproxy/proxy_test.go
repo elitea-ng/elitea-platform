@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -21,39 +22,88 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/llmproxytest"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/grpcauth/grpcauthtest"
 )
 
-func TestNew_InvalidTarget(t *testing.T) {
-	cases := []string{"", "://nope", "no-scheme-host"}
+func TestNew_RequiresGateway(t *testing.T) {
+	if _, err := New(Config{}); err == nil {
+		t.Fatal("New without a Gateway = nil error, want error")
+	}
+}
+
+func TestNewGatewayClient_InvalidTarget(t *testing.T) {
+	cases := []string{"", "://nope", "no-scheme-host", "http://gw:8443", "https://gw:8443/llm", "https://user@gw:8443"}
 	for _, tc := range cases {
-		if _, err := New(Config{TargetURL: tc, Transport: http.DefaultTransport}); err == nil {
-			t.Errorf("New(%q) = nil error, want error", tc)
+		if _, err := NewGatewayClient(GatewayClientConfig{Target: tc, TLS: &tls.Config{MinVersion: tls.VersionTLS13}}); err == nil {
+			t.Errorf("NewGatewayClient(%q) = nil error, want error", tc)
 		}
 	}
 }
 
-func TestNew_TransportBuildFails(t *testing.T) {
-	// No Transport override and bogus cert paths → mTLS build fails.
-	_, err := New(Config{
-		TargetURL:      "https://gw:8443",
+func TestNewGatewayClient_TLSMaterialFails(t *testing.T) {
+	_, err := NewGatewayClient(GatewayClientConfig{
+		Target:         "https://gw:8443",
 		ClientCertFile: "/nonexistent/cert.pem",
 		ClientKeyFile:  "/nonexistent/key.pem",
 		CAFile:         "/nonexistent/ca.pem",
 	})
 	if err == nil {
-		t.Fatal("expected error building mTLS transport with missing files")
+		t.Fatal("expected error building mTLS with missing files")
+	}
+	if _, err := NewGatewayClient(GatewayClientConfig{Target: "https://gw:8443"}); err == nil {
+		t.Fatal("expected error without mTLS material")
 	}
 }
 
-// proxyTo builds a Proxy in front of backend using a plain transport (no mTLS),
-// with the given identity secret.
-func proxyTo(t *testing.T, backendURL, secret string) *Proxy {
-	t.Helper()
-	p, err := New(Config{
-		TargetURL:      backendURL,
-		Transport:      http.DefaultTransport,
-		IdentitySecret: secret,
+// TestNewGatewayClient_FromFiles builds the client from PEM files, as the
+// composition root does, and calls a real-TLS gateway with it.
+func TestNewGatewayClient_FromFiles(t *testing.T) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"data":[]}`)
+	}))
+	caFile, certFile, keyFile := backend.WriteClientFiles(t, t.TempDir())
+	client, err := NewGatewayClient(GatewayClientConfig{
+		Target:         backend.Target,
+		ClientCertFile: certFile,
+		ClientKeyFile:  keyFile,
+		CAFile:         caFile,
+		ServerName:     grpcauthtest.ServerName,
 	})
+	if err != nil {
+		t.Fatalf("NewGatewayClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	resp, err := client.ListModels(t.Context(), &Request{})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != `{"data":[]}` {
+		t.Fatalf("got %d %q", resp.StatusCode, body)
+	}
+}
+
+// gatewayTo is a GatewayClient for backend over real mutual TLS.
+func gatewayTo(t *testing.T, backend *llmproxytest.Server, secret string) *GatewayClient {
+	t.Helper()
+	client, err := NewGatewayClient(GatewayClientConfig{
+		Target:         backend.Target,
+		IdentitySecret: secret,
+		TLS:            backend.ClientTLS(t),
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// proxyTo builds a Proxy in front of backend, over the real gRPC hop, with
+// the given identity secret.
+func proxyTo(t *testing.T, backend *llmproxytest.Server, secret string) *Proxy {
+	t.Helper()
+	p, err := New(Config{Gateway: gatewayTo(t, backend, secret)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -62,14 +112,14 @@ func proxyTo(t *testing.T, backendURL, secret string) *Proxy {
 
 func TestProxy_ForwardsAndInjectsIdentity(t *testing.T) {
 	var gotHeaders http.Header
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"ok":true}`)
 	}))
 	defer backend.Close()
 
-	p := proxyTo(t, backend.URL, "sekret")
+	p := proxyTo(t, backend, "sekret")
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader(`{"model":"x"}`))
 	ctx := middleware.ContextWithProject(req.Context(), middleware.ProjectContext{ProjectID: 7})
@@ -94,13 +144,13 @@ func TestProxy_ForwardsAndInjectsIdentity(t *testing.T) {
 
 func TestProxy_StripsClientSpoofedIdentity(t *testing.T) {
 	var gotHeaders http.Header
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
 	}))
 	defer backend.Close()
 
 	const secret = "sekret"
-	p := proxyTo(t, backend.URL, secret)
+	p := proxyTo(t, backend, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/messages", nil)
 	// Spoof attempt: attacker injects a different project ID and a forged signature.
@@ -132,11 +182,10 @@ func TestProxy_StripsClientSpoofedIdentity(t *testing.T) {
 
 func TestProxy_UpstreamDown_Returns502(t *testing.T) {
 	// Point at a closed server.
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	url := backend.URL
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	backend.Close()
 
-	p := proxyTo(t, url, "")
+	p := proxyTo(t, backend, "")
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
@@ -149,11 +198,10 @@ func TestProxy_UpstreamDown_Returns502(t *testing.T) {
 // TestProxy_UpstreamDown_NestedErrorShape asserts that the 502 error body
 // conforms to the OpenAI-shaped nested error envelope (spec §2.5).
 func TestProxy_UpstreamDown_NestedErrorShape(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	url := backend.URL
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	backend.Close()
 
-	p := proxyTo(t, url, "")
+	p := proxyTo(t, backend, "")
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
@@ -198,12 +246,12 @@ func TestProxy_SetWriteDeadlineWrappedErrNotSupported_IsIgnored(t *testing.T) {
 	// Verify errors.Is is used: a wrapped ErrNotSupported must be recognised as
 	// "not supported" and silently skipped — the proxy must still complete the
 	// round-trip successfully (200 from backend).
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer backend.Close()
 
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 
 	ndw := &noDeadlineWriter{flushRecorder: newFlushRecorder()}
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
@@ -236,7 +284,7 @@ func (f *flushRecorder) Flush() { f.flushes++ }
 
 func TestProxy_StreamsIncrementally(t *testing.T) {
 	// Backend that writes 3 SSE chunks, flushing between each with a small gap.
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl, ok := w.(http.Flusher)
 		if !ok {
@@ -251,7 +299,7 @@ func TestProxy_StreamsIncrementally(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/messages", nil)
 	rec := newFlushRecorder()
@@ -269,9 +317,9 @@ func TestProxy_StreamsIncrementally(t *testing.T) {
 
 func TestProxy_ClearsWriteDeadline(t *testing.T) {
 	// A ResponseWriter whose SetWriteDeadline is observable.
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	backend := llmproxytest.Start(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer backend.Close()
-	p := proxyTo(t, backend.URL, "")
+	p := proxyTo(t, backend, "")
 
 	dw := &deadlineWriter{flushRecorder: newFlushRecorder()}
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
@@ -335,23 +383,6 @@ func TestNewMTLSTransport_Errors(t *testing.T) {
 	}
 	if _, err := NewMTLSTransport(certFile, keyFile, badCA, ""); err == nil {
 		t.Error("expected error for CA bundle with no certificates")
-	}
-}
-
-func TestNew_BuildsMTLSTransportFromFiles(t *testing.T) {
-	dir := t.TempDir()
-	certFile, keyFile, caFile := writeTestCerts(t, dir)
-	p, err := New(Config{
-		TargetURL:      "https://elitea-llm-gateway-svc:8443",
-		ClientCertFile: certFile,
-		ClientKeyFile:  keyFile,
-		CAFile:         caFile,
-	})
-	if err != nil {
-		t.Fatalf("New with mTLS files: %v", err)
-	}
-	if p == nil {
-		t.Fatal("nil proxy")
 	}
 }
 

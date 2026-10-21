@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 )
 
 // sse-flush-check (spec §2.3 / §7.3, gate BFF.1 / validator BFF.9a):
@@ -254,3 +256,15 @@ var (
 	openAIProbe    = buildProbes("gpt-4o", "claude-sonnet-5")[0]
 	anthropicProbe = buildProbes("gpt-4o", "claude-sonnet-5")[1]
 )
+
+// signIdentity sets the signed X-Elitea-* identity on req, by the scheme
+// elitea-main signs it (llmproxy.SignIdentityHeaders).
+//
+// TODO(#1359): elitea-llm-gateway serves /llm over gRPC only (GatewayService),
+// so its HTTP listener answers none of these probes. sse-flush-check and
+// overhead-check reach /llm only through the elitea-main edge now, which
+// strips these headers and authenticates the caller instead. Port both probes
+// to an edge bearer token, or to the GatewayService client budget-check uses.
+func signIdentity(req *http.Request, secret []byte, projectID, userID, tenantID string) {
+	llmproxy.SignIdentityHeaders(req.Header, secret, projectID, userID, tenantID, "")
+}

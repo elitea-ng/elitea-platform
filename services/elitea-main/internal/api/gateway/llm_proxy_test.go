@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy/gatewaytest"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -157,13 +158,12 @@ func TestStatusPassesTheGatewayBodyThrough(t *testing.T) {
 // reads as "the gateway answered", the single conclusion this surface must
 // never produce falsely.
 func TestGatewayStatusClientRejectsANonJSONBody(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("<html>502 Bad Gateway</html>"))
 	}))
-	defer srv.Close()
 
-	_, err := NewGatewayStatusClient(srv.URL, nil).Status(context.Background())
+	_, err := NewGatewayStatusClient(gatewaytest.Client(t, srv, "")).Status(context.Background())
 
 	if err == nil {
 		t.Fatal("a non-JSON body was accepted as a gateway status report")
@@ -177,7 +177,7 @@ func TestGatewayStatusClientRejectsANonJSONBody(t *testing.T) {
 // here would surface as an unreachable gateway on a healthy deployment.
 func TestGatewayStatusClientRequestsTheRightPath(t *testing.T) {
 	var got string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.URL.Path
 		// No signature is expected on this hop: the gateway's operator listener
 		// verifies mutual TLS and no HMAC. Sending one would imply an
@@ -187,9 +187,8 @@ func TestGatewayStatusClientRequestsTheRightPath(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"enabled":true}`))
 	}))
-	defer srv.Close()
 
-	if _, err := NewGatewayStatusClient(srv.URL, nil).Status(context.Background()); err != nil {
+	if _, err := NewGatewayStatusClient(gatewaytest.Client(t, srv, "")).Status(context.Background()); err != nil {
 		t.Fatalf("status: %v", err)
 	}
 	if got != "/governance/status" {

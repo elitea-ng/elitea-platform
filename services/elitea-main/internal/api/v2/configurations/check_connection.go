@@ -23,12 +23,12 @@
 package configurations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -214,21 +214,17 @@ func connectionCheckMessageFor(reason, detail string) string {
 	return "Could not verify the connection."
 }
 
-// GatewayConnectionChecker calls elitea-llm-gateway's
-// POST /llm/v1/check_connection over the same mTLS-internal transport the
-// /llm streaming proxy uses (internal/llmproxy.NewMTLSTransport), signing the
-// request with the identical identity-header scheme
-// (internal/llmproxy.SignIdentityHeaders) so the gateway's verifySignature
-// accepts it. It never dials the provider itself — see the package doc above.
+// GatewayConnectionChecker calls elitea-llm-gateway's check_connection,
+// list_provider_models and list_provider_voices through llmproxy.Gateway
+// (gRPC over mutual TLS), with the identity tuple signed by the same scheme
+// the /llm surface uses, so the gateway's verifySignature accepts it. It
+// never dials the provider itself — see the package doc above.
 type GatewayConnectionChecker struct {
-	httpClient *http.Client
-	// modelHTTPClient carries the llm_model probe. The gateway bounds that
-	// probe at 30 s, so this client waits longer than httpClient does; the
-	// transport is the same.
-	modelHTTPClient *http.Client
-
-	baseURL        string
-	identitySecret []byte
+	gateway llmproxy.Gateway
+	// timeout bounds one call. modelTimeout bounds the llm_model probe: the
+	// gateway bounds that probe at 30 s, so this client waits longer.
+	timeout      time.Duration
+	modelTimeout time.Duration
 	// projectID is threaded through Check by the caller (the projectID URL
 	// path parameter), not resolved from ambient request context: the
 	// /configurations mount does not populate *middleware.ProjectContext (it
@@ -236,17 +232,45 @@ type GatewayConnectionChecker struct {
 	// from the check_connection/{projectID}/{configType} path itself).
 }
 
-// NewGatewayConnectionChecker builds a checker that reaches gatewayBaseURL
-// (e.g. "https://elitea-llm-gateway-svc:8443") over transport. When transport
-// is nil, llmproxy.NewMTLSTransport(certFile, keyFile, caFile, serverName) is
-// used — the identical construction the /llm reverse proxy uses.
-func NewGatewayConnectionChecker(gatewayBaseURL string, transport http.RoundTripper, identitySecret string) *GatewayConnectionChecker {
-	return &GatewayConnectionChecker{
-		httpClient:      &http.Client{Transport: transport, Timeout: 12 * time.Second},
-		modelHTTPClient: &http.Client{Transport: transport, Timeout: modelConnectionCheckClientTimeout},
-		baseURL:         strings.TrimRight(gatewayBaseURL, "/"),
-		identitySecret:  []byte(identitySecret),
+// NewGatewayConnectionChecker builds a checker over gateway. It returns nil
+// when gateway is nil (LLM_GATEWAY_URL unset): callers must treat a nil
+// checker as "not available", never substitute a stub that reports success.
+func NewGatewayConnectionChecker(gateway llmproxy.Gateway) *GatewayConnectionChecker {
+	if gateway == nil {
+		return nil
 	}
+	return &GatewayConnectionChecker{
+		gateway:      gateway,
+		timeout:      12 * time.Second,
+		modelTimeout: modelConnectionCheckClientTimeout,
+	}
+}
+
+// call sends one JSON request through rpc and returns the response and a
+// release function that closes it. projectID and userID are signed as the
+// identity. No execution id: these calls are authored by an operator or a
+// signed-in user, not made from a runtime execution, so the tuple signs v1.
+func (c *GatewayConnectionChecker) call(
+	ctx context.Context,
+	timeout time.Duration,
+	rpc func(context.Context, *llmproxy.Request) (*llmproxy.Response, error),
+	raw []byte,
+	userID string,
+) (*llmproxy.Response, func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	resp, err := rpc(ctx, &llmproxy.Request{
+		Header:   http.Header{"Content-Type": {"application/json"}},
+		Body:     bytes.NewReader(raw),
+		Identity: llmproxy.Identity{ProjectID: connectionCheckProjectIDFrom(ctx), UserID: userID},
+	})
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	return resp, func() {
+		_ = resp.Body.Close()
+		cancel()
+	}, nil
 }
 
 // checkerProjectIDKey is an unexported context key so Check can read the
@@ -295,21 +319,11 @@ func (c *GatewayConnectionChecker) Check(ctx context.Context, configType string,
 		return ConnectionCheckResult{}, fmt.Errorf("check connection: encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/llm/v1/check_connection", strings.NewReader(string(raw)))
-	if err != nil {
-		return ConnectionCheckResult{}, fmt.Errorf("check connection: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	// No execution id: a connection check is authored by an operator in the
-	// admin UI, not made from a runtime execution. The empty value signs v1,
-	// byte for byte what this call signed before.
-	llmproxy.SignIdentityHeaders(req.Header, c.identitySecret, connectionCheckProjectIDFrom(ctx), "", "", "")
-
-	resp, err := c.httpClient.Do(req)
+	resp, done, err := c.call(ctx, c.timeout, c.gateway.CheckConnection, raw, "")
 	if err != nil {
 		return ConnectionCheckResult{}, fmt.Errorf("check connection: call gateway: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer done()
 
 	if resp.StatusCode != http.StatusOK {
 		return ConnectionCheckResult{}, fmt.Errorf("check connection: gateway responded with status %d", resp.StatusCode)
@@ -549,24 +563,6 @@ func connectionCheckUnavailableResult(id any) map[string]any {
 	return map[string]any{
 		"id": id, "success": false, "message": "Could not verify the connection right now. Please try again.",
 	}
-}
-
-// gatewayConnectionCheckerFromEnv builds a GatewayConnectionChecker from the
-// same LLM_GATEWAY_URL / mTLS / GATEWAY_IDENTITY_SECRET environment
-// configuration the /llm reverse proxy uses
-// (cmd/elitea-main/main.go llmproxy.Config), so operators configure the
-// gateway connection once, not twice. Returns nil when LLM_GATEWAY_URL is
-// unset — callers must treat a nil checker as "not available", never
-// substitute a stub that reports success.
-func NewGatewayConnectionCheckerFromConfig(gatewayURL, clientCertFile, clientKeyFile, caFile, identitySecret string) (*GatewayConnectionChecker, error) {
-	if gatewayURL == "" {
-		return nil, nil
-	}
-	transport, err := llmproxy.NewMTLSTransport(clientCertFile, clientKeyFile, caFile, "")
-	if err != nil {
-		return nil, fmt.Errorf("check connection: build mTLS transport: %w", err)
-	}
-	return NewGatewayConnectionChecker(gatewayURL, transport, identitySecret), nil
 }
 
 // checkToolkitConnection runs this build's own toolkit probe for a type the

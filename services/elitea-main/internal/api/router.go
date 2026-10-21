@@ -639,8 +639,8 @@ type RouterConfig struct {
 	CurrentModelDefault       http.Handler
 	LLMProxy                  http.Handler
 	LLMProjectResolver        apimw.PersonalProjectResolver
-	// GatewayProxy is the mTLS streaming reverse proxy to elitea-llm-gateway-svc
-	// (BF0.9c). When non-nil, it is mounted at /llm with Auth+Project middleware
+	// GatewayProxy is the /llm surface over elitea-llm-gateway (llmproxy.Proxy,
+	// gRPC over mutual TLS; BF0.9c, #1359). When non-nil, it is mounted at /llm with Auth+Project middleware
 	// in the production router.
 	GatewayProxy           http.Handler
 	GatewayProjectResolver apimw.PersonalProjectResolver
@@ -4852,8 +4852,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		})
 	})
 
-	// /llm has one composed backend: GatewayProxy, the mTLS reverse proxy to
-	// elitea-llm-gateway-svc (LLM_GATEWAY_URL). The gateway is the only LLM
+	// /llm has one composed backend: GatewayProxy, the gRPC client of
+	// elitea-llm-gateway (LLM_GATEWAY_URL). The gateway is the only LLM
 	// data plane — it pulls per-project credentials and model definitions from
 	// p_{projectID}.configuration itself, so there is no second proxy for Main
 	// to compose and no LiteLLM facade to fall back to (that facade, its
