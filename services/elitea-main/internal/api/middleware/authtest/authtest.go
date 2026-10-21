@@ -83,10 +83,14 @@ func BearerToken(request *http.Request, tokenID, userID string) {
 }
 
 // ForgeXAuth sets the X-Auth-* identity the retired forward-auth projection
-// used (#1359), naming userID. Nothing reads it any more; a test sends it to
-// prove that a request carrying it and no credential is still refused.
+// used (#1359), and the X-Elitea-* identity tuple of the gateway hop, naming
+// userID. Nothing on a browser route reads either; a test sends them to
+// prove that a request carrying them and no credential is still refused.
 func ForgeXAuth(request *http.Request, userID string) {
 	request.Header.Set("X-Auth-Type", "user")
 	request.Header.Set("X-Auth-ID", userID)
 	request.Header.Set("X-Auth-User-ID", userID)
+	request.Header.Set("X-Elitea-User-Id", userID)
+	request.Header.Set("X-Elitea-Project-Id", "7")
+	request.Header.Set("X-Elitea-Identity-Signature", "forged")
 }

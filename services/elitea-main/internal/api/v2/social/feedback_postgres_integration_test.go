@@ -123,6 +123,7 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 		authID     string
 		userID     string
 		remote     string
+		forged     bool
 		wantStatus int
 	}{
 		{
@@ -132,12 +133,13 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "untrusted forwarded identity",
+			// #1359: no header projects an identity any more. A forged
+			// X-Auth-*/X-Elitea-* identity naming a project member, with no
+			// credential, is an unauthenticated request.
+			name:       "forged X-Auth identity without a session",
 			target:     "/api/v2/social/feedbacks/default/7",
-			authType:   "user",
-			authID:     "41",
-			userID:     "41",
 			remote:     "192.0.2.9:443",
+			forged:     true,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -201,6 +203,9 @@ func TestCurrentFeedbackCreateHTTPPostgresParityAndNegativeSecurity(t *testing.T
 				"",
 			)
 			request.Body = body
+			if test.forged {
+				authtest.ForgeXAuth(request, "41")
+			}
 			response := httptest.NewRecorder()
 			route.ServeHTTP(response, request)
 			if response.Code != test.wantStatus {

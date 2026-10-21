@@ -92,6 +92,7 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 		userID        string
 		remote        string
 		withoutHeader bool
+		forged        bool
 		wantStatus    int
 	}{
 		{
@@ -102,10 +103,13 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 			wantStatus:    http.StatusUnauthorized,
 		},
 		{
-			name:       "untrusted forwarded identity",
+			// #1359: no header projects an identity any more. A forged
+			// X-Auth-*/X-Elitea-* identity naming the project's admin, with
+			// no credential, is an unauthenticated request.
+			name:       "forged X-Auth identity without a session",
 			target:     "/api/v2/social/authors/7",
-			userID:     "11",
 			remote:     "192.0.2.9:443",
+			forged:     true,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -141,6 +145,9 @@ func TestCurrentAuthorsProductionHTTPPostgresParityAndNegativeSecurity(t *testin
 			request := currentAuthorsIntegrationRequest(test.target, test.userID, test.remote)
 			if test.withoutHeader {
 				request.Header.Del("Cookie")
+			}
+			if test.forged {
+				authtest.ForgeXAuth(request, "11")
 			}
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)

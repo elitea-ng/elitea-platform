@@ -129,6 +129,8 @@ func NewGatewayClient(cfg GatewayClientConfig) (*GatewayClient, error) {
 			Timeout:             10 * time.Second,
 			PermitWithoutStream: true,
 		}),
+		grpc.WithChainUnaryInterceptor(callerContextUnary),
+		grpc.WithChainStreamInterceptor(callerContextStream),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("llmproxy: gateway client: %w", err)
@@ -142,6 +144,62 @@ func NewGatewayClient(cfg GatewayClientConfig) (*GatewayClient, error) {
 
 // Close releases the connection.
 func (c *GatewayClient) Close() error { return c.conn.Close() }
+
+// callerContextError keeps the caller's own context error visible through
+// the hop. gRPC reports a passed deadline or a cancelled context as a status
+// (codes.DeadlineExceeded, codes.Canceled) that does not wrap the context's
+// error, so `errors.Is(err, context.DeadlineExceeded)` — what every caller
+// of the old HTTP hop tested — would turn false. When the caller's context
+// has ended, the returned error wraps both: ctx.Err() for errors.Is and the
+// status for status.FromError. A failure while the context is still live,
+// including a deadline the gateway itself enforced, is returned unchanged.
+func callerContextError(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return err
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil || errors.Is(err, ctxErr) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ctxErr, err)
+}
+
+func callerContextUnary(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return callerContextError(ctx, invoker(ctx, method, req, reply, cc, opts...))
+}
+
+func callerContextStream(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	stream, err := streamer(ctx, desc, cc, method, opts...)
+	if err != nil {
+		return nil, callerContextError(ctx, err)
+	}
+	return &callerContextClientStream{ClientStream: stream, ctx: ctx}, nil
+}
+
+// callerContextClientStream applies callerContextError to every stream
+// operation. ctx is the context the stream was opened with: the stream ends
+// when it does.
+type callerContextClientStream struct {
+	grpc.ClientStream
+	ctx context.Context
+}
+
+func (s *callerContextClientStream) SendMsg(m any) error {
+	return callerContextError(s.ctx, s.ClientStream.SendMsg(m))
+}
+
+func (s *callerContextClientStream) RecvMsg(m any) error {
+	return callerContextError(s.ctx, s.ClientStream.RecvMsg(m))
+}
+
+func (s *callerContextClientStream) CloseSend() error {
+	return callerContextError(s.ctx, s.ClientStream.CloseSend())
+}
+
+func (s *callerContextClientStream) Header() (metadata.MD, error) {
+	md, err := s.ClientStream.Header()
+	return md, callerContextError(s.ctx, err)
+}
 
 // gatewayAddress turns LLM_GATEWAY_URL into "host:port".
 func gatewayAddress(raw string) (addr, host string, err error) {
