@@ -57,14 +57,42 @@ func admissionPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	sql, err := os.ReadFile(filepath.Join("..", "..", "migrations", "shared", "0107_provider_admitted_revisions.sql"))
-	if err != nil {
-		t.Fatalf("read 0107: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(sql)); err != nil {
-		t.Fatalf("apply 0107: %v", err)
+	// 0107 creates the plane; 0171 widens its origin CHECK to the gRPC
+	// listener the registrar records (grpcs://host:port).
+	for _, file := range []string{"0107_provider_admitted_revisions.sql", "0171_provider_origin_grpcs.sql"} {
+		sql, err := os.ReadFile(filepath.Join("..", "..", "migrations", "shared", file))
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
 	}
 	return pool
+}
+
+// The facades reach their providers over gRPC, and the registrar records the
+// listener it dialled, grpcs://host:port. 0107's CHECK admitted only http(s),
+// so every boot-time registration was refused with 23514 and the admission
+// plane listed nothing; 0171 admits the gRPC origin and still refuses an
+// origin with a path or another scheme.
+func TestRegisterAdmitsTheGRPCListenerOriginAndStillRefusesAPath(t *testing.T) {
+	pool := admissionPool(t)
+	ctx := context.Background()
+	manifest := []byte(`{"name": "wikis", "provided_toolkits": []}`)
+	if _, err := providerhub.Register(ctx, pool, providerhub.Registration{ProjectID: 1, ProviderID: "wikis", Origin: "grpcs://elitea-deepwiki:9443", Manifest: manifest, Actor: "facade:deepwiki"}); err != nil {
+		t.Fatalf("a grpcs origin was refused: %v", err)
+	}
+	var origin string
+	_ = pool.QueryRow(ctx, `SELECT origin FROM provider_hub.provider_origin_registration WHERE project_id = 1 AND provider_id = 'wikis'`).Scan(&origin)
+	if origin != "grpcs://elitea-deepwiki:9443" {
+		t.Fatalf("origin = %q", origin)
+	}
+	for _, refused := range []string{"grpcs://elitea-deepwiki:9443/elitea.subapp.v1.ProviderService", "grpc://elitea-deepwiki:9443", "tcp://elitea-deepwiki:9443"} {
+		if _, err := providerhub.Register(ctx, pool, providerhub.Registration{ProjectID: 2, ProviderID: "wikis", Origin: refused, Manifest: manifest, Actor: "facade:deepwiki"}); err == nil {
+			t.Fatalf("origin %q was admitted", refused)
+		}
+	}
 }
 
 func TestPresentTellsAMigratedDatabaseFromABareOne(t *testing.T) {
