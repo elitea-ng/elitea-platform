@@ -7,7 +7,6 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/conversationactivity"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 // The conversation activity frames (client contract 1.12) start where a
@@ -15,15 +14,18 @@ import (
 //
 //   - an agent admission (the turn's question and its streaming answer are
 //     written in the admission transaction): the conversation runs;
-//   - an agent result projected (an answer, or a pause for input), before
-//     the settlement arrives;
-//   - every settlement (completion, pause, failure, cancellation), which
-//     also covers a result that never projected;
+//   - the settlement of an agent execution (completion, pause, failure,
+//     cancellation). The settlement protocol commits only after the
+//     execution's terminal output (its answer, its pause or its failure)
+//     projected, so the settlement alone sees every end of a turn: the
+//     projection itself sends nothing, or each end would send two frames;
 //   - a stop of the turn.
 //
 // Each wrapper calls the notifier only after its inner call succeeded. The
 // notifier reads the committed state and publishes detached from the
-// caller, so a slow or failed publish never delays or fails the turn.
+// caller, so a slow or failed publish never delays or fails the turn, and it
+// drops a frame identical to the one it last sent for the conversation (an
+// idempotent replay of a settlement).
 
 // activityAdmissionStore notifies after an agent admission commits.
 type activityAdmissionStore struct {
@@ -37,20 +39,6 @@ func (s activityAdmissionStore) AdmitAgentExecution(ctx context.Context, admissi
 		if project, parseErr := strconv.ParseInt(admission.Record.Job.ProjectionProjectID, 10, 64); parseErr == nil {
 			s.activity.ConversationChanged(ctx, project, admission.Binding.ClientStreamID)
 		}
-	}
-	return outcome, err
-}
-
-// activityAgentExecutionIngestor notifies after an agent result projects.
-type activityAgentExecutionIngestor struct {
-	next     outputAgentExecutionIngestor
-	activity *conversationactivity.Notifier
-}
-
-func (i activityAgentExecutionIngestor) IngestAgent(ctx context.Context, frame outputapp.AgentExecutionFrame) (outputapp.ProjectionOutcome, error) {
-	outcome, err := i.next.IngestAgent(ctx, frame)
-	if err == nil {
-		i.activity.ExecutionChanged(ctx, frame.Fence.ExecutionID)
 	}
 	return outcome, err
 }
@@ -69,13 +57,33 @@ func (s activityCancellationStore) CancelCurrentAgent(ctx context.Context, reque
 	return outcome, err
 }
 
-// activitySettlementHooks notifies after every settlement commits.
+// agentOutputPrefix is the logical output id prefix of an agent
+// execution's terminal output (output.AgentExecutionFrame). A settlement
+// commits only against the durable terminal output it names, so the prefix
+// tells an agent (chat) execution apart from every other kind (an index
+// ingest, a toolkit call, a configuration validation) without a read.
+const agentOutputPrefix = "agent-execution:"
+
+// activitySettlementHooks notifies after an agent execution's settlement
+// commits. Other execution kinds have no conversation, and an unknown
+// outcome (runtime recovery may run the execution again) changes nothing a
+// list row shows.
 func activitySettlementHooks(activity *conversationactivity.Notifier) []executionapp.SettlementOption {
 	if activity == nil {
 		return nil
 	}
 	return []executionapp.SettlementOption{executionapp.WithAfterSettleHooks(
 		func(ctx context.Context, proposal executionapp.SettlementProposal, _ executionapp.SettlementReceipt) {
+			if !changesConversationActivity(proposal) {
+				return
+			}
 			activity.ExecutionChanged(ctx, proposal.Fence.ExecutionID)
 		})}
+}
+
+// changesConversationActivity: the settlement ends a turn of an agent
+// execution.
+func changesConversationActivity(proposal executionapp.SettlementProposal) bool {
+	return proposal.Outcome != executionapp.SettlementOutcomeUnknown &&
+		proposal.TerminalLogicalOutputID == agentOutputPrefix+proposal.Fence.ExecutionID
 }

@@ -34,6 +34,15 @@ import { useActivityFeed } from "./activityFeed.store";
 
 const UNREAD_KEY = "desktop.localWork.unread";
 
+/**
+ * A read mark stops mattering once its finish is no longer recent: the
+ * glyph shows the grey check only for a day (`activityGlyph`).
+ */
+const READ_MARK_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** At most this many marks are kept: the newest finishes. */
+const MAX_MARKS = 200;
+
 /** Per thread: when its last turn finished (epoch ms), and whether the person saw it. */
 interface ThreadMark {
   readonly finishedAt: number;
@@ -73,6 +82,19 @@ function writeMarks(marks: Marks): void {
   }
 }
 
+/**
+ * The marks worth keeping: an unread one, or a read one while its finish is
+ * recent; the newest `MAX_MARKS` of them. A thread that is no longer listed
+ * stops being marked when its mark ages out, or when the cap drops it.
+ */
+function pruneMarks(marks: Marks, now: number = Date.now()): Marks {
+  const kept = Object.entries(marks)
+    .filter(([, mark]) => mark.unread || now - mark.finishedAt < READ_MARK_TTL_MS)
+    .sort(([, a], [, b]) => b.finishedAt - a.finishedAt)
+    .slice(0, MAX_MARKS);
+  return Object.fromEntries(kept);
+}
+
 interface LocalThreadMarksState {
   readonly marks: Marks;
   readonly finished: (threadId: string, at: number, seen: boolean) => void;
@@ -84,13 +106,13 @@ type MarksStore = UseBoundStore<StoreApi<LocalThreadMarksState>>;
 /** A fresh marks store, read from storage (tests build their own). */
 function createLocalThreadMarksStore(): MarksStore {
   return create<LocalThreadMarksState>((set) => ({
-    marks: readMarks(),
+    marks: pruneMarks(readMarks()),
     finished: (threadId, at, seen) =>
       set((state) => {
-        const marks = {
+        const marks = pruneMarks({
           ...state.marks,
           [threadId]: { finishedAt: at, unread: !seen },
-        };
+        });
         writeMarks(marks);
         return { marks };
       }),
@@ -98,10 +120,10 @@ function createLocalThreadMarksStore(): MarksStore {
       set((state) => {
         const mark = state.marks[threadId];
         if (mark === undefined || !mark.unread) return {};
-        const marks = {
+        const marks = pruneMarks({
           ...state.marks,
           [threadId]: { ...mark, unread: false },
-        };
+        });
         writeMarks(marks);
         return { marks };
       }),
@@ -223,23 +245,43 @@ function liveState(
   return running || server.state === "running" ? "running" : "idle";
 }
 
-/** How many of a folder's threads need the person, following the feed, the overlay and the marks. */
+/**
+ * How many of a folder's threads need the person, following the feed, the
+ * overlay and the marks. It reads no thread list: the threads that can need
+ * the person are those with a live host turn or cloud run in the folder, and
+ * those the server's frames know by the folder's remembered UUIDs. `threads`
+ * adds the folder's listed threads when the caller already holds them (an
+ * open folder), for a frame keyed by the thread's id alone.
+ */
 export function useLocalNeedsYouCount(
-  threads: readonly { readonly id: string }[],
+  workspaceId: string,
   uuids: Readonly<Record<string, string>>,
+  threads: readonly { readonly id: string }[] = [],
 ): number {
   const turns = useActivityFeed((state) => state.turns);
   const cloudRuns = useActivityFeed((state) => state.cloudRuns);
   const marks = useLocalThreadMarks((state) => state.marks);
   useConversationActivityOverlay((state) => state.entries);
-  return threads.filter(
-    (thread) =>
+  const candidates = new Set<string>([
+    ...threads.map((thread) => thread.id),
+    ...Object.keys(uuids),
+  ]);
+  for (const turn of Object.values(turns)) {
+    if (turn.workspaceId === workspaceId && turn.conversationId !== null)
+      candidates.add(turn.conversationId);
+  }
+  for (const run of Object.values(cloudRuns)) {
+    if (run.workspaceId === workspaceId && run.conversationId !== null)
+      candidates.add(run.conversationId);
+  }
+  return [...candidates].filter(
+    (threadId) =>
       localThreadActivity(
-        thread.id,
-        uuids[thread.id],
+        threadId,
+        uuids[threadId],
         turns,
         cloudRuns,
-        marks[thread.id],
+        marks[threadId],
       ).state === "needs_you",
   ).length;
 }

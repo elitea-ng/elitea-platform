@@ -87,6 +87,41 @@ describe('the overlay', () => {
     expect(resolveRowActivity(unread).unread).toBe(true);
   });
 
+  it('takes the unread hint from each frame: a turn that starts again clears the previous answer\'s', () => {
+    applyActivityFrame(parseActivityFrame(frame({ state: 'idle', last_activity_at: at(20), unread_hint: true }))!);
+    expect(resolveRowActivity(row()).unread).toBe(true);
+    applyActivityFrame(parseActivityFrame(frame({ state: 'running', last_activity_at: at(30) }))!);
+    expect(resolveRowActivity(row())).toMatchObject({ state: 'running', unread: false });
+    applyActivityFrame(parseActivityFrame(frame({ state: 'needs_you', last_activity_at: at(40), unread_hint: true }))!);
+    expect(resolveRowActivity(row())).toMatchObject({ state: 'needs_you', unread: true });
+  });
+
+  it('never moves the read marker back on the server\'s answer', () => {
+    const unread = row({ unread: true, lastActivityAt: at(-10) });
+    markReadLocally('5', NOW);
+    confirmReadLocally('5', at(-30));
+    expect(resolveRowActivity(unread).unread).toBe(false);
+  });
+
+  it('reads optimistically up to now only, and a failed read puts the previous marker back', () => {
+    // An answer after the client's clock stays unread: no allowance hides it.
+    expect(markReadLocally('5', NOW)).toBeTypeOf('function');
+    expect(resolveRowActivity(row({ unread: true, lastActivityAt: at(30) })).unread).toBe(true);
+
+    resetConversationActivityOverlay();
+    const unread = row({ unread: true });
+    const undo = markReadLocally('5', NOW);
+    expect(resolveRowActivity(unread).unread).toBe(false);
+    undo();
+    expect(resolveRowActivity(unread).unread).toBe(true);
+
+    // A newer marker that arrived meanwhile (another device) is kept.
+    const undoLater = markReadLocally('5', NOW);
+    applyActivityFrame(parseActivityFrame(frame({ unread_hint: false, read_at: at(60) }))!);
+    undoLater();
+    expect(resolveRowActivity(unread).unread).toBe(false);
+  });
+
   it('applies a read frame of another device', () => {
     applyActivityFrame(parseActivityFrame(frame({ unread_hint: false, read_at: at(0) }))!);
     expect(resolveRowActivity(row({ unread: true })).unread).toBe(false);

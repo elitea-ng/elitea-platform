@@ -1341,12 +1341,6 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		agentOutputIngestor = agentOutputNext
 	}
-	// Client contract 1.12: a projected result changes the conversation's
-	// activity status (it finished or paused).
-	if agentOutput != nil && dependencies.ConversationActivity != nil {
-		agentOutputNext = activityAgentExecutionIngestor{next: agentOutputNext, activity: dependencies.ConversationActivity}
-		agentOutputIngestor = agentOutputNext
-	}
 	if replayWake != nil {
 		if agentOutput != nil {
 			agentOutputIngestor = wakingAgentExecutionIngestor{

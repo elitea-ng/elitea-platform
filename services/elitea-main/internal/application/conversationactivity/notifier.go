@@ -18,6 +18,7 @@ package conversationactivity
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -91,6 +92,12 @@ const readTimeout = 5 * time.Second
 // repair it, and a burst of turns must not queue unbounded database reads.
 const maxInFlight = 64
 
+// maxRemembered bounds the conversations whose last sent frame a replica
+// remembers to drop a repeat. Past it the memory starts again: a repeat
+// frame is harmless (a client ignores a frame that is not newer), only
+// wasted.
+const maxRemembered = 4096
+
 // Notifier turns committed changes into frames. Every method is safe on a nil
 // Notifier (no live-update plane: nothing is sent).
 type Notifier struct {
@@ -98,6 +105,9 @@ type Notifier struct {
 	bus    Bus
 	logger *slog.Logger
 	slots  chan struct{}
+	// mu guards sent: per conversation, the last state frame published.
+	mu   sync.Mutex
+	sent map[int64]Frame
 	// sync runs the reads on the caller's goroutine (tests).
 	sync bool
 }
@@ -117,7 +127,7 @@ func New(store Store, bus Bus, logger *slog.Logger, opts ...Option) *Notifier {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	n := &Notifier{store: store, bus: bus, logger: logger, slots: make(chan struct{}, maxInFlight)}
+	n := &Notifier{store: store, bus: bus, logger: logger, slots: make(chan struct{}, maxInFlight), sent: map[int64]Frame{}}
 	for _, opt := range opts {
 		opt(n)
 	}
@@ -185,7 +195,13 @@ func (n *Notifier) run(ctx context.Context, kind string, read func(context.Conte
 			hint := true
 			frame.UnreadHint = &hint
 		}
+		if !n.remember(frame) {
+			// The same transition, told again (an idempotent replay of a
+			// settlement): the readers already have it.
+			return
+		}
 		if err := n.bus.Publish(readCtx, snapshot.ProjectID, snapshot.Audience, frame); err != nil {
+			n.forget(frame)
 			n.logger.WarnContext(readCtx, "conversation activity: publish failed", "kind", kind,
 				"project_id", snapshot.ProjectID, "conversation_id", frame.ConversationID, "err", err)
 		}
@@ -209,4 +225,36 @@ func (n *Notifier) run(ctx context.Context, kind string, read func(context.Conte
 		}()
 		work()
 	}()
+}
+
+// sameTransition: two state frames tell the same transition of a
+// conversation.
+func sameTransition(a, b Frame) bool {
+	return a.ConversationID == b.ConversationID && a.State == b.State && a.Since == b.Since &&
+		a.LastActivityAt == b.LastActivityAt && a.Source == b.Source
+}
+
+// remember records frame as the conversation's last sent one. It answers
+// false when the conversation's last sent frame is the same transition.
+func (n *Notifier) remember(frame Frame) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if last, ok := n.sent[frame.ConversationID]; ok && sameTransition(last, frame) {
+		return false
+	}
+	if len(n.sent) >= maxRemembered {
+		clear(n.sent)
+	}
+	n.sent[frame.ConversationID] = frame
+	return true
+}
+
+// forget drops frame after its publish failed, so a retry is not dropped as
+// a repeat.
+func (n *Notifier) forget(frame Frame) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if last, ok := n.sent[frame.ConversationID]; ok && sameTransition(last, frame) {
+		delete(n.sent, frame.ConversationID)
+	}
 }

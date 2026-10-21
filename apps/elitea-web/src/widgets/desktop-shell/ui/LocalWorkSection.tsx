@@ -235,9 +235,11 @@ interface FolderRowProps extends Omit<SectionProps, 'location'> {
 /** A folder's row, with its hover actions and its native context menu. */
 function FolderRow({ workspace, projects, run, open, selected, project, onToggle }: FolderRowProps): React.JSX.Element {
   const showMenu = useContextMenu();
-  // Client contract 1.12 (desktop state): the folder's threads, and how many need the person.
-  const threads = useQuery(threadsQuery(workspace.id)).data ?? [];
-  const needsYou = useLocalNeedsYouCount(threads, readThreadUuids(workspace.id));
+  // Client contract 1.12 (desktop state): how many of the folder's threads need the person, from the
+  // activity feed, the frames and the marks. A closed folder reads no thread list; an open one shares
+  // the list its thread rows read (the same query).
+  const threads = useQuery({ ...threadsQuery(workspace.id), enabled: open }).data ?? [];
+  const needsYou = useLocalNeedsYouCount(workspace.id, readThreadUuids(workspace.id), threads);
   const appIpc = useAppIpc();
   const { bind, remove } = useFolderMutations(workspace);
   const [picking, setPicking] = useState(false);

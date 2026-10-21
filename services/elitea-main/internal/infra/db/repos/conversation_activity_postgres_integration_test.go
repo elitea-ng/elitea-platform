@@ -307,6 +307,27 @@ func TestConversationSyncBumpsOnlyOnTurnTransitions(t *testing.T) {
 	}
 }
 
+// A group moved to another conversation bumps both, even when the same
+// UPDATE also settles the turn (the transition branch must not shadow the
+// move).
+func TestConversationSyncBumpsBothSidesOfAMove(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	from := newActivityChat(t, pool, false)
+	to := newActivityChat(t, pool, false)
+	answer := from.message(t, from.agent, true)
+	backdate(t, pool, "p_1.chat_conversations", from.id, time.Minute)
+	backdate(t, pool, "p_1.chat_conversations", to.id, time.Minute)
+	fromBefore, toBefore := from.syncAt(t), to.syncAt(t)
+
+	from.exec(t, `UPDATE p_1.chat_message_group SET conversation_id = $2, is_streaming = FALSE WHERE id = $1`, answer, to.id)
+	if got := from.syncAt(t); !got.After(fromBefore) {
+		t.Fatalf("the conversation the group left was not bumped (%v, then %v)", fromBefore, got)
+	}
+	if got := to.syncAt(t); !got.After(toBefore) {
+		t.Fatalf("the conversation the group joined was not bumped (%v, then %v)", toBefore, got)
+	}
+}
+
 func TestConversationReadMarkersCascadeAndForksStartRead(t *testing.T) {
 	f := newForkFixture(t)
 	ctx := context.Background()

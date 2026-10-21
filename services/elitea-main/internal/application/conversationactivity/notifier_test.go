@@ -97,3 +97,52 @@ func TestNotifierPublishesDetachedFromTheCaller(t *testing.T) {
 		t.Fatal("no frame after the caller's context ended")
 	}
 }
+
+// A transition told twice (an idempotent settlement replay) goes out once; a
+// new transition of the same conversation, and the same transition again
+// after a failed publish, go out.
+func TestNotifierSendsEachTransitionOnce(t *testing.T) {
+	bus := &fakeBus{}
+	frame := Frame{ConversationID: 3, State: "idle", Since: "t1", LastActivityAt: "t1"}
+	store := &switchingStore{snapshot: Snapshot{ProjectID: 1, Audience: Audience{Project: true}, Frame: frame}}
+	n := New(store, bus, nil, Synchronous())
+	n.ExecutionChanged(context.Background(), "e")
+	n.ExecutionChanged(context.Background(), "e")
+	if len(bus.frames) != 1 {
+		t.Fatalf("a repeated transition sent %d frames, want 1", len(bus.frames))
+	}
+	store.snapshot.Frame = Frame{ConversationID: 3, State: "running", Since: "t2", LastActivityAt: "t2"}
+	n.ConversationChanged(context.Background(), 1, "c")
+	if len(bus.frames) != 2 {
+		t.Fatalf("a new transition sent %d frames in all, want 2", len(bus.frames))
+	}
+
+	failing := &failingBus{}
+	n = New(store, failing, nil, Synchronous())
+	n.ConversationChanged(context.Background(), 1, "c")
+	n.ConversationChanged(context.Background(), 1, "c")
+	if failing.calls != 2 {
+		t.Fatalf("a retry after a failed publish was dropped: %d publishes, want 2", failing.calls)
+	}
+}
+
+type switchingStore struct{ snapshot Snapshot }
+
+func (s *switchingStore) ConversationByUUID(context.Context, int64, string) (Snapshot, bool, error) {
+	return s.snapshot, true, nil
+}
+
+func (s *switchingStore) ConversationByExecution(context.Context, string) (Snapshot, bool, error) {
+	return s.snapshot, true, nil
+}
+
+func (s *switchingStore) ConversationByMessage(context.Context, int64, string) (Snapshot, bool, error) {
+	return s.snapshot, true, nil
+}
+
+type failingBus struct{ calls int }
+
+func (b *failingBus) Publish(context.Context, int64, Audience, Frame) error {
+	b.calls++
+	return errors.New("bus down")
+}

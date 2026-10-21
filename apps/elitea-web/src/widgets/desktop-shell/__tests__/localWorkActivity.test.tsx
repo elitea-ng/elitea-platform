@@ -142,6 +142,41 @@ describe('Local work thread activity', () => {
   });
 });
 
+describe('the folder count and the marks', () => {
+  it('counts a collapsed folder\'s threads that need the person from the feed, without its thread list', async () => {
+    recordThread('w1', { id: '77', title: 'fix the build', updatedAt: 1 });
+    const user = userEvent.setup();
+    const { ipc } = mount('/workspaces');
+    await threadRow('fix the build');
+    await waitFor(() => expect(ipc.subscriberCount()).toBeGreaterThan(0));
+    const folder = screen.getAllByTestId('shell-folder')[0] as HTMLElement;
+    // Collapse the folder: its threads are no longer shown.
+    await user.click(within(folder).getAllByRole('button')[0] as HTMLElement);
+    await waitFor(() => expect(screen.queryAllByTestId('shell-thread')).toHaveLength(0));
+
+    useActivityFeed.getState().registerTurn('t1', { workspaceId: 'w1', workspaceName: 'app', conversationId: '77' });
+    act(() => {
+      ipc.emit({ turn_id: 't1', seq: 1, kind: 'status', payload: { phase: 'running' } });
+      ipc.emit({ turn_id: 't1', seq: 2, kind: 'approval_request', payload: { request_id: 'r1', tool: 'run_command', title: 'Run it', detail: '', reason: '', can_remember: false } });
+    });
+    await waitFor(() => expect(within(folder).getByTestId('activity-needs-you')).toHaveTextContent('1 needs you'));
+  });
+
+  it('keeps the unread marks and the recent read ones, the newest 200 at most', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const marks = useLocalThreadMarks.getState();
+    marks.finished('old-read', Date.now() - 2 * day, true);
+    marks.finished('old-unread', Date.now() - 2 * day, false);
+    marks.finished('recent-read', Date.now(), true);
+    expect(Object.keys(useLocalThreadMarks.getState().marks).sort()).toEqual(['old-unread', 'recent-read']);
+    for (let index = 0; index < 205; index += 1) useLocalThreadMarks.getState().finished(`t${index}`, Date.now() - day + index, false);
+    const kept = useLocalThreadMarks.getState().marks;
+    expect(Object.keys(kept)).toHaveLength(200);
+    expect(kept['recent-read']).toBeDefined();
+    expect(kept['old-unread']).toBeUndefined();
+  });
+});
+
 describe('localThreadActivity', () => {
   const turn: TrackedTurn = { turnId: 't', workspaceId: 'w1', workspaceName: 'app', conversationId: '5', phase: 'running', startedAt: 1, tool: null, steps: 0, approvals: [], commit: 'none', finished: false, changedFiles: 0, usage: null };
 

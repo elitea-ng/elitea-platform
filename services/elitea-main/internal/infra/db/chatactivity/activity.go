@@ -95,8 +95,11 @@ type Querier interface {
 // row's Unread is false. An id that does not exist is absent from the map.
 //
 // It reads each conversation's newest message group through
-// chat_message_group_conversation_newest_idx and the reader's marker
-// through the primary key of chat_conversation_reads (tenant/0153). A
+// chat_message_group_conversation_newest_idx, its last write and its newest
+// answer as a LIMIT 1 walk of chat_message_group_conversation_last_write_idx
+// (newest write first, so it stops at the first match instead of reading
+// every group), and the reader's marker through the primary key of
+// chat_conversation_reads (tenant/0153). A
 // reader without a marker has read everything before the tenant's
 // chat_conversation_read_baseline().
 func Load(ctx context.Context, q Querier, s string, reader int64, ids []int64) (map[int64]Activity, error) {
@@ -109,8 +112,8 @@ func Load(ctx context.Context, q Querier, s string, reader int64, ids []int64) (
 		       COALESCE(latest.is_streaming, false),
 		       COALESCE(latest.paused, false),
 		       latest.at,
-		       COALESCE(agg.last_at, c.created_at),
-		       COALESCE(agg.answer_at > COALESCE(r.read_at, %[1]s.chat_conversation_read_baseline()), false)
+		       COALESCE(last_write.at, c.created_at),
+		       COALESCE(answer.at > COALESCE(r.read_at, %[1]s.chat_conversation_read_baseline()), false)
 		         AND $2::bigint > 0
 		FROM %[1]s.chat_conversations c
 		LEFT JOIN LATERAL (
@@ -120,12 +123,19 @@ func Load(ctx context.Context, q Querier, s string, reader int64, ids []int64) (
 		    ORDER BY g.created_at DESC, g.id DESC
 		    LIMIT 1) latest ON TRUE
 		LEFT JOIN LATERAL (
-		    SELECT max(COALESCE(g.updated_at, g.created_at)) AS last_at,
-		           max(COALESCE(g.updated_at, g.created_at))
-		             FILTER (WHERE NOT g.is_streaming AND p.entity_name IS DISTINCT FROM 'user') AS answer_at
+		    SELECT COALESCE(g.updated_at, g.created_at) AS at
 		    FROM %[1]s.chat_message_group g
-		    LEFT JOIN %[1]s.chat_participants p ON p.id = g.author_participant_id
-		    WHERE g.conversation_id = c.id) agg ON TRUE
+		    WHERE g.conversation_id = c.id
+		    ORDER BY COALESCE(g.updated_at, g.created_at) DESC
+		    LIMIT 1) last_write ON TRUE
+		LEFT JOIN LATERAL (
+		    SELECT COALESCE(g.updated_at, g.created_at) AS at
+		    FROM %[1]s.chat_message_group g
+		    WHERE g.conversation_id = c.id AND NOT g.is_streaming
+		      AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_participants p
+		                      WHERE p.id = g.author_participant_id AND p.entity_name = 'user')
+		    ORDER BY COALESCE(g.updated_at, g.created_at) DESC
+		    LIMIT 1) answer ON TRUE
 		LEFT JOIN %[1]s.chat_conversation_reads r ON r.conversation_id = c.id AND r.user_id = $2::bigint
 		WHERE c.id = ANY($1::bigint[])`, s, PausedPredicate("g")), ids, reader)
 	if err != nil {

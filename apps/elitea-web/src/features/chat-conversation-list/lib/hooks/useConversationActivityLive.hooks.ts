@@ -8,31 +8,49 @@
  * who can see the conversation, and one frame per read to the reader's other
  * devices. Each frame goes into the shared overlay
  * (`shared/lib/conversationActivity`), which the rows of every list read, so
- * no list is fetched again. If the stream fails, the rows keep the listing's
- * state, and the listing is read again when the window gets focus.
+ * no list is fetched again. The tab holds one connection per project, shared
+ * by every list and by the handoff badges (`useSharedEventSource`), and
+ * applies each frame once.
+ *
+ * If the stream drops or fails, frames may be lost: the listing is read
+ * again on the next window focus, once for all the lists of the project
+ * (and on every focus while the stream stays closed for good). A healthy
+ * stream never refetches on focus.
  *
  * `useMarkConversationReadOnView` marks the open conversation read: when it
  * opens, when the window gets focus or becomes visible, and when a new answer
  * arrives while the person looks at it (`markConversationRead`). The row turns
- * read at once; the server's marker then takes its place.
+ * read at once; the server's marker then takes its place, and a failed request
+ * puts the previous marker back.
  */
 import { useEffect, useMemo, useRef } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { useEventSource } from '@/shared/api/sse';
+import { useSharedEventSource } from '@/shared/api/sse';
 import { markConversationRead } from '@/shared/api/generated/chat/chat';
 import { getConfig } from '@/shared/config';
 import {
-  applyActivityFrame,
   confirmReadLocally,
   CONVERSATION_ACTIVITY_EVENT,
   markReadLocally,
-  parseActivityFrame,
+  onActivityEvent,
   useConversationActivityOverlay,
 } from '@/shared/lib/conversationActivity';
 
 const FOLDER_LIST_KEY = ['folder', 'list'] as const;
+
+/**
+ * Per stream URL, frames may have been lost: the stream dropped (the browser
+ * reconnects) or `closed` for good. `focus` is the focus event that last read
+ * the listing again, so the lists of one project refetch once per focus.
+ */
+const streamGaps = new Map<string, { readonly closed: boolean; readonly focus?: Event }>();
+
+/** Test reset. */
+export function resetConversationActivityStreamGaps(): void {
+  streamGaps.clear();
+}
 
 function useProjectStreamUrl(projectId: string | number | null | undefined): string | null {
   const config = getConfig();
@@ -45,29 +63,48 @@ function useProjectStreamUrl(projectId: string | number | null | undefined): str
 export function useConversationActivityLiveEvents(projectId: string | number | null | undefined): void {
   const queryClient = useQueryClient();
   const streamUrl = useProjectStreamUrl(projectId);
-  useEventSource(
+  useSharedEventSource(
     streamUrl,
-    {
-      [CONVERSATION_ACTIVITY_EVENT]: (event: MessageEvent) => {
-        const frame = parseActivityFrame(String(event.data));
-        if (frame !== null) applyActivityFrame(frame);
-      },
-    },
+    CONVERSATION_ACTIVITY_EVENT,
+    { [CONVERSATION_ACTIVITY_EVENT]: onActivityEvent },
     {
       onError: (_event, readyState) => {
-        if (readyState !== 2) return;
-        console.warn('The conversation activity stream is closed; the list refreshes on focus instead.');
+        if (streamUrl === null) return;
+        const closed = readyState === 2;
+        if (closed && streamGaps.get(streamUrl)?.closed !== true) {
+          console.warn('The conversation activity stream is closed; the list refreshes on focus instead.');
+        }
+        streamGaps.set(streamUrl, { closed });
       },
     },
   );
 
-  // The fallback: a missed frame is fixed by the listing, read again on focus.
+  // The fallback: frames lost to a dropped or closed stream are fixed by the
+  // listing, read again on focus.
   useEffect(() => {
     if (streamUrl === null) return undefined;
-    const onFocus = (): void => void queryClient.invalidateQueries({ queryKey: FOLDER_LIST_KEY });
+    const onFocus = (event: Event): void => {
+      const gap = streamGaps.get(streamUrl);
+      if (gap === undefined || gap.focus === event) return;
+      // A dropped stream reconnected by itself: one read covers the gap. A
+      // closed one stays a gap, read again on each focus.
+      if (gap.closed) streamGaps.set(streamUrl, { closed: true, focus: event });
+      else streamGaps.delete(streamUrl);
+      void queryClient.invalidateQueries({ queryKey: FOLDER_LIST_KEY });
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [queryClient, streamUrl]);
+}
+
+type OverlayState = ReturnType<typeof useConversationActivityOverlay.getState>;
+
+/** The overlay entry of a conversation named by its id or its UUID. */
+function overlayEntryOf(state: OverlayState, conversationId: string | undefined): OverlayState['entries'][string] | undefined {
+  if (conversationId === undefined) return undefined;
+  // A route may hand the id over as a number at runtime.
+  const id = String(conversationId);
+  return state.entries[state.uuids[id.toLowerCase()] ?? id];
 }
 
 function isOnScreen(): boolean {
@@ -84,9 +121,11 @@ export interface UseMarkConversationReadOnViewParams {
 
 /** Marks the open conversation read while the person can see it. */
 export function useMarkConversationReadOnView({ projectId, conversationId, revision }: UseMarkConversationReadOnViewParams): void {
-  // The open row turns unread again when a frame brings a new answer: read it again.
-  const unreadHint = useConversationActivityOverlay((state) => (conversationId === undefined ? undefined : state.entries[conversationId]?.unreadHint));
-  const lastActivity = useConversationActivityOverlay((state) => (conversationId === undefined ? undefined : state.entries[conversationId]?.lastActivityAt));
+  // The open row turns unread again when a frame brings a new answer: read it
+  // again. The route may name the conversation by its UUID: the overlay keys
+  // it by its id, which the frames map the UUID to.
+  const unreadHint = useConversationActivityOverlay((state) => overlayEntryOf(state, conversationId)?.unreadHint);
+  const lastActivity = useConversationActivityOverlay((state) => overlayEntryOf(state, conversationId)?.lastActivityAt);
   // One request at a time; a read asked for meanwhile runs after it, so a new answer is never left unread.
   const inFlight = useRef(false);
   const again = useRef(false);
@@ -101,12 +140,14 @@ export function useMarkConversationReadOnView({ projectId, conversationId, revis
         return;
       }
       inFlight.current = true;
-      markReadLocally(conversationId);
+      const undo = markReadLocally(conversationId);
       markConversationRead(projectId, conversationId)
         .then((response) => {
           if (response.status === 200) confirmReadLocally(String(response.data.conversation_id), response.data.read_at);
+          else undo();
         })
-        .catch(() => undefined)
+        // Not read on the server: its answers are unread again.
+        .catch(undo)
         .finally(() => {
           inFlight.current = false;
           if (again.current) {

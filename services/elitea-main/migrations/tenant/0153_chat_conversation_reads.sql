@@ -42,6 +42,8 @@
 -- back on each TRANSITION and only then:
 --
 --   * a group INSERT (a turn starts, or a settled message is added);
+--   * an UPDATE that moves the group to another conversation (both
+--     conversations, checked first, so a move that also settles bumps both);
 --   * an UPDATE that changes `is_streaming` (the turn finishes, fails, is
 --     cancelled, pauses, or resumes);
 --   * an UPDATE that adds or removes a pause key (hitl_interrupt,
@@ -63,7 +65,14 @@
 -- INDEXES. The list reads each row's newest message group, and the folder
 -- sidebar counts the conversations whose newest group is paused, so this
 -- adds (conversation_id, created_at DESC, id DESC) and a partial index of
--- the paused groups. The pause predicate is the editor Test run's PAUSED
+-- the paused groups. The list also reads each row's last write
+-- (`last_activity_at`) and its newest answer (`unread`): an expression index
+-- on (conversation_id, COALESCE(updated_at, created_at) DESC) lets both be
+-- an ORDER BY ... LIMIT 1 walk from the newest write down, instead of a
+-- max() over every group of the conversation. An index, not a maintained
+-- column on chat_conversations: a column would be one more write of the
+-- conversation row on every token, which the turn-only bumps above exist to
+-- avoid. The pause predicate is the editor Test run's PAUSED
 -- rule (internal/infra/db/repos/editor_test_runs.go); the Go side keeps the
 -- same text in internal/infra/db/chatactivity.
 --
@@ -111,6 +120,11 @@ BEGIN
               AND attname = ANY (ARRAY['conversation_id', 'created_at', 'is_streaming', 'meta'])) = 4 THEN
         CREATE INDEX IF NOT EXISTS chat_message_group_conversation_newest_idx
             ON chat_message_group (conversation_id, created_at DESC, id DESC);
+        IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('chat_message_group')
+                   AND NOT attisdropped AND attname = 'updated_at') THEN
+            CREATE INDEX IF NOT EXISTS chat_message_group_conversation_last_write_idx
+                ON chat_message_group (conversation_id, (COALESCE(updated_at, created_at)) DESC);
+        END IF;
         CREATE INDEX IF NOT EXISTS chat_message_group_paused_idx
             ON chat_message_group (conversation_id)
             WHERE NOT is_streaming AND (meta ? 'hitl_interrupt' OR meta ? 'hitl_interrupts'
@@ -142,11 +156,13 @@ BEGIN
                 PERFORM %1$I.chat_sync_bump_conversation(OLD.conversation_id);
             ELSIF TG_OP = 'INSERT' THEN
                 PERFORM %1$I.chat_sync_bump_conversation(NEW.conversation_id);
+            ELSIF OLD.conversation_id IS DISTINCT FROM NEW.conversation_id THEN
+                -- A move bumps both conversations, whatever else the UPDATE
+                -- changes (a move that also settles the turn included).
+                PERFORM %1$I.chat_sync_bump_conversation(OLD.conversation_id);
+                PERFORM %1$I.chat_sync_bump_conversation(NEW.conversation_id);
             ELSIF OLD.is_streaming IS DISTINCT FROM NEW.is_streaming
                   OR %1$I.chat_group_meta_paused(OLD.meta) IS DISTINCT FROM %1$I.chat_group_meta_paused(NEW.meta) THEN
-                PERFORM %1$I.chat_sync_bump_conversation(NEW.conversation_id);
-            ELSIF OLD.conversation_id IS DISTINCT FROM NEW.conversation_id THEN
-                PERFORM %1$I.chat_sync_bump_conversation(OLD.conversation_id);
                 PERFORM %1$I.chat_sync_bump_conversation(NEW.conversation_id);
             ELSIF OLD.is_streaming AND NEW.is_streaming THEN
                 -- A write inside a running turn: no conversation bump.

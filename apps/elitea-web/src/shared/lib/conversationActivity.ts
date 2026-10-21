@@ -63,12 +63,27 @@ function activityTime(value: string | undefined): number | null {
 
 /* ── the overlay ── */
 
+/**
+ * The project stream's `conversation_activity` handler: parse the frame and
+ * apply it. Every follower of the stream subscribes it under the channel
+ * `CONVERSATION_ACTIVITY_EVENT` of the shared connection, so a frame is
+ * applied once however many lists follow the project.
+ */
+export function onActivityEvent(event: MessageEvent): void {
+  const frame = parseActivityFrame(String(event.data));
+  if (frame !== null) applyActivityFrame(frame);
+}
+
 interface OverlayEntry {
   readonly state?: ConversationActivityState;
   readonly since?: string;
   /** The frame's `last_activity_at`: the overlay's state is newer than a row older than this. */
   readonly lastActivityAt?: string;
-  /** A frame said a new answer arrived (after `lastActivityAt`'s row). */
+  /**
+   * The newest applied state frame said a new answer arrived (after
+   * `lastActivityAt`'s row). Set per frame: a later frame without an answer
+   * (a turn that starts again) clears it, as the server counts only answers.
+   */
   readonly unreadHint?: boolean;
   /** The person read up to here (epoch ms): an answer at or before it is read. */
   readonly readAt?: number;
@@ -163,8 +178,10 @@ function foldFrame(previous: OverlayEntry | undefined, frame: ActivityFrame): Ov
   let next: OverlayEntry = previous ?? {};
   // A state frame applies only when it is not older than the overlay's own.
   if (frame.state !== undefined && laterTime(frame.lastActivityAt, next.lastActivityAt)) {
+    // The hint belongs to this frame alone: drop the previous frame's.
+    const { unreadHint: _previousHint, ...rest } = next;
     next = {
-      ...next,
+      ...rest,
       state: frame.state,
       ...(frame.since !== undefined ? { since: frame.since } : {}),
       ...(frame.lastActivityAt !== undefined ? { lastActivityAt: frame.lastActivityAt } : {}),
@@ -186,16 +203,14 @@ export function applyActivityFrame(frame: ActivityFrame): void {
   }));
 }
 
-/**
- * The optimistic read allows for this much clock difference between the
- * client and the server; the server's answer (`confirmReadLocally`) then
- * puts the exact marker in its place.
- */
-const READ_SKEW_MS = 60_000;
+function overlayKey(state: OverlayState, id: string): string {
+  const key = String(id);
+  return state.uuids[key.toLowerCase()] ?? key;
+}
 
 function setReadAt(id: string, readAt: (previous: OverlayEntry) => number): void {
   useConversationActivityOverlay.setState((state) => {
-    const key = state.uuids[id.toLowerCase()] ?? id;
+    const key = overlayKey(state, id);
     const previous = state.entries[key] ?? {};
     return { entries: { ...state.entries, [key]: { ...previous, readAt: readAt(previous) } } };
   });
@@ -203,17 +218,37 @@ function setReadAt(id: string, readAt: (previous: OverlayEntry) => number): void
 
 /**
  * This client read the conversation (the optimistic half of
- * markConversationRead): every answer it knows of is read. `id` is the
- * conversation's numeric id or its UUID.
+ * markConversationRead): every answer it knows of up to `now` is read. `id`
+ * is the conversation's numeric id or its UUID. The server's marker
+ * (`confirmReadLocally`) then takes its place.
+ *
+ * Answers the undo: it puts the previous marker back, unless a newer one
+ * (the server's, or another device's) arrived meanwhile. A failed
+ * markConversationRead calls it, so its answers do not stay hidden.
  */
-export function markReadLocally(id: string, now: number = Date.now()): void {
-  setReadAt(id, (previous) => Math.max(now + READ_SKEW_MS, activityTime(previous.lastActivityAt) ?? 0, previous.readAt ?? 0));
+export function markReadLocally(id: string, now: number = Date.now()): () => void {
+  let before: number | undefined;
+  let optimistic = 0;
+  setReadAt(id, (previous) => {
+    before = previous.readAt;
+    optimistic = Math.max(now, activityTime(previous.lastActivityAt) ?? 0, previous.readAt ?? 0);
+    return optimistic;
+  });
+  return () => {
+    useConversationActivityOverlay.setState((state) => {
+      const key = overlayKey(state, id);
+      const current = state.entries[key];
+      if (current?.readAt !== optimistic || before === optimistic) return {};
+      const { readAt: _optimistic, ...rest } = current;
+      return { entries: { ...state.entries, [key]: before === undefined ? rest : { ...rest, readAt: before } } };
+    });
+  };
 }
 
-/** The server's read marker for the conversation (markConversationRead's `read_at`). */
+/** The server's read marker for the conversation (markConversationRead's `read_at`). It never moves the marker back. */
 export function confirmReadLocally(conversationId: string, readAt: string): void {
   const at = activityTime(readAt);
-  if (at !== null) setReadAt(conversationId, () => at);
+  if (at !== null) setReadAt(conversationId, (previous) => Math.max(at, previous.readAt ?? 0));
 }
 
 /** Test and sign-out reset. */

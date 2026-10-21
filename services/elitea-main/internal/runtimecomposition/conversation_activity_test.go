@@ -92,3 +92,23 @@ func TestConversationActivityWrappersNotifyAfterACommit(t *testing.T) {
 		t.Fatalf("lookups = %v, want %v", lookups.calls, want)
 	}
 }
+
+// Only an agent execution's settlement, with a known outcome, asks for the
+// conversation: every other execution kind has none.
+func TestConversationActivitySettlementFilter(t *testing.T) {
+	agent := executionapp.SettlementProposal{Outcome: executionapp.SettlementSucceeded, TerminalLogicalOutputID: "agent-execution:e1"}
+	agent.Fence.ExecutionID = "e1"
+	if !changesConversationActivity(agent) {
+		t.Fatal("an agent settlement was filtered out")
+	}
+	for name, proposal := range map[string]executionapp.SettlementProposal{
+		"unknown outcome": {Outcome: executionapp.SettlementOutcomeUnknown, TerminalLogicalOutputID: "agent-execution:e1", Fence: agent.Fence},
+		"index ingest":    {Outcome: executionapp.SettlementSucceeded, TerminalLogicalOutputID: "index-ingest:e1", Fence: agent.Fence},
+		"toolkit call":    {Outcome: executionapp.SettlementFailed, TerminalLogicalOutputID: "toolkit-call-tool:e1", Fence: agent.Fence},
+		"other execution": {Outcome: executionapp.SettlementSucceeded, TerminalLogicalOutputID: "agent-execution:e2", Fence: agent.Fence},
+	} {
+		if changesConversationActivity(proposal) {
+			t.Fatalf("%s: asked for the conversation", name)
+		}
+	}
+}
