@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,7 +79,10 @@ func TestEventsNATSBootComposesThePlatformMCPReplayStore(t *testing.T) {
 // nil (or per-replica) store at this seam is how a retried platform write
 // would run twice on another replica, and no handler test composes main's
 // wiring, so this reads it: main.go assigns platformMCPReplays from
-// newPlatformMCPReplayStore and passes it to composeRemoteToolkit, which sets
+// composePlatformMCPReplays and passes it to composeRemoteToolkit;
+// composePlatformMCPReplays answers newPlatformMCPReplayStore's store (the
+// live tests below prove it binds the bucket when it exists and degrades
+// when it does not); composeRemoteToolkit sets
 // RemoteToolkitDependencies.Replays from its parameter.
 func TestProductionRemoteToolkitGetsTheNATSReplayStore(t *testing.T) {
 	fileSet := token.NewFileSet()
@@ -87,15 +95,8 @@ func TestProductionRemoteToolkitGetsTheNATSReplayStore(t *testing.T) {
 		switch n := node.(type) {
 		case *ast.AssignStmt:
 			if len(n.Lhs) == 1 && len(n.Rhs) == 1 && identName(n.Lhs[0]) == "platformMCPReplays" {
-				// platformMCPReplays = replayStore, where replayStore is
-				// newPlatformMCPReplayStore's result (checked below).
-				assigned = assigned || identName(n.Rhs[0]) == "replayStore"
-			}
-			if len(n.Rhs) == 1 && len(n.Lhs) == 2 && identName(n.Lhs[0]) == "replayStore" {
 				call, ok := n.Rhs[0].(*ast.CallExpr)
-				if !ok || identName(call.Fun) != "newPlatformMCPReplayStore" {
-					t.Error("main.go's replayStore no longer comes from newPlatformMCPReplayStore")
-				}
+				assigned = assigned || (ok && identName(call.Fun) == "composePlatformMCPReplays")
 			}
 		case *ast.CallExpr:
 			if identName(n.Fun) == "composeRemoteToolkit" {
@@ -107,7 +108,30 @@ func TestProductionRemoteToolkitGetsTheNATSReplayStore(t *testing.T) {
 		return true
 	})
 	if !assigned || !passed {
-		t.Fatalf("main.go: platformMCPReplays assigned from the NATS store = %v, passed to composeRemoteToolkit = %v", assigned, passed)
+		t.Fatalf("main.go: platformMCPReplays assigned from composePlatformMCPReplays = %v, passed to composeRemoteToolkit = %v", assigned, passed)
+	}
+
+	natsFile, err := parser.ParseFile(fileSet, "event_stream_nats.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromStore := false
+	ast.Inspect(natsFile, func(node ast.Node) bool {
+		fn, ok := node.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "composePlatformMCPReplays" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			if assign, ok := node.(*ast.AssignStmt); ok && len(assign.Lhs) == 2 && identName(assign.Lhs[0]) == "store" {
+				call, ok := assign.Rhs[0].(*ast.CallExpr)
+				fromStore = fromStore || (ok && identName(call.Fun) == "newPlatformMCPReplayStore")
+			}
+			return true
+		})
+		return false
+	})
+	if !fromStore {
+		t.Fatal("composePlatformMCPReplays no longer answers newPlatformMCPReplayStore's store")
 	}
 
 	opsFile, err := parser.ParseFile(fileSet, "desktop_ops.go", nil, 0)
@@ -133,6 +157,106 @@ func TestProductionRemoteToolkitGetsTheNATSReplayStore(t *testing.T) {
 	})
 	if !wired {
 		t.Fatal("composeRemoteToolkit does not set RemoteToolkitDependencies.Replays from its platformReplays parameter")
+	}
+}
+
+// Without the live-update NATS the store is a nil interface (never a typed
+// nil, which the route would read as composed), and startup goes on.
+func TestComposePlatformMCPReplaysWithoutNATSDegrades(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	if store := composePlatformMCPReplays(context.Background(), nil, slog.New(slog.NewTextHandler(&logs, nil))); store != nil {
+		t.Fatalf("composePlatformMCPReplays(nil conn) = %#v, want a nil interface", store)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("no warning logged: %s", logs.String())
+	}
+}
+
+// The boot composition against a real JetStream server: with the bucket it
+// answers the KV store; with a bucket that cannot be bound (here: one too
+// small for a stored answer, which newPlatformMCPReplayStore refuses exactly
+// as it refuses a missing one) it logs an error naming the nats-bootstrap
+// Job and answers a nil interface, so elitea-main starts and platform calls
+// answer 501. The bucket is restored for the other tests.
+func TestEventsNATSBootDegradesWithoutThePlatformMCPReplayBucket(t *testing.T) {
+	url := os.Getenv("ELITEA_TEST_NATS_URL")
+	if url == "" {
+		t.Skip("set ELITEA_TEST_NATS_URL (a JetStream-enabled NATS) to run the live-update boot test")
+	}
+	conn, err := newEventsNATSConn(envLookup(map[string]string{eventsNATSURLEnv: url}), nil)
+	if err != nil || conn == nil {
+		t.Fatalf("newEventsNATSConn() = (%v, %v), want a connection", conn, err)
+	}
+	t.Cleanup(conn.Close)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	t.Cleanup(func() { bootstrapPlatformReplayBucket(t, conn) })
+
+	for _, tc := range []struct {
+		name    string
+		prepare func()
+	}{
+		{"missing", func() {}},
+		{"misconfigured", func() {
+			if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+				Bucket: desktopopsapi.PlatformReplayBucket, History: 1, TTL: time.Minute, Storage: jetstream.MemoryStorage,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := js.DeleteKeyValue(ctx, desktopopsapi.PlatformReplayBucket); err != nil && !errors.Is(err, jetstream.ErrBucketNotFound) {
+				t.Fatal(err)
+			}
+			tc.prepare()
+			var logs bytes.Buffer
+			store := composePlatformMCPReplays(ctx, conn, slog.New(slog.NewTextHandler(&logs, nil)))
+			if store != nil {
+				t.Fatalf("composePlatformMCPReplays() = %#v, want a nil interface", store)
+			}
+			if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "nats-bootstrap") ||
+				!strings.Contains(logs.String(), desktopopsapi.PlatformReplayBucket) {
+				t.Fatalf("the degraded store was not logged as an error naming the bootstrap Job: %s", logs.String())
+			}
+		})
+	}
+
+	_ = js.DeleteKeyValue(ctx, desktopopsapi.PlatformReplayBucket)
+	bootstrapPlatformReplayBucket(t, conn)
+	store := composePlatformMCPReplays(ctx, conn, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, ok := store.(*desktopopsapi.NATSPlatformReplays); !ok {
+		t.Fatalf("composePlatformMCPReplays() with the bucket = %#v, want the KV store", store)
+	}
+}
+
+// The resolved definition names each platform MCP server's tools from the
+// bridge the router binds (issue 1231): main.go hands that bridge to the
+// definition's service. Without it the definition offers a generic call with
+// no tool names and cannot list a guardrail-blocked tool out.
+func TestProductionResolvedVersionNamesPlatformMCPTools(t *testing.T) {
+	mainFile, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wired := false
+	ast.Inspect(mainFile, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "WithPlatformTools" &&
+			len(call.Args) == 1 && identName(call.Args[0]) == "platformMCPTools" {
+			wired = true
+		}
+		return true
+	})
+	if !wired {
+		t.Fatal("main.go does not give the resolved definition's service the platform MCP tool bridge (WithPlatformTools(platformMCPTools))")
 	}
 }
 

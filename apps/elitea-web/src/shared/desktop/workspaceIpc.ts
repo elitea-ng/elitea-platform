@@ -172,6 +172,8 @@ export type AgentEvent =
   /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced. Absent when the gateway reports no usage. */
   | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number } })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
+  /** The host closed an open request nobody answered within its wait (an MCP sign-in): it no longer waits. */
+  | (EventBase & { kind: 'approval_closed'; payload: { request_id: string; reason: string } })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
   | (EventBase & { kind: 'done'; payload: TurnDonePayload })
   /** After `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again. */

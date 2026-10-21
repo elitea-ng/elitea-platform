@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 const (
@@ -31,10 +32,22 @@ const (
 	platformToolTimeout = 60 * time.Second
 	// platformReplayWait is how long a retry that finds its key still in
 	// progress (on any replica) waits for that attempt's answer before
-	// answering 409 remote_toolkit_in_progress; platformReplayPoll is how
-	// often it looks.
-	platformReplayWait = 30 * time.Second
-	platformReplayPoll = 250 * time.Millisecond
+	// answering 409 remote_toolkit_in_progress (the desktop retries with the
+	// same key). It looks again after platformReplayPoll, doubling up to
+	// platformReplayPollMax, and at most platformReplayMaxClaims times in
+	// all: a retry costs a bounded number of KV operations (each claim is a
+	// Create and, while the key is held, a Get), 7 claims in 10 s at these
+	// values, whatever the tool's run time.
+	//
+	// A KV watch on the key would answer sooner, but it is one ordered
+	// consumer created and deleted per waiting retry (more JetStream API
+	// calls than the backoff makes, and a consumer grant on the bucket the
+	// replay path does not otherwise need), for a path that only a dropped
+	// answer reaches.
+	platformReplayWait      = 10 * time.Second
+	platformReplayPoll      = 250 * time.Millisecond
+	platformReplayPollMax   = 4 * time.Second
+	platformReplayMaxClaims = 8
 	// platformReplayStoreTimeout bounds one replay store call.
 	platformReplayStoreTimeout = 5 * time.Second
 )
@@ -102,21 +115,47 @@ func (b *PlatformToolBridge) CallPlatformTool(request *http.Request, call Platfo
 	return (*caller).CallPlatformTool(request, call)
 }
 
+// PlatformToolLister lists a platform MCP server's tools; the router's
+// adapter implements it next to PlatformToolCaller.
+type PlatformToolLister interface {
+	PlatformTools(ctx context.Context, projectID int64, toolkitType string) ([]storage.ClientPlatformTool, error)
+}
+
+// PlatformTools serves storage.ClientPlatformToolCatalog from the bound
+// caller, so the resolved definition names the same server's tools a call
+// runs. Unbound (or a caller that lists nothing) it answers nil, nil: the
+// definition then carries no `tools`.
+func (b *PlatformToolBridge) PlatformTools(ctx context.Context, projectID int64, toolkitType string) ([]storage.ClientPlatformTool, error) {
+	if b == nil {
+		return nil, nil
+	}
+	caller := b.caller.Load()
+	if caller == nil {
+		return nil, nil
+	}
+	lister, ok := (*caller).(PlatformToolLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.PlatformTools(ctx, projectID, toolkitType)
+}
+
 func platformCallDigest(toolkitType, toolName, argumentsSHA256 string) string {
 	digest := sha256.Sum256([]byte(toolkitType + "\x00" + toolName + "\x00" + argumentsSHA256))
 	return hex.EncodeToString(digest[:])
 }
 
 // runPlatformTool runs the authorized call once per Idempotency-Key, on any
-// replica, and answers it. It is reached after every check serve makes; only
-// a call it admits is charged to the caller's rate.
+// replica, and answers it. It is reached after every check serve makes, the
+// rate limit's included; only a call it admits (its key claimed now) is
+// charged to the caller's rate.
 func (h *remoteToolkitHandler) runPlatformTool(
 	writer http.ResponseWriter,
 	request *http.Request,
 	call *remoteCall,
 	idempotencyKey string,
 	arguments json.RawMessage,
-	charge func() bool,
+	charge func(),
 ) {
 	key := platformReplayKey(call.actor, call.project, idempotencyKey)
 	digest := platformCallDigest(call.toolkitType, call.toolName, call.argumentsSHA256)
@@ -160,10 +199,7 @@ func (h *remoteToolkitHandler) runPlatformTool(
 			slog.WarnContext(request.Context(), "platform MCP replay: release failed", "err", err)
 		}
 	}
-	if !charge() {
-		release()
-		return
-	}
+	charge()
 	// Detached from the caller's cancellation (its values, the authenticated
 	// user among them, are kept): a client that gave up and retries with the
 	// same key gets this run's answer instead of a second run.
@@ -210,24 +246,30 @@ func (h *remoteToolkitHandler) runPlatformTool(
 
 // claimPlatformCall claims key, and while another attempt holds it waits up
 // to h.replayWait for that attempt's answer (or for it to release the key,
-// which this call then claims).
+// which this call then claims), looking again with a doubling delay and at
+// most platformReplayMaxClaims times.
 func (h *remoteToolkitHandler) claimPlatformCall(
 	requestCtx context.Context, key, digest string, storeCtx func() (context.Context, context.CancelFunc),
 ) (PlatformReplay, error) {
 	deadline := h.now().Add(h.replayWait)
-	for {
+	delay := h.replayPoll
+	for claims := 1; ; claims++ {
 		ctx, cancel := storeCtx()
 		claim, err := h.replays.Claim(ctx, key, digest)
 		cancel()
-		if err != nil || claim.Verdict != ReplayInProgress || !h.now().Before(deadline) {
+		left := deadline.Sub(h.now())
+		if err != nil || claim.Verdict != ReplayInProgress || left <= 0 || claims >= platformReplayMaxClaims {
 			return claim, err
 		}
+		timer := time.NewTimer(min(delay, left))
 		select {
 		case <-requestCtx.Done():
+			timer.Stop()
 			// The caller left; it retries with the same key.
 			return claim, nil
-		case <-time.After(h.replayPoll):
+		case <-timer.C:
 		}
+		delay = min(2*delay, max(h.replayPollMax, h.replayPoll))
 	}
 }
 

@@ -315,7 +315,19 @@ one). `cancel` (or `deny`), no answer within 10 minutes, or a second
 the model reads (`authorization_cancelled`, `authorization_timeout`,
 `authorization_required`); the turn goes on. The UI shows the question as a
 card in the transcript and drops it when the call's `tool_result` arrives.
-The commit's `hitl_exchanges` hold it as kind `mcp_authorization`.
+The commit's `hitl_exchanges` hold it as kind `mcp_authorization`. At the
+10-minute wait the host closes the question itself: `approval_closed
+{request_id, reason: "timeout"}`, an exchange with `decision: "timeout"`, and
+a late `continue` answers `approval_closed`. Whether the page is the MCP
+page is the platform's word: the 409's `authorization_required.toolkit_type`
+(`mcp` or `mcp_*`) when it names this toolkit, else the definition's `type`.
+
+A platform MCP server's definition entry (client contract 1.16) names its
+tools (`tools: [{name, description}]`): its one generic `<toolkit>_call` tool
+lists them in its description (names, and descriptions up to 6 KiB in all)
+and as the `tool_name` enum; when the guardrails blocked some, the platform
+lists the remaining ones in `selected_tools` and each becomes its own tool
+with its own description.
 
 `mentions` are the workspace-relative paths the person referenced with "@"
 (a folder may end with `/`; at most 50). Each must resolve inside the
@@ -1131,7 +1143,8 @@ both together:
   `cancelled` or `error` — a turn refused at the start sends `error` and
   `status` `error` and never `done`. (The web feed keeps a turn listed after
   that only while its commit is pending or failed.)
-- An approval waits from `approval_request` until `approval_respond` answers it
+- An approval waits from `approval_request` until `approval_respond` answers it,
+  an `approval_closed` names its `request_id` (the host closed it at its wait),
   or its turn ends. No other event closes it: a `tool_result` or a `text_delta`
   says nothing about which approval it was.
 - Index progress: `Parsing <m> files` in an `index://event` message sets the
@@ -1219,12 +1232,13 @@ order. Kinds and payloads:
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
 | `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
 | `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `approval_closed` | `{request_id, reason: "timeout"}` — the host closed an open `approval_request` nobody answered within its wait (today: an MCP sign-in, 10 minutes); the card goes, the turn's `hitl_exchanges` record it with `decision: "timeout"`, and an `approval_respond` for it answers `approval_closed` |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
-`running` → (`text_delta`, `tool_call`, `approval_request`, `tool_result`, `usage`)* →
+`running` → (`text_delta`, `tool_call`, `approval_request`, `approval_closed`, `tool_result`, `usage`)* →
 `status` `done` | `error` → `done` → (`commit_failed`). A cancelled turn
 ends `status` `cancelled` → `done` with `commit: "none"`; nothing is
 committed and its execution expires on the server. A run that fails after

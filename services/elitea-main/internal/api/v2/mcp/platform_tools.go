@@ -14,6 +14,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -43,6 +44,37 @@ type PlatformToolOutcome struct {
 	// Text is the result's text content (the operation's JSON body on
 	// success).
 	Text string
+}
+
+// PlatformToolInfo is one tool of a platform MCP server, as the endpoint's
+// tools/list names it.
+type PlatformToolInfo struct {
+	Name        string
+	Description string
+}
+
+// PlatformTools lists the tools of the internal builder toolkitType names, as
+// its endpoint lists them in projectID (the desktop's resolved definition
+// names them, client contract 1.16). The listing does not depend on the
+// caller: each operation checks its own permission when it is called.
+func (h *Handler) PlatformTools(ctx context.Context, projectID int64, toolkitType string) ([]PlatformToolInfo, error) {
+	builder, ok := mcpregistry.InternalBuilderForType(toolkitType)
+	if !ok || h == nil || projectID <= 0 {
+		return nil, ErrNotPlatformTool
+	}
+	schema, ok := projectSchema(strconv.FormatInt(projectID, 10))
+	if !ok {
+		return nil, ErrNotPlatformTool
+	}
+	tools, err := h.source.tools(ctx, schema, scope{kind: scopeCategory, category: builder.Category})
+	if err != nil {
+		return nil, err
+	}
+	listed := make([]PlatformToolInfo, 0, len(tools))
+	for _, tool := range tools {
+		listed = append(listed, PlatformToolInfo{Name: tool.Name, Description: tool.Description})
+	}
+	return listed, nil
 }
 
 // CallPlatformTool runs one tool of the internal builder toolkitType names

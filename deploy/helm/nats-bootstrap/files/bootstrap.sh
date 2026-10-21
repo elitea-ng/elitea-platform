@@ -297,9 +297,11 @@ bootstrap_main() {
   # a hash of (caller, project, Idempotency-Key). elitea-main claims the key
   # (kv.Create) before running the call and stores its answer, so a retry on
   # another replica replays it instead of running a write twice. The TTL is
-  # the API's 15-minute replay window and elitea-main refuses less at boot;
-  # it is not a knob. A full bucket refuses new claims, and elitea-main then
-  # answers 503 rather than run a call it could not dedupe.
+  # the API's 15-minute replay window and elitea-main refuses less at boot
+  # (it then starts without the store, logging an error, and platform MCP
+  # calls answer 501); it is not a knob. A full bucket refuses new claims,
+  # and elitea-main then answers 503 rather than run a call it could not
+  # dedupe.
   ensure_kv ELITEA_PLATFORM_MCP_REPLAY \
     --replicas "${REPLICAS}" \
     --history 1 \

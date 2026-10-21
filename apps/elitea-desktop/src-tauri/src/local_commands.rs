@@ -759,7 +759,7 @@ pub fn approval_respond(
     } else {
         Err(IpcError::new(
             "approval_closed",
-            "That question is no longer open (the turn ended or it was answered).",
+            "That question is no longer open (the turn ended, it was answered, or nobody answered it in time).",
         ))
     }
 }

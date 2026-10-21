@@ -101,7 +101,8 @@ type RemoteToolkitDependencies struct {
 	// calls only.
 	Platform PlatformToolCaller
 	// Replays claims each platform call's Idempotency-Key before it runs and
-	// keeps its answer, across replicas (*NATSPlatformReplays). Nil answers
+	// keeps its answer, across replicas (*NATSPlatformReplays). Nil (no
+	// live-update NATS, or its bucket could not be bound at startup) answers
 	// 501 for platform calls: without it a retry on another replica could
 	// run a write twice.
 	Replays PlatformReplayStore
@@ -170,7 +171,7 @@ func newRemoteToolkitHandler(deps RemoteToolkitDependencies) *remoteToolkitHandl
 		useCase: deps.Runs, worker: deps.Worker, authorizer: deps.Authorizer, turns: deps.Turns,
 		confirmations: deps.Confirmations, audit: recorder, limiter: limiter, now: time.Now,
 		platform: deps.Platform, replays: deps.Replays,
-		replayWait: platformReplayWait, replayPoll: platformReplayPoll,
+		replayWait: platformReplayWait, replayPoll: platformReplayPoll, replayPollMax: platformReplayPollMax,
 	}
 	return handler
 }
@@ -192,6 +193,7 @@ type remoteToolkitHandler struct {
 	replays       PlatformReplayStore
 	replayWait    time.Duration
 	replayPoll    time.Duration
+	replayPollMax time.Duration
 }
 
 // remoteToolkitConfirmation is the user's approval of ONE sensitive call: it
@@ -266,7 +268,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	}
 	if platform && h.replays == nil {
 		desktopwire.WriteError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
-			"This deployment has no shared Idempotency-Key store (the live-update NATS), so it cannot run a platform MCP tool "+
+			"This deployment has no shared Idempotency-Key store (the live-update NATS and its platform MCP replay bucket), so it cannot run a platform MCP tool "+
 				"without risking a retried write running twice.")
 		return
 	}
@@ -410,26 +412,20 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	// RATE. Only a run this request ADMITS is charged, after every check
 	// above: a refused or invalid call, and a retry whose Idempotency-Key
 	// already admitted its run (a poll for the result), cost nothing.
+	// While the caller is over the limit every call is answered 429, a retry
+	// of an admitted key included, without being counted; the saved-toolkit
+	// and the platform path check it at the same point, before anything is
+	// claimed or run.
 	limitKey := "actor:" + strconv.FormatInt(actor, 10)
-	if platform {
-		h.runPlatformTool(writer, request, call, runRequest.IdempotencyKey, arguments, func() bool {
-			if blocked, retry := h.limiter.Blocked(limitKey); blocked {
-				call.outcome = "rate_limited"
-				writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
-				desktopwire.WriteError(writer, http.StatusTooManyRequests, "rate_limited",
-					"Too many remote toolkit calls from this caller. Retry after the interval in Retry-After.")
-				return false
-			}
-			h.limiter.Fail(limitKey)
-			return true
-		})
-		return
-	}
 	if blocked, retry := h.limiter.Blocked(limitKey); blocked {
 		call.outcome = "rate_limited"
 		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
 		desktopwire.WriteError(writer, http.StatusTooManyRequests, "rate_limited",
 			"Too many remote toolkit calls from this caller. Retry after the interval in Retry-After.")
+		return
+	}
+	if platform {
+		h.runPlatformTool(writer, request, call, runRequest.IdempotencyKey, arguments, func() { h.limiter.Fail(limitKey) })
 		return
 	}
 	outcome, err := h.useCase.RunTool(request.Context(), runRequest)

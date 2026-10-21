@@ -1,10 +1,12 @@
 package desktopops
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -256,5 +258,86 @@ func TestRemoteToolkitPlatformMCPNeverRunsAReplayTwice(t *testing.T) {
 	again := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, body, desktopToken(), h.serve)
 	if again.Code != http.StatusOK || len(failing.calls) != 2 {
 		t.Fatalf("after a failure: %d, calls %d", again.Code, len(failing.calls))
+	}
+}
+
+// heldReplays is a store whose every key is held by another attempt that
+// never answers; it counts the claims a retry makes.
+type heldReplays struct {
+	memoryReplays
+	claims atomic.Int32
+}
+
+func (s *heldReplays) Claim(context.Context, string, string) (PlatformReplay, error) {
+	s.claims.Add(1)
+	return PlatformReplay{Verdict: ReplayInProgress}, nil
+}
+
+// While the caller is over the rate limit, a retry of a key that already ran
+// (a replay) and a retry of one still running are answered 429 too, exactly
+// as on the saved-toolkit path, and neither is counted or claimed.
+func TestRemoteToolkitPlatformMCPRateLimitsRetriesToo(t *testing.T) {
+	t.Run("a replay", func(t *testing.T) {
+		platform := &fakePlatform{result: PlatformToolResult{Text: `{"id":9}`}}
+		h, _, _, _ := platformHandler(platform)
+		body := remoteBody(`"tool_name":"post_elitea_core_applications","arguments":{"name":"a"}`)
+		if first := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, body, desktopToken(), h.serve); first.Code != http.StatusOK {
+			t.Fatalf("first = %d %s", first.Code, first.Body)
+		}
+		for i := 1; i < RemoteToolkitCallsPerMinute; i++ {
+			h.limiter.Fail("actor:7")
+		}
+		retry := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, body, desktopToken(), h.serve)
+		if retry.Code != http.StatusTooManyRequests || retry.Header().Get("Retry-After") == "" || len(platform.calls) != 1 {
+			t.Fatalf("replay over the limit = %d %s, calls %d", retry.Code, retry.Body, len(platform.calls))
+		}
+	})
+	t.Run("an in-progress retry", func(t *testing.T) {
+		platform := &fakePlatform{result: PlatformToolResult{Text: `{}`}}
+		h, _, _, _ := platformHandler(platform)
+		held := &heldReplays{}
+		h.replays = held
+		h.replayWait = time.Minute
+		for i := 0; i < RemoteToolkitCallsPerMinute; i++ {
+			h.limiter.Fail("actor:7")
+		}
+		started := time.Now()
+		retry := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, remoteBody(`"tool_name":"x"`), desktopToken(), h.serve)
+		if retry.Code != http.StatusTooManyRequests || held.claims.Load() != 0 || len(platform.calls) != 0 {
+			t.Fatalf("in-progress retry over the limit = %d %s, claims %d", retry.Code, retry.Body, held.claims.Load())
+		}
+		if waited := time.Since(started); waited > 5*time.Second {
+			t.Fatalf("answered 429 after waiting %v for the running attempt", waited)
+		}
+	})
+}
+
+// A retry that finds its call still running looks again with a doubling
+// delay and a bounded number of claims, then answers 409
+// remote_toolkit_in_progress: it never polls the store at a fixed rate for
+// the whole wait.
+func TestRemoteToolkitPlatformMCPInProgressRetryIsBounded(t *testing.T) {
+	platform := &fakePlatform{result: PlatformToolResult{Text: `{}`}}
+	h, _, _, _ := platformHandler(platform)
+	held := &heldReplays{}
+	h.replays = held
+	h.replayWait, h.replayPoll, h.replayPollMax = time.Minute, time.Millisecond, 4*time.Millisecond
+	response := serveWith(t, http.MethodPost, RemoteToolkitPath, platformURL, remoteBody(`"tool_name":"x"`), desktopToken(), h.serve)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "remote_toolkit_in_progress") || len(platform.calls) != 0 {
+		t.Fatalf("status = %d %s, calls %d", response.Code, response.Body, len(platform.calls))
+	}
+	if got := held.claims.Load(); got != platformReplayMaxClaims {
+		t.Fatalf("the retry claimed %d times, want the bound %d", got, platformReplayMaxClaims)
+	}
+	// The production schedule fits the bound inside the wait: 250 ms
+	// doubling to 4 s reaches the 10 s wait before the eighth claim.
+	elapsed, delay, claims := time.Duration(0), platformReplayPoll, 1
+	for elapsed < platformReplayWait && claims < platformReplayMaxClaims {
+		elapsed += min(delay, platformReplayWait-elapsed)
+		delay = min(2*delay, platformReplayPollMax)
+		claims++
+	}
+	if elapsed < platformReplayWait {
+		t.Fatalf("the claim bound (%d) ends the wait after %v, before the %v it documents", platformReplayMaxClaims, elapsed, platformReplayWait)
 	}
 }

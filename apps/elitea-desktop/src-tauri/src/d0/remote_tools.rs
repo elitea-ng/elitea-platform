@@ -33,7 +33,9 @@ use elitea_agent_runtime::host::{
 use serde_json::{Value, json};
 
 use super::api::PlatformApi;
-use super::approvals::{MCP_AUTHORIZATION_PAYLOAD_KEY, REMOTE_PAYLOAD_KEY};
+use super::approvals::{
+    MCP_AUTHORIZATION_PAYLOAD_KEY, REMOTE_PAYLOAD_KEY, TIMEOUT_ACTION, WAIT_PAYLOAD_KEY,
+};
 use super::definition::RemoteToolSpec;
 
 /// The toolset's name.
@@ -77,6 +79,10 @@ pub struct RemoteToolkitTool {
     context: Arc<RemoteContext>,
 }
 
+/// The generic tool's description lists at most this many bytes of its
+/// tools' descriptions; past it, only their names.
+const MAX_LISTED_DESCRIPTIONS: usize = 6 * 1024;
+
 impl RemoteToolkitTool {
     #[must_use]
     pub fn new(spec: RemoteToolSpec, context: Arc<RemoteContext>) -> Self {
@@ -84,17 +90,38 @@ impl RemoteToolkitTool {
             || format!("Call any tool of the {} toolkit", spec.toolkit_name),
             |tool| format!("{}: {tool}", spec.toolkit_name),
         );
-        let description = if spec.description.is_empty() {
+        let mut description = if spec.description.is_empty() {
             format!("{what} (runs on the Elitea platform).")
         } else {
             format!("{what} (runs on the Elitea platform). {}", spec.description)
         };
+        if spec.tool_name.is_none() && !spec.tools.is_empty() {
+            description.push_str(&tools_listing(&spec));
+        }
         Self {
             spec,
             description,
             context,
         }
     }
+}
+
+/// "Its tools: `a` — what a does; `b`; …", the names the platform server
+/// listed, so the model can pick one for `tool_name`.
+fn tools_listing(spec: &RemoteToolSpec) -> String {
+    let mut listing = String::from(" Its tools (pass one as `tool_name`):");
+    let mut described = 0;
+    for tool in &spec.tools {
+        listing.push_str("\n- ");
+        listing.push_str(&tool.name);
+        let text = tool.description.trim();
+        if !text.is_empty() && described + text.len() <= MAX_LISTED_DESCRIPTIONS {
+            described += text.len();
+            listing.push_str(": ");
+            listing.push_str(text);
+        }
+    }
+    listing
 }
 
 fn error_result(code: &str, message: &str) -> Value {
@@ -115,10 +142,15 @@ impl Tool for RemoteToolkitTool {
         Some(if self.spec.tool_name.is_some() {
             json!({ "type": "object", "properties": {}, "additionalProperties": true })
         } else {
+            let mut tool_name =
+                json!({ "type": "string", "description": "The toolkit's tool to run." });
+            if !self.spec.tools.is_empty() {
+                tool_name["enum"] = self.spec.tools.iter().map(|t| t.name.clone()).collect();
+            }
             json!({
                 "type": "object",
                 "properties": {
-                    "tool_name": { "type": "string", "description": "The toolkit's tool to run." },
+                    "tool_name": tool_name,
                     "arguments": { "type": "object", "description": "That tool's arguments." }
                 },
                 "required": ["tool_name"]
@@ -399,32 +431,63 @@ async fn authorize(
         "detail": if server_url.is_empty() { toolkit.clone() } else { server_url.clone() },
         "server_url": server_url,
     });
-    if let Some(path) = authorize_path(context.project_id, spec) {
+    if let Some(path) = authorize_path(context.project_id, spec, required) {
         question["authorize_path"] = json!(path);
     }
+    let wait = context.authorization_wait;
     let request = ApprovalRequest {
         subject: call_id.to_owned(),
         message: title,
         available_actions: vec!["continue".to_owned(), "cancel".to_owned()],
-        payload: json!({ MCP_AUTHORIZATION_PAYLOAD_KEY: question }),
+        // The channel closes the question at the wait (the card goes and
+        // the exchange records the timeout); the timeout below only bounds
+        // a channel that does not.
+        payload: json!({
+            MCP_AUTHORIZATION_PAYLOAD_KEY: question,
+            WAIT_PAYLOAD_KEY: u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+        }),
     };
-    match tokio::time::timeout(context.authorization_wait, context.prompt.request(request)).await {
+    let backstop = wait.saturating_add(wait.min(Duration::from_secs(1)));
+    match tokio::time::timeout(backstop, context.prompt.request(request)).await {
         Err(_) => Authorization::TimedOut,
         Ok(Ok(ApprovalOutcome::Decided { action, .. })) if action == "approve" => {
             Authorization::Continue
+        }
+        Ok(Ok(ApprovalOutcome::Decided { action, .. })) if action == TIMEOUT_ACTION => {
+            Authorization::TimedOut
         }
         Ok(_) => Authorization::Cancelled,
     }
 }
 
 /// The web app's page that signs in to the toolkit: the MCP toolkit's page
-/// for an MCP type, else the toolkit's. Built from numbers the definition
-/// gave, never from the 409. A platform server (toolkit id 0) has none.
-fn authorize_path(project_id: i64, spec: &RemoteToolSpec) -> Option<String> {
+/// for an MCP toolkit, else the toolkit's. The numbers come from the
+/// definition, never from the 409. Whether it is an MCP toolkit is the
+/// platform's word: the 409's `authorization_required.toolkit_type` (the
+/// saved toolkit's type, which the platform checks against the run it
+/// admitted) when it names this toolkit, else the definition's `type`; an
+/// MCP type is `mcp` or `mcp_*`, the web app's own rule. A platform server
+/// (toolkit id 0) has no page.
+fn authorize_path(
+    project_id: i64,
+    spec: &RemoteToolSpec,
+    required: Option<&Value>,
+) -> Option<String> {
     if spec.toolkit_id <= 0 || project_id <= 0 {
         return None;
     }
-    let section = if spec.toolkit_type.starts_with("mcp") {
+    let same_toolkit = |r: &&Value| match r.get("toolkit_id") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(id)) => id.parse::<i64>().ok() == Some(spec.toolkit_id),
+        Some(id) => id.as_i64() == Some(spec.toolkit_id),
+    };
+    let toolkit_type = required
+        .filter(same_toolkit)
+        .and_then(|r| r.get("toolkit_type"))
+        .and_then(Value::as_str)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(&spec.toolkit_type);
+    let section = if toolkit_type == "mcp" || toolkit_type.starts_with("mcp_") {
         "mcps"
     } else {
         "toolkits"

@@ -5,10 +5,14 @@
 //! A question becomes an `approval_request` event with a fresh
 //! `request_id`; `approval_respond` resolves it. A turn that ends while a
 //! question is open drops it (the waiting tool call is dropped with the
-//! run), and a late answer is ignored.
+//! run), and a late answer is ignored. A question that carries a wait
+//! ([`WAIT_PAYLOAD_KEY`]) and is not answered within it is closed: an
+//! `approval_closed` event, a `timeout` exchange, and the asker reads
+//! [`TIMEOUT_ACTION`]; a late answer then finds it closed.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{
@@ -27,6 +31,13 @@ pub const REMOTE_PAYLOAD_KEY: &str = "remote_toolkit_call";
 
 /// The payload key an MCP sign-in question travels under (issue 1231).
 pub const MCP_AUTHORIZATION_PAYLOAD_KEY: &str = "mcp_authorization";
+
+/// The payload key of a question's wait, in milliseconds: past it the
+/// question is closed and answered [`TIMEOUT_ACTION`].
+pub const WAIT_PAYLOAD_KEY: &str = "wait_ms";
+
+/// The action a question closed by its wait is answered with.
+pub const TIMEOUT_ACTION: &str = "timeout";
 
 /// The person's answer, as `approval_respond` names it (`continue` and
 /// `cancel`, the MCP sign-in card's answers, are `allow_once` and `deny`).
@@ -75,6 +86,16 @@ impl ApprovalBroker {
             .ok()
             .and_then(|mut pending| pending.remove(request_id));
         entry.is_some_and(|(_, sender)| sender.send(decision).is_ok())
+    }
+
+    /// Close one open question without an answer. False when it is no
+    /// longer open (answered meanwhile).
+    fn close(&self, request_id: &str) -> bool {
+        self.pending
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.remove(request_id))
+            .is_some()
     }
 
     /// Drop every open question of a turn.
@@ -153,19 +174,50 @@ impl ApprovalChannel for UiPrompt {
             "command_approval"
         };
         binding.events.send("approval_request", payload);
-        let decision = answer.await.map_err(|_| ended())?;
+        let wait = request
+            .payload
+            .get(WAIT_PAYLOAD_KEY)
+            .and_then(Value::as_u64)
+            .map(Duration::from_millis);
+        let decision = match wait {
+            None => answer.await.map_err(|_| ended())?,
+            Some(wait) => {
+                let mut answer = answer;
+                match tokio::time::timeout(wait, &mut answer).await {
+                    Ok(decision) => decision.map_err(|_| ended())?,
+                    // Answered just as the wait ran out: the answer stands.
+                    Err(_) if !self.broker.close(&request_id) => {
+                        answer.try_recv().map_err(|_| ended())?
+                    }
+                    Err(_) => {
+                        // The card goes, and the exchange says nobody answered.
+                        binding.events.send(
+                            "approval_closed",
+                            json!({ "request_id": request_id, "reason": TIMEOUT_ACTION }),
+                        );
+                        binding.recorder.hitl_exchange(exchange_of(
+                            &request,
+                            &request_id,
+                            kind,
+                            &title,
+                            TIMEOUT_ACTION,
+                        ));
+                        return Ok(ApprovalOutcome::Decided {
+                            action: TIMEOUT_ACTION.to_owned(),
+                            value: json!({ "reason": "nobody answered in time" }),
+                        });
+                    }
+                }
+            }
+        };
         let approved = decision != UiDecision::Deny;
-        let mut exchange = json!({
-            "interrupt_id": request_id,
-            "kind": kind,
-            "prompt": cut(&title, 4096),
-            "decision": if approved { "approve" } else { "reject" },
-        });
-        // "Continue?" belongs to the turn, not to a tool step.
-        if kind != CONTINUE_KIND {
-            exchange["tool_run_id"] = Value::String(request.subject.clone());
-        }
-        binding.recorder.hitl_exchange(exchange);
+        binding.recorder.hitl_exchange(exchange_of(
+            &request,
+            &request_id,
+            kind,
+            &title,
+            if approved { "approve" } else { "reject" },
+        ));
         Ok(match decision {
             UiDecision::AllowAlways if can_remember => ApprovalOutcome::Decided {
                 action: APPROVE_ALWAYS.to_owned(),
@@ -181,6 +233,27 @@ impl ApprovalChannel for UiPrompt {
             },
         })
     }
+}
+
+/// One `hitl_exchanges` entry.
+fn exchange_of(
+    request: &ApprovalRequest,
+    request_id: &str,
+    kind: &str,
+    title: &str,
+    decision: &str,
+) -> Value {
+    let mut exchange = json!({
+        "interrupt_id": request_id,
+        "kind": kind,
+        "prompt": cut(title, 4096),
+        "decision": decision,
+    });
+    // "Continue?" belongs to the turn, not to a tool step.
+    if kind != CONTINUE_KIND {
+        exchange["tool_run_id"] = Value::String(request.subject.clone());
+    }
+    exchange
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -443,6 +516,63 @@ mod tests {
         assert_eq!(described["justification"], "Deletes go through review.");
         let plain = describe(&command_request(&["approve", "reject"]));
         assert!(plain.get("rule").is_none() && plain.get("justification").is_none());
+    }
+
+    /// A question with a wait that nobody answers is closed: the card goes
+    /// (`approval_closed`), the exchange records the timeout, the asker
+    /// reads `timeout`, and a late answer finds nothing open.
+    #[tokio::test]
+    async fn a_question_past_its_wait_is_closed_and_recorded() {
+        let emitter = Arc::new(VecEmitter::default());
+        let broker = Arc::new(ApprovalBroker::default());
+        let prompt = Arc::new(UiPrompt::new(broker.clone()));
+        let binding = binding(&emitter);
+        prompt.bind(Some(binding.clone()));
+        let request = ApprovalRequest {
+            subject: "call-9".into(),
+            message: "Jira needs your sign-in".into(),
+            available_actions: vec!["continue".into(), "cancel".into()],
+            payload: json!({
+                MCP_AUTHORIZATION_PAYLOAD_KEY: {"tool": "create_issue", "toolkit": "Jira", "title": "Jira needs your sign-in"},
+                WAIT_PAYLOAD_KEY: 20,
+            }),
+        };
+        let outcome = prompt.request(request).await.unwrap();
+        assert!(
+            matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == TIMEOUT_ACTION)
+        );
+        assert_eq!(broker.open(), 0);
+        let events = emitter.all();
+        let request_id = events[0].payload["request_id"].as_str().unwrap().to_owned();
+        assert_eq!(events[1].kind, "approval_closed");
+        assert_eq!(events[1].payload["request_id"], request_id.as_str());
+        assert!(
+            !broker.respond(&request_id, UiDecision::AllowOnce),
+            "a late Continue finds it closed"
+        );
+        let exchanges = binding.recorder.hitl_exchanges();
+        assert_eq!(exchanges.len(), 1);
+        assert_eq!(exchanges[0]["kind"], MCP_AUTHORIZATION_PAYLOAD_KEY);
+        assert_eq!(exchanges[0]["decision"], "timeout");
+        assert_eq!(exchanges[0]["tool_run_id"], "call-9");
+        assert_eq!(exchanges[0]["interrupt_id"], request_id.as_str());
+
+        // Answered within its wait, it is an ordinary answer.
+        emitter.on_event.lock().unwrap().replace(Box::new({
+            let broker = broker.clone();
+            move |event| {
+                if event.kind == "approval_request" {
+                    let id = event.payload["request_id"].as_str().unwrap().to_owned();
+                    broker.respond(&id, UiDecision::AllowOnce);
+                }
+            }
+        }));
+        let mut answered = command_request(&["approve", "reject"]);
+        answered.payload[WAIT_PAYLOAD_KEY] = json!(60_000);
+        let outcome = prompt.request(answered).await.unwrap();
+        assert!(
+            matches!(outcome, ApprovalOutcome::Decided { ref action, .. } if action == "approve")
+        );
     }
 
     #[tokio::test]

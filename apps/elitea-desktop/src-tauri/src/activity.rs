@@ -136,7 +136,8 @@ impl ActivityState {
     /// a turn ends at `done`, and also at an `error` event or a terminal
     /// `status` (`done`, `cancelled`, `error`) — a turn refused at the start
     /// never sends `done`. An approval is open until `approval_respond`
-    /// answers it (`answered`) or its turn ends: no other event closes it.
+    /// answers it (`answered`), the host closes it at its wait
+    /// (`approval_closed`), or its turn ends: no other event closes it.
     pub fn observe_agent(&mut self, event: &AgentEvent, now: Instant) {
         let turn = event.turn_id.as_str();
         match event.kind {
@@ -163,6 +164,11 @@ impl ActivityState {
                             tool,
                         },
                     );
+                }
+            }
+            "approval_closed" => {
+                if let Some(id) = event.payload["request_id"].as_str() {
+                    self.answered(id);
                 }
             }
             "error" | "done" => self.end(turn),
@@ -790,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_answer_or_the_end_of_its_turn_closes_an_approval() {
+    fn only_an_answer_its_close_or_the_end_of_its_turn_closes_an_approval() {
         let t0 = Instant::now();
         let mut state = ActivityState::default();
         state.observe_agent(&approval("t1", "r1", "run_command"), t0);
@@ -802,6 +808,16 @@ mod tests {
         assert_eq!(state.title(t0), "⚠ 2");
         state.answered("r1");
         assert_eq!(state.title(t0), "⚠ 1");
+        // The host closed the other at its wait.
+        state.observe_agent(
+            &event(
+                "t1",
+                "approval_closed",
+                json!({"request_id": "r2", "reason": "timeout"}),
+            ),
+            t0,
+        );
+        assert!(!state.title(t0).starts_with('⚠'));
         state.observe_agent(&event("t1", "done", json!({"committed": true})), t0);
         assert_eq!(state.title(t0), "");
     }

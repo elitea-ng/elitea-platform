@@ -1230,6 +1230,21 @@ func (a platformToolAdapter) CallPlatformTool(r *http.Request, call desktopopsap
 	}, nil
 }
 
+// PlatformTools serves desktopops.PlatformToolLister: the resolved
+// definition names a platform MCP server's tools from the same listing the
+// endpoint serves.
+func (a platformToolAdapter) PlatformTools(ctx context.Context, projectID int64, toolkitType string) ([]storage.ClientPlatformTool, error) {
+	listed, err := a.handler.PlatformTools(ctx, projectID, toolkitType)
+	if err != nil {
+		return nil, err
+	}
+	tools := make([]storage.ClientPlatformTool, 0, len(listed))
+	for _, tool := range listed {
+		tools = append(tools, storage.ClientPlatformTool{Name: tool.Name, Description: tool.Description})
+	}
+	return tools, nil
+}
+
 // newToolkitHandler builds the one toolkit handler shared by REST and the
 // fixed internal MCP category. Sharing the instance is the contract: a toolkit
 // created through MCP must cross the same dynamic-schema secret sealing,

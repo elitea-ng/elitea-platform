@@ -867,9 +867,10 @@ export const getExecuteRemoteToolkitToolUrl = (
  * retry with the same Idempotency-Key and body answers the first call's
  * result on any server replica (claimed in a shared JetStream KV store
  * before the tool runs and kept 15 minutes; a retry that finds it still
- * running waits up to 30 s, then answers 409
+ * running waits up to 10 s, then answers 409
  * `remote_toolkit_in_progress`). Without that store the call never
- * runs (503 `remote_toolkit_unavailable_now`).
+ * runs (503 `remote_toolkit_unavailable_now`; 501
+ * `remote_toolkit_unavailable` where the server started without it).
  * @summary Run one tool of one saved toolkit on a cloud worker
  */
 export const executeRemoteToolkitTool = async (

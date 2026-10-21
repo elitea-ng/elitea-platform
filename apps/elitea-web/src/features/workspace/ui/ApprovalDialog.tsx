@@ -12,26 +12,23 @@
  * The `mcp_authorization` kind (an MCP server needs the person's sign-in) is
  * such a card too: McpAuthorizationCard.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef } from 'react';
 
-import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
-import type { Theme } from "@mui/material/styles";
-import Typography from "@mui/material/Typography";
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
+import type { Theme } from '@mui/material/styles';
+import Typography from '@mui/material/Typography';
 
-import { t } from "@/shared/i18n";
-import type {
-  ApprovalDecision,
-  ApprovalRequestPayload,
-} from "@/shared/desktop/workspaceIpc";
+import { t } from '@/shared/i18n';
+import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/workspaceIpc';
 
-import { ruleSourceLabel } from "@/shared/desktop/ruleSource";
+import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
 
-import { McpAuthorizationCard } from "./McpAuthorizationCard";
+import { McpAuthorizationCard } from './McpAuthorizationCard';
 
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */
@@ -44,9 +41,9 @@ export interface ApprovalDialogProps {
 const monoSx = (theme: Theme) => ({
   margin: 0,
   padding: 1,
-  overflowX: "auto",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-all",
+  overflowX: 'auto',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-all',
   fontFamily: theme.typography.fontFamilyMono,
   border: `1px solid ${theme.vars.palette.divider}`,
   borderRadius: theme.vars.shape.radiusMd,
@@ -54,19 +51,11 @@ const monoSx = (theme: Theme) => ({
 
 /** Shell-quote an argv element only when it needs it, so the line reads like what would be typed. */
 function quoteArg(arg: string): string {
-  return /^[\w@%+=:,./-]+$/.test(arg)
-    ? arg
-    : `'${arg.replaceAll("'", "'\\''")}'`;
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`;
 }
 
 /** "The agent used its N steps": continue for N more, or stop here. */
-function ContinueCard({
-  request,
-  respond,
-}: {
-  request: ApprovalRequestPayload;
-  respond: (decision: ApprovalDecision) => void;
-}): React.JSX.Element {
+function ContinueCard({ request, respond }: { request: ApprovalRequestPayload; respond: (decision: ApprovalDecision) => void }): React.JSX.Element {
   const steps = request.steps ?? 0;
   const titleId = `workspace-continue-${request.request_id}`;
   return (
@@ -75,8 +64,8 @@ function ContinueCard({
       aria-labelledby={titleId}
       data-testid="approval-continue-card"
       sx={(theme: Theme) => ({
-        display: "flex",
-        flexDirection: "column",
+        display: 'flex',
+        flexDirection: 'column',
         gap: 1,
         padding: 1.5,
         border: `1px solid ${theme.vars.palette.divider}`,
@@ -84,33 +73,19 @@ function ContinueCard({
       })}
     >
       <Typography id={titleId} variant="labelMedium">
-        {t("workspace.continue.title", "The agent used its {{n}} steps", {
-          n: steps,
-        })}
+        {t('workspace.continue.title', 'The agent used its {{n}} steps', { n: steps })}
       </Typography>
-      {request.detail !== "" && (
-        <Typography
-          variant="bodySmall"
-          sx={{
-            color: (theme: Theme) => theme.vars.palette.text.secondary,
-            whiteSpace: "pre-wrap",
-          }}
-        >
+      {request.detail !== '' && (
+        <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary, whiteSpace: 'pre-wrap' }}>
           {request.detail}
         </Typography>
       )}
-      <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
-        <Button
-          size="small"
-          variant="contained"
-          onClick={() => respond("allow_once")}
-        >
-          {t("workspace.continue.more", "Continue for {{n}} more steps", {
-            n: steps,
-          })}
+      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+        <Button size="small" variant="contained" onClick={() => respond('allow_once')}>
+          {t('workspace.continue.more', 'Continue for {{n}} more steps', { n: steps })}
         </Button>
-        <Button size="small" onClick={() => respond("deny")}>
-          {t("workspace.continue.stop", "Stop here")}
+        <Button size="small" onClick={() => respond('deny')}>
+          {t('workspace.continue.stop', 'Stop here')}
         </Button>
       </Box>
     </Box>
@@ -118,32 +93,16 @@ function ContinueCard({
 }
 
 /** The command and the paths a request names, each shown only when present. */
-function ApprovalTargets({
-  command,
-  paths,
-}: {
-  command?: string[] | undefined;
-  paths?: string[] | undefined;
-}): React.JSX.Element {
+function ApprovalTargets({ command, paths }: { command?: string[] | undefined; paths?: string[] | undefined }): React.JSX.Element {
   return (
     <>
       {command !== undefined && command.length > 0 && (
-        <Box
-          component="pre"
-          data-testid="approval-command"
-          aria-label={t("workspace.approval.command", "Command")}
-          sx={monoSx}
-        >
-          {command.map(quoteArg).join(" ")}
+        <Box component="pre" data-testid="approval-command" aria-label={t('workspace.approval.command', 'Command')} sx={monoSx}>
+          {command.map(quoteArg).join(' ')}
         </Box>
       )}
       {paths !== undefined && paths.length > 0 && (
-        <Box
-          component="ul"
-          data-testid="approval-paths"
-          aria-label={t("workspace.approval.paths", "Paths")}
-          sx={(theme: Theme) => ({ ...monoSx(theme), listStyle: "none" })}
-        >
+        <Box component="ul" data-testid="approval-paths" aria-label={t('workspace.approval.paths', 'Paths')} sx={(theme: Theme) => ({ ...monoSx(theme), listStyle: 'none' })}>
           {paths.map((path) => (
             <li key={path}>{path}</li>
           ))}
@@ -153,11 +112,7 @@ function ApprovalTargets({
   );
 }
 
-export function ApprovalDialog({
-  request,
-  queued,
-  onRespond,
-}: ApprovalDialogProps): React.JSX.Element | null {
+export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogProps): React.JSX.Element | null {
   const denyRef = useRef<HTMLButtonElement>(null);
   const requestId = request?.request_id;
   // Deny takes focus each time a new request is shown (focus-trap order would otherwise start at the first button).
@@ -165,12 +120,9 @@ export function ApprovalDialog({
     if (requestId !== undefined) denyRef.current?.focus();
   }, [requestId]);
   if (request === undefined) return null;
-  const respond = (decision: ApprovalDecision): void =>
-    onRespond(request.request_id, decision);
-  if (request.kind === "continue")
-    return <ContinueCard request={request} respond={respond} />;
-  if (request.kind === "mcp_authorization")
-    return <McpAuthorizationCard request={request} respond={respond} />;
+  const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
+  if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
+  if (request.kind === 'mcp_authorization') return <McpAuthorizationCard request={request} respond={respond} />;
   const decidedBy = ruleSourceLabel(request.source, request.rule);
   return (
     <Dialog
@@ -182,54 +134,39 @@ export function ApprovalDialog({
       // The focus trap claims focus after mount; Deny takes it once the dialog has finished opening.
       slotProps={{ transition: { onEntered: () => denyRef.current?.focus() } }}
       onClose={(_event, reason) => {
-        if (reason === "escapeKeyDown") respond("deny");
+        if (reason === 'escapeKeyDown') respond('deny');
       }}
     >
       <DialogTitle id="workspace-approval-title">{request.title}</DialogTitle>
-      <DialogContent
-        sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}
-      >
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Typography id="workspace-approval-detail" variant="bodyMedium">
           {request.detail}
         </Typography>
         <ApprovalTargets command={request.command} paths={request.paths} />
-        <Typography
-          variant="bodySmall"
-          sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}
-        >
-          {t("workspace.approval.reason", "Why: {{reason}}", {
-            reason: request.justification ?? request.reason,
-          })}
+        <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+          {t('workspace.approval.reason', 'Why: {{reason}}', { reason: request.justification ?? request.reason })}
         </Typography>
         {decidedBy !== undefined && (
-          <Typography
-            variant="bodySmall"
-            data-testid="approval-rule-source"
-            sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}
-          >
-            {t("workspace.approval.source", "Asked by {{source}}", {
-              source: decidedBy,
-            })}
+          <Typography variant="bodySmall" data-testid="approval-rule-source" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+            {t('workspace.approval.source', 'Asked by {{source}}', { source: decidedBy })}
           </Typography>
         )}
         {queued > 0 && (
           <Typography variant="bodySmall" component="output">
-            {t("workspace.approval.queued", "{{n}} more waiting", {
-              n: queued,
-            })}
+            {t('workspace.approval.queued', '{{n}} more waiting', { n: queued })}
           </Typography>
         )}
       </DialogContent>
       <DialogActions>
-        <Button ref={denyRef} color="error" onClick={() => respond("deny")}>
-          {t("workspace.approval.deny", "Deny")}
+        <Button ref={denyRef} color="error" onClick={() => respond('deny')}>
+          {t('workspace.approval.deny', 'Deny')}
         </Button>
-        <Button variant="outlined" onClick={() => respond("allow_once")}>
-          {t("workspace.approval.allowOnce", "Allow once")}
+        <Button variant="outlined" onClick={() => respond('allow_once')}>
+          {t('workspace.approval.allowOnce', 'Allow once')}
         </Button>
         {request.can_remember && (
-          <Button variant="contained" onClick={() => respond("allow_always")}>
-            {t("workspace.approval.allowAlways", "Always allow")}
+          <Button variant="contained" onClick={() => respond('allow_always')}>
+            {t('workspace.approval.allowAlways', 'Always allow')}
           </Button>
         )}
       </DialogActions>

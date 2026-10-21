@@ -127,6 +127,12 @@ describe('turnReducer', () => {
     expect(view.approvals.map((a) => a.request_id)).toEqual(['a']);
   });
 
+  it('drops a request the host closed at its wait (approval_closed), and keeps the others', () => {
+    const closed: AgentEvent = { turn_id: T, seq: 3, kind: 'approval_closed', payload: { request_id: 'a', reason: 'timeout' } };
+    const view = activeView(run([approval(1, 'a'), approval(2, 'b'), closed]));
+    expect(view.approvals.map((a) => a.request_id)).toEqual(['b']);
+  });
+
   it('clears pending approvals when the turn ends, however it ends', () => {
     for (const phase of ['done', 'cancelled', 'error'] as const) {
       const view = activeView(run([approval(1, 'a'), status(2, phase)]));

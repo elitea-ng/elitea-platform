@@ -333,8 +333,12 @@ command bus; it applies to every account's streams on the server).
 
 The services **bind** and verify what their code depends on (counter flag,
 direct get, dedup windows, TTLs); they create nothing, and a missing asset is a
-boot error naming the bootstrap Job. Re-running the bootstrap reconciles drift
-(`stream edit` / `kv edit`).
+boot error naming the bootstrap Job. The one exception is
+`ELITEA_PLATFORM_MCP_REPLAY`: only platform MCP tools of desktop local turns
+need it, so when it is missing or misconfigured elitea-main logs an error
+naming the Job and starts without it (those calls then answer 501 and never
+run); restart elitea-main after the Job has run. Re-running the bootstrap
+reconciles drift (`stream edit` / `kv edit`).
 
 **`max_file_store` must hold the reservations**: `GATEWAY_BUDGET_DELTAS`
 reserves its 1 GiB `MaxBytes` up front, so a smaller JetStream file store

@@ -1093,6 +1093,7 @@ fn jira_spec() -> RemoteToolSpec {
         toolkit_type: "jira".into(),
         description: String::new(),
         tool_name: None,
+        tools: Vec::new(),
     }
 }
 
@@ -1239,18 +1240,198 @@ async fn mcp_authorization_required_asks_then_retries_with_new_key() {
     assert_eq!(second["mcp_authorization_reference"], REFERENCE);
     assert_eq!(second["arguments"], json!({"summary": "Bug"}));
     assert_eq!(second["tool_name"], "create_issue");
+}
 
-    // An MCP toolkit's sign-in page is the MCP page.
-    let mcp = RemoteToolSpec {
-        toolkit_type: "mcp".into(),
-        toolkit_id: 7,
+/// The sign-in page is the MCP page when the PLATFORM says the toolkit is an
+/// MCP server (the 409's `authorization_required.toolkit_type`, `mcp` or
+/// `mcp_*`), whatever the definition's type guessed; the definition's type
+/// decides only when the 409 names none, or names another toolkit. The
+/// toolkit id is always the definition's.
+#[tokio::test]
+async fn mcp_authorization_page_follows_the_platforms_toolkit_type() {
+    for (required, spec_type, want) in [
+        (
+            json!({"toolkit_type": "mcp", "toolkit_id": "7"}),
+            "jira",
+            "/app/1/mcps/all/7",
+        ),
+        (
+            json!({"toolkit_type": "mcp_github", "toolkit_id": 7}),
+            "jira",
+            "/app/1/mcps/all/7",
+        ),
+        (
+            json!({"toolkit_type": "jira", "toolkit_id": "7"}),
+            "mcp",
+            "/app/1/toolkits/all/7",
+        ),
+        (
+            json!({"toolkit_type": "mcpish"}),
+            "jira",
+            "/app/1/toolkits/all/7",
+        ),
+        (json!({"toolkit_name": "Jira"}), "mcp", "/app/1/mcps/all/7"),
+        (
+            json!({"toolkit_type": "jira", "toolkit_id": "8"}),
+            "mcp",
+            "/app/1/mcps/all/7",
+        ),
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let server = serve({
+            let calls = calls.clone();
+            let required = required.clone();
+            move |_req: &Req| {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Res::json(
+                        409,
+                        &json!({"ok": false, "error": "mcp_authorization_required", "authorization_required": required}),
+                    )
+                } else {
+                    Res::json(200, &json!({"ok": true, "status": "ok", "result": {}}))
+                }
+            }
+        })
+        .await;
+        let prompt = Arc::new(Answering {
+            decision: Some("approve"),
+            asked: Mutex::default(),
+        });
+        let context = remote_context(&server, prompt.clone(), Duration::from_secs(5)).await;
+        let spec = RemoteToolSpec {
+            toolkit_type: spec_type.into(),
+            toolkit_id: 7,
+            ..jira_spec()
+        };
+        remote_tools::call(&context, &spec, "c2", "x", json!({})).await;
+        assert_eq!(
+            prompt.asked.lock().unwrap()[0].payload["mcp_authorization"]["authorize_path"],
+            want,
+            "{required} with a definition type {spec_type}"
+        );
+    }
+}
+
+/// The generic tool of a platform server names its tools to the model: in
+/// its description and as the `tool_name` enum.
+#[test]
+fn a_platform_servers_generic_tool_names_its_tools() {
+    use adk_core::Tool as _;
+    let spec = RemoteToolSpec {
+        exposed_name: "Elitea_Applications_call".into(),
+        toolkit_id: 0,
+        toolkit_name: "Elitea Applications".into(),
+        toolkit_type: "mcp_elitea_internal_applications".into(),
+        tools: vec![
+            super::definition::RemoteToolInfo {
+                name: "get_elitea_core_applications".into(),
+                description: "List the project's agents.".into(),
+            },
+            super::definition::RemoteToolInfo {
+                name: "post_elitea_core_applications".into(),
+                description: String::new(),
+            },
+        ],
         ..jira_spec()
     };
-    calls.store(0, Ordering::SeqCst);
-    remote_tools::call(&context, &mcp, "c2", "x", json!({})).await;
+    let context = Arc::new(RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+        retry: RetryPolicy::default(),
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+    });
+    let tool = remote_tools::RemoteToolkitTool::new(spec, context);
+    assert!(
+        tool.description()
+            .contains("- get_elitea_core_applications: List the project's agents.")
+    );
+    assert!(
+        tool.description()
+            .contains("- post_elitea_core_applications")
+    );
+    let schema = tool.parameters_schema().unwrap();
     assert_eq!(
-        prompt.asked.lock().unwrap()[1].payload["mcp_authorization"]["authorize_path"],
-        "/app/1/mcps/all/7"
+        schema["properties"]["tool_name"]["enum"],
+        json!([
+            "get_elitea_core_applications",
+            "post_elitea_core_applications"
+        ])
+    );
+    // A toolkit with no named tools keeps a free `tool_name`.
+    let plain = remote_tools::RemoteToolkitTool::new(
+        jira_spec(),
+        Arc::new(RemoteContext {
+            api: Arc::new(
+                PlatformApi::new(
+                    Arc::new(StaticCredentials::new("http://127.0.0.1:9".into())),
+                    "0.1.0",
+                )
+                .unwrap(),
+            ),
+            project_id: 1,
+            execution_id: EXECUTION.into(),
+            application_id: 5,
+            version_id: 9,
+            prompt: Arc::new(super::approvals::UiPrompt::new(Arc::default())),
+            retry: RetryPolicy::default(),
+            authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
+        }),
+    );
+    assert!(
+        plain.parameters_schema().unwrap()["properties"]["tool_name"]
+            .get("enum")
+            .is_none()
+    );
+}
+
+/// A sign-in nobody answers within the wait is closed by the host's own
+/// prompt: the card goes (`approval_closed` for its request id), the turn's
+/// exchanges record a `timeout`, the broker forgets it (a late Continue is
+/// answered "no longer open"), and the tool call ends.
+#[tokio::test]
+async fn mcp_authorization_timeout_closes_and_records_the_question() {
+    let server = serve(|_req: &Req| mcp_authorization_required(None)).await;
+    let broker = Arc::new(super::approvals::ApprovalBroker::default());
+    let prompt = Arc::new(super::approvals::UiPrompt::new(broker.clone()));
+    let emitter = Arc::new(VecEmitter::default());
+    let binding = super::approvals::TurnBinding {
+        events: Arc::new(super::events::TurnEvents::new("t1".into(), emitter.clone())),
+        recorder: Arc::new(super::recorder::Recorder::default()),
+    };
+    prompt.bind(Some(binding.clone()));
+    let context = remote_context(&server, prompt, Duration::from_millis(50)).await;
+    let result = remote_tools::call(&context, &jira_spec(), "c1", "create_issue", json!({})).await;
+    assert_eq!(result["code"], "authorization_timeout");
+    assert_eq!(server.seen().len(), 1);
+
+    let events = emitter.all();
+    let asked = events
+        .iter()
+        .find(|e| e.kind == "approval_request")
+        .unwrap();
+    let request_id = asked.payload["request_id"].as_str().unwrap();
+    let closed = events.iter().find(|e| e.kind == "approval_closed").unwrap();
+    assert_eq!(closed.payload["request_id"], request_id);
+    assert!(!broker.respond(request_id, UiDecision::AllowOnce));
+    let exchanges = binding.recorder.hitl_exchanges();
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(exchanges[0]["kind"], "mcp_authorization");
+    assert_eq!(exchanges[0]["decision"], "timeout");
+    assert_eq!(exchanges[0]["tool_run_id"], "c1");
+    assert!(
+        !serde_json::to_string(&events)
+            .unwrap()
+            .contains(PLANTED_TOKEN)
     );
 }
 

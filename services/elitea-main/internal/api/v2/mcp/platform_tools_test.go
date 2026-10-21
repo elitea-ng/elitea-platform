@@ -63,3 +63,24 @@ func TestCallPlatformToolRunsTheCategoryOperationAsTheCaller(t *testing.T) {
 		t.Fatal("a saved toolkit type was dispatched as a platform tool")
 	}
 }
+
+// PlatformTools is the category's tools/list listing (the resolved
+// definition names them, client contract 1.16).
+func TestPlatformToolsListsTheCategory(t *testing.T) {
+	handler := NewHandler(nil, nil, nil, nil)
+	var asked scope
+	handler.source = &funcSource{fn: func(_ string, s scope) ([]Tool, error) {
+		asked = s
+		return []Tool{{Name: "a", Description: "first"}, {Name: "b"}}, nil
+	}}
+	listed, err := handler.PlatformTools(t.Context(), 7, "mcp_elitea_internal_notifications")
+	if err != nil || len(listed) != 2 || listed[0] != (PlatformToolInfo{Name: "a", Description: "first"}) || listed[1].Name != "b" {
+		t.Fatalf("listed = %+v, %v", listed, err)
+	}
+	if asked.kind != scopeCategory || asked.category != "notifications" {
+		t.Fatalf("listed scope = %+v", asked)
+	}
+	if _, err := handler.PlatformTools(t.Context(), 7, "github"); err == nil {
+		t.Fatal("a saved toolkit type was listed as a platform server")
+	}
+}
