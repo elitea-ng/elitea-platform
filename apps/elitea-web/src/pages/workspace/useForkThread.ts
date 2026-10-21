@@ -44,7 +44,7 @@ export interface ForkPoint {
   turnId?: string;
 }
 
-export interface ForkNotice {
+interface ForkNotice {
   severity: 'success' | 'warning';
   text: string;
 }
@@ -56,7 +56,7 @@ const notices = new Map<string, ForkNotice>();
  * The notice of the fork that opened `conversationId`, shown once: read it in a state
  * initializer (pure, so React may call it twice) and forget it after mount.
  */
-export function useForkNotice(conversationId: string): [ForkNotice | null, () => void] {
+function useForkNotice(conversationId: string): [ForkNotice | null, () => void] {
   const [notice, setNotice] = useState(() => notices.get(conversationId) ?? null);
   useEffect(() => {
     notices.delete(conversationId);
@@ -72,7 +72,7 @@ export interface ForkThreadInput {
   conversationId: string;
 }
 
-export interface ForkThread {
+interface ForkThread {
   /** Fork at `point`, or the whole thread. Never rejects: a failure is `error`. */
   fork: (point?: ForkPoint) => Promise<void>;
   pending: boolean;
@@ -126,7 +126,7 @@ async function copyLocalTurns(ipc: WorkspaceIpc, workspaceId: string, conversati
   }
 }
 
-export function useForkThread({ ipc, workspaceId, projectId, conversationId }: ForkThreadInput): ForkThread {
+function useForkThread({ ipc, workspaceId, projectId, conversationId }: ForkThreadInput): ForkThread {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [pending, setPending] = useState(false);

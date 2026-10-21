@@ -80,7 +80,7 @@ export function useCopyMenu(): (text: string, event: React.MouseEvent, fork?: ((
 }
 
 /** A turn's fork point: its answer, the last message its `done` event names. */
-export function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } | undefined): ForkPoint | null {
+function turnForkPoint(turnId: string, done: { messageIds: readonly string[] } | undefined): ForkPoint | null {
   const answer = done?.messageIds.at(-1);
   return answer === undefined || answer === '' ? null : { messageId: answer, turnId };
 }
