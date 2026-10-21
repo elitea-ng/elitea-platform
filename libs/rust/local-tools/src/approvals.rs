@@ -98,6 +98,10 @@ pub enum ToolKind {
     EditFile,
     ApplyPatch,
     RunCommand,
+    /// `run_tests`: a test runner invocation, run like `run_command` (the
+    /// same sandbox, classifier, policy ceiling and prefix rules), whose
+    /// "always allow" is remembered for its runner kind.
+    RunTests,
     /// A commit through the host's hardened git: allowed by default (a
     /// workspace rule may ask or deny); never remembered.
     GitCommit,
@@ -117,6 +121,13 @@ impl ToolKind {
                 | Self::ReadDocument
                 | Self::GitRead
         )
+    }
+
+    /// Whether the tool starts a process the rules judge as a command
+    /// (`run_command`, `run_tests`).
+    #[must_use]
+    pub const fn runs_commands(self) -> bool {
+        matches!(self, Self::RunCommand | Self::RunTests)
     }
 }
 
@@ -578,7 +589,7 @@ impl RulesEngine {
     /// that allows unenforced sandboxes, or one the session found its
     /// sandbox cannot confine ([`ToolCall::unconfined`]).
     fn runs_unconfined(&self, call: &ToolCall) -> bool {
-        call.tool == ToolKind::RunCommand && (!self.confined || call.unconfined)
+        call.tool.runs_commands() && (!self.confined || call.unconfined)
     }
 
     #[must_use]
@@ -610,7 +621,7 @@ impl RulesEngine {
             );
         }
         let shape = call.command.as_deref().map(analyse);
-        let risk = (call.tool == ToolKind::RunCommand).then(|| self.command_risk(call));
+        let risk = call.tool.runs_commands().then(|| self.command_risk(call));
         // A command that may run unconfined is the person's call every time:
         // neither a workspace allow nor a remembered choice vouches for it.
         let unconfined = self.runs_unconfined(call);
@@ -699,7 +710,7 @@ impl RulesEngine {
                 return deny(error.message().to_owned());
             }
         }
-        if call.tool != ToolKind::RunCommand {
+        if !call.tool.runs_commands() {
             return None;
         }
         if !self.policy.shell {
@@ -784,7 +795,7 @@ impl RulesEngine {
     /// The command prefix rules' decision (workspace file, then the
     /// person's; the strongest wins, the first of equals).
     fn prefix_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
-        if call.tool != ToolKind::RunCommand {
+        if !call.tool.runs_commands() {
             return None;
         }
         let shape = shape?;
@@ -870,7 +881,14 @@ impl RulesEngine {
         let mut best: Option<&CompiledRule> = None;
         for compiled in &self.rules {
             let rule = &compiled.rule;
-            if !rule.tools.is_empty() && !rule.tools.contains(&call.tool) {
+            // A rule that tightens `run_command` tightens `run_tests` too:
+            // it is not a way around the person's command rules.
+            let applies = rule.tools.is_empty()
+                || rule.tools.contains(&call.tool)
+                || (call.tool == ToolKind::RunTests
+                    && rule.verdict != Verdict::Allow
+                    && rule.tools.contains(&ToolKind::RunCommand));
+            if !applies {
                 continue;
             }
             // Deny and ask tighten: they match any path (and any segment,

@@ -330,7 +330,9 @@ pub async fn gather(
     mentioned: &[String],
 ) -> Facts {
     let mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
-    let commands = tools.iter().any(|tool| tool == "run_command");
+    let commands = tools
+        .iter()
+        .any(|tool| tool == "run_command" || tool == "run_tests");
     // The probes together: the turn waits at most one PROBE_TIMEOUT.
     let (git, sandbox, project) = tokio::join!(
         async {

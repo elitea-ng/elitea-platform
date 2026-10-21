@@ -44,6 +44,9 @@ fn path_param(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+/// The tools that run commands: offered only with the shell policy.
+const RUNS_COMMANDS: &[&str] = &["run_command", "run_tests"];
+
 /// The tools, in the order the model sees them.
 pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
@@ -135,7 +138,7 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
     WorkspaceToolSpec {
         name: "read_output",
         read_only: true,
-        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, run_tests, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
         parameters: || {
             json!({
                 "type": "object",
@@ -208,6 +211,24 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
                     "network": { "type": "boolean" }
                 },
                 "required": ["command"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
+        name: "run_tests",
+        read_only: false,
+        description: "Run the project's tests (or its build check) under the OS sandbox and get back the counts and the failing tests with file, line and a short message, not the whole log (output_id pages it with read_output). Without command it runs the detected test command for cwd (the environment's Project line); a given command must be one test runner invocation (cargo, go, vitest, jest, pytest, mvn, gradle, or the package manager's test script), and its structured output is switched on. A build that fails answers errors (the compiler's messages) instead of failures. The network is off unless network is true, which the person confirms.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Optional. Defaults to the detected test command; a given command must be a test runner invocation." },
+                    "filter": { "type": "string", "description": "Optional test name filter, appended the runner's way (cargo: positional; go: -run; pytest: -k; vitest/jest: -t)." },
+                    "cwd": path_param("Working directory relative to the workspace root (default: the detected project's folder)."),
+                    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 1800 },
+                    "network": { "type": "boolean", "description": "Allow the runner to fetch dependencies. Asked." }
+                },
+                "required": []
             })
         },
     },
@@ -468,7 +489,7 @@ pub struct WorkspaceToolProvider {
 
 impl WorkspaceToolProvider {
     /// `shell`: the project's effective policy (decision 11); without it
-    /// `run_command` is not offered.
+    /// `run_command` and `run_tests` are not offered.
     #[must_use]
     pub fn new(runner: Arc<dyn WorkspaceRunner>, shell: bool) -> Self {
         Self {
@@ -500,7 +521,7 @@ impl WorkspaceToolProvider {
     pub fn specs(&self) -> Vec<&'static WorkspaceToolSpec> {
         workspace_tools_for(self.edit_profile)
             .into_iter()
-            .filter(|spec| self.shell || spec.name != "run_command")
+            .filter(|spec| self.shell || !RUNS_COMMANDS.contains(&spec.name))
             .collect()
     }
 
@@ -572,7 +593,9 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 15);
+        assert!(names(true).contains(&"run_tests"));
+        assert!(!names(false).contains(&"run_tests"));
+        assert_eq!(names(true).len(), 16);
         let patch = WorkspaceToolProvider::new(runner.clone(), true)
             .with_edit_profile(EditProfile::Patch)
             .specs();

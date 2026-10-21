@@ -35,6 +35,7 @@ use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summa
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::project::{self, ProjectProfile};
+use crate::run_tests;
 use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
@@ -122,6 +123,22 @@ pub struct ToolSpec {
 
 fn path_param(description: &str) -> Value {
     json!({ "type": "string", "description": description })
+}
+
+const RUN_TESTS_DESCRIPTION: &str = "Run the project's tests (or its build check) under the OS sandbox and get back the counts and the failing tests with file, line and a short message, not the whole log (output_id pages it with read_output). Without command it runs the detected test command for cwd (the environment's Project line); a given command must be one test runner invocation (cargo, go, vitest, jest, pytest, mvn, gradle, or the package manager's test script), and its structured output is switched on. A build that fails answers errors (the compiler's messages) instead of failures. The network is off unless network is true, which the person confirms.";
+
+fn run_tests_parameters() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "command": { "type": "string", "description": "Optional. Defaults to the detected test command; a given command must be a test runner invocation." },
+            "filter": { "type": "string", "description": "Optional test name filter, appended the runner's way (cargo: positional; go: -run; pytest: -k; vitest/jest: -t)." },
+            "cwd": path_param("Working directory relative to the workspace root (default: the detected project's folder)."),
+            "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 1800 },
+            "network": { "type": "boolean", "description": "Allow the runner to fetch dependencies. Asked." }
+        },
+        "required": []
+    })
 }
 
 /// The tools, in the order the model sees them.
@@ -215,7 +232,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "read_output",
         kind: ToolKind::ReadOutput,
-        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
+        description: "Read a page of a tool output that was too long to show in full: the output_id a run_command, run_tests, git_diff, git_log or read_document result gave, with line numbers. Only this conversation's outputs, kept for a day; page with offset/limit (and next_column inside a long line). output_expired means it is gone: re-run the tool.",
         parameters: || {
             json!({
                 "type": "object",
@@ -290,6 +307,12 @@ pub const TOOLS: &[ToolSpec] = &[
                 "required": ["command"]
             })
         },
+    },
+    ToolSpec {
+        name: "run_tests",
+        kind: ToolKind::RunTests,
+        description: RUN_TESTS_DESCRIPTION,
+        parameters: run_tests_parameters,
     },
     ToolSpec {
         name: "git_status",
@@ -853,7 +876,7 @@ impl LocalSession {
         let plan = self.engine.plan_mode();
         tools_for(self.edit_profile())
             .into_iter()
-            .filter(|tool| tool.kind != ToolKind::RunCommand || policy.shell)
+            .filter(|tool| !tool.kind.runs_commands() || policy.shell)
             .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.is_read_only())
             .collect()
@@ -950,15 +973,7 @@ impl LocalSession {
             | ToolKind::SearchFiles
             | ToolKind::FindFiles
             | ToolKind::ReadDocument => self.read_only(spec, call_id, args).await,
-            ToolKind::ReadOutput => {
-                // No path: the id names one of this session's outputs.
-                self.authorize(call_id, ToolCall::new(ToolKind::ReadOutput), spec.name)
-                    .await?;
-                self.blocking(move |this| {
-                    budget::read_output(&this.spill, args, budget::bytes(this.budgets.read_file))
-                })
-                .await
-            }
+            ToolKind::ReadOutput => self.read_output(call_id, args).await,
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::GitCommit => self.git_commit(call_id, args).await,
             ToolKind::WriteFile => {
@@ -1017,6 +1032,7 @@ impl LocalSession {
                 .await
             }
             ToolKind::RunCommand => self.run_command(call_id, args).await,
+            ToolKind::RunTests => self.run_tests(call_id, args).await,
         }
     }
 
@@ -1047,6 +1063,16 @@ impl LocalSession {
                 EditCall::One(args) => files::edit(&this.workspace, &this.ledger, args),
                 EditCall::Many(args) => files::multi_edit(&this.workspace, &this.ledger, args),
             }
+        })
+        .await
+    }
+
+    /// `read_output`: no path, the id names one of this session's outputs.
+    async fn read_output(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
+        self.authorize(call_id, ToolCall::new(ToolKind::ReadOutput), "read_output")
+            .await?;
+        self.blocking(move |this| {
+            budget::read_output(&this.spill, args, budget::bytes(this.budgets.read_file))
         })
         .await
     }
@@ -1276,6 +1302,83 @@ impl LocalSession {
         }
         serde_json::to_value(output)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the result"))
+    }
+
+    /// `run_tests` ([`crate::run_tests`]): planned from the project profile
+    /// (or the given runner command), asked and run exactly as
+    /// `run_command` runs a command, answered with the failing tests.
+    async fn run_tests(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
+        let args: run_tests::TestArgs = if args.is_null() {
+            run_tests::TestArgs::default()
+        } else {
+            parse(args)?
+        };
+        let junit = run_tests::junit_path(&self.shell.temp_dir)?;
+        if args
+            .timeout_seconds
+            .is_some_and(|secs| !(1..=1800).contains(&secs))
+        {
+            return Err(ToolError::invalid("`timeout_seconds` is 1 to 1800"));
+        }
+        let network = args.network;
+        let timeout = Duration::from_secs(
+            args.timeout_seconds
+                .unwrap_or_else(|| self.shell.max_timeout.as_secs()),
+        );
+        let planned = self
+            .blocking({
+                let junit = junit.clone();
+                move |this| {
+                    let profile = this.profile_for(None);
+                    run_tests::plan(&this.workspace, &profile, &args, &junit)
+                }
+            })
+            .await?;
+        let max = self.engine.policy().max_sandbox_mode;
+        let mode = SandboxMode::WorkspaceWrite.min(max);
+        let spec = CommandSpec {
+            command: planned.command.clone(),
+            cwd: planned.cwd.clone(),
+            timeout: Some(timeout),
+            mode,
+            network,
+        };
+        let unconfined = shell::plan(&self.workspace, &self.shell, &spec)
+            .is_ok_and(|prepared| !prepared.hides_denied);
+        let call = ToolCall {
+            tool: ToolKind::RunTests,
+            paths: vec![spec.cwd.display_string()],
+            command: Some(spec.command.clone()),
+            sandbox: Some(mode),
+            network,
+            unconfined,
+        };
+        self.authorize(call_id, call, "run the tests").await?;
+        if mode != SandboxMode::ReadOnly {
+            self.blocking(Self::ensure_checkpoint).await?;
+        }
+        let started = std::time::SystemTime::now();
+        let output = shell::run_checked_up_to(
+            &self.workspace,
+            &self.shell,
+            &spec,
+            unconfined,
+            self.shell.max_test_timeout,
+        )
+        .await?;
+        self.blocking(move |this| {
+            let (report, junit_text) =
+                run_tests::report(&this.workspace, &planned, &output, &junit, started);
+            Ok(run_tests::answer(
+                &planned,
+                &output,
+                &report,
+                junit_text.as_deref(),
+                &this.spill,
+                budget::bytes(this.budgets.run_command),
+            ))
+        })
+        .await
     }
 
     /// `git_commit`: through the hardened host git (the repository is

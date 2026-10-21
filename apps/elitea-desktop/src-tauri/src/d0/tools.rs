@@ -247,7 +247,14 @@ impl Tool for ObservedTool {
                 (false, shorten(&text).0, false, Some(text))
             }
         };
-        if let (Some(command), Ok(value)) = (&command, &result) {
+        // run_tests: the command it planned (and ran) is in its answer.
+        let planned = (tool == "run_tests" && !self.remote)
+            .then(|| result.as_ref().ok())
+            .flatten()
+            .and_then(|value| value.get("command"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let (Some(command), Ok(value)) = (command.as_ref().or(planned.as_ref()), &result) {
             observer.recorder.command(command, value);
         }
         observer.recorder.tool_finished(

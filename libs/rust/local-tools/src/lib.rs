@@ -35,6 +35,7 @@ pub mod policy;
 pub mod project;
 pub mod project_instructions;
 pub mod provider;
+pub mod run_tests;
 pub mod sandbox;
 pub mod session;
 pub mod shell;

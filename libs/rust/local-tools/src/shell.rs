@@ -48,6 +48,9 @@ pub const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 pub struct ShellConfig {
     pub default_timeout: Duration,
     pub max_timeout: Duration,
+    /// The longest `run_tests` may run (a suite is slower than a
+    /// command); its default is [`Self::max_timeout`].
+    pub max_test_timeout: Duration,
     /// Bytes kept per stream (half from the start, half from the end):
     /// what a session spills when the output is over its token budget
     /// ([`crate::budget`]), which is what the model sees.
@@ -90,12 +93,14 @@ pub struct ShellConfig {
 }
 
 impl ShellConfig {
-    /// Defaults: 2 minutes (at most 10), 4 MiB kept per stream.
+    /// Defaults: 2 minutes (at most 10; tests at most 30), 4 MiB kept per
+    /// stream.
     #[must_use]
     pub fn new(temp_dir: PathBuf) -> Self {
         Self {
             default_timeout: Duration::from_mins(2),
             max_timeout: Duration::from_mins(10),
+            max_test_timeout: Duration::from_mins(30),
             output_cap: DEFAULT_OUTPUT_CAP,
             env_passthrough: Vec::new(),
             temp_dir,
@@ -460,6 +465,30 @@ pub async fn run_checked(
     spec: &CommandSpec,
     unhidden_approved: bool,
 ) -> ToolResult<CommandOutput> {
+    run_checked_up_to(
+        workspace,
+        config,
+        spec,
+        unhidden_approved,
+        config.max_timeout,
+    )
+    .await
+}
+
+/// [`run_checked`] with its timeout capped at `max_timeout` instead of
+/// [`ShellConfig::max_timeout`] (`run_tests`:
+/// [`ShellConfig::max_test_timeout`]).
+///
+/// # Errors
+///
+/// As [`run_checked`].
+pub async fn run_checked_up_to(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    unhidden_approved: bool,
+    max_timeout: Duration,
+) -> ToolResult<CommandOutput> {
     if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
         return Err(ToolError::invalid(format!(
             "`{}` is not a directory in the workspace",
@@ -479,7 +508,7 @@ pub async fn run_checked(
     let timeout = spec
         .timeout
         .unwrap_or(config.default_timeout)
-        .min(config.max_timeout);
+        .min(max_timeout);
 
     let mut command = tokio::process::Command::new(&prepared.program);
     command
