@@ -33,8 +33,11 @@ const PlatformMaxMessageBytes = 16 << 20
 const PlatformMaxSendMessageBytes = 65 << 20
 
 // DefaultPlatformGRPCPolicy is the platform listener's connection policy:
-// the private listeners' keepalive rhythm, with a long connection-age grace
-// because model completions stream on this port for minutes.
+// the private listeners' keepalive rhythm. MaxConnectionAge still makes
+// clients reconnect, which spreads them over replicas, but its grace is
+// unlimited: model completions and artifact transfers stream on this port
+// for as long as they take, and a bounded grace cut every one still open
+// at age plus grace (#1359).
 func DefaultPlatformGRPCPolicy() GRPCServerPolicy {
 	return GRPCServerPolicy{
 		MaxConcurrentStreams:  maxPrivateConcurrentStreams,
@@ -43,7 +46,7 @@ func DefaultPlatformGRPCPolicy() GRPCServerPolicy {
 		KeepaliveTimeout:      10 * time.Second,
 		MaxConnectionIdle:     5 * time.Minute,
 		MaxConnectionAge:      30 * time.Minute,
-		MaxConnectionAgeGrace: 15 * time.Minute,
+		MaxConnectionAgeGrace: ConnectionAgeGraceUnlimited,
 	}
 }
 

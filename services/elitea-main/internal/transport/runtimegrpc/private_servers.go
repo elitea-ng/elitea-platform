@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,13 @@ const (
 	maxPrivateConcurrentStreams = 256
 	maxPrivateConnections       = 1024
 )
+
+// ConnectionAgeGraceUnlimited is a MaxConnectionAgeGrace that never cuts a
+// stream: after MaxConnectionAge the server sends GOAWAY, the client opens a
+// new connection for new calls, and the calls already running on the old one
+// finish however long they take (grpc-go's own default, infinity). The
+// policy's limits still bound a listener's shutdown.
+const ConnectionAgeGraceUnlimited = time.Duration(math.MaxInt64)
 
 type GRPCServerPolicy struct {
 	MaxConcurrentStreams  uint32
@@ -176,7 +184,7 @@ func validateGRPCServerPolicy(policy GRPCServerPolicy) error {
 	if policy.KeepaliveTime < time.Second || policy.KeepaliveTimeout < time.Second || policy.MaxConnectionIdle < time.Second || policy.MaxConnectionAge < time.Second || policy.MaxConnectionAgeGrace < time.Second {
 		return errors.New("keepalive durations must be at least one second")
 	}
-	if policy.KeepaliveTimeout > policy.KeepaliveTime || policy.MaxConnectionIdle > policy.MaxConnectionAge || policy.MaxConnectionAgeGrace > policy.MaxConnectionAge {
+	if policy.KeepaliveTimeout > policy.KeepaliveTime || policy.MaxConnectionIdle > policy.MaxConnectionAge || (policy.MaxConnectionAgeGrace > policy.MaxConnectionAge && policy.MaxConnectionAgeGrace != ConnectionAgeGraceUnlimited) {
 		return errors.New("keepalive duration ordering is invalid")
 	}
 	return nil

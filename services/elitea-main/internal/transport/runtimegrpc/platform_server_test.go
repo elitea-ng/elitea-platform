@@ -222,3 +222,49 @@ func TestPlatformServerConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// A stream open when its connection reaches MaxConnectionAge keeps running:
+// the server sends GOAWAY, the grace is unlimited, and the client's next call
+// goes over a new connection without an error.
+func TestPlatformServerLetsAStreamOutliveItsConnectionAge(t *testing.T) {
+	if got := DefaultPlatformGRPCPolicy().MaxConnectionAgeGrace; got != ConnectionAgeGraceUnlimited {
+		t.Fatalf("the platform listener's connection-age grace is %v, want unlimited", got)
+	}
+	pki := grpcauthtest.NewPKI(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := DefaultPlatformGRPCPolicy()
+	policy.MaxConnectionAge = time.Second
+	policy.MaxConnectionIdle = time.Second
+	server, err := NewPlatformServer(PlatformServerConfig{Address: listener.Addr().String(), TLS: pki.ServerTLS(t), Policy: policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	})
+	health := healthv1.NewHealthClient(platformClient(t, listener.Addr().String(), pki.ClientTLS(t, "elitea-worker")))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	watch, err := health.Watch(ctx, &healthv1.HealthCheckRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watch.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2500 * time.Millisecond) // past the age and its jitter: GOAWAY sent
+	server.health.SetServingStatus("", healthv1.HealthCheckResponse_NOT_SERVING)
+	update, err := watch.Recv()
+	if err != nil || update.GetStatus() != healthv1.HealthCheckResponse_NOT_SERVING {
+		t.Fatalf("the stream past its connection's age: %v %v", update, err)
+	}
+	if _, err := health.Check(ctx, &healthv1.HealthCheckRequest{}); err != nil {
+		t.Fatalf("a call after GOAWAY: %v", err)
+	}
+}
