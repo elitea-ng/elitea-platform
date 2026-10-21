@@ -739,6 +739,98 @@ async fn a_pipeline_and_nested_agents_are_refused_locally() {
     assert_eq!(code, "nested_agents_unsupported");
 }
 
+fn platform_mcp_tool(with_ref: bool) -> Value {
+    let mut tool = json!({
+        "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+        "server_name": "mcp_elitea_internal_applications",
+        "name": "Elitea Applications", "toolkit_name": "Elitea Applications",
+        "description": "Read and change Elitea project resources through authorized platform tools."
+    });
+    if with_ref {
+        tool["selected_tools"] = json!([]);
+        tool["all_tools"] = json!(true);
+        tool["toolkit_ref"] = json!({"toolkit_id": 0, "project_id": 1, "ref": TOOLKIT_REF});
+    }
+    tool
+}
+
+/// Issue 1231: an agent that selects a platform MCP server runs locally when
+/// the platform gives the server a `toolkit_ref`; the model calls the
+/// server's tools through `executeRemoteToolkitTool` with toolkit id 0.
+#[tokio::test]
+async fn platform_mcp_with_ref_is_admitted_as_remote_tool() {
+    let details = json!({
+        "instructions": "List the agents.",
+        "agent_type": "openai",
+        "llm_settings": {"model_name": "gpt-test"},
+        "tools": [platform_mcp_tool(true)]
+    });
+    let model_calls = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let inner = platform(details, &[]);
+        let model_calls = model_calls.clone();
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                return match model_calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => tool_call(
+                        "call-platform",
+                        "Elitea_Applications_call",
+                        &json!({"tool_name": "get_elitea_core_applications", "arguments": {"limit": 5}}),
+                    ),
+                    _ => sse(&[json!({"choices": [{"delta": {"content": "Two agents."}, "finish_reason": "stop"}]})]),
+                };
+            }
+            if req.path == "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/0" {
+                return Res::json(
+                    200,
+                    &json!({"ok": true, "status": "ok", "toolkit_id": 0,
+                        "toolkit_type": "mcp_elitea_internal_applications",
+                        "tool_name": "get_elitea_core_applications", "result": {"total": 2}}),
+                );
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let call = events.iter().find(|e| e.kind == "tool_call").unwrap();
+    assert_eq!(call.payload["tool"], "Elitea_Applications_call");
+    assert_eq!(call.payload["remote"], true);
+    let result = events.iter().find(|e| e.kind == "tool_result").unwrap();
+    assert_eq!(result.payload["ok"], true, "{:?}", result.payload);
+    let remote = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/0");
+    assert_eq!(remote.len(), 1);
+    let body: Value = serde_json::from_str(&remote[0].body).unwrap();
+    assert_eq!(
+        body,
+        json!({"execution_id": EXECUTION, "application_id": 5, "version_id": 9,
+            "toolkit_ref": TOOLKIT_REF, "tool_name": "get_elitea_core_applications",
+            "arguments": {"limit": 5}})
+    );
+    assert!(!remote[0].headers["idempotency-key"].is_empty());
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let commit: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(commit["assistant_message"]["content"], "Two agents.");
+}
+
+/// A platform older than client contract 1.16 sends no `toolkit_ref`: the
+/// server cannot be reached locally, and the turn is refused before it opens.
+#[tokio::test]
+async fn platform_mcp_without_ref_is_still_refused() {
+    let details = json!({
+        "llm_settings": {"model_name": "m"},
+        "tools": [platform_mcp_tool(false)]
+    });
+    let (code, h) = refused(details, &[], allowed()).await;
+    assert_eq!(code, "platform_mcp_unsupported");
+    assert!(seen(&h.server, "/remote_toolkit_call/prompt_lib/1/0").is_empty());
+}
+
 #[tokio::test]
 async fn local_work_off_refuses_before_any_request() {
     for policy in [None, Some(json!({"allowed": false, "shell": true}))] {

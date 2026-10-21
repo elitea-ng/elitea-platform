@@ -2,9 +2,10 @@
 //! refusals for what it does not run locally yet.
 //!
 //! D0 runs one ordinary agent: its instructions, its model, its frozen
-//! skills and project context, and its credentialed toolkits as remote
-//! tools. A pipeline, a nested agent and a project MCP server are refused
-//! before the turn starts, so no execution is opened for them.
+//! skills and project context, and its credentialed toolkits and platform
+//! MCP servers as remote tools. A pipeline, a nested agent and a platform MCP
+//! server without a `toolkit_ref` (an older platform) are refused before the
+//! turn starts, so no execution is opened for them.
 
 use serde_json::{Map, Value};
 
@@ -107,10 +108,17 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
                     "This agent uses other agents as tools, which do not run locally yet; run it in the cloud.",
                 ));
             }
+            // A platform MCP server runs on the platform like a credentialed
+            // toolkit (ADR-0029 decision 3): a server that hands it a
+            // `toolkit_ref` (client contract 1.16) is called through
+            // `executeRemoteToolkitTool`; an older one cannot be reached.
+            Some("platform_mcp") if tool.get("toolkit_ref").is_some_and(Value::is_object) => {
+                remote_tools.extend(remote_specs(tool)?);
+            }
             Some("platform_mcp") => {
                 return Err(Refusal::new(
                     "platform_mcp_unsupported",
-                    "This agent uses a project MCP server, which local turns cannot reach yet; run it in the cloud.",
+                    "This agent uses a project MCP server that this platform version cannot reach from a local turn; update the platform or run it in the cloud.",
                 ));
             }
             _ => {
@@ -439,8 +447,40 @@ mod tests {
             admit(&nested, &[]).unwrap_err().code,
             "nested_agents_unsupported"
         );
+        let old_platform = resolved(json!({
+            "llm_settings": {"model_name": "m"},
+            "tools": [{"kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                       "server_name": "mcp_elitea_internal_applications"}]
+        }));
+        assert_eq!(
+            admit(&old_platform, &[]).unwrap_err().code,
+            "platform_mcp_unsupported"
+        );
         let no_model = resolved(json!({"tools": []}));
         assert_eq!(admit(&no_model, &[]).unwrap_err().code, "model_unresolved");
+    }
+
+    #[test]
+    fn a_platform_mcp_server_with_a_ref_is_one_generic_remote_tool() {
+        let admitted = admit(
+            &resolved(json!({
+                "llm_settings": {"model_name": "m"},
+                "tools": [{
+                    "kind": "platform_mcp", "type": "mcp_elitea_internal_applications",
+                    "server_name": "mcp_elitea_internal_applications",
+                    "name": "Elitea Applications", "toolkit_name": "Elitea Applications",
+                    "selected_tools": [], "all_tools": true,
+                    "toolkit_ref": {"toolkit_id": 0, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
+                }]
+            })),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(admitted.remote_tools.len(), 1);
+        let spec = &admitted.remote_tools[0];
+        assert_eq!(spec.toolkit_id, 0);
+        assert_eq!(spec.tool_name, None);
+        assert_eq!(spec.exposed_name, "Elitea_Applications_call");
     }
 
     #[test]

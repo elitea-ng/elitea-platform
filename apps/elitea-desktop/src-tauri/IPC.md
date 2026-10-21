@@ -265,7 +265,9 @@ as an `error` event plus a `status` `error` event of a fresh `turn_id`.
 Refusal codes (the rejection's `code` and the `error` event's): `local_work_disabled`,
 `secrets_withheld` ("this agent needs secrets; run it in the cloud"),
 `pipeline_unsupported`, `nested_agents_unsupported`,
-`platform_mcp_unsupported`, `unknown_tool_kind`, `toolkit_ref_missing`,
+`platform_mcp_unsupported` (a platform MCP server the platform gave no
+`toolkit_ref`: a server older than client contract 1.16),
+`unknown_tool_kind`, `toolkit_ref_missing`,
 `model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`, `skill_unknown`,
@@ -282,6 +284,16 @@ ends `cancelled` → `done`, `committed: false`) and forget every workspace
 session and kept turn: an earlier turn then answers `turn_unknown`.
 
 `plan_mode: true` offers read-only local tools only and no remote toolkits.
+
+**Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
+MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved
+definition gives it a `toolkit_ref`; issue 1231) are the same kind of tool to
+the model: each selected tool is one tool named `<toolkit>_<tool>`, and a
+toolkit or server with every tool selected (`all_tools`) is one tool
+`<toolkit>_call` that takes `tool_name` and `arguments`. Every call goes to
+`executeRemoteToolkitTool` (a platform server's with toolkit id 0) with
+its own `Idempotency-Key`, reused on each of its retries; the desktop never
+connects to an MCP server itself and holds no credential of one.
 
 `mentions` are the workspace-relative paths the person referenced with "@"
 (a folder may end with `/`; at most 50). Each must resolve inside the
