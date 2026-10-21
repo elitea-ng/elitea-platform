@@ -67,15 +67,17 @@
 #   elitea-worker is the NodeEvent producer — Go admits and projects executions
 #   but has no agent-token producer of its own. Two things it needs are not
 #   obvious:
-#     * platform_origin must be an https origin (config.py:187 rejects anything
-#       else) and elitea-main has no TLS listener for its /api/v2 + /llm surface,
-#       so `platform-edge` terminates TLS for it with a runtime-CA certificate.
-#     * the SDK verifies TLS through the OS trust store on import, which cannot
-#       contain a locally minted CA — hence ELITEA_DISABLE_SYSTEM_CA plus
-#       REQUESTS_CA_BUNDLE/SSL_CERT_FILE on the worker service.
-#   The worker has NO env-var configuration: one JSON file, deploy/runtime/
-#   worker-runtime.json, whose nats_stream/nats_consumer must match elitea-main's
-#   env below.
+#     * platform_origin must be an https origin and elitea-main has no TLS
+#       listener for its /api/v2 + /llm surface, so `platform-edge` terminates
+#       TLS for it with a runtime-CA certificate.
+#     * the native worker hands the runtime CA to every internal client in
+#       code; its process-wide trust store (SSL_CERT_FILE, set by
+#       docker-compose.standalone-rust-agent.yml) covers only outbound clients
+#       — the MCP client and the toolkits — and is the mcp-mock-trust bundle:
+#       public roots + mcp-mock CA + runtime CA (#983, #1203).
+#   The worker's deployment settings live in one JSON file, deploy/runtime/
+#   worker-runtime.rust.json, whose nats_stream/nats_consumer must match
+#   elitea-main's env below.
 #
 # ── The mock LLM (issue #283) ────────────────────────────────────────────────
 #   `seed-llm` now defaults to an OFFLINE mock when no provider key is present,
@@ -823,6 +825,11 @@ services:
   # The mock stays up alongside it: `check` writes its API-created credential
   # at llm-mock:8090 whatever provider was seeded, and that assertion must
   # keep running here.
+  #
+  # Toolkits that call PUBLIC services from this lane (GitHub at
+  # api.github.com, …) need no extra setting: the worker's outbound trust
+  # store is the mcp-mock-trust bundle, which starts from the public roots
+  # (docker-compose.standalone-rust-agent.yml, SSL_CERT_FILE; #1203).
   llm-real:
     image: ghcr.io/elitea-ng/elitea-e2e-llm:v0.1.0@sha256:1b11aa30481ffee8c8e823aeae712b7926a3422f689e1c49f45f5c208329b843
     profiles: ["real-llm"]
@@ -1882,54 +1889,18 @@ services:
     # it will accept (composition.go's capabilityVersions map).
     command: ["serve", "--config", "/run/elitea/runtime.json"]
     environment:
-      # TLS trust for platform_origin. The SDK routes verification through the
-      # OS trust store on import (elitea_sdk/_system_ca.py injects truststore),
-      # which cannot contain a CA minted on this machine minutes ago. Disabling
-      # that injection restores the standard mechanisms, and then the two
-      # variables below cover both HTTP stacks the SDK uses: `requests` for the
-      # /api/v2 calls (REQUESTS_CA_BUNDLE) and httpx/openai for the model call
-      # (SSL_CERT_FILE, honoured by ssl.create_default_context).
+      # TLS trust (SSL_CERT_FILE) is set by the Rust overlay, next to the mount
+      # and the one-shot it depends on: the mcp-mock-trust bundle, public roots
+      # included, so toolkits that call public SaaS (api.github.com, …) verify
+      # (#1203). Internal destinations get the runtime CA in code.
       #
-      # A runtime-CA-only bundle is correct AND tighter than adding public
-      # roots: every destination the worker dials — control, output, content,
-      # platform_origin — is signed by that CA, and model traffic egresses
-      # through elitea-main's /llm proxy rather than directly to a provider.
-      #
-      # THE BUNDLE, NOT THE RUNTIME CA ALONE (#983 trust half). A remote MCP
-      # server is the one destination on this stack that is NOT signed by the
-      # runtime CA: mcp-mock serves HTTPS with a certificate minted into its own
-      # image. Pointed at the runtime CA alone, the python leg cannot complete
-      # a TLS handshake with it at all — measured, before any MCP request:
-      # `mcp_adapter.py _preflight_auth_check` →
-      # `ClientConnectorCertificateError: self-signed certificate in
-      # certificate chain`, after which the toolkit has no tools and the turn
-      # answers a plain echo naming nothing. The native worker was given the
-      # same bundle for the same reason
-      # (deploy/docker-compose.standalone-rust-agent.yml).
-      #
-      # `worker-trust` below concatenates runtime CA + mcp-mock CA and NOTHING
-      # ELSE. Public roots are deliberately still absent, and the paragraph
-      # above this one says why they were absent before: every internal
-      # destination — control, output, content, platform_origin — is signed by
-      # the runtime CA, and model traffic egresses through elitea-main's /llm
-      # proxy rather than to a provider. No toolkit on this stack dials a
-      # publicly signed endpoint; a lane that adds one adds its own root here
-      # and says which tool needs it. These variables REPLACE the trust store
-      # rather than add to it, so every addition is a real widening.
-      ELITEA_DISABLE_SYSTEM_CA: "1"
-      REQUESTS_CA_BUNDLE: /run/elitea-worker-trust/worker-ca-bundle.pem
-      SSL_CERT_FILE: /run/elitea-worker-trust/worker-ca-bundle.pem
-      # The one environment variable the worker itself reads. Mirrors the
-      # hybrid's fail-safe snapshot: broader than the current
+      # Mirrors the hybrid's fail-safe snapshot: broader than the current
       # `artifact.delete_file` rule so metadata drift cannot bypass approval;
       # `remove_index` (the indexing families' index delete) is destructive too.
       ELITEA_SENSITIVE_TOOLS: '{"*":["delete_file","remove_index"]}'
     volumes:
       - ./runtime/worker-runtime.json:/run/elitea/runtime.json:ro
       - standalone_runtime_worker:/run/elitea-runtime:ro
-      # The combined bundle the two variables above name. Read-only: the worker
-      # consumes it, `worker-trust` is what writes it.
-      - standalone_worker_trust:/run/elitea-worker-trust:ro
       # 0700 and owned by uid 10001 — the worker contract requires a private
       # spool root. A fresh named volume starts 0755 owned by root, so it is
       # prepared by the init service rather than assumed.
@@ -1947,13 +1918,6 @@ services:
         condition: service_healthy
       platform-edge:
         condition: service_started
-      # The bundle both trust variables name must exist before the worker's
-      # first TLS dial — of ANY destination, not only the MCP one, because it
-      # is now the whole trust store. A late file would break only the runs
-      # that raced it, so the one-shot is waited on rather than hoped for
-      # (the same rule the native overlay applies to mcp-mock-trust).
-      worker-trust:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   worker-spool-init:
@@ -2035,49 +1999,6 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # The trust store the PYTHON worker runs on: runtime CA + mcp-mock CA (#983).
-  #
-  # A SECOND one-shot beside mcp-mock-trust, not a second file written by it,
-  # because the two bundles have different INPUTS and different owners.
-  # mcp-mock-trust concatenates the mock's certificate onto the image's public
-  # roots for a consumer (the native worker) whose internal destinations are
-  # trusted in code and whose other clients verify against public roots. The
-  # python worker is the opposite case: it has no code-level CA, every internal
-  # destination is signed by the runtime CA, and it must NOT gain public roots
-  # by accident. So this bundle is built from the runtime material the stack
-  # mints, which mcp-mock-trust does not mount and must not have to wait for.
-  #
-  # It runs the MOCK's image because that is where the mock's CA lives, as
-  # root because a fresh named volume starts 0755 root-owned and the worker
-  # runs non-root — the same reason worker-spool-init and mcp-mock-trust exist.
-  #
-  # The `-s` guard is the point of failing here rather than later: an empty or
-  # missing runtime CA would otherwise produce a syntactically valid bundle
-  # that trusts only the mock, and the worker would then fail every INTERNAL
-  # dial with a certificate error that reads like a platform outage.
-  worker-trust:
-    # No `build:` — the mock's image is built ONCE (by mcp-mock) and reused, so
-    # the trust anchor written here can only come from the mint being served.
-    # Deliberately NOT gated on mcp-mock health and not verified live: this
-    # bundle feeds the PYTHON worker, which must not depend on the mock being up
-    # (the single-image reuse already guarantees the same mint). The live check
-    # is in mcp-mock-trust, whose bundle the NATIVE worker consumes.
-    image: ghcr.io/eliteaai/elitea-mock-mcp:standalone
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - test -s /run/elitea-runtime/runtime-ca.crt
-        && cat /run/elitea-runtime/runtime-ca.crt /opt/mock-mcp/tls/ca.crt
-        > /trust/worker-ca-bundle.pem
-        && chmod 0644 /trust/worker-ca-bundle.pem
-    volumes:
-      - standalone_runtime_worker:/run/elitea-runtime:ro
-      - standalone_worker_trust:/trust
-    depends_on:
-      runtime-material:
-        condition: service_completed_successfully
-    restart: "no"
-
   # ── Traefik: routes /app → elitea-web, /api → elitea-main ──────────────────
   traefik:
     image: traefik:v3.4
@@ -2114,9 +2035,6 @@ volumes:
   # The worker's output spool. Private (0700, uid 10001) — prepared by
   # worker-spool-init because a fresh named volume starts 0755 root-owned.
   standalone_worker_spool:
-  # The trust bundle the native worker uses to verify mcp-mock's certificate.
-  # Written by mcp-mock-trust; mounted read-only by whoever dials the mock.
+  # The native worker's outbound trust store: public roots + mcp-mock CA +
+  # runtime CA. Written by mcp-mock-trust; mounted read-only by the worker.
   standalone_mcp_mock_trust:
-  # The PYTHON worker's whole trust store — runtime CA + mcp-mock CA, no public
-  # roots. Written by worker-trust; mounted read-only by the worker (#983).
-  standalone_worker_trust:

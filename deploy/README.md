@@ -25,11 +25,9 @@ including the runtime plane, on one machine.
 The agent worker is the native Rust worker by default (the Rust overlay,
 `docker-compose.standalone-rust-agent.yml`, is applied for you, and elitea-main
 is told `ELITEA_WORKER_IMPLEMENTATION=rust` and `ELITEA_INDEXING_RUNTIME=rust`).
-`STANDALONE_WORKER=python deploy/scripts/standalone-stack.sh ...` selects the
-legacy Python worker until it is removed. Running `docker compose -f
-deploy/docker-compose.standalone-full.yml` by itself, without the script, still
-gives the Python worker, and that base file states
-`ELITEA_WORKER_IMPLEMENTATION=python` so its toolkit catalogue matches. Where the
+The Python worker was removed; the script refuses `STANDALONE_WORKER=python`.
+Running the base file by itself, without the overlay, is not a supported shape:
+the overlay carries the worker's command, config and TLS trust. Where the
 Rust worker cannot serve a configured toolkit, tool or built-in capability, the
 chat says so on the reply (a compact notice naming what was left out and why).
 

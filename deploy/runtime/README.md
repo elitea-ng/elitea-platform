@@ -182,15 +182,15 @@ publishes no host port. (`content_origin` is different: that one is elitea-main'
 own :9445 listener, reached over mTLS, and the worker requires **HTTP/2** on it
 specifically — `serve.py:721` sets `http1=False`.)
 
-**Its TLS trust needs three environment variables, or nothing works.** The SDK
-routes verification through the OS trust store on import
-(`elitea_sdk/_system_ca.py` injects `truststore`), which cannot contain a CA
-minted on this machine. `ELITEA_DISABLE_SYSTEM_CA=1` restores the standard
-mechanisms, and then `REQUESTS_CA_BUNDLE` covers the `requests` calls to
-`/api/v2` while `SSL_CERT_FILE` covers the httpx/openai model call. A
-runtime-CA-only bundle is both correct and tighter than adding public roots:
-every host the worker dials is signed by that CA, and model traffic egresses
-through elitea-main's `/llm` proxy rather than directly to a provider.
+**Its TLS trust is split.** The native worker hands the runtime CA to every
+internal client (control, output, content, the model gateway) in code. The
+process-wide trust store, `SSL_CERT_FILE`, governs only the outbound clients —
+the remote MCP client and the toolkits — and must be a bundle that keeps the
+public roots, because the variable replaces the platform store rather than
+adding to it. On the standalone stack it is the `mcp-mock-trust` bundle
+(public roots + mcp-mock CA + runtime CA), so a toolkit calling a public
+service such as api.github.com verifies (#1203); the Helm chart builds the
+equivalent `trust-bundle.crt` in an init container.
 
 ## Execution actors need a PAT
 
