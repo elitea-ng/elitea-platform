@@ -465,9 +465,6 @@ func TestConfigNATSURLAndIdentityContract(t *testing.T) {
 	}
 }
 
-// Every Redis-era variable is gone from the configuration surface: a stale
-// deployment that still sets them gets no Redis client, and nothing in the
-// composition reads them (TestNoRuntimeRedisLookups in nats_test.go).
 // #966: the env parse follows the repository ceiling (4096), not the former
 // 1024, and still refuses anything above it.
 func TestConfigMaxOutstandingAcceptsCapsAboveTheFormer1024Ceiling(t *testing.T) {
@@ -486,6 +483,9 @@ func TestConfigMaxOutstandingAcceptsCapsAboveTheFormer1024Ceiling(t *testing.T) 
 	}
 }
 
+// Every Redis-era variable is gone from the configuration surface: a stale
+// deployment that still sets them gets no Redis client, and nothing in the
+// composition reads them (TestNoRuntimeRedisLookups in nats_test.go).
 func TestConfigNeedsNoRedis(t *testing.T) {
 	for name := range validEnvironment() {
 		if strings.Contains(name, "REDIS") || strings.Contains(name, "CONSUMER_GROUP") || strings.Contains(name, "STREAM_MAX_ENTRIES") {
