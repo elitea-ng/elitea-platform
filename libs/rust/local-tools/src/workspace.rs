@@ -246,6 +246,15 @@ pub enum EntryKind {
     Other,
 }
 
+/// An entry's kind, size and modification time ([`Workspace::stamp`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EntryStamp {
+    pub kind: EntryKind,
+    pub len: u64,
+    /// Nanoseconds since the epoch.
+    pub mtime_ns: i128,
+}
+
 /// Identity of a file's content as of one read: what the read-before-write
 /// guard compares.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -627,22 +636,44 @@ impl Workspace {
         if path.is_root() {
             return Ok(Some(EntryKind::Dir));
         }
-        let (dir, resolved) = match self.locate(path, false, false) {
-            Ok(found) => found,
-            Err(error) if error.code() == ErrorCode::NotFound => return Ok(None),
-            Err(error) => return Err(error),
+        Ok(self.stamp(path)?.map(|stamp| stamp.kind))
+    }
+
+    /// What `path` is, its size and its modification time, without
+    /// following a final symlink and without opening it: a cheap marker
+    /// that it changed (the project profile's cache key). `None` when it
+    /// does not exist. The deny rules are the caller's to check.
+    ///
+    /// # Errors
+    ///
+    /// When the walk fails for any reason other than absence.
+    pub fn stamp(&self, path: &WsPath) -> ToolResult<Option<EntryStamp>> {
+        let stat = if path.is_root() {
+            rustix::fs::fstat(&self.root_fd)?
+        } else {
+            let (dir, resolved) = match self.locate(path, false, false) {
+                Ok(found) => found,
+                Err(error) if error.code() == ErrorCode::NotFound => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let name = resolved.file_name().unwrap_or_default();
+            match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => stat,
+                Err(Errno::NOENT) => return Ok(None),
+                Err(errno) => return Err(errno.into()),
+            }
         };
-        let name = resolved.file_name().unwrap_or_default();
-        match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => Ok(Some(match FileType::from_raw_mode(stat.st_mode) {
-                FileType::RegularFile => EntryKind::File,
-                FileType::Directory => EntryKind::Dir,
-                FileType::Symlink => EntryKind::Symlink,
-                _ => EntryKind::Other,
-            })),
-            Err(Errno::NOENT) => Ok(None),
-            Err(errno) => Err(errno.into()),
-        }
+        let kind = match FileType::from_raw_mode(stat.st_mode) {
+            FileType::RegularFile => EntryKind::File,
+            FileType::Directory => EntryKind::Dir,
+            FileType::Symlink => EntryKind::Symlink,
+            _ => EntryKind::Other,
+        };
+        Ok(Some(EntryStamp {
+            kind,
+            len: u64::try_from(stat.st_size).unwrap_or(0),
+            mtime_ns: i128::from(stat.st_mtime) * 1_000_000_000 + i128::from(stat.st_mtime_nsec),
+        }))
     }
 
     /// Open a regular file for reading, confined.

@@ -34,6 +34,7 @@ use crate::files;
 use crate::git::{Repo, StatusSummary, capped, check_revision, parse_status_summary};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
+use crate::project::{self, ProjectProfile};
 use crate::sandbox::{self, Enforcement, SandboxRequest};
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
@@ -97,6 +98,9 @@ pub struct LocalSession {
     turn: Mutex<Turn>,
     /// The edit tools the current model is offered.
     edit_profile: Mutex<EditProfile>,
+    /// The project profile and the mentioned folders it was detected
+    /// with: detected again only when those change or a marker does.
+    project: Mutex<Option<(Vec<WsPath>, Arc<ProjectProfile>)>>,
 }
 
 /// How a command would be confined (see [`LocalSession::command_confinement`]).
@@ -641,6 +645,7 @@ impl LocalSession {
             spill,
             turn: Mutex::new(Turn::default()),
             edit_profile: Mutex::new(EditProfile::default()),
+            project: Mutex::new(None),
         }))
     }
 
@@ -661,6 +666,47 @@ impl LocalSession {
     /// [`Self::begin_turn`]; `None` is the default scope.
     pub fn set_conversation(&self, conversation: Option<&str>) {
         self.spill.set_conversation(conversation);
+    }
+
+    /// The workspace's test runners and build checks
+    /// ([`project::detect`]), looking also in the folders of `mentioned`
+    /// (the turn's `@` references; paths the workspace refuses are left
+    /// out). Cached for the session: detected again only when `mentioned`
+    /// differs or a marker file changed. Reads the file system; call it
+    /// off the async runtime.
+    pub fn project_profile(&self, mentioned: &[String]) -> Arc<ProjectProfile> {
+        let mentioned: Vec<WsPath> = mentioned
+            .iter()
+            .filter_map(|path| {
+                self.workspace
+                    .resolve(path.trim_end_matches('/'), Intent::Read)
+                    .ok()
+            })
+            .collect();
+        self.profile_for(Some(mentioned))
+    }
+
+    /// The cached profile when it still holds for `mentioned` (`None`: the
+    /// folders the last detection used), else a fresh one.
+    fn profile_for(&self, mentioned: Option<Vec<WsPath>>) -> Arc<ProjectProfile> {
+        let Ok(mut cached) = self.project.lock() else {
+            return Arc::new(project::detect(
+                &self.workspace,
+                &mentioned.unwrap_or_default(),
+            ));
+        };
+        let mentioned = mentioned
+            .or_else(|| cached.as_ref().map(|(dirs, _)| dirs.clone()))
+            .unwrap_or_default();
+        if let Some((dirs, profile)) = cached.as_ref()
+            && *dirs == mentioned
+            && profile.is_fresh(&self.workspace)
+        {
+            return Arc::clone(profile);
+        }
+        let profile = Arc::new(project::detect(&self.workspace, &mentioned));
+        *cached = Some((mentioned, Arc::clone(&profile)));
+        profile
     }
 
     /// The session's deny list (built once at open).

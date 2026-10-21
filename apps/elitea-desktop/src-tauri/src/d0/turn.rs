@@ -1778,6 +1778,7 @@ impl AgentHost {
                 Path::new(&workspace.path),
                 std::env::home_dir().as_deref(),
             ),
+            mentioned: checked,
         })
     }
 
@@ -1803,6 +1804,7 @@ impl AgentHost {
             api,
             mut memory,
             folder,
+            mentioned,
             ..
         } = prepared;
         let recorder = entry.recorder.clone();
@@ -1837,6 +1839,7 @@ impl AgentHost {
             &memory,
             &folder,
             &turn_context,
+            &mentioned,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -2234,6 +2237,7 @@ impl AgentHost {
         memory: &SessionPlan,
         folder: &str,
         turn_context: &TurnContext,
+        mentioned: &[String],
     ) -> Result<AgentAnswer, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // This turn's framing nonce: the untrusted blocks end only at a
@@ -2264,6 +2268,7 @@ impl AgentHost {
                 &workspace.policy,
                 request.plan_mode,
                 local_offered,
+                mentioned,
             ),
             context::model_limits(
                 api,
@@ -3293,6 +3298,9 @@ struct Prepared {
     memory: SessionPlan,
     /// The folder's name as the environment section shows it.
     folder: String,
+    /// The turn's checked `@` references: project detection looks in
+    /// their folders too.
+    mentioned: Vec<String>,
 }
 
 /// The body of `local_turn_commit`, encoded with its `tool_calls` in the
@@ -3751,6 +3759,7 @@ mod tests {
             network: false,
             plan_mode: false,
             tools: vec!["read_file".into(), "search_files".into()],
+            project: None,
         };
         let mut tuesday = monday.clone();
         tuesday.today = "2026-10-13".into();

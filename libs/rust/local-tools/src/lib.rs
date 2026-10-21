@@ -32,6 +32,7 @@ pub mod ledger;
 mod line_ending;
 pub mod patch;
 pub mod policy;
+pub mod project;
 pub mod project_instructions;
 pub mod provider;
 pub mod sandbox;

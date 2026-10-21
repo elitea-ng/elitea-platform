@@ -94,6 +94,11 @@ pub struct Facts {
     pub plan_mode: bool,
     /// The names of the tools offered this turn (local and index tools).
     pub tools: Vec<String>,
+    /// The detected test and check commands
+    /// ([`elitea_local_tools::project::ProjectProfile::preamble_line`]):
+    /// fixed words and plain folder names only. `None` when nothing was
+    /// detected (or not in time).
+    pub project: Option<String>,
 }
 
 /// The stable part of the `## Environment` section for `facts`: it changes
@@ -120,6 +125,9 @@ pub fn preamble(facts: &Facts) -> String {
             }
         ),
     ];
+    if let Some(project) = &facts.project {
+        lines.push(format!("- {project}"));
+    }
     if facts.plan_mode {
         lines.push(
             "- Mode: plan (read-only): explore and propose; nothing can be changed this turn"
@@ -227,7 +235,12 @@ fn tool_guidance(tools: &[String]) -> Vec<String> {
     if !editors.is_empty() {
         clauses.push(format!("keep edits small ({})", editors.join(" / ")));
     }
-    if has("run_command") && writes {
+    if has("run_tests") && writes {
+        clauses.push(
+            "run the project's tests with run_tests after changes (it reports the failing tests)"
+                .to_owned(),
+        );
+    } else if has("run_command") && writes {
         clauses.push("run the project's tests after changes".to_owned());
     }
     let git_reads = some(&["git_status", "git_diff", "git_log"]);
@@ -314,11 +327,12 @@ pub async fn gather(
     policy: &LocalWorkPolicy,
     plan_mode: bool,
     tools: Vec<String>,
+    mentioned: &[String],
 ) -> Facts {
     let mode = SandboxMode::WorkspaceWrite.min(policy.max_sandbox_mode);
     let commands = tools.iter().any(|tool| tool == "run_command");
-    // The two probes together: the turn waits at most one PROBE_TIMEOUT.
-    let (git, sandbox) = tokio::join!(
+    // The probes together: the turn waits at most one PROBE_TIMEOUT.
+    let (git, sandbox, project) = tokio::join!(
         async {
             match tokio::time::timeout(PROBE_TIMEOUT, session.git_summary()).await {
                 Ok(Some(summary)) => Git::Repo {
@@ -347,6 +361,19 @@ pub async fn gather(
                 Ok(Err(_)) | Err(_) => Sandbox::Unknown { mode },
             }
         },
+        async {
+            // Cached by the session; detected again when a marker changed.
+            let probe = tokio::task::spawn_blocking({
+                let session = session.clone();
+                let mentioned = mentioned.to_vec();
+                move || session.project_profile(&mentioned).preamble_line()
+            });
+            tokio::time::timeout(PROBE_TIMEOUT, probe)
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        },
     );
     Facts {
         os: os_description(),
@@ -357,6 +384,7 @@ pub async fn gather(
         network: policy.network,
         plan_mode,
         tools,
+        project,
     }
 }
 
@@ -395,6 +423,7 @@ mod tests {
                 "git_status",
                 "git_diff",
             ]),
+            project: None,
         }
     }
 
@@ -474,6 +503,32 @@ mod tests {
         assert!(preamble(&facts).contains("- Sandbox: no commands this turn"));
         facts.git = Git::NotARepo;
         assert!(current(&facts).contains("- Workspace: repo (not a git repository)"));
+    }
+
+    /// The detected commands are one line of the stable part; without a
+    /// profile there is no such line.
+    #[test]
+    fn preamble_names_the_detected_project_commands() {
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n")
+            .expect("manifest");
+        let workspace =
+            elitea_local_tools::workspace::Workspace::open(dir.path(), &[]).expect("workspace");
+        let mut facts = facts();
+        assert!(!preamble(&facts).contains("- Project:"));
+        facts.project = elitea_local_tools::project::detect(&workspace, &[]).preamble_line();
+        let text = preamble(&facts);
+        assert!(
+            text.contains("\n- Project: cargo workspace; tests: cargo test; check: cargo check\n"),
+            "{text}"
+        );
+        assert!(!current(&facts).contains("Project"), "stable part only");
+        facts.tools.push("run_tests".into());
+        assert!(
+            preamble(&facts).contains("run the project's tests with run_tests after changes"),
+            "{}",
+            preamble(&facts)
+        );
     }
 
     #[test]
