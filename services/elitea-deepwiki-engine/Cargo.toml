@@ -20,6 +20,9 @@ elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] 
 # The agents' conversation and its summarisation (shared with Inventory).
 elitea-conversation = { path = "../../libs/rust/conversation" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
+# An artifact-folder source reads elitea.runtime.v1.ArtifactObjectService on
+# the platform listener (#1359 U5), over the model calls' channel.
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 elitea-graph-algos = { path = "../../libs/rust/graph-algos" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
@@ -77,6 +80,8 @@ tonic = { version = "=0.14.6", default-features = false }
 # The model fakes served as elitea.llm.v1.ModelService over real gRPC
 # (`testing::with_model_service`): the engine's model calls are gRPC.
 elitea-model-rpc = { path = "../../libs/rust/model-rpc", features = ["testing"] }
+# The artifact store served beside it (tests/native_generate.rs).
+elitea-platform-rpc = { path = "../../libs/rust/platform-rpc", features = ["testing"] }
 
 [features]
 # TEST ONLY. In a debug build, a `repo_config` base URL of

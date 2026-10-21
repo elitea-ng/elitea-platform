@@ -278,6 +278,8 @@ async fn the_native_runner_maps_through_the_model_and_writes_the_store() {
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url("smart_normalize"),
         ),
+        // The platform listener: the mock gateway (only its origin counts).
+        ("ELITEA_INVENTORY_MODEL_SERVICE_URL", gateway.clone()),
     ]
     .into_iter()
     .collect();

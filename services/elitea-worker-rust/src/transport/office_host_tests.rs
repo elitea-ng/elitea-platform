@@ -1,6 +1,6 @@
-//! The Office host over a fake of the platform object API: the exact
-//! requests it sends, the failures it classifies, and a real `pptx` tool
-//! round trip of a deck's bytes through it (ADR-0032 P3).
+//! The Office host over a fake of elitea-main's `ArtifactObjectService`: the
+//! exact calls it makes, the failures it classifies, and a real `pptx` tool
+//! round trip of a deck's bytes through it (ADR-0032 P3, #1359 U5).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -19,227 +19,85 @@ use elitea_agent_runtime::toolkits::{
     ArtifactToolAuthority, OfficeFailure, OfficeModelRequest, OfficeToolHost,
     TextExtractionFailure, materialize_configured_toolsets_with_artifact_authority,
 };
-use elitea_connectors::source::Failure;
-use elitea_connectors::transport::{
-    HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Transport, TransportError,
-    header,
-};
+use elitea_platform_rpc::artifacts::{ArtifactError, Refusal};
+use elitea_platform_rpc::testing::{ArtifactCall, FakeArtifactStore, serve};
 use serde_json::{Map, Value, json};
 
 use super::office_host::{ClaimOfficeHost, OfficeRuntime};
 use crate::indexing::tools::{LazyStepbackModel, StepbackBinding};
 use crate::toolkits::{FrozenToolSnapshot, ToolAdmissionPolicy};
 
-const ORIGIN: &str = "https://platform.internal:9446";
-
-/// What the fake store saw.
-#[derive(Default)]
-struct Store {
-    objects: BTreeMap<String, Vec<u8>>,
-    log: Vec<(String, String, Option<String>, Option<String>)>,
-    /// The claim id each request named (`x-elitea-claim-id`).
-    claims: Vec<Option<String>>,
-}
-
-/// A fake of `/api/v2/artifacts/objects/{project}/{bucket}[/{key}]`: HEAD and
-/// GET by key, and the multipart POST that stores a `file` part.
+/// A fake of elitea-main's artifact store, served in process: objects are
+/// keyed by name whatever the bucket, the claim's tokens act in one project
+/// (42 unless a test names another), and some names answer a fixed refusal
+/// (the classification table).
 pub(crate) struct ObjectApi {
-    store: Mutex<Store>,
+    project_id: i64,
+    store: FakeArtifactStore,
+    channel: tonic::transport::Channel,
+    /// The runtime serving the fake when the test itself has none.
+    _runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl ObjectApi {
     pub(crate) fn new() -> Arc<Self> {
+        Self::for_project(&["pat-token", "pat"], 42)
+    }
+
+    /// A store whose objects live in `project_id`, where `tokens` may act.
+    pub(crate) fn for_project(tokens: &[&str], project_id: i64) -> Arc<Self> {
+        let store = tokens
+            .iter()
+            .fold(FakeArtifactStore::new().flat(), |store, token| {
+                store.grant(token, project_id)
+            })
+            .refuse("typed", 415, "UnsupportedMediaType", "not allowed")
+            .refuse("invalid", 422, "Unprocessable", "invalid")
+            .refuse("huge", 413, "TooLarge", "too large")
+            .refuse("broken", 500, "Internal", "broken")
+            .refuse("locked", 403, "Forbidden", "locked")
+            .refuse("taken", 409, "AlreadyExists", "taken")
+            .refuse("bad-name", 400, "BadRequest", "bad name")
+            .refuse("down", 500, "Internal", "down");
+        let (channel, runtime) = if tokio::runtime::Handle::try_current().is_ok() {
+            (serve(Some(store.clone()), None), None)
+        } else {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let channel = {
+                let _entered = runtime.enter();
+                serve(Some(store.clone()), None)
+            };
+            (channel, Some(runtime))
+        };
         Arc::new(Self {
-            store: Mutex::new(Store::default()),
+            project_id,
+            store,
+            channel,
+            _runtime: runtime,
         })
     }
 
-    pub(crate) fn put(&self, key: &str, bytes: Vec<u8>) {
-        self.store
-            .lock()
-            .expect("store")
-            .objects
-            .insert(key.to_owned(), bytes);
+    /// An Office runtime over this store.
+    pub(crate) fn runtime(&self) -> OfficeRuntime {
+        OfficeRuntime::new(self.channel.clone())
+    }
+
+    pub(crate) fn put(&self, key: &str, bytes: impl AsRef<[u8]>) {
+        self.store.put(self.project_id, "", key, bytes.as_ref(), "");
     }
 
     pub(crate) fn get(&self, key: &str) -> Option<Vec<u8>> {
-        self.store.lock().expect("store").objects.get(key).cloned()
+        self.store
+            .object(self.project_id, "", key)
+            .map(|object| object.bytes)
     }
 
-    fn log(&self) -> Vec<(String, String, Option<String>, Option<String>)> {
-        self.store.lock().expect("store").log.clone()
-    }
-}
-
-fn split_multipart(body: &[u8], boundary: &str) -> Option<(String, String, Vec<u8>)> {
-    let marker = format!("--{boundary}").into_bytes();
-    let start = body.windows(marker.len()).position(|w| w == marker)? + marker.len();
-    let head_end = body[start..].windows(4).position(|w| w == b"\r\n\r\n")? + start;
-    let head = String::from_utf8_lossy(&body[start..head_end]).into_owned();
-    let data_start = head_end + 4;
-    let closing = format!("\r\n--{boundary}--").into_bytes();
-    let data_end = body.windows(closing.len()).rposition(|w| w == closing)?;
-    let filename = head
-        .split("filename=\"")
-        .nth(1)?
-        .split('"')
-        .next()?
-        .to_owned();
-    let content_type = head
-        .split("Content-Type: ")
-        .nth(1)?
-        .lines()
-        .next()?
-        .trim()
-        .to_owned();
-    Some((filename, content_type, body[data_start..data_end].to_vec()))
-}
-
-#[async_trait]
-#[allow(clippy::too_many_lines, reason = "a fake of one HTTP API")]
-impl Transport for ObjectApi {
-    async fn execute(&self, request: Request) -> Result<Response, TransportError> {
-        let url = request.url().clone();
-        let auth = request
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        let path = url.path().to_owned();
-        let after = path
-            .strip_prefix("/api/v2/artifacts/objects/")
-            .unwrap_or("");
-        // Any project: the first segment.
-        let rest = after.split_once('/').map_or("", |(_, r)| r).to_owned();
-        let (bucket, key) = rest
-            .split_once('/')
-            .map_or((rest.clone(), String::new()), |(b, k)| {
-                (b.to_owned(), k.to_owned())
-            });
-        let mut store = self.store.lock().expect("store");
-        let claim = request
-            .headers()
-            .get("x-elitea-claim-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        store.claims.push(claim);
-        store.log.push((
-            request.method().to_string(),
-            path.clone(),
-            url.query().map(str::to_owned),
-            auth,
-        ));
-        // `POST /api/v2/artifacts/buckets/{project}`: the name is in the body.
-        if path.starts_with("/api/v2/artifacts/buckets/") {
-            let body: Value = request
-                .body()
-                .and_then(|b| b.as_bytes())
-                .and_then(|b| serde_json::from_slice(b).ok())
-                .unwrap_or(Value::Null);
-            let name = body.get("name").and_then(Value::as_str).unwrap_or_default();
-            let status = match name {
-                "taken" => StatusCode::CONFLICT,
-                "locked" => StatusCode::FORBIDDEN,
-                "bad-name" => StatusCode::BAD_REQUEST,
-                "down" => StatusCode::INTERNAL_SERVER_ERROR,
-                _ => StatusCode::OK,
-            };
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            let reply = if status == StatusCode::OK {
-                json!({"name": name, "retention_days": body.get("retention_days")}).to_string()
-            } else {
-                String::new()
-            };
-            return Ok(Response::from_bytes(status, headers, reply));
-        }
-        // Buckets that answer a fixed status, for the classification table.
-        let fixed = match bucket.as_str() {
-            "typed" => Some(StatusCode::UNSUPPORTED_MEDIA_TYPE),
-            "invalid" => Some(StatusCode::UNPROCESSABLE_ENTITY),
-            "huge" => Some(StatusCode::PAYLOAD_TOO_LARGE),
-            "broken" => Some(StatusCode::INTERNAL_SERVER_ERROR),
-            _ => None,
-        };
-        if let Some(status) = fixed {
-            return Ok(Response::from_bytes(status, HeaderMap::new(), Vec::new()));
-        }
-        if bucket == "locked" {
-            return Ok(Response::from_bytes(
-                StatusCode::FORBIDDEN,
-                HeaderMap::new(),
-                Vec::new(),
-            ));
-        }
-        if request.method() == Method::POST {
-            let content_type = request
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .to_owned();
-            let boundary = content_type
-                .split("boundary=")
-                .nth(1)
-                .unwrap_or("")
-                .to_owned();
-            let body = request
-                .body()
-                .and_then(|b| b.as_bytes())
-                .unwrap_or_default()
-                .to_vec();
-            let Some((filename, media, data)) = split_multipart(&body, &boundary) else {
-                return Ok(Response::from_bytes(
-                    StatusCode::BAD_REQUEST,
-                    HeaderMap::new(),
-                    Vec::new(),
-                ));
-            };
-            // A taken name is a 409 unless the write asked to replace it.
-            if store.objects.contains_key(&filename)
-                && url.query().is_none_or(|q| !q.contains("overwrite=true"))
-            {
-                return Ok(Response::from_bytes(
-                    StatusCode::CONFLICT,
-                    HeaderMap::new(),
-                    Vec::new(),
-                ));
-            }
-            let size = data.len();
-            store.objects.insert(filename.clone(), data);
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            let reply = json!({"key": filename, "size_bytes": size, "media_type": media});
-            return Ok(Response::from_bytes(
-                StatusCode::CREATED,
-                headers,
-                reply.to_string(),
-            ));
-        }
-        let Some(bytes) = store.objects.get(&key).cloned() else {
-            return Ok(Response::from_bytes(
-                StatusCode::NOT_FOUND,
-                HeaderMap::new(),
-                Vec::new(),
-            ));
-        };
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_LENGTH,
-            HeaderValue::from_str(&bytes.len().to_string()).expect("length"),
-        );
-        let body = if request.method() == Method::HEAD {
-            Vec::new()
-        } else {
-            bytes
-        };
-        Ok(Response::from_bytes(StatusCode::OK, headers, body))
+    fn calls(&self) -> Vec<ArtifactCall> {
+        self.store.calls()
     }
 }
 
@@ -298,10 +156,7 @@ impl Llm for Scripted {
 }
 
 fn host(api: &Arc<ObjectApi>, replies: Vec<&str>) -> (Arc<ClaimOfficeHost>, Arc<Scripted>) {
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let llm = Arc::new(Scripted(
         Mutex::new(replies.into_iter().map(str::to_owned).collect()),
         Mutex::new(Vec::new()),
@@ -345,24 +200,19 @@ async fn objects_are_read_and_written_as_bytes_under_the_claims_credential() {
         bytes
     );
 
-    let log = api.log();
-    let post = log.iter().find(|r| r.0 == "POST").expect("an upload");
-    assert_eq!(post.1, "/api/v2/artifacts/objects/42/decks");
-    assert_eq!(
-        post.2.as_deref(),
-        Some("overwrite=true"),
-        "replacing is the tool's contract"
-    );
-    for request in &log {
-        assert_eq!(
-            request.3.as_deref(),
-            Some("Bearer pat-token"),
-            "{request:?}"
-        );
+    let calls = api.calls();
+    let put = calls
+        .iter()
+        .find(|c| c.op == "PutObject")
+        .expect("an upload");
+    assert_eq!((put.project_id, put.bucket.as_str()), (42, "decks"));
+    assert!(put.overwrite, "replacing is the tool's contract");
+    for call in &calls {
+        assert_eq!(call.bearer.as_deref(), Some("pat-token"), "{call:?}");
     }
-    // The size is asked of a HEAD before the body is fetched.
-    let methods: Vec<&str> = log.iter().map(|r| r.0.as_str()).collect();
-    assert_eq!(methods, ["POST", "HEAD", "GET"]);
+    // The object's info arrives before its bytes: one call reads it.
+    let ops: Vec<&str> = calls.iter().map(|c| c.op).collect();
+    assert_eq!(ops, ["PutObject", "GetObject"]);
 }
 
 #[tokio::test]
@@ -390,7 +240,7 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         ),
         OfficeFailure::AccessRefused
     );
-    let before = api.log().len();
+    let before = api.calls().len();
     assert_eq!(
         kind(
             host.read_object("decks", "big.pptx", 100)
@@ -399,17 +249,11 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         ),
         OfficeFailure::TooLarge
     );
-    let after: Vec<String> = api.log()[before..].iter().map(|r| r.0.clone()).collect();
-    assert_eq!(after, ["HEAD"], "refused from the size alone, no GET");
-    // Names that could break out of the multipart header or the URL.
-    for name in [
-        "a\"b.pptx",
-        "a\r\nb.pptx",
-        "a\\b.pptx",
-        "../x.pptx",
-        "/abs.pptx",
-        "",
-    ] {
+    let after: Vec<&str> = api.calls()[before..].iter().map(|c| c.op).collect();
+    assert_eq!(after, ["GetObject"], "refused from the declared size");
+    // Names the platform's key rules refuse are never sent.
+    let before = api.calls().len();
+    for name in ["a\r\nb.pptx", "a\\b.pptx", "../x.pptx", "/abs.pptx", ""] {
         assert_eq!(
             kind(
                 host.write_object("decks", name, any, vec![1], true)
@@ -420,7 +264,12 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
             "{name:?}"
         );
     }
-    assert!(api.get("a\"b.pptx").is_none());
+    assert_eq!(api.calls().len(), before, "an invalid name sends nothing");
+    // A quote is an ordinary character over gRPC: no header to break out of.
+    host.write_object("decks", "a\"b.pptx", any, vec![1], true)
+        .await
+        .expect("a quoted name");
+    assert_eq!(api.get("a\"b.pptx"), Some(vec![1]));
     // Each status of the object API is its own cause.
     let write = |bucket: &'static str| {
         let host = &host;
@@ -449,37 +298,46 @@ async fn failures_are_classified_and_a_large_object_is_never_buffered() {
         kind(write("broken").await.expect_err("500")),
         OfficeFailure::Unreachable
     );
-    // The caller's overwrite flag decides the query, and a 409 is "already exists".
-    let before = api.log().len();
+    // The caller's overwrite flag travels, and a 409 is "already exists".
+    let before = api.calls().len();
     let taken = host
         .write_object("decks", "taken.pptx", any, vec![2], false)
         .await;
     assert_eq!(kind(taken.expect_err("409")), OfficeFailure::AlreadyExists);
     assert_eq!(api.get("taken.pptx"), Some(vec![1]), "nothing was replaced");
-    assert_eq!(api.log()[before].2, None, "no overwrite query unless asked");
+    assert!(!api.calls()[before].overwrite, "no overwrite unless asked");
     host.write_object("decks", "taken.pptx", any, vec![3], true)
         .await
         .expect("replaced when asked");
     assert_eq!(api.get("taken.pptx"), Some(vec![3]));
+    assert!(api.calls().last().expect("calls").overwrite);
+    // Causes that are not a route's refusal.
+    let refused = |http_status| {
+        super::office_host::failure(&ArtifactError::Refused(Refusal {
+            http_status,
+            code: String::new(),
+            message: String::new(),
+        }))
+        .kind()
+    };
+    assert_eq!(refused(401), OfficeFailure::AccessRefused, "no credential");
+    assert_eq!(refused(503), OfficeFailure::Unreachable);
+    let hop = super::office_host::failure(&ArtifactError::Hop(tonic::Status::unavailable("reset")));
     assert_eq!(
-        api.log().last().expect("log").2.as_deref(),
-        Some("overwrite=true")
+        hop.kind(),
+        OfficeFailure::Unreachable,
+        "the hop, not a refusal"
     );
-    // Transport-level causes.
-    let refused = super::office_host::failure(&Failure::Refused);
+    let unadmitted = super::office_host::failure(&ArtifactError::Hop(
+        tonic::Status::permission_denied("peer not admitted"),
+    ));
     assert_eq!(
-        refused.kind(),
-        OfficeFailure::AccessRefused,
-        "egress refused"
+        unadmitted.kind(),
+        OfficeFailure::Unreachable,
+        "a refused peer is a deployment fault, not the caller's access"
     );
-    let client = super::office_host::failure(&Failure::Client("bad".into()));
-    assert_eq!(
-        client.kind(),
-        OfficeFailure::AccessRefused,
-        "unusable credential"
-    );
-    let down = super::office_host::failure(&Failure::Transport("reset".into()));
-    assert_eq!(down.kind(), OfficeFailure::Unreachable);
+    let protocol = super::office_host::failure(&ArtifactError::Protocol("no info frame"));
+    assert_eq!(protocol.kind(), OfficeFailure::Unreachable);
 }
 
 /// `model_failure` classifies on the error CODE, never its message: the
@@ -579,10 +437,7 @@ fn bind_failures_invalid_requests_and_oversized_replies_have_their_own_kind() {
 /// for the tool; only a run with no model at all is `NoModel`.
 #[tokio::test]
 async fn an_unbindable_model_is_unusable_not_absent() {
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        ObjectApi::new() as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(ObjectApi::new().runtime());
     let failing = LazyStepbackModel::new(Box::new(|| {
         Err(crate::transport::model_facade::ModelFacadeError::InvalidConfiguration)
     }));
@@ -611,10 +466,7 @@ async fn an_unbindable_model_is_unusable_not_absent() {
 #[tokio::test]
 async fn the_office_host_reports_the_toolkit_cap_and_accepts_an_empty_reply() {
     let api = ObjectApi::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let llm = Arc::new(Scripted(
         Mutex::new(vec![String::new()]),
         Mutex::new(Vec::new()),
@@ -656,32 +508,6 @@ async fn the_office_host_reports_the_toolkit_cap_and_accepts_an_empty_reply() {
     );
 }
 
-#[test]
-fn the_only_reachable_host_is_the_platform_origin() {
-    let runtime = OfficeRuntime::new(
-        "https://platform.internal:9446",
-        &crate::transport::platform_http::test_identity(),
-    )
-    .expect("runtime");
-    assert!(runtime.permits("https://platform.internal:9446/api/v2/artifacts/objects/1/b/k"));
-    assert!(runtime.permits("https://PLATFORM.internal/x"));
-    for other in [
-        "https://evil.example/x",
-        "https://sub.platform.internal/x",
-        "https://platform.internal.evil.example/x",
-        "http://169.254.169.254/latest",
-    ] {
-        assert!(!runtime.permits(other), "{other}");
-    }
-    assert!(
-        OfficeRuntime::new(
-            "not a url",
-            &crate::transport::platform_http::test_identity()
-        )
-        .is_err()
-    );
-}
-
 #[tokio::test]
 async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
     let api = ObjectApi::new();
@@ -706,10 +532,7 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
     // No model bound at all (a pipeline node): a fixed sentence, not a panic,
     // and no "model could not be bound" warning, which only a failed binding
     // deserves.
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let unbound =
         ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
     let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -731,10 +554,7 @@ async fn the_model_call_sends_the_prompt_and_images_on_the_runs_model() {
     );
     assert_eq!(error.kind(), OfficeFailure::NoModel);
     // The capture works: a binding that FAILS is what that warning is for.
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let failing = ClaimOfficeHost::new(
         runtime,
         "pat",
@@ -882,13 +702,16 @@ async fn a_bucket_is_created_through_the_platform_api_under_the_claims_credentia
         .expect("created");
     assert_eq!(created.name, "reports");
     assert_eq!(created.retention_days, Some(14));
-    let log = api.log();
-    assert_eq!(log.len(), 1);
-    assert_eq!(log[0].0, "POST");
-    assert_eq!(log[0].1, "/api/v2/artifacts/buckets/42");
+    let calls = api.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].op, "CreateBucket");
     assert_eq!(
-        log[0].3.as_deref(),
-        Some("Bearer pat-token"),
+        (calls[0].project_id, calls[0].bucket.as_str()),
+        (42, "reports")
+    );
+    assert_eq!(
+        calls[0].bearer.as_deref(),
+        Some("pat-token"),
         "the turn's own credential, as for objects"
     );
 
@@ -906,7 +729,7 @@ async fn a_bucket_is_created_through_the_platform_api_under_the_claims_credentia
             "{name}"
         );
     }
-    let before = api.log().len();
+    let before = api.calls().len();
     for name in ["", "a", "has/slash", &"x".repeat(64)] {
         assert_eq!(
             kind(host.create_bucket(name, None).await.expect_err(name)),
@@ -914,7 +737,7 @@ async fn a_bucket_is_created_through_the_platform_api_under_the_claims_credentia
             "{name:?}"
         );
     }
-    assert_eq!(api.log().len(), before, "an invalid name sends nothing");
+    assert_eq!(api.calls().len(), before, "an invalid name sends nothing");
 }
 
 #[test]
@@ -937,7 +760,7 @@ fn an_object_link_is_root_relative_and_never_the_in_cluster_origin() {
 fn with_a_public_base_url_the_link_is_absolute_on_it_and_never_the_edge() {
     let api = ObjectApi::new();
     let runtime = Arc::new(
-        OfficeRuntime::with_transport(ORIGIN, Arc::clone(&api) as Arc<dyn Transport>)
+        api.runtime()
             .with_public_base_url(Some("https://elitea.example.com".to_owned())),
     );
     let model = LazyStepbackModel::unbound();
@@ -952,27 +775,12 @@ fn with_a_public_base_url_the_link_is_absolute_on_it_and_never_the_edge() {
     assert!(!link.contains("platform.internal"));
 }
 
-/// Object writes and bucket creation are effects: the host's HTTP client is
-/// built without protocol-level retries.
-#[test]
-fn the_host_client_is_built_without_protocol_retries() {
-    let retries_disabled = std::hint::black_box(super::office_host::OFFICE_POLICY.disable_retries);
-    assert!(retries_disabled);
-    assert!(
-        super::office_host::OfficeRuntime::new(
-            ORIGIN,
-            &crate::transport::platform_http::test_identity()
-        )
-        .is_ok()
-    );
-}
-
 /// The document reader the `SharePoint` text tools ask: plain text and code are
 /// read here, a PDF or Office file needs the extraction sidecar, and what is
 /// neither is named, never guessed at.
 #[tokio::test]
 async fn the_host_reads_text_itself_and_names_what_it_cannot_read() {
-    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let runtime = Arc::new(ObjectApi::new().runtime());
     let host =
         ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
     for (name, bytes, expected) in [
@@ -1072,7 +880,7 @@ fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
             "{name}"
         );
     }
-    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let runtime = Arc::new(ObjectApi::new().runtime());
     let host =
         ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
     assert_eq!(host.can_read_text("a.txt"), Ok(()));
@@ -1251,7 +1059,7 @@ impl Llm for Finishing {
 }
 
 fn finishing_host(text: &'static str, finish: adk_rust::FinishReason) -> ClaimOfficeHost {
-    let runtime = Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let runtime = Arc::new(ObjectApi::new().runtime());
     let model = LazyStepbackModel::bound(StepbackBinding {
         model: Arc::new(Finishing(text, finish)) as Arc<dyn Llm>,
         model_name: "finishing".to_owned(),
@@ -1306,7 +1114,7 @@ async fn reply_causes_reach_the_office_host_as_their_own_kinds() {
 #[tokio::test]
 async fn a_bind_failure_names_whether_the_claim_or_the_model_is_at_fault() {
     use crate::transport::model_facade::ModelFacadeError as E;
-    let runtime = || Arc::new(OfficeRuntime::with_transport(ORIGIN, ObjectApi::new()));
+    let runtime = || Arc::new(ObjectApi::new().runtime());
     for (error, kind) in [
         (E::InvalidClaimContext, OfficeFailure::ContextUnusable),
         (E::InvalidConfiguration, OfficeFailure::ModelUnusable),
@@ -1403,10 +1211,7 @@ const OTHER_CONVERSATION: &str = "0f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1";
 async fn the_office_host_names_its_claim_and_keeps_to_its_conversation() {
     use super::office_host::OfficeClaim;
     let api = ObjectApi::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let host = ClaimOfficeHost::new(runtime, "pat-token", "42", LazyStepbackModel::unbound())
         .expect("host")
         .with_claim(OfficeClaim::new(
@@ -1429,14 +1234,15 @@ async fn the_office_host_names_its_claim_and_keeps_to_its_conversation() {
             .expect("own-conversation read"),
         b"data"
     );
-    let sent = api.store.lock().expect("store").claims.clone();
+    let sent = api.calls();
     assert!(!sent.is_empty());
     assert!(
-        sent.iter().all(|claim| claim.as_deref() == Some("claim-1")),
+        sent.iter()
+            .all(|call| call.claim_id.as_deref() == Some("claim-1")),
         "{sent:?}"
     );
 
-    let before = api.log().len();
+    let before = api.calls().len();
     let other = format!("{OTHER_CONVERSATION}/x.xlsx");
     for (bucket, key) in [
         ("chat-attachments", other.as_str()),
@@ -1454,7 +1260,7 @@ async fn the_office_host_names_its_claim_and_keeps_to_its_conversation() {
         assert_eq!(write.kind(), OfficeFailure::AccessRefused, "{bucket}/{key}");
     }
     assert_eq!(
-        api.log().len(),
+        api.calls().len(),
         before,
         "a refused path reached the platform"
     );
@@ -1480,10 +1286,7 @@ impl elitea_agent_runtime::toolkits::AttachmentBucketResolver for PolicyBucket {
 async fn a_reports_bucket_works_on_every_path_and_the_policy_bucket_is_confined() {
     use super::office_host::OfficeClaim;
     let api = ObjectApi::new();
-    let runtime = Arc::new(OfficeRuntime::with_transport(
-        ORIGIN,
-        Arc::clone(&api) as Arc<dyn Transport>,
-    ));
+    let runtime = Arc::new(api.runtime());
     let authority = crate::protocol::control::test_runtime_context_authority();
     for conversation in [Some(OWN_CONVERSATION.to_owned()), None] {
         let host = ClaimOfficeHost::new(

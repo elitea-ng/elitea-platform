@@ -281,7 +281,7 @@ impl Pipeline<'_> {
             request.provider_label()
         ));
         let transport = Transport::new(&TransportSettings::from(&settings.model))?;
-        // An artifact folder is read over the same TLS stack.
+        // An artifact folder is read over the model calls' platform channel.
         let objects = transport.clone();
         let chat = ChatClient::new(transport.clone(), request.model.clone());
         let embeddings = EmbeddingClient::new(
@@ -582,17 +582,20 @@ impl Pipeline<'_> {
         });
         let outcome = match admitted {
             Admitted::Artifact(target) => match self.request.platform_objects.as_ref() {
-                Some(platform) => {
-                    ingest::ingest_artifact(
-                        &target,
-                        platform,
-                        objects.http_client(),
-                        &self.settings.ingest,
-                        self.job.scratch,
-                        cancel,
-                    )
-                    .await
-                }
+                Some(platform) => match objects.platform_channel() {
+                    Ok(channel) => {
+                        ingest::ingest_artifact(
+                            &target,
+                            platform,
+                            &elitea_platform_rpc::artifacts::ArtifactClient::new(channel),
+                            &self.settings.ingest,
+                            self.job.scratch,
+                            cancel,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                },
                 None => Err(value_error(
                     "an artifact source needs the platform artifact credentials, and this invocation has none",
                 )),

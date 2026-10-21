@@ -875,75 +875,23 @@ fn a_dependent_document_config_drops_only_the_base_chunker() {
     );
 }
 
-/// The artifact object API, scripted: a list under a prefix, and the bytes.
-struct Objects {
-    objects: Vec<(&'static str, &'static str)>,
-    requests: std::sync::Mutex<Vec<String>>,
-}
-
-#[async_trait::async_trait]
-impl elitea_connectors::transport::Transport for Objects {
-    async fn execute(
-        &self,
-        request: elitea_connectors::transport::Request,
-    ) -> Result<elitea_connectors::transport::Response, elitea_connectors::transport::TransportError>
-    {
-        use elitea_connectors::transport::{HeaderMap, HeaderValue, Response, StatusCode};
-        let path = request.url().path().to_owned();
-        self.requests.lock().expect("lock").push(path.clone());
-        let mut headers = HeaderMap::new();
-        let bucket_root = "/api/v2/artifacts/objects/1/docs";
-        if path == bucket_root {
-            let prefix = request
-                .url()
-                .query_pairs()
-                .find(|(name, _)| name == "prefix")
-                .map(|(_, value)| value.into_owned())
-                .unwrap_or_default();
-            let rows: Vec<Value> = self
-                .objects
-                .iter()
-                .filter(|(key, _)| key.starts_with(&prefix))
-                .map(|(key, text)| json!({"key": key, "size_bytes": text.len(), "etag": "\"same-etag\""}))
-                .collect();
-            headers.insert("content-type", HeaderValue::from_static("application/json"));
-            return Ok(Response::from_bytes(
-                StatusCode::OK,
-                headers,
-                json!({"objects": rows}).to_string().into_bytes(),
-            ));
-        }
-        let key = path
-            .trim_start_matches(&format!("{bucket_root}/"))
-            .to_owned();
-        let text = self
-            .objects
-            .iter()
-            .find(|(candidate, _)| *candidate == key)
-            .map(|(_, text)| *text)
-            .expect("a listed object");
-        headers.insert("etag", HeaderValue::from_static("\"same-etag\""));
-        Ok(Response::from_bytes(
-            StatusCode::OK,
-            headers,
-            text.as_bytes().to_vec(),
-        ))
-    }
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn artifact_documents_keep_the_full_key_so_two_folders_do_not_collide() {
     let mut harness = harness(4, None).await;
-    let transport = std::sync::Arc::new(Objects {
-        objects: vec![
-            ("a/readme.md", "# A\n\nfrom folder a\n"),
-            ("b/readme.md", "# B\n\nfrom folder b\n"),
-        ],
-        requests: std::sync::Mutex::new(Vec::new()),
-    });
-    // The artifact store is the platform's object API: the platform
-    // transport (the one presenting the worker's client certificate).
-    harness.runtime.platform_transport = transport.clone();
+    // The artifact store is the platform's `ArtifactObjectService`. The two
+    // objects share a name and an etag.
+    let mut store = elitea_platform_rpc::testing::FakeArtifactStore::new().grant("pat", 1);
+    for (key, text) in [
+        ("a/readme.md", "# A\n\nfrom folder a\n"),
+        ("b/readme.md", "# B\n\nfrom folder b\n"),
+    ] {
+        store = store
+            .with_object(1, "docs", key, text.as_bytes())
+            .with_etag(1, "docs", key, "\"same-etag\"");
+    }
+    harness.runtime.platform_artifacts = elitea_platform_rpc::artifacts::ArtifactClient::new(
+        elitea_platform_rpc::testing::serve(Some(store.clone()), None),
+    );
     let configuration = json!({"id": 7, "type": "artifact", "toolkit_name": "files", "settings": {"bucket": "docs"}});
     let now = || 1_700_000_000_000_i64;
     let mut last = None;
@@ -988,12 +936,12 @@ async fn artifact_documents_keep_the_full_key_so_two_folders_do_not_collide() {
     assert_eq!(last.removed_document_keys, vec!["a/readme.md"]);
     assert_eq!(last.documents[0].document_key, "b/readme.md");
     // The folder is the list prefix; the fetch asks for the full key.
-    let requests = transport.requests.lock().expect("lock").clone();
+    let calls = store.calls();
     assert!(
-        requests
+        calls
             .iter()
-            .any(|path| path.ends_with("/docs/a/readme.md")),
-        "{requests:?}"
+            .any(|call| call.op == "GetObject" && call.key == "a/readme.md"),
+        "{calls:?}"
     );
 }
 

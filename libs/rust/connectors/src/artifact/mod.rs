@@ -1,12 +1,11 @@
-//! The platform's own artifact store: the object API client
-//! ([`client::ArtifactPlatform`]) and, with `content-source`, a bucket
-//! folder as a `ContentSource` ([`source::ArtifactSource`]).
+//! The platform's own artifact store: its naming rules ([`client`]) and,
+//! with `content-source`, a bucket folder as a `ContentSource`
+//! ([`source::ArtifactSource`]) over the [`source::ArtifactObjects`] seam
+//! the host implements on its platform channel.
 //!
-//! The agent-runtime `artifact` toolkit family does not use this client:
+//! The agent-runtime `artifact` toolkit family does not use this module:
 //! its tools act under the live execution claim over the worker's private
-//! mTLS content listener (`PlatformWriter`). This is the bearer-authorized
-//! object API an engine reads a folder through, the one
-//! `elitea-repo-ingest`'s artifact-folder ingest speaks.
+//! mTLS content listener (`PlatformWriter`).
 
 pub mod client;
 #[cfg(feature = "content-source")]

@@ -197,12 +197,8 @@ async fn harness_with(
         removal: removal
             .clone()
             .map(|removal| removal as Arc<dyn IndexRemovalControl>),
-        platform_origin: "https://platform.internal".to_owned(),
-        platform_transport: Arc::new(
-            elitea_connectors::reqwest012::ReqwestTransport::hardened(
-                &elitea_connectors::github::client::CLIENT_POLICY,
-            )
-            .expect("client"),
+        platform_artifacts: elitea_platform_rpc::artifacts::ArtifactClient::new(
+            tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy(),
         ),
         allowlist: elitea_connectors::egress::HostAllowlist::parse(Some("*")),
         extractor: None,

@@ -283,6 +283,10 @@ impl std::error::Error for ModelGatewayTransportError {
 pub(crate) struct ModelGatewayClient {
     pub(super) transport: Arc<dyn ModelGatewayTransport>,
     pub(super) config: ModelGatewayConfig,
+    /// The channel to the platform listener the model calls ride, shared by
+    /// the worker's other elitea-main services there (the artifact store and
+    /// the internal tools, #1359 U5). `None` for a test transport.
+    platform: Option<Channel>,
 }
 
 impl ModelGatewayClient {
@@ -306,6 +310,7 @@ impl ModelGatewayClient {
             .map_err(|_| ModelFacadeError::DependencyUnavailable)?;
         config.origin = origin;
         Ok(Self {
+            platform: Some(channel.clone()),
             transport: Arc::new(GrpcModelGatewayTransport {
                 client: elitea_model_rpc::ModelServiceClient::new(channel)
                     .max_decoding_message_size(MAX_MODEL_MESSAGE_BYTES)
@@ -325,7 +330,13 @@ impl ModelGatewayClient {
         Ok(Self {
             transport: Arc::new(transport),
             config,
+            platform: None,
         })
+    }
+
+    /// The channel to the platform listener, when this client opened one.
+    pub(crate) fn platform_channel(&self) -> Option<Channel> {
+        self.platform.clone()
     }
 
     /// Consume one ephemeral claim credential into one single-use ADK model.

@@ -55,6 +55,13 @@ impl ModelFacade {
         Self { gateway }
     }
 
+    /// The channel to elitea-main's platform listener the model calls ride
+    /// (`None` over a test transport): the artifact store and the internal
+    /// tools are served there too (#1359 U5).
+    pub(crate) fn platform_channel(&self) -> Option<tonic::transport::Channel> {
+        self.gateway.platform_channel()
+    }
+
     /// The gateway's embeddings route over the same channel (ADR-0030 I1).
     pub(crate) fn embeddings(&self) -> super::embeddings_facade::EmbeddingsClient {
         super::embeddings_facade::EmbeddingsClient::from_gateway(&self.gateway)

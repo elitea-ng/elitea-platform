@@ -65,7 +65,9 @@ use std::time::Duration;
 
 use elitea_connectors::egress::HostAllowlist;
 use elitea_connectors::transport::Transport;
+use elitea_platform_rpc::artifacts::ArtifactClient;
 use elitea_vector_index::{ClientConfig, VectorClient};
+use tonic::transport::Channel;
 
 use crate::protocol::control::IndexRemovalControl;
 use crate::transport::embeddings_facade::EmbeddingsClient;
@@ -79,21 +81,18 @@ pub(crate) use pipeline::{
 };
 
 /// What every index run shares: the vector client, the gateway embeddings
-/// route, the platform origin for the artifact object API, the egress
-/// allowlist and the HTTP transport the connectors send through.
+/// route, the platform's artifact store, the egress allowlist and the HTTP
+/// transport the connectors send through.
 pub(crate) struct IndexIngestRuntime {
     pub(crate) vector: VectorClient,
     pub(crate) embeddings: EmbeddingsClient,
     /// The control plane the `remove_index` tool asks Main through
     /// (ADR-0030 I1); `None` leaves the tool refusing with a sentence.
     pub(crate) removal: Option<Arc<dyn IndexRemovalControl>>,
-    /// `https://host[:port]`: where the artifact connector finds the
-    /// platform's object API (the worker's `platform_origin`).
-    pub(crate) platform_origin: String,
-    /// The transport to `platform_origin`: elitea-main's mTLS platform
-    /// listener, so it presents the worker's runtime client certificate
-    /// (`transport::platform_http`).
-    pub(crate) platform_transport: Arc<dyn Transport>,
+    /// The platform's artifact store the artifact connector reads:
+    /// `ArtifactObjectService` on elitea-main's platform listener, over the
+    /// model calls' mTLS channel (#1359 U5).
+    pub(crate) platform_artifacts: ArtifactClient,
     pub(crate) allowlist: HostAllowlist,
     /// The connectors' transport to third-party hosts: no client identity.
     pub(crate) transport: Arc<dyn Transport>,
@@ -167,9 +166,8 @@ impl Default for IndexRunLimits {
 impl IndexIngestRuntime {
     /// A runtime over `vector_target` (`host:port`, mTLS with the worker's
     /// identity), the gateway `embeddings`, the connectors' hardened reqwest
-    /// transport, the deployment's egress allowlist, and a transport to
-    /// `platform_origin` that presents the same identity (elitea-main's
-    /// platform listener requires it).
+    /// transport, the deployment's egress allowlist, and the platform
+    /// listener's `platform_channel` (the artifact store).
     ///
     /// # Errors
     ///
@@ -180,18 +178,10 @@ impl IndexIngestRuntime {
         ca_pem: Vec<u8>,
         identity_pem: (Vec<u8>, Vec<u8>),
         embeddings: EmbeddingsClient,
-        platform_origin: String,
+        platform_channel: Channel,
         allowlist: HostAllowlist,
         limits: IndexRunLimits,
     ) -> Result<Self, IndexRuntimeBuildError> {
-        let platform_transport = crate::transport::platform_http::platform_transport(
-            &elitea_connectors::github::client::CLIENT_POLICY,
-            &crate::transport::platform_http::PlatformClientIdentity::new(
-                ca_pem.clone(),
-                identity_pem.clone(),
-            ),
-        )
-        .map_err(|_| IndexRuntimeBuildError)?;
         let mut config = ClientConfig::new(format!("https://{vector_target}"));
         config.ca_pem = Some(ca_pem);
         config.identity_pem = Some(identity_pem);
@@ -207,8 +197,7 @@ impl IndexIngestRuntime {
             vector,
             embeddings,
             removal: None,
-            platform_origin,
-            platform_transport: Arc::new(platform_transport),
+            platform_artifacts: ArtifactClient::new(platform_channel),
             allowlist,
             transport: Arc::new(transport),
             limits,

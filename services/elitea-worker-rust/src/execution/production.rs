@@ -290,7 +290,7 @@ impl ProductionAgentRuntime {
             index_runtime,
             extractor,
             workspace_runs,
-            platform_identity,
+            platform_channel,
         } = bundle;
         let limits = deployment.limits;
         let output_config = OutputGrpcConfig {
@@ -347,46 +347,19 @@ impl ProductionAgentRuntime {
                 .map_err(|_| ProductionRuntimeBuildError)?;
         let terminal_recovery = AgentTerminalRecoveryConfig::new(limits.output_max_sessions)
             .map_err(|_| ProductionRuntimeBuildError)?;
-        // The Office families (ADR-0032 P3) reach the platform object API at
-        // `platform_origin`, and only it, presenting the worker's runtime
-        // client certificate (elitea-main's platform listener requires one).
-        let office_runtime = crate::transport::office_host::OfficeRuntime::new(
-            &deployment.platform_origin,
-            &platform_identity,
-        )
-        .map(|runtime| {
-            Arc::new(
-                runtime
-                    .with_public_base_url(deployment.public_base_url.clone())
-                    .with_extractor(extractor.clone()),
-            )
-        })
-        .ok();
-        if office_runtime.is_none() {
-            tracing::warn!(
-                event = "office_runtime_unavailable",
-                "the Office families are left out: the platform origin is unusable"
-            );
-        }
-        // The internal MCP builders live on the platform listener too
-        // (`<platform_origin>/app/{project_id}/mcp/...`): an MCP endpoint on
-        // that exact origin presents the same client certificate, and no
-        // other endpoint does.
-        let platform_mcp = crate::toolkits::PlatformMcpIdentity::new(
-            &deployment.platform_origin,
-            platform_identity.ca_pem(),
-            platform_identity.identity_pem(),
-        )
-        .map(Arc::new)
-        .ok();
-        if platform_mcp.is_none() {
-            tracing::warn!(
-                event = "platform_mcp_identity_unavailable",
-                "internal MCP tools cannot reach the platform listener: its client identity is unusable"
-            );
-        }
+        // The Office families (ADR-0032 P3) reach the platform's artifact
+        // store, and the internal MCP builders their tool categories, as
+        // elitea.runtime.v1 services on the platform listener: the model
+        // calls' mTLS channel (#1359 U5).
+        let office_runtime = Some(Arc::new(
+            crate::transport::office_host::OfficeRuntime::new(platform_channel.clone())
+                .with_public_base_url(deployment.public_base_url.clone())
+                .with_extractor(extractor.clone()),
+        ));
         let mcp_connector: Arc<dyn crate::toolkits::McpConnector> = Arc::new(
-            crate::toolkits::AdkHttpMcpConnector::new().with_platform_identity(platform_mcp),
+            crate::toolkits::AdkHttpMcpConnector::new().with_internal_tools(
+                elitea_platform_rpc::internal_tools::InternalToolClient::new(platform_channel),
+            ),
         );
         let assembler = Arc::new(
             NativeRuntimeAssembler::postgres(

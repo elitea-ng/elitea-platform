@@ -1328,6 +1328,7 @@ dependencies = [
  "chrono",
  "elitea-connectors",
  "elitea-office-core",
+ "elitea-platform-rpc",
  "fancy-regex 0.18.0",
  "futures",
  "hmac 0.13.0",
@@ -1488,6 +1489,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-platform-rpc"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "zeroize",
+]
+
+[[package]]
 name = "elitea-vector-index"
 version = "0.1.0"
 dependencies = [
@@ -1533,6 +1550,7 @@ dependencies = [
  "elitea-llm-wire",
  "elitea-model-rpc",
  "elitea-office-core",
+ "elitea-platform-rpc",
  "elitea-vector-index",
  "elitea-workspace-store",
  "flate2",

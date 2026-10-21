@@ -62,6 +62,8 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
             common::database_url("socket"),
         ),
         ("ELITEA_INVENTORY_GIT_ALLOWLIST", "127.0.0.1".to_owned()),
+        // The platform listener: the mock gateway (only its origin counts).
+        ("ELITEA_INVENTORY_MODEL_SERVICE_URL", gateway.clone()),
         (
             "ELITEA_INVENTORY_SCRATCH_PATH",
             root.join("jobs").display().to_string(),

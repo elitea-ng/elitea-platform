@@ -231,13 +231,13 @@ pub struct ModelEnvSettings {
     /// platform listener requires one; a cleartext or ordinary TLS callback
     /// origin never asks for it.
     pub callback_identity: Option<crate::llm::ClientIdentityFiles>,
-    /// `ELITEA_DEEPWIKI_MODEL_SERVICE_URL`: the origin of
-    /// `elitea.llm.v1.ModelService`, elitea-main's platform listener
-    /// (`https://elitea-main:9446`). Every model call goes there over the
-    /// callback CA and client certificate; `llm_settings.api_base` then only
-    /// names the route and stays the artifact API's HTTP base (#1359 U5).
-    /// Unset, model calls go to the origin of `api_base`, which must then be
-    /// https.
+    /// `ELITEA_DEEPWIKI_MODEL_SERVICE_URL`: the origin of elitea-main's
+    /// platform listener (`https://elitea-main:9446`). Every model call
+    /// (`elitea.llm.v1.ModelService`) and every artifact-folder read
+    /// (`elitea.runtime.v1.ArtifactObjectService`, #1359 U5) goes there over
+    /// the callback CA and client certificate; `llm_settings.api_base` only
+    /// names the model route. The native runner requires it; `http://` is
+    /// accepted for a loopback host only (tests).
     pub model_service: Option<String>,
     /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
     /// inputs per embedding request, default 64.
@@ -254,6 +254,19 @@ pub struct ModelEnvSettings {
     /// `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`: the longest one model
     /// stream may run, default 7200 (Python had no limit).
     pub stream_total: Duration,
+}
+
+/// `http://` to a loopback host: the tests' in-process platform listener.
+fn is_loopback_http(origin: &str) -> bool {
+    reqwest::Url::parse(origin).is_ok_and(|url| {
+        let host = url.host_str().unwrap_or_default();
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        url.scheme() == "http"
+            && (bare.eq_ignore_ascii_case("localhost")
+                || bare
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback()))
+    })
 }
 
 fn model_settings(
@@ -283,7 +296,7 @@ fn model_settings(
         })?;
     let model_service = match raw("MODEL_SERVICE_URL") {
         None => None,
-        Some(origin) if origin.starts_with("https://") => Some(origin),
+        Some(origin) if origin.starts_with("https://") || is_loopback_http(&origin) => Some(origin),
         Some(origin) => {
             return Err(ConfigError(format!(
                 "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
@@ -706,6 +719,11 @@ impl Settings {
                 "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine stages and publishes every index in the deepwiki PostgreSQL database (ADR-0026 decision 5) and has no other index storage. Set it to the database the migrations ran on, or use 'fixture' or 'unavailable'."
             )));
         }
+        if runner == RunnerKind::Native && model.model_service.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {MODEL_SERVICE_SETTING}: the native engine reaches the model calls and the artifact store only on elitea-main's platform listener (https://elitea-main:9446); llm_settings.api_base never names a host. Set it, or use 'fixture' or 'unavailable'."
+            )));
+        }
         Ok(Self {
             runner,
             fixture_step,
@@ -1076,8 +1094,43 @@ mod tests {
                 "postgresql://u:p@db/deepwiki",
             ),
             ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
         ]);
         assert_eq!(parsed.map(|s| s.runner), Ok(RunnerKind::Native));
+    }
+
+    #[test]
+    fn native_refuses_to_start_without_the_platform_listener() {
+        let refused = settings(&[
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ]);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("ELITEA_DEEPWIKI_MODEL_SERVICE_URL")),
+            "{refused:?}"
+        );
+        // Plaintext only to a loopback host (the tests' listener).
+        for (origin, accepted) in [
+            ("http://127.0.0.1:8080", true),
+            ("http://[::1]:8080", true),
+            ("http://localhost:8080", true),
+            ("http://elitea-main:9446", false),
+        ] {
+            assert_eq!(
+                settings(&[("ELITEA_DEEPWIKI_MODEL_SERVICE_URL", origin)]).is_ok(),
+                accepted,
+                "{origin}"
+            );
+        }
     }
 
     #[test]
@@ -1151,6 +1204,10 @@ mod tests {
                 "postgresql://u:p@db/deepwiki",
             ),
             ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+            (
+                "ELITEA_DEEPWIKI_MODEL_SERVICE_URL",
+                "https://elitea-main:9446",
+            ),
         ];
         let with = |extra: &[(&'static str, &'static str)]| {
             let mut pairs = native.to_vec();

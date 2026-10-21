@@ -1477,13 +1477,13 @@ dependencies = [
  "elitea-model-client",
  "elitea-model-rpc",
  "elitea-pg-migrate",
+ "elitea-platform-rpc",
  "elitea-repo-ingest",
  "futures-util",
  "indexmap",
  "jiff",
  "jsonrepair",
  "md-5 0.10.6",
- "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1547,18 +1547,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-platform-rpc"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "prost",
+ "protoc-bin-vendored",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "zeroize",
+]
+
+[[package]]
 name = "elitea-repo-ingest"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "elitea-connectors",
  "elitea-engine-core",
+ "elitea-platform-rpc",
  "gix",
  "regex",
- "reqwest",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+ "tonic",
  "tracing",
  "zeroize",
 ]
@@ -5217,8 +5234,6 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
- "serde",
- "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

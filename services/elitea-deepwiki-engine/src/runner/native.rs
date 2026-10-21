@@ -834,6 +834,7 @@ mod tests {
             "ELITEA_DEEPWIKI_RUNNER" => Some("native".to_owned()),
             "ELITEA_DEEPWIKI_DATABASE_URL" => Some("postgresql://u:p@127.0.0.1:1/x".to_owned()),
             "ELITEA_DEEPWIKI_BUILD_OWNER" => Some("unit".to_owned()),
+            "ELITEA_DEEPWIKI_MODEL_SERVICE_URL" => Some("https://elitea-main:9446".to_owned()),
             "ELITEA_DEEPWIKI_SCRATCH_PATH" => Some(scratch.clone()),
             _ => None,
         })

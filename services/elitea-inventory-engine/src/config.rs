@@ -85,12 +85,13 @@ pub struct Settings {
     /// client certificate the model transport presents. elitea-main's
     /// platform listener requires a runtime-CA one.
     pub callback_identity: Option<elitea_model_client::ClientIdentityFiles>,
-    /// `MODEL_SERVICE_URL`: the origin of `elitea.llm.v1.ModelService`,
-    /// elitea-main's platform listener (`https://elitea-main:9446`). Every
-    /// model call goes there over the callback CA and client certificate;
-    /// `llm_settings.api_base` then only names the route and stays the
-    /// artifact API's HTTP base (#1359 U5). Unset, model calls go to the
-    /// origin of `api_base`, which must then be https.
+    /// `MODEL_SERVICE_URL`: the origin of elitea-main's platform listener
+    /// (`https://elitea-main:9446`). Every model call
+    /// (`elitea.llm.v1.ModelService`) and every source-tool call of
+    /// `investigate` (`elitea.runtime.v1.InternalToolService`, #1359 U5)
+    /// goes there over the callback CA and client certificate;
+    /// `llm_settings.api_base` only names the model route. The native runner
+    /// requires it; `http://` is accepted for a loopback host only (tests).
     pub model_service: Option<String>,
     /// `MODEL_CONCURRENCY`: the ingestion model calls (extraction,
     /// relations, community labels) in flight at once across this engine
@@ -193,6 +194,11 @@ impl Settings {
         let callback_identity =
             callback_identity(raw("CALLBACK_CERT_FILE"), raw("CALLBACK_KEY_FILE"))?;
         let model_service = model_service(raw("MODEL_SERVICE_URL"))?;
+        if runner == RunnerKind::Native && model_service.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {MODEL_SERVICE_SETTING}: the native engine reaches the model calls and the source tools only on elitea-main's platform listener (https://elitea-main:9446); llm_settings.api_base never names a host"
+            )));
+        }
         Ok(Self {
             source_types,
             ingest,
@@ -236,11 +242,32 @@ fn callback_identity(
     }
 }
 
-/// `MODEL_SERVICE_URL`: an https origin (the platform listener), or unset.
+/// `http://` to a loopback host: the tests' in-process platform listener.
+fn is_loopback_http(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.contains(']') => host,
+        _ => authority,
+    };
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    !authority.contains('@')
+        && (bare.eq_ignore_ascii_case("localhost")
+            || bare
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback()))
+}
+
+/// `MODEL_SERVICE_URL`: an https origin (the platform listener), a loopback
+/// `http://` one (tests), or unset.
 fn model_service(value: Option<String>) -> Result<Option<String>, ConfigError> {
     match value {
         None => Ok(None),
-        Some(origin) if origin.starts_with("https://") => Ok(Some(origin)),
+        Some(origin) if origin.starts_with("https://") || is_loopback_http(&origin) => {
+            Ok(Some(origin))
+        }
         Some(origin) => Err(ConfigError(format!(
             "{MODEL_SERVICE_SETTING} must be the https origin of elitea-main's platform listener, got '{origin}'"
         ))),
@@ -372,6 +399,38 @@ mod tests {
             settings(&[(MODEL_SERVICE_SETTING, "http://elitea-main:8080")])
                 .is_err_and(|e| e.to_string().contains(MODEL_SERVICE_SETTING))
         );
+        for loopback in [
+            "http://127.0.0.1:8080",
+            "http://[::1]:1/v1",
+            "http://localhost:9",
+        ] {
+            assert!(
+                settings(&[(MODEL_SERVICE_SETTING, loopback)]).is_ok(),
+                "{loopback}"
+            );
+        }
+        assert!(settings(&[(MODEL_SERVICE_SETTING, "http://127.0.0.1@evil:1")]).is_err());
+        // The native runner reaches the platform only there: required.
+        let native = settings(&[
+            ("ELITEA_INVENTORY_RUNNER", "native"),
+            (
+                "ELITEA_INVENTORY_DATABASE_URL",
+                "postgresql://u:p@db/inventory",
+            ),
+        ]);
+        assert!(
+            native.is_err_and(|e| e.to_string().contains(MODEL_SERVICE_SETTING)),
+            "started without the platform listener"
+        );
+        let native = settings(&[
+            ("ELITEA_INVENTORY_RUNNER", "native"),
+            (
+                "ELITEA_INVENTORY_DATABASE_URL",
+                "postgresql://u:p@db/inventory",
+            ),
+            (MODEL_SERVICE_SETTING, "https://elitea-main:9446"),
+        ]);
+        assert!(native.is_ok(), "{native:?}");
     }
 
     #[test]

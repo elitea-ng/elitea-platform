@@ -15,8 +15,10 @@
 //! client certificate ([`TransportSettings::client_identity`]); plaintext
 //! `http` is accepted for a loopback host only (tests).
 //!
-//! The `reqwest` client stays for the artifact API ([`Transport::http_client`]),
-//! which is not a model call.
+//! The same channel carries the engines' other platform calls
+//! ([`Transport::platform_channel`]: the artifact objects and the toolkit
+//! invocations, `elitea-platform-rpc`). The `reqwest` client is only the
+//! configured HTTP client a caller may still need; no platform call uses it.
 //!
 //! # Retries
 //!
@@ -150,12 +152,12 @@ pub struct TransportSettings {
     /// which requires a runtime-CA client certificate (mutual TLS). `None`
     /// presents nothing.
     pub client_identity: Option<ClientIdentityFiles>,
-    /// The origin of `elitea.llm.v1.ModelService` (elitea-main's platform
-    /// listener, `https://elitea-main:9446`). Set, every model call goes
-    /// there and `llm_settings.api_base` only names the route; unset, the
-    /// call goes to the origin of `api_base`. The engines set it because
-    /// their `api_base` is also the artifact API's HTTP base, which is not
-    /// on the platform listener until #1359 U5.
+    /// The origin of elitea-main's platform listener
+    /// (`https://elitea-main:9446`): `elitea.llm.v1.ModelService` and the
+    /// services of [`Transport::platform_channel`]. Set, every model call
+    /// goes there and `llm_settings.api_base` only names the route; unset, a
+    /// model call goes to the origin of `api_base` and there is no platform
+    /// channel. The engines require it.
     pub model_service: Option<String>,
     /// The `User-Agent` of every request: the consuming engine's name.
     pub user_agent: &'static str,
@@ -333,17 +335,43 @@ impl Transport {
         self.timeouts
     }
 
-    /// The configured HTTP client, for the platform's object API (an
-    /// artifact-folder source): the same CA bundle and client certificate as
-    /// the model calls, and no redirects. Model calls never use it.
+    /// The configured HTTP client: the same CA bundle and client
+    /// certificate as the model calls, and no redirects. No platform call
+    /// uses it.
     #[must_use]
     pub fn http_client(&self) -> &Client {
         &self.client
     }
 
+    /// The channel to elitea-main's platform listener at the configured
+    /// origin ([`TransportSettings::model_service`]), the one the model
+    /// calls use: the engines' artifact-object and toolkit-invocation calls
+    /// ride it (`elitea-platform-rpc`).
+    ///
+    /// # Errors
+    ///
+    /// A `RuntimeError` when no origin is configured or it cannot be
+    /// reached as the model calls reach it.
+    pub fn platform_channel(&self) -> Result<Channel, EngineError> {
+        if self.hop.origin.is_none() {
+            return Err(runtime(
+                "The platform listener is not configured: set the engine's MODEL_SERVICE_URL",
+            ));
+        }
+        self.channel("")
+    }
+
     /// The model service client: the configured origin, else the origin of
     /// `url`.
     fn model_service(&self, url: &str) -> Result<ModelServiceClient<Channel>, EngineError> {
+        Ok(ModelServiceClient::new(self.channel(url)?)
+            .max_decoding_message_size(MAX_MODEL_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES))
+    }
+
+    /// The platform listener's channel: the configured origin, else the
+    /// origin of `url`. One per origin, opened on first use.
+    fn channel(&self, url: &str) -> Result<Channel, EngineError> {
         let parsed = match &self.hop.origin {
             Some(origin) => reqwest::Url::parse(origin)
                 .map_err(|_| runtime(format!("The model service origin {origin} is not a URL")))?,
@@ -369,7 +397,7 @@ impl Transport {
             .lock()
             .map_err(|_| runtime("The model client's channel table is poisoned"))?;
         if let Some(channel) = channels.get(&origin) {
-            return Ok(ModelServiceClient::new(channel.clone()));
+            return Ok(channel.clone());
         }
         let mut endpoint = Endpoint::from_shared(origin.clone())
             .map_err(|_| runtime(format!("The model service origin {origin} is not valid")))?
@@ -394,9 +422,7 @@ impl Transport {
         }
         let channel = endpoint.connect_lazy();
         channels.insert(origin, channel.clone());
-        Ok(ModelServiceClient::new(channel)
-            .max_decoding_message_size(MAX_MODEL_MESSAGE_BYTES)
-            .max_encoding_message_size(MAX_MODEL_MESSAGE_BYTES))
+        Ok(channel)
     }
 }
 

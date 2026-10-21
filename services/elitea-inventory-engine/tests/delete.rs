@@ -439,6 +439,10 @@ fn runner(database: &str) -> NativeRunner {
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url(database),
         ),
+        (
+            "ELITEA_INVENTORY_MODEL_SERVICE_URL",
+            "https://elitea-main:9446".to_owned(),
+        ),
     ]
     .into_iter()
     .collect();

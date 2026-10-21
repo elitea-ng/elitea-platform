@@ -1,6 +1,7 @@
 pub(crate) mod anthropic_facade;
 #[cfg(test)]
 mod anthropic_facade_tests;
+pub(crate) mod artifact_objects;
 pub mod command_bus;
 pub mod control_grpc;
 pub(crate) mod embeddings_facade;
@@ -26,7 +27,6 @@ mod openai_compatible_facade_tests;
 pub mod output_grpc;
 mod output_session;
 pub(crate) mod platform_client;
-pub(crate) mod platform_http;
 pub(crate) mod platform_writer;
 pub(crate) mod runtime_context;
 #[cfg(test)]

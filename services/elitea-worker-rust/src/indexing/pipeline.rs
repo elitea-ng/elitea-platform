@@ -779,10 +779,9 @@ pub(crate) async fn run_index(
         &parameters,
         &filter,
         &PlatformAccess {
-            origin: &runtime.platform_origin,
+            artifacts: &runtime.platform_artifacts,
             bearer: &bearer,
             project_id: &project_id,
-            transport: &runtime.platform_transport,
         },
         &runtime.allowlist,
         Arc::clone(&runtime.transport),

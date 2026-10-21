@@ -51,6 +51,10 @@ async fn a_bucket_graph_is_imported_and_exported_through_the_socket() {
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url("transfer_tools"),
         ),
+        (
+            "ELITEA_INVENTORY_MODEL_SERVICE_URL",
+            "https://elitea-main:9446".to_owned(),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v))
@@ -154,6 +158,10 @@ async fn replace_ingestion_state_false_string_keeps_the_state() {
         (
             "ELITEA_INVENTORY_DATABASE_URL",
             common::database_url("transfer_tools_flag"),
+        ),
+        (
+            "ELITEA_INVENTORY_MODEL_SERVICE_URL",
+            "https://elitea-main:9446".to_owned(),
         ),
     ]
     .into_iter()

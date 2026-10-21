@@ -11,11 +11,11 @@ use serde_json::{Map, Value, json};
 
 use super::delegated_auth::delegated_authorization_requirement;
 use super::mcp::{
-    McpConnector, McpMaterializationError, McpMaterializationErrorCode, McpSession,
-    PlatformMcpIdentity, RETIRED_SSE_MESSAGE, RemoteMcpConfig, authorization_resource_metadata,
+    AdkHttpMcpConnector, McpConnector, McpMaterializationError, McpMaterializationErrorCode,
+    McpSession, RETIRED_SSE_MESSAGE, RemoteMcpConfig, authorization_resource_metadata,
     materialize_mcp_toolsets, materialize_mcp_toolsets_with_tokens,
     materialize_mcp_toolsets_with_tokens_and_authorization, mcp_authorization_required_fixture,
-    names_sse_endpoint, platform_identity_for, redirect_allowed, retired_sse_failure_for_test,
+    names_sse_endpoint, redirect_allowed, retired_sse_failure_for_test,
     same_origin_redirect_policy, session_client_builder, tool_list_cache_for_test,
     tool_list_key_for_test,
 };
@@ -1577,7 +1577,7 @@ async fn the_session_client_keeps_the_bearer_on_origin_and_refuses_cross_origin_
         // HTTP. The redirect policy compares origins, which this keeps.
         let config = direct_config(json!({"Authorization": "Bearer pat"}), &Map::new())
             .with_endpoint_for_test(&format!("{base}{path}"));
-        let client = session_client_builder(&config, None)
+        let client = session_client_builder(&config)
             .expect("builder")
             .https_only(false)
             .build()
@@ -1860,99 +1860,276 @@ async fn an_oauth_app_that_would_break_the_metadata_limits_is_refused_not_droppe
     assert!(error.visible_message().is_some());
 }
 
-/// A runtime CA and a client certificate under it, PEM: the CA bundle and
-/// the workload chain followed by its key (what the worker's trust
-/// material hands the connector).
-fn platform_pki() -> (String, String) {
-    use rcgen::{
-        BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa,
-        KeyPair, KeyUsagePurpose,
-    };
-    let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-    let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate().expect("ca key"))
-        .expect("ca cert");
-    let key = KeyPair::generate().expect("client key");
-    let mut params = CertificateParams::new(Vec::<String>::new()).expect("client params");
-    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    let certificate = params.signed_by(&key, &ca).expect("client cert");
-    (
-        ca.pem(),
-        format!("{}\n{}", certificate.pem(), key.serialize_pem()),
+// ---- #1359 U5: the internal categories over InternalToolService -----------
+
+/// A frozen internal builder of `category` (the per-execution actor token in
+/// its `Authorization` header, as Main materializes it).
+fn internal_builder(url: &str, selected: &[&str], excluded: &[&str]) -> Map<String, Value> {
+    json!({
+        "tools": [{
+            "type": "mcp_elitea_internal_applications",
+            "toolkit_name": "Elitea Applications",
+            "name": "Elitea Applications",
+            "meta": {"mcp": true, "internal_builder": true},
+            "settings": {
+                "server_name": "mcp_elitea_internal_applications",
+                "url": url,
+                "headers": {"Authorization": "Bearer actor-token"},
+                "selected_tools": selected,
+                "excluded_tools": excluded,
+                "timeout": 5,
+                "enable_caching": true,
+                "ssl_verify": true
+            }
+        }]
+    })
+    .as_object()
+    .cloned()
+    .expect("internal builder version")
+}
+
+fn internal_listing() -> &'static str {
+    r#"{"tools": [
+        {"name": "list_applications", "description": "Lists them",
+         "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+         "annotations": {"readOnlyHint": true}},
+        {"name": "run_application", "description": "Runs one",
+         "inputSchema": {"type": "object"}},
+        {"name": "delete_application", "description": "Deletes one",
+         "inputSchema": {"type": "object"}, "annotations": {"idempotentHint": true}}
+    ]}"#
+}
+
+async fn internal_tools_for(
+    version: &Map<String, Value>,
+    tools: Option<elitea_platform_rpc::testing::FakeInternalTools>,
+) -> Result<Vec<Arc<dyn Tool>>, McpMaterializationError> {
+    let mut connector = AdkHttpMcpConnector::new();
+    if let Some(tools) = tools {
+        connector = connector.with_internal_tools(
+            elitea_platform_rpc::internal_tools::InternalToolClient::new(
+                elitea_platform_rpc::testing::serve(None, Some(tools)),
+            ),
+        );
+    }
+    let policy = policy(&[]);
+    let snapshot = FrozenToolSnapshot::from_version_details(version)
+        .expect("MCP snapshot")
+        .apply_policy(policy.as_ref());
+    let toolsets = materialize_mcp_toolsets(&snapshot, &connector, &policy).await?;
+    let mut listed = Vec::new();
+    for toolset in toolsets {
+        listed.extend(
+            toolset
+                .tools(context() as Arc<dyn ReadonlyContext>)
+                .await
+                .expect("tools"),
+        );
+    }
+    Ok(listed)
+}
+
+#[tokio::test]
+async fn an_internal_builder_lists_and_calls_through_the_internal_tool_service() {
+    let fake = elitea_platform_rpc::testing::FakeInternalTools::new("actor-token")
+        .with_tools(internal_listing())
+        .with_call_result(
+            &["admitted", "running"],
+            r#"{"content": [{"type": "text", "text": "two apps"}], "isError": false}"#,
+        );
+    let version = internal_builder(
+        "https://internal-tools.elitea.invalid/app/7/mcp/applications",
+        &[],
+        &["delete_application"],
+    );
+    let tools = internal_tools_for(&version, Some(fake.clone()))
+        .await
+        .expect("materialized");
+    let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["list_applications", "run_application"],
+        "exclusion holds"
+    );
+    let list = &tools[0];
+    assert!(list.is_read_only() && list.is_concurrency_safe());
+    assert!(!tools[1].is_read_only() && !tools[1].is_concurrency_safe());
+    assert_eq!(
+        list.parameters_schema().expect("schema")["properties"]["q"]["type"],
+        "string"
+    );
+    assert!(
+        list.description()
+            .contains("MCP server: Elitea Applications")
+    );
+
+    let value = list
+        .execute(context() as Arc<dyn ToolContext>, json!({"q": "x"}))
+        .await
+        .expect("called");
+    assert_eq!(value, json!({"output": "two apps"}));
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].bearer, "actor-token");
+    assert_eq!(calls[0].project_id, 7);
+    assert_eq!(calls[0].scope, "applications");
+    assert_eq!(calls[0].name, "list_applications");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&calls[0].arguments).expect("arguments"),
+        json!({"q": "x"})
+    );
+    // No arguments travel as the empty object.
+    tools[1]
+        .execute(context() as Arc<dyn ToolContext>, json!({}))
+        .await
+        .expect("called");
+    assert!(fake.calls()[1].arguments.is_empty());
+}
+
+#[tokio::test]
+async fn an_internal_tool_error_result_and_rpc_error_reach_the_model_redacted() {
+    let version = internal_builder(
+        "https://internal-tools.elitea.invalid/app/7/mcp/applications",
+        &["run_application"],
+        &[],
+    );
+    let failing = elitea_platform_rpc::testing::FakeInternalTools::new("actor-token")
+        .with_tools(internal_listing())
+        .with_call_result(
+            &[],
+            r#"{"content": [{"type": "text", "text": "the run was refused"}], "isError": true}"#,
+        );
+    let tools = internal_tools_for(&version, Some(failing))
+        .await
+        .expect("materialized");
+    assert_eq!(tools.len(), 1, "selection holds");
+    let error = tools[0]
+        .execute(context() as Arc<dyn ToolContext>, json!({}))
+        .await
+        .expect_err("an error result");
+    assert!(error.to_string().contains("the run was refused"), "{error}");
+
+    let rpc = elitea_platform_rpc::testing::FakeInternalTools::new("actor-token")
+        .with_tools(internal_listing())
+        .with_call_error(-32602, "unknown tool");
+    let tools = internal_tools_for(&version, Some(rpc))
+        .await
+        .expect("materialized");
+    let error = tools[0]
+        .execute(context() as Arc<dyn ToolContext>, json!({}))
+        .await
+        .expect_err("an RPC error");
+    assert!(error.to_string().contains("unknown tool"), "{error}");
+    assert!(!error.to_string().contains("actor-token"), "{error}");
+}
+
+#[tokio::test]
+async fn a_refused_or_unserved_internal_builder_is_unavailable() {
+    let version = internal_builder(
+        "https://internal-tools.elitea.invalid/app/7/mcp/applications",
+        &[],
+        &[],
+    );
+    // The platform refuses the listing: discovery fails, nothing is exposed.
+    let refused = elitea_platform_rpc::testing::FakeInternalTools::new("actor-token")
+        .refusing(403, r#"{"error": "MCP is disabled"}"#);
+    let error = internal_tools_for(&version, Some(refused))
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::DependencyUnavailable
+    );
+    // A worker without the service never falls back to HTTP.
+    let error = internal_tools_for(&version, None)
+        .await
+        .err()
+        .expect("unserved");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::DependencyUnavailable
+    );
+    // A path that names no category is a configuration error.
+    let error = internal_tools_for(
+        &internal_builder("https://internal-tools.elitea.invalid/other/7", &[], &[]),
+        Some(elitea_platform_rpc::testing::FakeInternalTools::new(
+            "actor-token",
+        )),
     )
+    .await
+    .err()
+    .expect("no category");
+    assert_eq!(
+        error.code(),
+        McpMaterializationErrorCode::InvalidConfiguration
+    );
+}
+
+#[tokio::test]
+async fn an_internal_builder_on_the_old_platform_origin_is_still_served_internally() {
+    // The category comes from the path; the origin of an internal builder
+    // never decides the transport.
+    let fake = elitea_platform_rpc::testing::FakeInternalTools::new("actor-token")
+        .with_tools(internal_listing());
+    let tools = internal_tools_for(
+        &internal_builder("https://elitea-main:9446/app/12/mcp", &[], &[]),
+        Some(fake),
+    )
+    .await
+    .expect("materialized");
+    assert_eq!(tools.len(), 3);
 }
 
 #[test]
-fn the_platform_identity_is_offered_only_on_the_platform_origin() {
-    let (ca_pem, identity_pem) = platform_pki();
-    let platform = PlatformMcpIdentity::new(
-        "https://elitea-main:9446",
-        ca_pem.as_bytes(),
-        identity_pem.as_bytes(),
-    )
-    .expect("platform identity");
-    for (endpoint, served) in [
-        ("https://elitea-main:9446/app/7/mcp/artifacts", true),
-        ("https://ELITEA-MAIN:9446/app/7/mcp/artifacts", true),
-        ("https://elitea-main:9446", true),
-        // Another port of the same host is another listener.
-        ("https://elitea-main:9445/app/7/mcp/artifacts", false),
-        ("https://elitea-main/app/7/mcp/artifacts", false),
-        ("http://elitea-main:9446/app/7/mcp/artifacts", false),
-        ("https://elitea-main.evil.example:9446/app/7/mcp", false),
+fn only_the_reserved_origin_and_an_app_mcp_path_name_an_internal_category() {
+    use super::mcp_internal::{is_internal_tools_endpoint, scope_of};
+    for (endpoint, internal) in [
+        (
+            "https://internal-tools.elitea.invalid/app/7/mcp/applications",
+            true,
+        ),
+        ("https://internal-tools.elitea.invalid", true),
+        ("http://internal-tools.elitea.invalid/app/7/mcp", false),
+        (
+            "https://internal-tools.elitea.invalid:8443/app/7/mcp",
+            false,
+        ),
+        (
+            "https://user@internal-tools.elitea.invalid/app/7/mcp",
+            false,
+        ),
+        (
+            "https://internal-tools.elitea.invalid.evil.example/app/7/mcp",
+            false,
+        ),
         ("https://mcp.example.com/mcp", false),
-        ("https://user@elitea-main:9446/app/7/mcp", false),
-        ("not a url", false),
     ] {
-        assert_eq!(platform.serves(endpoint), served, "{endpoint}");
+        assert_eq!(is_internal_tools_endpoint(endpoint), internal, "{endpoint}");
+    }
+    for (endpoint, scope) in [
+        (
+            "https://h/app/7/mcp/applications",
+            Some((7, "applications")),
+        ),
+        (
+            "https://h/app/7/mcp/applications/",
+            Some((7, "applications")),
+        ),
+        ("https://h/app/7/mcp", Some((7, ""))),
+        ("https://h/app/7/mcp/a/b", Some((7, "a/b"))),
+        ("https://h/app/0/mcp", None),
+        ("https://h/app/x/mcp", None),
+        ("https://h/app/7/mcpx", None),
+        ("https://h/app/7/mcp/a//b", None),
+        ("https://h/app/7/mcp/../x", None),
+        ("https://h/app/7/mcp?x=1", None),
+        ("https://h/other", None),
+    ] {
         assert_eq!(
-            platform_identity_for(endpoint, Some(&platform)).is_some(),
-            served,
-            "{endpoint}"
-        );
-        assert!(
-            platform_identity_for(endpoint, None).is_none(),
+            scope_of(endpoint).map(|s| (s.project_id, s.scope)),
+            scope.map(|(id, scope): (i64, &str)| (id, scope.to_owned())),
             "{endpoint}"
         );
     }
-
-    // The client that carries it still builds, for the platform origin and
-    // for any other.
-    for endpoint in [
-        "https://elitea-main:9446/app/7/mcp/artifacts",
-        "https://mcp.example.com/mcp",
-    ] {
-        let config = direct_config(json!({"Authorization": "Bearer pat"}), &Map::new())
-            .with_endpoint_for_test(endpoint);
-        session_client_builder(&config, Some(&platform))
-            .expect("builder")
-            .build()
-            .expect("client");
-    }
-}
-
-#[test]
-fn a_platform_identity_needs_an_https_origin_and_usable_pem() {
-    let (ca_pem, identity_pem) = platform_pki();
-    assert!(
-        PlatformMcpIdentity::new(
-            "http://elitea-main:9446",
-            ca_pem.as_bytes(),
-            identity_pem.as_bytes()
-        )
-        .is_err()
-    );
-    assert!(
-        PlatformMcpIdentity::new(
-            "https://elitea-main:9446",
-            b"not pem",
-            identity_pem.as_bytes()
-        )
-        .is_err()
-    );
-    assert!(
-        PlatformMcpIdentity::new("https://elitea-main:9446", ca_pem.as_bytes(), b"not pem")
-            .is_err()
-    );
 }
