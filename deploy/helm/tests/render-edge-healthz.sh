@@ -5,11 +5,12 @@
 # with no authenticating filter in front of it.
 #
 # The defect this closes: on the cluster, /healthz sat in the HTTPRoute rule
-# that carries the edge-auth ExtensionRef, and the edge-auth policy in
-# internal/api/main_public_rules.go did not name it. Every probe of the public
+# that carried the edge-auth ExtensionRef, so every probe of the public
 # hostname answered a 302 to the login form. The decision on the issue is to
-# publish /healthz at the edge with a public rule and keep the body at the
-# minimal {"status":"ok"}.
+# publish /healthz at the edge and keep the body at the minimal
+# {"status":"ok"}. Edge auth is gone since #1359 (elitea-main authenticates
+# in-process and serves /healthz unauthenticated), so the chart half below is
+# the whole contract: no authenticating filter may come back on that rule.
 #
 # Every assertion below reads the RENDERED YAML, never values.yaml or the
 # template. The chart renders two edge shapes for elitea-main
@@ -17,9 +18,6 @@
 # true, and a networking.k8s.io Ingress otherwise. Both must reach /healthz,
 # and the HTTPRoute must carry no ExtensionRef — an authenticating filter on
 # the one rule that also carries the liveness path is exactly the #569 shape.
-# The Go half of the same contract is
-# services/elitea-main/tests/deployedge/edge_public_policy_test.go, which
-# drives the real edge-auth handler with the real public-rule catalog.
 #
 # Usage: deploy/helm/tests/render-edge-healthz.sh
 # Needs: helm, yq. No cluster, no network.
@@ -34,7 +32,6 @@ GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=htt
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CHART="$REPO/deploy/helm/elitea"
-PUBLIC_RULES_GO="$REPO/services/elitea-main/internal/api/main_public_rules.go"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -130,18 +127,6 @@ if [ "$covered" -eq 1 ]; then
   pass "the Ingress forwards /healthz to elitea-main"
 else
   fail "no Ingress path reaches /healthz"
-fi
-
-# ---------------------------------------------------------------------------
-# 3. The policy half exists. The chart publishes the path; the edge-auth
-#    policy must admit it, or an install that adds an authenticating edge in
-#    front of this chart lands back on #569. The Go gate proves the rule
-#    works; this line proves the chart and the policy speak of the same path.
-# ---------------------------------------------------------------------------
-if grep -q '"go.health.healthz"' "$PUBLIC_RULES_GO"; then
-  pass "main_public_rules.go carries the go.health.healthz public rule"
-else
-  fail "main_public_rules.go carries no go.health.healthz rule; a auth edge in front of this chart answers /healthz with a login redirect"
 fi
 
 if [ "$failures" -ne 0 ]; then

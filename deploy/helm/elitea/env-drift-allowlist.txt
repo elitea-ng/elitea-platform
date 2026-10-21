@@ -63,6 +63,9 @@ GATEWAY_NATS_URL
 # --- comparator it read is deleted.
 ELITEA_URL
 LEGACY_LLM_URL
+# cutover-ctl sse-flush-check / overhead-check: the operator's PAT for main's
+# public /llm (#1359), read on the operator's machine, never in the pod.
+API_KEY
 LLM_BUDGET_PROJECTS_FILE
 LLM_PARITY_PROJECTS_FILE
 
