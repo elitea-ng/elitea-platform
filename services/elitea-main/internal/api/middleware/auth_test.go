@@ -155,8 +155,8 @@ func TestAuthRejectsCredentialWhenAuthoritativePrincipalCheckFails(t *testing.T)
 			return auth.User{ID: "7", UserID: "7", AuthType: "token"}, nil
 		}),
 		PrincipalValidator: principalValidatorFunc(func(context.Context, auth.User) (auth.User, error) {
-			// See the note in auth_traefik_test.go: a suspension reports
-			// auth.ErrPrincipalInactive, and only that answer is a 401 (#537).
+			// A suspension reports auth.ErrPrincipalInactive, and only that
+			// answer is a 401 (#537).
 			return auth.User{}, auth.ErrPrincipalInactive
 		}),
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

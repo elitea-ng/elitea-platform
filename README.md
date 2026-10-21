@@ -39,7 +39,7 @@ elitea-platform/
 
 ```bash
 # Clone with submodules
-git clone --recurse-submodules https://github.com/EliteaAI/elitea-platform.git
+git clone --recurse-submodules https://github.com/elitea-ng/elitea-platform.git
 cd elitea-platform
 
 # Start everything (postgres, nats, rustfs, elitea-main, elitea-ui)
