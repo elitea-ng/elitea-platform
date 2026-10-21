@@ -11,18 +11,26 @@ package auth
 // begin row would let anyone spread over many client keys lock every user out
 // of sign-in.
 //
-// The limiter fails closed: a limited attempt is 429 with Retry-After, and a
-// limiter that cannot answer — or a client address that cannot be resolved
-// although trusted proxies are configured — is 503. A deployment with no
-// trusted proxy CIDRs cannot tell a client from its ingress, so the
-// composition root attaches no limiter there and logs a warning; keying on the
-// ingress would put every user in one window.
+// A limited attempt is 429 with Retry-After, and a limiter that cannot
+// answer is 503, as on the Form begin (internal/api/browserauth
+// admitAttempt): the limiter's store is the PostgreSQL every sign-in needs
+// anyway. A client address that cannot be resolved (a trusted proxy sent no,
+// or more than one, X-Forwarded-For line) is NOT refused: one misbehaving
+// proxy hop must not take single sign-on down for everyone behind it. The
+// attempt is keyed on the socket peer instead, a coarser bucket shared by
+// whatever else arrives unresolvable through that hop, and logged at most
+// once a minute. A deployment with no trusted proxy CIDRs cannot tell a
+// client from its ingress, so the composition root attaches no limiter there
+// and logs a warning; keying on the ingress would put every user in one
+// window.
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
@@ -38,7 +46,14 @@ type SignInClientAddresses interface {
 type signInAttempts struct {
 	admitter  browserapp.AttemptAdmitter
 	addresses SignInClientAddresses
+	// lastFallbackLog is the unix-nano time the peer fallback was last
+	// logged, so a proxy that never sends a usable header logs once a
+	// minute rather than once per sign-in.
+	lastFallbackLog atomic.Int64
 }
+
+// signInFallbackLogEvery spaces the peer-fallback warnings.
+const signInFallbackLogEvery = time.Minute
 
 func newSignInAttempts(admitter browserapp.AttemptAdmitter, addresses SignInClientAddresses) *signInAttempts {
 	if admitter == nil || addresses == nil {
@@ -53,15 +68,9 @@ func (a *signInAttempts) admit(w http.ResponseWriter, r *http.Request, stage bro
 	if a == nil {
 		return true
 	}
-	raw, ok := a.addresses.Resolve(r)
+	address, ok := a.clientAddress(r)
 	if !ok {
-		http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
-		return false
-	}
-	address, err := netip.ParseAddr(raw)
-	if err != nil {
-		http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
-		return false
+		address = a.peerAddress(r, stage)
 	}
 	retryAfter, err := a.admitter.Admit(r.Context(), browserapp.BrowserAttempt{
 		ClientKey: browserapp.AttemptClientKey(address),
@@ -77,6 +86,38 @@ func (a *signInAttempts) admit(w http.ResponseWriter, r *http.Request, stage bro
 	}
 	http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
 	return false
+}
+
+// clientAddress is the real caller behind the trusted proxies, when known.
+func (a *signInAttempts) clientAddress(r *http.Request) (netip.Addr, bool) {
+	raw, ok := a.addresses.Resolve(r)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	address, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return address.Unmap(), true
+}
+
+// peerAddress is the fallback key when the caller cannot be resolved: the
+// socket peer, or the unspecified address for a peer the server could not
+// even parse, so every such attempt still counts against one window.
+func (a *signInAttempts) peerAddress(r *http.Request, stage browserapp.BrowserAttemptStage) netip.Addr {
+	address := netip.IPv4Unspecified()
+	if peer, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		address = peer.Addr().Unmap()
+	} else if parsed, err := netip.ParseAddr(r.RemoteAddr); err == nil {
+		address = parsed.Unmap()
+	}
+	now := time.Now().UnixNano()
+	last := a.lastFallbackLog.Load()
+	if now-last >= int64(signInFallbackLogEvery) && a.lastFallbackLog.CompareAndSwap(last, now) {
+		slog.Warn("single sign-on attempt limiter could not resolve the client address; keying on the proxy peer",
+			"stage", string(stage), "peer", address.String())
+	}
+	return address
 }
 
 func setSignInRetryAfter(w http.ResponseWriter, retryAfter time.Duration) {

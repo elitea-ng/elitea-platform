@@ -117,14 +117,37 @@ func TestOIDCFailsClosedWith503WhenTheLimiterErrors(t *testing.T) {
 	}
 }
 
-func TestAnUnresolvableClientFailsClosedWithoutCounting(t *testing.T) {
-	admitter := &countingAdmitter{limit: 100}
+// A trusted proxy that sends no usable X-Forwarded-For used to make every
+// sign-in 503. The attempt now proceeds, keyed on the socket peer: a coarser
+// bucket, still limited.
+func TestAnUnresolvableClientIsKeyedOnThePeerInsteadOfRefused(t *testing.T) {
+	admitter := &countingAdmitter{limit: 2, retry: time.Second}
 	handler := envOnlyOIDCHandler().WithAttemptLimiter(admitter, peerAddresses{unresolvable: true})
 
+	for index := 0; index < 2; index++ {
+		recorder := httptest.NewRecorder()
+		handler.Login(recorder, signInRequest(http.MethodGet, "/auth/oidc/login", "10.0.0.5:4000"))
+		if recorder.Code != http.StatusFound {
+			t.Fatalf("begin %d = %d, want 302", index, recorder.Code)
+		}
+	}
+	if len(admitter.attempts) != 2 || admitter.attempts[0].ClientKey != "10.0.0.5" {
+		t.Fatalf("attempts = %+v, want two keyed on the peer", admitter.attempts)
+	}
 	recorder := httptest.NewRecorder()
-	handler.Login(recorder, signInRequest(http.MethodGet, "/auth/oidc/login", "192.0.2.7:4000"))
-	if recorder.Code != http.StatusServiceUnavailable || len(admitter.attempts) != 0 {
-		t.Fatalf("begin = %d after %d admissions, want 503 and none", recorder.Code, len(admitter.attempts))
+	handler.Login(recorder, signInRequest(http.MethodGet, "/auth/oidc/login", "10.0.0.5:4001"))
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("third begin through the same peer = %d, want 429", recorder.Code)
+	}
+
+	// A peer the server could not parse still counts, in one shared window.
+	recorder = httptest.NewRecorder()
+	handler.Callback(recorder, signInRequest(http.MethodGet, "/auth/oidc/callback?code=x&state=y", "not-an-address"))
+	if recorder.Code == http.StatusServiceUnavailable {
+		t.Fatalf("callback with an unparsable peer = 503, want it admitted")
+	}
+	if got := admitter.attempts[len(admitter.attempts)-1].ClientKey; got != "0.0.0.0" {
+		t.Fatalf("unparsable peer keyed as %q, want 0.0.0.0", got)
 	}
 }
 
