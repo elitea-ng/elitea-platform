@@ -14,14 +14,15 @@
 #   2. There is a recorded path that ends the exemption.
 #
 # Criterion 1 used to read "the finding set is owned outside this repository",
-# full stop. elitea-worker-python widened it, deliberately and visibly: most of
-# its findings come from a Debian base with no fix published, while a smaller
+# full stop. It was widened, deliberately and visibly, for the former
+# elitea-worker-python image (since deleted, together with its entry): most of
+# its findings came from a Debian base with no fix published, while a smaller
 # part was ours and fixable. Under the old wording that image had no honest
-# home — it could not block (the base findings make every branch red) and it
+# home — it could not block (the base findings made every branch red) and it
 # could not be exempt (the rest were ours). The wording now describes the mixed
-# case, and the retirement issue is what keeps it from being a hiding place: it
-# names the fixable part. #554 has since bumped that part, and the entry below
-# records exactly what is left and who owns it.
+# case, and an entry's retirement issue is what keeps it from being a hiding
+# place: it names the fixable part, and the entry records exactly what is left
+# and who owns it.
 #
 # Name both issues on the line above the entry: the findings, and the path that
 # ends the entry. Delete the entry when that path completes.
@@ -42,17 +43,16 @@
 # Lines that start with # are comments. Blank lines are ignored.
 
 
-# findings — NOT YET MEASURED: the image is new (ADR-0034, branch
-#   feat/handoff-executor) and was not built locally. It is
-#   debian:trixie-slim plus build-essential, git, python3 and curl, the
-#   userland the agent's `run_command` needs to build a user's project; a
-#   trixie-slim base alone reported 43 HIGH lines with no fixed version on
-#   2026-10-06 (debian13-single-os-family), so this image cannot block on
-#   criterion 1. The first scan run records the count; file the findings
-#   issue from it and name it here.
+# findings — #1330: the nightly scan of `latest` (4.58.0) on 2026-10-20
+#   reported 147 HIGH or CRITICAL lines (1 CRITICAL, 146 HIGH), every one
+#   "no fix yet" in Debian 13 (linux-libc-dev, python3.13, util-linux, curl,
+#   ncurses, perl, systemd, acl, setuptools wheel). The image is
+#   debian:trixie-slim plus build-essential, git, python3 and curl
+#   (ADR-0034), the userland the agent's `run_command` needs to build a
+#   user's project, so no branch here can clear it: criterion 1.
 # retirement — the image stays a full Debian userland by design (decision 9:
 #   the sandbox builds and tests the user's project). The entry ends when
 #   Debian publishes fixes for the base findings, or when the workspace
 #   sandbox moves to a minimal base with toolchains installed per project.
-#   File that issue with the findings issue and name it here.
+#   No retirement issue is filed yet; file it and name it here.
 elitea-workspace-runner
