@@ -218,3 +218,65 @@ fn offline_signatures() {
     ));
     assert!(!needs_network("test result: FAILED. 1 passed; 1 failed"));
 }
+
+/// Many tests and nested subtests: each failed leaf is reported once, its
+/// parents are not, and the lookups stay linear (regression: a run of
+/// tens of thousands of events was quadratic).
+#[test]
+fn go_test_json_many_subtests_reports_leaves_only() {
+    let mut stdout = String::new();
+    let event = |action: &str, test: &str, output: Option<&str>| {
+        let mut value = serde_json::json!({"Action": action, "Package": "example/p", "Test": test});
+        if let Some(output) = output {
+            value["Output"] = output.into();
+        }
+        format!("{value}\n")
+    };
+    let count = 20_000;
+    for n in 0..count {
+        stdout.push_str(&event("output", &format!("TestOk{n}"), Some("=== RUN\n")));
+        stdout.push_str(&event("pass", &format!("TestOk{n}"), None));
+    }
+    stdout.push_str(&event(
+        "output",
+        "TestParent/child/leaf",
+        Some("    a_test.go:7: broke\n"),
+    ));
+    stdout.push_str(&event("fail", "TestParent/child/leaf", None));
+    stdout.push_str(&event("fail", "TestParent/child", None));
+    stdout.push_str(&event("fail", "TestParent", None));
+    stdout.push_str(&event("fail", "", None));
+    let started = std::time::Instant::now();
+    let report = super::go_test_json(&stdout, "", None);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(report.passed, count);
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.failures[0].name, "example/p.TestParent/child/leaf");
+    assert_eq!(at(&report.failures[0]), (Some("a_test.go"), Some(7)));
+}
+
+/// Cargo's artifact records and its warnings are not kept; errors and
+/// libtest's text are.
+#[test]
+fn cargo_capture_keeps_only_what_the_parser_reads() {
+    use super::cargo_keeps_line as keeps;
+    assert!(!keeps(
+        br#"{"reason":"compiler-artifact","package_id":"x","filenames":[]}"#
+    ));
+    assert!(!keeps(
+        br#"{"reason":"build-script-executed","package_id":"x"}"#
+    ));
+    assert!(!keeps(br#"{"reason":"build-finished","success":true}"#));
+    assert!(!keeps(
+        br#"{"reason":"compiler-message","message":{"level":"warning","rendered":"w"}}"#
+    ));
+    assert!(keeps(
+        br#"{"reason":"compiler-message","message":{"level":"error","rendered":"e"}}"#
+    ));
+    assert!(keeps(b"test tests::adds ... ok\n"));
+    assert!(keeps(b"test result: ok. 1 passed; 0 failed; 0 ignored\n"));
+}

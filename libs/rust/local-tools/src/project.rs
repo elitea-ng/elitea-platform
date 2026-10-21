@@ -16,10 +16,11 @@
 //! | `Cargo.toml` | `cargo` | `cargo test --message-format=json` (libtest's human output parsed beside it) | `cargo check --message-format=json` |
 //! | `package.json` with `vitest` | `vitest` | `npx vitest run --reporter=json` | `npm run typecheck` when the script exists |
 //! | `package.json` with `jest` | `jest` | `npx jest --json` | `npm run typecheck` when the script exists |
+//! | `package.json` with another `test` script (mocha, ava, `node --test`) | `script` | `npm test` (its output read as text) | `npm run typecheck` when the script exists |
 //! | `go.mod` | `go` | `go test -json ./...` | `go vet ./...` |
 //! | `pyproject.toml`, `pytest.ini`, `setup.cfg` with `[tool:pytest]` | `pytest` | `pytest -q --junitxml=<temp>/…xml` | — |
-//! | `pom.xml` | `maven` | `mvn -q test` (or `./mvnw`), then `target/surefire-reports/*.xml` | — |
-//! | `build.gradle(.kts)` | `gradle` | `./gradlew test` (or `gradle`), then `build/test-results/**/*.xml` | — |
+//! | `pom.xml` | `maven` | `mvn -q test` (or `./mvnw`), then `target/surefire-reports/*.xml` (the modules' too) | — |
+//! | `build.gradle(.kts)` | `gradle` | `./gradlew test` (or `gradle`), then `build/test-results/**/*.xml` (the modules' too) | — |
 //!
 //! JavaScript commands use the folder's package manager (`pnpm-lock.yaml`:
 //! `pnpm exec`, `yarn.lock`: `yarn`, `bun.lock(b)`: `bunx`, else `npx`).
@@ -275,7 +276,14 @@ fn add_filter(kind: ProjectKind, argv: &mut Vec<String>, filter: &str) {
             argv.extend(["-t".to_owned(), filter.to_owned()]);
         }
         ProjectKind::Maven => argv.push(format!("-Dtest={filter}")),
-        ProjectKind::Gradle => argv.extend(["--tests".to_owned(), filter.to_owned()]),
+        ProjectKind::Gradle => {
+            // A task option: after the (last) test task it selects for.
+            let at = argv
+                .iter()
+                .rposition(|word| is_gradle_test_task(word))
+                .map_or(argv.len(), |index| index + 1);
+            argv.splice(at..at, ["--tests".to_owned(), filter.to_owned()]);
+        }
         ProjectKind::Script => argv.extend(["--".to_owned(), filter.to_owned()]),
     }
 }
@@ -460,7 +468,8 @@ impl Scan<'_> {
     }
 
     /// A `package.json`'s runner: vitest or jest among its dependencies or
-    /// in its `test` script; the package manager from the lock file.
+    /// in its `test` script, else its own `test` script (not npm's
+    /// placeholder); the package manager from the lock file.
     fn javascript(&mut self, dir: &WsPath, manifest: &str) -> Option<Runner> {
         let manifest: Value = serde_json::from_str(manifest).ok()?;
         let has_dependency = |name: &str| {
@@ -477,6 +486,10 @@ impl Scan<'_> {
             ProjectKind::Vitest
         } else if has_dependency("jest") || test_script.contains("jest") {
             ProjectKind::Jest
+        } else if !test_script.trim().is_empty() && !test_script.contains("no test specified") {
+            // Another runner (mocha, ava, `node --test`, …): the package's
+            // own `test` script, its output read as text.
+            ProjectKind::Script
         } else {
             return None;
         };
@@ -574,17 +587,224 @@ pub fn detect(workspace: &Workspace, mentioned: &[WsPath]) -> ProjectProfile {
     }
 }
 
-/// A test run `run_tests` will start: the runner, the argv, where the
-/// junit report goes (pytest).
+/// A test run `run_tests` will start: the runner, the argv, and the
+/// package manager's script it runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TestCommand {
     pub kind: ProjectKind,
     pub argv: Vec<String>,
+    /// The `package.json` script a package manager runs (`test`,
+    /// `test:unit`): the caller checks that the run's folder declares it
+    /// ([`check_package_script`]). `None` for every other command.
+    pub script: Option<String>,
 }
 
 fn has_flag(argv: &[String], flag: &str) -> bool {
     argv.iter()
         .any(|word| word == flag || word.starts_with(&format!("{flag}=")))
+}
+
+/// Maven phases and goals a given command may run: building and testing,
+/// never installing, deploying, releasing or publishing a site.
+const MAVEN_GOALS: &[&str] = &[
+    "clean",
+    "validate",
+    "compile",
+    "test-compile",
+    "test",
+    "verify",
+    "surefire:test",
+];
+
+/// The Maven goals that run tests (a filter applies to them).
+const MAVEN_TEST_GOALS: &[&str] = &["test", "verify", "surefire:test"];
+
+/// Maven flags taken alone.
+const MAVEN_FLAGS: &[&str] = &[
+    "-q",
+    "--quiet",
+    "-e",
+    "--errors",
+    "-X",
+    "--debug",
+    "-B",
+    "--batch-mode",
+    "-o",
+    "--offline",
+    "-U",
+    "--update-snapshots",
+    "-fae",
+    "--fail-at-end",
+    "-ff",
+    "--fail-fast",
+    "-am",
+    "--also-make",
+    "-amd",
+    "--also-make-dependents",
+    "-ntp",
+    "--no-transfer-progress",
+    "-N",
+    "--non-recursive",
+    "-V",
+    "--show-version",
+];
+
+/// Maven flags that take a value (the next word, or `--flag=value`).
+const MAVEN_VALUED: &[&str] = &[
+    "-pl",
+    "--projects",
+    "-P",
+    "--activate-profiles",
+    "-T",
+    "--threads",
+    "-rf",
+    "--resume-from",
+    "-D",
+    "--define",
+];
+
+/// Gradle tasks a given command may run (alone or as `:module:task`):
+/// building and testing, never publishing, uploading or releasing.
+const GRADLE_TASKS: &[&str] = &[
+    "clean",
+    "test",
+    "check",
+    "build",
+    "assemble",
+    "classes",
+    "testClasses",
+    "compileJava",
+    "compileTestJava",
+    "compileKotlin",
+    "compileTestKotlin",
+    "compileGroovy",
+    "compileTestGroovy",
+    "compileScala",
+    "compileTestScala",
+];
+
+/// Gradle flags taken alone.
+const GRADLE_FLAGS: &[&str] = &[
+    "-q",
+    "--quiet",
+    "-i",
+    "--info",
+    "-w",
+    "--warn",
+    "-d",
+    "--debug",
+    "-s",
+    "--stacktrace",
+    "-S",
+    "--full-stacktrace",
+    "--offline",
+    "--continue",
+    "--rerun-tasks",
+    "--rerun",
+    "--no-daemon",
+    "--daemon",
+    "--parallel",
+    "--no-parallel",
+    "--build-cache",
+    "--no-build-cache",
+    "--configuration-cache",
+    "--no-configuration-cache",
+];
+
+/// Gradle flags that take a value (the next word, or `--flag=value`).
+const GRADLE_VALUED: &[&str] = &[
+    "-x",
+    "--exclude-task",
+    "-p",
+    "--project-dir",
+    "--tests",
+    "--console",
+    "--warning-mode",
+    "--max-workers",
+];
+
+/// Whether `word` is a Gradle task path that runs tests (`test`,
+/// `:app:test`).
+fn is_gradle_test_task(word: &str) -> bool {
+    word == "test" || word.ends_with(":test")
+}
+
+/// The goals of a Maven command's arguments when every goal is one
+/// [`MAVEN_GOALS`] names and every flag is known; `None` otherwise.
+fn maven_goals(args: &[String]) -> Option<Vec<&str>> {
+    let mut goals = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let word = word.as_str();
+        if !word.starts_with('-') {
+            if !MAVEN_GOALS.contains(&word) {
+                return None;
+            }
+            goals.push(word);
+        } else if MAVEN_FLAGS.contains(&word) {
+        } else if MAVEN_VALUED.contains(&word) {
+            words.next()?;
+        } else if word.len() > 2 && (word.starts_with("-D") || word.starts_with("-P")) {
+            // `-Dkey=value`, `-Pprofile`.
+        } else if !word
+            .split_once('=')
+            .is_some_and(|(flag, _)| flag.starts_with("--") && MAVEN_VALUED.contains(&flag))
+        {
+            return None;
+        }
+    }
+    (!goals.is_empty()).then_some(goals)
+}
+
+/// The tasks of a Gradle command's arguments when every task is one
+/// [`GRADLE_TASKS`] names (alone or under a module path) and every flag is
+/// known; `None` otherwise.
+fn gradle_tasks(args: &[String]) -> Option<Vec<&str>> {
+    let task_ok = |word: &str| {
+        let (path, name) = word.rsplit_once(':').unwrap_or(("", word));
+        GRADLE_TASKS.contains(&name)
+            && path
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
+    };
+    let project_dir_ok = |dir: &str| {
+        !dir.is_empty() && !Path::new(dir).is_absolute() && !dir.split('/').any(|part| part == "..")
+    };
+    let mut tasks = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        let word = word.as_str();
+        if !word.starts_with('-') {
+            if !task_ok(word) {
+                return None;
+            }
+            tasks.push(word);
+            continue;
+        }
+        let (flag, attached) = match word.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+            _ => (word, None),
+        };
+        if attached.is_none() && GRADLE_FLAGS.contains(&flag) {
+            continue;
+        }
+        if GRADLE_VALUED.contains(&flag) {
+            let value = match attached {
+                Some(value) => value,
+                None => words.next()?.as_str(),
+            };
+            if matches!(flag, "-p" | "--project-dir") && !project_dir_ok(value) {
+                return None;
+            }
+            continue;
+        }
+        if word.len() > 2 && (word.starts_with("-D") || word.starts_with("-P")) {
+            // `-Dkey=value`, `-Pkey=value`.
+            continue;
+        }
+        return None;
+    }
+    (!tasks.is_empty()).then_some(tasks)
 }
 
 /// Read a command the model gave as a test runner invocation: the runner
@@ -593,11 +813,18 @@ fn has_flag(argv: &[String], flag: &str) -> bool {
 /// after `go test`, `--reporter=json` for vitest, `--json` for jest,
 /// `--junitxml=<junit>` for pytest), and `filter` added the runner's way.
 ///
+/// Maven and Gradle commands run only the goals and tasks
+/// `MAVEN_GOALS` and `GRADLE_TASKS` name (every one of them: `mvn
+/// test deploy` is refused); a package manager runs only the scripts
+/// `test`, `test:<name>`, `check`, `typecheck` and `lint` (which the
+/// caller checks the folder declares, [`TestCommand::script`]).
+///
 /// # Errors
 ///
 /// [`crate::error::ErrorCode::InvalidArgument`] when it is not a plain
 /// (simple) command of a runner `run_tests` knows: anything else belongs in
-/// `run_command`.
+/// `run_command`; and when `filter` is given for a command that runs no
+/// tests (a build check, `go vet`, `mvn compile`, `npm run lint`).
 pub fn given_command(
     command: &str,
     filter: Option<&str>,
@@ -606,8 +833,9 @@ pub fn given_command(
     let refuse = || {
         ToolError::invalid(
             "`command` must be one plain test runner invocation (cargo test/check/build/clippy, \
-             go test/vet/build, vitest, jest, pytest, mvn, gradle, or a package manager's test \
-             script); use run_command for anything else",
+             go test/vet/build, vitest, jest, pytest, mvn or gradle building and testing only, \
+             or a package manager's test, check, typecheck or lint script); use run_command for \
+             anything else",
         )
     };
     let CommandShape::Simple(mut argv) = analyse(command) else {
@@ -615,6 +843,9 @@ pub fn given_command(
     };
     let program = basename(argv.first().ok_or_else(refuse)?).to_owned();
     let at = |argv: &[String], index: usize| argv.get(index).cloned().unwrap_or_default();
+    // Whether it runs tests, so that a test filter applies.
+    let mut runs_tests = true;
+    let mut script = None;
     let kind = match program.as_str() {
         "cargo" => {
             let mut sub = 1;
@@ -622,7 +853,8 @@ pub fn given_command(
                 sub += 1;
             }
             match at(&argv, sub).as_str() {
-                "test" | "t" | "check" | "c" | "build" | "b" | "clippy" => {
+                word @ ("test" | "t" | "check" | "c" | "build" | "b" | "clippy") => {
+                    runs_tests = matches!(word, "test" | "t");
                     if !has_flag(&argv, "--message-format") {
                         let end = argv.iter().position(|w| w == "--").unwrap_or(argv.len());
                         argv.insert((sub + 1).min(end), "--message-format=json".to_owned());
@@ -640,7 +872,10 @@ pub fn given_command(
                 }
                 ProjectKind::Go
             }
-            "vet" | "build" => ProjectKind::Go,
+            "vet" | "build" => {
+                runs_tests = false;
+                ProjectKind::Go
+            }
             _ => return Err(refuse()),
         },
         "pytest" | "py.test" => ProjectKind::Pytest,
@@ -648,25 +883,26 @@ pub fn given_command(
             ProjectKind::Pytest
         }
         "mvn" | "mvnw" => {
-            let goals = ["test", "verify", "compile", "test-compile"];
-            if !argv[1..].iter().any(|word| goals.contains(&word.as_str())) {
-                return Err(refuse());
-            }
+            let goals = maven_goals(&argv[1..]).ok_or_else(refuse)?;
+            runs_tests = goals.iter().any(|goal| MAVEN_TEST_GOALS.contains(goal));
             ProjectKind::Maven
         }
         "gradle" | "gradlew" => {
-            let task = |word: &String| {
-                matches!(word.as_str(), "test" | "check" | "build")
-                    || word.ends_with(":test")
-                    || word.ends_with(":check")
-                    || word.starts_with("compile")
-            };
-            if !argv[1..].iter().any(task) {
-                return Err(refuse());
-            }
+            let tasks = gradle_tasks(&argv[1..]).ok_or_else(refuse)?;
+            runs_tests = tasks.iter().any(|task| is_gradle_test_task(task));
             ProjectKind::Gradle
         }
-        _ => javascript_kind(&mut argv, &program).ok_or_else(refuse)?,
+        _ => {
+            let (kind, named) = javascript_kind(&mut argv, &program).ok_or_else(refuse)?;
+            if kind == ProjectKind::Script {
+                // `bun test` (no script) is bun's own test runner.
+                runs_tests = named
+                    .as_deref()
+                    .is_none_or(|name| name == "test" || name.starts_with("test:"));
+            }
+            script = named;
+            kind
+        }
     };
     if kind == ProjectKind::Pytest
         && !has_flag(&argv, "--junitxml")
@@ -675,15 +911,33 @@ pub fn given_command(
         argv.push(format!("--junitxml={}", junit.display()));
     }
     if let Some(filter) = filter {
+        if !runs_tests {
+            return Err(ToolError::invalid(
+                "`filter` selects tests, and this command runs none (a build check, `go vet`, \
+                 a compile or lint): leave `filter` out, or run the test command",
+            ));
+        }
         add_filter(kind, &mut argv, filter);
     }
-    Ok(TestCommand { kind, argv })
+    Ok(TestCommand { kind, argv, script })
+}
+
+/// Whether a package manager's script `name` is one a given command may
+/// run: `test`, `test:<name>`, `check`, `typecheck`, `lint`.
+fn routine_script(name: &str) -> bool {
+    matches!(name, "test" | "check" | "typecheck" | "lint")
+        || name.strip_prefix("test:").is_some_and(|rest| {
+            !rest.is_empty()
+                && rest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
+        })
 }
 
 /// A JavaScript runner invocation (`npx vitest`, `pnpm exec jest`, `yarn
 /// vitest`, `vitest` itself, `npm test`, `pnpm run test:unit`), its JSON
-/// reporter switched on; `None` for anything else.
-fn javascript_kind(argv: &mut Vec<String>, program: &str) -> Option<ProjectKind> {
+/// reporter switched on, and the script it runs; `None` for anything else.
+fn javascript_kind(argv: &mut Vec<String>, program: &str) -> Option<(ProjectKind, Option<String>)> {
     let at = |argv: &[String], index: usize| argv.get(index).cloned().unwrap_or_default();
     let tool_index = match program {
         "vitest" | "jest" => 0,
@@ -693,18 +947,17 @@ fn javascript_kind(argv: &mut Vec<String>, program: &str) -> Option<ProjectKind>
         "pnpm" | "yarn" | "bun" if matches!(at(argv, 1).as_str(), "vitest" | "jest") => 1,
         "npm" | "pnpm" | "yarn" | "bun" => {
             let script = match at(argv, 1).as_str() {
-                "test" | "t" => return Some(ProjectKind::Script),
+                // bun's own test runner, not a script.
+                "test" if program == "bun" => return Some((ProjectKind::Script, None)),
+                "test" => "test".to_owned(),
+                "t" if matches!(program, "npm" | "pnpm") => "test".to_owned(),
                 "run" | "run-script" => at(argv, 2),
                 // pnpm, yarn and bun run a script by its bare name; npm
                 // does not.
                 other if program != "npm" => other.to_owned(),
                 _ => return None,
             };
-            let routine = ["test", "check", "typecheck", "lint"];
-            return routine
-                .iter()
-                .any(|name| script.starts_with(name))
-                .then_some(ProjectKind::Script);
+            return routine_script(&script).then_some((ProjectKind::Script, Some(script)));
         }
         _ => return None,
     };
@@ -717,15 +970,182 @@ fn javascript_kind(argv: &mut Vec<String>, program: &str) -> Option<ProjectKind>
             if !has_flag(argv, "--reporter") {
                 argv.push("--reporter=json".to_owned());
             }
-            Some(ProjectKind::Vitest)
+            Some((ProjectKind::Vitest, None))
         }
         "jest" => {
             if !has_flag(argv, "--json") {
                 argv.push("--json".to_owned());
             }
-            Some(ProjectKind::Jest)
+            Some((ProjectKind::Jest, None))
         }
         _ => None,
+    }
+}
+
+/// Words in a script's body that publish or deploy: such a script is not
+/// run as a test.
+const PUBLISHING_WORDS: &[&str] = &["publish", "deploy", "release"];
+
+/// Check that `dir`'s `package.json` (read through the confined
+/// workspace) declares the script `name`, and that neither it nor the
+/// `pre`/`post` scripts a package manager runs around it publish or
+/// deploy (a word such as `publish` or `deploy:prod` in its body).
+///
+/// # Errors
+///
+/// [`crate::error::ErrorCode::InvalidArgument`] when the file cannot be
+/// read, does not declare the script, or one of them publishes.
+pub fn check_package_script(workspace: &Workspace, dir: &WsPath, name: &str) -> ToolResult<()> {
+    let missing = || {
+        ToolError::invalid(format!(
+            "`{dir}` has no package.json declaring the script `{name}`; pass a script the \
+             package declares"
+        ))
+    };
+    let path = child(dir, "package.json").ok_or_else(missing)?;
+    if workspace.denied_by(&path, Intent::Read).is_some() {
+        return Err(missing());
+    }
+    let read = workspace
+        .read(&path, MAX_MARKER_BYTES)
+        .map_err(|_| missing())?;
+    let manifest: Value = serde_json::from_slice(&read.bytes).map_err(|_| missing())?;
+    let scripts = manifest.get("scripts");
+    let body = |name: &str| {
+        scripts
+            .and_then(|scripts| scripts.get(name))
+            .and_then(Value::as_str)
+    };
+    if body(name).is_none() {
+        return Err(missing());
+    }
+    let publishes = |text: &str| {
+        text.split(|c: char| c.is_whitespace() || "&|;()'\"`".contains(c))
+            .any(|word| {
+                PUBLISHING_WORDS.iter().any(|publishing| {
+                    word == *publishing
+                        || word
+                            .strip_prefix(publishing)
+                            .is_some_and(|rest| rest.starts_with(':'))
+                })
+            })
+    };
+    for script in [format!("pre{name}"), name.to_owned(), format!("post{name}")] {
+        if body(&script).is_some_and(publishes) {
+            return Err(ToolError::invalid(format!(
+                "the script `{script}` publishes or deploys; run_tests does not run it (use \
+                 run_command, which the person approves)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The `[package]` name in a `Cargo.toml`'s text, when it is plainly a
+/// crate name.
+fn cargo_package_name(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "name" {
+            continue;
+        }
+        let value = value.trim();
+        let name = value
+            .strip_prefix('"')
+            .and_then(|rest| rest.split_once('"'))
+            .map(|(name, _)| name)?;
+        let plain = !name.is_empty()
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte));
+        return plain.then(|| name.to_owned());
+    }
+    None
+}
+
+impl Runner {
+    /// The test command narrowed to `member`, a folder below the runner's
+    /// own (a cargo workspace's crate, a monorepo's package, a module),
+    /// and the folder it runs in: cargo `-p <crate>` (the nearest
+    /// `Cargo.toml` with a `[package]` at or above `member`), go in
+    /// `member` itself, vitest, jest and pytest with `member` as a path
+    /// argument, Maven `-pl <module>` and Gradle `-p <project>` (the
+    /// nearest folder with a `pom.xml`, a `build.gradle(.kts)`), a package
+    /// script in `member` when its `package.json` declares `test`. A
+    /// member none of those narrow to runs the whole command.
+    #[must_use]
+    pub fn member_test(
+        &self,
+        workspace: &Workspace,
+        member: &WsPath,
+        filter: Option<&str>,
+        junit: Option<&Path>,
+    ) -> (Vec<String>, WsPath) {
+        let own = self.dir.components();
+        let below = member.components();
+        if below.len() <= own.len() || below[..own.len()] != *own {
+            return (self.test_argv(filter, junit), self.dir.clone());
+        }
+        let relative = below[own.len()..].join("/");
+        let mut argv = self.test_argv(None, junit);
+        let mut cwd = self.dir.clone();
+        // The nearest folder at or above `member` (below the runner's) whose
+        // marker `name` passes `accept`: that folder (relative to the
+        // runner's) and what `accept` made of the marker.
+        let nearest = |names: &[&str], accept: &dyn Fn(&str) -> Option<String>| {
+            (own.len() + 1..=below.len()).rev().find_map(|end| {
+                let dir = WsPath::from_relative(Path::new(&below[..end].join("/"))).ok()?;
+                names.iter().find_map(|name| {
+                    let path = child(&dir, name)?;
+                    if workspace.denied_by(&path, Intent::Read).is_some() {
+                        return None;
+                    }
+                    let read = workspace.read(&path, MAX_MARKER_BYTES).ok()?;
+                    let made = accept(&String::from_utf8_lossy(&read.bytes))?;
+                    Some((below[own.len()..end].join("/"), made))
+                })
+            })
+        };
+        let any = |_: &str| Some(String::new());
+        match self.kind {
+            ProjectKind::Cargo => {
+                if let Some((_, name)) = nearest(&["Cargo.toml"], &cargo_package_name) {
+                    argv.splice(2..2, ["-p".to_owned(), name]);
+                }
+            }
+            ProjectKind::Go => cwd = member.clone(),
+            ProjectKind::Vitest | ProjectKind::Jest | ProjectKind::Pytest => argv.push(relative),
+            ProjectKind::Maven => {
+                if let Some((module, _)) = nearest(&["pom.xml"], &any) {
+                    argv.splice(1..1, ["-pl".to_owned(), module]);
+                }
+            }
+            ProjectKind::Gradle => {
+                if let Some((project, _)) = nearest(&["build.gradle", "build.gradle.kts"], &any) {
+                    argv.splice(1..1, ["-p".to_owned(), project]);
+                }
+            }
+            ProjectKind::Script => {
+                if check_package_script(workspace, member, "test").is_ok() {
+                    cwd = member.clone();
+                }
+            }
+        }
+        if let Some(filter) = filter {
+            add_filter(self.kind, &mut argv, filter);
+        }
+        (argv, cwd)
     }
 }
 
@@ -733,7 +1153,7 @@ fn javascript_kind(argv: &mut Vec<String>, program: &str) -> Option<ProjectKind>
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{ProjectKind, detect, given_command, plain_dir};
+    use super::{ProjectKind, check_package_script, detect, given_command, plain_dir};
     use crate::workspace::{Workspace, WsPath};
 
     fn fixtures() -> PathBuf {
@@ -981,6 +1401,226 @@ mod tests {
                 "--",
                 "--nocapture"
             ]
+        );
+    }
+
+    /// Every Maven goal and Gradle task must build or test: one that
+    /// installs, deploys or publishes beside a test goal is refused, so a
+    /// remembered "always allow" for the runner never covers it (#1224).
+    #[test]
+    fn maven_and_gradle_run_only_build_and_test_goals() {
+        let kind = |command: &str| given_command(command, None, None).map(|plan| plan.kind);
+        for accepted in [
+            "mvn test",
+            "mvn -q -B -pl core -am -Dskip.it=true clean verify",
+            "./mvnw -P ci --offline test-compile surefire:test",
+            "mvn --projects=core test",
+        ] {
+            assert_eq!(kind(accepted), Ok(ProjectKind::Maven), "{accepted}");
+        }
+        for accepted in [
+            "gradle test",
+            "./gradlew --offline -x lint clean :app:test check",
+            "./gradlew -p services/api --console=plain build",
+            "gradle -Pci=true compileTestJava",
+        ] {
+            assert_eq!(kind(accepted), Ok(ProjectKind::Gradle), "{accepted}");
+        }
+        for refused in [
+            "mvn test deploy",
+            "mvn install",
+            "mvn verify site-deploy",
+            "mvn test release:perform",
+            "mvn -f other/pom.xml test",
+            "mvn -s settings.xml test",
+            "mvn test -Dx=1 deploy:deploy",
+            "mvn -q",
+            "gradle test publish",
+            "gradle test :lib:publish",
+            "gradle test publishToMavenLocal",
+            "gradle uploadArchives test",
+            "./gradlew test --scan",
+            "./gradlew -I init.gradle test",
+            "./gradlew -p /elsewhere test",
+            "./gradlew -p ../other test",
+            "gradle pub",
+        ] {
+            assert!(kind(refused).is_err(), "{refused}");
+        }
+    }
+
+    /// A package manager runs only `test`, `test:<name>`, `check`,
+    /// `typecheck` or `lint`, by exact name (#1224).
+    #[test]
+    fn package_scripts_are_taken_by_exact_name() {
+        let script = |command: &str| {
+            given_command(command, None, None)
+                .map(|plan| (plan.kind, plan.script))
+                .map_err(|_| ())
+        };
+        let ok = |name: &str| Ok((ProjectKind::Script, Some(name.to_owned())));
+        assert_eq!(script("npm test"), ok("test"));
+        assert_eq!(script("npm t"), ok("test"));
+        assert_eq!(script("npm run test:unit"), ok("test:unit"));
+        assert_eq!(script("pnpm lint"), ok("lint"));
+        assert_eq!(script("yarn typecheck"), ok("typecheck"));
+        assert_eq!(script("bun run check"), ok("check"));
+        assert_eq!(script("bun test"), Ok((ProjectKind::Script, None)));
+        for refused in [
+            "npm run testpublish",
+            "npm run test-and-deploy",
+            "pnpm checkout",
+            "yarn lint-fix-and-release",
+            "pnpm typecheck:publish",
+            "npm run test:",
+            "yarn t",
+            "pnpm -r publish",
+            "npm run deploy",
+            "npm check",
+        ] {
+            assert!(script(refused).is_err(), "{refused}");
+        }
+    }
+
+    /// The script must be declared, and neither it nor the scripts run
+    /// around it may publish.
+    #[test]
+    fn a_package_script_must_exist_and_not_publish() {
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"test":"mocha","test:unit":"mocha unit","lint":"eslint . && npm publish",
+                "check":"tsc","postcheck":"changeset publish","test:e2e":"playwright test deploy/"}}"#,
+        )
+        .expect("package.json");
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let root = WsPath::root();
+        assert!(check_package_script(&workspace, &root, "test").is_ok());
+        assert!(check_package_script(&workspace, &root, "test:unit").is_ok());
+        // A folder named `deploy/` is not deploying.
+        assert!(check_package_script(&workspace, &root, "test:e2e").is_ok());
+        for refused in ["typecheck", "test:other", "lint", "check"] {
+            assert!(
+                check_package_script(&workspace, &root, refused).is_err(),
+                "{refused}"
+            );
+        }
+        let denied = Workspace::open(dir.path(), &["package.json".to_owned()]).expect("workspace");
+        assert!(check_package_script(&denied, &root, "test").is_err());
+    }
+
+    /// A filter selects tests: a command that runs none refuses it instead
+    /// of passing it on as an argument (#1224).
+    #[test]
+    fn a_filter_is_refused_for_commands_that_run_no_tests() {
+        for command in [
+            "cargo check",
+            "cargo clippy",
+            "cargo build",
+            "go vet ./...",
+            "go build ./...",
+            "mvn compile",
+            "gradle build",
+            "gradle check -x test",
+            "npm run lint",
+            "pnpm typecheck",
+        ] {
+            assert!(
+                given_command(command, Some("adds"), None).is_err(),
+                "{command}"
+            );
+        }
+        let argv = |command: &str| {
+            given_command(command, Some("FooTest"), None)
+                .expect("plan")
+                .argv
+                .join(" ")
+        };
+        assert_eq!(argv("mvn clean test"), "mvn clean test -Dtest=FooTest");
+        assert_eq!(
+            argv("./gradlew :app:test check"),
+            "./gradlew :app:test --tests FooTest check"
+        );
+        assert_eq!(argv("npm run test:unit"), "npm run test:unit -- FooTest");
+    }
+
+    /// A `test` script that is neither vitest nor jest (mocha, ava, `node
+    /// --test`) is the package's own runner; npm's placeholder is not.
+    #[test]
+    fn a_plain_test_script_is_detected() {
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"test":"mocha"}}"#,
+        )
+        .expect("package.json");
+        std::fs::create_dir(dir.path().join("placeholder")).expect("dir");
+        std::fs::write(
+            dir.path().join("placeholder/package.json"),
+            r#"{"scripts":{"test":"echo \"Error: no test specified\" && exit 1"}}"#,
+        )
+        .expect("package.json");
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let profile = detect(&workspace, &[]);
+        assert_eq!(profile.runners.len(), 1, "{:?}", profile.runners);
+        let runner = &profile.runners[0];
+        assert_eq!(runner.kind, ProjectKind::Script);
+        assert_eq!(runner.test_argv(None, None), ["npm", "test"]);
+        assert_eq!(
+            profile.preamble_line().as_deref(),
+            Some("Project: script (npm); tests: npm test")
+        );
+    }
+
+    /// A run asked for in a member of a workspace runs that member, not
+    /// the whole workspace (#1224).
+    #[test]
+    fn a_member_folder_narrows_the_root_runner() {
+        let dir = tempfile::tempdir().expect("dir");
+        let write = |path: &str, text: &str| {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(path, text).expect("write");
+        };
+        write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(
+            "crates/foo/Cargo.toml",
+            "[package]\nversion = \"0.1.0\"\nname = \"foo-core\"\n\n[dependencies]\nname = \"x\"\n",
+        );
+        write("crates/foo/src/lib.rs", "");
+        write("go.mod", "module x\n");
+        write("pom.xml", "<project/>");
+        write("core/pom.xml", "<project/>");
+        write("core/src/main/java/A.java", "");
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let profile = detect(&workspace, &[]);
+        let path = |p: &str| WsPath::from_relative(Path::new(p)).expect("p");
+        let run = |kind: ProjectKind, member: &str, filter: Option<&str>| {
+            let runner = profile
+                .runners
+                .iter()
+                .find(|runner| runner.kind == kind)
+                .expect("runner");
+            let (argv, cwd) = runner.member_test(&workspace, &path(member), filter, None);
+            (argv.join(" "), cwd.display_string())
+        };
+        let pair = |argv: &str, cwd: &str| (argv.to_owned(), cwd.to_owned());
+        assert_eq!(
+            run(ProjectKind::Cargo, "crates/foo/src", Some("adds")),
+            pair("cargo test -p foo-core --message-format=json adds", ".")
+        );
+        assert_eq!(
+            run(ProjectKind::Cargo, "docs", None),
+            pair("cargo test --message-format=json", "."),
+            "no crate there: the whole workspace"
+        );
+        assert_eq!(
+            run(ProjectKind::Go, "crates/foo", None),
+            pair("go test -json ./...", "crates/foo")
+        );
+        assert_eq!(
+            run(ProjectKind::Maven, "core/src", None),
+            pair("mvn -pl core -q test", ".")
         );
     }
 }

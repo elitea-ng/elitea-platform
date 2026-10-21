@@ -193,7 +193,7 @@ async fn go_fixture_failure_reports_file_and_line() {
     if !has("go", "version") {
         return;
     }
-    let (_dir, root, session) = fixture("go");
+    let (dir, root, session) = fixture("go");
     std::fs::write(
         root.join("add_test.go"),
         "package fixture\n\nimport \"testing\"\n\nfunc TestAdds(t *testing.T) {\n\tif Add(2, 2) != 4 {\n\t\tt.Fatal(\"no\")\n\t}\n}\n\nfunc TestBreaks(t *testing.T) {\n\tif got := Add(2, 2); got != 5 {\n\t\tt.Errorf(\"Add(2, 2) = %d, want 5\", got)\n\t}\n}\n",
@@ -201,6 +201,15 @@ async fn go_fixture_failure_reports_file_and_line() {
     .expect("test file");
     let result = session.call("run_tests", "g1", json!({})).await;
     check_go(&result);
+    // Go's build cache went to the cache root the sessions over this data
+    // directory share (not the session's temporary directory), which the
+    // sandbox let it write.
+    let cache = dir.path().join("data/build-cache/go");
+    assert!(
+        std::fs::read_dir(&cache).is_ok_and(|mut entries| entries.next().is_some()),
+        "{}",
+        cache.display()
+    );
 }
 
 fn check_go(result: &Value) {

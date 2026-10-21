@@ -28,23 +28,39 @@ runs) and names a test command and a build check per runner: cargo
 (`cargo test` / `cargo check`), go (`go test ./...` / `go vet ./...`),
 vitest and jest (through the package manager the lockfile names), pytest,
 Maven (`./mvnw` when present), Gradle (`./gradlew` when present), or the
-package's own `test` script. The profile is cached per session and
+package's own `test` script (mocha, ava, `node --test`, …; its output is
+read as text). The profile is cached per session and
 re-read when a marker file changes; the desktop's environment preamble
 shows it as its `Project:` line (only when the policy allows the shell:
 without it the agent cannot run those commands).
 
 `run_tests {command?, filter?, cwd?, timeout_seconds? (1..1800), network?}`
-runs the detected command for `cwd` (or validates a given one: it must be
-one runner invocation) with the runner's structured output switched on
-(`cargo --message-format=json`, `go test -json`, vitest `--reporter=json`,
-jest `--json`, pytest `--junitxml` into the session's `TMPDIR`; Maven and
-Gradle reports are read from their report folders, only those this run
-wrote). It runs exactly as `run_command` runs a command: the OS sandbox in
+runs the detected command for `cwd` with the runner's structured output
+switched on (`cargo --message-format=json`, `go test -json`, vitest
+`--reporter=json`, jest `--json`, pytest `--junitxml` into the session's
+`TMPDIR`; Maven and Gradle reports are read from the report folders of the
+run's folder and of its modules up to three levels down, only those this
+run wrote). A `cwd` inside a member of the root's runner narrows the run
+to it rather than running the whole workspace: cargo `-p <crate>`, go in
+that folder, vitest, jest and pytest with the folder as a path, Maven
+`-pl`, Gradle `-p`. A given `command` must be one runner invocation; without
+`cwd` it runs in the detected project's folder when exactly one runner of
+its kind was found, else at the root. Maven and Gradle commands may run
+only building and testing goals and tasks (every one of them: `mvn test
+deploy` and `gradle test publish` are refused), and a package manager only
+the scripts `test`, `test:<name>`, `check`, `typecheck` and `lint` that the
+folder's `package.json` declares (refused when the script, or its
+`pre`/`post` script, publishes or deploys). A `filter` is refused for a
+command that runs no tests (a build check, `go vet`, `npm run lint`). It
+runs exactly as `run_command` runs a command: the OS sandbox in
 `workspace-write`, the network off unless asked, the deny list, the same
 rules and checkpoint. Go's, Gradle's and Maven's caches (`GOCACHE`,
-`GRADLE_USER_HOME`, `-Dmaven.repo.local` in `MAVEN_OPTS`) default to the
-session's temporary directory, since the sandbox cannot write the home's,
-unless the host passes its own. The answer:
+`GRADLE_USER_HOME`, `-Dmaven.repo.local` in `MAVEN_OPTS`) default to one
+cache root kept across sessions, `<data_dir>/build-cache/{go,gradle,m2}`
+(writable in the sandbox, which cannot write the home's), unless the host
+passes its own. A cargo run's artifact records are left out of the
+captured output, so that they cannot push the test results out of it. The
+answer:
 
 ```json
 {"kind": "cargo", "command": "cargo test --message-format=json", "cwd": ".",

@@ -59,6 +59,19 @@ pub const MAX_REPORT_BYTES: u64 = 8 * 1024 * 1024;
 /// The most report files read for one Maven or Gradle run.
 const MAX_REPORT_FILES: usize = 500;
 
+/// The most bytes of report files read for one Maven or Gradle run.
+const MAX_REPORT_TOTAL_BYTES: usize = 32 * 1024 * 1024;
+
+/// How deep below the run's folder module folders are looked for (a
+/// multi-module build's `app/core/target/surefire-reports`).
+const MAX_MODULE_DEPTH: usize = 3;
+
+/// The most folders listed looking for modules.
+const MAX_MODULE_DIRS: usize = 256;
+
+/// Folders never looked into for modules: build output, dependencies.
+const NOT_MODULES: &[&str] = &["target", "build", "node_modules", "src", "out", "bin"];
+
 /// The longest `filter` taken.
 const MAX_FILTER: usize = 1024;
 
@@ -121,9 +134,31 @@ pub(crate) fn plan(
     };
     let (kind, words, cwd) = if let Some(command) = &args.command {
         let given = project::given_command(command, filter, Some(junit))?;
-        (given.kind, given.argv, typed.unwrap_or_default())
+        // Without `cwd`, the detected project's folder when exactly one
+        // runner of the command's kind was found (a package script: one
+        // JavaScript folder), else the workspace root.
+        let cwd = typed.unwrap_or_else(|| {
+            let javascript = |kind: ProjectKind| {
+                matches!(
+                    kind,
+                    ProjectKind::Vitest | ProjectKind::Jest | ProjectKind::Script
+                )
+            };
+            let mut matching = profile.runners.iter().filter(|runner| {
+                runner.kind == given.kind
+                    || (given.kind == ProjectKind::Script && javascript(runner.kind))
+            });
+            match (matching.next(), matching.next()) {
+                (Some(runner), None) => runner.dir.clone(),
+                _ => WsPath::root(),
+            }
+        });
+        if let Some(script) = &given.script {
+            project::check_package_script(workspace, &cwd, script)?;
+        }
+        (given.kind, given.argv, cwd)
     } else {
-        let at = typed.unwrap_or_default();
+        let at = typed.clone().unwrap_or_default();
         let runner = profile.runner_for(&at).ok_or_else(|| {
             ToolError::new(
                 ErrorCode::NotFound,
@@ -133,11 +168,15 @@ pub(crate) fn plan(
                 ),
             )
         })?;
-        (
-            runner.kind,
-            runner.test_argv(filter, Some(junit)),
-            runner.dir.clone(),
-        )
+        // A folder asked for below the runner's own (a workspace's member)
+        // is not widened to the whole workspace: the run is narrowed to it.
+        let (words, cwd) = match &typed {
+            Some(member) if *member != runner.dir => {
+                runner.member_test(workspace, member, filter, Some(junit))
+            }
+            _ => (runner.test_argv(filter, Some(junit)), runner.dir.clone()),
+        };
+        (runner.kind, words, cwd)
     };
     if workspace.stat(&cwd)? != Some(EntryKind::Dir) {
         return Err(ToolError::invalid(format!(
@@ -228,8 +267,60 @@ pub(crate) fn take_private_report(path: &Path) -> Option<String> {
     Some(text)
 }
 
-/// The junit files under `cwd`'s report directories for `kind` that this
-/// run wrote (modified since `started`), read through the workspace.
+/// Whether `dir` may be listed: not denied, nothing on the way a symlink,
+/// a directory.
+fn listable(workspace: &Workspace, dir: &WsPath) -> bool {
+    workspace.denied_by(dir, Intent::Read).is_none()
+        && workspace.final_target(dir).ok().as_ref() == Some(dir)
+        && workspace.stat(dir).ok().flatten() == Some(EntryKind::Dir)
+}
+
+/// `name` in `dir`.
+fn child_of(dir: &WsPath, name: &str) -> Option<WsPath> {
+    WsPath::from_relative(&Path::new(&dir.display_string()).join(name)).ok()
+}
+
+/// `cwd` and the module folders below it, at most [`MAX_MODULE_DEPTH`]
+/// down and [`MAX_MODULE_DIRS`] in all (no symlink followed, no denied or
+/// hidden folder, no build output).
+fn module_dirs(workspace: &Workspace, cwd: &WsPath) -> Vec<WsPath> {
+    let mut found = vec![cwd.clone()];
+    let mut next = 0;
+    let mut depth_of = vec![0];
+    while next < found.len() {
+        let (dir, depth) = (found[next].clone(), depth_of[next]);
+        next += 1;
+        if depth >= MAX_MODULE_DEPTH || !listable(workspace, &dir) {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(workspace.absolute(&dir)) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| !name.starts_with('.') && !NOT_MODULES.contains(&name.as_str()))
+            .collect();
+        names.sort();
+        for name in names {
+            if found.len() >= MAX_MODULE_DIRS {
+                return found;
+            }
+            if let Some(path) = child_of(&dir, &name)
+                && workspace.stat(&path).ok().flatten() == Some(EntryKind::Dir)
+            {
+                found.push(path);
+                depth_of.push(depth + 1);
+            }
+        }
+    }
+    found
+}
+
+/// The junit files under the report directories for `kind` of `cwd` and
+/// of its modules below it ([`module_dirs`]) that this run wrote (modified
+/// since `started`), read through the workspace: at most
+/// [`MAX_REPORT_FILES`] files of [`MAX_REPORT_TOTAL_BYTES`] in all.
 fn workspace_reports(
     workspace: &Workspace,
     cwd: &WsPath,
@@ -243,24 +334,24 @@ fn workspace_reports(
             i128::try_from(since.as_nanos()).unwrap_or(i128::MAX)
         });
     let mut out = Vec::new();
-    let mut pending: Vec<(WsPath, usize)> = kind
-        .report_dirs()
+    if kind.report_dirs().is_empty() {
+        return out;
+    }
+    let mut pending: Vec<(WsPath, usize)> = module_dirs(workspace, cwd)
         .iter()
-        .filter_map(|dir| {
-            let mut parts: Vec<&str> = cwd.components().iter().map(String::as_str).collect();
-            parts.push(dir);
-            WsPath::from_relative(Path::new(&parts.join("/"))).ok()
+        .rev()
+        .flat_map(|module| {
+            kind.report_dirs()
+                .iter()
+                .filter_map(move |dir| child_of(module, dir))
         })
         .map(|dir| (dir, 0))
         .collect();
-    let mut seen = 0;
+    let (mut seen, mut bytes) = (0, 0);
     while let Some((dir, depth)) = pending.pop() {
         // Listed only when nothing on the way is a symlink and it is not
         // denied; each file is then read through the workspace.
-        if workspace.denied_by(&dir, Intent::Read).is_some()
-            || workspace.final_target(&dir).ok().as_ref() != Some(&dir)
-            || workspace.stat(&dir).ok().flatten() != Some(EntryKind::Dir)
-        {
+        if !listable(workspace, &dir) {
             continue;
         }
         let Ok(entries) = std::fs::read_dir(workspace.absolute(&dir)) else {
@@ -290,6 +381,10 @@ fn workspace_reports(
                     if let Ok(read) = workspace.read(&path, MAX_REPORT_BYTES)
                         && read.stamp.mtime_ns >= since
                     {
+                        bytes += read.bytes.len();
+                        if bytes > MAX_REPORT_TOTAL_BYTES {
+                            return out;
+                        }
                         out.push(String::from_utf8_lossy(&read.bytes).into_owned());
                     }
                 }
@@ -477,13 +572,20 @@ pub(crate) fn answer(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_INLINE, Planned, answer, take_private_report};
+    use std::path::Path;
+    use std::time::{Duration, SystemTime};
+
+    use super::{
+        MAX_INLINE, Planned, TestArgs, answer, plan, take_private_report, workspace_reports,
+    };
     use crate::budget::{self, Budgets, SpillStore};
     use crate::policy::SandboxMode;
     use crate::project::ProjectKind;
+    use crate::project::detect;
     use crate::sandbox::Enforcement;
     use crate::shell::CommandOutput;
     use crate::test_report::{Failure, TestReport};
+    use crate::workspace::Workspace;
     use crate::workspace::WsPath;
 
     fn output(exit_code: i32, stderr: &str) -> CommandOutput {
@@ -612,5 +714,134 @@ mod tests {
         std::fs::write(&plain, "<testsuite/>").expect("plain");
         assert_eq!(take_private_report(&plain).as_deref(), Some("<testsuite/>"));
         assert!(!plain.exists(), "removed once read");
+    }
+
+    fn tree(files: &[(&str, &str)]) -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().expect("dir");
+        for (path, text) in files {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(path, text).expect("write");
+        }
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        (dir, workspace)
+    }
+
+    fn planned_for(workspace: &Workspace, args: &TestArgs) -> Result<(String, String), String> {
+        let profile = detect(workspace, &[]);
+        plan(workspace, &profile, args, Path::new("/t/j.xml"))
+            .map(|planned| (planned.command, planned.cwd.display_string()))
+            .map_err(|error| error.message().to_owned())
+    }
+
+    fn pair(command: &str, cwd: &str) -> (String, String) {
+        (command.to_owned(), cwd.to_owned())
+    }
+
+    /// A given command without `cwd` runs in the detected project's
+    /// folder when exactly one runner of its kind was found, as the schema
+    /// says; else at the root (#1224).
+    #[test]
+    fn a_given_command_runs_in_its_projects_folder() {
+        let (_dir, workspace) = tree(&[
+            (
+                "web/package.json",
+                r#"{"devDependencies":{"jest":"1"},"scripts":{"test":"jest","lint":"eslint ."}}"#,
+            ),
+            ("api/go.mod", "module x\n"),
+            ("svc/go.mod", "module y\n"),
+        ]);
+        let args = |command: &str| TestArgs {
+            command: Some(command.to_owned()),
+            ..TestArgs::default()
+        };
+        assert_eq!(
+            planned_for(&workspace, &args("npx jest")),
+            Ok(pair("npx jest --json", "web"))
+        );
+        assert_eq!(
+            planned_for(&workspace, &args("npm run lint")),
+            Ok(pair("npm run lint", "web"))
+        );
+        // Two go modules: the root (the model names `cwd` to choose).
+        assert_eq!(
+            planned_for(&workspace, &args("go vet ./...")),
+            Ok(pair("go vet ./...", "."))
+        );
+        // A script the folder does not declare is refused.
+        assert!(planned_for(&workspace, &args("npm run typecheck")).is_err());
+        let mut given = args("go test ./...");
+        given.cwd = Some("svc".to_owned());
+        assert_eq!(
+            planned_for(&workspace, &given),
+            Ok(pair("go test -json ./...", "svc"))
+        );
+    }
+
+    /// Without a command, a `cwd` inside a member of the root's workspace
+    /// narrows the run to that member instead of widening it to the whole
+    /// workspace (#1224).
+    #[test]
+    fn a_member_cwd_is_not_widened_to_the_workspace() {
+        let (_dir, workspace) = tree(&[
+            ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+            ("crates/foo/Cargo.toml", "[package]\nname = \"foo\"\n"),
+            ("crates/foo/src/lib.rs", ""),
+        ]);
+        let at = |cwd: Option<&str>| TestArgs {
+            cwd: cwd.map(str::to_owned),
+            filter: Some("adds".to_owned()),
+            ..TestArgs::default()
+        };
+        assert_eq!(
+            planned_for(&workspace, &at(Some("crates/foo"))),
+            Ok(pair("cargo test -p foo --message-format=json adds", "."))
+        );
+        assert_eq!(
+            planned_for(&workspace, &at(None)),
+            Ok(pair("cargo test --message-format=json adds", "."))
+        );
+        assert_eq!(
+            planned_for(&workspace, &at(Some("."))),
+            Ok(pair("cargo test --message-format=json adds", "."))
+        );
+    }
+
+    /// A multi-module build's reports are read from each module's report
+    /// folder, a few levels down; a symlinked module is not followed
+    /// (#1224).
+    #[test]
+    fn module_reports_are_read_below_the_run_folder() {
+        let suite = |name: &str| {
+            format!(
+                r#"<testsuite><testcase classname="a.{name}" name="ok"/><testcase classname="a.{name}" name="bad"><failure message="no"/></testcase></testsuite>"#
+            )
+        };
+        let (core, api, root, real) = (suite("Core"), suite("Api"), suite("Root"), suite("Real"));
+        let (dir, workspace) = tree(&[
+            ("pom.xml", "<project/>"),
+            ("target/surefire-reports/TEST-root.xml", &root),
+            ("core/target/surefire-reports/TEST-core.xml", &core),
+            ("services/api/target/surefire-reports/TEST-api.xml", &api),
+            // Hidden: never a module; reached only through the link below.
+            (".real/target/surefire-reports/TEST-real.xml", &real),
+        ]);
+        std::os::unix::fs::symlink(dir.path().join(".real"), dir.path().join("module"))
+            .expect("link");
+        let started = SystemTime::now() - Duration::from_secs(1);
+        let reports = workspace_reports(&workspace, &WsPath::root(), ProjectKind::Maven, started);
+        assert_eq!(reports.len(), 3, "{reports:?}");
+        for name in ["Core", "Api", "Root"] {
+            assert!(
+                reports
+                    .iter()
+                    .any(|report| report.contains(&format!("a.{name}"))),
+                "{name}"
+            );
+        }
+        assert!(
+            !reports.iter().any(|report| report.contains("a.Real")),
+            "{reports:?}"
+        );
     }
 }

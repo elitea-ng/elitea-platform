@@ -15,6 +15,7 @@
 //! ([`MAX_MESSAGE_BYTES`]) and is the runner's text, which the caller
 //! returns as tool output (data the model reads, never instructions).
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -275,6 +276,35 @@ pub fn cargo(stdout: &str, stderr: &str, root: Option<&Path>) -> TestReport {
     report
 }
 
+/// Whether [`cargo`] reads a line of a `--message-format=json` run's
+/// stdout, so the capture keeps it: cargo's artifact, build-script and
+/// build-finished records (one per crate built: thousands, kilobytes
+/// each) and compiler messages below the error level are left out; error
+/// diagnostics and libtest's text are kept. Dropped before the capture's
+/// head-and-tail cap, they cannot push the test results out of it.
+#[must_use]
+pub fn cargo_keeps_line(line: &[u8]) -> bool {
+    const DROPPED: &[&[u8]] = &[
+        br#"{"reason":"compiler-artifact""#,
+        br#"{"reason":"build-script-executed""#,
+        br#"{"reason":"build-finished""#,
+    ];
+    if DROPPED.iter().any(|prefix| line.starts_with(prefix)) {
+        return false;
+    }
+    if line.starts_with(br#"{"reason":"compiler-message""#) {
+        // An error is kept; so is a line that does not parse (judged by
+        // the reader, not here).
+        return serde_json::from_slice::<Value>(line).map_or(true, |message| {
+            message
+                .pointer("/message/level")
+                .and_then(Value::as_str)
+                .is_none_or(|level| level.starts_with("error"))
+        });
+    }
+    true
+}
+
 /// One `--message-format=json` line: an error's rendered text at its
 /// primary span.
 fn cargo_message(message: &Value, root: Option<&Path>, report: &mut TestReport) {
@@ -434,13 +464,12 @@ fn go_build_error(line: &str, root: Option<&Path>) -> Option<Failure> {
 fn go_failure(
     package: &str,
     test: &str,
-    outputs: &[((String, String), String)],
+    outputs: &HashMap<(String, String), String>,
     root: Option<&Path>,
 ) -> Failure {
     let output = outputs
-        .iter()
-        .find(|((p, t), _)| p == package && t == test)
-        .map_or("", |(_, text)| text.as_str());
+        .get(&(package.to_owned(), test.to_owned()))
+        .map_or("", String::as_str);
     let message: String = output
         .lines()
         .filter(|line| {
@@ -472,7 +501,9 @@ fn go_failure(
 #[must_use]
 pub fn go_test_json(stdout: &str, stderr: &str, root: Option<&Path>) -> TestReport {
     let mut report = TestReport::default();
-    let mut outputs: Vec<((String, String), String)> = Vec::new();
+    // By (package, test): every lookup is one hash, however many tests a
+    // run has.
+    let mut outputs: HashMap<(String, String), String> = HashMap::new();
     let mut failed: Vec<(String, String)> = Vec::new();
     let mut package_failed: Vec<String> = Vec::new();
     let mut build_lines = String::new();
@@ -498,11 +529,10 @@ pub fn go_test_json(stdout: &str, stderr: &str, root: Option<&Path>) -> TestRepo
                 if test.is_empty() {
                     build_lines.push_str(&printed);
                 }
-                let key = (package, test);
-                match outputs.iter_mut().find(|(seen, _)| *seen == key) {
-                    Some((_, all)) => all.push_str(&printed),
-                    None => outputs.push((key, printed)),
-                }
+                outputs
+                    .entry((package, test))
+                    .or_default()
+                    .push_str(&printed);
             }
             ("build-output", _) => build_lines.push_str(&text_of("Output")),
             ("pass", false) => report.passed += 1,
@@ -520,13 +550,17 @@ pub fn go_test_json(stdout: &str, stderr: &str, root: Option<&Path>) -> TestRepo
         }
     }
     // A parent whose subtest failed fails too: the leaves are reported.
+    // Every failed test's ancestors (`A` and `A/B` of `A/B/C`) are parents.
+    let mut parents: HashSet<(&str, &str)> = HashSet::new();
+    for (package, test) in &failed {
+        for (at, _) in test.match_indices('/') {
+            parents.insert((package.as_str(), &test[..at]));
+        }
+    }
+    let failed_packages: HashSet<&str> = failed.iter().map(|(p, _)| p.as_str()).collect();
     let leaves: Vec<&(String, String)> = failed
         .iter()
-        .filter(|(package, test)| {
-            !failed.iter().any(|(other_package, other)| {
-                other_package == package && other.starts_with(&format!("{test}/"))
-            })
-        })
+        .filter(|(package, test)| !parents.contains(&(package.as_str(), test.as_str())))
         .collect();
     report.failed += leaves.len() as u64;
     for (package, test) in leaves {
@@ -536,13 +570,12 @@ pub fn go_test_json(stdout: &str, stderr: &str, root: Option<&Path>) -> TestRepo
     // TestMain did) and without a build error: its own output.
     if report.errors.is_empty() {
         for package in package_failed {
-            if failed.iter().any(|(p, _)| *p == package) {
+            if failed_packages.contains(package.as_str()) {
                 continue;
             }
             let text = outputs
-                .iter()
-                .find(|((p, t), _)| *p == package && t.is_empty())
-                .map_or("", |(_, text)| text.as_str());
+                .get(&(package.clone(), String::new()))
+                .map_or("", String::as_str);
             let found = find_location(text, root);
             report.failed += 1;
             report.push_failure(Failure::new(

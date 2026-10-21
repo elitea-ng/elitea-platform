@@ -627,6 +627,11 @@ impl LocalSession {
         // checkpoints, remembered choices; the session's temporary
         // directory inside it stays usable). Commands, host git and the
         // file tools all read it.
+        // The build tools' caches outlive the session: every session over
+        // this data directory shares them.
+        if shell.cache_dir.is_none() {
+            shell.cache_dir = Some(config.data_dir.join("build-cache"));
+        }
         shell.deny_read.extend(config.deny_read);
         shell.deny_read.push(config.data_dir.clone());
         if shell.app_id.is_none() {
@@ -1360,12 +1365,17 @@ impl LocalSession {
             self.blocking(Self::ensure_checkpoint).await?;
         }
         let started = std::time::SystemTime::now();
+        // Cargo's artifact records are left out of what is kept: they
+        // would push the test results out of the capture's head and tail.
+        let keep = (planned.kind == project::ProjectKind::Cargo)
+            .then_some(crate::test_report::cargo_keeps_line as shell::KeepLine);
         let output = shell::run_checked_up_to(
             &self.workspace,
             &self.shell,
             &spec,
             unconfined,
             self.shell.max_test_timeout,
+            keep,
         )
         .await?;
         self.blocking(move |this| {
