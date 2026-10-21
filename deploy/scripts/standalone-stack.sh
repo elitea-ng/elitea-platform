@@ -376,6 +376,18 @@ raise SystemExit(1)
 
 # reject_retired_embedding_var stops a run that still sets the retired variable.
 # A silent no-op would hide the reason the value stopped taking effect.
+# grpc_answer <grpcurl -v output> <trailer name> prints "<trailer|notrailer>+<code>"
+# for a call grpcurl reported. grpcurl writes the trailers on stdout and the
+# status on stderr, and a container engine relays the two streams separately,
+# so the captured text has no fixed order between them; this reads each one
+# on its own.
+grpc_answer() {
+  local seen=notrailer code
+  case "$1" in *"$2"*) seen=trailer ;; esac
+  code="$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*Code: //p' | head -n 1)"
+  printf '%s+%s' "$seen" "${code:-none}"
+}
+
 reject_retired_embedding_var() {
   if [ -n "${INDEX_EMBEDDING_MODEL:-}" ]; then
     echo "ERROR: INDEX_EMBEDDING_MODEL is retired (#468)." >&2
@@ -1548,7 +1560,11 @@ SQL
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
     ASSERTION_SITES="$(derive_assertion_floor "$0" "$ASSERTION_SITE_PATTERN" "$ASSERTION_SITE_RANGE")"
-    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) ))
+    # runtime_service_probe (#1359 U5) holds one accepting arm and is called
+    # once per platform service probe: each call site past the first is one
+    # more assertion.
+    RUNTIME_SERVICE_PROBE_SITES="$(derive_assertion_floor "$0" '^[[:space:]]+runtime_service_probe[[:space:]]+[A-Z]' "$ASSERTION_SITE_RANGE")"
+    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) + RUNTIME_SERVICE_PROBE_SITES - 1 ))
     ALLOW_SKIPS=0
     for check_arg in "${@:2}"; do
       case "$check_arg" in
@@ -1986,11 +2002,14 @@ sys.stdout.write(reply)
         -d '{"call":{},"body":""}' \
         elitea-main:9446 elitea.llm.v1.ModelService/Embeddings 2>&1 || true
     }
+    # grpcurl prints the trailers on stdout and the status on stderr, and
+    # `docker run` relays the two streams separately, so their order in the
+    # captured text is not fixed: each is matched on its own.
     model="$(model_rpc "$RUNTIME_CERTS" subapp-callback-client)"
-    case "$model" in
-      *"elitea-model-refusal-bin"*"Code: Unauthenticated"*)
+    case "$(grpc_answer "$model" elitea-model-refusal-bin)" in
+      trailer+Unauthenticated)
         ok "ModelService on :9446 admits the callback identity and answers an invalid bearer with the pipeline's 401 (Unauthenticated + refusal trailer)" ;;
-      *"Code: PermissionDenied"*)
+      *+PermissionDenied)
         fail "ModelService on :9446 refused dns:elitea-subapp-callback — it is missing from ELITEA_MODEL_SERVICE_CLIENTS" ;;
       *) fail "ModelService on :9446 did not answer as the /llm pipeline: $(printf '%s' "$model" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
     esac
@@ -2027,20 +2046,21 @@ sys.stdout.write(reply)
         elitea-main:9446 "$4" 2>&1 || true
     }
     runtime_service_probe() { # runtime_service_probe <label> <identity> <clients env> <trailer> <answer>
-      case "$5" in
-        *"$4"*"Code: Unauthenticated"*)
+      case "$(grpc_answer "$5" "$4")" in
+        trailer+Unauthenticated)
           ok "$1 on :9446 admits $2 and answers an invalid bearer with the route's 401 (Unauthenticated + $4)" ;;
-        *"Code: PermissionDenied"*)
+        *+PermissionDenied)
           fail "$1 on :9446 refused $2 — it is missing from $3" ;;
-        *"Code: Unimplemented"*)
+        *+Unimplemented)
           fail "$1 is not registered on :9446 ($3 is empty?)" ;;
         *) fail "$1 on :9446 did not answer as its route: $(printf '%s' "$5" | grep -m3 -E 'Code:|Message:|Failed|error' | tr '\n' ' ')" ;;
       esac
     }
-    for ident in subapp-callback-client agent-worker-client; do
-      runtime_service_probe ArtifactObjectService "$ident" ELITEA_ARTIFACT_SERVICE_CLIENTS elitea-artifact-refusal-bin \
-        "$(runtime_rpc "$ident" elitea/runtime/v1/artifact_object.proto '{"project_id":1}' elitea.runtime.v1.ArtifactObjectService/ListBuckets)"
-    done
+    # One call per line, no loop: EXPECTED_ASSERTIONS counts these call sites.
+    runtime_service_probe ArtifactObjectService subapp-callback-client ELITEA_ARTIFACT_SERVICE_CLIENTS elitea-artifact-refusal-bin \
+      "$(runtime_rpc subapp-callback-client elitea/runtime/v1/artifact_object.proto '{"project_id":1}' elitea.runtime.v1.ArtifactObjectService/ListBuckets)"
+    runtime_service_probe ArtifactObjectService agent-worker-client ELITEA_ARTIFACT_SERVICE_CLIENTS elitea-artifact-refusal-bin \
+      "$(runtime_rpc agent-worker-client elitea/runtime/v1/artifact_object.proto '{"project_id":1}' elitea.runtime.v1.ArtifactObjectService/ListBuckets)"
     runtime_service_probe InternalToolService agent-worker-client ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS elitea-internal-tool-refusal-bin \
       "$(runtime_rpc agent-worker-client elitea/runtime/v1/internal_tool.proto '{"scope":{"project_id":1,"scope":"applications"}}' elitea.runtime.v1.InternalToolService/ListTools)"
     # The Inventory engine's `investigate` source-tool calls (InvokeToolkit)

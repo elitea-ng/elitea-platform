@@ -7,7 +7,14 @@ nats:
     jetstream:
       fileStore:
         pvc:
-          size: 1Gi
+          # The upstream chart derives max_file_store from this size, and
+          # JetStream RESERVES each stream's MaxBytes against it at creation:
+          # the bootstrap's GATEWAY_BUDGET_DELTAS alone reserves 1 GiB
+          # (nats-bootstrap values deltas.maxBytes), so a 1Gi store refuses
+          # it ("insufficient storage resources available", 10047) once any
+          # other bounded stream exists. kind's local-path provisioner does
+          # not enforce the size, so the headroom costs no disk.
+          size: 4Gi
   promExporter:
     # No Prometheus Operator in kind, so no PodMonitor CRD. The exporter stays
     # on: the chart's guards tie the command-bus alerts to it, and the
