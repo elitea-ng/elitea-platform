@@ -1747,6 +1747,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	got := routeSet.Patterns()
 
 	want := []string{
+		"DELETE /api/v2/admin/branding/administration",
 		"DELETE /api/v2/admin/gateway/default_model/",
 		"DELETE /api/v2/admin/gateway/governance/{id}",
 		"DELETE /api/v2/admin/gateway/models/{id}",

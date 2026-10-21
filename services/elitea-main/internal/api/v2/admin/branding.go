@@ -2,10 +2,10 @@ package admin
 
 // The admin surface of the BRAND PACK's database layer (ADR-0024, decision 5).
 //
-// Two routes, `GET` and `PUT /admin/branding/administration`, read and write
-// the `branding` section of `centry.platform_config` — the same rows the
-// generic Configuration page reaches through `plugin_config_values`, with the
-// same schema (config_schemas.go's brandingSection) and the same validation.
+// Three routes, `GET`, `PUT` and `DELETE /admin/branding/administration`,
+// read, write and reset the `branding` section of `centry.platform_config` —
+// the same rows the generic Configuration page reaches through
+// `plugin_config_values`, with the same schema (config_schemas.go's brandingSection) and the same validation.
 // What the typed routes add is what the generic form cannot show: which LAYERS
 // contribute to the pack a user actually sees (the mounted file, the database
 // rows), the EFFECTIVE pack after the merge, and its ETag — the facts the
@@ -45,6 +45,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -95,7 +96,7 @@ const maxAssetUploadBytes = 600 * 1024
 // multipart `file` part. It stores the bytes and answers the asset's public
 // path; the caller then places that path in the section (an upload on its
 // own changes nothing a user sees, so an abandoned upload is a stray object
-// the next save collects, never a stray brand).
+// the first save after brandingAssetGrace collects, never a stray brand).
 func (h *Handler) BrandingAssetUpload(w http.ResponseWriter, r *http.Request) {
 	kind := chi.URLParam(r, "kind")
 	if !v2branding.KnownKind(kind) {
@@ -140,33 +141,52 @@ func (h *Handler) BrandingAssetUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, asset)
 }
 
+// brandingAssetGrace is how long an unreferenced asset is safe from
+// collection. An upload is referenced by nothing until its uploader saves,
+// and a save or package import by another tab or administrator in between
+// would otherwise delete it, leaving the uploader's later save pointing at a
+// missing file (#1057). Thirty minutes covers an editing session; an
+// abandoned upload is collected by the first save after that.
+const brandingAssetGrace = 30 * time.Minute
+
 // collectBrandingAssets deletes every stored asset the SAVED section no
-// longer references. It runs after a successful write and never fails the
-// request: a stray object is a cost, not a defect, and the next save tries
-// again. A backend that cannot list (storage.ErrNotSupported) is skipped.
+// longer references and that is older than brandingAssetGrace. It runs after
+// a successful write and never fails the request: a stray object is a cost,
+// not a defect, and the next save tries again. A backend that cannot list
+// (storage.ErrNotSupported) is skipped.
 func (h *Handler) collectBrandingAssets(ctx context.Context, stored map[string]any) {
 	if h.brandingAssets == nil {
 		return
 	}
-	referenced := referencedAssetPaths(stored)
-	paths, err := h.brandingAssets.List(ctx)
+	infos, err := h.brandingAssets.ListInfos(ctx)
 	if err != nil {
 		slog.Debug("branding: asset collection skipped", "reason", err.Error())
 		return
 	}
-	for _, path := range paths {
-		if referenced[path] {
-			continue
-		}
-		// Kept packages (rollback, decision 9) are referenced by nothing in
-		// the section and are pruned by their own rule, never here.
-		if kind, _, _, ok := v2branding.ParseAssetPath(path); ok && kind == v2branding.KindPackage {
-			continue
-		}
+	for _, path := range collectableBrandingAssets(infos, referencedAssetPaths(stored), time.Now().Add(-brandingAssetGrace)) {
 		if err := h.brandingAssets.Delete(ctx, path); err != nil {
 			slog.Warn("branding: could not collect an unreferenced asset", "path", path, "reason", err.Error())
 		}
 	}
+}
+
+// collectableBrandingAssets picks the assets a collection deletes: not
+// referenced, not a kept package (rollback, decision 9 - pruned by its own
+// rule), and last written before cutoff. An object whose backend reports no
+// modification time is kept: its age is unknown, and deleting a fresh upload
+// is a defect where keeping a stray is only a cost.
+func collectableBrandingAssets(infos []v2branding.AssetInfo, referenced map[string]bool, cutoff time.Time) []string {
+	var paths []string
+	for _, info := range infos {
+		if referenced[info.Path] || info.Kind == v2branding.KindPackage {
+			continue
+		}
+		if info.LastModified.IsZero() || info.LastModified.After(cutoff) {
+			continue
+		}
+		paths = append(paths, info.Path)
+	}
+	return paths
 }
 
 // referencedAssetPaths lists every asset path the stored rows name: the four
@@ -308,6 +328,38 @@ func (h *Handler) BrandingSave(w http.ResponseWriter, r *http.Request) {
 	if stored, err := h.loadSectionValues(r, section.id); err == nil {
 		h.collectBrandingAssets(r.Context(), stored)
 	}
+	h.writeBrandingState(w, r, section, true)
+}
+
+// BrandingReset serves `DELETE /admin/branding/administration`: every stored
+// row of the section is deleted in one statement, so each key - the ones the
+// page edits, a package import's scheme_tokens, the e-mail sender fields, and
+// any key added later - inherits from the layer below again (#1057). The
+// client used to emulate this by writing every key it knew at "inherit",
+// which depended on it knowing each key's type and left rows of empty values
+// behind. The resolver is invalidated, unreferenced assets past their grace
+// period are collected, and the answer is a fresh read, as GET.
+func (h *Handler) BrandingReset(w http.ResponseWriter, r *http.Request) {
+	section, ok := findConfigSection(platformconfig.SectionBranding)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "branding section missing"})
+		return
+	}
+	if h.pool == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "could not write the platform configuration store",
+		})
+		return
+	}
+	if _, err := h.pool.Exec(r.Context(),
+		`DELETE FROM centry.platform_config WHERE section = $1`, section.id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "could not write the platform configuration store",
+		})
+		return
+	}
+	h.invalidateBranding()
+	h.collectBrandingAssets(r.Context(), map[string]any{})
 	h.writeBrandingState(w, r, section, true)
 }
 

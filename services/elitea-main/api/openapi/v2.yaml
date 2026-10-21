@@ -15275,6 +15275,26 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: resetBrandingSettings
+      summary: Reset the brand pack's database layer
+      description: |
+        Deletes every stored row of the `branding` section in one statement,
+        so every key, including ones the editor does not render, inherits
+        from the layer below again. Invalidates the resolver's cache, collects
+        unreferenced brand assets older than the upload grace period, and
+        answers with a fresh read of the same shape as GET with `saved: true`.
+      tags: [admin]
+      responses:
+        '200':
+          description: The branding state after the reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrandingSettings'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
 
   /admin/branding/assets/{kind}:
     post:

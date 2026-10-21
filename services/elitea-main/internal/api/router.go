@@ -2496,6 +2496,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				requireBranding := central("configuration.branding")
 				r.With(requireBranding).Get("/branding/administration", adminHandler.BrandingRead)
 				r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSave)
+				r.With(requireBranding).Delete("/branding/administration", adminHandler.BrandingReset)
 				r.With(requireBranding).Post("/branding/assets/{kind}", adminHandler.BrandingAssetUpload)
 				r.With(requireBranding).Post("/branding/test_email/administration", adminHandler.BrandingTestEmail)
 				// OUTBOUND E-MAIL — the real surface behind the Configuration

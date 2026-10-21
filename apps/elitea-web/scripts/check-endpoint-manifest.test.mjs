@@ -757,7 +757,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // read marker behind the unread state of the chat and Local work lists of
 // the web, desktop and mobile apps. Its manifest entries land with the
 // screens that call it.
-const GENERATED_OPERATION_COUNT = 339;
+// 339 -> 340 (issue 1057): resetBrandingSettings, the server-side Reset of
+// Admin › Branding (DELETE of the section's rows). Admin routes are not in
+// the manifest, so its count is unchanged.
+const GENERATED_OPERATION_COUNT = 340;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
