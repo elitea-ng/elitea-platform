@@ -1441,7 +1441,10 @@ main:
     ARTIFACT_ATTACHMENT_RETENTION_DAYS: ""
 
     # --- LLM gateway proxy (BF0.9c; issue #463) ---------------------------------
-    # URL of the elitea-llm-gateway service. Empty composes no GatewayProxy, and
+    # URL of the elitea-llm-gateway gRPC listener (#1359): https://<host>:<port>,
+    # no path. elitea-main dials it as dns:///<host>:<port> with round_robin, so
+    # name the HEADLESS Service (llmGateway.service.grpcName, port grpcPort):
+    # each replica is then one address. Empty composes no gateway client, and
     # the /llm path then answers 503 llm_gateway_not_configured.
     #
     # WHY THERE IS NO DEFAULT VALUE HERE, and why that is not the old defect.
@@ -1453,10 +1456,10 @@ main:
     # value is now a stated posture instead of a silent one.
     #
     # A default URL cannot be correct, and would be worse than the empty value:
-    #   1. internal/llmproxy/proxy.go ALWAYS builds an mTLS transport. With no
-    #      readable client certificate, tls.LoadX509KeyPair fails, llmproxy.New
-    #      returns an error, and cmd/elitea-main turns that into a FATAL boot
-    #      error. A default URL with no certificates is a crash loop, not a
+    #   1. internal/llmproxy/gateway_client.go ALWAYS loads mutual TLS material.
+    #      With no readable client certificate, tls.LoadX509KeyPair fails,
+    #      NewGatewayClient returns an error, and cmd/elitea-main turns that
+    #      into a FATAL boot error. A default URL with no certificates is a crash loop, not a
     #      working /llm path.
     #   2. The certificates arrive through
     #      fileConfig.llmGatewayClientMaterial above, which mounts a Secret at
@@ -1473,7 +1476,7 @@ main:
     #
     # Cross-namespace: this must be an FQDN when the gateway is in another
     # namespace, e.g.
-    #   https://elitea-llm-gateway-svc.elitea-gateway.svc.cluster.local:8083
+    #   https://elitea-llm-gateway-grpc.elitea-gateway.svc.cluster.local:8443
     LLM_GATEWAY_URL: ""
 
     # The mTLS material for the hop above. These three are FILE PATHS, not the
@@ -2679,6 +2682,13 @@ llmGateway:
     # config.go defaults; set explicitly so the deployment is self-documenting.
     GATEWAY_SHUTDOWN_TIMEOUT: "150s"
     GATEWAY_INITIAL_POOL_SIZE: "100"
+    # The GatewayService gRPC listener (#1359): every /llm call from elitea-main
+    # arrives here, over mutual TLS. It must match service.grpcPort.
+    GATEWAY_GRPC_ADDR: ":8443"
+    # The workload identities the gRPC listener admits, from the client
+    # certificate SAN ("dns:<name>" or one spiffe:// URI). The edge-client
+    # Certificate (templates/llmGateway/certificates.yaml) carries dns:elitea-main.
+    GATEWAY_GRPC_CLIENTS: "dns:elitea-main"
     GATEWAY_PROVIDER_CONCURRENCY: "50"
     GATEWAY_LOG_LEVEL: "info"
     # NATS budget-path circuit breaker (§8.5). Trip after N consecutive failures;
@@ -3070,11 +3080,19 @@ llmGateway:
     #         port: 8000
     egress: []
 
-  # elitea-llm-gateway-svc: mTLS-only ClusterIP (NOT public), port 8083 (design
-  # §9.1). Named explicitly so the edge/runbook references resolve.
+  # Two Services (#1359):
+  #   name/port         ClusterIP on the plaintext HTTP listener. It serves
+  #                     /healthz, /readyz and /metrics only (infrastructure).
+  #   grpcName/grpcPort HEADLESS Service on the mutual-TLS gRPC listener
+  #                     (GatewayService). elitea-main resolves it and balances
+  #                     calls round_robin across the replicas; point
+  #                     main.env.LLM_GATEWAY_URL at it.
+  # Neither is public (design §9.1).
   service:
     name: elitea-llm-gateway-svc
     port: 8083
+    grpcName: elitea-llm-gateway-grpc
+    grpcPort: 8443
     annotations: {}
 
   # HPA on a custom /llm SSE-connection metric (design §9.5) — CPU/memory is a poor
@@ -3104,7 +3122,9 @@ llmGateway:
 
   # mTLS for the elitea-main -> gateway hop (design §9.1). cert-manager issues a
   # server cert (this Deployment mounts it) and an edge client cert (elitea-main
-  # mounts it) from a shared internal CA issuer.
+  # mounts it) from a shared internal CA issuer. REQUIRED (#1359): the gateway
+  # serves /llm only on its mutual-TLS gRPC listener, and refuses to start
+  # without the material. The chart refuses enabled=false.
   mtls:
     enabled: true
     serverSecretName: elitea-llm-gateway-server-tls
@@ -3120,13 +3140,11 @@ llmGateway:
     # ca.crt (mTLS require-and-verify).
     mountPath: /etc/gateway/tls
 
-  # probes: with mtls.enabled (the default) the paths below are NOT used — the
-  # listener requires a verified client certificate, which a kubelet probe cannot
-  # present, so templates/deployment.yaml probes the socket instead. The paths
-  # apply when mtls.enabled is false. So with mTLS on, /readyz never removes a
-  # pod from rotation: the gateway itself refuses /llm spend (503
-  # nats_unavailable) while budget enforcement is unwired, and does not rely on
-  # readiness for it ([human decision] 2026-10-16).
+  # probes: httpGet on the plaintext HTTP listener (#1359), which serves health
+  # and metrics only. /readyz now removes a pod from the headless gRPC Service.
+  # The gateway still refuses /llm spend (503 nats_unavailable) while budget
+  # enforcement is unwired, and does not rely on readiness for it
+  # ([human decision] 2026-10-16).
   probes:
     liveness:
       # Process liveness only (no dependency calls) — issue #242: a NATS blip
@@ -3177,33 +3195,9 @@ llmGateway:
     enabled: false
     minAvailable: 1
 
-  # Opt-in external reachability (issue #241; legacy parity), OFF by default.
-  # CAUTION: the gateway is mTLS-internal by design (service.yaml — "NEVER
-  # public", §9.1); enabling this exposes /llm outside the mTLS-only path the
-  # rest of this chart assumes. Only turn it on if your ingress
-  # controller/Gateway itself terminates and re-verifies mTLS equivalent to
-  # what elitea-main does today — templates/ingress.yaml refuses to render
-  # (helm `fail`) unless acknowledgeMTLSBypass is also set to true, so that
-  # confirmation can't be skipped by accident. Set ingress.gatewayApi: true to
-  # render an HTTPRoute instead of a networking.k8s.io/v1 Ingress; the two are
-  # mutually exclusive.
-  ingress:
-    enabled: false
-    acknowledgeMTLSBypass: false
-    gatewayApi: false
-    className: ""
-    annotations: {}
-    path: /
-    pathType: Prefix
-    hosts: []
-    tls: []
-      # - secretName: elitea-llm-gateway-tls
-      #   hosts:
-      #     - gateway.dev.elitea.ai
-    gateway:
-      name: ""
-      namespace: ""
-      sectionName: ""
+  # The opt-in ingress to the gateway (issue #241) was removed (#1359): the gateway serves
+  # /llm only to elitea-main over mutual-TLS gRPC. The chart refuses
+  # llmGateway.ingress.enabled=true.
 
   nodeSelector: {}
   tolerations: []

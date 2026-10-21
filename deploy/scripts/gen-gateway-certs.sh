@@ -44,6 +44,10 @@ if [ "$needs_regen" -eq 0 ]; then
   for c in ca.crt gateway-server.crt client.crt; do
     openssl x509 -checkend 86400 -noout -in "$CERT_DIR/$c" >/dev/null 2>&1 || needs_regen=1
   done
+  # The gateway gRPC listener (#1359) admits elitea-main by the client cert
+  # SAN DNS:elitea-main, never by the CN. Material from before #1359 has no
+  # SAN and every /llm call is refused, so replace it.
+  openssl x509 -noout -text -in "$CERT_DIR/client.crt" 2>/dev/null | grep -q 'DNS:elitea-main' || needs_regen=1
 fi
 if [ "$needs_regen" -eq 0 ] && [ "${FORCE:-0}" != "1" ]; then
   echo "→ Certificates in $CERT_DIR are present and valid; nothing to do (FORCE=1 to regenerate)."
@@ -76,7 +80,7 @@ openssl req -newkey rsa:2048 -nodes \
 openssl x509 -req -in "$CERT_DIR/client.csr" \
   -CA "$CERT_DIR/ca.crt" -CAkey "$CERT_DIR/ca.key" -CAcreateserial \
   -out "$CERT_DIR/client.crt" -days "$DAYS" \
-  -extfile <(printf 'extendedKeyUsage=clientAuth\n') 2>/dev/null
+  -extfile <(printf 'subjectAltName=DNS:elitea-main\nextendedKeyUsage=clientAuth\n') 2>/dev/null
 
 rm -f "$CERT_DIR"/*.csr
 # The gateway container runs as distroless `nonroot` (uid 65532) and must be able

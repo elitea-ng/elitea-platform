@@ -111,20 +111,39 @@ if grep -qE 'kv add +GATEWAY_CUTOVER' "$BS"; then bad "must NOT create GATEWAY_C
 # The dead GATEWAY_BUDGET KV (stream KV_GATEWAY_BUDGET) nothing read.
 if grep -qE '(ensure_kv|kv add) +GATEWAY_BUDGET( |$)' "$BS"; then bad "must NOT create the dead GATEWAY_BUDGET KV bucket"; else ok "no GATEWAY_BUDGET KV bucket"; fi
 
-echo "== gateway Service: mTLS-only ClusterIP, port 8083 (design §9.1) =="
+echo "== gateway Services: infra ClusterIP:8083 + headless gRPC:8443 (#1359) =="
 "$HELM" template gw "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" > "$TMP/gw.yaml"
-python3 - "$TMP/gw.yaml" <<'PY' && ok "elitea-llm-gateway-svc ClusterIP:8083; server+client certs" || bad "gateway service/certs render"
+python3 - "$TMP/gw.yaml" <<'PY' && ok "elitea-llm-gateway-svc ClusterIP:8083 (infra); elitea-llm-gateway-grpc headless:8443; server+client certs" || bad "gateway service/certs render"
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
-svc  = [d for d in docs if d["kind"] == "Service"]
-assert svc, "Service missing"
-s = svc[0]
-assert s["metadata"]["name"] == "elitea-llm-gateway-svc", "service name must be elitea-llm-gateway-svc"
-assert s["spec"]["type"] == "ClusterIP", "must be ClusterIP (mTLS-only, not public)"
-assert s["spec"]["ports"][0]["port"] == 8083, "gateway port must be 8083"
+svc  = {d["metadata"]["name"]: d for d in docs if d["kind"] == "Service"}
+# The plaintext listener serves /healthz, /readyz and /metrics only.
+s = svc.get("elitea-llm-gateway-svc")
+assert s, "Service elitea-llm-gateway-svc missing"
+assert s["spec"]["type"] == "ClusterIP", "must be ClusterIP (not public)"
+assert [p["port"] for p in s["spec"]["ports"]] == [8083], "infra Service must expose 8083 only"
+# /llm is the GatewayService gRPC listener. Headless, so elitea-main balances
+# round_robin across replicas instead of pinning one HTTP/2 connection.
+g = svc.get("elitea-llm-gateway-grpc")
+assert g, "headless gRPC Service elitea-llm-gateway-grpc missing"
+assert g["spec"].get("clusterIP") == "None", "gRPC Service must be headless"
+ports = g["spec"]["ports"]
+assert [(p["name"], p["port"], p.get("appProtocol")) for p in ports] == [("grpc", 8443, "grpc")], ports
+dep = [d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-llm-gateway"]
+assert dep, "gateway Deployment missing"
+c = dep[0]["spec"]["template"]["spec"]["containers"][0]
+cports = {p["name"]: p["containerPort"] for p in c["ports"]}
+assert cports == {"http": 8083, "grpc": 8443}, cports
+env = {e["name"]: e.get("value") for e in c.get("env", [])}
+assert env.get("GATEWAY_GRPC_ADDR", ":8443") == ":8443", env.get("GATEWAY_GRPC_ADDR")
+assert c["readinessProbe"]["httpGet"]["port"] == "http", "probes use the plaintext infra listener"
 certs = [d for d in docs if d["kind"] == "Certificate"]
 usages = {u for c in certs for u in c["spec"]["usages"]}
 assert "server auth" in usages and "client auth" in usages, "need both server + client mTLS certs"
+server = [c for c in certs if "server auth" in c["spec"]["usages"]]
+assert any("elitea-llm-gateway-grpc" in c["spec"].get("dnsNames", []) for c in server), "server cert must name the gRPC Service"
+client = [c for c in certs if "client auth" in c["spec"]["usages"] and "server auth" not in c["spec"]["usages"]]
+assert any("elitea-main" in c["spec"].get("dnsNames", []) for c in client), "client cert must carry the elitea-main SAN the gateway allowlist admits"
 PY
 
 echo "== gateway HPA: custom /llm SSE metric (design §9.5) =="

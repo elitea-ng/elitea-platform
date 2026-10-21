@@ -953,7 +953,7 @@ case "${1:-}" in
     echo "     admin console http://${HOST}:${PORT}/admin/app/"
     echo "     API           http://${HOST}:${PORT}/api/v2"
     echo "     OIDC provider http://localhost:${OIDC_PORT}"
-    echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
+    echo "     gateway       http://localhost:${STANDALONE_GATEWAY_PORT:-8085}/healthz (health and metrics; /llm is internal gRPC)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
     ;;
 
@@ -1608,51 +1608,51 @@ SQL
     }
     trap report_check_result EXIT
 
-    # ── The gateway mTLS hop ─────────────────────────────────────────────────
-    # Talk to the gateway directly over mTLS. /llm routes need signed identity
-    # headers that only elitea-main can produce, so this checks transport and
-    # liveness, not the completion path.
-    echo "→ gateway mTLS on https://localhost:${GW_PORT}:"
-    # --http1.1 is required, not cosmetic: curl offers h2 via ALPN, the gateway
-    # accepts it, and the response then fails with an INTERNAL_ERROR stream
-    # reset. elitea-main's own transport pins NextProtos to http/1.1 for the
-    # same reason, so this matches the real client.
-    #
-    # The answer is CAPTURED and compared (#422). The probe used to end in
-    # `&& echo`, which makes the curl a non-final member of an AND list. `set -e`
-    # does not act on such a command, and nothing counted the result, so the
-    # FIRST assertion of `check` could not turn `check` red.
-    gw_health="$(curl -sS --http1.1 --cert "$CERTS/client.crt" --key "$CERTS/client.key" \
-         --cacert "$CERTS/ca.crt" --resolve "elitea-llm-gateway:${GW_PORT}:127.0.0.1" \
-         -w '\nHTTP %{http_code}' \
-         "https://elitea-llm-gateway:${GW_PORT}/healthz" 2>&1 || true)"
+    # ── The gateway hops (#1359) ─────────────────────────────────────────────
+    # The gateway has two listeners. :8083 (published as ${GW_PORT}) is
+    # plaintext infra: /healthz, /readyz and /metrics only. :8443 is the
+    # GatewayService gRPC listener that carries every /llm call from
+    # elitea-main, over mutual TLS. It is not published; it is probed from
+    # inside the compose network below.
+    echo "→ gateway health on http://localhost:${GW_PORT}:"
+    # The answer is CAPTURED and compared (#422). A probe that ends in `&& echo`
+    # is a non-final member of an AND list, so `set -e` does not act on it and
+    # it cannot turn `check` red.
+    gw_health="$(curl -sS -w '\nHTTP %{http_code}' \
+         "http://localhost:${GW_PORT}/healthz" 2>&1 || true)"
     case "$gw_health" in
       *'"status":"ok"'*'HTTP 200'*)
-        ok "the gateway answers /healthz over mTLS (HTTP 200)" ;;
-      *) fail "the gateway did not answer /healthz over mTLS: $(printf '%s' "$gw_health" | tr '\n' ' ' | cut -c1-200)" ;;
+        ok "the gateway answers /healthz on its infra listener (HTTP 200)" ;;
+      *) fail "the gateway did not answer /healthz: $(printf '%s' "$gw_health" | tr '\n' ' ' | cut -c1-200)" ;;
     esac
 
-    # The negative control, and the reason the assertion above is not enough on
-    # its own. A 200 proves that the gateway ANSWERED a caller that offered a
-    # certificate. It does not prove the listener REQUIRED one: a listener that
-    # loses RequireAndVerifyClientCert answers the same 200, because the client
-    # offers a certificate the server never asks for. So repeat the request with
-    # NO client certificate. It must be refused in the handshake.
-    #
-    # The failure MODE is read as well. A gateway that is not running refuses
-    # this request too, and calling that a pass reports "mTLS is enforced" about
-    # a dead process. curl reports a refused or timed-out connection as (7) or
-    # (28); neither reached a handshake, so neither measures the requirement.
-    gw_anon="$(curl -sS --http1.1 --cacert "$CERTS/ca.crt" \
-         --resolve "elitea-llm-gateway:${GW_PORT}:127.0.0.1" \
-         -o /dev/null -w 'HTTP %{http_code}' \
-         "https://elitea-llm-gateway:${GW_PORT}/healthz" 2>&1 || true)"
+    # One-off container on the stack's network with deploy/certs mounted. It
+    # needs the openssl CLI, which debian:trixie-slim does not ship.
+    gw_probe() {
+      ${COMPOSE_BIN%% *} run --rm --network "${PROJECT}_default" -v "${CERTS}:/m:ro" \
+        --entrypoint sh docker.io/library/postgres:18 -c "$1" 2>&1 || true
+    }
+    echo "→ gateway GatewayService gRPC on elitea-llm-gateway:8443 (mTLS, from inside the network):"
+    # The positive half: elitea-main's own material completes a TLS 1.3
+    # handshake, the server cert verifies for the name in LLM_GATEWAY_URL, and
+    # the listener speaks h2. A wrong SAN or a CA mismatch fails the verify.
+    gw_grpc="$(gw_probe "openssl s_client -connect elitea-llm-gateway:8443 -servername elitea-llm-gateway -verify_hostname elitea-llm-gateway -CAfile /m/ca.crt -cert /m/client.crt -key /m/client.key -tls1_3 -alpn h2 </dev/null")"
+    case "$gw_grpc" in
+      *'ALPN protocol: h2'*'Verify return code: 0'*|*'Verify return code: 0'*'ALPN protocol: h2'*)
+        ok "the gateway gRPC listener completes mTLS with elitea-main's certificate (TLS 1.3, h2)" ;;
+      *) fail "the gateway gRPC listener did not complete mTLS with elitea-main's certificate: $(printf '%s' "$gw_grpc" | grep -E 'error|Verify return|ALPN|errno' | tr '\n' ' ' | cut -c1-200)" ;;
+    esac
+
+    # The negative control. A completed handshake does not prove the listener
+    # REQUIRED a certificate: one that loses RequireAndVerifyClientCert
+    # completes it too. Under TLS 1.3 the refusal arrives AFTER the client's
+    # Finished, so stdin stays open for a second and s_client reads the alert.
+    # A dead gateway gives "Connection refused", which is not a pass.
+    gw_anon="$(gw_probe "(sleep 1) | openssl s_client -connect elitea-llm-gateway:8443 -servername elitea-llm-gateway -CAfile /m/ca.crt -tls1_3 -alpn h2")"
     case "$gw_anon" in
-      *'HTTP 200'*)
-        fail "the gateway served /healthz to a caller with NO client certificate. The listener does not require one, so the elitea-main → gateway hop is not mutually authenticated" ;;
-      *'curl: (7)'*|*'curl: (28)'*|*'Failed to connect'*|*'Connection refused'*|*'Could not resolve'*)
-        fail "the no-certificate probe never reached a TLS handshake, so the mTLS requirement was not measured: $(printf '%s' "$gw_anon" | tr '\n' ' ' | cut -c1-160)" ;;
-      *) ok "the gateway refuses a caller with no client certificate ($(printf '%s' "$gw_anon" | tr '\n' ' ' | cut -c1-120))" ;;
+      *'certificate required'*)
+        ok "the gateway gRPC listener refuses a caller with no client certificate" ;;
+      *) fail "the gateway gRPC listener did not refuse a caller with no client certificate, so the elitea-main → gateway hop is not proven mutually authenticated: $(printf '%s' "$gw_anon" | grep -E 'alert|error|errno|Verify return' | tr '\n' ' ' | cut -c1-200)" ;;
     esac
 
     echo "→ elitea-main /llm reachability:"

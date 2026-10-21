@@ -126,7 +126,7 @@
 #
 # ── Ports ────────────────────────────────────────────────────────────────────
 #   8084  traefik (entry point)     STANDALONE_PORT
-#   8085  gateway, direct (debug)   STANDALONE_GATEWAY_PORT
+#   8085  gateway health/metrics    STANDALONE_GATEWAY_PORT
 #   15433 postgres                  STANDALONE_PG_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
 #   8096  qtest-mock journal        STANDALONE_QTEST_PORT
@@ -519,7 +519,13 @@ services:
       context: ..
       dockerfile: services/elitea-llm-gateway/Containerfile
     environment:
+      # Plaintext infra listener: /healthz, /readyz and /metrics only.
       GATEWAY_HTTP_ADDR: ":8083"
+      # GatewayService gRPC listener (#1359): every /llm call from elitea-main,
+      # over mutual TLS. It admits only the client cert with SAN
+      # DNS:elitea-main (deploy/scripts/gen-gateway-certs.sh).
+      GATEWAY_GRPC_ADDR: ":8443"
+      GATEWAY_GRPC_CLIENTS: "dns:elitea-main"
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
@@ -540,8 +546,8 @@ services:
       # exists. That is right for a cluster and wrong for a laptop.
       # Set it to "auto" to reproduce the cluster posture.
       LLM_BUDGET_REQUIRE_ENFORCEMENT: "${LLM_BUDGET_REQUIRE_ENFORCEMENT:-off}"
-      # Serve TLS and require client certs. Presenting all three is what turns on
-      # mutual auth; elitea-main's side is non-optional, so this is not a choice.
+      # TLS material for the gRPC listener. It always requires a client cert;
+      # the gateway refuses to start without all three files.
       GATEWAY_TLS_CERT_FILE: /run/certs/gateway-server.crt
       GATEWAY_TLS_KEY_FILE: /run/certs/gateway-server.key
       GATEWAY_TLS_CA_FILE: /run/certs/ca.crt
@@ -639,9 +645,8 @@ services:
       - ./certs/gateway-server.key:/run/certs/gateway-server.key:ro
       - ./certs/ca.crt:/run/certs/ca.crt:ro
     ports:
-      # Direct access for debugging with curl --cert/--key. Traffic that must
-      # carry a project identity has to go through elitea-main, which is what
-      # signs the identity headers.
+      # Health and metrics for debugging (plaintext). /llm is gRPC on :8443 and
+      # is not published: only elitea-main holds the admitted client cert.
       - "${STANDALONE_GATEWAY_PORT:-8085}:8083"
     depends_on:
       postgres:
@@ -946,11 +951,11 @@ services:
       S3_REGION: "us-east-1"
       S3_FORCE_PATH_STYLE: "true"
       # ── LLM gateway ────────────────────────────────────────────────────────
-      # Setting LLM_GATEWAY_URL is what composes the proxy. It is all-or-nothing:
-      # llmproxy.New always builds an mTLS transport, so the three cert vars are
+      # Setting LLM_GATEWAY_URL is what composes the gateway gRPC client. It is
+      # all-or-nothing: NewGatewayClient always loads mTLS material, so the three cert vars are
       # mandatory once the URL is set — an empty path is a fatal boot error, not
       # a fallback to plaintext.
-      LLM_GATEWAY_URL: "https://elitea-llm-gateway:8083"
+      LLM_GATEWAY_URL: "https://elitea-llm-gateway:8443"
       GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-standalone-dev-identity-secret}"
       LLM_GATEWAY_CLIENT_CERT: /run/certs/client.crt
       LLM_GATEWAY_CLIENT_KEY: /run/certs/client.key

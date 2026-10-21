@@ -509,8 +509,10 @@ main:
     S3_ENDPOINT_URL: ""
     S3_FORCE_PATH_STYLE: "false"   # "true" for MinIO, RustFS, Ceph
 
-    # The /llm hop to the gateway: the Service is elitea-llm-gateway-svc
-    LLM_GATEWAY_URL: "https://elitea-llm-gateway-svc:8083"
+    # The /llm hop to the gateway: gRPC over mutual TLS to the headless
+    # Service elitea-llm-gateway-grpc (port 8443). Port 8083 on
+    # elitea-llm-gateway-svc serves health and metrics only.
+    LLM_GATEWAY_URL: "https://elitea-llm-gateway-grpc:8443"
     LLM_GATEWAY_CLIENT_CERT: "/run/elitea-llm-gateway/tls.crt"
     LLM_GATEWAY_CLIENT_KEY: "/run/elitea-llm-gateway/tls.key"
     LLM_GATEWAY_CA_FILE: "/run/elitea-llm-gateway/ca.crt"

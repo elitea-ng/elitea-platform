@@ -510,12 +510,16 @@ elitea-main.validateLLMGateway — issue #463.
 The /llm proxy is all-or-nothing, and the failure it produces when half
 configured is a CrashLoopBackOff rather than a disabled feature.
 
-internal/llmproxy/proxy.go builds an mTLS transport whenever Config.Transport is
-nil, and the only seam for a plaintext transport is a struct field with no
-environment binding, so it is test-only. With LLM_GATEWAY_URL set and any of the
-three material paths empty, tls.LoadX509KeyPair or os.ReadFile fails,
-llmproxy.New returns an error, and cmd/elitea-main returns
-"compose llm gateway proxy" as a fatal boot error.
+internal/llmproxy/gateway_client.go (#1359: gRPC over mutual TLS to the
+gateway's GatewayService) always loads the client certificate; the only
+seam for other material is a struct field with no environment binding, so it
+is test-only. With LLM_GATEWAY_URL set and any of the three material paths
+empty, NewGatewayClient fails, and cmd/elitea-main returns
+"compose llm gateway client" as a fatal boot error.
+
+LLM_GATEWAY_URL names the gateway gRPC listener: https://<host>:<port>, no
+path. The gateway HTTP port (llmGateway.service.port) serves health and
+metrics only, so a URL on that port is refused here too.
 
 So this refuses the half-configured values file at `helm template` time.
 
@@ -533,18 +537,23 @@ the /llm path. That state is no longer silent: with no URL the router answers
   "LLM_GATEWAY_CLIENT_KEY" (get $env "LLM_GATEWAY_CLIENT_KEY" | toString)
   "LLM_GATEWAY_CA_FILE" (get $env "LLM_GATEWAY_CA_FILE" | toString) -}}
 {{- if $url -}}
-{{- if not (or (hasPrefix "https://" $url) (hasPrefix "http://" $url)) -}}
-{{- fail (printf "env.LLM_GATEWAY_URL must be an absolute URL with a scheme and a host. internal/llmproxy/proxy.go refuses anything else: \"target url %q missing scheme or host\"." $url) -}}
+{{- $parsed := urlParse $url -}}
+{{- if or (ne $parsed.scheme "https") (not $parsed.host) (and $parsed.path (ne $parsed.path "/")) -}}
+{{- fail (printf "env.LLM_GATEWAY_URL must be https://<host>:<port> of the gateway gRPC listener, with no path. internal/llmproxy/gateway_client.go refuses anything else: got %q (missing scheme or host, or not https)." $url) -}}
+{{- end -}}
+{{- $infraPort := printf ":%v" (.Values.llmGateway.service.port | default 8083) -}}
+{{- if hasSuffix $infraPort $parsed.host -}}
+{{- fail (printf "env.LLM_GATEWAY_URL is %q, the gateway HTTP port (llmGateway.service.port). That listener serves health and metrics only; /llm is the gRPC listener (llmGateway.service.grpcPort, default 8443) behind llmGateway.service.grpcName." $url) -}}
 {{- end -}}
 {{- range $name, $value := $material -}}
 {{- if not $value -}}
-{{- fail (printf "env.LLM_GATEWAY_URL is set, so env.%s must be set too. internal/llmproxy/proxy.go always builds an mTLS transport and reads this value as a FILE PATH; an empty path makes cmd/elitea-main exit at boot with \"compose llm gateway proxy\". Set all three of LLM_GATEWAY_CLIENT_CERT, LLM_GATEWAY_CLIENT_KEY and LLM_GATEWAY_CA_FILE, and mount the material at those paths." $name) -}}
+{{- fail (printf "env.LLM_GATEWAY_URL is set, so env.%s must be set too. internal/llmproxy/gateway_client.go always loads mutual TLS material and reads this value as a FILE PATH; an empty path makes cmd/elitea-main exit at boot with \"compose llm gateway client\". Set all three of LLM_GATEWAY_CLIENT_CERT, LLM_GATEWAY_CLIENT_KEY and LLM_GATEWAY_CA_FILE, and mount the material at those paths." $name) -}}
 {{- end -}}
 {{- if not (hasPrefix "/" $value) -}}
-{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q. internal/llmproxy/proxy.go passes it to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
+{{- fail (printf "env.%s must be an absolute file path, not certificate text. Got %q. internal/llmproxy/gateway_client.go passes it to tls.LoadX509KeyPair / os.ReadFile." $name $value) -}}
 {{- end -}}
 {{- if and $clientMaterial.enabled (not (hasPrefix $mountPath $value)) -}}
-{{- fail (printf "env.%s is %q, which fileConfig.llmGatewayClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container, and the pod exits at boot with \"compose llm gateway proxy\"." $name $value $mountPath) -}}
+{{- fail (printf "env.%s is %q, which fileConfig.llmGatewayClientMaterial does not serve: its mountPath is %q. A path outside the mounted directory is a file that does not exist in the container, and the pod exits at boot with \"compose llm gateway client\"." $name $value $mountPath) -}}
 {{- end -}}
 {{- end -}}
 {{- if not $clientMaterial.enabled -}}
@@ -556,7 +565,7 @@ the /llm path. That state is no longer silent: with no URL the router answers
 {{- else -}}
 {{- range $name, $value := $material -}}
 {{- if $value -}}
-{{- fail (printf "env.%s is set but env.LLM_GATEWAY_URL is empty, so no proxy is composed and the material is never read. Set env.LLM_GATEWAY_URL, or clear env.%s." $name $name) -}}
+{{- fail (printf "env.%s is set but env.LLM_GATEWAY_URL is empty, so no gateway client is composed and the material is never read. Set env.LLM_GATEWAY_URL, or clear env.%s." $name $name) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -283,7 +283,7 @@ main:
     # elitea-main.validateLLMGateway refuses the half-configured pair at
     # `helm template` time (issue #463). Mount the material at this directory; the
     # names match what deploy/scripts/gen-gateway-certs.sh writes.
-    LLM_GATEWAY_URL: "https://elitea-llm-gateway:8083"
+    LLM_GATEWAY_URL: "https://elitea-llm-gateway:8443"
     LLM_GATEWAY_CLIENT_CERT: "/run/certs/tls.crt"
     LLM_GATEWAY_CLIENT_KEY: "/run/certs/tls.key"
     LLM_GATEWAY_CA_FILE: "/run/certs/ca.crt"
