@@ -775,6 +775,74 @@ async fn dependents_expansion_keeps_cross_file_calls_edge() {
     );
 }
 
+/// #1219 review: a dependent read again keeps the edges into its own
+/// nodes. `c.rs` calls `b::helper`, `b.rs` calls `a::f`; editing `a.rs`
+/// reads `b.rs` again, and `c.rs`'s call into `helper` (a node only `b.rs`
+/// cites) survives though `c.rs` is not read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dependent_read_again_keeps_the_edges_into_its_nodes() {
+    let folder = tempfile::tempdir().unwrap();
+    write(folder.path(), "src/a.rs", "pub fn f() {}\n");
+    write(
+        folder.path(),
+        "src/b.rs",
+        "use crate::a::f;\n\npub fn helper() {\n    f();\n}\n",
+    );
+    write(
+        folder.path(),
+        "src/c.rs",
+        "use crate::b::helper;\n\npub fn run() {\n    helper();\n}\n",
+    );
+    let data = tempfile::tempdir().unwrap();
+    let service = IndexService::open(
+        "ws1",
+        folder.path(),
+        &[],
+        &data.path().join("index"),
+        Arc::new(NoEvents),
+    )
+    .unwrap();
+    service.refresh(false).await.unwrap();
+    let calls = |edges: &[(String, String)], caller: &str| {
+        edges
+            .iter()
+            .any(|(from, kind)| from == caller && kind == "calls")
+    };
+    let before = edges_into(&service, "helper");
+    assert!(calls(&before, "run"), "{before:?}");
+
+    write(folder.path(), "src/a.rs", "/// Edited.\npub fn f() {}\n");
+    service.refresh(false).await.unwrap();
+    let report = service.last_report().unwrap();
+    // `b.rs` is read again for its call into `f`; `c.rs` is not.
+    assert_eq!(
+        (report.read, report.unchanged, report.dependents),
+        (2, 1, 1),
+        "{report:?}"
+    );
+    let into_f = edges_into(&service, "f");
+    assert!(calls(&into_f, "helper"), "{into_f:?}");
+    let after = edges_into(&service, "helper");
+    assert!(calls(&after, "run"), "{after:?} ({report:?})");
+
+    // The same graph a full build makes.
+    let graph = || {
+        let (view, _) = service.view().unwrap();
+        let mut nodes: Vec<String> = view.graph.nodes().map(|(id, _)| id.to_owned()).collect();
+        let mut edges: Vec<(String, String)> = view
+            .graph
+            .edges()
+            .map(|(from, to, _)| (from.to_owned(), to.to_owned()))
+            .collect();
+        nodes.sort();
+        edges.sort();
+        (nodes, edges)
+    };
+    let incremental = graph();
+    service.refresh(true).await.unwrap();
+    assert_eq!(incremental, graph());
+}
+
 /// Files changed since the last full build add up; past the threshold the
 /// index asks for a full rebuild, and one resets the count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

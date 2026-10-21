@@ -1842,9 +1842,6 @@ mod tests {
         assert!(took < Duration::from_millis(500), "waited {took:?}");
     }
 
-    /// A change made outside the app (no turn, no command) refreshes a
-    /// turned-on index once the folder is quiet; turned off, the folder is
-    /// no longer watched.
     /// An index drifted past the threshold is rebuilt from nothing once it
     /// has been idle; not while a turn runs (#1219).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1894,6 +1891,9 @@ mod tests {
         );
     }
 
+    /// A change made outside the app (no turn, no command) refreshes a
+    /// turned-on index once the folder is quiet; turned off, the folder is
+    /// no longer watched.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_folder_watch_refreshes_a_turned_on_index() {
         let app = tempfile::tempdir().unwrap();
