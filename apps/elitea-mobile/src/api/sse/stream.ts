@@ -4,7 +4,7 @@ import { CLIENT_VERSION_HEADER, getClientVersion } from '@/api/clientVersion';
 import { ApiError, parseRetryAfter } from '@/api/errors';
 import { classifySessionFailure, sessionBearerToken, shouldReplay } from '@/api/middleware';
 import { isSameOrigin } from '@/api/paths';
-import { EventStreamParser, type SseEvent } from '@/api/sse/parser';
+import { EventStreamParser, type SseEvent } from '@elitea/client-core/stream';
 import { expoStreamTransport, type StreamResponse, type StreamTransport } from '@/api/sse/transport';
 import { registerAbortable } from '@/lib/abortRegistry';
 import { appActivity } from '@/lib/appActivity';

@@ -1,18 +1,14 @@
 import { z } from 'zod';
 
-import type { SseEvent } from '@/api/sse/parser';
+import { EXECUTION_EVENT, parseEventData, type SseEvent } from '@elitea/client-core/stream';
 
 /**
  * Execution event-stream frames, validated at the boundary (the wire is not
  * specified by the server contract yet: ADR-0025 WP5). Schemas are loose: a
  * known field of the wrong type fails the frame, unknown fields pass through.
+ * The event names and the frame vocabulary are shared with the web and
+ * desktop clients (`@elitea/client-core/stream`).
  */
-
-export const EXECUTION_EVENT = {
-  node: 'execution.node_event',
-  failed: 'execution.failed',
-  replayReset: 'execution.replay_reset',
-} as const;
 
 const ResponseMetadata = z.looseObject({
   finish_reason: z.string().nullish(),
@@ -50,26 +46,18 @@ export type Frame =
   /** Data that is not valid JSON or does not match the schema. */
   | { kind: 'invalid'; event: string };
 
-function parseJson(data: string): unknown {
-  try {
-    return JSON.parse(data);
-  } catch {
-    return undefined;
-  }
-}
-
 export function parseFrame(event: SseEvent): Frame {
   switch (event.event) {
     case EXECUTION_EVENT.node: {
-      const parsed = NodeEventSchema.safeParse(parseJson(event.data));
+      const parsed = NodeEventSchema.safeParse(parseEventData(event.data));
       return parsed.success ? { kind: 'node', node: parsed.data } : { kind: 'invalid', event: event.event };
     }
     case EXECUTION_EVENT.failed: {
-      const parsed = ExecutionFailedSchema.safeParse(parseJson(event.data));
+      const parsed = ExecutionFailedSchema.safeParse(parseEventData(event.data));
       return parsed.success ? { kind: 'failed', failure: parsed.data } : { kind: 'failed', failure: {} };
     }
     case EXECUTION_EVENT.replayReset: {
-      const parsed = ReplayResetSchema.safeParse(parseJson(event.data));
+      const parsed = ReplayResetSchema.safeParse(parseEventData(event.data));
       return { kind: 'replay_reset', reason: parsed.success ? (parsed.data.reason ?? null) : null };
     }
     default:

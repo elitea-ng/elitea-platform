@@ -1,3 +1,5 @@
+import { FRAME_TYPE, TOOL_CALL_TYPES } from '@elitea/client-core/stream';
+
 import type { NodeEvent } from '@/features/chat/frames';
 
 /**
@@ -21,13 +23,6 @@ export type ToolStatus = 'running' | 'done' | 'error' | 'needs_auth' | 'waiting'
 
 /** What a `waiting` call waits for: an approval of the call, or the user's answer to a question. */
 export type ToolWait = 'approval' | 'answer';
-
-/**
- * The `finish_reason` of a tool call that paused for the user (client
- * contract 1.2: `agent_tool_paused`, and the persisted trace step). Not a
- * failure.
- */
-export const PAUSE_FINISH_REASONS: ReadonlySet<string> = new Set(['awaiting_approval', 'awaiting_input', 'interrupted']);
 
 /** What a paused call waits for, from its `finish_reason` and its `pause.guardrail_type`. */
 export function waitOf(finishReason: unknown, guardrailType: unknown): ToolWait {
@@ -165,7 +160,7 @@ function assembled(chunks: ToolStep['chunks']): { text: string; complete: boolea
 export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): ToolStep[] {
   const rm = asRecord(node.response_metadata) ?? {};
 
-  if (node.type === 'agent_tool_output_chunk') {
+  if (node.type === FRAME_TYPE.AgentToolOutputChunk) {
     const chunk = asRecord(rm.tool_output_chunk);
     const id = asString(chunk?.tool_call_id);
     const index = asCount(chunk?.index);
@@ -191,7 +186,7 @@ export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): To
   if (id === null) return [...steps];
   const meta = toolMeta(rm);
   const found = steps.find((s) => s.id === id);
-  let step: ToolStep = found ?? { ...emptyStep(id, meta.name), partial: node.type !== 'agent_tool_start' };
+  let step: ToolStep = found ?? { ...emptyStep(id, meta.name), partial: node.type !== FRAME_TYPE.AgentToolStart };
   step = {
     ...step,
     name: meta.name !== 'tool' ? meta.name : step.name,
@@ -203,9 +198,9 @@ export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): To
   step = withInputs(step, rm.tool_inputs);
 
   switch (node.type) {
-    case 'agent_tool_start':
+    case FRAME_TYPE.AgentToolStart:
       return upsert(steps, step);
-    case 'agent_tool_end': {
+    case FRAME_TYPE.AgentToolEnd: {
       const declared = asRecord(rm.tool_output_chunks);
       const declaredTotal = asCount(declared?.total);
       let output = displayValue(rm.tool_output);
@@ -229,7 +224,7 @@ export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): To
         partial,
       });
     }
-    case 'agent_tool_paused':
+    case FRAME_TYPE.AgentToolPaused:
       // Contract 1.2: the call paused for the user (an approval or a
       // question) just before the agent_hitl_interrupt frame. Not a failure,
       // and not finished: the tool has not run.
@@ -240,7 +235,7 @@ export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): To
         pauseId: asString(asRecord(rm.pause)?.interrupt_id),
         error: null,
       });
-    case 'agent_tool_error': {
+    case FRAME_TYPE.AgentToolError: {
       const error = displayValue(rm.error) ?? (typeof node.content === 'string' ? node.content : null);
       // A server before contract 1.2 reports that pause as an error of the
       // call (the LangGraph interrupt's repr) instead of agent_tool_paused.
@@ -256,7 +251,7 @@ export function reduceToolFrame(steps: readonly ToolStep[], node: NodeEvent): To
         error: capped?.text ?? 'The tool failed.',
       });
     }
-    case 'mcp_authorization_required':
+    case FRAME_TYPE.McpAuthorizationRequired:
       // The tool has not run: it waits for a sign-in.
       return upsert(steps, { ...step, status: step.status === 'running' ? 'needs_auth' : step.status });
     default:
@@ -278,13 +273,7 @@ function upsert(steps: readonly ToolStep[], step: ToolStep): ToolStep[] {
 }
 
 export function isToolFrame(type: string): boolean {
-  return (
-    type === 'agent_tool_start' ||
-    type === 'agent_tool_end' ||
-    type === 'agent_tool_error' ||
-    type === 'agent_tool_paused' ||
-    type === 'agent_tool_output_chunk'
-  );
+  return TOOL_CALL_TYPES.has(type);
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +397,7 @@ export function pauseOf(node: NodeEvent): TurnPause | null {
   const threadId = asString(rm.thread_id) ?? asString(rm.root_thread_id);
   const messageId = asString(node.message_id);
   switch (node.type) {
-    case 'agent_hitl_interrupt': {
+    case FRAME_TYPE.AgentHitlInterrupt: {
       const interrupts = interruptsOf(rm);
       if (interrupts.length === 0) return null;
       const shape = isFanoutChild(rm) ? 'fanout' : interrupts.length > 1 ? 'parallel' : 'single';
@@ -421,12 +410,12 @@ export function pauseOf(node: NodeEvent): TurnPause | null {
       }
       return { kind: 'hitl', shape, interrupts, threadId, messageId };
     }
-    case 'mcp_authorization_required': {
+    case FRAME_TYPE.McpAuthorizationRequired: {
       if (!Array.isArray(rm.authorization_requests)) return null;
       const requests = rm.authorization_requests.map(parseAuthRequest).filter((r): r is AuthRequest => r !== null);
       return requests.length > 0 ? { kind: 'auth', requests, threadId, messageId } : null;
     }
-    case 'agent_requires_confirmation':
+    case FRAME_TYPE.AgentRequiresConfirmation:
       return {
         kind: 'output_limit',
         threadId,

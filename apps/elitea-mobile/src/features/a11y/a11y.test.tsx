@@ -1,7 +1,7 @@
 import { act, render } from '@testing-library/react-native';
 import { AccessibilityInfo, Text } from 'react-native';
 
-import { EventStreamParser } from '@/api/sse/parser';
+import { EventStreamParser } from '@elitea/client-core/stream';
 import { createAnnouncer } from '@/features/a11y/announce';
 import { modalAnimation, useReducedMotion } from '@/features/a11y/motion';
 import { turnAnnouncement, useTurnAnnouncements } from '@/features/a11y/turnAnnouncements';

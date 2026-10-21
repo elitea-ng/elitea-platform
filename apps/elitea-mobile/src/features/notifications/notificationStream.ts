@@ -1,6 +1,6 @@
 import { originOf } from '@/api/paths';
 import { NotificationFrameSchema } from '@/api/queries/notifications';
-import type { SseEvent } from '@/api/sse/parser';
+import type { SseEvent } from '@elitea/client-core/stream';
 import { ResumableStream, type ResumableStreamOptions } from '@/api/sse/stream';
 import { projectScope } from '@/lib/abortRegistry';
 

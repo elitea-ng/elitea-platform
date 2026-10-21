@@ -1,4 +1,4 @@
-import { EventStreamParser } from '@/api/sse/parser';
+import { EventStreamParser } from '@elitea/client-core/stream';
 import { loadFixtureBytes, type FixtureName } from '@/features/chat/__fixtures__/loadFixture';
 import { parseFrame, type Frame } from '@/features/chat/frames';
 import {

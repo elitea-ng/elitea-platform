@@ -1,9 +1,10 @@
+import { PAUSE_FINISH_REASONS } from '@elitea/client-core/stream';
 import { useQuery } from '@tanstack/react-query';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
 import type { components } from '@/api/generated/elitea.gen';
 import { queryKeys } from '@/api/queries/keys';
-import { PAUSE_FINISH_REASONS, capText, displayValue, waitOf, type ToolStep } from '@/features/chat/toolActivity';
+import { capText, displayValue, waitOf, type ToolStep } from '@/features/chat/toolActivity';
 
 /**
  * Tool history of a reloaded conversation (client contract 1.1):
