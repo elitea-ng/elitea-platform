@@ -31,14 +31,15 @@
 
 use crate::chunks;
 use crate::dense::{DenseSearch, QueryEmbedder, VectorMatrix};
+use crate::ingest::Expansion;
 use crate::search::{Answer, Dense, NameIndex, Request};
 use crate::source::{LocalFolderSource, SOURCE_NAME};
 use crate::sqlite_store::{ChunkUpdate, SqliteGraphStore, StoreError};
 use elitea_content_source::content_version;
 use elitea_engine_core::stream::{Context, Line, StopSignal};
 use elitea_inventory_core::graph::Graph;
-use elitea_inventory_core::ingest::SourceSelection;
 use elitea_inventory_core::ingest::files::Selection;
+use elitea_inventory_core::ingest::{Outcome, SourceSelection};
 use elitea_inventory_core::retrieval::view::GraphView;
 use elitea_inventory_core::store::{
     Completion, GraphKey, GraphStore as _, RunCounts, SourceStatus,
@@ -158,7 +159,17 @@ pub struct RunReport {
     pub removed: u64,
     /// Files read to hash because their size or mtime changed.
     pub hashed: u64,
+    /// Unchanged files read again (and counted in `read`) for their edges
+    /// into the nodes of changed files (`ingest::dependents`).
+    pub dependents: u64,
 }
+
+/// Files changed since the last full build past which the host rebuilds
+/// the index from nothing when it is idle
+/// ([`IndexService::wants_full_rebuild`]): incremental refreshes drift
+/// from what a full build makes (relations resolve by name over the node
+/// order a full build adds them in).
+pub const DRIFT_REBUILD: u64 = 500;
 
 /// One progress report of an index (`index://event`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -657,6 +668,19 @@ impl IndexService {
         self.emit("stale", None);
     }
 
+    /// Whether the index has drifted far enough from a full build (more
+    /// than [`DRIFT_REBUILD`] files changed since one, or a refresh had too
+    /// many dependents to read) that the host should rebuild it from
+    /// nothing when idle. Blocking (SQLite).
+    #[must_use]
+    pub fn wants_full_rebuild(&self) -> bool {
+        !self.is_closed()
+            && self
+                .store
+                .drift_files()
+                .is_ok_and(|drift| drift > DRIFT_REBUILD)
+    }
+
     /// Whether a refresh runs (or waits its turn).
     #[must_use]
     pub fn is_building(&self) -> bool {
@@ -957,8 +981,40 @@ impl IndexService {
             unchanged: files,
             removed: 0,
             hashed: 0,
+            dependents: 0,
         };
         Ok(Some((view, files, report)))
+    }
+
+    /// Add a committed refresh to the drift since the last full build: the
+    /// files it changed (not the dependents it read again for them); a full
+    /// build resets it. The build is committed: a failure here only loses
+    /// count.
+    fn record_drift(&self, full: bool, outcome: &Outcome, expansion: Expansion) {
+        let drift = if full {
+            0
+        } else {
+            let changed = count(
+                outcome
+                    .documents_processed
+                    .saturating_sub(expansion.files)
+                    .saturating_add(outcome.removed_files),
+            );
+            let drift = self
+                .store
+                .drift_files()
+                .unwrap_or_default()
+                .saturating_add(changed);
+            if expansion.capped {
+                // Edges into what changed may be lost: rebuild.
+                drift.max(DRIFT_REBUILD + 1)
+            } else {
+                drift
+            }
+        };
+        if let Err(error) = self.store.set_drift_files(drift) {
+            log::warn!("the index drift count was not saved: {error}");
+        }
     }
 
     /// The run, and whether it got as far as recording its start.
@@ -1013,7 +1069,7 @@ impl IndexService {
                     .stage_chunks(&source.take_staged(threads))
                     .map_err(engine_error)
             };
-            let outcome = crate::ingest::ingest(
+            let (outcome, expansion) = crate::ingest::ingest(
                 &mut graph,
                 &SourceSelection::all(SOURCE_NAME),
                 &source,
@@ -1053,11 +1109,14 @@ impl IndexService {
                     replace: full || rechunk,
                 }),
             )?;
+            // A first build (nothing before it) is a full one.
+            self.record_drift(full || previous.is_empty(), &outcome, expansion);
             let report = RunReport {
                 read: count(outcome.documents_processed),
                 unchanged: count(outcome.unchanged),
                 removed: count(outcome.removed_files),
                 hashed: count(source.hashed()),
+                dependents: count(expansion.files),
             };
             Ok::<_, IndexError>((
                 Arc::new(GraphView::without_vectors(graph, revision)),

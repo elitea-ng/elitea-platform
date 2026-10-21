@@ -1450,12 +1450,9 @@ impl AgentHost {
         // for (that turn's conversation is read after it, below).
         let claim =
             WorkspaceClaim::take_for_turn(&self.busy, &request.workspace_id, TURN_RUNNING).await?;
-        // The index's background embedding waits while the turn runs.
-        let _embedding_held = self
-            .deps
-            .index
-            .as_ref()
-            .and_then(|index| index.pause_embedding());
+        // The index's background embedding, and any idle rebuild, wait
+        // while the turn runs.
+        let _index_held = self.deps.index.as_ref().map(|index| index.hold_for_turn());
         // Read again under the claim: the workspace may have been removed or
         // re-bound while the version and the conversation were read (neither
         // can happen from here on, both take the claim).
