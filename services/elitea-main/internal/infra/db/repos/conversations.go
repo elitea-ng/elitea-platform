@@ -844,13 +844,11 @@ func (r *ConversationsRepo) UpdateInternalTools(ctx context.Context, projectID, 
 			return conversations.Conversation{}, apierr.BadRequest("unknown internal tool " + strconv.Quote(name))
 		}
 	}
-	current, err := r.Get(ctx, projectID, conversationID)
-	if err != nil {
-		return conversations.Conversation{}, err
-	}
-	id, err := r.resolveConversationID(ctx, projectID, conversationID)
-	if err != nil {
-		return conversations.Conversation{}, err
+	// The UPDATE addresses the row by whichever id form the route carries
+	// and returns everything the answer needs: no read before the write.
+	predicate, ok := idPredicate(conversationID)
+	if !ok {
+		return conversations.Conversation{}, apierr.NotFound("conversation not found")
 	}
 	if tools == nil {
 		tools = []string{}
@@ -859,19 +857,20 @@ func (r *ConversationsRepo) UpdateInternalTools(ctx context.Context, projectID, 
 	if err != nil {
 		return conversations.Conversation{}, fmt.Errorf("conversations: update internal tools: encode: %w", err)
 	}
-	q := fmt.Sprintf(`UPDATE %s.chat_conversations
-		SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{internal_tools}', $1::jsonb, true),
+	q := fmt.Sprintf(`UPDATE %s.chat_conversations c
+		SET meta = jsonb_set(COALESCE(c.meta, '{}'::jsonb), '{internal_tools}', $2::jsonb, true),
 		    updated_at = (now() AT TIME ZONE 'UTC')
-		WHERE id = $2
-		RETURNING id::text, name, COALESCE(uuid::text, ''), author_id, folder_id::text, created_at, COALESCE(updated_at, created_at), meta, is_private, COALESCE(instructions,'')`,
-		schema(projectID))
+		WHERE %s
+		RETURNING c.id::text, c.name, COALESCE(c.uuid::text, ''), c.author_id, c.folder_id::text, c.created_at, COALESCE(c.updated_at, c.created_at), c.meta, c.is_private, COALESCE(c.instructions,''), COALESCE(c.source,'')`,
+		schema(projectID), predicate)
 	var c conversations.Conversation
 	var authorID int
 	var folderID *string
 	var metaBytes []byte
 	var isPrivate bool
-	if err := r.pool.QueryRow(ctx, q, encoded, id).Scan(
-		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Instructions,
+	var source string
+	if err := r.pool.QueryRow(ctx, q, conversationID, encoded).Scan(
+		&c.ID, &c.Name, &c.UUID, &authorID, &folderID, &c.CreatedAt, &c.UpdatedAt, &metaBytes, &isPrivate, &c.Instructions, &source,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return conversations.Conversation{}, apierr.NotFound("conversation not found")
@@ -883,8 +882,8 @@ func (r *ConversationsRepo) UpdateInternalTools(ctx context.Context, projectID, 
 	c.FolderID = folderID
 	c.Meta = decodeConversationMeta(metaBytes)
 	c.IsPrivate = &isPrivate
-	if current.Source == conversations.EditorTestSource {
-		c.Source = current.Source
+	if source == conversations.EditorTestSource {
+		c.Source = source
 	}
 	return c, nil
 }
