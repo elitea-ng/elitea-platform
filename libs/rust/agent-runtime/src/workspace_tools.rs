@@ -93,6 +93,23 @@ pub const WORKSPACE_TOOLS: &[WorkspaceToolSpec] = &[
         },
     },
     WorkspaceToolSpec {
+        name: "find_files",
+        read_only: true,
+        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). Lists paths only and opens nothing; .gitignore honoured. For text inside files use search_files.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs) or, with fuzzy=true, a name fragment (usrctrl)." },
+                    "path": path_param("Directory relative to the workspace root (default: the root)."),
+                    "fuzzy": { "type": "boolean", "description": "Rank by fuzzy match instead of glob filtering." },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["pattern"]
+            })
+        },
+    },
+    WorkspaceToolSpec {
         name: "read_document",
         read_only: true,
         description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, e-mail, HTML, or plain text).",
@@ -501,7 +518,7 @@ mod tests {
         assert!(!names(true).contains(&REPLACED_TOOL));
         assert!(names(true).contains(&"run_command"));
         assert!(!names(false).contains(&"run_command"));
-        assert_eq!(names(true).len(), 12);
+        assert_eq!(names(true).len(), 13);
         for spec in WORKSPACE_TOOLS {
             assert_eq!((spec.parameters)()["type"], "object", "{}", spec.name);
         }

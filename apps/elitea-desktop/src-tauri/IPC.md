@@ -1214,7 +1214,8 @@ cannot change, such as `410` or `403`) the host sends `commit_failed`
 commit still running or failed is logged; that execution expires on the
 server, as before.
 The read-only, concurrency-safe calls of one model step (`read_file`,
-`list_tree`, `search_files`, `read_document`, git reads, the index tools)
+`list_tree`, `search_files`, `find_files`, `read_document`, git reads, the
+index tools)
 run together, at most 8 at once, before the step's other calls; writes,
 commands and remote toolkit calls then run one at a time in the model's
 order, so at most one tool `approval_request` is open at a time. Their

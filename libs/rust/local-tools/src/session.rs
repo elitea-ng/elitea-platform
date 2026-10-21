@@ -156,6 +156,23 @@ pub const TOOLS: &[ToolSpec] = &[
         },
     },
     ToolSpec {
+        name: "find_files",
+        kind: ToolKind::FindFiles,
+        description: "Find files in the workspace by name: a glob (src/**/*.rs, *.toml; newest first) or, with fuzzy=true, a name fragment (usrctrl; best match first). Lists paths only and opens nothing; .gitignore honoured. For text inside files use search_files.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "A glob (src/**/*.rs) or, with fuzzy=true, a name fragment (usrctrl)." },
+                    "path": path_param("Directory relative to the workspace root (default: the root)."),
+                    "fuzzy": { "type": "boolean", "description": "Rank by fuzzy match instead of glob filtering." },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["pattern"]
+            })
+        },
+    },
+    ToolSpec {
         name: "read_document",
         kind: ToolKind::ReadDocument,
         description: "Extract the text of a document in the workspace (PDF, Word, Excel, PowerPoint, e-mail, HTML, or plain text).",
@@ -763,6 +780,7 @@ impl LocalSession {
             ToolKind::ReadFile
             | ToolKind::ListTree
             | ToolKind::SearchFiles
+            | ToolKind::FindFiles
             | ToolKind::ReadDocument => self.read_only(spec, call_id, args).await,
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::GitCommit => self.git_commit(call_id, args).await,
@@ -859,6 +877,7 @@ impl LocalSession {
             ToolKind::ReadFile => files::read(&this.workspace, &this.ledger, args),
             ToolKind::ListTree => files::tree(&this.workspace, args),
             ToolKind::SearchFiles => files::search(&this.workspace, args),
+            ToolKind::FindFiles => files::find_files(&this.workspace, args),
             _ => files::document(&this.workspace, args),
         })
         .await

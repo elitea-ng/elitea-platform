@@ -11,7 +11,7 @@ destructive.**
 
 | Call | Default |
 |---|---|
-| `read_file`, `list_tree`, `search_files`, `read_document`, git reads | allowed |
+| `read_file`, `list_tree`, `search_files`, `find_files`, `read_document`, git reads | allowed |
 | `write_file`, `edit_file`, `apply_patch` inside the workspace | allowed: the turn's checkpoint undoes them. `path_deny`, `.git` and paths outside the workspace are refused before any rule |
 | `git_commit` | allowed: denied paths (`path_deny`, credentials, the desktop app's data) are never committed: left out of the given paths, and a commit of what is staged is refused, naming them, while the index holds one |
 | `run_command`, `read-only` or `workspace-write` sandbox, no network, not destructive | allowed, compound commands included (`cargo test 2>&1 \| tee target/log`, `npm ci && npm test`) |
@@ -26,8 +26,8 @@ directory. Each entry is denied as given and as resolved (a symlinked
 `~/.config` included), without regard to case where the file system folds
 it. Every tool reads it: the OS sandbox of each command, the host's git,
 `git_diff` and `git_commit`, and the in-process file tools, walkers and the
-local index (`read_file`, `read_document`, `list_tree`, `search_files`
-refuse or leave out what it covers, as for `path_deny`, wherever the
+local index (`read_file`, `read_document`, `list_tree`, `search_files`,
+`find_files` refuse or leave out what it covers, as for `path_deny`, wherever the
 workspace sits).
 
 ## What counts as destructive

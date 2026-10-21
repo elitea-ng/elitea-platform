@@ -220,6 +220,7 @@ async fn the_toolset_follows_policy_and_plan_mode() {
         "edit_file",
         "apply_patch",
         "search_files",
+        "find_files",
         "list_tree",
         "read_document",
         "run_command",

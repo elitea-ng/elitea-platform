@@ -436,11 +436,73 @@ fn base_dir(workspace: &Workspace, path: Option<&str>) -> ToolResult<WsPath> {
     }
 }
 
+/// A glob over workspace files, as `search_files` and `find_files` take it:
+/// one with a `/` matches the path from the workspace root
+/// (`src/**/*.rs`), one without matches the file name at any depth
+/// (`*.rs`); a leading `./` or `/` is dropped.
+fn file_glob(glob: &str) -> ToolResult<(globset::GlobMatcher, bool)> {
+    let trimmed = glob.trim();
+    let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
+    let trimmed = trimmed.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return Err(ToolError::invalid("the glob is empty"));
+    }
+    let matcher = globset::GlobBuilder::new(trimmed)
+        .literal_separator(true)
+        .build()
+        .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?
+        .compile_matcher();
+    Ok((matcher, trimmed.contains('/')))
+}
+
+/// The walk every listing tool shares (see [`walker`]); the glob is a
+/// filter on files, so `.gitignore` still applies under it.
+fn walk_builder(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    depth: Option<usize>,
+) -> ToolResult<ignore::WalkBuilder> {
+    let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
+    let denied = workspace.read_denied_filter();
+    let glob = glob.map(file_glob).transpose()?;
+    let root = workspace.root().to_path_buf();
+    builder
+        .hidden(false)
+        .require_git(false)
+        .follow_links(false)
+        .max_depth(depth)
+        // `.git`, `path_deny` and the session's deny list are pruned here,
+        // never filtered after: a denied tree is never descended into, so
+        // it cannot use up a walk's limit (nor a parallel walker's time).
+        .filter_entry(move |entry| {
+            if entry.file_name().to_str().is_some_and(is_protected_name) || denied(entry.path()) {
+                return false;
+            }
+            let Some((glob, whole_path)) = &glob else {
+                return true;
+            };
+            if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                return true;
+            }
+            if *whole_path {
+                entry
+                    .path()
+                    .strip_prefix(&root)
+                    .is_ok_and(|relative| glob.is_match(relative))
+            } else {
+                glob.is_match(entry.file_name())
+            }
+        });
+    Ok(builder)
+}
+
 /// A walk of the workspace from `base` the way every listing tool walks it:
 /// `.gitignore` honoured (with or without a git repository), hidden files
 /// included, `.git` and `path_deny` matches pruned (never descended into),
 /// symlinks yielded as entries but never followed, names in byte order.
-/// `glob` narrows it to matching paths; `depth` limits it.
+/// `glob` narrows it to matching files (`.gitignore` still applies);
+/// `depth` limits it.
 ///
 /// Public for the desktop's local index (ADR-0029 decision 7), which lists
 /// a workspace exactly as the agent's tools see it. A caller that wants
@@ -455,30 +517,8 @@ pub fn walker(
     glob: Option<&str>,
     depth: Option<usize>,
 ) -> ToolResult<ignore::Walk> {
-    let mut builder = ignore::WalkBuilder::new(workspace.absolute(base));
-    let denied = workspace.read_denied_filter();
-    builder
-        .hidden(false)
-        .require_git(false)
-        .follow_links(false)
-        .max_depth(depth)
-        .sort_by_file_name(Ord::cmp)
-        // `path_deny` matches are pruned here, not filtered after: a denied
-        // tree is never descended into, so it cannot use up a walk's limit.
-        .filter_entry(move |entry| {
-            !entry.file_name().to_str().is_some_and(is_protected_name) && !denied(entry.path())
-        });
-    if let Some(glob) = glob {
-        let mut overrides = ignore::overrides::OverrideBuilder::new(workspace.root());
-        overrides
-            .add(glob)
-            .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?;
-        builder.overrides(
-            overrides
-                .build()
-                .map_err(|_| ToolError::invalid(format!("`{glob}` is not a glob")))?,
-        );
-    }
+    let mut builder = walk_builder(workspace, base, glob, depth)?;
+    builder.sort_by_file_name(Ord::cmp);
     Ok(builder.build())
 }
 
@@ -586,6 +626,139 @@ pub(crate) fn tree(workspace: &Workspace, args: Value) -> ToolResult<Value> {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct FindArgs {
+    pub pattern: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub fuzzy: bool,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
+/// Files `find_files` answers by default.
+const DEFAULT_FIND_RESULTS: usize = 100;
+/// The most files one `find_files` call looks at: a huge folder answers
+/// from its first part rather than stalling the turn.
+pub const MAX_FIND_VISITED: usize = 200_000;
+
+/// The regular files [`walker`] yields under `base` (narrowed by `glob`),
+/// as workspace paths, with their modification time; at most `limit`
+/// looked at. `true` when the limit cut the walk short.
+fn walked_files(
+    workspace: &Workspace,
+    base: &WsPath,
+    glob: Option<&str>,
+    limit: usize,
+) -> ToolResult<(Vec<(WsPath, std::time::SystemTime)>, bool)> {
+    let mut files = Vec::new();
+    let mut visited = 0usize;
+    for entry in walker(workspace, base, glob, None)?.flatten() {
+        visited += 1;
+        if visited > limit {
+            return Ok((files, true));
+        }
+        // Regular files only: a symlink is neither listed nor followed.
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Some(path) = relative(workspace, entry.path()) else {
+            continue;
+        };
+        if workspace.denied_by(&path, Intent::Read).is_some() {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        files.push((path, modified));
+    }
+    Ok((files, false))
+}
+
+/// `find_files`: workspace files by glob, newest first, or by a fuzzy name
+/// fragment, best first. The same view as `list_tree` (`.gitignore`
+/// honoured, `.git`, `path_deny` and the session's deny list pruned,
+/// symlinks never followed); names only, nothing is opened.
+pub(crate) fn find_files(workspace: &Workspace, args: Value) -> ToolResult<Value> {
+    let args: FindArgs = parse(args)?;
+    let pattern = args.pattern.trim();
+    if pattern.is_empty() {
+        return Err(ToolError::invalid("pattern is empty"));
+    }
+    let max = args
+        .max_results
+        .unwrap_or(DEFAULT_FIND_RESULTS)
+        .clamp(1, 1000);
+    let base = base_dir(workspace, args.path.as_deref())?;
+    if args.fuzzy {
+        let (files, cut) = walked_files(workspace, &base, None, MAX_FIND_VISITED)?;
+        let ranked = fuzzy_rank(pattern, files.into_iter().map(|(path, _)| path));
+        let total = ranked.len();
+        let shown: Vec<Value> = ranked
+            .into_iter()
+            .take(max)
+            .map(|(path, score)| json!({ "path": path.display_string(), "score": score }))
+            .collect();
+        return Ok(json!({
+            "files": shown,
+            "matched": total,
+            "truncated": total > max || cut,
+        }));
+    }
+    let (mut files, cut) = walked_files(workspace, &base, Some(pattern), MAX_FIND_VISITED)?;
+    // Newest first; equal times in path order, so the answer is stable.
+    files.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.components().cmp(b.0.components()))
+    });
+    let total = files.len();
+    let shown: Vec<String> = files
+        .into_iter()
+        .take(max)
+        .map(|(path, _)| path.display_string())
+        .collect();
+    Ok(json!({
+        "files": shown,
+        "matched": total,
+        "truncated": total > max || cut,
+    }))
+}
+
+/// `paths` that fuzzily match `pattern` (nucleo's path scoring, smart
+/// case), best first; equal scores shorter, then in path order.
+fn fuzzy_rank(pattern: &str, paths: impl Iterator<Item = WsPath>) -> Vec<(WsPath, u32)> {
+    use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+    use nucleo_matcher::{Config, Matcher, Utf32Str};
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let pattern = Pattern::new(
+        pattern,
+        CaseMatching::Smart,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    );
+    let mut buffer = Vec::new();
+    let mut ranked: Vec<(WsPath, String, u32)> = paths
+        .filter_map(|path| {
+            let shown = path.display_string();
+            let score = pattern.score(Utf32Str::new(&shown, &mut buffer), &mut matcher)?;
+            Some((path, shown, score))
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| a.1.len().cmp(&b.1.len()))
+            .then_with(|| a.0.components().cmp(b.0.components()))
+    });
+    ranked
+        .into_iter()
+        .map(|(path, _, score)| (path, score))
+        .collect()
+}
+
+#[derive(Deserialize)]
 pub(crate) struct DocumentArgs {
     pub path: String,
 }
@@ -629,7 +802,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        EditArgs, WriteArgs, apply_patch, document, edit, plan_patch, read, search, tree, write,
+        EditArgs, WriteArgs, apply_patch, document, edit, find_files, plan_patch, read, search,
+        tree, write,
     };
     use crate::error::ErrorCode;
     use crate::ledger::ReadLedger;
@@ -993,6 +1167,174 @@ mod tests {
                 .code(),
             ErrorCode::InvalidArgument
         );
+    }
+
+    fn found(result: &serde_json::Value) -> Vec<String> {
+        result["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .map(|file| {
+                file.as_str()
+                    .or_else(|| file["path"].as_str())
+                    .expect("path")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    fn touch(dir: &tempfile::TempDir, name: &str, seconds_ago: u64) {
+        let time = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds_ago);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.path().join(name))
+            .expect("open")
+            .set_modified(time)
+            .expect("mtime");
+    }
+
+    #[test]
+    fn find_files_glob_newest_first() {
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "src/old.rs", "");
+        seed(&dir, "src/new.rs", "");
+        seed(&dir, "src/deep/mid.rs", "");
+        seed(&dir, "src/notes.md", "");
+        seed(&dir, "other.rs", "");
+        touch(&dir, "src/old.rs", 3000);
+        touch(&dir, "src/deep/mid.rs", 2000);
+        touch(&dir, "src/new.rs", 1000);
+        let result = find_files(&ws, json!({ "pattern": "src/**/*.rs" })).expect("find");
+        assert_eq!(
+            found(&result),
+            ["src/new.rs", "src/deep/mid.rs", "src/old.rs"]
+        );
+        assert_eq!(result["truncated"], false);
+        // A name glob matches at any depth; max_results caps.
+        let capped = find_files(&ws, json!({ "pattern": "*.rs", "max_results": 2 })).expect("find");
+        assert_eq!(found(&capped).len(), 2);
+        assert_eq!(capped["matched"], 4);
+        assert_eq!(capped["truncated"], true);
+        // Under a directory only.
+        let sub = find_files(&ws, json!({ "pattern": "*.rs", "path": "src/deep" })).expect("find");
+        assert_eq!(found(&sub), ["src/deep/mid.rs"]);
+        assert_eq!(
+            find_files(&ws, json!({ "pattern": "[" }))
+                .expect_err("bad glob")
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn find_files_fuzzy_ranks_best_first() {
+        let (dir, ws, _ledger) = setup(&[]);
+        for name in [
+            "app/user_controller.rs",
+            "app/user_service.rs",
+            "app/controller.rs",
+            "app/session_ctrl.rs",
+            "README.md",
+        ] {
+            seed(&dir, name, "");
+        }
+        let result = find_files(&ws, json!({ "pattern": "usrctrl", "fuzzy": true })).expect("find");
+        let files = found(&result);
+        assert_eq!(
+            files.first().map(String::as_str),
+            Some("app/user_controller.rs")
+        );
+        assert!(!files.contains(&"README.md".to_owned()), "{files:?}");
+        assert!(
+            result["files"][0]["score"]
+                .as_u64()
+                .is_some_and(|score| score > 0)
+        );
+    }
+
+    #[test]
+    fn find_files_prunes_denied_and_git() {
+        let (dir, ws, _ledger) = setup(&["secrets/**", "*.pem"]);
+        seed(&dir, ".gitignore", "target/\n");
+        seed(&dir, ".git/config.rs", "");
+        seed(&dir, "target/gen.rs", "");
+        seed(&dir, "secrets/key.rs", "");
+        seed(&dir, "src/key.pem", "");
+        seed(&dir, "src/lib.rs", "");
+        for args in [
+            json!({ "pattern": "**/*" }),
+            json!({ "pattern": "key", "fuzzy": true }),
+            json!({ "pattern": "rs", "fuzzy": true }),
+        ] {
+            let files = found(&find_files(&ws, args).expect("find"));
+            assert!(
+                files
+                    .iter()
+                    .all(|path| path == "src/lib.rs" || path == ".gitignore"),
+                "{files:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_files_does_not_follow_symlinks() {
+        let outside = tempfile::tempdir().expect("outside");
+        seed(&outside, "passwords.rs", "");
+        let (dir, ws, _ledger) = setup(&[]);
+        seed(&dir, "src/lib.rs", "");
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).expect("link");
+        std::os::unix::fs::symlink(
+            outside.path().join("passwords.rs"),
+            dir.path().join("src/link.rs"),
+        )
+        .expect("link");
+        let glob = found(&find_files(&ws, json!({ "pattern": "**/*.rs" })).expect("find"));
+        assert_eq!(glob, ["src/lib.rs"]);
+        let fuzzy =
+            found(&find_files(&ws, json!({ "pattern": "pass", "fuzzy": true })).expect("find"));
+        assert!(fuzzy.is_empty(), "{fuzzy:?}");
+    }
+
+    /// Security regression: a workspace bound at a home directory holds
+    /// `~/.ssh` and the app's own credentials; the session's deny list
+    /// keeps both out of every search and listing.
+    #[test]
+    fn search_never_reads_deny_list_paths() {
+        let dir = tempfile::tempdir().expect("dir");
+        let home = std::fs::canonicalize(dir.path()).expect("canonical");
+        let plant = |path: &str, content: &str| {
+            let path = home.join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+            std::fs::write(path, content).expect("plant");
+        };
+        plant(".ssh/id_rsa", "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+        plant(".ssh/id_rsa.pub", "ssh-rsa AAAA PRIVATE KEY comment\n");
+        plant(
+            "Library/Application Support/ai.elitea.desktop/credentials.json",
+            "{\"refresh\": \"PRIVATE KEY\"}\n",
+        );
+        plant("notes/id_card.txt", "nothing secret\n");
+        let list = crate::deny::DenyList::for_session(
+            Some(&home),
+            Some("ai.elitea.desktop"),
+            true,
+            Vec::new(),
+        );
+        let ws = Workspace::open(&home, &[])
+            .expect("workspace")
+            .with_deny_list(std::sync::Arc::new(list));
+        let searched = search(
+            &ws,
+            json!({ "pattern": "PRIVATE KEY", "fixed_strings": true }),
+        )
+        .expect("search");
+        assert_eq!(searched["matches"], json!([]), "{searched}");
+        let ids = found(&find_files(&ws, json!({ "pattern": "**/id_*" })).expect("find"));
+        assert_eq!(ids, ["notes/id_card.txt"]);
+        let creds = found(
+            &find_files(&ws, json!({ "pattern": "credentials", "fuzzy": true })).expect("find"),
+        );
+        assert!(creds.is_empty(), "{creds:?}");
     }
 
     #[test]
