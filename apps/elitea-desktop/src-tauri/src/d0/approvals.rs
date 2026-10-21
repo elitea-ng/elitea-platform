@@ -25,7 +25,11 @@ use super::recorder::Recorder;
 /// The payload key a remote toolkit confirmation travels under.
 pub const REMOTE_PAYLOAD_KEY: &str = "remote_toolkit_call";
 
-/// The person's answer, as `approval_respond` names it.
+/// The payload key an MCP sign-in question travels under (issue 1231).
+pub const MCP_AUTHORIZATION_PAYLOAD_KEY: &str = "mcp_authorization";
+
+/// The person's answer, as `approval_respond` names it (`continue` and
+/// `cancel`, the MCP sign-in card's answers, are `allow_once` and `deny`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiDecision {
     AllowOnce,
@@ -37,9 +41,9 @@ impl UiDecision {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "allow_once" => Some(Self::AllowOnce),
+            "allow_once" | "continue" => Some(Self::AllowOnce),
             "allow_always" => Some(Self::AllowAlways),
-            "deny" => Some(Self::Deny),
+            "deny" | "cancel" => Some(Self::Deny),
             _ => None,
         }
     }
@@ -143,6 +147,8 @@ impl ApprovalChannel for UiPrompt {
             "tool_confirmation"
         } else if request.payload.get(CONTINUE_PAYLOAD_KEY).is_some() {
             CONTINUE_KIND
+        } else if request.payload.get(MCP_AUTHORIZATION_PAYLOAD_KEY).is_some() {
+            MCP_AUTHORIZATION_PAYLOAD_KEY
         } else {
             "command_approval"
         };
@@ -241,6 +247,31 @@ fn describe(request: &ApprovalRequest) -> Value {
             "reason": "",
             "can_remember": false,
         });
+    }
+    if let Some(question) = request.payload.get(MCP_AUTHORIZATION_PAYLOAD_KEY) {
+        // An MCP server's sign-in: a card in the transcript, never
+        // remembered. `call_id` lets the UI drop it when the call ends.
+        let text = |key: &str| {
+            question
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        };
+        let mut payload = json!({
+            "kind": MCP_AUTHORIZATION_PAYLOAD_KEY,
+            "call_id": request.subject,
+            "tool": text("tool"),
+            "toolkit": text("toolkit"),
+            "title": text("title"),
+            "detail": text("detail"),
+            "server_url": text("server_url"),
+            "reason": "",
+            "can_remember": false,
+        });
+        if !text("authorize_path").is_empty() {
+            payload["authorize_path"] = json!(text("authorize_path"));
+        }
+        return payload;
     }
     if let Some(remote) = request.payload.get(REMOTE_PAYLOAD_KEY) {
         let text = |key: &str| remote.get(key).and_then(Value::as_str).unwrap_or_default();

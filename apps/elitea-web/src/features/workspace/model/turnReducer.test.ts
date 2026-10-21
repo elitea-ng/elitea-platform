@@ -116,6 +116,17 @@ describe('turnReducer', () => {
     expect(activeView(state).approvals.map((a) => a.request_id)).toEqual(['a', 'c']);
   });
 
+  it("drops an MCP sign-in card when its tool call ends, and keeps the others", () => {
+    const signIn: AgentEvent = {
+      turn_id: T,
+      seq: 3,
+      kind: 'approval_request',
+      payload: { request_id: 's', kind: 'mcp_authorization', call_id: 'c1', tool: 'create_issue', title: 'Jira needs your sign-in', detail: '', reason: '', can_remember: false },
+    };
+    const view = activeView(run([call(1, 'c1'), approval(2, 'a'), signIn, result(4, 'c1')]));
+    expect(view.approvals.map((a) => a.request_id)).toEqual(['a']);
+  });
+
   it('clears pending approvals when the turn ends, however it ends', () => {
     for (const phase of ['done', 'cancelled', 'error'] as const) {
       const view = activeView(run([approval(1, 'a'), status(2, phase)]));

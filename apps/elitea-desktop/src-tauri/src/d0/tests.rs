@@ -1070,15 +1070,9 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
             attempts: 3,
             delay: Duration::from_millis(5),
         },
+        authorization_wait: remote_tools::MCP_AUTHORIZATION_WAIT,
     };
-    let spec = RemoteToolSpec {
-        exposed_name: "Jira_call".into(),
-        toolkit_id: 3,
-        toolkit_ref: TOOLKIT_REF.into(),
-        toolkit_name: "Jira".into(),
-        description: String::new(),
-        tool_name: None,
-    };
+    let spec = jira_spec();
     let result = remote_tools::call(&context, &spec, "c1", "search", json!({"q": 1})).await;
     assert_eq!(result, json!({"status": "ok", "result": "fine"}));
     let seen = server.seen();
@@ -1088,6 +1082,298 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
         seen[1].headers["idempotency-key"]
     );
     assert_eq!(seen[0].body, seen[1].body);
+}
+
+fn jira_spec() -> RemoteToolSpec {
+    RemoteToolSpec {
+        exposed_name: "Jira_call".into(),
+        toolkit_id: 3,
+        toolkit_ref: TOOLKIT_REF.into(),
+        toolkit_name: "Jira".into(),
+        toolkit_type: "jira".into(),
+        description: String::new(),
+        tool_name: None,
+    }
+}
+
+/// A token-shaped value the 409 carries in every field a careless host
+/// could forward; it must reach no event, log line or commit.
+const PLANTED_TOKEN: &str = "eyJhbGciOiJSUzI1NiJ9.pl4nted-0auth-T0ken.c4n4ry";
+
+/// `mcp_authorization_required` as executeRemoteToolkitTool answers it,
+/// with the token planted everywhere the server's OAuth metadata could put
+/// one.
+fn mcp_authorization_required(reference: Option<&str>) -> Res {
+    let mut retry = json!({"tool_name": "create_issue",
+        "tool_params": {"summary": "Bug", "refresh_token": PLANTED_TOKEN}});
+    if let Some(reference) = reference {
+        retry["mcp_authorization_reference"] = json!(reference);
+    }
+    Res::json(
+        409,
+        &json!({
+            "ok": false, "error": "mcp_authorization_required", "toolkit_id": 3,
+            "toolkit_type": "jira", "tool_name": "create_issue",
+            "message": format!("sign in (access_token={PLANTED_TOKEN})"),
+            "access_token": PLANTED_TOKEN,
+            "authorization_required": {
+                "tool_name": "create_issue", "toolkit_name": "Jira", "toolkit_type": "jira", "toolkit_id": 3,
+                "server_url": format!("https://user:{PLANTED_TOKEN}@mcp.example.com/mcp?access_token={PLANTED_TOKEN}#{PLANTED_TOKEN}"),
+                "resource_metadata_url": format!("https://mcp.example.com/.well-known/oauth?t={PLANTED_TOKEN}"),
+                "www_authenticate": format!("Bearer error=\"invalid_token\", token=\"{PLANTED_TOKEN}\""),
+                "resource_metadata": {"client_secret": PLANTED_TOKEN, "access_token": PLANTED_TOKEN},
+                "access_token": PLANTED_TOKEN
+            },
+            "authorization_retry": retry
+        }),
+    )
+}
+
+/// An approval channel that records every question and answers `decision`
+/// (`None`: never answers).
+struct Answering {
+    decision: Option<&'static str>,
+    asked: Mutex<Vec<elitea_agent_runtime::host::ApprovalRequest>>,
+}
+
+#[async_trait]
+impl elitea_agent_runtime::host::ApprovalChannel for Answering {
+    async fn request(
+        &self,
+        request: elitea_agent_runtime::host::ApprovalRequest,
+    ) -> Result<elitea_agent_runtime::host::ApprovalOutcome, elitea_agent_runtime::host::HostError>
+    {
+        self.asked.lock().unwrap().push(request);
+        let Some(action) = self.decision else {
+            return std::future::pending().await;
+        };
+        Ok(elitea_agent_runtime::host::ApprovalOutcome::Decided {
+            action: action.to_owned(),
+            value: json!({}),
+        })
+    }
+}
+
+async fn remote_context(
+    server: &MockServer,
+    prompt: Arc<dyn elitea_agent_runtime::host::ApprovalChannel>,
+    authorization_wait: Duration,
+) -> RemoteContext {
+    RemoteContext {
+        api: Arc::new(
+            PlatformApi::new(
+                Arc::new(StaticCredentials::new(server.origin.clone())),
+                "0.1.0",
+            )
+            .unwrap(),
+        ),
+        project_id: 1,
+        execution_id: EXECUTION.into(),
+        application_id: 5,
+        version_id: 9,
+        prompt,
+        retry: RetryPolicy {
+            attempts: 3,
+            delay: Duration::from_millis(5),
+        },
+        authorization_wait,
+    }
+}
+
+/// Issue 1231: an MCP server that needs the person's sign-in asks once (the
+/// toolkit's web page to sign in on, the server's address without its
+/// query), then, on Continue, sends the call again as a NEW call (its own
+/// Idempotency-Key) with the authorisation reference the 409 named.
+#[tokio::test]
+async fn mcp_authorization_required_asks_then_retries_with_new_key() {
+    const REFERENCE: &str = "mcpref_0123456789abcdef0123456789abcdef0123";
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = serve({
+        let calls = calls.clone();
+        move |_req: &Req| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                mcp_authorization_required(Some(REFERENCE))
+            } else {
+                Res::json(
+                    200,
+                    &json!({"ok": true, "status": "ok", "result": {"key": "J-1"}}),
+                )
+            }
+        }
+    })
+    .await;
+    let prompt = Arc::new(Answering {
+        decision: Some("approve"),
+        asked: Mutex::default(),
+    });
+    let context = remote_context(&server, prompt.clone(), Duration::from_secs(5)).await;
+    let result = remote_tools::call(
+        &context,
+        &jira_spec(),
+        "c1",
+        "create_issue",
+        json!({"summary": "Bug"}),
+    )
+    .await;
+    assert_eq!(result, json!({"status": "ok", "result": {"key": "J-1"}}));
+
+    let asked = prompt.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].subject, "c1");
+    assert_eq!(asked[0].available_actions, ["continue", "cancel"]);
+    let question = &asked[0].payload["mcp_authorization"];
+    assert_eq!(question["toolkit"], "Jira");
+    assert_eq!(question["server_url"], "https://mcp.example.com/mcp");
+    assert_eq!(question["authorize_path"], "/app/1/toolkits/all/3");
+    assert!(!asked[0].payload.to_string().contains(PLANTED_TOKEN));
+
+    let seen = server.seen();
+    assert_eq!(seen.len(), 2);
+    assert_ne!(
+        seen[0].headers["idempotency-key"],
+        seen[1].headers["idempotency-key"]
+    );
+    let first: Value = serde_json::from_str(&seen[0].body).unwrap();
+    let second: Value = serde_json::from_str(&seen[1].body).unwrap();
+    assert!(first.get("mcp_authorization_reference").is_none());
+    assert_eq!(second["mcp_authorization_reference"], REFERENCE);
+    assert_eq!(second["arguments"], json!({"summary": "Bug"}));
+    assert_eq!(second["tool_name"], "create_issue");
+
+    // An MCP toolkit's sign-in page is the MCP page.
+    let mcp = RemoteToolSpec {
+        toolkit_type: "mcp".into(),
+        toolkit_id: 7,
+        ..jira_spec()
+    };
+    calls.store(0, Ordering::SeqCst);
+    remote_tools::call(&context, &mcp, "c2", "x", json!({})).await;
+    assert_eq!(
+        prompt.asked.lock().unwrap()[1].payload["mcp_authorization"]["authorize_path"],
+        "/app/1/mcps/all/7"
+    );
+}
+
+/// Cancel, and no answer within the wait, end that tool call only (the
+/// model reads why); nothing is sent again.
+#[tokio::test]
+async fn mcp_authorization_cancel_ends_only_the_tool_call() {
+    let server = serve(|_req: &Req| mcp_authorization_required(None)).await;
+    let cancelling = Arc::new(Answering {
+        decision: Some("reject"),
+        asked: Mutex::default(),
+    });
+    let context = remote_context(&server, cancelling, Duration::from_secs(5)).await;
+    let result = remote_tools::call(&context, &jira_spec(), "c1", "create_issue", json!({})).await;
+    assert_eq!(result["status"], "error");
+    assert_eq!(result["code"], "authorization_cancelled");
+    assert_eq!(server.seen().len(), 1);
+
+    let silent = Arc::new(Answering {
+        decision: None,
+        asked: Mutex::default(),
+    });
+    let context = remote_context(&server, silent, Duration::from_millis(50)).await;
+    let result = remote_tools::call(&context, &jira_spec(), "c1", "create_issue", json!({})).await;
+    assert_eq!(result["code"], "authorization_timeout");
+    assert_eq!(server.seen().len(), 2);
+
+    // In a turn: the cancelled call is a failed tool step, and the turn
+    // goes on to the model's answer and commits.
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        move |req: &Req| {
+            if req.path == "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/3" {
+                return mcp_authorization_required(None);
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let ask = events
+        .iter()
+        .find(|e| e.kind == "approval_request")
+        .unwrap();
+    assert_eq!(ask.payload["kind"], "mcp_authorization");
+    assert_eq!(ask.payload["call_id"], "call-remote");
+    let results: Vec<_> = events.iter().filter(|e| e.kind == "tool_result").collect();
+    assert_eq!(results[1].payload["ok"], false);
+    assert_eq!(
+        seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3").len(),
+        1
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(body["assistant_message"], json!({"content": "Done."}));
+    assert_eq!(body["hitl_exchanges"][0]["kind"], "mcp_authorization");
+    assert_eq!(body["hitl_exchanges"][0]["decision"], "reject");
+}
+
+/// The canary: a 409 whose every field carries a token-shaped value. The
+/// person continues, the server asks again (the second ask ends the call),
+/// and the value is in no event, no log line and no commit.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_authorization_tokens_never_reach_events_logs_or_the_commit() {
+    crate::testutil::capture_log();
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        move |req: &Req| {
+            if req.path == "/api/v2/elitea_core/remote_toolkit_call/prompt_lib/1/3" {
+                return mcp_authorization_required(None);
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let remote = seen(&h.server, "/remote_toolkit_call/prompt_lib/1/3");
+    assert_eq!(remote.len(), 2, "asked once, sent again once");
+    let results: Vec<_> = events.iter().filter(|e| e.kind == "tool_result").collect();
+    assert_eq!(results[1].payload["ok"], false);
+    let asks: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "approval_request")
+        .collect();
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0].payload["server_url"], "https://mcp.example.com/mcp");
+    for event in h.emitter.all() {
+        assert!(
+            !serde_json::to_string(&event.payload)
+                .unwrap()
+                .contains(PLANTED_TOKEN),
+            "{} carries the token",
+            event.kind
+        );
+    }
+    for commit in seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    ) {
+        assert!(
+            !commit.body.contains(PLANTED_TOKEN),
+            "the commit carries it"
+        );
+    }
+    // The model's next request holds the tool's result: no token either.
+    for llm in seen(&h.server, "/llm/v1/chat/completions") {
+        assert!(!llm.body.contains(PLANTED_TOKEN), "the model saw it");
+    }
+    assert!(
+        !crate::testutil::LOG
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(PLANTED_TOKEN)),
+        "a log line carries the token"
+    );
 }
 
 /// ADR-0029 decision 2: no crate in this binary may turn on serde_json's

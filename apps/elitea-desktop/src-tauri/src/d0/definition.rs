@@ -54,6 +54,9 @@ pub struct RemoteToolSpec {
     pub toolkit_id: i64,
     pub toolkit_ref: String,
     pub toolkit_name: String,
+    /// The toolkit's `type` (`mcp_*` names an MCP server toolkit), for the
+    /// web app page that signs in to it.
+    pub toolkit_type: String,
     pub description: String,
     /// `None`: the toolkit's every tool (`all_tools`); the model names the
     /// tool in a `tool_name` argument.
@@ -242,6 +245,7 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
         .unwrap_or("toolkit")
         .to_owned();
     let description = text("description").unwrap_or_default().to_owned();
+    let toolkit_type = text("type").unwrap_or_default().to_owned();
     let all_tools = tool.get("all_tools") == Some(&Value::Bool(true));
     let selected: Vec<String> = tool
         .get("selected_tools")
@@ -259,6 +263,7 @@ fn remote_specs(tool: &Value) -> Result<Vec<RemoteToolSpec>, Refusal> {
         toolkit_id,
         toolkit_ref: toolkit_ref.to_owned(),
         toolkit_name: toolkit_name.clone(),
+        toolkit_type: toolkit_type.clone(),
         description: description.clone(),
         tool_name,
     };
@@ -491,6 +496,7 @@ mod tests {
                 toolkit_id: 1,
                 toolkit_ref: String::new(),
                 toolkit_name: "read".into(),
+                toolkit_type: String::new(),
                 description: String::new(),
                 tool_name: Some("file".into()),
             };

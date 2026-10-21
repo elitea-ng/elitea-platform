@@ -9,6 +9,8 @@
  * The `continue` kind (the run used its steps: go on?) is not a modal: it is
  * a compact card the page puts in the transcript, under what the agent did.
  * It is asked every time and never remembered, so it offers no "always".
+ * The `mcp_authorization` kind (an MCP server needs the person's sign-in) is
+ * such a card too: McpAuthorizationCard.
  */
 import { useEffect, useRef } from 'react';
 
@@ -25,6 +27,8 @@ import { t } from '@/shared/i18n';
 import type { ApprovalDecision, ApprovalRequestPayload } from '@/shared/desktop/workspaceIpc';
 
 import { ruleSourceLabel } from '@/shared/desktop/ruleSource';
+
+import { McpAuthorizationCard } from './McpAuthorizationCard';
 
 export interface ApprovalDialogProps {
   /** The request being asked; `undefined` closes the dialog. */
@@ -98,6 +102,7 @@ export function ApprovalDialog({ request, queued, onRespond }: ApprovalDialogPro
   if (request === undefined) return null;
   const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
   if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
+  if (request.kind === 'mcp_authorization') return <McpAuthorizationCard request={request} respond={respond} />;
   const decidedBy = ruleSourceLabel(request.source, request.rule);
   return (
     <Dialog

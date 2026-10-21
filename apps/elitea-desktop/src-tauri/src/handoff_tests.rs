@@ -1293,20 +1293,6 @@ async fn status_many_is_local_first_and_cached() {
     assert_eq!(h.platform.lock().unwrap().state_gets, 1, "cached");
 }
 
-static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-struct CaptureLog;
-
-impl log::Log for CaptureLog {
-    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-        true
-    }
-    fn log(&self, record: &log::Record<'_>) {
-        LOG.lock().unwrap().push(format!("{}", record.args()));
-    }
-    fn flush(&self) {}
-}
-
 fn files_containing(dir: &Path, needle: &[u8], out: &mut Vec<String>) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
@@ -1328,10 +1314,11 @@ fn files_containing(dir: &Path, needle: &[u8], out: &mut Vec<String>) {
 /// no disk under the app data, in no log line and in no event.
 #[tokio::test(flavor = "multi_thread")]
 async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
-    let _ = log::set_logger(&CaptureLog).map(|()| log::set_max_level(log::LevelFilter::Trace));
+    crate::testutil::capture_log();
     log::info!("capture probe");
     assert!(
-        LOG.lock()
+        crate::testutil::LOG
+            .lock()
             .unwrap()
             .iter()
             .any(|line| line == "capture probe"),
@@ -1436,7 +1423,8 @@ async fn includes_and_env_harvest_and_the_value_never_lands_anywhere() {
     files_containing(h.app.path(), planted.as_bytes(), &mut found);
     assert!(found.is_empty(), "{found:?}");
     assert!(
-        !LOG.lock()
+        !crate::testutil::LOG
+            .lock()
             .unwrap()
             .iter()
             .any(|line| line.contains(planted))

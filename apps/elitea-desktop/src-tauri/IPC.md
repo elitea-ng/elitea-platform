@@ -229,7 +229,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
-| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
+| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "continue" \| "cancel"}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
@@ -294,6 +294,28 @@ toolkit or server with every tool selected (`all_tools`) is one tool
 `executeRemoteToolkitTool` (a platform server's with toolkit id 0) with
 its own `Idempotency-Key`, reused on each of its retries; the desktop never
 connects to an MCP server itself and holds no credential of one.
+
+**MCP sign-in.** A remote tool whose MCP server needs the person's sign-in
+answers 409 `mcp_authorization_required`. The host then asks
+`approval_request {kind: "mcp_authorization", call_id, tool, toolkit, title:
+"<toolkit> needs your sign-in", detail, server_url, authorize_path?, reason:
+"", can_remember: false}`: `server_url` is the server's address (http(s),
+without credentials, query or fragment), `authorize_path` the web app page
+that signs in to that toolkit (`/app/<project>/mcps/all/<toolkit>` for an MCP
+toolkit, `/app/<project>/toolkits/all/<toolkit>` otherwise; absent for a
+platform server), which the UI opens in the system browser. Nothing else of
+the 409 (the server's OAuth metadata, its `WWW-Authenticate`, the call's
+arguments) reaches an event, a log line, the model or the commit, and no
+token ever reaches the desktop: the browser signs in against the platform.
+Answer `continue` (or `allow_once`) once signed in: the host sends the same
+tool call again as a new call (a new `Idempotency-Key`, with the
+`authorization_retry.mcp_authorization_reference` the 409 named, when it named
+one). `cancel` (or `deny`), no answer within 10 minutes, or a second
+`mcp_authorization_required` end that tool call only, as a failed tool step
+the model reads (`authorization_cancelled`, `authorization_timeout`,
+`authorization_required`); the turn goes on. The UI shows the question as a
+card in the transcript and drops it when the call's `tool_result` arrives.
+The commit's `hitl_exchanges` hold it as kind `mcp_authorization`.
 
 `mentions` are the workspace-relative paths the person referenced with "@"
 (a folder may end with `/`; at most 50). Each must resolve inside the
@@ -1196,7 +1218,7 @@ order. Kinds and payloads:
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
 | `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
 | `usage` | `{prompt_tokens: number, completion_tokens: number, total_tokens: number}` — one model call's usage as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage). `prompt_tokens` is what that call sent, i.e. the context in use right then; sum the calls for a turn's total. The context window's size is not reported, so there is no "fill" percentage. |
-| `approval_request` | `{request_id, kind?: "continue", steps?: number, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
+| `approval_request` | `{request_id, kind?: "continue" \| "mcp_authorization", steps?: number, call_id?, toolkit?, server_url?, authorize_path?, tool, title, detail, command?: string[], paths?: string[], reason, source?: "workspace" \| "user" \| "default" \| …, rule?: string, justification?: string, can_remember: boolean}` — `kind: "continue"` is the step limit's question (below), `kind: "mcp_authorization"` an MCP server's sign-in (**MCP sign-in**); `source` is the layer that asks, and when an approval rule asks, `rule` names it (`workspace#3`, `user#1`) and `justification` is its text (the card shows it in place of `reason`) |
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
