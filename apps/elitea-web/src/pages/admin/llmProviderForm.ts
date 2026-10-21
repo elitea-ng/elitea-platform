@@ -32,7 +32,77 @@ export interface ProviderField {
   readonly placeholder?: string;
   /** Rendered as a multi-line field — a service-account document, not a token. */
   readonly multiline?: boolean;
+  /**
+   * `boolean` renders a checkbox and sends a JSON boolean. The gateway decodes
+   * such a field into a Go `bool`, so the string "true" would fail the decode
+   * and drop the whole credential row. The form state holds "true"/"false",
+   * which is also how the listing's `settings` reports it.
+   */
+  readonly kind?: 'text' | 'boolean';
+  /** Shown under the control. */
+  readonly helperText?: string;
 }
+
+/**
+ * How a credential authenticates to its provider: `data.auth_mode`.
+ *
+ * `workload_identity` uses the gateway pod's own Google service account (GKE
+ * Workload Identity), so the row holds no key. `key` is a stored secret. An
+ * absent value is `key`, which is what every row written before the field
+ * means.
+ */
+export type ProviderAuthMode = 'workload_identity' | 'key';
+
+/**
+ * What the listing reports about a keyless credential, beside `settings`.
+ * Optional, because an older server does not send either field; absent
+ * `auth_mode` is `key`.
+ */
+export interface KeylessProviderListing {
+  readonly auth_mode?: string;
+  /** DIAL's workload-identity token audience; empty means the endpoint origin. */
+  readonly token_audience?: string;
+}
+
+/** The types that can authenticate without a stored key. */
+const KEYLESS_TYPES: ReadonlySet<LlmProviderType> = new Set<LlmProviderType>([
+  'vertex_ai',
+  'ai_dial',
+]);
+
+/** Whether this type offers the Authentication choice. */
+export function supportsWorkloadIdentity(type: LlmProviderType): boolean {
+  return KEYLESS_TYPES.has(type);
+}
+
+/** The stored or typed auth mode. Anything but `workload_identity` is `key`. */
+export function providerAuthMode(values: Readonly<Record<string, string>>): ProviderAuthMode {
+  return values['auth_mode'] === 'workload_identity' ? 'workload_identity' : 'key';
+}
+
+/**
+ * The origin of a typed endpoint, for the token audience placeholder: the
+ * value the gateway uses when the field is empty. Empty when the endpoint does
+ * not parse yet.
+ */
+export function endpointOrigin(apiBase: string): string {
+  try {
+    return new URL(apiBase.trim()).origin;
+  } catch {
+    return '';
+  }
+}
+
+const TOKEN_AUDIENCE_FIELD: ProviderField = {
+  key: 'token_audience',
+  label: t('pages.admin.llmProviders.field.tokenAudience', 'Token audience'),
+  secret: false,
+  required: false,
+  helperText: t(
+    'pages.admin.llmProviders.field.tokenAudienceHelp',
+    'Optional. The audience of the Google ID token sent to DIAL. Empty uses the endpoint origin.',
+  ),
+};
 
 /** `api_base` is common to every provider, and is never secret. */
 function endpointField(required: boolean, placeholder: string): ProviderField {
@@ -144,11 +214,43 @@ const PROVIDER_FIELDS: Readonly<Record<LlmProviderType, readonly ProviderField[]
   // behind a private network commonly has none, and requiring one would make
   // the form refuse a configuration that works.
   ollama: [endpointField(true, 'http://ollama:11434'), apiKeyField(false)],
-  vllm: [endpointField(true, 'http://vllm:8000/v1'), apiKeyField(false)],
+  vllm: [
+    endpointField(true, 'http://vllm:8000/v1'),
+    apiKeyField(false),
+    {
+      key: 'use_anthropic_endpoints',
+      label: t(
+        'pages.admin.llmProviders.field.useAnthropicEndpoints',
+        'Use Anthropic-compatible endpoints',
+      ),
+      secret: false,
+      required: false,
+      kind: 'boolean',
+      helperText: t(
+        'pages.admin.llmProviders.field.useAnthropicEndpointsHelp',
+        'Send requests to /v1/messages in the Anthropic format instead of the OpenAI-compatible routes.',
+      ),
+    },
+  ],
 };
 
-export function providerFields(type: LlmProviderType): readonly ProviderField[] {
-  return PROVIDER_FIELDS[type];
+/**
+ * The fields of one type, for one auth mode.
+ *
+ * With workload identity the stored key is not a field at all: Vertex loses
+ * its service-account document, DIAL loses its API key and gains the optional
+ * token audience. `authMode` is ignored for a type without the choice.
+ */
+export function providerFields(
+  type: LlmProviderType,
+  authMode: ProviderAuthMode = 'key',
+): readonly ProviderField[] {
+  const fields = PROVIDER_FIELDS[type];
+  if (!supportsWorkloadIdentity(type) || authMode === 'key') return fields;
+  const keyless = fields.filter(
+    (field) => field.key !== 'vertex_credentials' && field.key !== 'api_key',
+  );
+  return type === 'ai_dial' ? [...keyless, TOKEN_AUDIENCE_FIELD] : keyless;
 }
 
 /** Human labels for the type select. */
@@ -179,7 +281,7 @@ export function missingProviderFields(
   values: Readonly<Record<string, string>>,
   editing: boolean,
 ): readonly string[] {
-  return providerFields(type)
+  return providerFields(type, providerAuthMode(values))
     .filter((field) => field.required && (field.secret ? !editing : true))
     .filter((field) => (values[field.key] ?? '').trim() === '')
     .map((field) => field.label);
@@ -194,17 +296,27 @@ export function missingProviderFields(
  *
  * A blank NON-secret field is sent as the empty string, because clearing an
  * endpoint or an api-version is a thing an operator legitimately does and there
- * is no other way to express it.
+ * is no other way to express it. A boolean field is sent as a JSON boolean.
  */
 export function providerDataFor(
   type: LlmProviderType,
   values: Readonly<Record<string, string>>,
-): Record<string, string> {
-  const data: Record<string, string> = {};
-  for (const field of providerFields(type)) {
+): Record<string, string | boolean> {
+  const authMode = providerAuthMode(values);
+  const data: Record<string, string | boolean> = {};
+  for (const field of providerFields(type, authMode)) {
     const value = (values[field.key] ?? '').trim();
+    if (field.kind === 'boolean') {
+      data[field.key] = value === 'true';
+      continue;
+    }
     if (field.secret && value === '') continue;
     data[field.key] = value;
   }
+  // Sent on EVERY save of a type with the choice, `key` included: the update
+  // is partial, so omitting it on a switch back to a key would leave a stored
+  // `workload_identity` in place. A field the mode hides is not sent, so a
+  // stored key survives a switch to workload identity and back.
+  if (supportsWorkloadIdentity(type)) data['auth_mode'] = authMode;
   return data;
 }

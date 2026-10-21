@@ -76,6 +76,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	saml2 "github.com/russellhaering/gosaml2"
+	"github.com/russellhaering/gosaml2/types"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browsersession"
@@ -212,12 +213,15 @@ func (h *SAMLHandler) resolve(w http.ResponseWriter, r *http.Request) (*samlRunt
 // SERVED rather than pasted together by hand there: entity ID, ACS URL, NameID
 // format and the signing certificate all come from the same authored row the
 // login path reads, so the two cannot drift.
+//
+// It is served for a provider with request signing OFF too. See
+// serviceProviderMetadata for why that path does not call the library.
 func (h *SAMLHandler) Metadata(w http.ResponseWriter, r *http.Request) {
 	runtime, ok := h.resolve(w, r)
 	if !ok {
 		return
 	}
-	descriptor, err := runtime.provider.Metadata()
+	descriptor, err := serviceProviderMetadata(runtime)
 	if err != nil {
 		slog.Error("SAML: metadata could not be built", "err", err)
 		http.Error(w, "metadata is not available", http.StatusServiceUnavailable)
@@ -232,6 +236,55 @@ func (h *SAMLHandler) Metadata(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/samlmetadata+xml")
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(document)
+}
+
+// samlMetadataValidity is how long a served descriptor says it stays valid. It
+// is the seven days gosaml2's own Metadata uses, so both paths agree.
+const samlMetadataValidity = 7 * 24 * time.Hour
+
+// serviceProviderMetadata builds this deployment's SP descriptor.
+//
+// With a service-provider key attached (request signing on), it is the
+// library's own descriptor, which carries that key's certificate. Without one,
+// `SAMLServiceProvider.Metadata` cannot be called: it ALWAYS reads an
+// encryption certificate and fails "empty SP encryption certificate" when there
+// is none, so an unsigned provider had no metadata at all. That path builds the
+// same `types.EntityDescriptor` here, with no KeyDescriptor: there is no key to
+// publish, and assertions are still required to be signed.
+//
+// Neither library path writes a NameIDFormat, so the authored one is added to
+// both.
+func serviceProviderMetadata(runtime *samlRuntime) (*types.EntityDescriptor, error) {
+	provider := runtime.provider
+	var descriptor *types.EntityDescriptor
+	if provider.SPKeyStore != nil || provider.SignAuthnRequests {
+		// A provider that signs but has no key is a broken runtime; the library
+		// refuses it, and that refusal is the right answer here.
+		built, err := provider.Metadata()
+		if err != nil {
+			return nil, err
+		}
+		descriptor = built
+	} else {
+		descriptor = &types.EntityDescriptor{
+			ValidUntil: provider.Clock.Now().UTC().Add(samlMetadataValidity),
+			EntityID:   provider.ServiceProviderIssuer,
+			SPSSODescriptor: &types.SPSSODescriptor{
+				AuthnRequestsSigned:        false,
+				WantAssertionsSigned:       !provider.SkipSignatureValidation,
+				ProtocolSupportEnumeration: saml2.SAMLProtocolNamespace,
+				AssertionConsumerServices: []types.IndexedEndpoint{{
+					Binding:  saml2.BindingHttpPost,
+					Location: provider.AssertionConsumerServiceURL,
+					Index:    1,
+				}},
+			},
+		}
+	}
+	if format := runtime.document.NameIDFormat; format != "" && descriptor.SPSSODescriptor != nil {
+		descriptor.SPSSODescriptor.NameIDFormats = []string{format}
+	}
+	return descriptor, nil
 }
 
 // Login answers `GET /auth/saml/login`.

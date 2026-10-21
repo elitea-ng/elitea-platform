@@ -33,17 +33,26 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import FormHelperText from '@mui/material/FormHelperText';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
+import { LlmProviderAuthModeField } from './LlmProviderAuthModeField';
 import {
+  endpointOrigin,
   missingProviderFields,
+  providerAuthMode,
   providerDataFor,
   providerFields,
   providerTypeLabel,
+  supportsWorkloadIdentity,
+  type KeylessProviderListing,
+  type ProviderField,
 } from './llmProviderForm';
 import {
   LLM_PROVIDER_TYPES,
@@ -68,10 +77,30 @@ export interface LlmProviderDialogProps {
   readonly onSubmit: (draft: LlmProviderDraft) => void;
 }
 
-/** The non-secret values an edit can pre-fill, from what the listing published. */
-function initialValuesFor(editing: LlmProvider | undefined): Record<string, string> {
+/**
+ * The non-secret values an edit can pre-fill, from what the listing published.
+ *
+ * `auth_mode` and `token_audience` are read from `settings` or from the row
+ * itself, whichever the server sends them in. Absent is the key mode.
+ */
+function initialValuesFor(
+  editing: (LlmProvider & KeylessProviderListing) | undefined,
+): Record<string, string> {
   if (editing === undefined) return {};
-  return { api_base: editing.endpoint, ...editing.settings };
+  const values: Record<string, string> = { api_base: editing.endpoint, ...editing.settings };
+  if (editing.auth_mode !== undefined) values['auth_mode'] = editing.auth_mode;
+  if (editing.token_audience !== undefined) values['token_audience'] = editing.token_audience;
+  return values;
+}
+
+/** A field's placeholder. The token audience defaults to the endpoint origin. */
+function placeholderFor(
+  field: ProviderField,
+  values: Readonly<Record<string, string>>,
+): string | undefined {
+  if (field.key !== 'token_audience') return field.placeholder;
+  const origin = endpointOrigin(values['api_base'] ?? '');
+  return origin === '' ? undefined : origin;
 }
 
 export function LlmProviderDialog({
@@ -107,7 +136,8 @@ export function LlmProviderDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing]);
 
-  const fields = providerFields(type);
+  const authMode = providerAuthMode(values);
+  const fields = providerFields(type, authMode);
   const missing = missingProviderFields(type, values, editing !== undefined);
   const canSubmit = name.trim() !== '' && missing.length === 0 && !isSaving;
 
@@ -180,31 +210,63 @@ export function LlmProviderDialog({
           ))}
         </TextField>
 
-        {fields.map((field) => (
-          <TextField
-            key={field.key}
-            label={field.label}
-            value={values[field.key] ?? ''}
-            onChange={(event) => {
-              setValues((current) => ({ ...current, [field.key]: event.target.value }));
+        {supportsWorkloadIdentity(type) ? (
+          <LlmProviderAuthModeField
+            value={authMode}
+            onChange={(mode) => {
+              setValues((current) => ({ ...current, auth_mode: mode }));
             }}
-            size="small"
-            type={field.secret && field.multiline !== true ? 'password' : 'text'}
-            multiline={field.multiline === true}
-            minRows={field.multiline === true ? 4 : undefined}
-            required={field.required && !(field.secret && editing !== undefined)}
-            placeholder={field.placeholder}
-            slotProps={{ htmlInput: { 'data-testid': `llm-provider-${field.key}` } }}
-            helperText={
-              field.secret && editing !== undefined
-                ? t(
-                    'pages.admin.llmProviders.field.secretUnchanged',
-                    'Leave blank to keep the stored value. It cannot be read back.',
-                  )
-                : undefined
-            }
           />
-        ))}
+        ) : null}
+
+        {fields.map((field) =>
+          field.kind === 'boolean' ? (
+            <div key={field.key}>
+              <FormControlLabel
+                control={
+                  <BaseCheckbox
+                    checked={values[field.key] === 'true'}
+                    onChange={(event) => {
+                      setValues((current) => ({
+                        ...current,
+                        [field.key]: event.target.checked ? 'true' : 'false',
+                      }));
+                    }}
+                    data-testid={`llm-provider-${field.key}`}
+                  />
+                }
+                label={field.label}
+              />
+              {field.helperText !== undefined ? (
+                <FormHelperText>{field.helperText}</FormHelperText>
+              ) : null}
+            </div>
+          ) : (
+            <TextField
+              key={field.key}
+              label={field.label}
+              value={values[field.key] ?? ''}
+              onChange={(event) => {
+                setValues((current) => ({ ...current, [field.key]: event.target.value }));
+              }}
+              size="small"
+              type={field.secret && field.multiline !== true ? 'password' : 'text'}
+              multiline={field.multiline === true}
+              minRows={field.multiline === true ? 4 : undefined}
+              required={field.required && !(field.secret && editing !== undefined)}
+              placeholder={placeholderFor(field, values)}
+              slotProps={{ htmlInput: { 'data-testid': `llm-provider-${field.key}` } }}
+              helperText={
+                field.secret && editing !== undefined
+                  ? t(
+                      'pages.admin.llmProviders.field.secretUnchanged',
+                      'Leave blank to keep the stored value. It cannot be read back.',
+                    )
+                  : field.helperText
+              }
+            />
+          ),
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isSaving}>
