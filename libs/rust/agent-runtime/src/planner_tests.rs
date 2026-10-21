@@ -64,8 +64,17 @@ async fn the_toolset_serves_the_sdks_five_tools_with_its_descriptions_and_argume
         ]
     );
     let update = tools[0].parameters_schema().expect("schema");
-    assert_eq!(update["required"], json!(["title", "steps"]));
-    assert_eq!(update["properties"]["steps"]["items"]["type"], "string");
+    // The SDK's arguments, plus Codex's additive shape (#1225).
+    assert_eq!(update["required"], json!(["steps"]));
+    assert_eq!(update["properties"]["title"]["type"], "string");
+    let items = &update["properties"]["steps"]["items"]["anyOf"];
+    assert_eq!(items[0]["type"], "string");
+    assert_eq!(items[1]["required"], json!(["step", "status"]));
+    assert_eq!(
+        items[1]["properties"]["status"]["enum"],
+        json!(["pending", "in_progress", "completed", "cancelled"])
+    );
+    assert_eq!(update["properties"]["explanation"]["type"], "string");
     for tool in &tools[1..3] {
         let schema = tool.parameters_schema().expect("schema");
         assert_eq!(schema["required"], json!(["step_number"]));
@@ -232,7 +241,15 @@ async fn the_plan_is_bounded_and_a_refusal_writes_nothing() {
         json!({"title": "x".repeat(MAX_TITLE_CHARS + 1), "steps": ["a"]}),
         json!({"title": "T", "steps": ["y".repeat(MAX_STEP_BYTES + 1)]}),
         json!({"title": "T", "steps": [1]}),
-        json!({"steps": ["a"]}),
+        json!({"title": 7, "steps": ["a"]}),
+        json!({"steps": [{"step": "a", "status": "done"}]}),
+        json!({"steps": [{"step": "a"}]}),
+        json!({"steps": ["a"], "explanation": "e".repeat(MAX_EXPLANATION_CHARS + 1)}),
+        json!({"steps": [
+            {"step": "a", "status": "in_progress"},
+            {"step": "b", "status": "in_progress"}
+        ]}),
+        json!({"steps": vec!["x".repeat(MAX_STEP_BYTES); 20]}),
     ] {
         assert!(
             call(&tools, &ctx, "update_plan", args)
@@ -471,4 +488,208 @@ fn the_state_key_uses_the_shared_content_digest() {
             crate::instruction_authority::content_digest("s:a")
         )
     );
+}
+
+// ---------------------------------------------------------------------------
+// #1225: Codex's shape, the plan view the hosts show, and the host's seed.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn update_replaces_and_bounds_the_plan() {
+    let tools = tools().await;
+    let ctx = context();
+    let created = call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({
+            "title": "Rename",
+            "explanation": "Smallest change first.",
+            "steps": [
+                {"step": "Find the callers", "status": "completed"},
+                {"step": "Rename the type", "status": "in_progress"},
+                "Run the tests",
+                {"step": "Update the docs", "status": "cancelled"}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(
+        created,
+        "Plan created:\n\n📋 Rename\n   Progress: 1/4 completed, 1 in progress\n\n   ☑ 1. Find the callers ✓\n   ▶ 2. Rename the type (in progress)\n   ☐ 3. Run the tests\n   ☒ 4. Update the docs (cancelled)"
+    );
+    let (key, value) = delta(&ctx).into_iter().next().expect("plan state");
+    assert!(valid_state_entry(&key, &value));
+    let view = plan_update(&delta(&ctx)).expect("a plan update");
+    assert_eq!(
+        view,
+        json!({
+            "title": "Rename",
+            "explanation": "Smallest change first.",
+            "status": "in_progress",
+            "steps": [
+                {"n": 1, "step": "Find the callers", "status": "completed"},
+                {"n": 2, "step": "Rename the type", "status": "in_progress"},
+                {"n": 3, "step": "Run the tests", "status": "pending"},
+                {"n": 4, "step": "Update the docs", "status": "cancelled"}
+            ]
+        })
+    );
+    // Codex sends no title: the plan keeps its own and is replaced whole.
+    let replaced = call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({"steps": [{"step": "Only this", "status": "completed"}]}),
+    )
+    .await;
+    assert!(replaced.starts_with("Plan updated:\n\n📋 Rename\n   Progress: 1/1"));
+    let view = plan_update(&delta(&ctx)).expect("a plan update");
+    assert_eq!(view["status"], "completed", "every step settled");
+    assert!(view.get("explanation").is_none(), "replaced, not merged");
+    assert_eq!(view["steps"].as_array().map(Vec::len), Some(1));
+    // A refusal past the serialised bound writes nothing new.
+    let before = delta(&ctx);
+    let big = vec![json!("y".repeat(MAX_STEP_BYTES)); 17];
+    assert_eq!(
+        call(&tools, &ctx, "update_plan", json!({"steps": big})).await,
+        format!(
+            "Error updating plan: the plan is larger than {} KiB.",
+            MAX_PLAN_BYTES / 1024
+        )
+    );
+    assert_eq!(delta(&ctx), before);
+}
+
+#[tokio::test]
+async fn only_one_step_in_progress() {
+    let tools = tools().await;
+    let ctx = context();
+    let refused = call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({"steps": [
+            {"step": "a", "status": "in_progress"},
+            {"step": "b", "status": "in_progress"}
+        ]}),
+    )
+    .await;
+    assert_eq!(
+        refused,
+        "Error updating plan: at most one step can be in_progress at a time."
+    );
+    assert!(delta(&ctx).is_empty());
+    call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({"steps": [{"step": "a", "status": "in_progress"}, "b"]}),
+    )
+    .await;
+    call(&tools, &ctx, "start_step", json!({"step_number": 2})).await;
+    let view = plan_update(&delta(&ctx)).expect("a plan update");
+    assert_eq!(view["steps"][0]["status"], "pending");
+    assert_eq!(view["steps"][1]["status"], "in_progress");
+    // A stored plan with two steps in progress is not a valid entry.
+    let (key, mut value) = delta(&ctx).into_iter().next().expect("state");
+    value["plan"]["steps"][0]["status"] = json!("in_progress");
+    assert!(!valid_state_entry(&key, &value));
+}
+
+/// The plan lives in session state: a new run (a fresh toolset, as after an
+/// app restart or on another worker) over the stored session reads it back.
+#[tokio::test]
+async fn plan_survives_session_reload() {
+    let tools = tools().await;
+    let ctx = context();
+    call(
+        &tools,
+        &ctx,
+        "update_plan",
+        json!({"title": "Keep", "steps": [{"step": "one", "status": "in_progress"}, "two"]}),
+    )
+    .await;
+    let (_, stored) = delta(&ctx).into_iter().next().expect("state");
+    let reloaded = SessionContext::with_entry(stored);
+    let tools = self::tools().await;
+    let status = call(&tools, &reloaded, "get_plan_status", json!({})).await;
+    assert!(
+        status.starts_with("📋 Keep\n   Progress: 0/2 completed, 1 in progress"),
+        "{status}"
+    );
+    assert!(
+        call(
+            &tools,
+            &reloaded,
+            "complete_step",
+            json!({"step_number": 1})
+        )
+        .await
+        .starts_with("Step 1 completed (1/2 done)")
+    );
+}
+
+#[tokio::test]
+async fn an_accepted_markdown_plan_is_seeded_only_when_there_is_none() {
+    let planner = Planner::new();
+    let tools = planner
+        .toolset()
+        .tools(Arc::new(SimpleToolContext::new("planner-test")))
+        .await
+        .expect("tools");
+    let ctx = context();
+    let markdown = "# Rename X\n\nWhy: it is misnamed.\n\n1. Find the callers\n2. Rename `X` to `Y`\n- [x] Read the code\n* Run the tests\n";
+    assert!(
+        planner
+            .seed_from_markdown(ctx.as_ref(), markdown)
+            .expect("seed")
+    );
+    let view = plan_update(&delta(&ctx)).expect("seeded");
+    assert_eq!(view["title"], "Rename X");
+    assert_eq!(
+        view["steps"],
+        json!([
+            {"n": 1, "step": "Find the callers", "status": "pending"},
+            {"n": 2, "step": "Rename `X` to `Y`", "status": "pending"},
+            {"n": 3, "step": "Read the code", "status": "completed"},
+            {"n": 4, "step": "Run the tests", "status": "pending"}
+        ])
+    );
+    // The toolset sees the seeded plan (one live plan), and a second seed
+    // over a plan with steps writes nothing.
+    let status = call(&tools, &ctx, "get_plan_status", json!({})).await;
+    assert!(status.starts_with("📋 Rename X"), "{status}");
+    let other = context();
+    call(
+        &tools,
+        &other,
+        "update_plan",
+        json!({"title": "Mine", "steps": ["a"]}),
+    )
+    .await;
+    assert!(
+        !planner
+            .seed_from_markdown(other.as_ref(), markdown)
+            .expect("seed")
+    );
+    // Markdown with no list is not a plan to copy.
+    let empty = context();
+    let fresh = Planner::new();
+    assert!(
+        !fresh
+            .seed_from_markdown(empty.as_ref(), "Just do it.")
+            .expect("seed")
+    );
+    assert!(delta(&empty).is_empty());
+}
+
+#[test]
+fn a_delta_without_a_plan_entry_is_no_plan_update() {
+    assert!(plan_update(&HashMap::new()).is_none());
+    let key = state_key("s:a");
+    let deleted = HashMap::from([(key, json!({"schema": 1, "scope": "s:a", "plan": null}))]);
+    assert_eq!(plan_update(&deleted), Some(Value::Null));
+    let unrelated = HashMap::from([("other".to_owned(), json!(1))]);
+    assert!(plan_update(&unrelated).is_none());
 }

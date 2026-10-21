@@ -28,8 +28,33 @@
 //!   latest state; the last event wins and equals the sequential result.
 //! * **Bounds.** At most [`MAX_STEPS`] steps, [`MAX_STEP_BYTES`] bytes per
 //!   step and [`MAX_TITLE_CHARS`] characters of title (the SDK's database
-//!   column is `varchar(255)`; the file store had no bound at all). An
-//!   over-long plan is refused with a sentence the model can act on.
+//!   column is `varchar(255)`; the file store had no bound at all), and a
+//!   written plan serialises to at most [`MAX_PLAN_BYTES`]. An over-long
+//!   plan is refused with a sentence the model can act on.
+//! * **Codex's shape, additively** (#1225). `update_plan` also takes the
+//!   Codex `update_plan` form (`openai/codex`, Apache-2.0; the schema shape
+//!   only, no code): each step may be `{step, status}` instead of a string,
+//!   with `status` one of `pending`, `in_progress`, `completed` or
+//!   `cancelled`, plus an optional `explanation`; `title` may be left out
+//!   (the plan keeps its title). At most one step is `in_progress`. The SDK
+//!   form (`title` and a list of strings) is unchanged, so cloud prompts
+//!   written for the SDK keep working.
+//!
+//! # The plan the hosts show
+//!
+//! Every plan change rides its tool-result event as a `state_delta`, so a
+//! host's [`EventSink`](crate::host::EventSink) sees it in stream order:
+//! [`plan_update`] reads it back as the public view
+//! (`{title, explanation?, status, steps: [{n, step, status}]}`, `null` for a
+//! deleted plan) the desktop sends as its `plan_updated` event. A host that
+//! accepts a plan written elsewhere (the desktop's `exit_plan_mode`) copies
+//! it in with [`Planner::seed_from_markdown`], through the same live plan.
+//!
+//! The tools stay `is_read_only() == false` and not concurrency safe: they
+//! change only session state, but adk's `Auto` strategy would run read-only
+//! calls together and the in-batch order is what keeps a batch equal to the
+//! sequential run; the cloud's dispatch journal also keys on the flag. Plan
+//! mode keeps the planner by toolset, not by this flag.
 
 use std::sync::{Arc, Mutex};
 
@@ -50,6 +75,12 @@ pub const MAX_STEPS: usize = 100;
 pub const MAX_STEP_BYTES: usize = 2_000;
 /// The longest plan title, in characters.
 pub const MAX_TITLE_CHARS: usize = 255;
+/// The longest explanation, in characters.
+pub const MAX_EXPLANATION_CHARS: usize = 2_000;
+/// The largest plan a tool writes, serialised (Codex bounds its plan the
+/// same way). Checked when a plan is written; a stored plan is only held to
+/// the per-field bounds.
+pub const MAX_PLAN_BYTES: usize = 32 * 1024;
 
 const SCHEMA: u32 = 1;
 
@@ -129,6 +160,7 @@ Low-quality plans (\"run tests → fix things → done\") are not acceptable.
 const PENDING: &str = "pending";
 const IN_PROGRESS: &str = "in_progress";
 const COMPLETED: &str = "completed";
+const CANCELLED: &str = "cancelled";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -145,6 +177,15 @@ impl Step {
     fn in_progress(&self) -> bool {
         self.status == IN_PROGRESS
     }
+
+    fn cancelled(&self) -> bool {
+        self.status == CANCELLED
+    }
+
+    /// Completed or cancelled: nothing more to do.
+    fn settled(&self) -> bool {
+        self.completed() || self.cancelled()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -152,6 +193,11 @@ impl Step {
 struct Plan {
     title: String,
     status: String,
+    /// Codex's `explanation`: why the plan is what it is (or changed).
+    /// Absent from plans written without one, so their stored form is what
+    /// it was before #1225.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    explanation: Option<String>,
     steps: Vec<Step>,
 }
 
@@ -185,6 +231,8 @@ impl Plan {
         for (index, step) in self.steps.iter().enumerate() {
             let (indicator, suffix) = if step.completed() {
                 ("☑", " ✓")
+            } else if step.cancelled() {
+                ("☒", " (cancelled)")
             } else if step.in_progress() {
                 ("▶", " (in progress)")
             } else {
@@ -213,7 +261,12 @@ fn state_key(scope: &str) -> String {
 
 fn bounded(plan: &Plan) -> bool {
     plan.title.chars().count() <= MAX_TITLE_CHARS
+        && plan
+            .explanation
+            .as_ref()
+            .is_none_or(|text| text.chars().count() <= MAX_EXPLANATION_CHARS)
         && plan.steps.len() <= MAX_STEPS
+        && plan.steps.iter().filter(|step| step.in_progress()).count() <= 1
         && plan
             .steps
             .iter()
@@ -222,7 +275,7 @@ fn bounded(plan: &Plan) -> bool {
 }
 
 fn valid_status(status: &str) -> bool {
-    matches!(status, PENDING | IN_PROGRESS | COMPLETED)
+    matches!(status, PENDING | IN_PROGRESS | COMPLETED | CANCELLED)
 }
 
 /// Whether `value` is the well-formed plan state `key` must hold. The worker's
@@ -321,28 +374,204 @@ impl Shared {
     }
 }
 
-/// The five plan tools as one toolset.
+/// One planner: its five tools over one live plan, and the host's way in
+/// to the same plan ([`Self::seed_from_markdown`]).
+#[derive(Clone)]
+pub struct Planner {
+    shared: Arc<Shared>,
+}
+
+impl Default for Planner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Planner {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                live: Mutex::new(None),
+            }),
+        }
+    }
+
+    /// The five plan tools as one toolset.
+    #[must_use]
+    pub fn toolset(&self) -> Arc<dyn Toolset> {
+        let tools: Vec<Arc<dyn Tool>> = [
+            Action::UpdatePlan,
+            Action::StartStep,
+            Action::CompleteStep,
+            Action::GetPlanStatus,
+            Action::DeletePlan,
+        ]
+        .into_iter()
+        .map(|action| {
+            Arc::new(PlanTool {
+                action,
+                shared: Arc::clone(&self.shared),
+            }) as Arc<dyn Tool>
+        })
+        .collect();
+        Arc::new(BasicToolset::new(TOOLSET_NAME, tools))
+    }
+
+    /// Copy a plan the person accepted (Markdown) into the plan state when
+    /// the model has not written one: a `# heading` is the title, each list
+    /// item (`-`, `*`, `1.`, `- [ ]`, `- [x]`) a step, in order, pending
+    /// (checked ones completed). Called by a host inside the tool call that
+    /// accepted it, so the state rides that call's result event. True when
+    /// it wrote a plan; a plan that already has steps, or Markdown without
+    /// a list, writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// When the live plan is unavailable.
+    pub fn seed_from_markdown(
+        &self,
+        ctx: &dyn ToolContext,
+        markdown: &str,
+    ) -> Result<bool, AdkError> {
+        let (scope, stored) = self.shared.current(ctx)?;
+        if matches!(&stored, Stored::Plan(Some(plan)) if !plan.steps.is_empty()) {
+            return Ok(false);
+        }
+        let Some(plan) = plan_from_markdown(markdown) else {
+            return Ok(false);
+        };
+        self.shared.commit(ctx, &scope, Some(plan))?;
+        Ok(true)
+    }
+}
+
+/// The five plan tools as one toolset (a fresh [`Planner`]).
 #[must_use]
 pub fn toolset() -> Arc<dyn Toolset> {
-    let shared = Arc::new(Shared {
-        live: Mutex::new(None),
-    });
-    let tools: Vec<Arc<dyn Tool>> = [
-        Action::UpdatePlan,
-        Action::StartStep,
-        Action::CompleteStep,
-        Action::GetPlanStatus,
-        Action::DeletePlan,
-    ]
-    .into_iter()
-    .map(|action| {
-        Arc::new(PlanTool {
-            action,
-            shared: Arc::clone(&shared),
-        }) as Arc<dyn Tool>
-    })
-    .collect();
-    Arc::new(BasicToolset::new(TOOLSET_NAME, tools))
+    Planner::new().toolset()
+}
+
+/// The steps of a Markdown plan, bounded as `update_plan` bounds them.
+fn plan_from_markdown(markdown: &str) -> Option<Plan> {
+    let mut title = String::new();
+    let mut steps = Vec::new();
+    for line in markdown.lines() {
+        let line = line.trim();
+        if title.is_empty()
+            && steps.is_empty()
+            && let Some(heading) = line.strip_prefix('#')
+        {
+            heading
+                .trim_start_matches('#')
+                .trim()
+                .clone_into(&mut title);
+            continue;
+        }
+        let Some((text, done)) = list_item(line) else {
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        steps.push(Step {
+            description: clip_bytes(text, MAX_STEP_BYTES),
+            status: if done { COMPLETED } else { PENDING }.to_owned(),
+        });
+        if steps.len() == MAX_STEPS {
+            break;
+        }
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    let title: String = title.chars().take(MAX_TITLE_CHARS).collect();
+    let mut plan = Plan {
+        title,
+        status: IN_PROGRESS.to_owned(),
+        explanation: None,
+        steps,
+    };
+    while plan.steps.len() > 1 && encoded_len(&plan) > MAX_PLAN_BYTES {
+        plan.steps.pop();
+    }
+    (encoded_len(&plan) <= MAX_PLAN_BYTES).then_some(plan)
+}
+
+/// A Markdown list item's text and whether it is a checked box.
+fn list_item(line: &str) -> Option<(&str, bool)> {
+    let rest = if let Some(rest) = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("+ "))
+    {
+        rest
+    } else {
+        let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 {
+            return None;
+        }
+        line[digits..]
+            .strip_prefix(". ")
+            .or_else(|| line[digits..].strip_prefix(") "))?
+    };
+    let rest = rest.trim();
+    for (prefix, done) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
+        if let Some(text) = rest.strip_prefix(prefix) {
+            return Some((text.trim(), done));
+        }
+    }
+    Some((rest, false))
+}
+
+fn clip_bytes(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+fn encoded_len(plan: &Plan) -> usize {
+    serde_json::to_vec(plan).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// The plan a tool-result event's `state_delta` wrote, as the hosts show it:
+/// `Some(view)` for each plan entry (the last one wins), with `view` being
+/// `{title, explanation?, status, steps: [{n, step, status}]}`, or `null` for
+/// a deleted plan; `None` when the delta holds no well-formed plan entry.
+#[must_use]
+pub fn plan_update<S: std::hash::BuildHasher>(
+    delta: &std::collections::HashMap<String, Value, S>,
+) -> Option<Value> {
+    let mut found = None;
+    for (key, value) in delta {
+        if !is_state_key(key) || !valid_state_entry(key, value) {
+            continue;
+        }
+        let Ok(envelope) = serde_json::from_value::<Envelope>(value.clone()) else {
+            continue;
+        };
+        found = Some(envelope.plan.as_ref().map_or(Value::Null, plan_view));
+    }
+    found
+}
+
+fn plan_view(plan: &Plan) -> Value {
+    let steps: Vec<Value> = plan
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| json!({"n": index + 1, "step": step.description, "status": step.status}))
+        .collect();
+    let mut view = json!({"title": plan.title, "status": plan.status, "steps": steps});
+    if let Some(explanation) = &plan.explanation {
+        view["explanation"] = Value::String(explanation.clone());
+    }
+    view
 }
 
 #[derive(Clone, Copy)]
@@ -387,17 +616,42 @@ impl Tool for PlanTool {
 
     fn parameters_schema(&self) -> Option<Value> {
         Some(match self.action {
+            // The SDK's `title` + `steps: [string]`, and Codex's
+            // `steps: [{step, status}]` + `explanation` (#1225).
             Action::UpdatePlan => json!({
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "description": "Title for the plan"},
+                    "title": {
+                        "type": "string",
+                        "maxLength": MAX_TITLE_CHARS,
+                        "description": "Title for the plan"
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "maxLength": MAX_EXPLANATION_CHARS,
+                        "description": "Why the plan is what it is, or what changed"
+                    },
                     "steps": {
                         "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of step descriptions in order"
+                        "maxItems": MAX_STEPS,
+                        "items": {"anyOf": [
+                            {"type": "string", "maxLength": MAX_STEP_BYTES},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "step": {"type": "string", "maxLength": MAX_STEP_BYTES},
+                                    "status": {
+                                        "type": "string",
+                                        "enum": [PENDING, IN_PROGRESS, COMPLETED, CANCELLED]
+                                    }
+                                },
+                                "required": ["step", "status"]
+                            }
+                        ]},
+                        "description": "List of step descriptions in order (a string is a pending step); at most one step in_progress"
                     }
                 },
-                "required": ["title", "steps"]
+                "required": ["steps"]
             }),
             Action::StartStep => step_schema("Step number to start (1-indexed)"),
             Action::CompleteStep => step_schema("Step number to complete (1-indexed)"),
@@ -434,6 +688,59 @@ impl Tool for PlanTool {
     }
 }
 
+/// One `steps` item: the SDK's string (a pending step) or Codex's
+/// `{step, status}`.
+fn step_argument(value: &Value) -> Option<Step> {
+    match value {
+        Value::String(text) => Some(Step {
+            description: text.clone(),
+            status: PENDING.to_owned(),
+        }),
+        Value::Object(fields) => {
+            let description = fields.get("step")?.as_str()?.to_owned();
+            let status = fields.get("status")?.as_str()?;
+            valid_status(status).then(|| Step {
+                description,
+                status: status.to_owned(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The sentence refusing an over-long plan, if it is one.
+fn refuse_bounds(title: Option<&str>, explanation: Option<&str>, steps: &[Step]) -> Option<String> {
+    if title.is_some_and(|title| title.chars().count() > MAX_TITLE_CHARS) {
+        return Some(format!(
+            "Error updating plan: the title is longer than {MAX_TITLE_CHARS} characters."
+        ));
+    }
+    if explanation.is_some_and(|text| text.chars().count() > MAX_EXPLANATION_CHARS) {
+        return Some(format!(
+            "Error updating plan: the explanation is longer than {MAX_EXPLANATION_CHARS} characters."
+        ));
+    }
+    if steps.len() > MAX_STEPS {
+        return Some(format!(
+            "Error updating plan: a plan holds at most {MAX_STEPS} steps."
+        ));
+    }
+    if steps
+        .iter()
+        .any(|step| step.description.len() > MAX_STEP_BYTES)
+    {
+        return Some(format!(
+            "Error updating plan: a step is longer than {MAX_STEP_BYTES} bytes."
+        ));
+    }
+    if steps.iter().filter(|step| step.in_progress()).count() > 1 {
+        return Some(
+            "Error updating plan: at most one step can be in_progress at a time.".to_owned(),
+        );
+    }
+    None
+}
+
 fn step_schema(description: &str) -> Value {
     json!({
         "type": "object",
@@ -444,48 +751,50 @@ fn step_schema(description: &str) -> Value {
 
 impl PlanTool {
     fn update_plan(&self, ctx: &dyn ToolContext, args: &Value) -> Result<String, AdkError> {
-        let Some(title) = args.get("title").and_then(Value::as_str) else {
-            return Ok("Error updating plan: title is required".to_owned());
+        let title = match args.get("title") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(title)) => Some(title.clone()),
+            Some(_) => return Ok("Error updating plan: title must be a string".to_owned()),
+        };
+        let explanation = match args.get("explanation") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) if text.is_empty() => None,
+            Some(Value::String(text)) => Some(text.clone()),
+            Some(_) => return Ok("Error updating plan: explanation must be a string".to_owned()),
         };
         let Some(steps) = args.get("steps").and_then(Value::as_array) else {
             return Ok("Error updating plan: steps is required".to_owned());
         };
-        let Some(steps) = steps
-            .iter()
-            .map(|step| step.as_str().map(str::to_owned))
-            .collect::<Option<Vec<_>>>()
-        else {
-            return Ok("Error updating plan: every step must be a string".to_owned());
+        let Some(steps) = steps.iter().map(step_argument).collect::<Option<Vec<_>>>() else {
+            return Ok(
+                "Error updating plan: every step must be a string or {step, status} with status pending, in_progress, completed or cancelled"
+                    .to_owned(),
+            );
         };
-        if title.chars().count() > MAX_TITLE_CHARS {
-            return Ok(format!(
-                "Error updating plan: the title is longer than {MAX_TITLE_CHARS} characters."
-            ));
-        }
-        if steps.len() > MAX_STEPS {
-            return Ok(format!(
-                "Error updating plan: a plan holds at most {MAX_STEPS} steps."
-            ));
-        }
-        if steps.iter().any(|step| step.len() > MAX_STEP_BYTES) {
-            return Ok(format!(
-                "Error updating plan: a step is longer than {MAX_STEP_BYTES} bytes."
-            ));
+        if let Some(refusal) = refuse_bounds(title.as_deref(), explanation.as_deref(), &steps) {
+            return Ok(refusal);
         }
         let (scope, stored) = self.shared.current(ctx)?;
         // An unreadable old plan is simply replaced.
         let existing = !matches!(stored, Stored::Plan(None));
+        // Codex sends no title: the plan keeps the one it had.
+        let title = title.unwrap_or_else(|| match &stored {
+            Stored::Plan(Some(plan)) => plan.title.clone(),
+            _ => String::new(),
+        });
+        let all_settled = !steps.is_empty() && steps.iter().all(Step::settled);
         let plan = Plan {
-            title: title.to_owned(),
-            status: IN_PROGRESS.to_owned(),
-            steps: steps
-                .into_iter()
-                .map(|description| Step {
-                    description,
-                    status: PENDING.to_owned(),
-                })
-                .collect(),
+            title,
+            status: if all_settled { COMPLETED } else { IN_PROGRESS }.to_owned(),
+            explanation,
+            steps,
         };
+        if encoded_len(&plan) > MAX_PLAN_BYTES {
+            return Ok(format!(
+                "Error updating plan: the plan is larger than {} KiB.",
+                MAX_PLAN_BYTES / 1024
+            ));
+        }
         let action = if existing { "updated" } else { "created" };
         let rendered = plan.render();
         self.shared.commit(ctx, &scope, Some(plan))?;
@@ -549,7 +858,7 @@ impl PlanTool {
             ));
         }
         COMPLETED.clone_into(&mut plan.steps[index].status);
-        if plan.steps.iter().all(Step::completed) {
+        if plan.steps.iter().all(Step::settled) {
             COMPLETED.clone_into(&mut plan.status);
         }
         let done = plan.steps.iter().filter(|step| step.completed()).count();
