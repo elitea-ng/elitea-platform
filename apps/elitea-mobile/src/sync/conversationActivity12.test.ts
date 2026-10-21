@@ -55,7 +55,7 @@ describe('conversation activity in the offline copy (contract 1.12)', () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(['p', 7, 'conversations'], { pages: [{ rows: [conversationRow(41, finished)], total: 1, offset: 0 }], pageParams: [0] });
     server.on('PUT', READ, { status: 200, body: { conversation_id: 41, read_at: '2026-10-21T10:06:00Z', unread: false } });
-    expect(await runMarkConversationRead(7, 41, { queryClient, getDb: () => db, client: server.client })).toBe(true);
+    expect(await runMarkConversationRead(7, 41, { queryClient, getDb: () => db, client: server.client })).toEqual({ kind: 'read', unread: false });
     expect((await readConversationRows(db, 7, 10, 0)).rows[0]).toMatchObject({ ...finished, unread: false, name: 'Conversation 41' });
     queryClient.clear();
   });

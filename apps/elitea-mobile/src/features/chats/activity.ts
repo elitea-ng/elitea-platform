@@ -45,7 +45,12 @@ export function activityTitleBold(row: ActivityRowFields): boolean {
   return row.unread === true && activityStateOf(row) !== 'running';
 }
 
-/** How many rows wait for the user (a section header's "N needs you"). */
+/**
+ * How many rows wait for the user (a section header's "N needs you"). Only the rows paged in: the
+ * sections are the device's own (Pinned, then local days) over the flat listing, which has no
+ * group counts, unlike the web's folder and date groups and their whole-group `needs_you`
+ * (docs/client-feature-parity.md).
+ */
 export function countNeedsYou(rows: readonly { needsYou?: boolean }[]): number {
   return rows.filter((row) => row.needsYou === true).length;
 }

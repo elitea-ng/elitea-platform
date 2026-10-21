@@ -166,7 +166,7 @@ export function ConversationList({
         renderItem={({ item: section }) => (
           <ListSection
             title={section.title}
-            accessory={<NeedsYouCount count={countNeedsYou(section.data)} />}
+            accessory={sectionAccessory(section.data)}
             style={[styles.section, { marginHorizontal: space.screenGutterCompact }]}>
             {section.data.map((row) => {
               const { pin, rename, archive, fork, remove } = rowActions(row, rowsActions);
@@ -208,9 +208,17 @@ export function ConversationList({
   );
 }
 
-/** A section header's "N needs you" (client contract 1.12), in the warning colour; nothing at zero. */
+/**
+ * A section header's accessory: its "N needs you" (client contract 1.12), or none at zero. Never
+ * an element that draws nothing: any accessory moves the header to its two-part layout.
+ */
+function sectionAccessory(rows: readonly ChatListItem[]): ReactElement | undefined {
+  const count = countNeedsYou(rows);
+  return count > 0 ? <NeedsYouCount count={count} /> : undefined;
+}
+
+/** A section header's "N needs you", in the warning colour. */
 function NeedsYouCount({ count }: { count: number }) {
-  if (count <= 0) return null;
   return (
     <Text variant="footnote" tone="warning" emphasized testID="section-needs-you">
       {needsYouText(count)}

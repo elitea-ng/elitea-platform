@@ -19,7 +19,7 @@ import { log } from '@/lib/log';
 import { selectChat } from '@/features/chats/selectedChat';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
-import { useMarkConversationRead } from '@/features/chat/useMarkConversationRead';
+import { readRevision, useMarkConversationRead } from '@/features/chat/useMarkConversationRead';
 import { speaksContract } from '@/api/discovery';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
@@ -116,7 +116,10 @@ export function ThreadView({
   id: string;
   intent?: string;
   chrome?: ThreadChrome;
-  /** False while another screen covers it (the detail column under a pushed screen): no announcements. */
+  /**
+   * False while another screen covers it (the detail column under a pushed screen, a screen pushed
+   * over the thread's own): no announcements, and it is not marked read.
+   */
   inFront?: boolean;
 }) {
   const palette = usePalette();
@@ -246,7 +249,7 @@ export function ThreadView({
   useMarkConversationRead({
     projectId,
     conversationId: Number.isSafeInteger(numericId) && numericId > 0 ? numericId : null,
-    revision: `${messages.length}:${live?.settled === true}`,
+    revision: readRevision(messages, live?.settled === true),
     enabled: contract112 && inFront && !isOfflineCopy(detail),
   });
   // Before client contract 1.1 a model (adhoc) chat dropped mentions silently.

@@ -1,8 +1,6 @@
-import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 
 import { sendConversationAction, type ConversationAction } from '@/api/queries/conversationActions';
-import type { ConversationPage } from '@/api/queries/conversations';
 import { queryKeys } from '@/api/queries/keys';
 import { queryClient } from '@/api/queryClient';
 import { offlineStore } from '@/db/offlineStore';
@@ -13,6 +11,7 @@ import { getSession, subscribeSession } from '@/state/session';
 import { bindOutbox } from '@/sync/appOutbox';
 import { reportActionFailure } from '@/sync/actionFailures';
 import { syncManager } from '@/sync/appSync';
+import { patchConversationPages } from '@/sync/conversationPages';
 import { ConversationOpsDrainer, enqueueOp, listOps, overlayOf, settledPagePatch, type ConversationOp, type ConversationOverlay } from '@/sync/conversationOps';
 
 /**
@@ -22,31 +21,7 @@ import { ConversationOpsDrainer, enqueueOp, listOps, overlayOf, settledPagePatch
  * reports failure to the screen instead.
  */
 
-/** Patches the loaded list pages so a taken action shows before the refetch lands. */
-export function patchConversationPages(client: QueryClient, projectId: number, conversationId: number, action: ConversationAction): void {
-  const drop = (page: ConversationPage): ConversationPage => ({ ...page, rows: page.rows.filter((row) => row.id !== conversationId) });
-  const patch = (key: readonly unknown[], change: (page: ConversationPage) => ConversationPage) =>
-    client.setQueryData<InfiniteData<ConversationPage, number>>(key, (data) => (data ? { ...data, pages: data.pages.map(change) } : data));
-  // Both lists: a Local work thread is deleted from its own list (rename and pin only match the Chats one).
-  for (const key of [queryKeys.conversations(projectId), queryKeys.localWork(projectId)]) {
-    patch(key, (page) => {
-      // An archived chat leaves the lists; an unarchived one comes back with the refetch.
-      if (action.kind === 'delete' || (action.kind === 'archive' && action.archived)) return drop(page);
-      if (action.kind === 'archive') return page;
-      return {
-        ...page,
-        rows: page.rows.map((row) =>
-          row.id !== conversationId ? row : action.kind === 'rename' ? { ...row, name: action.name } : { ...row, is_pinned: action.pinned },
-        ),
-      };
-    });
-  }
-  // The Archived chats list: an unarchived or deleted chat leaves it (an archived one comes with its refetch).
-  if (action.kind === 'delete' || (action.kind === 'archive' && !action.archived)) patch(queryKeys.archived(projectId), drop);
-  else if (action.kind === 'rename') {
-    patch(queryKeys.archived(projectId), (page) => ({ ...page, rows: page.rows.map((row) => (row.id === conversationId ? { ...row, name: action.name } : row)) }));
-  }
-}
+export { patchConversationPages } from '@/sync/conversationPages';
 
 export { subscribeActionFailures, type ActionFailureListener } from '@/sync/actionFailures';
 

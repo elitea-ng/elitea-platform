@@ -43,7 +43,7 @@ export function ListSection({
   return (
     <View style={[styles.section, style]}>
       {title && accessory ? (
-        <View style={styles.sectionHeader}>
+        <View style={styles.sectionHeader} testID="section-header-accessory">
           <Text heading variant={uiPlatform === 'ios' ? 'footnote' : 'subheadline'} tone={uiPlatform === 'ios' ? 'secondary' : 'accent'} style={styles.headerTitle}>
             {sectionTitle(title)}
           </Text>

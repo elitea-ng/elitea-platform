@@ -1,12 +1,12 @@
-import type { InfiniteData, QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
-import { unwrap } from '@/api/errors';
-import type { ConversationPage } from '@/api/queries/conversations';
+import { isApiError, unwrap } from '@/api/errors';
 import { queryKeys } from '@/api/queries/keys';
-import { setConversationRowUnread } from '@/db/repo';
+import { setRowJsonField } from '@/db/repo';
 import type { Db } from '@/db/sql';
 import { log } from '@/lib/log';
+import { patchConversationPages } from '@/sync/conversationPages';
 
 /**
  * Read markers (client contract 1.12, `markConversationRead`): the CALLER's marker of a
@@ -15,8 +15,8 @@ import { log } from '@/lib/log';
  * (src/features/chat/useMarkConversationRead.ts).
  *
  * The read does not re-deliver the row in the `changes_since` delta, so the device writes the
- * new `unread` into its own copies: the loaded list pages at once (before the request), and the
- * offline store's row once the workspace answered.
+ * new `unread` into its own copies: the loaded list pages at once (before the request), and both
+ * the pages and the offline store's row once the workspace answered.
  */
 
 /** Moves the caller's marker up to now; resolves the row's `unread` after it. Throws `ApiError`. */
@@ -29,17 +29,54 @@ export async function markConversationRead(projectId: number, conversationId: nu
   return { unread: state?.unread === true };
 }
 
-/** Sets `unread` on the conversation's row in the loaded Chats and Local work pages. */
-export function patchConversationUnread(client: QueryClient, projectId: number, conversationId: number, unread: boolean): void {
-  for (const key of [queryKeys.conversations(projectId), queryKeys.localWork(projectId)]) {
-    client.setQueryData<InfiniteData<ConversationPage, number>>(key, (data) => {
-      if (!data || !data.pages.some((page) => page.rows.some((row) => row.id === conversationId && row.unread !== unread))) return data;
-      return {
-        ...data,
-        pages: data.pages.map((page) => ({ ...page, rows: page.rows.map((row) => (row.id === conversationId ? { ...row, unread } : row)) })),
-      };
-    });
+/**
+ * How a read ended:
+ * - `read`: the workspace took it; `unread` is what it says now (true when an answer landed
+ *   after the marker, or the read landed before the answer was stored);
+ * - `refused`: it never will for this conversation (403, 404, 410, 426, another 4xx, the
+ *   session gone): the thread stops asking;
+ * - `failed`: try again later (no answer, a timeout, 408, 425, 429, 5xx).
+ */
+export type MarkReadOutcome = { kind: 'read'; unread: boolean } | { kind: 'refused' } | { kind: 'failed' };
+
+/** True when sending the read again cannot succeed (it is refused for good, or the app must update). */
+export function isPermanentReadFailure(error: unknown): boolean {
+  if (!isApiError(error)) return false;
+  switch (error.kind) {
+    case 'http': {
+      const status = error.status ?? 0;
+      return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429;
+    }
+    case 'upgrade_required':
+    case 'session_invalid':
+    case 'origin_mismatch':
+      return true;
+    default:
+      return false;
   }
+}
+
+/** A transient failure the lists are read again for (a cancelled request, or a session ending, is not). */
+function refetchAfter(error: unknown): boolean {
+  return !isApiError(error) || error.kind === 'network' || error.kind === 'timeout' || error.kind === 'http';
+}
+
+/** How long failed reads wait before the lists are read again, so a burst of failures reads them once. */
+export const MARK_READ_REFETCH_DEBOUNCE_MS = 2000;
+
+const pendingRefetch = new WeakMap<QueryClient, Set<number>>();
+
+/** Reads the Chats and Local work lists again, once for every failure within the debounce. */
+function refetchListsSoon(client: QueryClient, projectId: number): void {
+  const pending = pendingRefetch.get(client) ?? new Set<number>();
+  pendingRefetch.set(client, pending);
+  if (pending.has(projectId)) return;
+  pending.add(projectId);
+  setTimeout(() => {
+    pending.delete(projectId);
+    void client.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
+    void client.invalidateQueries({ queryKey: queryKeys.localWork(projectId) });
+  }, MARK_READ_REFETCH_DEBOUNCE_MS);
 }
 
 export interface MarkReadDeps {
@@ -49,23 +86,37 @@ export interface MarkReadDeps {
 }
 
 /**
- * Marks the conversation read: the row turns read in the list at once, then the workspace is
- * asked; its answer is written to the list and the offline copy. When the request fails the
- * list is read again, so the row shows the workspace's truth. Never throws; true when the
- * workspace took the read.
+ * Marks the conversation read: a list read in flight is cancelled (its answer, from before the
+ * read, would turn the row unread again), the row turns read in the list at once, then the
+ * workspace is asked; its answer is written to the list and the offline copy, and a cancelled
+ * list read is sent again. A transient failure reads the lists again (once per burst), so the
+ * row shows the workspace's truth; a refusal does not (nothing changed). Never throws.
  */
-export async function runMarkConversationRead(projectId: number, conversationId: number, deps: MarkReadDeps): Promise<boolean> {
-  patchConversationUnread(deps.queryClient, projectId, conversationId, false);
+export async function runMarkConversationRead(projectId: number, conversationId: number, deps: MarkReadDeps): Promise<MarkReadOutcome> {
+  const { queryClient } = deps;
+  const lists = [queryKeys.conversations(projectId), queryKeys.localWork(projectId)];
+  const cancelled = lists.filter((queryKey) => queryClient.isFetching({ queryKey }) > 0);
+  await Promise.all(cancelled.map((queryKey) => queryClient.cancelQueries({ queryKey })));
+  patchConversationPages(queryClient, projectId, conversationId, { kind: 'unread', unread: false });
+  let unread: boolean;
   try {
-    const { unread } = await markConversationRead(projectId, conversationId, deps.client);
-    if (unread) patchConversationUnread(deps.queryClient, projectId, conversationId, true);
-    const db = deps.getDb();
-    if (db !== null) await setConversationRowUnread(db, projectId, conversationId, unread);
-    return true;
+    ({ unread } = await markConversationRead(projectId, conversationId, deps.client));
   } catch (error) {
     log.info('mark conversation read failed', { error });
-    void deps.queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
-    void deps.queryClient.invalidateQueries({ queryKey: queryKeys.localWork(projectId) });
-    return false;
+    const permanent = isPermanentReadFailure(error);
+    if (!permanent && refetchAfter(error)) refetchListsSoon(queryClient, projectId);
+    // A list read cancelled for nothing is sent again.
+    else for (const queryKey of cancelled) void queryClient.invalidateQueries({ queryKey });
+    return { kind: permanent ? 'refused' : 'failed' };
   }
+  // Always the workspace's answer: a list read that landed meanwhile may say otherwise.
+  patchConversationPages(queryClient, projectId, conversationId, { kind: 'unread', unread });
+  for (const queryKey of cancelled) void queryClient.invalidateQueries({ queryKey });
+  const db = deps.getDb();
+  try {
+    if (db !== null) await setRowJsonField(db, projectId, conversationId, 'unread', unread);
+  } catch (error) {
+    log.warn('offline copy: read marker not saved', { error });
+  }
+  return { kind: 'read', unread };
 }

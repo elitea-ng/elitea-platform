@@ -23,7 +23,7 @@ import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 import { fakeStreamTransport } from '@/test/fakeStreamTransport';
 
 let mockParams: Record<string, string> = {};
-jest.mock('expo-router', () => ({
+jest.mock('expo-router', () => ({ useIsFocused: () => true,
   router: { replace: jest.fn(), push: jest.fn() },
   useLocalSearchParams: () => mockParams,
   Stack: { Screen: () => null },

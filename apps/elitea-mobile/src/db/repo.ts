@@ -132,16 +132,32 @@ export async function upsertConversationRow(
 }
 
 /**
- * Writes the caller's `unread` (client contract 1.12) into a stored list row after a read
- * (markConversationRead). A read does not re-deliver the row in the delta, so without this the
- * offline copy would keep the row unread. The transcript is not marked for a sync.
+ * SQL for a stored JSON column with `path` set to the next bound value, or the column as it is
+ * when it holds no valid JSON (a row saved before the column was kept). `json`: the bound value
+ * is JSON text (`'true'`, `'false'`), not a string.
  */
-export async function setConversationRowUnread(db: SqlExecutor, projectId: number, conversationId: number, unread: boolean): Promise<void> {
-  await db.run(
-    `UPDATE conversations SET row_json = json_set(row_json, '$.unread', json(?))
-     WHERE project_id = ? AND id = ? AND row_json IS NOT NULL AND json_valid(row_json)`,
-    [unread ? 'true' : 'false', projectId, conversationId],
-  );
+export function jsonColumnSet(column: 'row_json' | 'detail_json', path: string, json = false): string {
+  return `CASE WHEN ${column} IS NOT NULL AND json_valid(${column}) THEN json_set(${column}, '${path}', ${json ? 'json(?)' : '?'}) ELSE ${column} END`;
+}
+
+/**
+ * Sets one boolean field of a stored list row (`row_json`): a pin, an archive taken, or the
+ * caller's `unread` after a read (client contract 1.12; a read is not re-delivered by the delta,
+ * so without it the offline copy would keep the row unread). The transcript is not marked for a
+ * sync.
+ */
+export async function setRowJsonField(
+  db: SqlExecutor,
+  projectId: number,
+  conversationId: number,
+  field: 'is_pinned' | 'is_archived' | 'unread',
+  value: boolean,
+): Promise<void> {
+  await db.run(`UPDATE conversations SET row_json = ${jsonColumnSet('row_json', `$.${field}`, true)} WHERE project_id = ? AND id = ?`, [
+    value ? 'true' : 'false',
+    projectId,
+    conversationId,
+  ]);
 }
 
 /**

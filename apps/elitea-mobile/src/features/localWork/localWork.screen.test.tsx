@@ -23,7 +23,7 @@ jest.mock('@/state/selfIdentity', () => ({
   ...jest.requireActual('@/state/selfIdentity'),
   useSelfUserId: () => mockSelf,
 }));
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn() } }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-crypto', () => ({ randomUUID: () => '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b' }));

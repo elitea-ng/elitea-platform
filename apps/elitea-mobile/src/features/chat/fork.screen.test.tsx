@@ -19,7 +19,7 @@ import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 // opens the new chat at once; a fork point that is not settled (409), and no connection, are told
 // in the thread; a fork shows "Forked from <name>" with a link back.
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn(), push: jest.fn() } }));
+jest.mock('expo-router', () => ({ useIsFocused: () => true, useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { replace: jest.fn(), push: jest.fn() } }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 

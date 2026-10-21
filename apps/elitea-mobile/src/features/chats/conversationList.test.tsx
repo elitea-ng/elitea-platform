@@ -60,6 +60,8 @@ describe('Chats rows: activity status (client contract 1.12)', () => {
     expect(screen.getAllByTestId('section-needs-you').map((node) => node.props.children)).toEqual(['1 needs you', '1 needs you']);
     await render(<ConversationList rows={[rows[0], rows[3]]} now={NOW} onOpen={jest.fn()} empty={<Text>none</Text>} />);
     expect(screen.queryByTestId('section-needs-you')).toBeNull();
+    // At zero the header keeps its plain title layout (no empty accessory).
+    expect(screen.queryByTestId('section-header-accessory')).toBeNull();
   });
 
   it('lets a busy row (a fork) keep its spinner over the glyph', async () => {

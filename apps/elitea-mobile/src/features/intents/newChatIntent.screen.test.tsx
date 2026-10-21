@@ -21,7 +21,7 @@ jest.mock('expo-crypto', () => ({ randomUUID: () => `00000000-0000-4000-8000-${S
 const mockReplace = jest.fn();
 let mockParams: Record<string, string> = {};
 let mockCovers = false;
-jest.mock('expo-router', () => ({ router: { replace: (...args: unknown[]) => mockReplace(...args) }, useLocalSearchParams: () => mockParams }));
+jest.mock('expo-router', () => ({ useIsFocused: () => true, router: { replace: (...args: unknown[]) => mockReplace(...args) }, useLocalSearchParams: () => mockParams }));
 jest.mock('@/security/lock/useLockController', () => ({ ...jest.requireActual('@/security/lock/useLockController'), useLockCovers: () => mockCovers }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
