@@ -378,3 +378,19 @@ func TestAForbiddenCloneDestinationIsRefusedBeforeTheToolRuns(t *testing.T) {
 		t.Fatalf("%v %v", body, err)
 	}
 }
+
+// A fixture host builds no search index, so a project's index deletion
+// removes nothing and is complete. It must ANSWER (not refuse as an
+// engine-less host would): elitea-main's project deprovisioning reaches the
+// fixture host in the E2E stack, and a refusal there leaves the project
+// stuck in deprovisioning.
+func TestTheFixtureAnswersAProjectIndexDeletionWithNothingRemoved(t *testing.T) {
+	runner := run.NewFixtureRunner(spi.Settings{GitAllowlist: "*"}, 0)
+	deletion, err := runner.DeleteProject(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if deletion.ProjectID != 7 || deletion.Incomplete || deletion.LiveBuilds != 0 || deletion.StaleBuildsRemoved != 0 || len(deletion.Wikis) != 0 {
+		t.Fatalf("DeleteProject = %+v, want a complete deletion of nothing", deletion)
+	}
+}

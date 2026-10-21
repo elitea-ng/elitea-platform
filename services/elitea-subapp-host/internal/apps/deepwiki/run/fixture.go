@@ -339,5 +339,17 @@ func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
 		Tools:      tools,
 		Egress:     spi.ParseEgressPolicy(settings.GitAllowlist),
 		Artifacts:  transport,
+		// The fixture builds no search index, so a project's index deletion
+		// truthfully removes nothing. Answering it (rather than refusing as
+		// an engine-less host) lets elitea-main's project deprovisioning
+		// complete against a fixture host; the wiki artifacts themselves are
+		// purged by the platform's own project deletion.
+		deleteProject: fixtureDeleteProjectWikis,
 	}
+}
+
+// fixtureDeleteProjectWikis is delete_project_wikis on a host with no index:
+// no live builds, no stale builds, no wikis.
+func fixtureDeleteProjectWikis(context.Context, map[string]any, *spi.Context) (map[string]any, error) {
+	return map[string]any{"success": true, "live_builds": 0, "builds": 0, "per_wiki": []any{}}, nil
 }
