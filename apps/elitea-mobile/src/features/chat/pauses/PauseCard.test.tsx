@@ -163,7 +163,7 @@ describe('jsonObjectError', () => {
 });
 
 describe('HITL card (captured, python worker sensitive tool)', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+   
   const captured = require('../__fixtures__/captured/python-sensitive-tool-pause.json') as { frames: Record<string, unknown>[] };
   const pause = pauseOf(nodeOf(captured.frames[2])) as TurnPause;
   const POLICY = "Your organization requires approval before running the sensitive action 'MockTools.mock_tool_status'.";

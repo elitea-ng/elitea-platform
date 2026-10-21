@@ -34,7 +34,7 @@ describe('turn announcements', () => {
   });
 
   it('says what a pause waits for (the captured Python sensitive-tool pause)', () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+     
     const captured = require('../chat/__fixtures__/captured/python-sensitive-tool-pause.json') as { frames: Record<string, unknown>[] };
     let state: TurnState = streaming;
     for (const node of captured.frames) state = reduceTurn(state, { kind: 'node', node: node as never });

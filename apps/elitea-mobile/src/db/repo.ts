@@ -13,8 +13,13 @@ import { parseServerTime } from '@/lib/time';
  * A conversation list row as any supported server sends it. Client contract 1.4 makes
  * `is_pinned` required, but a 1.3 server omits it (which means not pinned), and rows saved
  * from one stay in the store; so it is optional here and read as `row.is_pinned === true`.
+ * `is_archived` (client contract 1.10) is optional for the same reason: a row saved from an
+ * older server has none, and it means not archived.
  */
-export type ConversationSummary = Omit<components['schemas']['ConversationSummary'], 'is_pinned'> & { is_pinned?: boolean };
+export type ConversationSummary = Omit<components['schemas']['ConversationSummary'], 'is_pinned' | 'is_archived'> & {
+  is_pinned?: boolean;
+  is_archived?: boolean;
+};
 export type ConversationDetail = components['schemas']['ConversationDetail'];
 export type ConversationMessage = components['schemas']['ConversationMessage'];
 export type Notification = components['schemas']['Notification'];

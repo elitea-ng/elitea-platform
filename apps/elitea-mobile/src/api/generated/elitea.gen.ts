@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.9
+ * client contract:    1.11
  * operations sha256:  5f445416957ab134d0467128cf1145c6b6e0cbde4945380f5baa586e53d58510
  */
 export interface paths {
@@ -2070,6 +2070,15 @@ export interface components {
             low_tier_default_model_project_id?: number | null;
             total: number;
         };
+        /** @description Client contract 1.10. The member who archived the conversation. Present on a list row only when `is_archived` is true. `name` is the user's display name, or an empty string when the server cannot resolve one. */
+        ConversationArchivedBy: {
+            /**
+             * Format: int64
+             * @description The user id.
+             */
+            id: number;
+            name: string;
+        };
         /** @description A chunk of a chunked upload was stored; the file is assembled when the last chunk arrives, and that request answers 201. NOTE(W2): internal/api/v2/conversations/attachments.go:409. */
         ConversationAttachmentChunkReceived: {
             chunk_index: number;
@@ -2109,12 +2118,13 @@ export interface components {
             editor_test_runs?: components["schemas"]["EditorTestRunsPage"];
             /** @description Null when the conversation sits outside every folder. */
             folder_id?: string | null;
+            forked_from?: components["schemas"]["ConversationForkedFrom"];
             id: string;
             instructions?: string;
             /** @description Always present; a row that cannot say reads as private. */
             is_private: boolean;
             message_count: number;
-            /** @description Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`. */
+            /** @description Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`. Each group carries `role` (`user` or `assistant`, from its author's participant row, as the message list's `role` is): a fork copies another member's questions without making that member a participant of the fork, so the participant list alone cannot tell such a question from an answer. */
             message_groups?: {
                 [key: string]: unknown;
             }[];
@@ -2170,6 +2180,25 @@ export interface components {
             role: string;
             /** @description The message group's UUID, when it has one. */
             uid?: string;
+        };
+        /** @description Client contract 1.11. The conversation this conversation was forked from (forkConversation), and the fork point. Absent when the conversation is not a fork. The source can be deleted, or become invisible to the reader, later; then the ids stay and `name` is absent. */
+        ConversationForkedFrom: {
+            /** @description The source conversation's numeric id. */
+            conversation_id: number;
+            /**
+             * Format: uuid
+             * @description The source conversation's UUID.
+             */
+            conversation_uuid?: string;
+            /** @description The numeric id of the fork point message group. Absent when the whole conversation was forked. */
+            message_id?: number;
+            /**
+             * Format: uuid
+             * @description The UUID of the fork point message group, when there is one.
+             */
+            message_uuid?: string;
+            /** @description getConversation only. The source conversation's current name. Present only when the source still exists and the reader can see it; a client shows the "Forked from" link only then. */
+            name?: string;
         };
         /** @description The legacy page carries `total` and `rows` only. With `changes_since` (ADR-0025 WP6) the same two keys keep their meaning — the rows are the legacy row shape, oldest change first, and `total` is the size of the caller's whole filtered list now — and `tombstones`, `next_cursor` and `has_more` are added. */
         ConversationListing: {
@@ -2287,10 +2316,23 @@ export interface components {
         ConversationStarters: unknown[];
         /** @description One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field. */
         ConversationSummary: {
+            /**
+             * Format: date-time
+             * @description Client contract 1.10. When the conversation was archived, in UTC. Present only when `is_archived` is true.
+             */
+            archived_at?: string;
+            archived_by?: components["schemas"]["ConversationArchivedBy"];
             created_at: string;
             /** @description Always -1 today; see the schema description. */
             duration: number;
+            forked_from?: components["schemas"]["ConversationForkedFrom"];
+            /** @description Client contract 1.11, forkConversation's answer only. Maps the UUID of each message group the fork copied to the UUID of its copy in the new conversation; empty when nothing was copied. A client that recorded message ids of the source (the desktop's turn history) rewrites them with it. No other read carries it. */
+            forked_messages?: {
+                [key: string]: string;
+            };
             id: number;
+            /** @description Client contract 1.10. The conversation is archived in its project (archiveConversation). The archive is shared by the project, as the pin is: every member who can see the row sees the same value. An archived row keeps its `is_pinned`; a client leaves archived rows out of its pinned section. An archive or unarchive re-delivers the row in the `changes_since` delta of every member who can see it; it does not change `updated_at`. A server before 1.10 omits the field, which means not archived. */
+            is_archived: boolean;
             /** @description Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app's "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned. */
             is_pinned: boolean;
             message_groups_count: number;
@@ -2299,7 +2341,14 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             name: string;
+            /** @description Client contract 1.11. The conversation's origin (`elitea` for a chat, `local_work` for a Local work thread). */
+            source?: string;
             updated_at: string;
+            /**
+             * Format: uuid
+             * @description Client contract 1.11. The conversation's UUID, the id the chat send and the attachment routes take.
+             */
+            uuid?: string;
             /** @description Client contract 1.8 (ADR-0034). Who runs the thread's turns now: `local`, `cloud` or `returning`. A handoff transition re-delivers the row in the `changes_since` delta. */
             workspace_executor?: string;
         };
@@ -4233,7 +4282,9 @@ export interface operations {
     listConversations: {
         parameters: {
             query?: {
-                /** @description Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged. Empty or `0`: a full sync from the beginning in delta shape. Otherwise the opaque `next_cursor` of a previous delta of THIS list — the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine` and `hidden` values; a cursor from another list is a 400. Rows come oldest change first. Losing access to the whole project is not a tombstone: the client sees 403 and drops that project's cache. */
+                /** @description Client contract 1.10. The project's archived conversations (archiveConversation): `exclude` (the default; absent or any other value means `exclude`) leaves them out, `only` lists only them, and `include` lists both. In delta mode (`changes_since`) the value narrows `total` and every page of a full sync (`changes_since` empty or `0`, then the `next_cursor` of each page while `has_more`): the rows stamped before the full sync started. A row that changed during the full sync, and the rows of every later delta, are NOT narrowed by it: an archive or unarchive re-delivers the row with its new `is_archived`, and the client keeps the rows that match its list and drops the others. A client at contract 1.10 or later sends `archived` on every delta call, `exclude` included. A delta call without `archived` gets the shape a client before 1.10 reads: an archived conversation is an `access_lost` tombstone (with the archive time as `deleted_at`) and not a row, and an unarchived conversation is a row again. These tombstones count against the rows' `limit`. */
+                archived?: string;
+                /** @description Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged. Empty or `0`: a full sync from the beginning in delta shape. Otherwise the opaque `next_cursor` of a previous delta of THIS list — the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine`, `hidden` and `archived` values (an absent `archived` and `exclude` are the same list); a cursor from another list is a 400. Rows come oldest change first. Losing access to the whole project is not a tombstone: the client sees 403 and drops that project's cache. */
                 changes_since?: string;
                 /** @description The participant entity's id, paired with entity_name. */
                 entity_meta_id?: string;
