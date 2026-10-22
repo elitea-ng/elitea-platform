@@ -193,7 +193,7 @@ done
 # KNOW WHAT THAT BUYS AND WHAT IT DOES NOT. The check now starts exactly where
 # the `chat-stream-rust` job in .github/workflows/ci-web-e2e.yml starts: on every
 # pull request that touches deploy/**, services/elitea-main/**,
-# apps/elitea-web/**, tools/uictl/**, docker-bake.hcl or that workflow file.
+# apps/elitea-web/**, docker-bake.hcl or that workflow file.
 # The compose files live under deploy/, so an edit to one starts it. A pull
 # request that touches none of those paths does not start it — a workflow-only
 # or docs-only change, for instance. The static gates in

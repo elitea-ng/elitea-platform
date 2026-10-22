@@ -58,98 +58,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Job 1b: Release parity audit ────────────────────────────────────────────
-  # Lives HERE, not in a workflow_run workflow of its own, and that is the
-  # whole point. A separate workflow_run audit has to check out the released
-  # commit and then EXECUTE it (`go run ./tools/uictl`) in the privileged
-  # default-branch context, which CodeQL flags as
-  # actions/cache-poisoning/poisonable-step and which is a real shape rather
-  # than a false positive. As a job here it runs in the ordinary push context
-  # on a commit that is already on main, so there is no untrusted checkout to
-  # reason about at all.
-  #
-  # It also gates better: `needs: release` reads semantic-release's OWN
-  # new_release_published output instead of re-deriving whether a release
-  # happened by hunting for a `v*` tag pointing at HEAD.
-  #
-  # What it audits: the same two commands ci-web.yml runs on every PR, re-run
-  # against what was actually shipped. On a PR they gate the diff; a release is
-  # cut from main, and main can carry a merge result that no single PR ever
-  # validated.
-  audit:
-    name: Release parity audit
-    needs: release
-    if: needs.release.outputs.new_release_published == 'true'
-    runs-on: ubuntu-latest
-    # Narrower than the workflow default (contents/packages/issues/pull-requests
-    # write): this job only reads the tree.
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          submodules: recursive # apps/elitea-ui is the pinned parity baseline
-          persist-credentials: false
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.work
-          # uictl has no external dependencies and no go.sum, so the cache
-          # would hold the toolchain and little else for two commands that run
-          # once per release.
-          cache: false
-
-      - name: Route + manifest parity (release-blocking)
-        run: |
-          echo "### Release audit — ${{ needs.release.outputs.new_release_git_tag }}" >> "$GITHUB_STEP_SUMMARY"
-          go run ./tools/uictl parity-routes --baseline apps/elitea-ui
-          go run ./tools/uictl parity-manifest --validate
-
-      # `--require-must` REPORTS, it does not block. This is a decision, not
-      # an omission — issue #309 asked for the choice to be made explicitly
-      # and named, not left as a silent default:
-      #
-      #   DECISION: stay advisory. Measured on this branch, `uictl
-      #   parity-manifest --require-must` exits 1 with "694 priority:must
-      #   item(s) not verified". Blocking on that count would red every
-      #   release on a known, tracked migration backlog, a signal nobody can
-      #   act on at release time — that is how a gate turns into noise
-      #   everyone learns to ignore, not a safer release.
-      #
-      #   OWNER: Platform Engineering, the same owner
-      #   `implementation-readiness.mdx` (elitea-docs) already names for this
-      #   gap register — this step reports the identical priority:must count
-      #   that document tracks, so it inherits that document's owner rather
-      #   than getting an invented one.
-      #
-      #   REVIEW BY: 2026-11-30. Re-run this decision then: if the backlog is
-      #   near zero, make this step block a release; if not, move this date.
-      #   An advisory with no review date is how gate 3's stale coverage
-      #   exclusion (this same issue) went unnoticed for ten consumers.
-      #
-      # `cutover/*` in ci-web.yml already blocks on this same check and is
-      # unaffected by the above — that arm is where the audit is meant to
-      # bite before release policy changes.
-      #
-      # The step still FAILS if the audit emits no recognisable verdict at all
-      # — "ran, found nothing" and "did not really run" are otherwise the same
-      # log line, which is the entire subject of the gate-dormancy work.
-      - name: Require-must parity (advisory — reports, does not block; owner Platform Engineering, review by 2026-11-30)
-        run: |
-          set -uo pipefail
-          OUT="$(go run ./tools/uictl parity-manifest --require-must 2>&1)" && STATUS=0 || STATUS=$?
-          echo "$OUT"
-          if ! printf '%s' "$OUT" | grep -qE 'priority:must item|all priority:must items'; then
-            echo "::error::parity-manifest --require-must produced no verdict line (exit $STATUS)"
-            exit 1
-          fi
-          {
-            printf '%s\n' "$OUT" | grep -E 'priority:must item|all priority:must items'
-            echo ""
-            echo "_Advisory, not release-blocking (issue #309). Owner: Platform Engineering. Review by: 2026-11-30._"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   # ── Job 2: Build each image on its native runner ────────────────────────────
   #
   # VULNERABILITY SCAN — WHERE IT RUNS (issues #433 and #501)
@@ -215,9 +123,6 @@ jobs:
             context: .
             dockerfile: ./services/elitea-egress-proxy/Containerfile
             target: final
-          - name: elitea-ui
-            context: .
-            dockerfile: ./deploy/docker/Containerfile.elitea-ui
           # New UI (spec §7.3, issue #244): mirrors the elitea-web bake target
           # in docker-bake.hcl so the image bake produces actually reaches
           # ghcr.io instead of only ever being built locally/in CI.
@@ -310,7 +215,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.release.outputs.new_release_git_tag }}
-          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -461,9 +365,6 @@ jobs:
             blocking: true
           - name: elitea-egress-proxy
             expect_type: gobinary
-            blocking: true
-          - name: elitea-ui
-            expect_type: alpine
             blocking: true
           - name: elitea-web
             expect_type: alpine
@@ -634,9 +535,6 @@ jobs:
             blocking: true
           - name: elitea-egress-proxy
             expect_type: gobinary
-            blocking: true
-          - name: elitea-ui
-            expect_type: alpine
             blocking: true
           - name: elitea-web
             expect_type: alpine
@@ -1067,7 +965,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

@@ -80,8 +80,8 @@ export const ErrorState: Story = {
   // in BOTH colour schemes, 3.55:1 against the dark scheme's surface —
   // short of WCAG AA's 4.5:1 for this text size. Fixed at the token: the
   // dark scheme's `icon.fill.error` is now `#ED4F4F` (same hue/saturation,
-  // raised lightness — `scripts/gen-brand-tokens.mjs`'s `A11Y_OVERRIDES`
-  // table, `parity/brand-hue-map.md` §10), 5.05:1 against
+  // raised lightness — the contrast overrides in
+  // `src/shared/brand/tokens/README.md`, `parity/brand-hue-map.md` §10), 5.05:1 against
   // `background.default`. This story now runs the real a11y gate.
 };
 

@@ -128,7 +128,7 @@ func TestParseUpstreamAcceptsOnlyAnOrigin(t *testing.T) {
 	if upstream, err := webedge.ParseUpstream(""); upstream != nil || err != nil {
 		t.Errorf("an empty value must leave the edge off, got %v, %v", upstream, err)
 	}
-	for _, good := range []string{"http://elitea-web:80", "http://elitea-ui", "https://web.internal:8443/"} {
+	for _, good := range []string{"http://elitea-web:80", "http://elitea-web", "https://web.internal:8443/"} {
 		if _, err := webedge.ParseUpstream(good); err != nil {
 			t.Errorf("ParseUpstream(%q) = %v", good, err)
 		}
@@ -149,7 +149,7 @@ var browserComposeStackFloor = []string{
 	"deploy/docker-compose.standalone-full.yml",
 }
 
-var webServiceNames = []string{"elitea-web", "elitea-ui"}
+var webServiceNames = []string{"elitea-web"}
 
 // TestBrowserComposeStacksTurnTheEdgeOn is the compose half of the service
 // resolution gate: a stack whose elitea-main names no upstream, or one that

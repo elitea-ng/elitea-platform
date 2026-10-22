@@ -53,9 +53,9 @@
 # WHY `lint` IS HERE TOO (#427)
 #
 # The ci-go.yml Lint job named two modules in a hand-written matrix, and
-# `task lint` ran in one module. The workspace holds nine. So an errcheck,
-# staticcheck or unused finding in gen/go, libs/go/**, libs/proto/gen/go or
-# tools/uictl passed every gate in this repository. The head of .golangci.yml
+# `task lint` ran in one module, while the workspace held many more (twelve
+# today). So an errcheck, staticcheck or unused finding in libs/go/**,
+# libs/proto/gen/go or the other services passed every gate in this repository. The head of .golangci.yml
 # said "Applied to every module". That was a statement of intent, not of fact.
 #
 # The same six rules above now hold for lint as well. Point 6 matters most: a

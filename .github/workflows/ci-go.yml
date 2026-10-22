@@ -217,10 +217,9 @@ jobs:
     runs-on: ubuntu-latest
     # Issue #427. This job used to carry a hand-written matrix of two modules,
     # `services/elitea-main` and `services/elitea-scheduler`, while go.work
-    # names nine. gen/go, libs/go/authlib, libs/go/eventslib,
-    # libs/go/observability, libs/go/rpclib, libs/proto/gen/go and tools/uictl
-    # were never linted, and this workflow triggers on `libs/go/**` — so it ran
-    # on their changes and looked at none of them.
+    # named many more (twelve today). The libs/go modules, libs/proto/gen/go
+    # and the other services were never linted, and this workflow triggers on
+    # `libs/go/**` — so it ran on their changes and looked at none of them.
     #
     # A hand-written matrix cannot report what it left out. The module list is
     # read from go.work at run time instead, by the same script the vet and
@@ -238,10 +237,9 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
-          # This job lints nine modules now, so the cache key reads every module
-          # that has a go.sum. tools/uictl has none — it declares no external
-          # dependency. The block below is a literal string, so a comment
-          # inside it would become a path.
+          # This job lints every go.work module, so the cache key reads every
+          # module that has a go.sum. The block below is a literal string, so a
+          # comment inside it would become a path.
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum
@@ -618,8 +616,8 @@ jobs:
   # changed — same `target: final` build, same HIGH,CRITICAL threshold, same
   # "a report with no Go binary is a failure" guard.
   #
-  # It moved because path filters are per workflow. elitea-web and elitea-ui are
-  # published images too, and adding apps/elitea-web/** to this workflow's
+  # It moved because path filters are per workflow. elitea-web is a published
+  # image too, and adding apps/elitea-web/** to this workflow's
   # triggers would run the Postgres service, the storage emulators and the whole
   # Go test suite on every front-end change.
 

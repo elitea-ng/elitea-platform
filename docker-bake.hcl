@@ -20,7 +20,7 @@ variable "REGISTRY" {
 }
 
 group "default" {
-  targets = ["elitea-main", "elitea-ui", "elitea-scheduler", "elitea-llm-gateway"]
+  targets = ["elitea-main", "elitea-web", "elitea-scheduler", "elitea-llm-gateway"]
 }
 
 group "go" {
@@ -29,10 +29,6 @@ group "go" {
 
 group "scheduler" {
   targets = ["elitea-scheduler"]
-}
-
-group "ui" {
-  targets = ["elitea-ui"]
 }
 
 target "elitea-main" {
@@ -50,21 +46,9 @@ target "elitea-main" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
-target "elitea-ui" {
-  context    = "./apps/elitea-ui"
-  dockerfile = "../deploy/docker/Containerfile.elitea-ui"
-  tags       = ["${REGISTRY}/elitea-ui:${TAG}"]
-  cache-from = [
-    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-ui:release-linux-amd64",
-    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-ui:linux-amd64",
-  ]
-  platforms  = ["linux/amd64", "linux/arm64"]
-}
-
-# New UI (spec §7.3): context is the repo root and the Containerfile lives with
+# The UI (spec §7.3): context is the repo root and the Containerfile lives with
 # the app, so bake, publish.yml and Taskfile build with identical contexts —
-# fixing defect D1 by construction. Built in parallel with elitea-ui for the
-# whole cutover; rollback is an edge routing change, never a rebuild.
+# fixing defect D1 by construction.
 target "elitea-web" {
   context    = "."
   dockerfile = "apps/elitea-web/Containerfile"

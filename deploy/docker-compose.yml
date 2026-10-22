@@ -216,7 +216,7 @@ services:
       # Relay /app and /docs to the SPA container and redirect `/` to /app/
       # (internal/api/webedge). Compose only: a cluster's Gateway API
       # HTTPRoute does this routing, and the chart never sets it.
-      ELITEA_WEB_UPSTREAM: "http://elitea-ui:80"
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme"
       SKIP_MIGRATIONS: "1"
@@ -662,20 +662,40 @@ services:
       retries: 12
       start_period: 10s
 
-  elitea-ui:
+  # The UI (apps/elitea-web), built the way docker-compose.standalone-full.yml
+  # builds it. elitea-main relays /app and /docs here (ELITEA_WEB_UPSTREAM).
+  elitea-web:
     build:
       context: ..
-      dockerfile: deploy/docker/Containerfile.elitea-ui
-    image: ghcr.io/elitea-ng/elitea-ui:dev
+      dockerfile: apps/elitea-web/Containerfile
+    image: ghcr.io/elitea-ng/elitea-web:dev
     environment:
       VITE_SERVER_URL: "/api/v2"
       VITE_BASE_URI: "/app/"
+      # Empty on purpose: there is no socket.io server in this stack, so the
+      # app installs its no-op socket client.
       VITE_SOCKET_SERVER: ""
       VITE_SOCKET_PATH: "/socket.io"
-      VITE_PUBLIC_PROJECT_ID: "1"
-      DEV: ""
+      # NOT "1", for the reason docker-compose.standalone-full.yml gives at its
+      # elitea-web service: the SPA treats the selected project as PUBLIC when
+      # it equals this value, and the working project a developer uses here is
+      # normally 1, so "1" would render the public view on every agents,
+      # pipelines and skills page and hide the private lists. This stack seeds
+      # no data at all (SKIP_MIGRATIONS=1, no seed service: the schema and rows
+      # come from outside), so it has no public project of its own to name;
+      # 99 is an id nothing creates. Pages that need the REAL public project
+      # read `public_project_id` from elitea-main's `platform_settings`
+      # (shared/lib/hooks/usePublicProjectId). Set VITE_PUBLIC_PROJECT_ID to
+      # your database's public project id to test the public view.
+      VITE_PUBLIC_PROJECT_ID: "${VITE_PUBLIC_PROJECT_ID:-99}"
     depends_on:
       - elitea-main
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   elitea-scheduler:
     build:
