@@ -56,26 +56,6 @@ on:
       # The bake step reads its targets and contexts from here.
       - "docker-bake.hcl"
       - ".github/workflows/helm-install-smoke.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "deploy/helm/**"
-      - "!deploy/helm/tests/**"
-      - "!deploy/helm/**/*.md"
-      - "deploy/kind/**"
-      - "deploy/scripts/gen-runtime-certs.sh"
-      - "services/elitea-main/internal/runtimecomposition/**"
-      # The images this job builds and whose pods `verify` asserts.
-      - "services/elitea-subapp-host/**"
-      - "services/elitea-deepwiki-engine/**"
-      - "services/elitea-inventory-engine/**"
-      - "services/elitea-vector/**"
-      - "libs/rust/**"
-      - "libs/proto/**"
-      - "libs/go/natsconn/**"
-      - "docker-bake.hcl"
-      - ".github/workflows/helm-install-smoke.yml"
   schedule:
     # Sunday 05:23 UTC, after the Saturday Dependabot slot and its merges.
     - cron: "23 5 * * 0"
@@ -103,7 +83,7 @@ jobs:
     # The cache policy: READ ONLY, on every event. Each image reads the
     # registry layer cache ci-web-e2e.yml's build-once jobs write for the
     # same Containerfile and stage (ghcr.io/elitea-ng/ci-cache-<image>:
-    # linux-amd64, public, written by a push to main only), and an empty
+    # linux-amd64, public, written by a run on main only), and an empty
     # `<target>.cache-to=` clears any export. That ref has ONE writer: a
     # second writer of a mode=max cache replaces the first's manifest, so the
     # smoke writing it too would cost the E2E stacks their layers on every

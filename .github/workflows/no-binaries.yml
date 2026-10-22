@@ -8,15 +8,19 @@ name: No Binaries
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "3 1 * * *"
+  workflow_dispatch:
 
 # A new push cancels the queued previous run of THIS workflow on the same ref.
 # This does not narrow what the gate sees: it still runs unfiltered on every
 # push and pull_request (see above), it just stops N superseded copies of the
 # same commit range sitting in the queue. The org is on the GitHub free plan —
-# 20 concurrent jobs for the whole account — and a push to main starts ~100
+# 20 concurrent jobs for the whole account — and a nightly run on main starts ~100
 # jobs, so a queued run that can never report on current code is a slot another
 # gate needs.
 concurrency:
@@ -227,36 +231,29 @@ jobs:
       - name: Rust image builds compile the checked-out source
         run: python -m pytest -q scripts/contract/test_cargo_target_cache_freshness.py
 
-  # Issue #518. The wiring is a separate artifact from the gate, and only the
-  # gate feels like the work. `helm-lint.yml` was correct in its own file and
-  # its push arm named `main` only, so it could not start on the branch it
-  # guards. A measurement on 2026-08-18 gives the size of the hole: for EVERY
-  # workflow in this repository, `actions/runs?branch=<staging>&event=push`
-  # returned `total_count: 0`. No push run has ever started on the staging
-  # branch.
-  #
-  # This job holds the wiring itself. It reads .github/staging-branch.txt and
-  # the push arm of each workflow, and it fails when a workflow that names
-  # `main` does not also name the staging branch — or when a workflow names a
-  # branch the file does not.
+  # No workflow starts on a push (owner decision, 2026-10-22): a merge to main
+  # starts no pipeline. Pull requests run their gates; main runs on a schedule
+  # (the nightly cache writers, publish.yml's nightly pre-release) and by
+  # dispatch (a release, a dev pre-release). This job holds that rule for every
+  # workflow, in each spelling `on:` takes.
   #
   # It lives here, and not in a path-filtered workflow, for the reason the
   # header of this file gives: a path filter is a second thing to keep correct,
   # and a gate about triggers must not itself depend on one.
-  workflow-branch-coverage:
-    name: Workflow triggers reach the staging branch
+  workflow-triggers:
+    name: No workflow starts on a push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # The check asks `origin` whether the branch it names still exists, so the
-      # authenticated remote that actions/checkout leaves behind is required.
+        with:
+          persist-credentials: false
       # It reads only node's standard library (the runner's node); there is
       # nothing to install.
-      - name: Every push arm that names main also names the staging branch
+      - name: No workflow names the push event
         run: |
           set -euo pipefail
-          node --test scripts/ci/check-workflow-branch-coverage.test.mjs
-          node scripts/ci/check-workflow-branch-coverage.mjs
+          node --test scripts/ci/check-no-push-triggers.test.mjs
+          node scripts/ci/check-no-push-triggers.mjs
 
   # docs/client-feature-parity.md is how new client work lands on web, desktop
   # and mobile together; the checker holds the table's shape (every row has a
@@ -476,7 +473,7 @@ jobs:
   # were PULL REQUESTS: setup-go caches of 0.3-1.2 GB per pull request and
   # ~2.9 GB of pull-request BuildKit blobs, every one of them evicting the
   # main-branch entry each pull request should have been reading. The rule
-  # since then is "pull requests read, a push to main writes"; this job holds
+  # since then is "pull requests read, a run on main writes"; this job holds
   # it, for every workflow and composite action, with the negative cases in
   # scripts/ci/check-workflow-cache-writes.test.mjs.
   #
@@ -533,7 +530,7 @@ jobs:
       - name: The build-once contract and the CI-image prune policy hold
         run: |
           set -euo pipefail
-          for suite in stack-images.test.mjs prune-ci-images.test.mjs; do
+          for suite in stack-images.test.mjs prune-ci-images.test.mjs prune-prereleases.test.mjs; do
             expected="$(grep -c '^test(' "scripts/ci/${suite}")"
             [ "${expected}" -ge 5 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 5"; exit 1; }
             # Capture the status: under `set -e` a failing command substitution

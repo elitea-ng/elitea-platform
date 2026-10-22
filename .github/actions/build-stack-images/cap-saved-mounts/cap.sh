@@ -7,7 +7,7 @@
 # entry only grows (the single rust entry was 3.55 GB on 2026-10-20).
 #
 # POLICY: above the cap, drop the LARGEST cargo-target-<image> directory, and
-# repeat. That image then builds cold ONCE, on the next main push, and is
+# repeat. That image then builds cold ONCE, on the next nightly run on main, and is
 # saved holding only the artefacts its current lockfile uses: a reset, not a
 # per-run cost. Finer pruning (stale fingerprints) needs to know which
 # artefacts this build USED; cargo records no such thing and restored mtimes
@@ -30,7 +30,7 @@ while [ "$(total)" -gt "$cap" ]; do
     echo "::warning::cap: mounts are $(total) MB with no cargo target directory left to drop"
     break
   fi
-  echo "cap: dropping $biggest ($(du -sm "$biggest" | cut -f1) MB) from the saved entry; that image builds cold once on the next main push"
+  echo "cap: dropping $biggest ($(du -sm "$biggest" | cut -f1) MB) from the saved entry; that image builds cold once on the next nightly run on main"
   # The dance's extraction may leave files a plain user cannot remove;
   # hosted runners have passwordless sudo.
   rm -rf "$biggest" 2>/dev/null || sudo rm -rf "$biggest" || { echo "::warning::cap: could not remove $biggest"; break; }

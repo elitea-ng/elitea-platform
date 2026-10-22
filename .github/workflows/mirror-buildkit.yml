@@ -32,11 +32,6 @@ on:
   pull_request:
     paths:
       - ".github/workflows/mirror-buildkit.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/mirror-buildkit.yml"
   schedule:
     # First Sunday-ish of the month, 04:41 UTC.
     - cron: "41 4 1 * *"

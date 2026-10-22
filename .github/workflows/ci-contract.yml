@@ -6,16 +6,12 @@ on:
       - "services/elitea-main/tests/contract/**"
       - "services/elitea-main/api/openapi/**"
       - ".github/workflows/ci-contract.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "services/elitea-main/tests/contract/**"
-      - "services/elitea-main/api/openapi/**"
-      # This workflow's own file. The pull_request arm above names it and this
-      # arm did not, so a push that edited only the gate could not start the
-      # gate it edited (#518).
-      - ".github/workflows/ci-contract.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "55 0 * * *"
   workflow_dispatch:
 
 concurrency:

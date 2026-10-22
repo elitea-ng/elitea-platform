@@ -15,12 +15,6 @@ on:
     paths:
       - "deploy/mock-llm/**"
       - ".github/workflows/ci-mock-llm.yml"
-  push:
-    branches:
-      - main
-    paths:
-      - "deploy/mock-llm/**"
-      - ".github/workflows/ci-mock-llm.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

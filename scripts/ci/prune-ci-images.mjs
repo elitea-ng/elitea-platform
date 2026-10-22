@@ -18,7 +18,7 @@
 // is skipped.
 //
 // ci-web-e2e.yml pushes every stack image it builds to `ci-<image>:<sha>` (one
-// version per commit) and, on a push to main, the layer cache to
+// version per commit) and, on a run on main, the layer cache to
 // `ci-cache-<image>:linux-amd64` (the tag moves; every move strands the previous
 // manifest as an untagged version); publish.yml does the same with
 // `ci-cache-<image>:release-<platform>`. Nothing that ships references them

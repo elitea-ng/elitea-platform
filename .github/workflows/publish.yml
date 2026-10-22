@@ -1,10 +1,45 @@
 name: Release & Publish
 
+# THREE CHANNELS, NONE OF THEM A MERGE. A merge to main starts no run of this
+# workflow (nor of any other: scripts/ci/check-no-push-triggers.mjs). Releasing
+# on every merge cut a release per pull request — v4.66.0 to v6.0.0 in two
+# days — so a release is now a decision:
+#
+#   release   workflow_dispatch from main. semantic-release, exactly as before:
+#             the conventional commits since the last stable tag decide the
+#             bump, and it creates the tag and the GitHub release. Moves
+#             `latest` and `<major>.<minor>`. Nothing releasable: no-op.
+#   nightly   the schedule below, from main. A pre-release
+#             `<next>-nightly.<yyyymmdd>.<run>`. Skipped when HEAD already
+#             carries a release or nightly tag (no commits since the last one).
+#   dev       workflow_dispatch from ANY branch. A pre-release `<next>-dev.<run>`.
+#
+# `<next>` is the version semantic-release would cut from that ref now (a dry
+# run with the ref as its only branch), so a pre-release always sorts BEFORE the
+# release it previews. With nothing releasable since the last stable tag it is
+# that tag's patch + 1. Pre-release tags never feed the bump: semantic-release
+# ignores pre-release versions when it looks for the last release of `main`.
+#
+# A pre-release builds, scans, signs and publishes the same images and charts a
+# release does, under its own version only — the manifest step never gives a
+# version with a `-` the moving tags. The `prune` job keeps the newest
+# PRERELEASE_KEEP of each pre-release channel and deletes the rest.
 on:
-  push:
-    branches:
-      - main
-      - next
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: >-
+          release — a stable release from main (semantic-release decides the
+          version). dev — a pre-release `<next>-dev.<run>` of the dispatched
+          ref, any branch. nightly — what the schedule runs, by hand.
+        type: choice
+        options:
+          - release
+          - dev
+          - nightly
+        default: release
+  schedule:
+    - cron: "7 2 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +50,8 @@ env:
   # Read by the chart job. Pinned, not "latest" — an unpinned third-party
   # download is a hard dependency of every release.
   YQ_VERSION: v4.44.6
+  # Pre-releases kept per channel (nightly, dev) by the `prune` job.
+  PRERELEASE_KEEP: "14"
 
 permissions:
   contents: write
@@ -24,20 +61,64 @@ permissions:
   id-token: write
 
 jobs:
-  # ── Job 1: Semantic Release — determine version, create tag & GitHub release ─
+  # ── Job 1: Version — decide the version, create the tag & GitHub release ────
+  #
+  # Every later job reads only these three outputs, whichever channel set them.
   release:
-    name: Semantic Release
+    name: Version (${{ github.event_name == 'schedule' && 'nightly' || inputs.channel }})
     runs-on: ubuntu-latest
     outputs:
-      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
-      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
-      new_release_git_tag: ${{ steps.semantic.outputs.new_release_git_tag }}
+      new_release_published: ${{ steps.stable.outputs.new_release_published || steps.pre.outputs.published }}
+      new_release_version: ${{ steps.stable.outputs.new_release_version || steps.pre.outputs.version }}
+      new_release_git_tag: ${{ steps.stable.outputs.new_release_git_tag || steps.pre.outputs.git_tag }}
+      channel: ${{ steps.channel.outputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Channel
+        id: channel
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          channel="$INPUT"
+          if [ "$EVENT" = "schedule" ]; then channel=nightly; fi
+          case "$channel" in
+            release|nightly)
+              # A stable release, and the nightly preview of the next one, come
+              # from main only. A dev pre-release is the one channel for a branch.
+              if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+                echo "::error::the ${channel} channel runs from main; dispatch it on main, or pick dev for ${GITHUB_REF_NAME}"
+                exit 1
+              fi ;;
+            dev) ;;
+            *) echo "::error::unknown channel '${channel}'"; exit 1 ;;
+          esac
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+          # semantic-release EVALUATES the `branches` input as JavaScript, so
+          # the branch name reaches it as a JSON string literal, never raw.
+          echo "branches=$(jq -cn --arg b "$GITHUB_REF_NAME" '[$b]')" >> "$GITHUB_OUTPUT"
+          echo "### Channel: ${channel} (${GITHUB_REF_NAME} @ ${GITHUB_SHA::12})" >> "$GITHUB_STEP_SUMMARY"
+
+      # Nothing new since the last nightly (or release): no nightly. A nightly
+      # per quiet night would only be a copy of the one before it.
+      - name: Nightly — anything new since the last one?
+        id: fresh
+        if: steps.channel.outputs.channel == 'nightly'
+        run: |
+          set -euo pipefail
+          held="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-nightly\..+)?$' || true)"
+          if [ -n "$held" ]; then
+            echo "HEAD already carries ${held//$'\n'/, }; no nightly." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -46,8 +127,9 @@ jobs:
           # semantic-release runs from npx; nothing here wants a cache.
           package-manager-cache: false
 
-      - name: Semantic Release
-        id: semantic
+      - name: Semantic Release (release channel)
+        id: stable
+        if: steps.channel.outputs.channel == 'release'
         uses: cycjimmy/semantic-release-action@v8
         with:
           extra_plugins: |
@@ -57,6 +139,66 @@ jobs:
             @semantic-release/github
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same analysis, as a dry run on the dispatched ref: it publishes
+      # nothing and reports the version a release would cut, and its notes.
+      - name: Semantic Release dry run (pre-release channels)
+        id: next
+        if: steps.channel.outputs.channel == 'dev' || steps.fresh.outputs.fresh == 'true'
+        uses: cycjimmy/semantic-release-action@v8
+        with:
+          dry_run: true
+          branches: ${{ steps.channel.outputs.branches }}
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@8
+            @semantic-release/commit-analyzer
+            @semantic-release/release-notes-generator
+            @semantic-release/github
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the pre-release tag and GitHub pre-release
+        id: pre
+        if: steps.next.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          NEXT: ${{ steps.next.outputs.new_release_version }}
+          LAST: ${{ steps.next.outputs.last_release_version }}
+          NOTES: ${{ steps.next.outputs.new_release_notes }}
+          RUN: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          base="$NEXT"
+          if [ -z "$base" ]; then
+            # Nothing releasable since the last stable tag: preview its patch.
+            last="${LAST:-0.0.0}"
+            IFS=. read -r major minor patch <<< "${last%%-*}"
+            base="${major}.${minor}.$((patch + 1))"
+          fi
+          case "$CHANNEL" in
+            nightly) version="${base}-nightly.$(date -u +%Y%m%d).${RUN}" ;;
+            dev)     version="${base}-dev.${RUN}" ;;
+          esac
+          tag="v${version}"
+
+          {
+            echo "${CHANNEL} pre-release of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}."
+            echo
+            if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES"; else echo "No releasable commits since v${LAST:-0.0.0}."; fi
+          } > "$RUNNER_TEMP/notes.md"
+
+          # --target creates the tag on GitHub at this commit; the later jobs
+          # check it out by name.
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+
+          {
+            echo "published=true"
+            echo "version=${version}"
+            echo "git_tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Pre-release **${tag}**" >> "$GITHUB_STEP_SUMMARY"
 
   # ── Job 2: Build each image on its native runner ────────────────────────────
   #
@@ -252,9 +394,9 @@ jobs:
           # The registry layer cache (the public ghcr.io/elitea-ng/ci-cache-<image>
           # package), not `type=gha`: the Actions cache is capped at 10 GB and
           # a mode=max export of twenty platform builds is what kept it at the
-          # cap. `release-<platform>` is this job's own ref, written by a push
-          # to main only (`next` reads it; mode=max because the builder stages
-          # are most of each build). The second read is ci-web-e2e.yml's
+          # cap. `release-<platform>` is this job's own ref, written by a run
+          # from main only (a dev pre-release of a branch reads it; mode=max
+          # because the builder stages are most of each build). The second read is ci-web-e2e.yml's
           # build-once cache of the same Containerfile (amd64), so a release
           # starts from main's latest CI layers. The cache is a cache: nothing
           # a release ships is a ci-* image (scripts/ci/check-ci-image-references.mjs).
@@ -903,7 +1045,64 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           helm show chart "oci://${REGISTRY}/charts/${{ matrix.chart }}" --version "$VERSION"
 
-  # ── Job 5: Rollback — delete release, tag, and images on failure ────────────
+  # ── Job 5: Docs — deploy the docs site for a stable release ─────────────────
+  #
+  # A merge no longer deploys the docs (docs-pages.yml has no push arm), so the
+  # site moves with the stable release, built from its tag. Not in rollback's
+  # `needs`: a failed docs deploy leaves a release that is otherwise complete,
+  # and docs-pages.yml can be re-dispatched on its own.
+  docs:
+    name: Docs
+    needs: [release, chart]
+    if: needs.release.outputs.new_release_published == 'true' && needs.release.outputs.channel == 'release'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/docs-pages.yml
+    with:
+      ref: ${{ needs.release.outputs.new_release_git_tag }}
+
+  # ── Job 6: Prune — keep the newest PRERELEASE_KEEP pre-releases per channel ──
+  #
+  # Runs after a pre-release published, so the one just cut is counted among
+  # the kept. Deletes each older pre-release with its tag, its images (the
+  # manifest and both platform tags) and its charts:
+  # scripts/ci/prune-prereleases.mjs, unit-tested in no-binaries.yml.
+  prune:
+    name: Prune old pre-releases
+    needs: [release, chart]
+    if: needs.release.outputs.new_release_published == 'true' && needs.release.outputs.channel != 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Pinned to the v9.0.0 commit, as ci-image-cleanup.yml pins it: this
+      # step holds packages: write.
+      - name: Prune
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CHANNEL: ${{ needs.release.outputs.channel }}
+          ORG: ${{ github.repository_owner }}
+        with:
+          script: |
+            const { main } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/ci/prune-prereleases.mjs`);
+            const code = await main({
+              github,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              org: process.env.ORG,
+              channel: process.env.CHANNEL,
+              keep: Number(process.env.PRERELEASE_KEEP),
+            });
+            if (code !== 0) core.setFailed(`scripts/ci/prune-prereleases.mjs exited ${code}`);
+
+  # ── Job 7: Rollback — delete release, tag, and images on failure ────────────
   rollback:
     name: Rollback
     # `publish-image` is on this list so a refused image is rolled back, not left

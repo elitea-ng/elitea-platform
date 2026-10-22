@@ -14,7 +14,8 @@
 //     import the package.json and package-lock.json `npm ci` installs from,
 //
 // and fails, naming the path, when the `pull_request` filter covers none of
-// them — or when the `push` filter differs from the `pull_request` one. It
+// them. (There is no `push` filter to keep equal to it: no workflow starts on
+// a push, scripts/ci/check-no-push-triggers.mjs.) It
 // also runs scripts/ci/e2e-lane-filter.sh (the `model-path-changes` job's
 // skip rule) over each input and fails on any it would call outside the stack:
 // the two lists must agree that a stack input starts the stack lanes.
@@ -191,15 +192,9 @@ export function main(log = console.log) {
   // PyYAML reads the unquoted `on:` key as True ("true" here).
   const on = Object.hasOwn(workflow, "true") ? workflow.true : workflow.on;
   const pr = [...on.pull_request.paths];
-  const push = [...on.push.paths];
   const errors = [];
-  if ([...pr, ...push].some((p) => p.startsWith("!"))) {
+  if (pr.some((p) => p.startsWith("!"))) {
     errors.push("negated path patterns are not modelled by this check");
-  }
-  if (JSON.stringify(sorted(pr)) !== JSON.stringify(sorted(push))) {
-    const onlyPr = sorted(new Set(pr.filter((p) => !push.includes(p))));
-    const onlyPush = sorted(new Set(push.filter((p) => !pr.includes(p))));
-    errors.push(`the push paths differ from the pull_request paths: only in pull_request ${pyRepr(onlyPr)}, only in push ${pyRepr(onlyPush)}`);
   }
 
   const inputs = new Map();

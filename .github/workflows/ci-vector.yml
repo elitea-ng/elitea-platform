@@ -30,19 +30,12 @@ on:
       - "libs/rust/engine-core/**"
       - "libs/rust/Cargo.toml"
       - ".github/workflows/ci-vector.yml"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-vector/**"
-      - "libs/proto/elitea/vector/**"
-      - "libs/rust/engine-sidecar/**"
-      - "libs/rust/engine-core/**"
-      - "libs/rust/Cargo.toml"
-      - ".github/workflows/ci-vector.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "35 0 * * *"
   workflow_dispatch:
 
 concurrency:

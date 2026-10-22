@@ -59,66 +59,12 @@ on:
       - ".github/actions/npm-cache/**"
       - ".github/actions/main-write-cache/**"
       - ".github/workflows/ci-rust.yml"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "services/elitea-worker-rust/**"
-      # The chart-rendered workspace profile the supervisor test parses.
-      - "deploy/runtime/sandbox-workspace.kubernetes.example.json"
-      - "services/elitea-code-runner/**"
-      - "services/elitea-main/migrations/agentstate/**"
-      - "libs/proto/**"
-      # elitea-llm-wire (the /llm caller contract) and elitea-agent-runtime
-      # (the runtime shared with the desktop host, ADR-0029), path dependencies,
-      # and the patched adk crates in libs/rust/vendor; they inherit package
-      # fields and lints from the libs/rust workspace.
-      - "libs/rust/**"
-      # The workspace-run Docker proofs create the egress network with it.
-      - "deploy/docker/workspace-egress.sh"
-      # ...and run the real egress proxy for the proxy-mode proof.
-      - "services/elitea-egress-proxy/**"
-      - "libs/go/egresslib/**"
-      # The /llm caller contract both Rust callers assert (worker, engine model client).
-      - "conformance/llm-caller/**"
-      # The SDK schema gate reads both (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs;
-      # the worker's artifact suite asserts it through `test-support`).
-      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
-      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
-      - "services/elitea-main/internal/rustonly/rust_only_toolkit_tools.json"
-      # The live command-bus test runs the worker against the NATS chart's
-      # own permission table and the real bootstrap (docs/runtime-command-bus.md).
-      # The bundled NATS server's permission table and the bootstrap script.
-      - "deploy/helm/elitea/values.yaml"
-      - "deploy/helm/elitea/values-nats-ha.yaml"
-      - "deploy/helm/elitea/templates/nats/**"
-      - "deploy/helm/elitea/Chart.lock"
-      - "deploy/helm/elitea/build-deps.sh"
-      - "deploy/helm/elitea/files/nats-bootstrap.sh"
-      - "scripts/nats/**"
-      - "libs/go/natsconn/**"
-      - "docs/runtime-command-bus.md"
-      # The owner-schema fixture is migrated by the real command, and the
-      # Docker supervisor tests run through the ledger helper; the ignored-test
-      # guard reads its own script and allowlist.
-      - "services/elitea-main/cmd/elitea-migrate/**"
-      - "services/elitea-main/internal/infra/db/migrate/**"
-      - "scripts/runtime/test_sandbox_ledger.py"
-      - "scripts/ci/check-worker-ignored-tests.mjs"
-      - "scripts/ci/check-worker-ignored-tests.test.mjs"
-      - "scripts/ci/ci-compat.mjs"
-      - "scripts/ci/py-compat.mjs"
-      - "scripts/ci/package.json"
-      - "scripts/ci/package-lock.json"
-      - "scripts/ci/worker-ignored-tests-allowlist.txt"
-      # The guard's install: ci-scripts-deps and the npm cache actions it uses.
-      - ".github/actions/ci-scripts-deps/**"
-      - ".github/actions/npm-cache/**"
-      - ".github/actions/main-write-cache/**"
-      - ".github/workflows/ci-rust.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "19 0 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -447,7 +393,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-verification-linux-amd64,ignore-error=true' || '' }}
 
       - name: Build the code runner Deno/Pyodide image
         uses: docker/build-push-action@v7
@@ -463,7 +409,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-default-linux-amd64,ignore-error=true' || '' }}
 
       # The Rust language image (vendored Cargo tree + the Rust adapter): the
       # Docker PID-limit test compiles and runs user Rust code in it.
@@ -481,7 +427,7 @@ jobs:
             type=gha,scope=elitea-code-runner-verification-linux-amd64
             type=gha,scope=elitea-code-runner-default-linux-amd64
             type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
-          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-code-runner-rust-runtime-linux-amd64,ignore-error=true' || '' }}
 
       # The helper starts its own disposable postgres:18 container
       # (--pull=never; the service above already pulled the image), generates

@@ -10,25 +10,20 @@ name: Docs — GitHub Pages
 # job cap (see ci-web.yml's own header), and the standard build/deploy split
 # exists for workflows that fan a build out to multiple deploy targets. This
 # has exactly one.
+#
+# WHEN. A stable release deploys it: publish.yml's `docs` job calls this
+# workflow with the release tag, so the site describes a version someone can
+# install. A merge to main deploys nothing (no workflow has a push arm,
+# scripts/ci/check-no-push-triggers.mjs). workflow_dispatch deploys the
+# dispatched ref by hand.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/elitea-web/src/entries/docs/**"
-      - "apps/elitea-web/vite.config.ts"
-      - "apps/elitea-web/package.json"
-      - "apps/elitea-web/package-lock.json"
-      - ".github/workflows/docs-pages.yml"
+  workflow_call:
+    inputs:
+      ref:
+        description: The git ref to build the docs from (the release tag).
+        type: string
+        required: true
   workflow_dispatch:
-
-# Pages deployments must not race each other — a slower run finishing after a
-# faster, more recent one would publish stale content. `cancel-in-progress`
-# on the SAME concurrency group as every other Pages deploy is GitHub's own
-# documented pattern for this job.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -39,6 +34,13 @@ jobs:
   build-and-deploy:
     name: Build and deploy docs
     runs-on: ubuntu-latest
+    # Pages deployments must not race each other — a slower run finishing after
+    # a faster, more recent one would publish stale content. Job level, not
+    # workflow level: under workflow_call a workflow-level group would be read
+    # in the CALLER's context.
+    concurrency:
+      group: "pages"
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -47,6 +49,9 @@ jobs:
         working-directory: apps/elitea-web
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Empty under workflow_dispatch: the dispatched ref.
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@v7
         with:
           node-version: "26"

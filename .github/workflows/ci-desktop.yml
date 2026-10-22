@@ -53,47 +53,12 @@ on:
       # The shared client package the web bundle compiles from source.
       - "libs/ts/client-core/**"
       - ".github/workflows/ci-desktop.yml"
-  push:
-    branches:
-      - main
-    paths:
-      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
-      - "rust-toolchain.toml"
-      - "scripts/ci/assert-rust-toolchain.sh"
-      - "apps/elitea-desktop/**"
-      # The host links the shared runtime, the local tools and the /llm
-      # contract (ADR-0029 D0), and their path dependencies.
-      - "libs/rust/agent-runtime/**"
-      - "libs/rust/local-tools/**"
-      - "libs/rust/workspace-store/**"
-      - "libs/rust/llm-wire/**"
-      - "libs/rust/content-source/**"
-      # The runtime's internal tool client (#1359): platform-rpc and the
-      # contracts its build.rs compiles.
-      - "libs/rust/platform-rpc/**"
-      - "libs/proto/elitea/runtime/v1/artifact_object.proto"
-      - "libs/proto/elitea/runtime/v1/internal_tool.proto"
-      # The provider clients the toolkit families share (ADR-0030 decision 3).
-      - "libs/rust/connectors/**"
-      - "libs/rust/doc-extract/**"
-      # The local workspace index (ADR-0029 decision 7) links the Inventory
-      # core's parsers and Python-compatible text; both crates keep
-      # `preserve_order` out of their normal dependencies for this host.
-      - "libs/rust/engine-core/**"
-      - "libs/rust/code-parsers/**"
-      - "libs/rust/inventory-core/**"
-      - "libs/rust/local-index/**"
-      # The index tools mirror the cloud Inventory descriptor; a drift test reads it.
-      - "services/elitea-subapp-host/internal/apps/inventory/descriptor.json"
-      - "libs/rust/vendor/adk-agent/**"
-      - "libs/rust/vendor/adk-runner/**"
-      - "apps/elitea-web/src/**"
-      - "apps/elitea-web/vite.config.ts"
-      - "apps/elitea-web/package.json"
-      - "apps/elitea-web/package-lock.json"
-      # The shared client package the web bundle compiles from source.
-      - "libs/ts/client-core/**"
-      - ".github/workflows/ci-desktop.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "43 0 * * *"
   workflow_dispatch:
 
 concurrency:

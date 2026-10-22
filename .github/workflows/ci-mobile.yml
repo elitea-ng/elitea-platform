@@ -22,16 +22,12 @@ on:
       - "libs/ts/client-core/**"
       - ".github/workflows/ci-mobile.yml"
       - ".github/actions/npm-cache/**"
-  push:
-    branches:
-      - main
-    paths:
-      - "apps/elitea-mobile/**"
-      - "services/elitea-main/api/openapi/v2.yaml"
-      - "libs/ts/client-core/**"
-      # This workflow's own file, in both arms (#518).
-      - ".github/workflows/ci-mobile.yml"
-      - ".github/actions/npm-cache/**"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "51 0 * * *"
   workflow_dispatch:
 
 concurrency:
