@@ -1267,7 +1267,8 @@ fn every_covered_configuration_type_round_trips_through_the_wire() {
         assert_eq!(outcomes.len(), 2, "{name} proves both verdicts");
         covered += 1;
     }
-    assert_eq!(covered, 32);
+    // 31: the retired pgvector type left the catalog (#1359).
+    assert_eq!(covered, 31);
 }
 
 fn claim_again(command: &WorkerCommandV1) -> AcceptedAgentClaim {
