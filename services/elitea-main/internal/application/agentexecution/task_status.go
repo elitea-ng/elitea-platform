@@ -9,7 +9,7 @@ import (
 
 // THE LEGACY CONTRACT THIS RESTORES.
 //
-// pylon served `application_task` from
+// The legacy runtime served `application_task` from
 // legacy/plugins/elitea_core/api/v2/application_task.py:
 //
 //	GET    /api/v2/elitea_core/application_task/prompt_lib/{project_id}/{task_id}
@@ -23,7 +23,7 @@ import (
 // called it DEPRECATED in favour of `task/{task_id}/stop`, and it is gated on
 // `models.applications.task.delete`.
 //
-// Both raised the pylon exception text back to the caller as
+// Both raised the legacy exception text back to the caller as
 // `{"ok": false, "error": str(e)}` with 400 for an unknown task id.
 //
 // WHAT THIS PORT KEEPS, AND WHAT IT REFUSES.

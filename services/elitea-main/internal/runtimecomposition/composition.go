@@ -1468,7 +1468,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// "secret" (#408). The worker asks for it with its bearer token and
 		// puts it on every call it makes back to this service, so the
 		// version-details route can refuse a project that has no value instead
-		// of accepting a value printed in the pylon source.
+		// of accepting a value printed in the legacy source.
 		projectSecretsHeader := secretsapi.NewHandler(dependencies.ContentPool)
 		if projectSystemTokens != nil {
 			runtimeToken, err = storage.NewEliteaClientTokenServiceWithSchedules(

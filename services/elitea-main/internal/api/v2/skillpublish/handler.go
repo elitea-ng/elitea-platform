@@ -1,5 +1,5 @@
 // Package skillpublish is the skill-level publishing surface (#249): the six
-// pylon modules that let a skill leave its project and appear in the public
+// legacy modules that let a skill leave its project and appear in the public
 // catalog, plus the three small skills-parity extras that sit in the same
 // domain.
 //
@@ -16,8 +16,8 @@
 //	agents_with_skill      → GET    /agents_with_skill/prompt_lib/{projectID}/{skillID}
 //
 // The publishing model is the one application publishing already established in
-// `internal/api/v2/eliteacore/handler.go` and the one pylon implements for
-// skills, which agree on the shape that matters here:
+// `internal/api/v2/eliteacore/handler.go` and the one the legacy runtime
+// implements for skills, which agree on the shape that matters here:
 //
 //   - publishing SNAPSHOTS. It never flips the version the user is editing; it
 //     materialises a new source version under the requested `version_name` and
@@ -41,7 +41,7 @@
 //     Skill icons are #36 and do not exist in this stack yet; porting the check
 //     would make every publish fail for a field no client can set.
 //   - the unpublish notification (`notify_skill_author_unpublished`). It fires
-//     a pylon RPC event; the Go notifications surface has no skill event type.
+//     a legacy RPC event; the Go notifications surface has no skill event type.
 //   - `my_liked` / `trend_*` filters on the public listing, and the
 //     likes/is_liked/authors decoration on its rows. Those come from the social
 //     plugin's like store, which is a separate surface.
@@ -89,7 +89,7 @@ const maxPublishedVersionsPerSkill = 3
 // DEFAULT_VERSION_NAME).
 const defaultVersionName = "base"
 
-// entityTypeAgent is the only value pylon's SkillEntityTypes enum has.
+// entityTypeAgent is the only value the legacy SkillEntityTypes enum has.
 const entityTypeAgent = "agent"
 
 type Handler struct {

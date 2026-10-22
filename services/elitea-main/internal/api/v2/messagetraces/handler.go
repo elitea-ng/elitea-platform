@@ -63,7 +63,7 @@ import (
 )
 
 // Permissions the routes are gated on in internal/api/router.go, transcribed
-// from the `check_api` declarations of the two pylon handlers. Both are
+// from the `check_api` declarations of the two legacy handlers. Both are
 // DEFAULT-mode, project-scoped, and both are granted to default-mode admin,
 // editor and viewer by migrations/shared/0063_trace_and_cost_read_permissions.sql
 // — without that grant a project-scoped gate resolves to the empty set and is

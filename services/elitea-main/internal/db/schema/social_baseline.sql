@@ -1,7 +1,7 @@
 -- SQLC compiler input for the current-baseline centry.social_users table.
 --
 -- This file is NOT a runtime migration. It projects the existing populated
--- Pylon schema so generated queries remain compile-time checked while the
+-- legacy-era schema so generated queries remain compile-time checked while the
 -- Social API is moved to elitea-main.
 
 CREATE TABLE centry.social_users (

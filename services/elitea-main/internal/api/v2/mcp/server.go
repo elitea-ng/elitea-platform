@@ -7,8 +7,8 @@ package mcp
 // Authentication and tenant scope are the router's (`apimw.Auth` plus
 // `apimw.RequireProjectAccess`), which is why nothing in this file re-derives
 // them: by the time a handler here runs, the caller is an authenticated
-// principal with a role in {projectID}. pylon performs the same two checks
-// inline (`auth.current_user()` then `list_user_projects`).
+// principal with a role in {projectID}. The legacy runtime performs the same
+// two checks inline (`auth.current_user()` then `list_user_projects`).
 
 import (
 	"bytes"
@@ -32,16 +32,16 @@ const maxRequestBytes = 1 << 20
 // supportedProtocolVersions are the MCP revisions this server will name in an
 // initialize result, newest first.
 //
-// pylon pins "2024-11-05" unconditionally. Echoing the client's version when it
-// is one we speak is what the specification asks for, and it matters in
-// practice: a client that requested 2025-06-18 and is answered 2024-11-05 is
-// told, correctly, that the server is older than it is, and several clients
-// then downgrade behaviour they did not need to. Everything this server
-// implements — initialize, tools/list, tools/call — is identical across all
-// three revisions.
+// The legacy runtime pins "2024-11-05" unconditionally. Echoing the client's
+// version when it is one we speak is what the specification asks for, and it
+// matters in practice: a client that requested 2025-06-18 and is answered
+// 2024-11-05 is told, correctly, that the server is older than it is, and
+// several clients then downgrade behaviour they did not need to. Everything
+// this server implements — initialize, tools/list, tools/call — is identical
+// across all three revisions.
 var supportedProtocolVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
 
-// sseUnavailableMessage is pylon's exact wording for a GET on this path.
+// sseUnavailableMessage is the legacy runtime's exact wording for a GET on this path.
 const sseUnavailableMessage = "The server does not offer an SSE stream at this endpoint"
 
 // Endpoint serves every MCP protocol request, in all three scopes.
@@ -60,8 +60,8 @@ func (h *Handler) Endpoint(w http.ResponseWriter, r *http.Request) {
 	// server→client notification stream. This server never initiates a
 	// message: it has no subscriptions, no progress notifications and no
 	// listChanged events (see the capabilities below), so there is nothing to
-	// stream and 405 is the specification's answer for exactly that case. pylon
-	// refuses the same way, with this same sentence.
+	// stream and 405 is the specification's answer for exactly that case. The
+	// legacy runtime refuses the same way, with this same sentence.
 	if r.Method == http.MethodGet {
 		if h.resumeCodec != nil && r.Header.Get("Last-Event-ID") != "" {
 			h.resumeToolStream(w, r, schema)
@@ -100,10 +100,10 @@ func (h *Handler) Endpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A notification carries no id, so there is no response to correlate. The
-	// specification requires 202 with an empty body; pylon answers 200 with
-	// `{}`, which clients tolerate but which is indistinguishable from a
+	// specification requires 202 with an empty body; the legacy runtime answers
+	// 200 with `{}`, which clients tolerate but which is indistinguishable from a
 	// successful request-response and confuses any client that checks. This is
-	// the one place this port deliberately does not copy pylon's status code.
+	// the one place this port deliberately does not copy the legacy status code.
 	//
 	// The message is not otherwise acted on: the only notification a client
 	// sends this server is `notifications/initialized`, which is an
@@ -147,14 +147,14 @@ func (h *Handler) dispatch(r *http.Request, schema string, s scope, message rpcM
 // initializeResult answers the handshake.
 //
 // The capabilities are the ones this server actually has, which is a shorter
-// list than pylon's. pylon declares `logging`, `resources`, `prompts` and
-// `tools.listChanged: true`; it implements none of them — `logging/setLevel`
-// returns an empty result and nothing is ever logged to the client, there is no
-// resource or prompt handler at all, and no listChanged notification is ever
-// sent (it could not be: the HTTP path has no open stream to send it on).
-// Declaring a capability is a promise a client acts on — it will send
-// `resources/list`, or wait for a `listChanged` that never arrives — so only
-// `tools` is declared here, with `listChanged: false`.
+// list than the legacy one. The legacy runtime declares `logging`, `resources`,
+// `prompts` and `tools.listChanged: true`; it implements none of them —
+// `logging/setLevel` returns an empty result and nothing is ever logged to the
+// client, there is no resource or prompt handler at all, and no listChanged
+// notification is ever sent (it could not be: the HTTP path has no open stream
+// to send it on). Declaring a capability is a promise a client acts on — it
+// will send `resources/list`, or wait for a `listChanged` that never arrives —
+// so only `tools` is declared here, with `listChanged: false`.
 func initializeResult(s scope, params json.RawMessage) map[string]any {
 	name, instructions := s.serverIdentity()
 	return map[string]any{
@@ -214,10 +214,10 @@ func (h *Handler) listTools(r *http.Request, schema string, s scope, message rpc
 //
 // Exported so the acceptance tests pin the stated reason, not just the shape.
 //
-// On a runtime-less deployment both execution paths pylon has are out of
-// reach:
+// On a runtime-less deployment both execution paths the legacy runtime has are
+// out of reach:
 //
-//   - an AGENT tool runs `do_predict`, the pylon prediction entry point. The
+//   - an AGENT tool runs `do_predict`, the legacy prediction entry point. The
 //     transport that reached it from Go was removed in issue 126 and its
 //     replacement — the runtime command bus and a worker — is not
 //     running at all on such a deployment.

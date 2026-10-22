@@ -23,11 +23,11 @@ func InstallNaiveClockProbe(ctx context.Context, pool *pgxpool.Pool) error {
 // time zone column, a row trigger that refuses a write which stored the
 // SESSION-local wall clock instead of the UTC wall clock.
 //
-// The naive columns of this schema hold the UTC wall clock (pylon wrote them
-// with server_default now() in UTC containers, and the web client reads them
-// as UTC). A writer that puts a bare now()/clock_timestamp() into one, or that
-// leaves it to a column DEFAULT now(), stores the session's local time.
-// Every test session runs in a non-UTC zone (internal/testpg), so such a
+// The naive columns of this schema hold the UTC wall clock (the legacy runtime
+// wrote them with server_default now() in UTC containers, and the web client
+// reads them as UTC). A writer that puts a bare now()/clock_timestamp() into
+// one, or that leaves it to a column DEFAULT now(), stores the session's local
+// time. Every test session runs in a non-UTC zone (internal/testpg), so such a
 // value sits within a few minutes of the session-local clock and the UTC
 // offset away from the UTC clock. That is the one signature the trigger
 // refuses; a value deliberately dated in the past or the future is neither

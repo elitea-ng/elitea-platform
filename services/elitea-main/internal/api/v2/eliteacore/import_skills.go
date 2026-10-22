@@ -20,8 +20,8 @@ package eliteacore
 // carries `skills`, an array of references that name the skill by
 // `import_uuid` and the version by `version_name`.
 //
-// This is pylon's shape, unchanged, because the same files move between the two
-// implementations and the old app builds it as well:
+// This is the legacy shape, unchanged, because the same files move between the
+// two implementations and the old app builds it as well:
 //
 //   - legacy/plugins/elitea_core/utils/export_import.py, `_export_skills_main`
 //     writes it,
@@ -53,14 +53,14 @@ package eliteacore
 // because it reads `skill_version_id` and not the name
 // (internal/db/queries/agent_chat.sql:126-132) — so nothing would report it.
 //
-// The reach is not theoretical and does not need pylon. `skillBlocks`
-// (export_markdown.go) writes `version: <name>` into the markdown this service
-// hands the user to edit, and `buildSkillsFromFrontmatter`
+// The reach is not theoretical and does not need the legacy runtime.
+// `skillBlocks` (export_markdown.go) writes `version: <name>` into the markdown
+// this service hands the user to edit, and `buildSkillsFromFrontmatter`
 // (apps/elitea-ui .../importWizardParser.helpers.js:142) reads that field back
 // as `name: block.version || 'base'`. Export an agent with a pinned skill and
 // import the file again, and the loop closes inside this product.
 //
-// `ensureBaseSkillVersion` is pylon's answer, unchanged
+// `ensureBaseSkillVersion` is the legacy runtime's answer, unchanged
 // (utils/skill_export_import.py:43-59, issue #5469). It is ADDITIVE: the named
 // versions all survive, so a reference that pins one still resolves to it, and a
 // `base` clone of the first version is prepended so the reads have their row.
@@ -69,7 +69,7 @@ package eliteacore
 // `base`, `skillpublish/attach.go:201` does the same, and
 // `upsertBaseSkillVersion` writes no other name.
 //
-// # One pylon behaviour this deliberately leaves out
+// # One legacy behaviour this deliberately leaves out
 //
 //   - `_find_forked_skill` (utils/skill_utils.py) reuses a skill this project
 //     already forked from the same source, keyed on the lineage in the version
@@ -150,7 +150,7 @@ func (h *Handler) importSkill(
 	description, _ := entry["description"].(string)
 	if description == "" {
 		// `skills.description` is NOT NULL (001_initial.sql:370-381), and the
-		// legacy writes `description or name` into it (utils/skill_utils.py,
+		// the legacy runtime writes `description or name` into it (utils/skill_utils.py,
 		// import_skill). An empty string would satisfy the column and give the
 		// skill list a row with no text at all.
 		description = name
@@ -195,9 +195,9 @@ func (h *Handler) importSkill(
 	// two projects that import one file each get their own skill, and neither
 	// can reach the other's.
 	//
-	// This is not pylon's `_find_forked_skill`, which matches the lineage a FORK
-	// writes into the version meta and so cannot see a plain import at all. It is
-	// the same idea, keyed on the one identifier every import document carries.
+	// This is not the legacy `_find_forked_skill`, which matches the lineage a
+	// FORK writes into the version meta and so cannot see a plain import at all.
+	// It is the same idea, keyed on the one identifier every import document carries.
 	var skillID int
 	err = h.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id FROM %s.skills
@@ -301,7 +301,7 @@ func importedSkillMeta(entry map[string]any, importUUID string) (map[string]any,
 }
 
 // ensureBaseSkillVersion prepends a `base` clone when the imported versions
-// carry none — pylon's `ensure_base_version`
+// carry none — the legacy `ensure_base_version`
 // (utils/skill_export_import.py:43-59), for the reason the file header gives.
 //
 // ADDITIVE, and not a rename: the named versions all survive, so a reference
@@ -396,7 +396,7 @@ func (h *Handler) attachImportedSkills(
 	// what this request added.
 	//
 	// The cap is measured over (entity_version_id, entity_type), which is the set
-	// the attach route (internal/infra/db/repos/skills.go:239-241) and pylon's
+	// the attach route (internal/infra/db/repos/skills.go:239-241) and the legacy
 	// `validate_agent_skill_limit` both measure. Every row this function writes
 	// carries `entity_type = agent`, because the refusal below admits no other
 	// value, so one counter measures that set exactly.
@@ -425,9 +425,9 @@ func (h *Handler) attachImportedSkills(
 				"unable to link skill %q: it carries no version to attach", importUUID))
 			continue
 		}
-		// `agent` is the whole set. Pylon closes the enum to that one member and
-		// types the request field as it, so any other value is a 400 there and on
-		// the sibling write route here (internal/api/v2/skills/handler.go,
+		// `agent` is the whole set. The legacy runtime closes the enum to that one
+		// member and types the request field as it, so any other value is a 400 there
+		// and on the sibling write route here (internal/api/v2/skills/handler.go,
 		// relationEntityType). Both READS filter on the literal — the chat read
 		// (internal/db/queries/agent_chat.sql:132) and the attached-skill
 		// registry (internal/api/v2/applications/handler.go) — so a row written
@@ -445,7 +445,7 @@ func (h *Handler) attachImportedSkills(
 			continue
 		}
 		// The cap the attach route enforces (v2skills.MaxSkillsPerEntityVersion,
-		// pylon's MAX_SKILLS_PER_AGENT). The read side renders it as "n/5 skills
+		// the legacy MAX_SKILLS_PER_AGENT). The read side renders it as "n/5 skills
 		// added", so an import that walked past it would make that counter say
 		// 6/5 and the skill menu would stay disabled.
 		if attached >= v2skills.MaxSkillsPerEntityVersion {

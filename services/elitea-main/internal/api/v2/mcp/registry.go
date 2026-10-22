@@ -1,6 +1,6 @@
 package mcp
 
-// `tools_list` and `tools_call` — pylon `elitea_core/api/v2/tools_list.py` and
+// `tools_list` and `tools_call` — legacy `elitea_core/api/v2/tools_list.py` and
 // `tools_call.py`.
 //
 //	GET  /api/v2/elitea_core/tools_list/{projectID}
@@ -15,14 +15,14 @@ package mcp
 //
 // The Python execution worker reads the listing to build an agent's MCP tools
 // (`elitea_sdk/runtime/clients/client.py:get_mcp_toolkits`). Until issue 335
-// this service answered 501, so the hybrid edge sent that call to pylon and an
-// agent with an MCP toolkit could not run without pylon.
+// this service answered 501, so the hybrid edge sent that call to the legacy
+// runtime and an agent with an MCP toolkit could not run without the legacy runtime.
 //
 // # Why the listing can now be served
 //
-// pylon's store is process memory: two dictionaries in
+// The legacy store is process memory: two dictionaries in
 // `utils/mcp_servers_storage.py`, filled over socket.io and swept when a socket
-// goes away. There was no table behind it, in pylon or here.
+// goes away. There was no table behind it, in the legacy runtime or here.
 //
 // There is one now — `elitea_mcp.registered_servers` and
 // `elitea_mcp.registered_tools`, shared migration 0073, read and written by
@@ -33,7 +33,7 @@ package mcp
 //
 // # Both mode shapes are served
 //
-// pylon's `api_tools.with_modes` registers a route both with and without the
+// The legacy `api_tools.with_modes` registers a route both with and without the
 // mode segment, so `/tools_list/1` and `/tools_list/default/1` are the same
 // endpoint. The SDK builds the mode-less form
 // (`client.py:105`), and the hybrid edge matches the mode-less form as well.
@@ -78,10 +78,10 @@ const ToolRegistryUnavailableReason = "tools_call dispatches a tool invocation t
 
 // ToolsList serves the project's registered MCP servers from the durable store.
 //
-// The response is a bare JSON array of server objects, which is pylon's shape:
-// `serialize(mcp_servers)` on a list of `McpServer` models, with no envelope.
-// The SDK parses the body directly as a list, so an envelope would break every
-// existing worker.
+// The response is a bare JSON array of server objects, which is the legacy
+// shape: `serialize(mcp_servers)` on a list of `McpServer` models, with no
+// envelope. The SDK parses the body directly as a list, so an envelope would
+// break every existing worker.
 func (h *Handler) ToolsList(w http.ResponseWriter, r *http.Request) {
 	// Gated on the master switch before anything is read, like every other
 	// route in this package: which subsystems a deployment runs is itself
@@ -113,9 +113,9 @@ func (h *Handler) ToolsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// pylon unions the caller's personal project with the current one, and lets
-	// the personal entry win a name collision. A user registers a server in
-	// their own project and it follows them into every project they work in.
+	// The legacy runtime unions the caller's personal project with the current
+	// one, and lets the personal entry win a name collision. A user registers a
+	// server in their own project and it follows them into every project they work in.
 	var personal []mcpregistry.Server
 	if personalID := h.personalProjectID(ctx, r); personalID > 0 && personalID != projectID {
 		personal, err = h.registry.ListForProject(ctx, personalID)
@@ -178,9 +178,9 @@ func (h *Handler) personalProjectID(ctx context.Context, r *http.Request) int64 
 // (`elitea_sdk/runtime/tools/mcp_remote_tool.py`) instead of asking the
 // platform to relay.
 //
-// The body is not read. pylon validates it against `McpToolCallPostBody` before
-// looking the server up, but a 400 for a malformed body would imply that a
-// well-formed one would be dispatched somewhere, and none is.
+// The body is not read. The legacy runtime validates it against
+// `McpToolCallPostBody` before looking the server up, but a 400 for a malformed
+// body would imply that a well-formed one would be dispatched somewhere, and none is.
 func (h *Handler) ToolsCall(w http.ResponseWriter, r *http.Request) {
 	if !h.requireMCPEnabled(w, r) {
 		return
@@ -188,8 +188,8 @@ func (h *Handler) ToolsCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": ToolRegistryUnavailableReason})
 }
 
-// parseProjectID accepts only a plain positive integer, which is what pylon's
-// `<int:project_id>` converter accepts.
+// parseProjectID accepts only a plain positive integer, which is what the
+// legacy runtime's `<int:project_id>` converter accepts.
 func parseProjectID(raw string) (int64, bool) {
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || value <= 0 {

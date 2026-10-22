@@ -1,7 +1,7 @@
 -- name: UpsertAttachmentChunk :exec
 -- ON CONFLICT DO UPDATE, not DO NOTHING: a retried chunk_index (client
 -- timeout, network retry) must overwrite the previous bytes for that index,
--- matching legacy's own local-disk behavior (writing to the same filename
+-- matching the legacy runtime's own local-disk behavior (writing to the same filename
 -- twice replaces it) — never double-counted, since the primary key already
 -- de-duplicates by chunk_index.
 INSERT INTO elitea_storage.attachment_chunks (
@@ -23,7 +23,7 @@ WHERE project_id = $1 AND conversation_id = $2 AND file_id = $3;
 -- name: ListAttachmentChunksOrdered :many
 -- Read by the merge step once CountAttachmentChunks reaches total_chunks —
 -- ORDER BY chunk_index reconstructs the original byte stream regardless of
--- arrival order, matching legacy's merge_chunks reading 0..total_chunks-1.
+-- arrival order, matching the legacy runtime's merge_chunks reading 0..total_chunks-1.
 SELECT chunk_index, bytes
 FROM elitea_storage.attachment_chunks
 WHERE project_id = $1 AND conversation_id = $2 AND file_id = $3
@@ -38,7 +38,7 @@ WHERE project_id = $1 AND conversation_id = $2 AND file_id = $3;
 -- final chunk arrived (browser tab closed, connection lost) — the only
 -- other path that deletes these rows is the completed-merge path
 -- (DeleteAttachmentChunks above), which an abandoned upload never reaches.
--- Legacy's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
+-- The legacy runtime's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
 -- 12-hour local-disk TTL swept by the elitea_core_cleanup_stale_chunks RPC.
 DELETE FROM elitea_storage.attachment_chunks
 WHERE received_at < $1;

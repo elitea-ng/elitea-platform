@@ -25,4 +25,4 @@ def test_standalone_worker_matches_current_confluence_goldens() -> None:
     )
 )
 def test_current_sdk_stop_reconciles_terminal_history_and_events() -> None:
-    """Enable in the cross-process Pylon-versus-worker orchestration profile."""
+    """Enable in the cross-process legacy-versus-worker orchestration profile."""

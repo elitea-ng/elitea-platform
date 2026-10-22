@@ -1,6 +1,6 @@
 package conversations
 
-// S20a: chat attachment byte path. Legacy's chunked-upload contract
+// S20a: chat attachment byte path. The legacy runtime's chunked-upload contract
 // (legacy/plugins/elitea_core/api/v2/attachments.py, utils/attachments.py) —
 // form fields file_id/chunk_index (0-based)/total_chunks/file_name, one
 // chunk per POST, disk-buffered under a per-file_id temp directory, "all
@@ -27,7 +27,7 @@ package conversations
 // project-scoped "system" bucket, elitea_storage.buckets/objects), not a
 // bare storage.ObjectStore.Put with no metadata row — this is a deliberate
 // choice over the simpler bypass: it makes S14's retention sweeper apply to
-// attachments (legacy's chat_bucket_retention_days, 365 days by default,
+// attachments (the legacy runtime's chat_bucket_retention_days, 365 days by default,
 // otherwise has no Go-side equivalent at all) and folds attachment bytes
 // into the same SumProjectBytes aggregate every other artifact write
 // already contributes to.
@@ -36,7 +36,7 @@ package conversations
 // IS now written, so the open question recorded here through part 1 of #606 is
 // answered: Go took migration ownership of the table
 // (migrations/tenant/0127_chat_message_attachment_items.sql, which records why
-// the collision risk with pylon's own Alembic history is addressable), and the
+// the collision risk with the legacy Alembic history is addressable), and the
 // row itself is written by the ADMISSION transaction, not by this upload
 // handler — internal/infra/db/repos/agent_execution_jobs.go's
 // insertCurrentTurnAttachments, from `payload.attachments` on the start route.
@@ -54,11 +54,11 @@ package conversations
 // ConversationsRepo.DeleteMessage feeds back to the object store when a
 // message is deleted with ?delete_attachment.
 //
-// STILL NOT PORTED, and not by this change: the extracted document text pylon
-// appends to the item's `content` from a separate processing step, and image
-// thumbnailing. Those read the object through the SDK and belong to the
-// worker/SDK port; the admission writes only the creation-time scaffold chunk
-// (see agentexecutionapp.attachmentContentScaffold).
+// STILL NOT PORTED, and not by this change: the extracted document text the
+// legacy runtime appends to the item's `content` from a separate processing
+// step, and image thumbnailing. Those read the object through the SDK and
+// belong to the worker/SDK port; the admission writes only the creation-time
+// scaffold chunk (see agentexecutionapp.attachmentContentScaffold).
 
 import (
 	"bytes"
@@ -99,7 +99,7 @@ const (
 	attachmentMultipartMemLimit = 8 << 20 // in-memory part threshold before ParseMultipartForm spills to temp files
 )
 
-// fileIDPattern matches legacy's ChunkUploadPayload.file_id validation — it
+// fileIDPattern matches the legacy runtime's ChunkUploadPayload.file_id validation — it
 // is joined into a storage key, so the same traversal-guard shape legacy
 // itself enforces before ever touching a filesystem path.
 var fileIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -229,7 +229,7 @@ func maxAttachmentChunks() int {
 	return int(n) * 2
 }
 
-// attachmentCreated is legacy's AttachmentMessageItemCreated wire shape —
+// attachmentCreated is the legacy runtime's AttachmentMessageItemCreated wire shape —
 // preserved for whatever caller still expects it, even though the
 // underlying metadata store below is now elitea_storage.*, not
 // chat_messages_attachment.
@@ -456,7 +456,7 @@ func (h *Handler) writeAttachmentBytes(w http.ResponseWriter, r *http.Request) {
 
 	h.finalizeAttachment(w, r.Context(), projectID, projectIDStr, conversationID, fileName, contentType, merged)
 
-	// Always runs, success or failure — matches legacy's own `finally:
+	// Always runs, success or failure — matches the legacy runtime's own `finally:
 	// cleanup_chunks(...)`. A failed delete just leaves harmless,
 	// self-healing rows (DeleteAttachmentChunks' own doc comment).
 	_ = h.attachments.DeleteAttachmentChunks(r.Context(), projectID, conversationID, fileID)
@@ -565,7 +565,7 @@ func numberedAttachmentName(name string, attempt int) string {
 
 // finalizeAttachment validates size limits, writes the object through the
 // S6/S9 metadata tables, and writes the response — the shared tail of both
-// the chunked and the plain-multipart paths above, mirroring legacy's own
+// the chunked and the plain-multipart paths above, mirroring the legacy runtime's own
 // process_uploaded_files, which both call identically.
 func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context, projectID int64, projectIDStr, conversationID, fileName, contentType string, content []byte) {
 	bucketName, policyMaxFileBytes, policyRetentionDays, err := h.attachments.AttachmentPolicy(ctx, projectID)

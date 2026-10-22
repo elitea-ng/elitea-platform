@@ -673,8 +673,8 @@ func newFlagsPool(t *testing.T) *pgxpool.Pool {
 // TestMaintenanceSplashHTMLReachesThePublicSettings is the splash-body port,
 // from the consumer's end.
 //
-// pylon stored `splash_template` in a tunable and served it as a whole document
-// (legacy/plugins/bootstrap/tools/splash.py). Here it is one
+// The legacy runtime stored `splash_template` in a tunable and served it as a
+// whole document (legacy/plugins/bootstrap/tools/splash.py). Here it is one
 // `centry.platform_config` row that the SPA's app shell and the standalone
 // splash entry BOTH read off `platform_settings`, so the two screens cannot
 // show different words for the same window.

@@ -6,7 +6,7 @@ package admin_test
 // `GET /admin/auth_users/{mode}` returns id, name, email, last_login,
 // suspended and administration role for every row of auth_core__user. It had
 // no permission middleware, so any authenticated session could read the whole
-// global user list — ~30k rows on the legacy dev database — while its pylon
+// global user list — ~30k rows on the legacy dev database — while its legacy
 // original (legacy/plugins/admin/api/v2/auth_users.py) gates `get()` on
 // `admin.auth.users`, the same permission it requires for `post()`.
 //
@@ -185,7 +185,7 @@ func TestAuthUsersListingIsGatedOnTheMigrationSeededPermission(t *testing.T) {
 			t.Fatalf("administration super_admin grants = %v, missing %q", superAdmin, permission)
 		}
 	}
-	// The escalation permission is super_admin-only in pylon
+	// The escalation permission is super_admin-only in the legacy runtime
 	// (admin/module.py sets `admin: False`), and users.go gates grant/revoke of
 	// the super_admin role on it. If the migration handed it to `admin` the Go
 	// guard would be unreachable in practice.
@@ -275,7 +275,7 @@ func TestAdminCentralRBACMigrationLeavesAConfiguredDeploymentAlone(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	// A deployment whose operator has an administration mode and has REVOKED
-	// `admin.auth.users` from `admin` — the pylon-backed shape, and the one a
+	// `admin.auth.users` from `admin` — the legacy-backed shape, and the one a
 	// migration must never quietly undo. Absent is not the same as
 	// configured-to-empty, which is why the guard keys on "any
 	// administration-mode role exists" rather than on the missing rows.

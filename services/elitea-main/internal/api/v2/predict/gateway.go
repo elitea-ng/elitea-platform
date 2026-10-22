@@ -5,12 +5,12 @@
 // WHAT THIS REPLACES. router.go's NOTE(#126) recorded this path among the
 // routes that stood behind a nil `RouterConfig.Predictor` gate nothing ever
 // assigned. Their only implementation was the prototype Redis RPC client to
-// pylon-indexer, which published raw JSON onto a channel served through
+// the legacy indexer, which published raw JSON onto a channel served through
 // arbiter's gzip(pickle(...)) codec — every call was dropped on decode — so
 // #126 deleted the transport rather than repairing it. The capability stayed
 // open as this issue.
 //
-// BLOCKING ONLY, ON PURPOSE. Legacy's predict_sio_llm has two modes: blocking
+// BLOCKING ONLY, ON PURPOSE. The legacy runtime's predict_sio_llm has two modes: blocking
 // (await_task_timeout > 0, the answer comes back in the HTTP response) and
 // async (await_task_timeout == 0, a task id comes back and the tokens arrive
 // over the socket.io `application_predict` event). The async half is NOT

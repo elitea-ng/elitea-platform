@@ -8,16 +8,16 @@ import (
 
 // vaultData is the JSON stored (after Fernet encryption) in centry.secrets_data.
 //
-// THE VALUES ARE JSON VALUES, NOT ONLY STRINGS. The vault format is pylon's,
-// and pylon stores whatever Python value it was handed. The Configurations
-// default-model write (infra/db/repos.SetCurrentModelDefault) stores
-// `default_<section>_model_project_id` as a JSON INTEGER on purpose, and the
-// model-default reader (centrysecrets.LookupRegularProjectID) and pylon both
-// read it back as one. A `map[string]string` decode refused the whole vault on
-// that one integer, so every project route answered 500 "project vault is
-// unreadable" for a project whose only fault was having a default model
-// selected — the Settings > Secrets page, the e2e cleanup sweep, and every
-// create (F1 / UI-PD-1).
+// THE VALUES ARE JSON VALUES, NOT ONLY STRINGS. The vault format is the legacy
+// one, and the legacy runtime stores whatever Python value it was handed. The
+// Configurations default-model write (infra/db/repos.SetCurrentModelDefault)
+// stores `default_<section>_model_project_id` as a JSON INTEGER on purpose, and
+// the model-default reader (centrysecrets.LookupRegularProjectID) and the
+// legacy runtime both read it back as one. A `map[string]string` decode refused
+// the whole vault on that one integer, so every project route answered 500
+// "project vault is unreadable" for a project whose only fault was having a
+// default model selected — the Settings > Secrets page, the e2e cleanup sweep,
+// and every create (F1 / UI-PD-1).
 //
 // The two maps stay `map[string]string`, which is what the routes read and
 // write. A non-string value is exposed as its JSON text — `42`, `true`,
@@ -111,7 +111,8 @@ func (v vaultData) MarshalJSON() ([]byte, error) {
 }
 
 func (v vaultData) encodeCollection(collection vaultCollection, values map[string]string) map[string]json.RawMessage {
-	// pylon always writes both keys, as objects; an empty map is `{}`.
+	// The legacy runtime always writes both keys, as objects; an empty map is
+	// `{}`.
 	encoded := make(map[string]json.RawMessage, len(values))
 	original := v.raw[collection]
 	for name, value := range values {
@@ -126,7 +127,7 @@ func (v vaultData) encodeCollection(collection vaultCollection, values map[strin
 }
 
 // moveToHidden moves a regular secret into hidden_secrets, carrying its stored
-// JSON type with it — pylon's hide moves the Python value as it is.
+// JSON type with it — the legacy hide moves the Python value as it is.
 func (v *vaultData) moveToHidden(name string) bool {
 	value, ok := v.Secrets[name]
 	if !ok {
@@ -149,9 +150,9 @@ func (v *vaultData) moveToHidden(name string) bool {
 // rename moves regular secret `oldName` to `newName` holding `value`, and
 // carries its stored JSON type across when the value is unchanged. A rename
 // alone does not change a value: `42` stays the integer 42 and `false` stays
-// the boolean false (the STRING "false" is truthy in pylon, so writing it as
-// one would flip its meaning). A changed value is a JSON string, as every
-// other route write is.
+// the boolean false (the STRING "false" is truthy in the legacy runtime, so
+// writing it as one would flip its meaning). A changed value is a JSON string,
+// as every other route write is.
 func (v *vaultData) rename(oldName, newName, value string) {
 	raw, typed := v.raw[regularCollection][oldName]
 	delete(v.Secrets, oldName)
@@ -168,9 +169,9 @@ func (v *vaultData) rename(oldName, newName, value string) {
 //
 // A value stored as anything but a JSON string is NOT a credential. Its text
 // (`null`, `true`, `0`) is guessable, so it reports found=true, usable=false
-// and the caller must treat it as no value at all. Pylon compares the Python
-// value itself, so a stored `None` never equals any header; reading it as the
-// text "null" would accept `X-SECRET: null`.
+// and the caller must treat it as no value at all. The legacy runtime compares
+// the Python value itself, so a stored `None` never equals any header; reading
+// it as the text "null" would accept `X-SECRET: null`.
 func (v vaultData) credential(name string) (value string, found, usable bool) {
 	if text, ok := v.Secrets[name]; ok {
 		_, typed := v.raw[regularCollection][name]

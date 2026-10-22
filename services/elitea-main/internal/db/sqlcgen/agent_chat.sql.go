@@ -580,13 +580,13 @@ type InsertCurrentAgentAttachmentItemParams struct {
 // InsertCurrentAgentTextItem does it: these items are written inside the
 // admission transaction immediately after the question item, so the caller
 // already knows the sequence (1, 2, ... — the question's text item holds 0,
-// matching pylon's enumerate(attachments_info, start=1) at
+// matching the legacy enumerate(attachments_info, start=1) at
 // rpc/chat_all.py:303). A count(*) here would additionally re-read a table it
 // is writing to, per attachment.
 //
 // `content` is cast to json, NOT jsonb: 0127 records why the deployed column
-// is json (a shared table pylon also reads/writes, where jsonb's key
-// reordering and whitespace normalisation would change the stored bytes).
+// is json (a shared table the legacy runtime also reads/writes, where jsonb's
+// key reordering and whitespace normalisation would change the stored bytes).
 func (q *Queries) InsertCurrentAgentAttachmentItem(ctx context.Context, arg InsertCurrentAgentAttachmentItemParams) error {
 	_, err := q.db.Exec(ctx, insertCurrentAgentAttachmentItem,
 		arg.Name,
@@ -1275,7 +1275,7 @@ LEFT JOIN LATERAL (
           ON message_text.id = message_item.id
         LEFT JOIN chat_messages_attachment AS message_attachment
           ON message_attachment.id = message_item.id
-        -- A CANVAS contributes its NEWEST version, as pylon's history does
+        -- A CANVAS contributes its NEWEST version, as the legacy history does
         -- (elitea_core/utils/chat_history.py:57-66, ` + "`" + `message.latest_version` + "`" + `).
         -- Carving an answer into a canvas DELETES the text item it came from
         -- (ConversationsRepo.CreateCanvas), so without this branch the words
@@ -1336,7 +1336,7 @@ LEFT JOIN LATERAL (
                 >= (message_group.created_at, message_group.id, message_item.order_index, message_item.id)
         ) AS canvas_budget ON TRUE
         -- THE FENCE IS ONE BACKTICK LONGER than the longest backtick run in
-        -- the content (and never shorter than pylon's three), so a canvas
+        -- the content (and never shorter than the legacy three), so a canvas
         -- that itself holds a fenced block cannot close the fence early and
         -- spill the rest of the document out of it.
         LEFT JOIN LATERAL (
@@ -1351,12 +1351,12 @@ LEFT JOIN LATERAL (
             WHERE message_item.item_type = 'text_message'
               AND COALESCE(message_text.content, '') <> ''
             UNION ALL
-            -- Pylon's rendering: a canvas with a language is fenced as
+            -- The legacy rendering: a canvas with a language is fenced as
             -- ` + "`" + `` + "`" + `` + "`" + `<lang>\n\n<content>\n\n` + "`" + `` + "`" + `` + "`" + ` (a longer fence when the content
             -- holds backticks, see canvas_fence) and one without is its
             -- content. A canvas past the history budget is a marker instead
-            -- (see canvas_budget). The one deviation is ` + "`" + `document` + "`" + ` (#879, a type pylon
-            -- never had): its content IS the prose of the answer in Markdown,
+            -- (see canvas_budget). The one deviation is ` + "`" + `document` + "`" + ` (#879, a type
+            -- the legacy runtime never had): its content IS the prose of the answer in Markdown,
             -- so it goes in as that prose rather than as a code block of a
             -- language no model knows. chr(96) is the backtick, spelled that
             -- way because sqlc embeds this text in a Go raw string.
@@ -1689,7 +1689,7 @@ WHERE conversation.uuid = $5::uuid
             -- This gate refuses a conversation whose history contains an item
             -- type this parity slice cannot serve. ` + "`" + `attachment_message` + "`" + `
             -- belonged in it only because nothing in this service could
-            -- produce one, so the type meant "a pylon-era conversation".
+            -- produce one, so the type meant "a legacy-era conversation".
             -- Admission now WRITES those items, so leaving it here made the
             -- gate read its own output: the turn carrying the file was
             -- admitted and the NEXT turn on that conversation was refused.
@@ -1762,14 +1762,14 @@ type ResolveCurrentAdhocTurnRow struct {
 // rendered it, the prompt did not mention it, and a follow-up question about
 // that file had nothing to answer from.
 //
-// The rule is pylon's, not an invention: chat_history.py:67-73 EXTENDS an
-// attachment item's stored `content` LIST into the group's content array,
-// in item order, alongside the text chunks -- it does not nest it, and does
-// not append one object per file. That is why the per-item CROSS JOIN LATERAL
-// emits chunk ROWS rather than a per-item array: `jsonb_agg` over the rows is
-// the flattening, and one ORDER BY (order_index, id, chunk_index) then orders
-// items and, within an item, its chunks -- the pre-#606 ordering unchanged for
-// a group that has only text.
+// The rule is the legacy runtime's, not an invention: chat_history.py:67-73
+// EXTENDS an attachment item's stored `content` LIST into the group's content
+// array, in item order, alongside the text chunks -- it does not nest it, and
+// does not append one object per file. That is why the per-item CROSS JOIN
+// LATERAL emits chunk ROWS rather than a per-item array: `jsonb_agg` over the
+// rows is the flattening, and one ORDER BY (order_index, id, chunk_index) then
+// orders items and, within an item, its chunks -- the pre-#606 ordering
+// unchanged for a group that has only text.
 //
 // WHY THE JOINS BECAME LEFT JOINS AND THE FILTER BECAME A WHERE. The old
 // `FILTER (WHERE message_text.content <> ”)` cannot survive: it tests a
@@ -1785,7 +1785,7 @@ type ResolveCurrentAdhocTurnRow struct {
 // represent at all) now survives it.
 //
 // `content` IS `json`, NOT `jsonb` (migrations/tenant/0127 records why), and
-// it is nullable with a pylon-era default of `'{}'::json` -- an OBJECT, not an
+// it is nullable with a legacy-era default of `'{}'::json` -- an OBJECT, not an
 // array. chat_history.py:70-74 carries a non-list fallback for exactly that
 // data. Here the CASE demands `jsonb_typeof(...) = 'array'` before expanding,
 // because `jsonb_array_elements` on a non-array raises 22023 and would fail
@@ -2056,7 +2056,7 @@ SELECT conversation.id AS conversation_id,
            -- used to read the wrong one. ` + "`" + `p_<id>.application_variables` + "`" + ` is the
            -- authoritative one:
            --
-           --   * it is the ONLY store the legacy product has -- pylon's
+           --   * it is the ONLY store the legacy product has -- its
            --     ` + "`" + `ApplicationVersion.variables` + "`" + ` is a relationship to
            --     ` + "`" + `ApplicationVariable` + "`" + `, and ` + "`" + `update_version` + "`" + ` dumps its payload
            --     with ` + "`" + `exclude={'tags', 'variables', 'tools'}` + "`" + `, so a variable
@@ -2167,7 +2167,7 @@ LEFT JOIN LATERAL (
           ON message_text.id = message_item.id
         LEFT JOIN chat_messages_attachment AS message_attachment
           ON message_attachment.id = message_item.id
-        -- A CANVAS contributes its NEWEST version, as pylon's history does
+        -- A CANVAS contributes its NEWEST version, as the legacy history does
         -- (elitea_core/utils/chat_history.py:57-66, ` + "`" + `message.latest_version` + "`" + `).
         -- Carving an answer into a canvas DELETES the text item it came from
         -- (ConversationsRepo.CreateCanvas), so without this branch the words
@@ -2228,7 +2228,7 @@ LEFT JOIN LATERAL (
                 >= (message_group.created_at, message_group.id, message_item.order_index, message_item.id)
         ) AS canvas_budget ON TRUE
         -- THE FENCE IS ONE BACKTICK LONGER than the longest backtick run in
-        -- the content (and never shorter than pylon's three), so a canvas
+        -- the content (and never shorter than the legacy three), so a canvas
         -- that itself holds a fenced block cannot close the fence early and
         -- spill the rest of the document out of it.
         LEFT JOIN LATERAL (
@@ -2243,12 +2243,12 @@ LEFT JOIN LATERAL (
             WHERE message_item.item_type = 'text_message'
               AND COALESCE(message_text.content, '') <> ''
             UNION ALL
-            -- Pylon's rendering: a canvas with a language is fenced as
+            -- The legacy rendering: a canvas with a language is fenced as
             -- ` + "`" + `` + "`" + `` + "`" + `<lang>\n\n<content>\n\n` + "`" + `` + "`" + `` + "`" + ` (a longer fence when the content
             -- holds backticks, see canvas_fence) and one without is its
             -- content. A canvas past the history budget is a marker instead
-            -- (see canvas_budget). The one deviation is ` + "`" + `document` + "`" + ` (#879, a type pylon
-            -- never had): its content IS the prose of the answer in Markdown,
+            -- (see canvas_budget). The one deviation is ` + "`" + `document` + "`" + ` (#879, a type
+            -- the legacy runtime never had): its content IS the prose of the answer in Markdown,
             -- so it goes in as that prose rather than as a code block of a
             -- language no model knows. chr(96) is the backtick, spelled that
             -- way because sqlc embeds this text in a Go raw string.
@@ -2583,7 +2583,7 @@ WHERE conversation.uuid = $4::uuid
             -- This gate refuses a conversation whose history contains an item
             -- type this parity slice cannot serve. ` + "`" + `attachment_message` + "`" + `
             -- belonged in it only because nothing in this service could
-            -- produce one, so the type meant "a pylon-era conversation".
+            -- produce one, so the type meant "a legacy-era conversation".
             -- Admission now WRITES those items, so leaving it here made the
             -- gate read its own output: the turn carrying the file was
             -- admitted and the NEXT turn on that conversation was refused.
@@ -2642,7 +2642,7 @@ type ResolveCurrentApplicationTurnRow struct {
 // A participant that names the catalogue twin of a PUBLISHED agent therefore
 // has no row to join here at all, and an inner join answered no rows -- the
 // 422 a conversation in project A got when it addressed an agent published in
-// the catalogue, which legacy allowed. The version for that one case is read
+// the catalogue, which the legacy runtime allowed. The version for that one case is read
 // afterwards, from the catalogue project's own schema
 // (CurrentAgentStartRepository.resolveCatalogueApplicationVersion), so this
 // join is allowed to miss and the projection below is then a document of
@@ -2661,14 +2661,14 @@ type ResolveCurrentApplicationTurnRow struct {
 // rendered it, the prompt did not mention it, and a follow-up question about
 // that file had nothing to answer from.
 //
-// The rule is pylon's, not an invention: chat_history.py:67-73 EXTENDS an
-// attachment item's stored `content` LIST into the group's content array,
-// in item order, alongside the text chunks -- it does not nest it, and does
-// not append one object per file. That is why the per-item CROSS JOIN LATERAL
-// emits chunk ROWS rather than a per-item array: `jsonb_agg` over the rows is
-// the flattening, and one ORDER BY (order_index, id, chunk_index) then orders
-// items and, within an item, its chunks -- the pre-#606 ordering unchanged for
-// a group that has only text.
+// The rule is the legacy runtime's, not an invention: chat_history.py:67-73
+// EXTENDS an attachment item's stored `content` LIST into the group's content
+// array, in item order, alongside the text chunks -- it does not nest it, and
+// does not append one object per file. That is why the per-item CROSS JOIN
+// LATERAL emits chunk ROWS rather than a per-item array: `jsonb_agg` over the
+// rows is the flattening, and one ORDER BY (order_index, id, chunk_index) then
+// orders items and, within an item, its chunks -- the pre-#606 ordering
+// unchanged for a group that has only text.
 //
 // WHY THE JOINS BECAME LEFT JOINS AND THE FILTER BECAME A WHERE. The old
 // `FILTER (WHERE message_text.content <> ”)` cannot survive: it tests a
@@ -2684,7 +2684,7 @@ type ResolveCurrentApplicationTurnRow struct {
 // represent at all) now survives it.
 //
 // `content` IS `json`, NOT `jsonb` (migrations/tenant/0127 records why), and
-// it is nullable with a pylon-era default of `'{}'::json` -- an OBJECT, not an
+// it is nullable with a legacy-era default of `'{}'::json` -- an OBJECT, not an
 // array. chat_history.py:70-74 carries a non-list fallback for exactly that
 // data. Here the CASE demands `jsonb_typeof(...) = 'array'` before expanding,
 // because `jsonb_array_elements` on a non-array raises 22023 and would fail
@@ -2885,7 +2885,7 @@ SELECT application_version.id AS application_version_id,
            -- used to read the wrong one. ` + "`" + `p_<id>.application_variables` + "`" + ` is the
            -- authoritative one:
            --
-           --   * it is the ONLY store the legacy product has -- pylon's
+           --   * it is the ONLY store the legacy product has -- its
            --     ` + "`" + `ApplicationVersion.variables` + "`" + ` is a relationship to
            --     ` + "`" + `ApplicationVariable` + "`" + `, and ` + "`" + `update_version` + "`" + ` dumps its payload
            --     with ` + "`" + `exclude={'tags', 'variables', 'tools'}` + "`" + `, so a variable
@@ -3434,16 +3434,16 @@ WHERE response.uuid = $2::uuid
       WHERE unsupported_question_item.message_group_id = question.id
         -- #606: ` + "`" + `attachment_message` + "`" + ` is in this allow-list because admission WRITES
         -- those items onto the question group. Before #606 nothing could produce one,
-        -- so its absence here meant "a pylon-era question this path cannot serve";
-        -- after #606 it meant "any turn that carried a file can never be resumed or
-        -- regenerated" — this gate refusing rows the admission it follows had just
-        -- created.
+        -- so its absence here meant "a legacy-era question this path cannot
+        -- serve"; after #606 it meant "any turn that carried a file can never be
+        -- resumed or regenerated" — this gate refusing rows the admission it
+        -- follows had just created.
         --
         -- Same reasoning as the historical_group gates, and the same limit: allowing
         -- it is not a claim that the file is re-sent on a resume, only that its
         -- presence must not make the turn unresumable. The RESPONSE-side gate below
         -- stays strict, because nothing here writes attachment items onto a response
-        -- group — pylon does, for agent-produced files
+        -- group — the legacy runtime does, for agent-produced files
         -- (events/message_stream.py:107-120), and that is genuinely unported.
         AND unsupported_question_item.item_type NOT IN ('text_message', 'context_message', 'attachment_message')
   )
@@ -4066,13 +4066,13 @@ type UpdateCurrentAgentAttachmentContentParams struct {
 // #607: persist the text the worker extracted from ONE of this turn's
 // attachments, so a LATER turn sees the file's contents and not just its name.
 //
-// Pylon never needed this statement. It extracts at message-persist time and
-// appends the text to the item it has in hand, in the same process and the same
-// session (rpc/chat_all.py:344-377, with flag_modified(item, "content") at :376
-// because the column is `json`). Here the reader is the worker and the writer is
-// elitea-main, so the text comes back across a protocol
-// (AgentExecutionResultV1.attachment_contents) and lands here, on the terminal
-// path elitea-main already owns.
+// The legacy runtime never needed this statement. It extracts at
+// message-persist time and appends the text to the item it has in hand, in the
+// same process and the same session (rpc/chat_all.py:344-377, with
+// flag_modified(item, "content") at :376 because the column is `json`). Here
+// the reader is the worker and the writer is elitea-main, so the text comes
+// back across a protocol (AgentExecutionResultV1.attachment_contents) and lands
+// here, on the terminal path elitea-main already owns.
 //
 // MATCHED ON item.uuid, NOT ON (bucket, name). Attaching the same file twice in
 // one conversation is an ordinary thing to do and produces two rows with
@@ -4114,10 +4114,10 @@ type UpdateCurrentAgentAttachmentContentParams struct {
 // accident.
 //
 // `content` is cast to json, NOT jsonb, for the reason 0127 records: the column
-// is `json` because pylon reads and writes the same table, and jsonb's key
-// reordering and whitespace normalisation would change the stored bytes -- which
-// for this value includes the `elitea_attachment` marker a later turn's worker
-// reads to decide the file has already been extracted.
+// is `json` because the legacy runtime reads and writes the same table, and
+// jsonb's key reordering and whitespace normalisation would change the stored
+// bytes -- which for this value includes the `elitea_attachment` marker a later
+// turn's worker reads to decide the file has already been extracted.
 func (q *Queries) UpdateCurrentAgentAttachmentContent(ctx context.Context, arg UpdateCurrentAgentAttachmentContentParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateCurrentAgentAttachmentContent, arg.Content, arg.ItemID, arg.ResponseMessageGroupID)
 	if err != nil {

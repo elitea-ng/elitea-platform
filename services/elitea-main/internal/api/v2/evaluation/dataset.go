@@ -21,7 +21,7 @@ import (
 // each of them in `default` mode, and
 // migrations/shared/0115_evaluation_dataset_run_permissions.sql is that grant.
 // They deliberately do NOT go through router.go's `projectPermission` helper,
-// because that helper's own gate asserts pylon provenance these names do not
+// because that helper's own gate asserts legacy provenance these names do not
 // have — see 0115's header and the note on the dimension constants.
 const (
 	PermissionDatasetRead   = "models.applications.evaluation.dataset.read"

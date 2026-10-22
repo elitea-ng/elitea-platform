@@ -4,7 +4,7 @@
 -- This file is NOT a runtime migration and MUST NOT be executed by service
 -- startup. elitea-migrate remains the only target-schema migration owner. This
 -- projection lets sqlc type-check queries against the existing populated
--- pylon_auth schema while adoption and upgrade migrations are built.
+-- legacy auth schema while adoption and upgrade migrations are built.
 
 CREATE TABLE public.auth_core__user (
     id serial PRIMARY KEY,

@@ -46,7 +46,7 @@ import (
 // actually ran rather than inferring it from a status code that some other
 // layer might also produce. Only the routes that still sit at the membership
 // tier consult it — the tag writes, which have no legacy permission to copy,
-// and the MCP surface, which pylon leaves unguarded.
+// and the MCP surface, which the legacy runtime leaves unguarded.
 type memberOfProject struct {
 	project string
 	asked   []string
@@ -96,8 +96,8 @@ type eliteaCoreProjectScopedRoute struct {
 	ownPath   string
 	otherPath string
 	// permission is the string this route's gate names, transcribed from the
-	// matching pylon module. router_elitea_core_permission_map_test.go proves
-	// independently that every such string is one legacy declares and one the
+	// matching legacy module. router_elitea_core_permission_map_test.go proves
+	// independently that every such string is one the legacy runtime declares and one the
 	// migration corpus grants; this field is what lets a test WITHHOLD it.
 	permission string
 }
@@ -119,7 +119,7 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodDelete, "/api/v2/elitea_core/version/prompt_lib/7/1/2", "/api/v2/elitea_core/version/prompt_lib/8/1/2", "models.applications.version.delete"},
 	// PATCH on the version path is the expanded READ the SDK calls, so it
 	// carries the READ permission the GET above carries, not version.update
-	// (#336). Pylon declares the same string on its own PATCH handler.
+	// (#336). The legacy runtime declares the same string on its own PATCH handler.
 	{http.MethodPatch, "/api/v2/elitea_core/version/prompt_lib/7/1/2", "/api/v2/elitea_core/version/prompt_lib/8/1/2", "models.applications.version.details"},
 	// Skills.
 	{http.MethodGet, "/api/v2/elitea_core/skills/prompt_lib/7", "/api/v2/elitea_core/skills/prompt_lib/8", "models.applications.skills.list"},
@@ -129,7 +129,7 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	// PATCH on the same path is overloaded: a body with `has_relation`
 	// attaches or detaches a skill (#38). It writes to another project's
 	// entity_skill_mapping, so it takes the same gate as the PUT beside it.
-	// Pylon declares the same permission on its own PATCH handler
+	// The legacy runtime declares the same permission on its own PATCH handler
 	// (legacy/plugins/elitea_core/api/v2/skill.py:202-207).
 	{http.MethodPatch, "/api/v2/elitea_core/skill/prompt_lib/7/1", "/api/v2/elitea_core/skill/prompt_lib/8/1", "models.applications.skills.update"},
 	{http.MethodDelete, "/api/v2/elitea_core/skill/prompt_lib/7/1", "/api/v2/elitea_core/skill/prompt_lib/8/1", "models.applications.skills.delete"},
@@ -238,7 +238,7 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	// budget on a model call keyed to the {projectID} segment, so they belong
 	// in this table for the same reason every write above does: the path
 	// segment must not be the authorization claim. The project-context row
-	// names `.edit` rather than legacy's `models.project_context.generate` —
+	// names `.edit` rather than the legacy runtime's `models.project_context.generate` —
 	// see the registration in router.go for why that substitution is the safe
 	// direction.
 	{http.MethodPost, "/api/v2/elitea_core/generate_application_draft/prompt_lib/7", "/api/v2/elitea_core/generate_application_draft/prompt_lib/8", "models.applications.applications.create"},
@@ -256,7 +256,7 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	// project, refuse an under-privileged member, ADMIT an entitled one — apply
 	// to them unchanged.
 
-	// Notifications. The permissions are the four the pylon notifications
+	// Notifications. The permissions are the four the legacy notifications
 	// plugin declares, and the same four the reviewed copy of this surface
 	// (internal/api/v2/notifications/api.go) gates the identical paths on.
 	// 0079 grants them.
@@ -266,7 +266,7 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPut, "/api/v2/notifications/notification/prompt_lib/7/1", "/api/v2/notifications/notification/prompt_lib/8/1", "models.notifications.notification.update"},
 	{http.MethodDelete, "/api/v2/notifications/notification/prompt_lib/7/1", "/api/v2/notifications/notification/prompt_lib/8/1", "models.notifications.notification.delete"},
 
-	// Context manager. Pylon has NO context_manager module, so these two
+	// Context manager. The legacy runtime has NO context_manager module, so these two
 	// permissions are not a transcription: they are the conversation strings
 	// the router applies to every other Go-only route that acts on one
 	// conversation. See the note at the registration for the reasoning, and
@@ -486,7 +486,7 @@ func TestEliteaCoreRoutesAdmitAnEntitledMember(t *testing.T) {
 }
 
 // TestEliteaCoreTagWritesStayAtTheMembershipTier pins the one family #313
-// leaves as a product decision. pylon's tags.py declares `get` and nothing
+// leaves as a product decision. The legacy tags.py declares `get` and nothing
 // else, so POST and DELETE have no permission to transcribe; they keep the
 // membership check rather than being gated on an invented name (too strict:
 // nothing grants it) or on the LIST permission (too loose: a viewer could then

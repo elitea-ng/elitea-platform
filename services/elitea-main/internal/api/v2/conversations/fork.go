@@ -42,7 +42,7 @@ const ForkedFromMetaKey = "forked_from"
 const ForkNameSuffix = " (fork)"
 
 // DefaultConversationName stands in for a blank source name in a fork's
-// default name (pylon's `conversations.py` default).
+// default name (the legacy `conversations.py` default).
 const DefaultConversationName = "New conversation"
 
 // ForkedMessagesKey is the forkConversation answer's map of the copied

@@ -11,10 +11,10 @@ package scheduling
 // internal platform RPC (`rpc_func`) plus its keyword arguments. It is not a
 // tenant workload and not a pipeline. `services/elitea-scheduler` used to poll
 // this table once a minute and publish each due `rpc_func` onto the
-// Redis/Arbiter bus for legacy Pylon. Nothing in the Go stack consumed that
-// bus (issue #305), so that dispatcher was deleted; in a Go-only deployment
-// these rows are read and edited here and executed only by a legacy Pylon
-// scheduling plugin, where one still runs against the same database.
+// Redis/Arbiter bus for the legacy runtime. Nothing in the Go stack consumed
+// that bus (issue #305), so that dispatcher was deleted; in a Go-only
+// deployment these rows are read and edited here and executed only by the
+// legacy scheduling plugin, where one still runs against the same database.
 //
 // So this table is live and shared. It is also the mechanism the
 // indexing transition itself depends on — services/elitea-scheduler/RETIREMENT.md
@@ -40,10 +40,11 @@ package scheduling
 // preserved alongside, because reporting triggers that never fire as active
 // schedules is a statement about the system that is not true.
 //
-// The contract below is pylon's, not an invention — same path, same modes, same
-// body keys, same row fields as legacy/plugins/scheduling/api/v2/schedules.py
-// and its model in legacy/plugins/scheduling/models/schedule.py, which is what
-// the existing admin_ui client already speaks to.
+// The contract below is the legacy one, not an invention — same path, same
+// modes, same body keys, same row fields as
+// legacy/plugins/scheduling/api/v2/schedules.py and its model in
+// legacy/plugins/scheduling/models/schedule.py, which is what the existing
+// admin_ui client already speaks to.
 //
 // ## The write path deliberately cannot change WHAT RUNS
 //
@@ -60,7 +61,7 @@ package scheduling
 // ignoring them silently — a caller that thinks it retargeted a schedule and got
 // a 200 is the failure this unit exists to stop.
 //
-// pylon's `SchedulePutModel` permits `rpc_kwargs`. Not preserving it is a
+// The legacy `SchedulePutModel` permits `rpc_kwargs`. Not preserving it is a
 // deliberate narrowing under AGENTS.md's "compatibility never requires
 // preserving a vulnerability": the admin page never sends it (it edits the cron
 // cell and the active switch, nothing else), so no legitimate-user outcome is
@@ -76,11 +77,12 @@ package scheduling
 //
 // ## Authorisation
 //
-// Both routes are gated in internal/api/router.go on the permission their pylon
-// counterparts declare — `configuration.scheduling.schedules.view` for the read,
-// `configuration.scheduling.schedules.edit` for the write — resolved per request
-// from auth_core__user_role. The admin SPA's `window.admin_ui_config.permissions`
-// is presentation state and is never consulted here.
+// Both routes are gated in internal/api/router.go on the permission their
+// legacy counterparts declare — `configuration.scheduling.schedules.view` for
+// the read, `configuration.scheduling.schedules.edit` for the write — resolved
+// per request from auth_core__user_role. The admin SPA's
+// `window.admin_ui_config.permissions` is presentation state and is never
+// consulted here.
 
 import (
 	"context"
@@ -102,7 +104,7 @@ var scheduleCronParser = cron.NewParser(
 	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow,
 )
 
-// administrationMode is the pylon mode whose handler lists EVERY schedule.
+// administrationMode is the legacy mode whose handler lists EVERY schedule.
 const administrationMode = "administration"
 
 // scheduleRow is one `centry.schedule` row as the admin page reads it. Field
@@ -120,7 +122,7 @@ type scheduleRow struct {
 }
 
 // scheduleUpdateBody is the accepted write. Every field is a POINTER so that
-// "absent" is distinguishable from "set to the zero value" — pylon's
+// "absent" is distinguishable from "set to the zero value" — the legacy
 // `exclude_unset` semantics, which the page relies on when it PUTs `active`
 // alone and expects `cron` to survive.
 //
@@ -155,8 +157,9 @@ func isAdministrationRequest(r *http.Request) bool {
 }
 
 // AdministrationSchedules serves `GET /scheduling/schedules/administration/{projectID}`.
-// The `{projectID}` segment is part of pylon's URL shape and carries no meaning
-// in this mode — the admin page sends `0` — so it is ignored rather than parsed.
+// The `{projectID}` segment is part of the legacy URL shape and carries no
+// meaning in this mode — the admin page sends `0` — so it is ignored rather
+// than parsed.
 func (h *Handler) AdministrationSchedules(w http.ResponseWriter, r *http.Request) {
 	h.serveSchedules(w, r, true)
 }
@@ -168,9 +171,9 @@ func (h *Handler) AdministrationSchedulesUpdate(w http.ResponseWriter, r *http.R
 
 // Schedules serves `GET /scheduling/schedules/{mode}/{projectID}`.
 //
-// `administration` lists the whole table (pylon's AdminAPI.get); any other mode
-// lists the rows belonging to `{projectID}` (pylon's ProjectAPI.get). The
-// project listing is `project_id = $1` and never `IS NULL OR = $1`: the
+// `administration` lists the whole table (the legacy AdminAPI.get); any other
+// mode lists the rows belonging to `{projectID}` (the legacy ProjectAPI.get).
+// The project listing is `project_id = $1` and never `IS NULL OR = $1`: the
 // project-less rows are PLATFORM jobs, and showing them inside one project's
 // settings would invite an operator to disable a platform job from a page that
 // looks project-scoped.
@@ -265,7 +268,7 @@ func (h *Handler) listSchedules(ctx context.Context, administration bool, projec
 
 // SchedulesUpdate serves `PUT /scheduling/schedules/{mode}/{projectID}`.
 //
-// The id travels in the BODY, not the path — pylon's shape, and what the
+// The id travels in the BODY, not the path — the legacy shape, and what the
 // existing client sends. In a non-administration mode the update is additionally
 // constrained to the `{projectID}` in the path, so a project-scoped caller
 // cannot retime another project's schedule (or a platform one) by guessing an id.

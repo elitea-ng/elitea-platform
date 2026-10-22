@@ -136,7 +136,7 @@ func TestChatMentionNotificationsWriteNothingForAnEmptyAudience(t *testing.T) {
 // NOT the migrated template the rest of this file uses. That template replays
 // the shared/tenant migration CORPUS, which never creates
 // `public.auth_core__user` or `public.auth_core__project_user_role` — they are
-// pylon-owned in a migrated deployment, and on continuous integration's
+// legacy-owned in a migrated deployment, and on continuous integration's
 // Postgres they simply do not exist. Seeding them there failed with
 // `relation "public.auth_core__user" does not exist`, and the first version of
 // this test answered that with `t.Skipf`, which the skip ledger (#423) refuses

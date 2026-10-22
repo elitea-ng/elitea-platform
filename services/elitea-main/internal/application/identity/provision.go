@@ -340,7 +340,7 @@ type InitialGlobalAdminShapes struct {
 // ClassifyInitialGlobalAdmins sorts the configured entries by shape.
 //
 // A BARE ADDRESS IS NOT MALFORMED. `alice@corp.com` with no prefix is a valid
-// reference entry: it names the pylon-era bare provider reference, and it
+// reference entry: it names the legacy-era bare provider reference, and it
 // matches `saml:alice@corp.com` through the prefix strip in
 // internal/api/v2/auth/first_login.go. To report it would warn about a working
 // configuration.

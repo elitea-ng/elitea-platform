@@ -51,13 +51,13 @@
 // # What is NOT ported, and why
 //
 //   - `PUT /support_assistant/config` (api/v2/config.py's `put`). The reference
-//     needs it because a Pylon plugin owns its own YAML; here the admin Features
-//     page already writes this section into `centry.platform_config` through
-//     `/api/v2/admin/…/config_values`, with schema validation and an audited
-//     permission. A second writer over the same rows is a drift hazard with
-//     nothing to gain — the page and this package would have to agree forever
-//     about field names, types and defaults. The Features page is the single
-//     writer; this package only reads.
+//     needs it because a legacy plugin owns its own YAML; here the admin
+//     Features page already writes this section into `centry.platform_config`
+//     through `/api/v2/admin/…/config_values`, with schema validation and an
+//     audited permission. A second writer over the same rows is a drift hazard
+//     with nothing to gain — the page and this package would have to agree
+//     forever about field names, types and defaults. The Features page is the
+//     single writer; this package only reads.
 //
 //   - The socket.io surface (`sio/support.py`'s `support_predict`). This service
 //     streams over SSE — see `internal/api/v2/executions` and the #93 chat

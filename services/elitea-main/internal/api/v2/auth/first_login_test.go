@@ -127,7 +127,7 @@ func TestInitialGlobalAdminMatchingAcceptsBothSpellings(t *testing.T) {
 		},
 		{
 			// The prefix is mandatory. A bare address is a REFERENCE entry —
-			// it names `saml:alice@corp.com` and the pylon-era bare ref — and
+			// it names `saml:alice@corp.com` and the legacy-era bare ref — and
 			// it must not silently become an address match.
 			name:          "a bare address is not an email entry",
 			admins:        []string{"alice@corp.com"},

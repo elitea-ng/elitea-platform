@@ -73,10 +73,10 @@ func main() {
 
 	// Enumerated AFTER the shared history, not before it.
 	//
-	// TenantProjects reads centry.project. On a database that pylon populated
-	// that table is already there, so reading it first worked and this ordering
-	// never mattered. On an EMPTY database it does not exist yet, and
-	// -all-tenants failed before applying anything:
+	// TenantProjects reads centry.project. On a database the legacy runtime
+	// populated that table is already there, so reading it first worked and
+	// this ordering never mattered. On an EMPTY database it does not exist yet,
+	// and -all-tenants failed before applying anything:
 	//
 	//   preflight legacy tenant projects: ERROR: relation "centry.project"
 	//   does not exist (SQLSTATE 42P01)

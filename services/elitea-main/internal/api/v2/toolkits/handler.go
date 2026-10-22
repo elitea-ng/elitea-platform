@@ -239,8 +239,9 @@ func NewPostgresRepository(pool *pgxpool.Pool) Repository {
 	return &pgRepo{pool: pool}
 }
 
-// knownToolkitTypes is the baseline list of toolkit types pylon_indexer supports.
-// DB types are merged in at runtime so newly-registered types appear automatically.
+// knownToolkitTypes is the baseline list of toolkit types the legacy indexer
+// supports. DB types are merged in at runtime so newly-registered types appear
+// automatically.
 var knownToolkitTypes = []string{
 	"datasource",
 	"file_loader",
@@ -944,7 +945,7 @@ func (h *Handler) TestTool(w http.ResponseWriter, r *http.Request) {
 	h.runToolkitTool(w, r, chi.URLParam(r, "toolID"))
 }
 
-// TestToolkitTool is the same run reached through pylon's own path,
+// TestToolkitTool is the same run reached through the legacy path,
 // `POST /test_toolkit_tool/prompt_lib/{projectID}`, which names the toolkit in
 // the body rather than the route.
 //

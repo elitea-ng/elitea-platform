@@ -29,7 +29,7 @@ import (
 // is a startup error (ADR-0017), not a third plane.
 //
 // Validator is the credential reader apimw.Auth's Bearer branch uses. It used
-// to be joined here by Client, the pylon Redis-RPC validator; #383 deleted
+// to be joined here by Client, the legacy Redis-RPC validator; #383 deleted
 // that client, so Validator is the only token reader left. SessionSecret
 // counts because the browser session cookie is a credential the deployment
 // issues and apimw.Auth verifies with the same key.

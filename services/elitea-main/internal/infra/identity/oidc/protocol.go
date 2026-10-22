@@ -297,8 +297,9 @@ func (v *assertionVerifier) Verify(
 	}
 	expiresAt := verifiedToken.Expiry.UTC()
 	if v.protocol.expirationOverride > 0 {
-		// Current pylon_auth can extend beyond signed exp. This correction allows
-		// only a shorter local session and never weakens the signed lifetime.
+		// The legacy auth plugin can extend beyond signed exp. This correction
+		// allows only a shorter local session and never weakens the signed
+		// lifetime.
 		override := verificationTime.Add(v.protocol.expirationOverride)
 		if override.Before(expiresAt) {
 			expiresAt = override

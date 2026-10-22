@@ -1,7 +1,7 @@
 package projects
 
-// Project creation — the route that made a pylon-free deployment able to onboard
-// a tenant (#333). The reference is
+// Project creation — the route that let a deployment without the legacy runtime
+// onboard a tenant (#333). The reference is
 // legacy/plugins/projects/api/v2/project.py's AdminAPI.post.
 
 import (
@@ -29,9 +29,9 @@ const CreateProjectPermission = "projects.projects.project.create"
 
 // administrationMode is the only `{mode}` this route answers on.
 //
-// pylon registers create on its AdminAPI alone — `mode_handlers` maps
-// `administration` to AdminAPI and `default` to ProjectAPI, and ProjectAPI has
-// no `post`, so `POST /projects/project/default` is a 404 there. Reproduced
+// The legacy runtime registers create on its AdminAPI alone — `mode_handlers`
+// maps `administration` to AdminAPI and `default` to ProjectAPI, and ProjectAPI
+// has no `post`, so `POST /projects/project/default` is a 404 there. Reproduced
 // here rather than left to the permission gate, so that the wrong mode is "no
 // such route" instead of "you may not", which is what a client sees today.
 const administrationMode = "administration"
@@ -111,9 +111,9 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The owner is the authenticated caller, never a body field — pylon reads
-	// `g.auth.id`. The permission middleware has already resolved and rewritten
-	// the user id on the context by the time this runs.
+	// The owner is the authenticated caller, never a body field — the legacy
+	// runtime reads `g.auth.id`. The permission middleware has already resolved
+	// and rewritten the user id on the context by the time this runs.
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
 		apierr.WriteStatus(w, http.StatusUnauthorized, "unauthorized")

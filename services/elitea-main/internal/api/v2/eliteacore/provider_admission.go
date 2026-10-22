@@ -20,10 +20,10 @@ package eliteacore
 // THREE CONTRACT DECISIONS, each chosen against the shape this replaces:
 //
 //   * `healthy` is a THREE-STATE value: true, false, or null. Null means no
-//     probe has reported inside the freshness window. Pylon's page could only
-//     say true or false, because its value was which in-process dict an entry
-//     landed in — so a provider nobody had probed appeared unhealthy, and an
-//     operator could not tell that from one that had actually failed.
+//     probe has reported inside the freshness window. The legacy page could
+//     only say true or false, because its value was which in-process dict an
+//     entry landed in — so a provider nobody had probed appeared unhealthy, and
+//     an operator could not tell that from one that had actually failed.
 //
 //   * Registration answers 202, not 200. The descriptor is recorded and is NOT
 //     in force: 200 would say the provider is admitted, which is the thing this

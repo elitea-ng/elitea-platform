@@ -30,7 +30,7 @@ import (
 //
 // Despite the name, the response is JSON, not S3's XML: the SDK calls
 // response.json() unconditionally (client.py:1118). The name reflects the
-// legacy pylon route this replaces, not the wire format.
+// legacy route this replaces, not the wire format.
 //
 // Only the representation is new. The bucket resolution, prefix validation,
 // delimiter handling and paging all come from the same helpers the native
@@ -184,7 +184,7 @@ func (h *Handler) requireS3BucketScoped(w http.ResponseWriter, r *http.Request, 
 	// SDK reaches the same objects through these routes as the native ones, so
 	// an exception that refuses a verb there must refuse it here; an S3
 	// representation that is a softer way in is not a representation, it is a
-	// second policy. AccessDenied is the code legacy's own S3 routes answer
+	// second policy. AccessDenied is the code the legacy runtime's own S3 routes answer
 	// with (routes/s3.py:88-90).
 	//
 	// The hidden workspace bucket (ADR-0034 decision 3) is absent, before the

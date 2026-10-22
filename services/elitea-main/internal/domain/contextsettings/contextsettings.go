@@ -5,13 +5,13 @@
 // WHY A DOMAIN PACKAGE. The same shape is written in two unrelated places —
 // `PUT /social/author` (the user's defaults, centry.social_users) and
 // `PUT /elitea_core/context_strategy/...` (one conversation, its
-// `meta.context_strategy`) — and read by a third (the context status). pylon
-// had the same duplication and kept the two halves agreed only by convention:
-// social/models/pd/users.py declared the defaults, elitea_core/models/pd/
-// context.py declared the strategy, and elitea_core/utils/context_analytics.py
-// `set_context_strategy` mapped one onto the other by hand. Defaults spelled
-// twice are defaults that drift, so every constant, range and mapping rule
-// lives here once.
+// `meta.context_strategy`) — and read by a third (the context status). The
+// legacy runtime had the same duplication and kept the two halves agreed only
+// by convention: social/models/pd/users.py declared the defaults,
+// elitea_core/models/pd/ context.py declared the strategy, and
+// elitea_core/utils/context_analytics.py `set_context_strategy` mapped one onto
+// the other by hand. Defaults spelled twice are defaults that drift, so every
+// constant, range and mapping rule lives here once.
 //
 // Legacy numeric context settings do not define the new combined window.
 // New compaction uses Balanced or Full. Stored legacy records stay unchanged.
@@ -39,7 +39,7 @@ const (
 	DefaultSummaryInstructions    = "Generate a concise summary of the following conversation messages"
 )
 
-// The frozen contract's ranges. pylon: the `Field(..., ge=, le=)` constraints
+// The frozen contract's ranges. Legacy: the `Field(..., ge=, le=)` constraints
 // on ContextStrategy/ContextStrategyUpdate, plus the model validator that
 // bounds the summary model's own max_tokens.
 const (
@@ -170,7 +170,7 @@ func numeric(value any) (int, bool) {
 	return 0, false
 }
 
-// StrategyUpdate is the per-conversation PUT body: pylon's
+// StrategyUpdate is the per-conversation PUT body: the legacy
 // ContextStrategyUpdate. Every field is optional; an absent field keeps
 // whatever the resolution rule already produced.
 type StrategyUpdate struct {

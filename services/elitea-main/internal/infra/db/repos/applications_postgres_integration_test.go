@@ -465,7 +465,7 @@ func TestApplicationsRepoPostgres_ListReportsIsForkedFromVersionMetaAndSurfacesO
 	})
 	// A version whose meta names ONLY one of the two keys is not a fork —
 	// `IsForkedFromMeta`/`isForkedFromMeta` both require both, matching what
-	// pylon's own model tested (key presence, not truthiness).
+	// the legacy model tested (key presence, not truthiness).
 	createTestApplication(t, repo, "half-tagged", 5, &applications.Version{
 		Name: "base",
 		Meta: map[string]any{"parent_entity_id": "42"},
@@ -614,7 +614,7 @@ func TestApplicationsRepoPostgres_DeleteClearsApplicationToolsWhenThatTableExist
 	ctx := testContext(t)
 	seedUser(t, pool, 1, "one@elitea.ai")
 
-	// application_tools exists only in pylon-migrated databases, and has no
+	// application_tools exists only in legacy-migrated databases, and has no
 	// cascade there. Recreate that shape to prove Delete still clears it.
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE p_1.application_tools (

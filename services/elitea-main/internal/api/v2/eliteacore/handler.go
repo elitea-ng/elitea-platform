@@ -1796,8 +1796,8 @@ var genericSubAgentNames = map[string]bool{
 // model was chosen (the name is there) but the project it belongs to is not
 // recorded, so nothing downstream can resolve it.
 //
-// The no-model-at-all case is deliberately NOT this: pylon raises its own,
-// differently-worded "No LLM model configured" Critical for it
+// The no-model-at-all case is deliberately NOT this: the legacy runtime raises
+// its own, differently-worded "No LLM model configured" Critical for it
 // (legacy/plugins/elitea_core/utils/publish_utils.py:2984-2990), which this
 // port does not have — an agent published without naming a model still gets
 // the platform default, and promoting that to a refusal is a separate
@@ -1819,7 +1819,7 @@ func incompleteModelSettings(llm map[string]any) bool {
 	return false
 }
 
-// genericPublishTags is pylon's `GENERIC_TAG_SET`
+// genericPublishTags is the legacy runtime's `GENERIC_TAG_SET`
 // (legacy/plugins/elitea_core/utils/publish_utils.py:112) verbatim — a tag set
 // that says nothing about what an agent is FOR, and so cannot make it findable
 // in the marketplace. #913.
@@ -2102,7 +2102,7 @@ func (h *Handler) runPublishValidation(
 		warnings = append(warnings, map[string]any{"field": "conversation_starters", "issue": "no conversation starters — users won't know how to begin", "source": "deterministic"})
 	}
 
-	// Tags — #913, the three rules pylon's `TagsChecker` has
+	// Tags — #913, the three rules the legacy `TagsChecker` has
 	// (legacy/plugins/elitea_core/utils/publish_utils.py:2824-2851), which this
 	// port had collapsed into a single "fewer than three tags" Recommendation
 	// that said the OPPOSITE of the first of them:
@@ -2112,8 +2112,8 @@ func (h *Handler) runPublishValidation(
 	//   more than two tags  -> Suggestion("Recommend 1-2 tags ...")
 	//
 	// The old rule fired a Recommendation for 0, 1 and 2 tags and stayed silent
-	// for the case pylon recommends about, so an author with no tags at all was
-	// told the same thing as an author with two good ones.
+	// for the case the legacy runtime recommends about, so an author with no tags
+	// at all was told the same thing as an author with two good ones.
 	switch {
 	case len(tagNames) == 0:
 		criticalIssues = append(criticalIssues, map[string]any{"field": "tags", "issue": "no tags defined — add at least one relevant tag", "source": "deterministic"})
@@ -2288,7 +2288,7 @@ func (h *Handler) runPublishValidation(
 			// NAME survives, the project it came from does not. Both this check
 			// and Publish's own hard-check read the key only as
 			// `ok && mpid != nil`, so an ABSENT key skipped the whole rule and
-			// the agent published with settings nothing could resolve. Pylon's
+			// the agent published with settings nothing could resolve. The legacy
 			// `LLMSharedModelChecker` raises this as a Critical
 			// (legacy/plugins/elitea_core/utils/publish_utils.py:2993-3001).
 			criticalIssues = append(criticalIssues, map[string]any{
@@ -2602,8 +2602,8 @@ func (h *Handler) publicApplicationDetail(w http.ResponseWriter, r *http.Request
 // information_schema, swallowed any query error into an empty page, reported
 // `adoption` as two hardcoded zeroes and returned no pagination at all. The
 // real listing is internal/api/v2/eliteacore/admin_published_agents.go, which
-// reads the public project the way the pylon original does and is registered on
-// `GET /elitea_core/admin_published_agents/administration`.
+// reads the public project the way the legacy original does and is registered
+// on `GET /elitea_core/admin_published_agents/administration`.
 
 func (h *Handler) TrendingAuthors(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, []any{})
@@ -2659,13 +2659,13 @@ func (h *Handler) ApplicationRelation(w http.ResponseWriter, r *http.Request) {
 	// Everything above answers the opposite one: the skills and tools THIS
 	// version uses. `check_version_in_use` is routed here, and the agent
 	// editor's delete flow needs the INVERSE — the parents that reference this
-	// version as a sub-agent, and the versions it could be replaced by. Pylon
-	// answers exactly that (`legacy/plugins/elitea_core/rpc/application.py:
-	// 1796-1868`: `in_use`, `referencing_parents`, `replacement_versions`,
-	// `version_name`, `application_id`), so the delete dialog could list the
-	// affected agents by name and offer a replacement. Without it the dialog
-	// could only be wired to data about the wrong relation, which is why it
-	// was never wired at all.
+	// version as a sub-agent, and the versions it could be replaced by. The legacy
+	// runtime answers exactly that
+	// (`legacy/plugins/elitea_core/rpc/application.py: 1796-1868`: `in_use`,
+	// `referencing_parents`, `replacement_versions`, `version_name`,
+	// `application_id`), so the delete dialog could list the affected agents by
+	// name and offer a replacement. Without it the dialog could only be wired to
+	// data about the wrong relation, which is why it was never wired at all.
 	//
 	// `items` is kept beside the new keys rather than replaced: the same
 	// handler also serves GET /application_relation/..., and an existing
@@ -2689,10 +2689,10 @@ func (h *Handler) ApplicationRelation(w http.ResponseWriter, r *http.Request) {
 // A reference is a row of `elitea_tools` (type='application') whose settings
 // name this version, JOINED to the parent through `entity_tool_mapping` — the
 // exact pair `application_relation.go` writes. The join is what makes the
-// answer trustworthy: pylon counts a tool row with NO valid parent mapping as
-// an ORPHAN and reports `in_use: false` for it (rpc/application.py:1861-1863),
-// because the delete cleans those up itself. Joining does the same thing, one
-// statement instead of two loops.
+// answer trustworthy: the legacy runtime counts a tool row with NO valid parent
+// mapping as an ORPHAN and reports `in_use: false` for it
+// (rpc/application.py:1861-1863), because the delete cleans those up itself.
+// Joining does the same thing, one statement instead of two loops.
 //
 // Every read is best-effort in the way the rest of this handler is: a failure
 // answers "nothing references it", which is what the route answered for its
@@ -2861,7 +2861,7 @@ func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request
 // returned 404, and the picker drew five broken images, because it has no
 // fallback for a url that fails. An empty section is honest.
 //
-// Three items complete the feature. Legacy does all three
+// Three items complete the feature. The legacy runtime does all three
 // (legacy/plugins/elitea_core/routes/application_icon.py:15 and
 // legacy/plugins/elitea_core/module.py:599-616):
 //
@@ -3173,17 +3173,17 @@ func (h *Handler) DeleteIcon(w http.ResponseWriter, r *http.Request) {
 //
 // The mapping exists because the platform's own markdown export does not write
 // the stored spelling. `markdownAgentType` (export_markdown.go) writes `agent`
-// for a stored `openai` agent, faithfully mirroring pylon's
+// for a stored `openai` agent, faithfully mirroring the legacy
 // `_application_to_md`. The import's allow-list never had an `agent` member —
-// pylon's `AgentTypes` enum has none either — so exporting an agent as markdown
-// and posting its frontmatter back answered
+// the legacy `AgentTypes` enum has none either — so exporting an agent as
+// markdown and posting its frontmatter back answered
 // `Import function has been failed: invalid agent_type` (#845). The round trip
 // closed only in a browser: both web clients rename `agent` to `openai` in
 // their own file parser, and nothing in the API contract said they had to.
 //
 // The rename is done HERE rather than by changing the exporter, so that every
-// `.agent.md` file already written — by this platform, by pylon, or by hand
-// from the documented format — keeps importing.
+// `.agent.md` file already written — by this platform, by the legacy runtime,
+// or by hand from the documented format — keeps importing.
 //
 // The empty string maps to `openai` as well: that is the column default this
 // path applied before, and an entry that names no type is a plain agent.
@@ -3557,7 +3557,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			// verbatim from the file above, so it holds a variable only when
 			// the source project was this platform (`versionFromBody` mirrors
 			// the list into it for the write echo) and never when the source
-			// was pylon, whose `update_version` dumps with
+			// was the legacy runtime, whose `update_version` dumps with
 			// `exclude={'tags', 'variables', 'tools'}`.
 			//
 			// Reported, not best-effort. A variable is a value the agent needs
@@ -4064,7 +4064,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	// # The index space of every error entry
 	//
 	// ONE space for both arrays: the applications, then the skills. That is the
-	// legacy's own numbering. `fork.py` concatenates
+	// the legacy runtime's own numbering. `fork.py` concatenates
 	// `(applications or []) + (skills or [])` into one entities list and hands
 	// that list to `import_wizard`, which numbers every error and every result by
 	// the position in it (`_wrap_import_error`, `_wrap_import_result`).
@@ -4922,7 +4922,7 @@ func iconStorageUnavailable(w http.ResponseWriter) {
 // The response key is `rows`, not the `items` the stub used: `rows`/`total` is
 // the shape the caller unwraps
 // (apps/elitea-web/src/entities/project/api/projectContextApi.ts,
-// fetchProjectIcons via unwrapListPage) and the shape pylon's project_icon
+// fetchProjectIcons via unwrapListPage) and the shape the legacy project_icon
 // listing answers.
 func (h *Handler) ListProjectIcons(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
@@ -4969,8 +4969,8 @@ func (h *Handler) ListProjectIcons(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	// `skip` and `limit` were accepted and DISCARDED. The picker sends both
-	// (apps/elitea-web fetchProjectIcons sends limit=200&skip=0) and pylon
-	// honours both, so a project with more icons than one page could never
+	// (apps/elitea-web fetchProjectIcons sends limit=200&skip=0) and the legacy
+	// runtime honours both, so a project with more icons than one page could never
 	// reach the rest of them: every request answered page one and called it the
 	// whole set. `total` stays the count of every icon, not of the page —
 	// get_icons_list computes it before the slice, and a client paging on it
@@ -5088,7 +5088,7 @@ const maxProjectIconBytes = 512 * 1024
 const maxProjectIconDimension = 512
 
 // defaultIconDimension is the box every icon route falls back to when the form
-// names none, in pylon and here.
+// names none, in the legacy runtime and here.
 const defaultIconDimension = 64
 
 // defaultProjectIconPageSize is project_icon.py's `limit` default.
@@ -5214,19 +5214,19 @@ func (h *Handler) MCPDCRProxy(w http.ResponseWriter, r *http.Request) {
 // Issue 335 gives it a real backend. The discovery is an outbound HTTP exchange
 // with the MCP server named in the body, over the streamable-HTTP transport,
 // through the same validated sender the OAuth and DCR proxies in this file
-// already use. pylon reaches the same servers through a task node that imports
-// the Python SDK; the protocol on the wire is the same.
+// already use. The legacy runtime reaches the same servers through a task node
+// that imports the Python SDK; the protocol on the wire is the same.
 //
 // The result is also WRITTEN to `elitea_mcp.registered_servers`, which is what
 // `GET /elitea_core/tools_list/{projectID}` reads. That write is the reason the
 // listing endpoint can stop answering 501: this is the registration path, so
 // there is no second source of the same data.
 //
-// The response shape is pylon's `McpSyncToolsResponseModel`, flat rather than
-// wrapped in `{"result": …}`. The web client accepts either
+// The response shape is the legacy `McpSyncToolsResponseModel`, flat rather
+// than wrapped in `{"result": …}`. The web client accepts either
 // (`useGetRemoteMcpTools.ts:192` reads `response.result ?? response`), and flat
-// is the truthful one here: pylon nests because the value arrives from an
-// asynchronous task, and this path has no task.
+// is the truthful one here: the legacy runtime nests because the value arrives
+// from an asynchronous task, and this path has no task.
 func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 	// Gated BEFORE the body is decoded, so a disabled deployment answers the
 	// same 403 to a well-formed request and a malformed one. Deciding after the
@@ -5247,14 +5247,14 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// `ssl_verify` is read from the body by pylon and honoured. It is ignored
-	// here, and TLS verification always applies: AGENTS.md makes verification
-	// mandatory outside an explicitly isolated test. A caller that needs a
-	// private certificate authority configures the service trust bundle
+	// `ssl_verify` is read from the body by the legacy runtime and honoured. It is
+	// ignored here, and TLS verification always applies: AGENTS.md makes
+	// verification mandatory outside an explicitly isolated test. A caller that
+	// needs a private certificate authority configures the service trust bundle
 	// (WithHTTPClient), which is auditable, rather than switching verification
 	// off per request, which is not.
 	// A pre-built MCP toolkit leaves the platform to supply the endpoint and the
-	// credentials, which is what pylon's `resolve_mcp_prebuilt_settings` does
+	// credentials, which is what the legacy `resolve_mcp_prebuilt_settings` does
 	// from its plugin configuration. The catalogue is a table here (shared
 	// migration 0094); the resolution fills only fields the caller left empty,
 	// so a toolkit that carries its own URL still wins.
@@ -5379,15 +5379,15 @@ func (h *Handler) MCPSyncTools(w http.ResponseWriter, r *http.Request) {
 }
 
 // mcpSyncDefaultTimeout and mcpSyncMaxTimeout bound the outbound discovery.
-// pylon defaults the synchronous form to 120 seconds; the ceiling stops a
-// caller-supplied value from holding a request open indefinitely.
+// The legacy runtime defaults the synchronous form to 120 seconds; the ceiling
+// stops a caller-supplied value from holding a request open indefinitely.
 const (
 	mcpSyncDefaultTimeout = 120 * time.Second
 	mcpSyncMaxTimeout     = 300 * time.Second
 )
 
-// parsePositiveID accepts only a plain positive integer, which is what pylon's
-// `<int:project_id>` converter accepts.
+// parsePositiveID accepts only a plain positive integer, which is what the
+// legacy runtime's `<int:project_id>` converter accepts.
 func parsePositiveID(raw string) (int64, bool) {
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || value <= 0 {
@@ -5433,7 +5433,7 @@ func (h *Handler) AgentCategories(w http.ResponseWriter, r *http.Request) {
 	//
 	// The pre-existing read below looks for a `publishing_guardrail` row in the
 	// PROJECT's own `configuration` table. That row is per project, and the
-	// setting is not: the reference authors it once, globally, in the pylon
+	// setting is not: the reference authors it once, globally, in the legacy
 	// plugin's config, and no surface in this platform writes a per-project
 	// `publishing_guardrail` row at all. So the project read was a lookup that
 	// could only ever miss, and every deployment got the nine hardcoded
@@ -5520,7 +5520,7 @@ func (h *Handler) Unpin(w http.ResponseWriter, r *http.Request) {
 // `RegisterDescriptor` and `ServiceDescriptors` — the admin Service Descriptors
 // page's three endpoints — moved to service_descriptors.go when unit A14 ported
 // that page. Both were stubs: the listing answered 200 with three hardcoded rows
-// naming Pylon plugins in a shape the client does not read, and the registration
+// naming legacy runtime plugins in a shape the client does not read, and the registration
 // answered `{"ok": true}` to a body it discarded, from no route at all.
 
 // --- Collections ---

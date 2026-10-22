@@ -128,7 +128,7 @@ type AuthDeps struct {
 // NOTE(#126): IndexerDeps and its six fields — Predictor, LLMService,
 // ChatService, PipelineRunner, ToolTester, MCPSyncer — used to live here. They
 // were projections onto internal/infra/indexersvc, a prototype Redis RPC client
-// that published raw JSON to the `elitea_rpc` channel that pylon-indexer serves
+// that published raw JSON to the `elitea_rpc` channel the legacy indexer serves
 // through arbiter's gzip+pickle codec, so every call was silently dropped.
 // Nothing ever assigned them outside tests, so the twelve routes they gated
 // 404'd in every deployment.
@@ -909,7 +909,7 @@ func newProjectProvisioner(cfg RouterConfig) (*projectprovisioning.Provisioner, 
 }
 
 // Permission strings from the existing configuration.artifacts.artifacts
-// catalog (S11). edit is easy to miss — legacy uses it for retention and pin
+// catalog (S11). edit is easy to miss — the legacy runtime uses it for retention and pin
 // changes (PATCH), distinct from create (uploads, bucket/grant creation) and
 // delete (DELETE, :batchDelete).
 const (
@@ -919,9 +919,9 @@ const (
 	artifactPermissionDelete = "configuration.artifacts.artifacts.delete"
 	// The per-bucket ACL routes. legacy/plugins/artifacts declares these two
 	// on api/v2/bucket_permissions.py (:36 for the GET, :69 and :123 for the
-	// writes) — DISTINCT strings from the four above, because in pylon the
-	// access list lives inside an s3_api_credentials row. Shared migration
-	// 0118 grants them.
+	// writes) — DISTINCT strings from the four above, because in the legacy
+	// runtime the access list lives inside an s3_api_credentials row. Shared
+	// migration 0118 grants them.
 	artifactPermissionACLView = "configuration.artifacts.s3_credentials.view"
 	artifactPermissionACLEdit = "configuration.artifacts.s3_credentials.edit"
 )
@@ -1052,7 +1052,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			// `add_file_to_test_case` answered "Resource not found" for a
 			// valid path as loudly as for a typo.
 			//
-			// `default` is the pylon MODE segment the SDK still sends. It is
+			// `default` is the legacy MODE segment the SDK still sends. It is
 			// a literal here for the reason the bucket-permission routes give
 			// above: this surface resolves PermissionModeDefault
 			// unconditionally, so the segment names nothing the router reads
@@ -1149,10 +1149,10 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 //	GET|POST /app/{projectID}/mcp/{entity}/{entityVersionID}
 //
 // Mounted on its own Auth-wrapped subrouter for the same reason the artifact
-// routes are: these paths live outside /api/v2 (pylon serves them from the app
-// blueprint, and the internal-toolkit URLs written into existing projects
-// hardcode `/app/{project_id}/mcp/...`), so they cannot inherit the /api/v2
-// group's middleware, and they must not inherit its JSON compression.
+// routes are: these paths live outside /api/v2 (the legacy runtime serves them
+// from the app blueprint, and the internal-toolkit URLs written into existing
+// projects hardcode `/app/{project_id}/mcp/...`), so they cannot inherit the
+// /api/v2 group's middleware, and they must not inherit its JSON compression.
 //
 // RequireProjectAccess is unconditional here. The endpoint reads one tenant's
 // agents and toolkits by name, and authentication alone would let any
@@ -1482,7 +1482,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		mountSSOBrowserRoutes(r, ssoPaths, cfg.SessionHandler, cfg.OIDCHandler, cfg.SAMLHandler, chooser)
 	}
 
-	// Static file serving for application icons (root level like pylon)
+	// Static file serving for application icons (root level, as the legacy
+	// runtime served them)
 	iconDir := os.Getenv("ICON_DATA_DIR")
 	if iconDir == "" {
 		iconDir = "/data/static/application_icon"
@@ -2212,7 +2213,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			}
 			moderationHandler := v2moderation.NewHandler(cfg.Pool, moderationOptions...)
 			// The admin panel's surface. Every route below is gated on the same
-			// pylon permission its Python counterpart declares in
+			// legacy permission its Python counterpart declares in
 			// legacy/plugins/admin/api/v2/, resolved from the database in
 			// `administration` mode. The admin SPA's
 			// `window.admin_ui_config.permissions` is PRESENTATION state and is
@@ -2227,10 +2228,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// the source — migrations/shared/0060_admin_central_rbac.sql seeds
 			// the administration roles and their grants, and
 			// internal/infra/db/migrations/001_initial.sql seeds them on a fresh
-			// database — so the remaining reads are gated to match pylon too.
+			// database — so the remaining reads are gated to match the legacy
+			// runtime too.
 			//
 			// Read this as the parity table it is. `mode` in the URL does NOT
-			// select the permission mode: pylon reaches these handlers only
+			// select the permission mode: legacy reached these handlers only
 			// through its `administration` AdminAPI, so the resolution mode is
 			// always `administration`.
 			central := func(permission string) func(http.Handler) http.Handler {
@@ -2269,15 +2271,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Admin panel endpoints (administration mode, no projectID)
 				//
 				// The two `prompt_lib` routes stay open ON PURPOSE. They are the
-				// help-center's version/resource lookup, reached in pylon through
-				// `PromptLibAPI`, whose `get()` carries NO check_api decorator at
-				// all (system_info.py, plugin_config_values.py) — unlike the
-				// `AdminAPI` siblings one line below. chi matches a static
-				// segment ahead of a `{param}`, so these keep winning over
-				// `/system_info/{mode}` and `/plugin_config_values/{mode}/{plugin}`.
+				// help-center's version/resource lookup, reached in the legacy
+				// runtime through `PromptLibAPI`, whose `get()` carries NO
+				// check_api decorator at all (system_info.py,
+				// plugin_config_values.py) — unlike the `AdminAPI` siblings one
+				// line below. chi matches a static segment ahead of a `{param}`,
+				// so these keep winning over `/system_info/{mode}` and
+				// `/plugin_config_values/{mode}/{plugin}`.
 				r.Get("/system_info/prompt_lib", adminHandler.SystemInfo)
-				// The Help Center's own read (unit A14). pylon exposes exactly
-				// ONE config section to non-administrators —
+				// The Help Center's own read (unit A14). The legacy runtime
+				// exposes exactly ONE config section to non-administrators —
 				// `_PUBLIC_SECTIONS = {"resources"}` in
 				// legacy/plugins/admin/api/v2/plugin_config_values.py — and this
 				// route is restricted the same way, by being a route rather than
@@ -2294,7 +2297,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireAdminUsers).Post("/auth_users/{mode}", adminHandler.AuthUsersAction)
 				r.With(requireAdminUsers).Put("/user_suspend/{mode}/{userID}", adminHandler.UserSuspend)
 				// The MODES registry and the GLOBAL invite (#255). Both are
-				// pylon `AdminAPI`-only surfaces — `mode_handlers` names
+				// legacy `AdminAPI`-only surfaces — `mode_handlers` names
 				// `administration` and nothing else — so the segment is STATIC
 				// and another mode 404s rather than reaching a handler that
 				// would have to guess what it meant. Both declare
@@ -2310,7 +2313,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireModeUsers).Delete("/modes/administration", adminHandler.ModesRemove)
 				r.With(requireModeUsers).Post("/user_invite/administration", adminHandler.UserInvite)
 				// The CROSS-PROJECT bulk membership invite (issue 247,
-				// internal/api/v2/admin/invites_bulk.go). pylon serves this as
+				// internal/api/v2/admin/invites_bulk.go). The legacy runtime served this as
 				// two console pages — legacy/plugins/admin/api/v2/
 				// invites_bulkusers.py and invites_bulkprojects.py — and each
 				// declares its OWN permission rather than the project-membership
@@ -2320,7 +2323,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// answer 403 on a clean database, which is the class
 				// router_permission_grant_gate_test.go exists to catch.
 				//
-				// The mode segment is STATIC. pylon's `mode_handlers` names
+				// The mode segment is STATIC. The legacy `mode_handlers` names
 				// `administration` and nothing else on both modules, so another
 				// mode 404s rather than reaching a handler that would have to
 				// guess what it meant.
@@ -2392,7 +2395,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// ungated, ignoring {scope}, and listing only already-granted
 				// permissions. See internal/api/v2/admin/roles.go.
 				//
-				// Gated on the permissions the pylon originals declare
+				// Gated on the permissions the legacy originals declare
 				// (`configuration.roles.permissions.view` / `.edit`,
 				// legacy/plugins/admin/api/v2/permissions.py), resolved from
 				// auth_core__user_role per request. The read is gated too: this
@@ -2436,10 +2439,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// handler, because that permission depends on the section and
 				// route middleware cannot see it.
 				//
-				// pylon registers no handler for any other mode on this path
-				// except `prompt_lib`/resources above, so there is deliberately
-				// no `{mode}` fallback: another mode 404s rather than being
-				// answered with something plausible.
+				// The legacy runtime registers no handler for any other mode on
+				// this path except `prompt_lib`/resources above, so there is
+				// deliberately no `{mode}` fallback: another mode 404s rather
+				// than being answered with something plausible.
 				r.With(requireRuntimePlugins).
 					Get("/plugin_config_values/administration/{plugin}", adminHandler.AdministrationPluginConfigValues)
 				r.With(requireRuntimePlugins).
@@ -2590,9 +2593,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// stub that used to sit on this line; this unit replaced the stub
 				// with a real handler, registered below on a static
 				// `administration` segment. Re-adding a `{mode}` route here would
-				// resurrect the stub for every other mode — and since pylon reaches
-				// this surface only through its `administration` AdminAPI, the only
-				// thing that would answer is a constant nobody asked for.
+				// resurrect the stub for every other mode — and since legacy
+				// reaches this surface only through its `administration` AdminAPI,
+				// the only thing that would answer is a constant nobody asked for.
 				r.With(requireRuntimePlugins).Get("/maintenance/{mode}", adminHandler.Maintenance)
 				r.With(requireRuntimePlugins).Put("/maintenance/{mode}", adminHandler.Maintenance)
 				// Admin › Tasks — the platform's own background jobs, read
@@ -2631,7 +2634,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// the listing SELECT and answered 200 with the member list — so
 				// Invite / Edit role / Remove all reported success and wrote
 				// nothing. They now reach real handlers, each gated on the same
-				// pylon permission its Python counterpart declares
+				// legacy permission its Python counterpart declares
 				// (legacy/plugins/admin/api/v2/users.py).
 				// The member LISTING was the last write-free route in this block
 				// with no gate at all, and it is the one that discloses the most:
@@ -2642,7 +2645,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// {projectID} segment. Its own three writes beside it have been
 				// gated since #130.
 				//
-				// pylon declares `configuration.users.users.view` on the same
+				// The legacy runtime declares `configuration.users.users.view` on the same
 				// handler (legacy/plugins/admin/api/v2/users.py, API.get), which
 				// is the string the /elitea_core fallback copy of this route
 				// already carries.
@@ -2709,7 +2712,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// membership OF THAT PROJECT — so a global administrator who is
 				// not a member of the project scores zero permissions and is
 				// refused, and the admin panel's whole purpose is acting on
-				// projects one is not in. pylon gates the same handler on the
+				// projects one is not in. Legacy gates the same handler on the
 				// same permission resolved in administration mode
 				// (legacy/plugins/admin/api/v2/users.py maps BOTH modes to the
 				// same body, and its `recommended_roles` names `administration`).
@@ -2731,8 +2734,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
-				// auth_core__project_role for the named project, pylon declares
-				// `configuration.roles.roles.view` on the same handler
+				// auth_core__project_role for the named project, legacy
+				// declares `configuration.roles.roles.view` on the same handler
 				// (legacy/plugins/admin/api/v2/roles.py, ProjectAPI.get), and
 				// two callers reach it in two modes — the project settings page
 				// as `/admin/roles/default/{projectID}` and the admin panel's
@@ -2752,7 +2755,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Role DEFINITIONS — create, rename, delete (gap G9).
 				//
 				// The two GETs above LIST roles. Nothing could add one, rename
-				// one, or take one away, while pylon's
+				// one, or take one away, while the original
 				// legacy/plugins/admin/api/v2/roles.py is full CRUD. A
 				// deployment that wanted a `security_reviewer` role had to
 				// INSERT it into auth_core__role by hand.
@@ -2775,7 +2778,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// ADMINISTRATION mode like every other admin-panel gate above.
 				// They are distinct from `configuration.roles.permissions.*`:
 				// moving a checkbox in the matrix and deleting the role that
-				// checkbox belongs to are different privileges, and pylon
+				// checkbox belongs to are different privileges, and legacy
 				// separates them too.
 				//
 				// migrations/shared/0111 grants them. No migration did before,
@@ -2796,7 +2799,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// button wrote to nowhere and the gate it feeds always said yes.
 				// See internal/api/v2/moderation/requests.go.
 				//
-				// Gated on the permissions the pylon handlers declare
+				// Gated on the permissions the legacy handlers declare
 				// (legacy/plugins/admin/api/v2/moderation_status*.py). The split
 				// between CENTRAL and RESOLVED is the same one the schedules and
 				// admin-user writes needed: an operator answering requests that
@@ -2946,7 +2949,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// short-circuited on the `projectID=0` the admin page sends. See
 			// internal/api/v2/scheduling/schedules.go.
 			//
-			// Gated on the permissions pylon declares for the same handlers
+			// Gated on the permissions the legacy runtime declares for the same handlers
 			// (legacy/plugins/scheduling/api/v2/schedules.py):
 			// `configuration.scheduling.schedules.view` and `…edit`.
 			//
@@ -3000,7 +3003,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			r.Mount("/configurations", configurationsHandler.Routes())
 
 			// === Secrets ===
-			// Mounted under "/secrets" — the pylon PLUGIN name — while the
+			// Mounted under "/secrets" — the legacy PLUGIN name — while the
 			// subrouter's own three prefixes are the plugin's RESOURCE
 			// MODULES (secrets.py / secret.py / hide.py). The doubled
 			// "secrets" in /api/v2/secrets/secrets/{mode}/{projectID} is the
@@ -3024,7 +3027,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// centry.notifications for that project. They shipped with NO gate
 			// of any kind: not a permission, not a membership check.
 			//
-			// The permissions are transcribed from the pylon notifications
+			// The permissions are transcribed from the legacy notifications
 			// plugin, which is the same source the REVIEWED copy of this surface
 			// uses — internal/api/v2/notifications/api.go gates the identical
 			// paths on the identical four strings. That copy is registered by
@@ -3085,7 +3088,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// so `projectPermission` below can be used at all. The two land
 				// together on purpose; either alone is a defect.
 				//
-				// `projectScoped` therefore survives only where legacy has NO
+				// `projectScoped` therefore survives only where the legacy runtime has NO
 				// permission to copy — see each remaining use for which one and
 				// why. Everywhere else the named permission REPLACES it, which
 				// is strictly stronger: legacyrbac's projectPermissions() joins
@@ -3125,12 +3128,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// because /notifications and /context_manager need the same
 				// helper and are siblings of this group rather than children.
 				//
-				// Every name passed to it is transcribed from the pylon
+				// Every name passed to it is transcribed from the legacy
 				// `check_api` declaration of the matching elitea_core/api/v2/*.py
 				// module and verb; router_elitea_core_permission_map_test.go
 				// re-derives both directions from
 				// testdata/legacy/legacy-rbac-static-catalog.json and from 0068,
-				// so a name that legacy never declared — or one that nothing
+				// so a name that the legacy runtime never declared — or one that nothing
 				// grants — fails the build instead of shipping as a 403 nobody
 				// can clear.
 
@@ -3162,18 +3165,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// a body-less PATCH and expects the expanded, secret-resolved
 					// version details.
 					//
-					// Pylon declares the READ permission
+					// The legacy runtime declares the READ permission
 					// `models.applications.version.details` on its own handler
 					// (legacy/plugins/elitea_core/api/v2/version.py:100-106), so
 					// this route takes the same permission as the GET above it —
 					// NOT `version.update`, which would refuse the viewer that
-					// pylon admits.
+					// legacy admits.
 					r.With(projectPermission("models.applications.version.details")).
 						Patch("/version/prompt_lib/{projectID}/{applicationID}/{versionID}", appHandler.GetVersionExpanded)
-					// pylon's default_version.py declares only `patch`; the GET
-					// beside it has no legacy verb to copy, so it takes the READ
-					// permission of the resource it returns — a version — rather
-					// than a name invented for it.
+					// The legacy default_version.py declares only `patch`; the
+					// GET beside it has no legacy verb to copy, so it takes the
+					// READ permission of the resource it returns — a version —
+					// rather than a name invented for it.
 					r.With(projectPermission("models.applications.version.details")).
 						Get("/default_version/prompt_lib/{projectID}/{applicationID}", appHandler.GetDefaultVersion)
 					r.With(projectPermission("models.applications.version.update")).
@@ -3314,7 +3317,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// the MCP create screen could never show a type.
 				// Gate behind FEATURE_FLAG_TOOLKIT_PROJECT_ACCESS for gradual
 				// rollout: when enabled, each route resolves the permission its
-				// pylon module declares; setting the env var to "false"
+				// legacy module declares; setting the env var to "false"
 				// registers the same routes with no gate at all — the legacy
 				// vllm/bifrost compatibility path. The flag selects GATED
 				// versus UNGATED, never registered versus not.
@@ -3325,10 +3328,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// copy is ever read.
 				//
 				// The permissions replace the membership check this block
-				// carried: pylon's tools.py/tool.py split `list`/`create` from
-				// `details`/`update`/`patch`/`delete`, and PATCH is a different
-				// string from PUT there, which is why `tool.patch` also gates
-				// the index-START route and the MCP proxies below.
+				// carried: the legacy tools.py/tool.py split `list`/`create`
+				// from `details`/`update`/`patch`/`delete`, and PATCH is a
+				// different string from PUT there, which is why `tool.patch`
+				// also gates the index-START route and the MCP proxies below.
 				toolkitGate := projectPermission
 				if os.Getenv("FEATURE_FLAG_TOOLKIT_PROJECT_ACCESS") == "false" {
 					toolkitGate = func(string) func(http.Handler) http.Handler {
@@ -3367,7 +3370,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/toolkit_validator/prompt_lib/{projectID}/{toolkitID}", toolkitHandler.ValidateToolkit)
 				r.With(toolkitGate("models.applications.fork.post")).
 					Post("/fork_toolkit/prompt_lib/{projectID}", toolkitHandler.ForkToolkit)
-				// pylon has test_toolkit_tool.py and no test_tool.py; both
+				// The legacy runtime has test_toolkit_tool.py and no test_tool.py; both
 				// verbs here run one toolkit tool, so both take the string that
 				// module declares.
 				//
@@ -3467,8 +3470,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(projectPermission("models.promptlib_shared.tags.list")).
 						Get("/tags/prompt_lib/{projectID}", tagHandler.List)
 					// POST and DELETE stay at the MEMBERSHIP tier, alone in this
-					// group. pylon's tags.py defines `get` and nothing else — no
-					// legacy deployment has ever served a tag write on this
+					// group. The legacy tags.py defines `get` and nothing else —
+					// no legacy deployment has ever served a tag write on this
 					// resource, so there is no `check_api` declaration to
 					// transcribe. Naming one here would be a guess in one of two
 					// directions with no way to tell which: reuse
@@ -3500,10 +3503,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// router_elitea_core_permission_map_test.go asserts that every
 				// literal handed to `projectPermission` appears in
 				// testdata/legacy/legacy-rbac-static-catalog.json, and that
-				// assertion is exactly right for a PORTED pylon route: a name
+				// assertion is exactly right for a PORTED legacy route: a name
 				// the catalogue does not know is a typo, and a typo ships as a
 				// permanent 403 nobody can clear. Agent Evaluation is not in
-				// the pylon corpus this repository carries — there is no
+				// the legacy corpus this repository carries — there is no
 				// evaluation module in legacy/plugins/elitea_core/api/v2/ — so
 				// these four names have no `check_api` to be transcribed from.
 				// Routing them through that helper would make a provenance
@@ -3561,7 +3564,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// four use, and NOT router.go's `projectPermission` helper, for
 				// the reason recorded above and in
 				// migrations/shared/0115_evaluation_dataset_run_permissions.sql:
-				// Agent Evaluation is not in the pylon corpus this repository
+				// Agent Evaluation is not in the legacy corpus this repository
 				// carries, so these names have no `check_api` to be transcribed
 				// from and the helper's provenance assertion would be false.
 				// router_permission_grant_gate_test.go still binds them to a
@@ -3688,7 +3691,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/messages/prompt_lib/{projectID}/{conversationID}", convHandler.DeleteMessages)
 					// message.py declares BOTH verbs on one module, so the
 					// per-message read shares this DELETE's URL and its
-					// {messageID} param — pylon's `message_group_uid`, a
+					// {messageID} param — the legacy `message_group_uid`, a
 					// message-GROUP uuid string (message.py:176-183). The read
 					// declares `models.chat.messages.details`
 					// (message.py:39), which is NOT a new name: it is the
@@ -3769,7 +3772,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 								cfg.ConvsRepo,
 								v2canvaspresence.WithBackend(cfg.CanvasPresence),
 							).Heartbeat)
-					// attachment_storage has no pylon module; it writes the
+					// attachment_storage has no legacy module; it writes the
 					// conversation's own storage setting, so it takes
 					// context_strategy.py's string — the other per-conversation
 					// setting write — rather than a name invented for it.
@@ -3796,7 +3799,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Head("/attachments/prompt_lib/{projectID}/{conversationID}/{name}", convHandler.DownloadAttachment)
 					r.With(requireConversationRead).
 						Get("/context_analytics/prompt_lib/{projectID}/{conversationID}", convHandler.GetContextStatus)
-					// The strategy READ is new here (pylon exposed only the
+					// The strategy READ is new here (legacy exposed only the
 					// write). It takes the conversation-details permission,
 					// like every other read of this conversation's own
 					// settings, and it sits on the same path as the write so
@@ -3871,7 +3874,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// distinguishable from a missing route. Gating the registration
 				// on the dependency instead is exactly what produced #126.
 				//
-				// The permission is legacy's own
+				// The permission is the legacy runtime's own
 				// (elitea_core/api/v2/predict_llm.py check_api), and its
 				// default-mode split reaches VIEWER — see
 				// migrations/shared/0105_predict_llm_permission.sql, which is
@@ -3882,7 +3885,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Batch version replacement
 				if cfg.AppsRepo != nil {
 					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool)
-					// Neither this route nor the one below it has a pylon
+					// Neither this route nor the one below it has a legacy
 					// module: both are Go-side additions that WRITE an
 					// application version — one swaps a version reference across
 					// a project's agents, the other rewrites a version's
@@ -3908,14 +3911,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// route. Gating the registration on the dependency is exactly
 				// what produced #126.
 				//
-				// The permissions are legacy's own check_api declarations, with
+				// The permissions are the legacy runtime's own check_api declarations, with
 				// ONE deliberate substitution. generate_project_context_draft
 				// declares `models.project_context.generate`, a string this
-				// repository's migration history does not grant and legacy's
+				// repository's migration history does not grant and the legacy runtime's
 				// own catalogue reaches only through that one module; gating on
 				// it would ship a permanent 403 nobody can clear (#313).
 				// `models.project_context.edit` is granted by 0068 to exactly
-				// the roles legacy's recommended_roles gives .generate — admin
+				// the roles the legacy runtime's recommended_roles gives .generate — admin
 				// and editor, never viewer — and it is the permission the
 				// caller needs anyway, since the only thing to do with a
 				// generated Project Background is save it.
@@ -3959,10 +3962,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// the publish permission rather than on membership; these are
 				// the strings publish.py, unpublish.py, publish_validate.py and
 				// fork.py declare. publish and unpublish are DIFFERENT names in
-				// pylon, and the legacy matrix withholds both from a viewer —
-				// which is the whole point of the tier, since a viewer that
-				// could publish would push a project's agent into the public
-				// catalogue.
+				// the legacy runtime, and its matrix withholds both from a
+				// viewer — which is the whole point of the tier, since a viewer
+				// that could publish would push a project's agent into the
+				// public catalogue.
 				requirePublish := projectPermission("models.applications.publish.post")
 				requireVersionValidate := projectPermission("models.applications.version_validator.check")
 				// The fork route runs the FORK handler (#505). It was registered
@@ -4009,7 +4012,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.Get("/public_skill/prompt_lib/{skillID}", skillPublishHandler.PublicSkill)
 				r.Get("/public_skill/prompt_lib/{skillID}/{versionName}", skillPublishHandler.PublicSkill)
 
-				// Everything project-scoped carries the permission its pylon
+				// Everything project-scoped carries the permission its legacy
 				// module declares.
 				//
 				// These routes take {projectID} from the path and then read and
@@ -4018,7 +4021,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// it onto that project's agents. They shipped behind the
 				// membership check because nothing granted a permission then;
 				// #313's seeding migration is what lets them carry one now.
-				// pylon's publish_skill.py, unpublish_skill.py and
+				// The legacy publish_skill.py, unpublish_skill.py and
 				// publish_skill_validate.py all declare ONE string —
 				// `skills.publish` — unlike the application plane above, where
 				// publish and unpublish are separate names.
@@ -4056,11 +4059,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/trending_authors/prompt_lib/{projectID}", coreHandler.TrendingAuthors)
 
 				// Moderation used to be registered here as well, on
-				// `/elitea_core/moderation_status/…`. pylon serves that resource
-				// under `admin` only and no client has ever called this copy; it
-				// is removed with the stub it pointed at rather than re-pointed
-				// at the real handler, which would publish a second URL for the
-				// same rows. See internal/api/v2/moderation/requests.go.
+				// `/elitea_core/moderation_status/…`. The legacy runtime serves that
+				// resource under `admin` only and no client has ever called this
+				// copy; it is removed with the stub it pointed at rather than
+				// re-pointed at the real handler, which would publish a second
+				// URL for the same rows. See
+				// internal/api/v2/moderation/requests.go.
 
 				// Application relations. application_relation.py declares only
 				// `patch`; the GET beside it is the same handler answering the
@@ -4089,7 +4093,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Method(http.MethodGet, "/feedbacks/default/{projectID}", v2social.NewFeedbackListHandler(cfg.Pool))
 
 				// Analytics (flat paths matching UI expectations). All seven
-				// pylon analytics_*.py modules declare the SAME string as
+				// legacy analytics_*.py modules declare the SAME string as
 				// analytics_costs.py below — `models.monitoring.tracing.view` —
 				// so the eighth endpoint is no longer the only gated one. The
 				// grant that makes it resolvable on a Go-bootstrapped database
@@ -4153,7 +4157,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// not-yet-ported feature — so the paths and parameters are the
 				// ones a client already speaks.
 				//
-				// Gated on the two permissions the pylon handlers declare,
+				// Gated on the two permissions the legacy handlers declare,
 				// resolved against the project in DEFAULT mode.
 				traceHandler := v2messagetraces.NewHandler(cfg.Pool)
 				r.With(projectPermission(v2messagetraces.ListPermission)).
@@ -4186,9 +4190,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// exactly as it does for the agent listing. 0100 grants them.
 				//
 				// The POST is registered twice for the same reason the agent one
-				// is: pylon's url_params carry an OPTIONAL trailing version id,
-				// and with it the upload binds the icon to that skill version in
-				// one call.
+				// is: the legacy url_params carry an OPTIONAL trailing version
+				// id, and with it the upload binds the icon to that skill
+				// version in one call.
 				requireSkillIconUpload := projectPermission("models.applications.skills.upload_icon.post")
 				r.With(projectPermission("models.applications.skills.upload_icon.get")).
 					Get("/upload_skill_icon/prompt_lib/{projectID}", coreHandler.ListSkillIcons)
@@ -4206,7 +4210,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// import_wizard.py declares exactly that string for exactly that
 				// operation, so the two share it rather than the POST inheriting
 				// the export's read tier. export_converter.py carries no guard in
-				// pylon and names no project in its path, so it stays open.
+				// the legacy runtime and names no project in its path, so it
+				// stays open.
 				r.With(projectPermission("models.applications.export_import.import")).
 					Post("/export_import/prompt_lib/{projectID}/{entityID}", coreHandler.ExportImportPost)
 				r.With(projectPermission("models.applications.export_import.export")).
@@ -4237,7 +4242,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				//
 				// In the caller's OWN personal project the settings writes accept
 				// `models.project_context.edit` too. A personal project has one
-				// member, and pylon made that member an `editor`.
+				// member, and the legacy runtime made that member an `editor`.
 				requireProjectContextView := projectPermission("models.project_context.view")
 				requireProjectContextEdit := projectPermission("models.project_context.edit")
 				requireProjectSettingsEdit := apimw.RequireResolvedPermissionOrPersonalProject(
@@ -4302,7 +4307,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission("models.promptlib_shared.search")).
 					Get("/search_options/prompt_lib/{projectID}", coreHandler.SearchOptions)
 
-				// MCP OAuth & sync. All three pylon modules declare
+				// MCP OAuth & sync. All three legacy modules declare
 				// `models.applications.tool.patch`. Only the sync writes a
 				// project's toolkit rows, so only the sync keeps that string.
 				//
@@ -4318,8 +4323,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `tool.patch` the chat "Authorize" button failed for every
 				// viewer with "Dynamic client registration failed: access_denied".
 				//
-				// The two proxies are mode-less ProjectAPI paths in pylon, which
-				// is why they carry no `prompt_lib` segment here either.
+				// The two proxies are mode-less ProjectAPI paths in the legacy
+				// runtime, which is why they carry no `prompt_lib` segment here
+				// either.
 				requireMCPConnect := projectPermission("models.applications.predict.post")
 				requireMCPToolWrite := projectPermission("models.applications.tool.patch")
 				r.With(requireMCPConnect).Post("/mcp_oauth_proxy/{projectID}", coreHandler.MCPOAuthProxy)
@@ -4328,22 +4334,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				// The MCP REST surface (issue 252 P1). All three stay at the
 				// MEMBERSHIP tier, and unlike the tag writes above that is not a
-				// gap waiting on a decision: pylon's tools_list.py and
+				// gap waiting on a decision: the legacy tools_list.py and
 				// tools_call.py are two of the thirty-seven handlers the legacy
 				// catalogue lists as UNGUARDED, and internal_mcp_pat_status has
-				// no pylon module at all. There is no permission to transcribe,
-				// and #302's acceptance notes forbid tightening what legacy
-				// leaves open — but each still names a project in its path and
-				// then reads that project's toolkit rows or the caller's own
-				// tokens, so the membership check they shipped with stays.
+				// no legacy module at all. There is no permission to
+				// transcribe, and #302's acceptance notes forbid tightening
+				// what the legacy runtime leaves open — but each still names a project in
+				// its path and then reads that project's toolkit rows or the
+				// caller's own tokens, so the membership check they shipped
+				// with stays.
 				//
-				// The modes are pylon's, not a guess: tools_list/tools_call
-				// register `c.DEFAULT_MODE` only, internal_mcp_pat_status
-				// registers `prompt_lib` only. A mode pylon does not serve on a
-				// path 404s here rather than being answered with something
-				// plausible.
+				// The modes are the legacy runtime's, not a guess:
+				// tools_list/tools_call register `c.DEFAULT_MODE` only,
+				// internal_mcp_pat_status registers `prompt_lib` only. A mode
+				// the legacy runtime does not serve on a path 404s here rather than being
+				// answered with something plausible.
 				//
-				// tools_list is registered in BOTH mode shapes. pylon's
+				// tools_list is registered in BOTH mode shapes. The legacy
 				// `api_tools.with_modes` registers a route with and without the
 				// mode segment, so `/tools_list/1` and `/tools_list/default/1`
 				// are one endpoint there. The Python execution worker builds
@@ -4377,7 +4384,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				// Users / Roles (served under /admin/ for UI compat, registered
 				// here as fallback). elitea_core has no users.py or roles.py;
-				// pylon serves both from the ADMIN plugin, whose ProjectAPI
+				// the legacy runtime serves both from the ADMIN plugin, whose ProjectAPI
 				// variants declare `configuration.users.users.view` and
 				// `configuration.roles.roles.view`. Both handlers here read the
 				// named project's membership — Users returns every member's
@@ -4391,9 +4398,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// own permission SELF-READ: the handler resolves the requester's
 				// permissions for the project and hands them back, so a
 				// non-member already gets an empty list and there is nothing to
-				// leak. pylon's counterpart is auth/api/v2/permissions.py, which
-				// the legacy catalogue lists among the UNGUARDED handlers. The
-				// admin plugin's permissions.py IS guarded, on
+				// leak. The legacy counterpart is auth/api/v2/permissions.py,
+				// which the legacy catalogue lists among the UNGUARDED handlers.
+				// The admin plugin's permissions.py IS guarded, on
 				// `configuration.roles.permissions.view`, but that is the
 				// role→permission MATRIX editor and a different resource; the
 				// legacy matrix grants that string to the default-mode ADMIN
@@ -4401,17 +4408,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// on the request the web app uses to decide what to render.
 				r.Get("/permissions/prompt_lib/{projectID}", coreHandler.Permissions)
 
-				// The admin SERVICE DESCRIPTORS page (unit A14) — pylon's
+				// The admin SERVICE DESCRIPTORS page (unit A14) — the legacy
 				// provider hub. All three routes answer 501 with one reason;
 				// see internal/api/v2/eliteacore/service_descriptors.go for
 				// why, and for what each of them used to do.
 				//
 				// The listing was `r.Get("/admin/{mode}", …)` answering 200
 				// with three hardcoded rows naming `elitea_core`, `auth` and
-				// `indexer` — Pylon plugin names, not providers — in a shape
+				// `indexer` — legacy plugin names, not providers — in a shape
 				// the client does not read, from a handler taking
 				// `_ *http.Request` and therefore ungated. `administration` is
-				// now a STATIC segment because that is the only mode pylon
+				// now a STATIC segment because that is the only mode legacy
 				// registers on this path (`mode_handlers = {'administration':
 				// AdminAPI}`); another mode 404s rather than being answered
 				// with something plausible, and the handler states its mode
@@ -4424,7 +4431,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// so the refusal is explicit and pinned by a test: a 404 leaves
 				// the next person free to wire the stub back up.
 				//
-				// Gated on the permissions the pylon originals declare,
+				// Gated on the permissions the legacy originals declare,
 				// resolved in administration mode — `runtime.airun
 				// .serviceproviders` for the listing (elitea_core/api/v2/
 				// admin.py) and `provider_hub.descriptor.register` for the
@@ -4435,7 +4442,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/admin/administration", coreHandler.ServiceDescriptors)
 				// The admin dashboard's published-agents adoption listing
 				// (#255), registered next to the other `/…/administration`
-				// admin routes. `administration` is the only mode pylon's
+				// admin routes. `administration` is the only mode the legacy
 				// admin_published_agents.py registers, so it is a STATIC
 				// segment here too. Gated on the permission that file declares,
 				// resolved in administration mode: the listing names every
@@ -4501,7 +4508,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `{mode}` route would let any member skip it by asking for
 				// `administration`.
 				//
-				// Gates, transcribed from the pylon `check_api` declarations:
+				// Gates, transcribed from the legacy `check_api` declarations:
 				// the project-scoped reads resolve `models.project_context.view`
 				// against the project in DEFAULT mode; the administration reads
 				// and writes resolve `models.admin.project_budgets.view` /
@@ -4553,7 +4560,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// had no route at all before this unit, and the other two were
 				// stubs returning empty arrays.
 				//
-				// Gated on the permission the pylon originals declare
+				// Gated on the permission the legacy originals declare
 				// (`models.admin.audit_trail.view`,
 				// legacy/plugins/elitea_core/api/v2/audit*.py), resolved from
 				// auth_core__user_role per request. Unlike the admin USER
@@ -4571,7 +4578,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				// Per-user event counts for ONE project — the admin Projects
 				// page's activity drawer (unit A14). Same table and therefore
-				// the same gate as the four reads above; pylon's
+				// the same gate as the four reads above; the legacy
 				// project_user_activity.py declares that same permission. It had
 				// no route and no handler at all before this unit.
 				r.With(requireAuditTrail).
@@ -4617,7 +4624,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// architecture decision and the "runtime.plugins" admin-status gate
 			// (reusing the permission system_info.py/plugin_config_*.py/
 			// maintenance.py/runtime_*.py already declare, rather than seeding
-			// legacy's unseeded "models.admin.tracing.view" fresh).
+			// the legacy runtime's unseeded "models.admin.tracing.view" fresh).
 			requireTracingAdminStatus := apimw.RequireCentralPermissions(
 				permissionResolver, platformauth.PermissionModeAdministration,
 				"runtime.plugins",
@@ -4646,7 +4653,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			//
 			// THE LEGACY MATRIX HAS NO ENTRY FOR THIS SURFACE, and this file
 			// says so rather than implying a transcription. There is no
-			// context_manager module in pylon at all:
+			// context_manager module in the legacy runtime at all:
 			// testdata/legacy/legacy-rbac-static-catalog.json lists none, guarded
 			// or unguarded. So there is no `check_api` declaration to copy and no
 			// legacy role split to read.
@@ -4660,7 +4667,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			//   the four writes → models.chat.conversation.edit
 			//
 			// This is the rule this router already applies to the other Go-only
-			// routes that act on a conversation and have no pylon module:
+			// routes that act on a conversation and have no legacy module:
 			// `attachment_storage` and `context_strategy` both take
 			// `models.chat.conversation.edit` for the same reason, and their note
 			// states it. Reusing the conversation strings also keeps the surface

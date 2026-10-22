@@ -170,7 +170,7 @@ func TestEdge_PrincipalNameForeignProjectNeverReachesTheGatewayIdentity(t *testi
 }
 
 // TestEdge_PrincipalNameMemberProjectReachesTheGatewayIdentity is direction 2
-// of issue #459, end to end. The Pylon system project-user still bills the
+// of issue #459, end to end. The legacy system project-user still bills the
 // project its name asks for, because it belongs to that project.
 func TestEdge_PrincipalNameMemberProjectReachesTheGatewayIdentity(t *testing.T) {
 	spy := &gatewaySpy{}

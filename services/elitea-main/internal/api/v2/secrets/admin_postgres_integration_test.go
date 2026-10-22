@@ -133,7 +133,7 @@ func do(t *testing.T, router chi.Router, method, path string, body any) *httptes
 const adminBase = "/secrets/secret/administration/0/"
 
 // readAdminSecret re-reads one global secret through the PRODUCT's GET. The
-// body is pylon's `{"secret": <value|null>}`.
+// body is the legacy `{"secret": <value|null>}`.
 func readAdminSecret(t *testing.T, router chi.Router, name string) (string, bool) {
 	t.Helper()
 	recorder := do(t, router, http.MethodGet, adminBase+name, nil)
@@ -486,9 +486,9 @@ func TestAdminSecretsFailClosedWithoutAResolver(t *testing.T) {
 
 /* ── the destructive-write guards ──────────────────────────────────────── */
 
-// Pylon's admin POST assigns into the dict unconditionally, so creating a name
-// that already exists destroys the current value with a 200. Here it is a 400,
-// and the existing value is intact.
+// The legacy admin POST assigns into the dict unconditionally, so creating a
+// name that already exists destroys the current value with a 200. Here it is a
+// 400, and the existing value is intact.
 func TestAdminSecretCreateDoesNotOverwriteAnExistingName(t *testing.T) {
 	pool := newSecretsPool(t)
 	prepareVaults(t, pool)
@@ -557,7 +557,8 @@ func TestAdminSecretWriteRefusesAnUnreadableVaultInsteadOfReplacingIt(t *testing
 }
 
 // A name outside `[A-Za-z0-9_]` can be stored but never resolved, because that
-// is the class `{{secret.<name>}}` interpolation matches. Pylon accepts it.
+// is the class `{{secret.<name>}}` interpolation matches. The legacy runtime
+// accepted it.
 func TestAdminSecretCreateRejectsAnUnresolvableName(t *testing.T) {
 	pool := newSecretsPool(t)
 	prepareVaults(t, pool)
@@ -572,7 +573,7 @@ func TestAdminSecretCreateRejectsAnUnresolvableName(t *testing.T) {
 	}
 }
 
-// Updating a name that does not exist is pylon's 404, not a create.
+// Updating a name that does not exist is the legacy 404, not a create.
 func TestAdminSecretUpdateOfAnUnknownNameIsNotACreate(t *testing.T) {
 	pool := newSecretsPool(t)
 	prepareVaults(t, pool)

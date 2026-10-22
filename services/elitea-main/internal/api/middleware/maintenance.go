@@ -5,9 +5,9 @@ package middleware
 //
 // # What this replaces
 //
-// pylon installed a gevent ROUTER HOOK on the bootstrap plugin's persisted
-// state (legacy/plugins/bootstrap/tools/splash.py). It ran in front of
-// everything, resolved the caller over the auth RPC, read their
+// The legacy runtime installed a gevent ROUTER HOOK on the bootstrap plugin's
+// persisted state (legacy/plugins/bootstrap/tools/splash.py). It ran in front
+// of everything, resolved the caller over the auth RPC, read their
 // administration-mode roles, and served a stored HTML splash with 503 to anyone
 // who was not an admin. Nothing in this service installs router hooks, and the
 // Configuration section that toggled it therefore said so and refused.
@@ -18,20 +18,20 @@ package middleware
 //
 // # Why it sits on the JSON API and not in front of the whole process
 //
-// The pylon hook had to intercept everything because pylon also served the SPA's
+// The legacy hook had to intercept everything because it also served the SPA's
 // assets, so a maintenance window meant the browser got the splash HTML instead
 // of the app. Here the SPA is static and is served outside this group. Letting
 // it load and having it render the splash itself is strictly better:
 //
 //   - the splash is themed, translated and accessible like the rest of the
 //     product, rather than being a whole HTML document served in place of it.
-//     pylon's `splash_template` IS ported, as the `maintenance_html` platform
-//     setting, but as a BODY the product's own splash renders inside its page:
-//     the server refuses executable markup on the way in
+//     the legacy `splash_template` IS ported, as the `maintenance_html`
+//     platform setting, but as a BODY the product's own splash renders inside
+//     its page: the server refuses executable markup on the way in
 //     (v2/admin/config_values.go's validateSplashHTML) and every renderer
-//     sanitises on the way out, which the pylon hook did neither of;
+//     sanitises on the way out, which the legacy hook did neither of;
 //   - an ADMIN can reach the admin panel and turn the switch back off during the
-//     window, which under the pylon hook depended on a static shared bypass
+//     window, which under the legacy hook depended on a static shared bypass
 //     token in plugin config;
 //   - the SPA discovers maintenance from `platform_settings` rather than by
 //     inferring it from a wall of failed requests.
@@ -104,7 +104,7 @@ const maintenanceCacheTTL = 10 * time.Second
 const maintenanceLoadTimeout = 3 * time.Second
 
 // MaintenanceAdminPermission is the permission that gets through a maintenance
-// window. It is `runtime.plugins` — the name pylon's own maintenance.py declares
+// window. It is `runtime.plugins` — the name the legacy maintenance.py declares
 // on this surface, and the one the Configuration section requires in order to
 // author the switch. A caller who cannot START a window is not admitted during
 // one; a caller who can, is.

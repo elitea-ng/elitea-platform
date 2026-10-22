@@ -182,8 +182,8 @@ func (r *ConversationsRepo) Get(ctx context.Context, projectID, conversationID s
 // decodeConversationMeta reads the `meta` jsonb column.
 //
 // A document this repository cannot parse reads as "no settings", not as an
-// error: the column is written by this service and by pylon before it, and a
-// details request must still answer with the conversation's name and
+// error: the column is written by this service and by the legacy runtime before
+// it, and a details request must still answer with the conversation's name and
 // participants when one legacy row holds something unexpected.
 func decodeConversationMeta(raw []byte) map[string]any {
 	if len(raw) == 0 {
@@ -205,7 +205,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	// The auth_core__user join resolves a DISPLAY NAME for user participants.
 	// The REST attach path stores only `entity_meta.id` (the numeric user id
 	// the resolver's author join needs), and the participant writer records
-	// its own disclosed gap: "Legacy also resolves a user name ... this
+	// its own disclosed gap: "The legacy runtime also resolves a user name ... this
 	// repository does not perform that lookup" (participantDisplayMeta). The
 	// transcript's author captions read `meta.user_name` off THIS payload, so
 	// without the lookup every author renders as "User <n>".
@@ -1002,11 +1002,11 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 	//     flat one-row-per-message representation with an inline `content`
 	//     column. Its successor is the chat_message_group -> chat_message_items
 	//     -> chat_messages_text graph that migrations/tenant/0123 creates and
-	//     ListMessages reads. Pylon does not declare it either.
+	//     ListMessages reads. The legacy runtime does not declare it either.
 	//   * `chat_conversation_summaries` appeared exactly once in this
-	//     repository — in the statement below. It is not in pylon, not in any
-	//     migration, and not in the pg-catalog dump of the live legacy database
-	//     (testdata/postgres/legacy-centry-catalog.json).
+	//     repository — in the statement below. It is not in the legacy runtime,
+	//     not in any migration, and not in the pg-catalog dump of the live
+	//     legacy database (testdata/postgres/legacy-centry-catalog.json).
 	//
 	// Neither is recoverable, so both statements are gone rather than repaired.
 	// What replaces them is the item level of the real graph: chat_message_items
@@ -1129,7 +1129,7 @@ func deleteConversationPin(ctx context.Context, tx pgx.Tx, projectID string, con
 // IS NOT DISTINCT FROM, not `=`: a missing key reads as SQL NULL, and `=`
 // answers NULL for it, which the WHERE clause drops.
 //
-// THE COMPARISON IS TEXTUAL, and legacy's is numeric. legacy casts both sides
+// THE COMPARISON IS TEXTUAL, and the legacy runtime's is numeric. The legacy runtime casts both sides
 // to Integer (`make_query_filter_for_entity`, participant_utils.py:79-94).
 // This query compares the `->>` text on both sides. A caller that sends
 // `"id": "42"` and a caller that sends `"id": 42` therefore get two rows for
@@ -1156,8 +1156,8 @@ const participantIdentityQuery = `SELECT id FROM %s.chat_participants
 // participant this repository created contributed a NULL name there.
 //
 // The name comes from the request, which is what the web client sends
-// (features/chat-participants/lib/helpers.ts). Legacy also resolves an
-// `agent_type` for an application through an entity lookup. Legacy also
+// (features/chat-participants/lib/helpers.ts). The legacy runtime also resolves an
+// `agent_type` for an application through an entity lookup. The legacy runtime also
 // resolves a user name and avatar for a user through that lookup. This
 // repository does not perform that lookup.
 func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte {
@@ -1198,7 +1198,7 @@ func participantDisplayMeta(entityName string, entityMeta map[string]any) []byte
 // rows and two mapping rows in one conversation. A double click does that,
 // and so does a retry after a failed first attempt.
 //
-// The order is now find, then create, which is what legacy's `get_or_create_one`
+// The order is now find, then create, which is what the legacy runtime's `get_or_create_one`
 // does and what predict.go's findOrCreateUserParticipant already did.
 //
 // One transaction covers the lookup, the insert and the mapping. Two
@@ -1212,7 +1212,7 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 
 // AddParticipants preserves the current all-or-nothing batch boundary. It
 // returns the participant id of each body, in request order. An entity that
-// was already a participant returns its existing id; legacy's POST answers
+// was already a participant returns its existing id; the legacy runtime's POST answers
 // with those same rows (get_or_create_one), not the whole conversation.
 func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error) {
 	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
@@ -2212,9 +2212,10 @@ func (r *ConversationsRepo) DeleteMessages(ctx context.Context, projectID, conve
 	// chat_message_group -> chat_message_items -> chat_messages_text
 	// (migrations/tenant/0123_agent_chat_message_tables.sql), the same graph
 	// ListMessages reads. On a clean install the statement raised 42P01, so
-	// clearing a conversation answered 500; where pylon had created the legacy
-	// table it succeeded and cleared nothing the user could see. Deleting the
-	// group graph is what "clear this conversation's messages" means.
+	// clearing a conversation answered 500; where the legacy runtime had
+	// created the old table it succeeded and cleared nothing the user could
+	// see. Deleting the group graph is what "clear this conversation's
+	// messages" means.
 	//
 	// chat_messages_text and chat_messages_context cascade from
 	// chat_message_items, and chat_message_trace_step cascades from
@@ -2249,10 +2250,10 @@ func (r *ConversationsRepo) DeleteMessages(ctx context.Context, projectID, conve
 //	DELETE FROM %s.chat_messages WHERE group_uid = $1
 //
 // which could not work on ANY deployment. `chat_messages` does not exist on a
-// database this repository provisioned (42P01), and on a legacy pylon database,
+// database this repository provisioned (42P01), and on a legacy database,
 // where it does exist, it has no `group_uid` column (42703) — see the catalog
 // dump at testdata/postgres/legacy-centry-catalog.json. The identifier the
-// route carries is a chat_message_group UUID; pylon's own handler
+// route carries is a chat_message_group UUID; the legacy handler
 // (legacy/plugins/elitea_core/api/v2/message.py:80-83) resolves it that way.
 //
 // # Why the pair goes together
@@ -2260,15 +2261,16 @@ func (r *ConversationsRepo) DeleteMessages(ctx context.Context, projectID, conve
 // A turn is two groups: the user's question, and the reply that points back at
 // it through reply_to_id. Deleting only the reply leaves a question the model
 // will be re-sent on the next turn with no answer beneath it — a transcript
-// that reads as though the assistant ignored the user. Pylon deletes both
-// (message.py:129-146) and that is the behaviour the chat UI was built around.
+// that reads as though the assistant ignored the user. The legacy runtime
+// deletes both (message.py:129-146) and that is the behaviour the chat UI was
+// built around.
 //
 // The pair is followed in ONE direction only: from this group to the group it
 // replies to. Deleting a user question does NOT take its answer, because
 // reply_to_id points backwards and the answer is the later group — which the
 // last-only rule already refuses to skip past.
 //
-// # The three rules, ported from pylon
+// # The three rules, ported from the legacy runtime
 //
 // Restoring the delete without them would have been worse than leaving it
 // broken: an unconditional delete-by-uuid lets any member of a project with the
@@ -2281,8 +2283,8 @@ func (r *ConversationsRepo) DeleteMessages(ctx context.Context, projectID, conve
 //     'application' participant's entity_meta.id is an AGENT id, so comparing a
 //     user id against it would let user 42 delete the messages of agent 42.
 //     That is why the entity_name check is part of the predicate rather than an
-//     optimisation. Pylon authorises on the named group only, not on its pair,
-//     and so does this.
+//     optimisation. The legacy runtime authorises on the named group only, not
+//     on its pair, and so does this.
 //
 //  2. SUMMARIZED (message.py:108-112, and again at :135-139 for the pair). A
 //     group whose meta says context.included is false has been folded into a
@@ -2294,28 +2296,29 @@ func (r *ConversationsRepo) DeleteMessages(ctx context.Context, projectID, conve
 //     pairing exists to prevent.
 //
 //  3. LAST ONLY (message.py:114-122). Deleting from the middle of a transcript
-//     leaves the model with a conversation that never happened. Pylon ordered
-//     this check by created_at alone, which is nondeterministic here for the
-//     same reason ListMessages needs its id tiebreaker: created_at defaults to
-//     a transaction-scoped now(), so a turn's two groups share a timestamp to
-//     the microsecond and "the last message" was whichever row Postgres
-//     happened to return. This orders by (created_at, id) so the answer is
-//     stable, and so it agrees with the order ListMessages renders. The rule
-//     applies to the NAMED group; its pair is by construction the group before
-//     it, which is exactly what the rule would otherwise forbid.
+//     leaves the model with a conversation that never happened. The legacy
+//     runtime ordered this check by created_at alone, which is nondeterministic
+//     here for the same reason ListMessages needs its id tiebreaker: created_at
+//     defaults to a transaction-scoped now(), so a turn's two groups share a
+//     timestamp to the microsecond and "the last message" was whichever row
+//     Postgres happened to return. This orders by (created_at, id) so the
+//     answer is stable, and so it agrees with the order ListMessages renders.
+//     The rule applies to the NAMED group; its pair is by construction the
+//     group before it, which is exactly what the rule would otherwise forbid.
 //
-// STATUS CODES DIVERGE FROM PYLON DELIBERATELY. Pylon answered 400 for all
-// three (and for "not found"). Here they are 403, 400 and 400, with 404 for a
-// group that does not exist. Nothing switches on the status — the web client
-// renders the message body (useApplicationChatStreaming.hooks.ts:163-171) — and
-// a permission failure reported as "bad request" is the kind of thing that
-// sends the next reader looking for a malformed payload.
+// STATUS CODES DIVERGE FROM LEGACY DELIBERATELY. The legacy runtime answered
+// 400 for all three (and for "not found"). Here they are 403, 400 and 400, with
+// 404 for a group that does not exist. Nothing switches on the status — the web
+// client renders the message body
+// (useApplicationChatStreaming.hooks.ts:163-171) — and a permission failure
+// reported as "bad request" is the kind of thing that sends the next reader
+// looking for a malformed payload.
 //
-// PORTED SINCE: pylon's attachment cleanup (`delete_attachment`). This method
-// reports the refs (DeleteMessageResult.Attachments, collected below) and
-// Handler.DeleteMessage removes the bytes when the request carries the flag —
-// including the deliberate fix to pylon's ordering, which deletes the files
-// BEFORE its own guards run.
+// PORTED SINCE: the legacy attachment cleanup (`delete_attachment`). This
+// method reports the refs (DeleteMessageResult.Attachments, collected below)
+// and Handler.DeleteMessage removes the bytes when the request carries the flag
+// — including the deliberate fix to the legacy ordering, which deletes the
+// files BEFORE its own guards run.
 //
 // STILL NOT PORTED: the per-group socket event, which the returned UUIDs
 // replace for the one client that exists.
@@ -2407,7 +2410,7 @@ func (r *ConversationsRepo) DeleteMessage(ctx context.Context, projectID, groupU
 	// naming the stored files, and the handler could not clean them up even if
 	// asked. The bytes themselves are the handler's to remove, and only once
 	// this transaction has committed; see Handler.DeleteMessage for why that
-	// ordering deliberately differs from pylon's.
+	// ordering deliberately differs from the legacy one.
 	//
 	// Selected by `item_type` as well as by the join, because the discriminator
 	// and the payload table are two statements of the same fact and this is the
@@ -2454,11 +2457,11 @@ func (r *ConversationsRepo) DeleteMessage(ctx context.Context, projectID, groupU
 // ListMessages serves the transcript window the caller asked for.
 //
 // DEFECT #603: the window used to be computed from `page`/`page_size`, a pair
-// no caller sends — see conversations.MessagesQuery for the client and pylon
+// no caller sends — see conversations.MessagesQuery for the client and legacy
 // evidence — so `offset` never advanced and `sort_order` never applied. The
 // parameters now arrive resolved, as limit/offset/sort, which is the shape
-// pylon applied them in: `.order_by(sorting(sorting_by), sorting(id))
-// .limit(limit).offset(offset)` (messages.py:98-100).
+// the legacy runtime applied them in: `.order_by(sorting(sorting_by),
+// sorting(id)) .limit(limit).offset(offset)` (messages.py:98-100).
 func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, conversationID string, query conversations.MessagesQuery) (conversations.MessagesListResponse, error) {
 	s := schema(projectID)
 
@@ -2471,22 +2474,23 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 	// instead — what this method used to do — is what turned the #599 type
 	// error into apparent data loss: a broken query and an empty conversation
 	// became indistinguishable, so nobody saw a failure to investigate.
-	// The free-text filter, and why it is an EXISTS rather than pylon's JOIN.
+	// The free-text filter, and why it is an EXISTS rather than the legacy
+	// JOIN.
 	//
-	// Pylon wrote `query.join(TextMessageItem, ...).filter(content.ilike(...))`
-	// (messages.py:86-91). A group with two matching text items therefore
-	// appeared TWICE in its result and was counted twice by the `total` on the
-	// next line — the join multiplies the group by its matching items. EXISTS
-	// asks the same question ("does this group contain matching text?") and
-	// answers it once per group, so a group is one row and `total` is a count
-	// of groups, which is what the envelope's `total` claims to be everywhere
-	// else.
+	// The legacy runtime wrote `query.join(TextMessageItem,
+	// ...).filter(content.ilike(...))` (messages.py:86-91). A group with two
+	// matching text items therefore appeared TWICE in its result and was
+	// counted twice by the `total` on the next line — the join multiplies the
+	// group by its matching items. EXISTS asks the same question ("does this
+	// group contain matching text?") and answers it once per group, so a group
+	// is one row and `total` is a count of groups, which is what the envelope's
+	// `total` claims to be everywhere else.
 	//
 	// The term is escaped. `%` and `_` are ILIKE metacharacters, so an
 	// unescaped search for `50%` or `a_b` silently matches far more than the
-	// user typed; pylon interpolated the raw term and had exactly that
-	// behaviour. Nothing sends `query` today — the web client never sets it —
-	// so there is no client relying on the wildcard reading, and a literal
+	// user typed; the legacy runtime interpolated the raw term and had exactly
+	// that behaviour. Nothing sends `query` today — the web client never sets
+	// it — so there is no client relying on the wildcard reading, and a literal
 	// search is what a search box means. `\` is escaped first, or it would
 	// escape the escapes added after it.
 	filter, filterArgs := "", []any{}
@@ -2501,9 +2505,9 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 		filterArgs = append(filterArgs, "%"+pattern+"%")
 	}
 
-	// `total` counts the FILTERED set, as pylon's did — it is computed after the
-	// filter is applied (messages.py:93). A total that ignored the filter would
-	// make total_pages describe a different result set than items.
+	// `total` counts the FILTERED set, as the legacy one did — it is computed
+	// after the filter is applied (messages.py:93). A total that ignored the
+	// filter would make total_pages describe a different result set than items.
 	var total int
 	countFilter := ""
 	countArgs := []any{id}
@@ -2534,7 +2538,7 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 	// sort_by names a COLUMN, so it cannot be bound as a parameter — it is
 	// concatenated into the statement below. Only a value this map produces is
 	// ever interpolated, so an attacker-supplied sort_by reaches Postgres as
-	// `created_at` and nothing else. Pylon resolved it with
+	// `created_at` and nothing else. The legacy runtime resolved it with
 	// `getattr(ConversationMessageGroup, sort_by)` (messages.py:75), which
 	// accepted any attribute of the model and raised AttributeError -> 500 on
 	// anything else; in Python that was merely rude, in this form it would be
@@ -2552,9 +2556,9 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 		direction = "ASC"
 	}
 
-	// The `id` tiebreaker is pylon's, and it is load-bearing rather than
-	// decorative: created_at defaults to now(), which in Postgres is
-	// transaction-scoped, so every group written by one transaction — the
+	// The `id` tiebreaker is the legacy runtime's, and it is load-bearing
+	// rather than decorative: created_at defaults to now(), which in Postgres
+	// is transaction-scoped, so every group written by one transaction — the
 	// user-input/assistant-reply pair among them — shares a timestamp to the
 	// microsecond. Without it the two halves of a turn can come back in either
 	// order, and worse, a row can appear on two consecutive offset pages while
@@ -2594,7 +2598,7 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 
 	// The envelope keeps its {items,total,page,page_size,total_pages} shape:
 	// apps/elitea-web/e2e/streaming/chat.streaming.spec.ts:212 reads
-	// `body.items`, so switching to pylon's {rows,total} would trade this
+	// `body.items`, so switching to the legacy {rows,total} would trade this
 	// defect for a red e2e. A limit/offset caller never named a page, so both
 	// fields are DERIVED from the window actually served — page_size is the
 	// limit, and page is the 1-based index of the page containing the first row
@@ -3014,7 +3018,7 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 // attachmentItemDetails shapes one `attachment_message` item's payload for the
 // transcript (#606).
 //
-// KEYS. Pylon's own API returns exactly {filepath, attachment_type, content,
+// KEYS. The legacy API returns exactly {filepath, attachment_type, content,
 // id, item_type} — `filepath` being the computed property "/" + bucket + "/" +
 // name (elitea_core/models/pd/attachment.py:32-43,
 // models/message_items/attachment.py:29-32) — and never exposes `bucket` or
@@ -3034,10 +3038,11 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 // primary key), which is what PlaybackChatBox.tsx:286 keys on.
 //
 // CONTENT IS DECODED, AND NEVER NULL. The column is `json` holding a LIST of
-// content chunks in pylon, which the client walks looking for an `image_url`
-// entry (entities/attachment/model/selectors.ts:36-44). Handing it back as a
-// string would make that walk see one opaque scalar and every inline image
-// would stop rendering, so it is unmarshalled to `any` and re-encoded as JSON.
+// content chunks in the legacy runtime, which the client walks looking for an
+// `image_url` entry (entities/attachment/model/selectors.ts:36-44). Handing it
+// back as a string would make that walk see one opaque scalar and every inline
+// image would stop rendering, so it is unmarshalled to `any` and re-encoded as
+// JSON.
 //
 // An absent or unparseable content emits `[]`, not null and not an omission.
 // That is not cosmetic: the client's `findContentByType` tests

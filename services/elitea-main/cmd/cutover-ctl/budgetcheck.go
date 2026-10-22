@@ -16,9 +16,9 @@ import (
 // budget-check (spec §8.5 / §8.8, gate BFF.9e):
 //
 // The migration introduces a project budget enforcement layer (GovernanceStore)
-// that replaces the pylon platform's soft limits with hard int64 nano-USD counters
-// in NATS JetStream (design §8). Two properties MUST hold before the big-bang
-// cutover:
+// that replaces the previous platform's soft limits with hard int64 nano-USD
+// counters in NATS JetStream (design §8). Two properties MUST hold before the
+// big-bang cutover:
 //
 //  1. Hard block: a request to an over-budget project receives HTTP 402 with
 //     error.type=budget_exceeded and error.code=insufficient_quota. The LLM

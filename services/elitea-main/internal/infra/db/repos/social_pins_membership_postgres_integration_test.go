@@ -19,9 +19,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// seedPinAccessTables creates the pylon-owned auth tables the membership
-// predicate reads (auth_core__user only for its suspension flag). The migrated template does not carry them (pylon owns them
-// in a deployment), so a pin test that needs a member creates the minimum here.
+// seedPinAccessTables creates the legacy-owned auth tables the membership
+// predicate reads (auth_core__user only for its suspension flag). The migrated template does not carry them (the legacy
+// runtime owns them in a deployment), so a pin test that needs a member creates the minimum here.
 // They are created once per database; a second call is a no-op.
 func seedPinAccessTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
@@ -84,8 +84,9 @@ VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, projectID, user, role); err != nil 
 }
 
 // seedPinFixtures creates the second project row and the tenant tables the
-// migrated template lacks (pylon owns `applications` and `elitea_tools`), then
-// one row per backed entity type. It returns the id of the row each type pins.
+// migrated template lacks (the legacy runtime owns `applications` and
+// `elitea_tools`), then one row per backed entity type. It returns the id of
+// the row each type pins.
 func seedPinFixtures(t *testing.T, pool *pgxpool.Pool) map[string]int {
 	t.Helper()
 	ctx := context.Background()

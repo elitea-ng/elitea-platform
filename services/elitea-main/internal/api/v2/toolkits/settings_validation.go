@@ -217,7 +217,7 @@ func toolkitSettingsFieldErrors(violations []configurationapp.CurrentToolkitSett
 // context at all, an id outside int32, and a projectID that is not a positive
 // tenant-shaped integer. The (0,false) arm of OwningUserID needs an auth.User
 // that is a token AND has no UserID, and the one writer that could produce it
-// is the Pylon Redis RPC client (internal/infra/authsvc/rpc.go), which copies
+// is the legacy Redis RPC client (internal/infra/authsvc/rpc.go), which copies
 // user_id straight from the response without checking it — and which has no
 // non-test caller (the same latency internal/api/middleware/project.go's
 // project-by-name note records). A hybrid deployment that composes that client

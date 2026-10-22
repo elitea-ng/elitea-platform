@@ -58,7 +58,7 @@ WHERE received_at < $1
 // final chunk arrived (browser tab closed, connection lost) — the only
 // other path that deletes these rows is the completed-merge path
 // (DeleteAttachmentChunks above), which an abandoned upload never reaches.
-// Legacy's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
+// The legacy runtime's equivalent is utils/file_utils.py's cleanup_stale_chunks, a
 // 12-hour local-disk TTL swept by the elitea_core_cleanup_stale_chunks RPC.
 func (q *Queries) DeleteStaleAttachmentChunks(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStaleAttachmentChunks, receivedAt)
@@ -88,7 +88,7 @@ type ListAttachmentChunksOrderedRow struct {
 
 // Read by the merge step once CountAttachmentChunks reaches total_chunks —
 // ORDER BY chunk_index reconstructs the original byte stream regardless of
-// arrival order, matching legacy's merge_chunks reading 0..total_chunks-1.
+// arrival order, matching the legacy runtime's merge_chunks reading 0..total_chunks-1.
 func (q *Queries) ListAttachmentChunksOrdered(ctx context.Context, arg ListAttachmentChunksOrderedParams) ([]ListAttachmentChunksOrderedRow, error) {
 	rows, err := q.db.Query(ctx, listAttachmentChunksOrdered, arg.ProjectID, arg.ConversationID, arg.FileID)
 	if err != nil {
@@ -135,7 +135,7 @@ type UpsertAttachmentChunkParams struct {
 
 // ON CONFLICT DO UPDATE, not DO NOTHING: a retried chunk_index (client
 // timeout, network retry) must overwrite the previous bytes for that index,
-// matching legacy's own local-disk behavior (writing to the same filename
+// matching the legacy runtime's own local-disk behavior (writing to the same filename
 // twice replaces it) — never double-counted, since the primary key already
 // de-duplicates by chunk_index.
 func (q *Queries) UpsertAttachmentChunk(ctx context.Context, arg UpsertAttachmentChunkParams) error {

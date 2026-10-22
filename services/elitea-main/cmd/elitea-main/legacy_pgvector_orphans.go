@@ -7,9 +7,9 @@ package main
 // A project delete drops its own legacy database from the cleanup journal
 // (projectprovisioning/legacy_vector_database.go). This is for the ones no
 // journal will drop: projects deleted before that step came back (their rows
-// completed without it), deleted by pylon, or deleted before the journal
-// existed. It ships in the elitea-main image, so it runs where the service
-// runs (kubectl exec, or a one-off Job from the same image and Secret).
+// completed without it), deleted by the legacy runtime, or deleted before the
+// journal existed. It ships in the elitea-main image, so it runs where the
+// service runs (kubectl exec, or a one-off Job from the same image and Secret).
 //
 // Usage:
 //

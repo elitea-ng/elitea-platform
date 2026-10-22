@@ -660,10 +660,11 @@ func equalInts(a, b []int) bool {
 	return true
 }
 
-// pylon seeded developer-mode roles, `admin` among them, on every legacy
-// database. #6880 refuses the mode for create and rename. A DELETE must still
-// remove those leftovers, including the ones with a built-in name: no code
-// names a developer-mode role. Create and rename in that mode stay refused.
+// The legacy runtime seeded developer-mode roles, `admin` among them, on every
+// legacy database. #6880 refuses the mode for create and rename. A DELETE must
+// still remove those leftovers, including the ones with a built-in name: no
+// code names a developer-mode role. Create and rename in that mode stay
+// refused.
 func TestAdminRoleDeleteRemovesALeftoverDeveloperRole(t *testing.T) {
 	pool, writes, _ := newRoleWriteEnvironment(t)
 

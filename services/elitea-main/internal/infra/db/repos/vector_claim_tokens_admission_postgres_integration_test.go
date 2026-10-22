@@ -202,7 +202,7 @@ func TestPostgresAgentAdmissionIncludesSubAgentMemoryToolkits(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	// The tenant agent tables (pylon-owned, absent from the migrated
+	// The tenant agent tables (legacy-owned, absent from the migrated
 	// template) and one saved agent: application 31, version 41, which plays
 	// sub-agent B here.
 	seedCurrentAgentContinuationSchema(t, pool)

@@ -2,12 +2,13 @@ package output
 
 // #607: the ADMISSION side of the attachment write-back.
 //
-// Pylon extracts a document's text once, at message-persist time, and stores it
-// (rpc/chat_all.py:344-377 reads the files through the SDK artifact toolkit and
-// appends the text as a second `{"type":"text"}` chunk of the item's `content`,
-// with `flag_modified(item, "content")` at :376 because the column is `json`).
-// Every later turn is then pure DB -- utils/chat_history.py:67-73 extends the
-// stored chunks straight into the message and re-reads nothing.
+// The legacy runtime extracts a document's text once, at message-persist time,
+// and stores it (rpc/chat_all.py:344-377 reads the files through the SDK
+// artifact toolkit and appends the text as a second `{"type":"text"}` chunk of
+// the item's `content`, with `flag_modified(item, "content")` at :376 because
+// the column is `json`). Every later turn is then pure DB --
+// utils/chat_history.py:67-73 extends the stored chunks straight into the
+// message and re-reads nothing.
 //
 // In this port the two halves are in different services: only the worker can
 // reach the artifact toolkit, and only elitea-main can write
@@ -156,11 +157,11 @@ func validAttachmentItemID(value string) bool {
 //
 // The array is the column's contract: the chat-history projection expands
 // `chat_messages_attachment.content` with `jsonb_array_elements` and
-// `jsonb_typeof(...) = 'array'` (queries/agent_chat.sql), and pylon's own
+// `jsonb_typeof(...) = 'array'` (queries/agent_chat.sql), and the legacy
 // reader treats the value as a list of chunks (utils/chat_history.py:67-73). A
-// stored object -- the shape pylon's `'{}'::json` column default leaves behind
-// -- contributes nothing to a prompt, so writing one would be a silent erasure
-// of the scaffold that IS there.
+// stored object -- the shape the legacy `'{}'::json` column default leaves
+// behind -- contributes nothing to a prompt, so writing one would be a silent
+// erasure of the scaffold that IS there.
 //
 // The first element must be an object because that is the scaffold's header
 // chunk, the one carrying the `elitea_attachment` marker. The marker is not

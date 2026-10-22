@@ -363,7 +363,7 @@ func TestScheduledRunDoesNotCountTowardAdoption(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	// The membership table is pylon-owned and the ledgered template does not
+	// The membership table is legacy-owned and the ledgered template does not
 	// create it, so the test declares the columns projectAdoption reads.
 	_, err := pool.Exec(ctx, `
 CREATE TABLE IF NOT EXISTS public.auth_core__project_user_role (

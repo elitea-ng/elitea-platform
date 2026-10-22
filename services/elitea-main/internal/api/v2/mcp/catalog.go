@@ -2,13 +2,13 @@ package mcp
 
 // Per-project tool assembly — the half of issue 252 that serves REAL data.
 //
-// The external project listing has two row-backed sources, matching what pylon
-// `utils/mcp_service.py:__get_all_tools` reads:
+// The external project listing has two row-backed sources, matching what the
+// legacy runtime's `utils/mcp_service.py:__get_all_tools` reads:
 //
 //	AGENTS   — `applications` whose version carries the tag named `mcp`. One
-//	           tool per agent, taking a single `task` string. pylon resolves the
-//	           `mcp` tag id first and lists NOTHING when the project has no such
-//	           tag; that is preserved, because the tag is the opt-in.
+//	           tool per agent, taking a single `task` string. The legacy runtime
+//	           resolves the `mcp` tag id first and lists NOTHING when the project
+//	           has no such tag; that is preserved, because the tag is the opt-in.
 //	TOOLKITS — `elitea_tools` rows flagged `meta.mcp_options.available_by_mcp`.
 //	           One tool per entry of `settings.selected_tools`, named
 //	           `<toolkit>_<tool>`.
@@ -122,9 +122,9 @@ type toolSource interface {
 	tools(ctx context.Context, schema string, s scope) ([]Tool, error)
 }
 
-// agentTaskSchema is the input schema every agent tool carries — pylon's, field
-// for field. An agent takes free-form instruction text, so the schema is one
-// required string; there is no per-agent schema to read anywhere.
+// agentTaskSchema is the input schema every agent tool carries — the legacy
+// runtime's, field for field. An agent takes free-form instruction text, so the
+// schema is one required string; there is no per-agent schema to read anywhere.
 func agentTaskSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -138,10 +138,10 @@ func agentTaskSchema() map[string]any {
 	}
 }
 
-// invalidToolNameChars is pylon's `_build_agent_identifier`:
+// invalidToolNameChars is the legacy `_build_agent_identifier`:
 // `re.sub(r'[^A-Za-z0-9_\-]', "_", name)`. MCP tool names are matched literally
-// by clients, so the sanitisation has to agree with pylon's exactly or the same
-// agent gets a different tool name on the two stacks.
+// by clients, so the sanitisation has to agree with the legacy one exactly or
+// the same agent gets a different tool name on the two stacks.
 var invalidToolNameChars = regexp.MustCompile(`[^A-Za-z0-9_\-]`)
 
 func toolIdentifier(name string) string {
@@ -199,9 +199,9 @@ func (p postgresToolSource) tools(ctx context.Context, schema string, s scope) (
 		}
 		return p.toolkitTools(ctx, schema, access, nil)
 	default:
-		// pylon lists toolkits first, then agents. Order is not protocol-
-		// significant, but a stable one makes the listing diffable between the
-		// two stacks during parity checks.
+		// The legacy runtime lists toolkits first, then agents. Order is not
+		// protocol-significant, but a stable one makes the listing diffable between
+		// the two stacks during parity checks.
 		toolkitTools, err := p.toolkitTools(ctx, schema, access, nil)
 		if err != nil {
 			return nil, err
@@ -235,14 +235,14 @@ func (p postgresToolSource) externalAccess(ctx context.Context, schema string) (
 
 // agentTools lists the agents this project exposes over MCP.
 //
-// The join through `tags` on the literal name `mcp` is the opt-in. pylon
-// resolves the tag id separately and passes an empty filter list when the
-// project has no `mcp` tag, in which case `__get_all_tools` skips the agent
+// The join through `tags` on the literal name `mcp` is the opt-in. The legacy
+// runtime resolves the tag id separately and passes an empty filter list when
+// the project has no `mcp` tag, in which case `__get_all_tools` skips the agent
 // block entirely — the same outcome this join produces, without the round trip.
 //
 // DISTINCT ON the application: an agent with several tagged versions is one
-// tool, not one per version. pylon reaches the same place by listing
-// applications rather than versions.
+// tool, not one per version. The legacy runtime reaches the same place by
+// listing applications rather than versions.
 func (p postgresToolSource) agentTools(
 	ctx context.Context,
 	schema string,
@@ -310,13 +310,13 @@ func (p postgresToolSource) agentTools(
 // agentToolForVersion is the resource-scoped variant: one application version
 // id in, that application's single tool out.
 //
-// Unlike the listing above this does NOT require the `mcp` tag. That is pylon's
-// behaviour (`__get_application_tools` looks the version up and emits the tool
-// unconditionally) and it is coherent: the caller reached this endpoint by
-// naming one specific version, so the project-wide opt-in tag is not what is
-// selecting it. The tenant boundary still holds — the version is looked up in
-// this project's schema only, so a version id from another project is not
-// found.
+// Unlike the listing above this does NOT require the `mcp` tag. That is the
+// legacy runtime's behaviour (`__get_application_tools` looks the version up
+// and emits the tool unconditionally) and it is coherent: the caller reached
+// this endpoint by naming one specific version, so the project-wide opt-in tag
+// is not what is selecting it. The tenant boundary still holds — the version is
+// looked up in this project's schema only, so a version id from another project
+// is not found.
 func (p postgresToolSource) agentToolForVersion(
 	ctx context.Context,
 	schema string,
@@ -352,8 +352,8 @@ func (p postgresToolSource) agentToolForVersion(
 	if err != nil {
 		if isNoRows(err) {
 			// An id that names nothing in this project is an empty listing, not
-			// an error: it is exactly what pylon does (it logs and returns []),
-			// and it does not tell a caller probing ids whether the row exists
+			// an error: it is exactly what the legacy runtime does (it logs and returns
+			// []), and it does not tell a caller probing ids whether the row exists
 			// in some other tenant.
 			return nil, nil
 		}
@@ -375,9 +375,9 @@ func (p postgresToolSource) agentToolForVersion(
 // named toolkit when toolkitID is non-nil.
 //
 // `meta.mcp_options.available_by_mcp` is the opt-in, and it is applied in the
-// single-toolkit case too: pylon refuses to serve a toolkit that was not
-// flagged even when it is addressed directly, and dropping that check here
-// would make the resource-scoped URL a way around the flag.
+// single-toolkit case too: the legacy runtime refuses to serve a toolkit that
+// was not flagged even when it is addressed directly, and dropping that check
+// here would make the resource-scoped URL a way around the flag.
 //
 // The `#>>` text extraction rather than a boolean cast is deliberate: the key
 // is absent on most rows, and `(meta -> 'x' ->> 'y')::boolean` on a row where
@@ -497,7 +497,7 @@ func (p postgresToolSource) toolkitSchemas(toolkitType string) (map[string]map[s
 // unknownToolkitToolSchema is the fallback for an argument schema the pinned
 // catalogue genuinely cannot know.
 //
-// pylon fills this from `get_toolkit_schemas(...)[type].properties.selected_tools
+// The legacy runtime fills this from `get_toolkit_schemas(...)[type].properties.selected_tools
 // .args_schemas[tool]` — a registry the Python worker builds by importing the
 // SDK and calling `schema()` on every toolkit class. Main's composition root
 // injects the equivalent digest-pinned projection from
@@ -520,10 +520,10 @@ func unknownToolkitToolSchema() map[string]any {
 // selectedToolNames reads `settings.selected_tools`.
 //
 // Both encodings that occur in the wild are accepted: the list of plain names
-// pylon writes, and the list of objects the toolkit editor sends for types
-// whose tools carry per-tool settings. Anything else in the array is skipped
-// rather than failing the listing — one malformed entry must not remove a whole
-// toolkit from a client's tool list.
+// the legacy runtime writes, and the list of objects the toolkit editor sends
+// for types whose tools carry per-tool settings. Anything else in the array is
+// skipped rather than failing the listing — one malformed entry must not remove
+// a whole toolkit from a client's tool list.
 func selectedToolNames(raw []byte) []string {
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
@@ -555,10 +555,10 @@ func selectedToolNames(raw []byte) []string {
 //
 // The collision is real, not theoretical: `toolIdentifier` maps every character
 // outside `[A-Za-z0-9_-]` to `_`, so agents named "Release Notes" and
-// "Release/Notes" both become `Release_Notes`. pylon logs and skips the second
-// one for agents and API tools. Serving both would be worse than dropping one:
-// `tools/call` resolves by name, so a duplicate makes which tool actually runs
-// depend on iteration order.
+// "Release/Notes" both become `Release_Notes`. The legacy runtime logs and
+// skips the second one for agents and API tools. Serving both would be worse
+// than dropping one: `tools/call` resolves by name, so a duplicate makes which
+// tool actually runs depend on iteration order.
 func dedupeByName(tools []Tool) []Tool {
 	if len(tools) == 0 {
 		return nil

@@ -102,10 +102,10 @@ func TestMain(m *testing.M) {
 }
 
 // supportSeedSQL is the LEGACY-OWNED schema, the part the ledgered corpus does
-// not create because pylon created it first. It is the same arrangement every
-// other integration suite here uses: the seed provides what a real deployment
-// inherited, the corpus then runs on top of it, and the test proves the
-// corpus's tables and the inherited ones work together.
+// not create because the legacy runtime created it first. It is the same
+// arrangement every other integration suite here uses: the seed provides what a
+// real deployment inherited, the corpus then runs on top of it, and the test
+// proves the corpus's tables and the inherited ones work together.
 const supportSeedSQL = `
 CREATE SCHEMA centry;
 CREATE TABLE centry.project (

@@ -134,7 +134,7 @@ func TestCurrentIndexTypesRoutePreservesUnchangedUIContract(t *testing.T) {
 		)
 	}
 
-	// The Pylon half stays byte for byte what the pinned SDK fixture holds.
+	// The legacy half stays byte for byte what the pinned SDK fixture holds.
 	// The body also carries the published `items`/`total` envelope since #394,
 	// so the whole body is no longer the fixture; decode the three maps back
 	// out and compare those. TestCurrentIndexTypesRouteAnswersPublishedEnvelope

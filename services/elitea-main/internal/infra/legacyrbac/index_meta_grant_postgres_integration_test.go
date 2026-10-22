@@ -94,7 +94,7 @@ INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) V
 	}
 }
 
-// A project that carries its OWN per-project grants — every pylon-backed
+// A project that carries its OWN per-project grants — every legacy-backed
 // database and every legacy dump — suppresses the central fallback entirely, so
 // this migration cannot change what an existing deployment's members can do.
 // It is also why the E2E seed's project-1 list has to be fixed separately.

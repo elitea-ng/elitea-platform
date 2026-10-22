@@ -13,7 +13,7 @@ package analytics
 // table (services/elitea-scheduler/internal/budgetwriteback). It is the
 // platform's single accounting path, and issue 253 asked this endpoint to
 // surface what that path writes rather than to resurrect the LiteLLM-era
-// tables the pylon original read.
+// tables the legacy original read.
 //
 // It is also the same table /elitea_core/usage and /elitea_core/project_budget
 // report from (issue 246). One source, three views: a figure here can never
@@ -22,7 +22,7 @@ package analytics
 //
 // # What the reference served that this cannot, and why it is ABSENT
 //
-// The pylon handler aggregated `centry.audit_events` rows — one row per LLM
+// The legacy handler aggregated `centry.audit_events` rows — one row per LLM
 // call, each carrying llm_cost, input_tokens, output_tokens, model_name, the
 // caller and a trace_id it correlated back to an agent. So it could answer
 // by_model, by_agent, by_user, a daily trend, a call count and an average cost

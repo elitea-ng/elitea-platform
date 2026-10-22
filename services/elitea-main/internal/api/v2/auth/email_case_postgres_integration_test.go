@@ -45,7 +45,8 @@ func TestASAMLFirstLoginWithMixedCaseAdoptsTheSCIMProvisionedAccount(t *testing.
 }
 
 // The same rule on the OIDC path, against a row stored in MIXED case (as
-// pylon stored what the identity provider sent). The stored spelling is kept.
+// the legacy runtime stored what the identity provider sent). The stored
+// spelling is kept.
 func TestAnOIDCFirstLoginAdoptsAMixedCaseLegacyAccount(t *testing.T) {
 	pool := newProvisioningPool(t)
 	ctx := context.Background()

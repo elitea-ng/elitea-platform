@@ -342,7 +342,7 @@ func TestPATExpiryRunNowSaysSoWhenItHasNoProducer(t *testing.T) {
 // newPATExpiryCorpusPool builds a throwaway database holding what a deployed
 // installation holds: the bootstrap schema plus every ledgered shared
 // migration, applied by the runner elitea-migrate uses. No hand-written CREATE
-// TABLE — 0125's guarded foreign key onto the pylon-owned auth_core__token is
+// TABLE — 0125's guarded foreign key onto the legacy-owned auth_core__token is
 // one of the things under test, and a hand-made table would not have it.
 func newPATExpiryCorpusPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()

@@ -476,8 +476,8 @@ FROM elitea_storage.buckets WHERE project_id = $1`, quotaProjectID); err != nil 
 	if got := fmt.Sprint(entry("data_retention_limit")["quota"]); got != "30" {
 		t.Fatalf("data_retention_limit quota = %s, want 30", got)
 	}
-	// tasks_count is deliberately absent: its RPC has no provider in pylon
-	// either, and nothing in this platform counts tasks.
+	// tasks_count is deliberately absent: its RPC has no provider in the legacy
+	// runtime either, and nothing in this platform counts tasks.
 	if _, present := stats["tasks_count"]; present {
 		t.Fatal("tasks_count is reported; nothing in this platform counts tasks")
 	}

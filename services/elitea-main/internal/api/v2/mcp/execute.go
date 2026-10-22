@@ -33,7 +33,7 @@ package mcp
 //     shows up in the chat list, the message-trace machinery applies, cancel
 //     works, and the usual budget and governance attribution is unchanged.
 //     Under (a) the only trace is the runtime execution row.
-//  3. pylon's `do_predict` is the reference for (a), and it is not free of
+//  3. The legacy `do_predict` is the reference for (a), and it is not free of
 //     conversations either — it is reached from a socket that already has one.
 //     The reference's shape is not an argument for a transcript-less run here.
 //
@@ -90,11 +90,11 @@ import (
 
 // mcpConversationSource marks the conversations this file creates.
 //
-// It is a new `chat_conversations.source` value alongside pylon's `elitea` and
-// the support assistant's `support`. The column is a free VARCHAR(64) with no
-// enumeration to extend, and the listing endpoint filters on `source` only when
-// a caller asks for one, so an MCP run appears in the ordinary chat list — see
-// reason 2 above — while still being separable with `?source=mcp`.
+// It is a new `chat_conversations.source` value alongside the legacy `elitea`
+// and the support assistant's `support`. The column is a free VARCHAR(64) with
+// no enumeration to extend, and the listing endpoint filters on `source` only
+// when a caller asks for one, so an MCP run appears in the ordinary chat list —
+// see reason 2 above — while still being separable with `?source=mcp`.
 const mcpConversationSource = "mcp"
 
 // applicationEntityName is the `chat_participants.entity_name` an agent

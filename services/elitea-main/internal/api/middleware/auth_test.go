@@ -30,7 +30,7 @@ func (f principalValidatorFunc) ValidatePrincipal(ctx context.Context, user auth
 // The tests below carry it so AuthConfig describes a deployment WITH a
 // credential plane; none of them presents a credential the reader can
 // accept. It replaces
-// newTestClient, which returned the pylon Redis-RPC validator #383 deleted —
+// newTestClient, which returned the legacy Redis-RPC validator #383 deleted —
 // that client refused everything too, by failing to dial Redis, so no
 // assertion in this file changes.
 func unusedTokenValidator() middleware.TokenValidator {
@@ -126,7 +126,8 @@ func TestAuth_BasicAuthExtractsUsername(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	// Will fail with 401 since no real pylon_auth to validate — that's expected
+	// Will fail with 401 since no real legacy auth backend to validate — that's
+	// expected
 	if rec.Code != http.StatusUnauthorized {
 		t.Logf("got status %d (expected 401 without real auth backend)", rec.Code)
 	}

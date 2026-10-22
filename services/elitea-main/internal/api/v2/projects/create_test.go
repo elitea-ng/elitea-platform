@@ -189,8 +189,8 @@ func TestCreateProjectIsGated(t *testing.T) {
 }
 
 // TestCreateProjectAnswersOnlyTheAdministrationMode reproduces the reference's
-// route table: pylon registers create on AdminAPI alone, and ProjectAPI has no
-// `post`, so `POST /projects/project/default` is a 404 there.
+// route table: the legacy runtime registers create on AdminAPI alone, and
+// ProjectAPI has no `post`, so `POST /projects/project/default` is a 404 there.
 func TestCreateProjectAnswersOnlyTheAdministrationMode(t *testing.T) {
 	unreachable := unreachableProvisioner(t)
 	router := createRouter(t,

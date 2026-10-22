@@ -2,7 +2,7 @@ package repos
 
 // The admin Tasks page's read and its cancel.
 //
-// # What legacy's Tasks page was, and why this is not a copy of it
+// # What the legacy runtime's Tasks page was, and why this is not a copy of it
 //
 // legacy/plugins/admin's Tasks page (module.py:392-421, api/v2/tasks.py) lists
 // an in-process `arbiter.TaskNode`'s `global_task_state` — one-off maintenance
@@ -15,8 +15,8 @@ package repos
 // can answer, from its own tables. That is what this file serves. It keeps the
 // legacy row keys an operator's tooling reads (`task_id`, `status`,
 // `started_at`, `user`) and adds the two the legacy shape had no need for,
-// because pylon had exactly one kind of task and one project: `kind` and
-// `project_id`.
+// because the legacy runtime had exactly one kind of task and one project:
+// `kind` and `project_id`.
 //
 // # The three sources
 //

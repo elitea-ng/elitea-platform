@@ -31,8 +31,8 @@ import (
 // STATED RATHER THAN SKIPPED. The table is declared minimally
 // (`configuration_validation_postgres_integration_test.go`: id + llm_settings)
 // because the migration corpus does not create it at all — in a migrated
-// deployment it is pylon-owned — and each suite that needs more of it adds what
-// it needs (`seedCurrentAgentContinuationSchema` adds the full 001_initial
+// deployment it is legacy-owned — and each suite that needs more of it adds
+// what it needs (`seedCurrentAgentContinuationSchema` adds the full 001_initial
 // shape for the continuation cases). A `t.Skip` on the missing columns would
 // turn the three assertions below into silent no-ops, which is the failure mode
 // this repository keeps paying for.

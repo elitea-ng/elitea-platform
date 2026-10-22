@@ -107,14 +107,14 @@ CREATE TABLE chat_messages_context (
 -- Column-for-column identical to 0127, which in turn is MEASURED from the
 -- pg_catalog dump of the live legacy database
 -- (testdata/postgres/legacy-centry-catalog.json, schema p_1) rather than
--- transcribed from pylon's SQLAlchemy model. Two details that look like
+-- transcribed from the legacy SQLAlchemy model. Two details that look like
 -- oversights here are load-bearing and are copied deliberately:
 --
 --   * `content` is `json`, NOT `jsonb`. The deployed column is `json`, and in
---     a deployment where pylon and this service both touch the row, `jsonb`
---     would normalise whitespace, reorder keys and drop duplicates, so the
---     bytes read back would not be the bytes written. 0127 records the same
---     reasoning at length.
+--     a deployment where the legacy runtime and this service both touch the
+--     row, `jsonb` would normalise whitespace, reorder keys and drop
+--     duplicates, so the bytes read back would not be the bytes written. 0127
+--     records the same reasoning at length.
 --   * There is no index beyond the primary key, because the deployed table has
 --     none and the only access path is a join on `id` from chat_message_items.
 --

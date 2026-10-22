@@ -21,7 +21,7 @@ import (
 //
 // Every other test in this package seeds its database from
 // dbschema.AuthCoreBaselineSQLCProjection, which is sqlc compiler input and
-// carries pylon tables the Go install never creates (auth_core__group and
+// carries legacy tables the Go install never creates (auth_core__group and
 // auth_core__user_group among them). A database built only by elitea-migrate
 // (Bootstrap + ApplyShared, the Helm and standalone-full path) has no such
 // tables, so a provisioning step that writes one rolled back every first login
@@ -70,7 +70,7 @@ func TestPostgresIdentityProvisioningFreshInstallNewUser(t *testing.T) {
 
 // newFreshInstallIdentityDatabase creates a private empty database and runs
 // migrate.Bootstrap + ApplyShared on it, the same two calls cmd/elitea-migrate
-// makes on a first install. It proves the pylon-only group table is absent, so
+// makes on a first install. It proves the legacy-only group table is absent, so
 // the test keeps discriminating if the schema source ever changes.
 func newFreshInstallIdentityDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()

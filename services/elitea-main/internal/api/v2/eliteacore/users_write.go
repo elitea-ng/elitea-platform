@@ -10,7 +10,7 @@ package eliteacore
 // 404, because the client's `onSuccess` path fired, a success toast rendered
 // and the user only discovered the truth on the next reload.
 //
-// The wire contract implemented here is the pylon one the old SPA (and the new
+// The wire contract implemented here is the legacy one the old SPA (and the new
 // client, which was ported from it) actually speaks — legacy/plugins/admin/
 // api/v2/users.py:
 //
@@ -27,14 +27,14 @@ package eliteacore
 // blaming its field binding was corrected in the issue's comments.
 //
 // `administration` mode used to answer 501 here, on the reasoning that it
-// "addresses the GLOBAL (project-less) scope in pylon". That is true of the
-// admin panel's OTHER routes and false of this one: `/admin/users/{mode}/{projectID}`
-// carries the project id in its own path, and pylon's users.py declares BOTH
-// url_params (`<int:project_id>` and `<string:mode>/<int:project_id>`) with
-// `mode_handlers` mapping `default` and `administration` to the same body. So
-// there is no global scope to confuse it with, and the 501 was simply a hole:
-// the admin Projects page's member dialog is exactly this call, and it reached
-// a Not Implemented (unit A14, #200).
+// "addresses the GLOBAL (project-less) scope in the legacy runtime". That is
+// true of the admin panel's OTHER routes and false of this one:
+// `/admin/users/{mode}/{projectID}` carries the project id in its own path, and
+// the legacy users.py declares BOTH url_params (`<int:project_id>` and
+// `<string:mode>/<int:project_id>`) with `mode_handlers` mapping `default` and
+// `administration` to the same body. So there is no global scope to confuse it
+// with, and the 501 was simply a hole: the admin Projects page's member dialog
+// is exactly this call, and it reached a Not Implemented (unit A14, #200).
 //
 // It is accepted here; what differs between the modes is the GATE, not the
 // query. router.go registers the administration-mode verbs separately, on
@@ -64,7 +64,7 @@ const (
 	userWriteModeAdministration = "administration"
 )
 
-// inviteResult mirrors one element of the array pylon's POST returns
+// inviteResult mirrors one element of the array the legacy POST returns
 // (add_user_to_project_or_create's return value, projects/rpc/poc.go:139).
 // The client only branches on the HTTP status, but the per-email detail is
 // what makes a partial failure ("two invited, one already a member")
@@ -79,14 +79,14 @@ type inviteResult struct {
 	// relay refused, or when the row was an error.
 	InvitationDelivered bool `json:"invitation_delivered"`
 	// Outcome is the MACHINE-READABLE half of `msg`, and it is additive on
-	// purpose. pylon carried the four cases of a bulk invite — added, already a
-	// member, malformed address, write failed — only in free English prose
-	// ("user a@b.c already exists in project 3"), so the reference SPA could not
-	// tell them apart and showed one toast for the whole batch. A client that
+	// purpose. The legacy runtime carried the four cases of a bulk invite — added,
+	// already a member, malformed address, write failed — only in free English
+	// prose ("user a@b.c already exists in project 3"), so the reference SPA could
+	// not tell them apart and showed one toast for the whole batch. A client that
 	// wants to say "2 invited, 1 already a member, 1 invalid" per address must
 	// otherwise match on that prose, which changes with the wording.
 	//
-	// `status` keeps its two pylon values, so an old client reads this response
+	// `status` keeps its two legacy values, so an old client reads this response
 	// exactly as before. New clients branch on this field.
 	Outcome string `json:"outcome"`
 }
@@ -158,7 +158,7 @@ func (h *Handler) userWriteContext(w http.ResponseWriter, r *http.Request, mode 
 // resolveProjectRoleIDs maps the role NAMES the client sends onto
 // auth_core__project_role ids for this project. Names the project does not
 // define are returned separately so the caller can reject the whole request —
-// pylon's validate_role_assignment does the same, and silently dropping them
+// the legacy validate_role_assignment does the same, and silently dropping them
 // would produce the exact class of bug this file exists to remove (a 200 that
 // did less than it said).
 func (h *Handler) resolveProjectRoleIDs(
@@ -221,7 +221,7 @@ func validEmail(address string) bool {
 // UsersCreate implements POST /api/v2/admin/users/{mode}/{projectID} —
 // "invite users by email with these roles".
 //
-// Per pylon parity an address with no auth_core__user row is CREATED here
+// Per legacy parity an address with no auth_core__user row is CREATED here
 // rather than rejected: that is what makes an invite an invite. The row is
 // created by email only — no auth_core__user_provider link — because the OIDC
 // provisioning path already resolves an existing row by email and links the
@@ -405,8 +405,8 @@ func (h *Handler) inviteOne(
 // usersUpdateRequest accepts every id spelling that reaches this route.
 // `userId` is what the current client sends (entities/user/model/useEditUser.ts:30
 // for one user, and a COMMA-JOINED string of ids for a batch edit at :61);
-// `id`/`ids` are pylon's own spellings (admin/api/v2/users.py's put) and are
-// accepted so the old SPA and the API-testing suite keep working.
+// `id`/`ids` are the legacy runtime's own spellings (admin/api/v2/users.py's
+// put) and are accepted so the old SPA and the API-testing suite keep working.
 type usersUpdateRequest struct {
 	UserID json.RawMessage `json:"userId"`
 	Legacy json.RawMessage `json:"user_id"`
@@ -458,7 +458,7 @@ func (req usersUpdateRequest) userIDs() ([]int, error) {
 
 // UsersUpdate implements PUT /api/v2/admin/users/{mode}/{projectID} — "these
 // users now hold exactly these roles in this project". Replacement, not merge:
-// pylon's update_project_user_roles deletes the user's rows for the project
+// the legacy update_project_user_roles deletes the user's rows for the project
 // before inserting the new set, and the Edit-roles dialog is a checkbox list
 // whose unchecked boxes have to mean something.
 //
@@ -558,8 +558,8 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 
 // deleteUserIDs reads the `id[]` query key. The client sends ONE occurrence
 // with the ids comma-joined (`?id[]=3,4`, shared/api/generated/admin/admin.ts's
-// getUserDeleteUrl stringifies the array), while pylon's own `id[]` may repeat;
-// both are accepted.
+// getUserDeleteUrl stringifies the array), while the legacy runtime's own
+// `id[]` may repeat; both are accepted.
 func deleteUserIDs(r *http.Request) ([]int, error) {
 	query := r.URL.Query()
 	raw := append([]string{}, query["id[]"]...)
@@ -615,7 +615,7 @@ WHERE binding.token_id = token.id
   AND token.user_id = ANY($2)`
 
 // UsersDelete implements DELETE /api/v2/admin/users/{mode}/{projectID} —
-// remove the users from THIS project. Parity with pylon's
+// remove the users from THIS project. Parity with the legacy
 // remove_users_from_project: it clears the project role rows only. The
 // auth_core__user row survives, because the person may be a member of other
 // projects and "remove from project" is not "delete the account".

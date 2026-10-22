@@ -85,7 +85,7 @@ func TestCurrentIndexTypesRouteAnswersPublishedEnvelopeBesideLegacyKeys(
 		)
 	}
 
-	// 2. The Pylon half, unchanged: apps/elitea-ui reads exactly these three
+	// 2. The legacy half, unchanged: apps/elitea-ui reads exactly these three
 	// maps (src/slices/fileTypes.js:26-28).
 	var legacyMaps handler.CurrentIndexTypes
 	if err := json.Unmarshal(response.Body.Bytes(), &legacyMaps); err != nil {

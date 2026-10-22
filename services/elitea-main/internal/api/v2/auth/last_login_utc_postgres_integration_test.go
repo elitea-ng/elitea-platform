@@ -1,7 +1,7 @@
 package auth
 
 // auth_core__user.last_login is `timestamp` WITHOUT time zone holding the
-// UTC wall clock, like every pylon-era naive column. now() stored into it
+// UTC wall clock, like every legacy-era naive column. now() stored into it
 // goes through the SESSION time zone, so a first-login INSERT that wrote a
 // bare now() stored local time on a non-UTC session. The pool here runs in
 // the testpg zone (America/Toronto by default), so that bug is visible.

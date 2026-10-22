@@ -2785,7 +2785,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Redis RPC transport this change retires, so it could not have been
 	// mounted after the deletion either. The chat-dispatch migration it was a
 	// placeholder for is #93; the web client's own socket.io still points at
-	// pylon and is unaffected.
+	// the legacy runtime and is unaffected.
 	// NOT wrapped in otelhttp here: internal/api/router.go already installs
 	// apimw.OtelMiddleware (r.Use at router.go:396) as chi middleware, which
 	// creates a span per request via otel.Tracer("elitea-main") — the same

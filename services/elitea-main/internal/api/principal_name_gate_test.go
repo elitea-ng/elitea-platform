@@ -110,7 +110,7 @@ func TestPrincipalNameIsNotDerivedFromTokenName(t *testing.T) {
 // the /llm edge and not a display string.
 //
 // It is EMPTY, and that is the end state ADR-0018 describes. The one entry it
-// ever held was internal/infra/authsvc/rpc.go, the pylon Redis RPC validator
+// ever held was internal/infra/authsvc/rpc.go, the legacy Redis RPC validator
 // that populated auth.User.Name from an RPC response. #383 deleted that file
 // and RouterConfig.AuthClient with it, so no non-test file in this service
 // assigns a principal name any more. An addition here now needs the full

@@ -4,7 +4,7 @@ package secrets
 //
 //   - a typed (non-string) `secrets_header_value` lifts no suppression on any
 //     project route, and the backfill replaces it with a fresh random string;
-//   - Hide applies the default-secret policy (pylon hide.py: 400 "Default
+//   - Hide applies the default-secret policy (legacy hide.py: 400 "Default
 //     secrets API disabled");
 //   - a rename through Update keeps an unchanged typed value's JSON type.
 //

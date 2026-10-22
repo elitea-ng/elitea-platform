@@ -27,18 +27,18 @@ import (
 //
 // Current baseline evidence for the surviving behavior:
 //
-//   - projects/centry/pylon_main/plugins/runtime_interface_litellm/methods/
+//   - legacy/centry/<main runtime>/plugins/runtime_interface_litellm/methods/
 //     configuration_entities.py:36-203 at revision
 //     997ecd9c866d0ac048fffb01bbecd2197c3d7435 manages the six credential types
 //     and the llm, embedding, image_generation, tts, and asr model sections. It
 //     skips models whose ai_credentials value is empty.
-//   - projects/centry/pylon_main/plugins/runtime_interface_litellm/methods/
+//   - legacy/centry/<main runtime>/plugins/runtime_interface_litellm/methods/
 //     configuration_transformations.py:38-115 at the same revision performs the
 //     expansion and unsecreting that the resolution port preserves.
-//   - projects/centry/pylon_main/plugins/runtime_interface_litellm/methods/
+//   - legacy/centry/<main runtime>/plugins/runtime_interface_litellm/methods/
 //     tools.py:97-111 at the same revision applies allow_project_own_llms while
 //     always permitting the public project.
-//   - projects/centry/pylon_main/plugins/elitea_core/events/configuration.py:
+//   - legacy/centry/<main runtime>/plugins/elitea_core/events/configuration.py:
 //     73-109 and methods/configuration.py:43-87 at revision
 //     41321950099cd1c3a71a96cc5f9b8766ef5fc7cc repair renamed toolkit
 //     references and application defaults after an LLM configuration delete.
