@@ -136,6 +136,8 @@ pub use elitea_vector_index::ids::{model_slug, point_key};
 pub struct EntityVectors {
     client: VectorClient,
     bearer: Arc<Bearer>,
+    /// The most results one ranking asks elitea-vector for ([`MAX_RANKED`]).
+    depth: u32,
 }
 
 struct Bearer(String);
@@ -214,7 +216,18 @@ impl EntityVectors {
         Self {
             client,
             bearer: Arc::new(Bearer(bearer.into())),
+            depth: MAX_RANKED,
         }
+    }
+
+    /// The same access with a ranking depth below [`MAX_RANKED`] (clamped to
+    /// 1 to it): a graph with more entities at or above `min_score` than
+    /// that is ranked from its stored vectors. For the tests, which cannot
+    /// reach the real depth cheaply.
+    #[must_use]
+    pub fn with_ranking_depth(mut self, depth: u32) -> Self {
+        self.depth = depth.clamp(1, MAX_RANKED);
+        self
     }
 
     /// Upsert `entities` (those of non-zero norm, in the space's width) of
@@ -438,13 +451,13 @@ impl EntityVectors {
                     space,
                     vector: query,
                     filter: None,
-                    limit: MAX_RANKED,
+                    limit: self.depth,
                     score_threshold: Some(threshold),
                 },
             )
             .await
             .map_err(|error| vectors_failed("search", &error))?;
-        if points.len() >= MAX_RANKED as usize {
+        if points.len() >= self.depth as usize {
             // More may reach min_score than elitea-vector returns: the
             // caller ranks the graph itself.
             return Ok(None);
@@ -680,7 +693,7 @@ pub async fn rank(
             tracing::info!(
                 project_id = key.project_id,
                 application_id = key.application_id,
-                limit = MAX_RANKED,
+                limit = vectors.depth,
                 "more entities of the graph reach min_score than elitea-vector returns; ranking it from the stored vectors"
             );
             return Ok(Ok(rank_stored(pool, key, vector, min_score).await?));

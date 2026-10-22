@@ -653,6 +653,53 @@ async fn the_stored_ranking_matches_the_vector_ranking() {
     }
 }
 
+/// A ranking whose search comes back full (more entities reach `min_score`
+/// than elitea-vector returns) is answered from the stored vectors, whole:
+/// every entity, not the cut page. The depth is lowered so the test needs
+/// no 10000 points.
+#[tokio::test]
+async fn a_full_search_falls_back_to_the_stored_ranking() {
+    use elitea_inventory_core::store::GraphStore as _;
+    let Some(pool) = database("rank_fallback").await else {
+        return;
+    };
+    let key = key(1, 12);
+    let (fake, origin) = common::fake_vector(&[(BEARER, 1)]).await;
+    let vectors = common::entity_vectors(&origin, BEARER);
+    let mut graph = replay();
+    let ids: Vec<String> = graph.nodes().map(|(id, _)| id.to_owned()).collect();
+    for (index, id) in ids.iter().enumerate() {
+        let x = f64::from(u32::try_from(index % 7).expect("small"));
+        assert!(graph.set_embedding(id, &[1.0, x, 0.25, -0.5]));
+    }
+    graph
+        .metadata
+        .insert("embeddings_model".to_owned(), json!("text-embed-x"));
+    store::save_with(&pool, key, &graph, Some(&vectors))
+        .await
+        .expect("write");
+    let query = [0.5, 1.0, 0.0, 0.0];
+    let local = store::vectors::rank_stored(&pool, key, &query, 0.1)
+        .await
+        .expect("rank stored");
+    assert!(local.len() > 3, "the graph ranks more than the depth");
+    let searches = || {
+        fake.calls()
+            .iter()
+            .filter(|call| **call == "search")
+            .count()
+    };
+    let before = searches();
+    let ranked = store::PgGraphStore::new(pool.clone())
+        .with_vectors(Some(vectors.with_ranking_depth(3)))
+        .rank(key, &query, 0.1)
+        .await
+        .expect("rank")
+        .expect("same width");
+    assert_eq!(searches() - before, 1, "one search, then the fallback");
+    assert_eq!(ranked, local, "the whole stored ranking, not 3");
+}
+
 /// The view cache over the PostgreSQL store: no graph, no view; a view is
 /// reused while the revision stands and reloaded once it moves.
 #[tokio::test]
