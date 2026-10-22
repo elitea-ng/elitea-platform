@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.16"
+  x-elitea-client-contract: "1.17"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -4218,6 +4218,14 @@ components:
             error:
               type: string
               description: At most 4 KiB, only with `is_error`.
+            model_name:
+              type: string
+              maxLength: 256
+              description: >-
+                Client contract 1.17. The model the turn ran on: the agent's
+                own, or the chat model the person chose for the turn. Stored
+                as the answer's `meta.model_name`, as a cloud turn's answer
+                carries it; absent leaves it out.
         tool_calls:
           type: object
           description: >-

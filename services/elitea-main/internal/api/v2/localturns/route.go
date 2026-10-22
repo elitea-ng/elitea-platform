@@ -101,6 +101,8 @@ type commitBody struct {
 		Content string `json:"content"`
 		IsError bool   `json:"is_error"`
 		Error   string `json:"error"`
+		// ModelName is the model the turn ran on (#1228).
+		ModelName string `json:"model_name"`
 	} `json:"assistant_message"`
 	ToolCalls     json.RawMessage            `json:"tool_calls"`
 	ThinkingSteps []json.RawMessage          `json:"thinking_steps"`
@@ -220,6 +222,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		AssistantMessage: body.AssistantMessage.Content,
 		AssistantIsError: body.AssistantMessage.IsError,
 		AssistantError:   body.AssistantMessage.Error,
+		ModelName:        body.AssistantMessage.ModelName,
 		ToolCalls:        body.ToolCalls, ThinkingSteps: body.ThinkingSteps,
 		HITLExchanges: body.HITLExchanges, Report: report, AuditRoute: CommitPath,
 	})

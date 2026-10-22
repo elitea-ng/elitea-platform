@@ -7,13 +7,14 @@
  */
 import { lazy } from 'react';
 
-import { matchingCommands, workspaceCommands } from './model/composerCommands';
+import { matchingCommands, modelCommandName, workspaceCommands } from './model/composerCommands';
 import { invokedSkill, matchingSkills, skillToken } from './model/composerSkills';
 import { activeToken, mentionText, referencedPaths } from './model/composerTokens';
 import { readLastLocation, writeLastLocation } from './model/threads';
 import { latestPlan } from './model/turnReducer';
 import { ApprovalCard } from './ui/ApprovalCard';
 import { ApprovalDialog } from './ui/ApprovalDialog';
+import { ModelChip } from './ui/ModelChip';
 import { PlanCard } from './ui/PlanCard';
 
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
@@ -30,8 +31,8 @@ export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
 export type { WorkspaceCommandId } from './model/composerCommands';
 
-/** The composer's text rules ("@"/"/" tokens, referenced paths), its local "/" commands and the agent's skills in the "/" menu, as one bundle. */
-export const composer = { activeToken, mentionText, referencedPaths, matchingCommands, workspaceCommands, matchingSkills, skillToken, invokedSkill };
+/** The composer's text rules ("@"/"/" tokens, referenced paths), its local "/" commands, the agent's skills in the "/" menu and its model chip, as one bundle. */
+export const composer = { activeToken, mentionText, referencedPaths, matchingCommands, workspaceCommands, modelCommandName, matchingSkills, skillToken, invokedSkill, ModelChip };
 
 /** The folder and thread the person was last in (desktop home), read and written as one pair. */
 export const lastLocation = { read: readLastLocation, write: writeLastLocation };

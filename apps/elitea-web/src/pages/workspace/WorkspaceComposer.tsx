@@ -11,6 +11,8 @@
  *   them, in their own section, the selected agent's skills: picking one
  *   inserts `/<skill name>`, and a message that still starts with it is
  *   sent with that skill (`skills`), which the host applies to the turn.
+ *   `/model <name>` sent as the whole message sets the turn model instead
+ *   (`onModelCommand`); `/model` alone opens the model chip's menu.
  *
  * Both menus are driven from the keyboard without leaving the textarea:
  * ↑/↓ move, Enter or Tab pick, Esc closes until the token changes.
@@ -66,6 +68,8 @@ export interface WorkspaceComposerProps {
   runLocation?: ReactNode;
   /** The context meter (`ContextMeter`), after the run location. */
   contextMeter?: ReactNode;
+  /** The model chip (`ModelChip`), after the agent picker. */
+  modelPicker?: ReactNode;
   onPlanModeChange: (planMode: boolean) => void;
   /** The selected agent's skills, offered after the commands in the "/" menu. */
   skills: readonly ComposerSkill[];
@@ -73,6 +77,8 @@ export interface WorkspaceComposerProps {
   onSend: (prompt: string, mentions: string[], skills: string[]) => Promise<boolean>;
   onStop: () => void;
   onCommand: (command: WorkspaceCommandId) => void;
+  /** `/model <name>` was sent as the whole message: the page sets the model (nothing goes to the agent). */
+  onModelCommand?: ((name: string) => void) | undefined;
   /** The composer got focus: the page lets the host read ahead for the send (#1213). */
   onFocus?: () => void;
 }
@@ -108,12 +114,13 @@ interface FooterControlsProps {
   onPlanModeChange: (planMode: boolean) => void;
   showMode: boolean;
   agentPicker: ReactNode;
+  modelPicker: ReactNode;
   runLocation: ReactNode;
   contextMeter: ReactNode;
 }
 
-/** The footer's left side: Act | Plan, the agent·version picker, where the thread runs, the context meter. */
-function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
+/** The footer's left side: Act | Plan, the agent·version picker, the model, where the thread runs, the context meter. */
+function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, modelPicker, runLocation, contextMeter }: FooterControlsProps): React.JSX.Element {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
       {showMode && (
@@ -129,6 +136,7 @@ function FooterControls({ planMode, onPlanModeChange, showMode, agentPicker, run
         />
       )}
       {agentPicker}
+      {modelPicker}
       {runLocation}
       {contextMeter}
     </Box>
@@ -243,14 +251,23 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     }
   };
 
+  const clearInput = (): void => {
+    inputRef.current?.reset();
+    setPicked([]);
+    setToken(null);
+  };
+
   const send = (question: string): void => {
+    const named = props.onModelCommand === undefined ? null : composer.modelCommandName(question);
+    if (named !== null) {
+      props.onModelCommand?.(named);
+      clearInput();
+      return;
+    }
     const mentions = composer.referencedPaths(question, picked);
     const skill = composer.invokedSkill(question, skills);
     void onSend(question, mentions, skill === null ? [] : [skill.name]).then((sent) => {
-      if (!sent) return;
-      inputRef.current?.reset();
-      setPicked([]);
-      setToken(null);
+      if (sent) clearInput();
     });
   };
 
@@ -278,7 +295,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           modelSelector: null,
-          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
+          attachmentButton: <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} showMode={props.showMode !== false} agentPicker={props.agentPicker} modelPicker={props.modelPicker} runLocation={props.runLocation} contextMeter={props.contextMeter} />,
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <IconButton
               data-testid="workspace-send-button"

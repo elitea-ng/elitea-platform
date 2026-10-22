@@ -26,6 +26,25 @@ describe('TurnTranscript', () => {
     expect(text.querySelector('img')).toBeNull();
   });
 
+  it('folds a step\'s reasoning into a Thinking line with its length, and shows it as plain text on demand', async () => {
+    const items = [
+      { type: 'thinking' as const, key: 'r1', text: 'Check **the** tests', chars: 1234 },
+      { type: 'thinking' as const, key: 'r2', text: 'still going' },
+    ];
+    renderWithTheme(<TurnTranscript view={{ phase: 'running', items, approvals: [] }} busy onCancel={vi.fn()} />);
+    const [done, streaming] = screen.getAllByTestId('thinking-block');
+    expect(done).toHaveTextContent(`Thinking · ${new Intl.NumberFormat().format(1234)} characters`);
+    expect(streaming).toHaveTextContent('Thinking…');
+    expect(screen.queryByTestId('thinking-text')).toBeNull();
+    const toggle = screen.getByRole('button', { name: /characters/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const body = await screen.findByTestId('thinking-text');
+    expect(body.textContent).toBe('Check **the** tests');
+    expect(body.querySelector('strong')).toBeNull();
+  });
+
   it('says a turn was not saved and offers Retry, which sends that execution again', async () => {
     const onRetry = vi.fn(() => Promise.resolve());
     const view = {

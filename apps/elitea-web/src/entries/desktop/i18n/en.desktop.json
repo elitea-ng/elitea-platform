@@ -640,5 +640,20 @@
   "workspace.context.fallback": "The model’s window is unknown: 128K is assumed.",
   "workspace.context.label": "{{percent}}% of {{window}}",
   "workspace.context.summarizing": "Summarizing…",
-  "workspace.context.used": "{{used}} of {{window}} tokens of context in use"
+  "workspace.context.used": "{{used}} of {{window}} tokens of context in use",
+  "workspace.command.model": "Choose the model (/model <name> sets it)",
+  "workspace.model": "Model",
+  "workspace.model.agentDefault": "Agent’s model",
+  "workspace.model.choose": "Model: {{label}}",
+  "workspace.model.effort": "Reasoning effort",
+  "workspace.model.effort.high": "High",
+  "workspace.model.effort.low": "Low",
+  "workspace.model.effort.medium": "Medium",
+  "workspace.model.effort.none": "No reasoning",
+  "workspace.model.fixed": "This agent runs on its own model here: it pins its model, or this folder’s settings keep it.",
+  "workspace.model.loading": "The models are still loading. Try again in a moment.",
+  "workspace.model.none": "No other models in this project",
+  "workspace.model.unknown": "This project has no chat model named “{{name}}”.",
+  "workspace.thinking.done": "Thinking · {{chars}} characters",
+  "workspace.thinking.streaming": "Thinking…"
 }

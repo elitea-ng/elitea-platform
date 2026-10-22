@@ -48,7 +48,34 @@ const result = (seq: number, id: string): AgentEvent => ({
   payload: { call_id: id, ok: true, summary: 'ok', truncated: false },
 });
 
+const thinking = (seq: number, value: string): AgentEvent => ({ turn_id: T, seq, kind: 'thinking_delta', payload: { text: value } });
+const thought = (seq: number, chars: number): AgentEvent => ({ turn_id: T, seq, kind: 'thinking_end', payload: { chars } });
+
 describe('turnReducer', () => {
+  it('folds each step\'s reasoning into its own Thinking block, closed by thinking_end', () => {
+    const view = activeView(run([thinking(1, 'Look'), thinking(2, 'ing'), thought(3, 7), text(4, 'Answer'), thinking(5, 'Again'), call(6, 'c1')]));
+    expect(view.items.map((i) => i.type)).toEqual(['thinking', 'text', 'thinking', 'tool']);
+    expect(view.items[0]).toEqual({ type: 'thinking', key: 'r1', text: 'Looking', chars: 7 });
+    expect(view.items[2]).toEqual({ type: 'thinking', key: 'r5', text: 'Again' });
+  });
+
+  it('keeps thinking and text runs apart when it stores them, and re-folds them the same way', () => {
+    const live = activeView(run([thinking(1, 'a'), thinking(2, 'b'), text(3, 'c'), text(4, 'd')]));
+    // A late, lower seq re-folds from the stored (merged) runs.
+    const refolded = activeView(run([thinking(2, 'b'), text(3, 'c'), text(4, 'd'), thinking(1, 'a')]));
+    expect(refolded.items).toEqual(live.items);
+    expect(live.items).toEqual([
+      { type: 'thinking', key: 'r1', text: 'ab' },
+      { type: 'text', key: 't3', text: 'cd' },
+    ]);
+  });
+
+  it('keeps the model the running status names', () => {
+    const model = { name: 'gpt-5', reasoning_effort: 'high' as const, chosen: true, pinned: false };
+    const view = activeView(run([{ turn_id: T, seq: 1, kind: 'status', payload: { phase: 'running', model } }, status(2, 'done')]));
+    expect(view.model).toEqual(model);
+  });
+
   it('merges consecutive text deltas into one block and keeps tool rows between blocks', () => {
     const view = activeView(run([text(1, 'Hel'), text(2, 'lo'), call(3, 'c1'), text(4, 'bye')]));
     expect(view.items.map((i) => i.type)).toEqual(['text', 'tool', 'text']);

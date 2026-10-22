@@ -46,11 +46,11 @@ use elitea_agent_runtime::context_management::{
 use elitea_agent_runtime::context_status::{ContextPhase, ModelContextStatus};
 use elitea_agent_runtime::host::ModelRequest;
 use elitea_agent_runtime::request::ModelContextLimits;
-use reqwest::Method;
 use serde_json::{Map, Value};
 
 use super::api::PlatformApi;
 use super::cache::{LimitsKey, TurnCaches};
+use super::catalogue::{self, Catalogue, ReasoningReplay};
 use super::events::{ContextMeter, TurnEvents};
 use super::recorder::{Recorder, ToolCalls};
 use super::session::AGENT_AUTHOR;
@@ -73,84 +73,78 @@ pub const MAX_MODEL_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 /// author; this one names who wrote it).
 pub const MARKER_AUTHOR: &str = "elitea_context_compaction";
 
-/// The context limits of the turn's model (module docs). Never fails: a
+/// What a turn knows of its model from the catalogue: its context limits
+/// and whether its reasoning goes back to the provider (#1228).
+#[derive(Clone, Copy, Debug)]
+pub struct ModelFacts {
+    pub limits: ModelContextLimits,
+    pub replay: ReasoningReplay,
+}
+
+/// The facts of the turn's model (module docs), with at most one catalogue
+/// read: `in_hand` is the catalogue the turn already read (to check a chosen
+/// model), else the kept facts, else one read. Frozen limits read nothing:
+/// the family then comes from `in_hand` or the kept facts, else is
+/// [`ReasoningReplay::Never`] (no read for it alone). Never fails: a
 /// catalogue that cannot be read is the fallback, not a refused turn.
-pub async fn model_limits(
+pub async fn model_facts(
     api: &PlatformApi,
     caches: &TurnCaches,
     project_id: i64,
     model_name: &str,
     details: &Map<String, Value>,
-) -> ModelContextLimits {
-    if let Some(frozen) = details
-        .get("model_context_limits")
-        .and_then(|value| serde_json::from_value::<ModelContextLimits>(value.clone()).ok())
-        .filter(valid)
-    {
-        return frozen;
-    }
+    in_hand: Option<&Catalogue>,
+) -> ModelFacts {
     let key = api.credentials().identity().map(|identity| LimitsKey {
         identity,
         project_id,
         model_name: model_name.to_owned(),
     });
-    if let Some(cached) = key.as_ref().and_then(|key| caches.limits(key)) {
-        return cached;
+    let kept = key.as_ref().and_then(|key| caches.limits(key));
+    let from_hand = in_hand.map(|catalogue| facts_of(catalogue, model_name));
+    if let Some(frozen) = details
+        .get("model_context_limits")
+        .and_then(|value| serde_json::from_value::<ModelContextLimits>(value.clone()).ok())
+        .filter(valid)
+    {
+        let replay = from_hand.or(kept).map(|facts| facts.replay);
+        return ModelFacts {
+            limits: frozen,
+            replay: replay.unwrap_or_default(),
+        };
+    }
+    if let Some(facts) = from_hand.or(kept) {
+        if let (Some(key), None) = (key, kept) {
+            caches.keep_limits(key, facts);
+        }
+        return facts;
     }
     // A definitive answer is kept, whatever it said (a model it does not
     // describe stays on the fallback for the session); a transient one is
     // asked again next turn.
-    let Some(answer) = catalogue_limits(api, project_id, model_name).await else {
-        return FALLBACK_LIMITS;
+    let Some(catalogue) = catalogue::read(api, &caches.catalogues, project_id).await else {
+        return ModelFacts {
+            limits: FALLBACK_LIMITS,
+            replay: ReasoningReplay::Never,
+        };
     };
-    let limits = answer.unwrap_or(FALLBACK_LIMITS);
+    let facts = facts_of(&catalogue, model_name);
     if let Some(key) = key {
-        caches.keep_limits(key, limits);
+        caches.keep_limits(key, facts);
     }
-    limits
+    facts
 }
 
-/// `None` when the catalogue could not answer now ([`definitive`]);
-/// `Some(None)` when it does not describe the model.
-async fn catalogue_limits(
-    api: &PlatformApi,
-    project_id: i64,
-    model_name: &str,
-) -> Option<Option<ModelContextLimits>> {
-    let answer = api
-        .send(
-            Method::GET,
-            &format!("/api/v2/configurations/models/{project_id}?section=llm&include_shared=true"),
-            None,
-            &[],
-        )
-        .await
-        .ok()?;
-    if !(200..300).contains(&answer.status) {
-        log::info!(
-            "the model catalogue answered {}; the turn uses the default context window",
-            answer.status
-        );
-        return definitive(answer.status).then_some(None);
+/// `model_name`'s facts in `catalogue` (the project's own model wins over a
+/// shared one; one it does not describe: the fallback).
+fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
+    let model = catalogue.find(model_name);
+    ModelFacts {
+        limits: model
+            .and_then(|model| limits_of(&model.row))
+            .unwrap_or(FALLBACK_LIMITS),
+        replay: ReasoningReplay::of(model),
     }
-    let Some(items) = answer.body.get("items").and_then(Value::as_array) else {
-        return Some(None);
-    };
-    // The turn's project's own model first, then a shared one.
-    Some(
-        items
-            .iter()
-            .filter(|item| item.get("name").and_then(Value::as_str) == Some(model_name))
-            .min_by_key(|item| item.get("project_id").and_then(Value::as_i64) != Some(project_id))
-            .and_then(limits_of),
-    )
-}
-
-/// A catalogue status the session can keep: a 2xx, or a 404 (no catalogue
-/// for the project: it describes no model). Any other (401, 403, 408, 429,
-/// a 5xx) may answer differently on the next turn.
-fn definitive(status: u16) -> bool {
-    (200..300).contains(&status) || status == 404
 }
 
 /// A catalogue row's limits (`context_window`, `max_output_tokens`,
@@ -222,11 +216,13 @@ pub fn policy(details: &Map<String, Value>) -> Option<CompactionPolicy> {
 pub struct ProviderBudget {
     pub model: ModelRequest,
     pub budget: RequestContextBudget,
+    /// As the transport sends history (#1228).
+    pub replay: ReasoningReplay,
 }
 
 impl ModelRequestBudget for ProviderBudget {
     fn measure(&self, request: &LlmRequest) -> adk_core::Result<RequestContextUsage> {
-        let body = super::model::request_body(&self.model, request)?;
+        let body = super::model::request_body(&self.model, request, self.replay)?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| adk_core::AdkError::model("the model request could not be encoded"))?;
         self.budget
@@ -472,16 +468,6 @@ mod tests {
         assert!(output_only.context_window_fallback && !output_only.max_output_fallback);
         assert!(limits_of(&json!({"context_window": -1})).is_none());
         assert!(limits_of(&json!({"context_window": 1000, "max_output_tokens": 1000})).is_none());
-    }
-
-    #[test]
-    fn only_a_definitive_catalogue_answer_is_kept() {
-        for status in [200, 204, 404] {
-            assert!(definitive(status), "{status}");
-        }
-        for status in [401, 403, 408, 429, 500, 502, 503, 504] {
-            assert!(!definitive(status), "{status}");
-        }
     }
 
     #[test]

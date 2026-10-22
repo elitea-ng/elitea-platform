@@ -7,8 +7,12 @@
  * side serialises them) and are NOT renamed here: a rename layer is one more
  * place for the two halves to drift apart.
  */
+import type { ContextMeter } from './contextMeter';
 import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
+import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel, TurnModelChoice } from './turnModel';
+
+export type { ContextMeter } from './contextMeter';
 
 export interface Workspace {
   id: string;
@@ -32,20 +36,8 @@ export interface TurnStartRequest {
   skills: string[];
   /** `/compact`: the host compacts the conversation's context at the turn's first model call (IPC.md "Context window"). */
   compact?: boolean;
-}
-
-/** A model call's request occupancy, as the host measured it before sending (IPC.md "Context window"): estimates, never content. */
-export interface ContextMeter {
-  used_tokens: number;
-  /** The window the budget uses: the model's, at most 272k. */
-  window_tokens: number;
-  phase: 'measured' | 'compacting' | 'compacted';
-  /** The turn compacted the context. */
-  compacted: boolean;
-  /** When it last did (RFC 3339). */
-  compacted_at?: string;
-  /** The catalogue did not name the model's window: the host's 128k default. */
-  window_fallback: boolean;
+  /** Another chat model of the project for this turn and the thread's next ones (IPC.md "Model per turn"). */
+  model?: TurnModelChoice | undefined;
 }
 
 /** `agent_prewarm`: the agent version (and thread) the composer is about to send to. */
@@ -177,6 +169,8 @@ export type AgentEvent =
         phase: TurnPhase;
         message?: string;
         project_instructions?: string[];
+        /** On the first `running`: the model the turn runs on. */
+        model?: TurnModel;
         /** On `running` again: the run went on past its step limit, for the n-th time, from the host's own `host_prompt` (never the person's message). */
         continued?: number;
         host_prompt?: string;
@@ -187,10 +181,12 @@ export type AgentEvent =
       };
     })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
+  | (EventBase & { kind: 'thinking_delta'; payload: ThinkingDeltaPayload })
+  | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
   /** One model call's usage: `prompt_tokens` is what it sent (the context in use), `completion_tokens` what it produced; `context` the call's request occupancy (the composer's meter). Absent when the gateway reports no usage. */
-  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; context?: ContextMeter } })
+  | (EventBase & { kind: 'usage'; payload: { prompt_tokens: number; completion_tokens: number; total_tokens: number; reasoning_tokens?: number; context?: ContextMeter } })
   /** The request occupancy when its phase changes (`compacting` while a summary call runs, then `compacted`, then `measured`): the composer's meter between `usage` events. */
   | (EventBase & { kind: 'context'; payload: ContextMeter })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })

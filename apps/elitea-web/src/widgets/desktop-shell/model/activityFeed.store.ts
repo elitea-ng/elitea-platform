@@ -171,9 +171,11 @@ function ended(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {
   return { ...turn, phase, tool: null, approvals: [], finished: turn.commit === 'none' };
 }
 
-/** Streamed text and the composer's meter (`context`): nothing the feed shows. */
-function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text_delta' | 'context' }> {
-  return event.kind === 'text_delta' || event.kind === 'context';
+const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<AgentEvent['kind']>(['text_delta', 'thinking_delta', 'thinking_end', 'context']);
+
+/** Streamed text and reasoning, and the composer's meter (`context`): nothing the feed shows. */
+function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: 'text_delta' | 'thinking_delta' | 'thinking_end' | 'context' }> {
+  return QUIET_KINDS.has(event.kind);
 }
 
 function withPhase(turn: TrackedTurn, phase: TurnPhase): TrackedTurn {

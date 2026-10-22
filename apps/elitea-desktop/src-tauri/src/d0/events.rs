@@ -349,9 +349,10 @@ impl TurnEvents {
     }
 
     /// `status` `running`, naming the AGENTS.md files the turn applies
-    /// (`project_instructions`, only when there are some).
-    pub fn running(&self, project_instructions: &[String]) {
-        let mut payload = json!({ "phase": Phase::Running.as_str() });
+    /// (`project_instructions`, only when there are some) and the model it
+    /// runs on (`model`: `{name, reasoning_effort?, chosen, pinned}`, #1228).
+    pub fn running(&self, project_instructions: &[String], model: &Value) {
+        let mut payload = json!({ "phase": Phase::Running.as_str(), "model": model });
         if !project_instructions.is_empty() {
             payload["project_instructions"] = json!(project_instructions);
         }
@@ -382,17 +383,42 @@ impl TurnEvents {
         }
     }
 
+    /// The model's reasoning as it streams (#1228), next to `text_delta`:
+    /// shown folded as "Thinking", never logged.
+    pub fn thinking_delta(&self, text: &str) {
+        if !text.is_empty() {
+            self.send("thinking_delta", json!({ "text": text }));
+        }
+    }
+
+    /// A reasoning block closed (the model moved on to its answer or its
+    /// tool calls, or its stream ended): `chars` is the block's length.
+    pub fn thinking_end(&self, chars: usize) {
+        self.send("thinking_end", json!({ "chars": chars }));
+    }
+
     /// One model call's token usage, as the gateway reported it (`prompt_tokens`
     /// is what that call sent: the context in use; `completion_tokens` what it
     /// produced). Sent once the call's stream has ended, only when the gateway
     /// reported usage. `context` is the call's request occupancy when the
     /// step compaction measured it (#1217): the composer's context meter.
-    pub fn usage(&self, prompt_tokens: u32, completion_tokens: u32, total_tokens: u32) {
+    /// `reasoning_tokens` (of `completion_tokens`) when the gateway names
+    /// them (`completion_tokens_details.reasoning_tokens`).
+    pub fn usage(
+        &self,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+        reasoning_tokens: Option<u32>,
+    ) {
         let mut payload = json!({
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
         });
+        if let Some(reasoning) = reasoning_tokens {
+            payload["reasoning_tokens"] = json!(reasoning);
+        }
         if let Some(context) = self.context_payload() {
             payload["context"] = context;
         }
@@ -457,7 +483,7 @@ mod tests {
         events.context(meter("compacted", 1_500));
         events.context(meter("compacted", 1_600));
         events.context(meter("measured", 1_700));
-        events.usage(1, 1, 2);
+        events.usage(1, 1, 2, None);
         let all = emitter.all();
         let sent: Vec<(&str, &str)> = all
             .iter()
@@ -494,7 +520,7 @@ mod tests {
         events.timed(Timed::Participant, Duration::from_millis(80));
         events.status(Phase::Starting, None);
         events.status(Phase::Starting, Some("again"));
-        events.running(&[]);
+        events.running(&[], &Value::Null);
         // Two overlapping tool calls, then a later one: their union.
         events.tool_began();
         events.tool_began();
