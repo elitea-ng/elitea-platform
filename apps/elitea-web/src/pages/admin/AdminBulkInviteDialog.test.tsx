@@ -11,9 +11,9 @@
  *     route answers 200 for a partial batch on purpose, so a dialog that
  *     branched on the promise resolving would tell an operator that forty
  *     refusals were forty invitations.
- *  3. The per-pair outcomes are rendered apart. pylon returned one log blob, so
- *     "added" and "was already a member" and "no such role here" were
- *     indistinguishable without reading every line.
+ *  3. The per-pair outcomes are rendered apart. The legacy runtime returned one
+ *     log blob, so "added" and "was already a member" and "no such role here"
+ *     were indistinguishable without reading every line.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configure, screen, waitFor, within } from '@testing-library/react';
@@ -170,7 +170,7 @@ describe('Admin › Users › Bulk invite', () => {
     expect(summary).toHaveTextContent('1 added, 0 already members, 1 refused of 2 pairs.');
     expect(summary.className).toContain('MuiAlert-colorWarning');
 
-    // Each pair keeps its own outcome, which pylon's log blob could not do.
+    // Each pair keeps its own outcome, which the legacy log blob could not do.
     const results = within(screen.getByTestId('bulk-invite-results'));
     expect(results.getByText('Added')).toBeInTheDocument();
     expect(results.getByText('Role not defined here')).toBeInTheDocument();

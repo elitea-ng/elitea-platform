@@ -57,7 +57,7 @@ function isArtifactListWire(value: unknown): value is ArtifactListWire {
 /**
  * One call, not two: `GET /api/v2/artifacts/buckets/{projectID}` already
  * carries `is_pinned` and `created_at` (handler.go:27-37). The second fetch
- * that used to merge in "bucket metadata" targeted the legacy Pylon route
+ * that used to merge in "bucket metadata" targeted the legacy runtime's route
  * `/artifacts/buckets/default/{projectId}`, whose literal `default` was
  * consumed as elitea-main's `{projectID}` segment and answered 403 (#138).
  */
@@ -84,7 +84,7 @@ export async function fetchArtifacts(
 
 /**
  * MIGRATION NOTE (Phase 1c) — this module was written against the LEGACY
- * Pylon artifacts plugin (`legacy/plugins/artifacts`, routes
+ * runtime's artifacts plugin (`legacy/plugins/artifacts`, routes
  * `/artifacts/buckets/default/{project}`, `/artifacts/artifact(s)/...`).
  * elitea-main serves a different, newer API (S11): `/api/v2/artifacts/
  * {buckets,objects,grants}`. The legacy operation names survived here only

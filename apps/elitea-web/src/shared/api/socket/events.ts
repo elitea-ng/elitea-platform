@@ -9,7 +9,7 @@
  * rendering library are retired. Edit this file directly; the tests in
  * events.test.ts are what hold it to its shape.
  *
- * Evidence for every entry is the CLIENT side — the pylon-era app's own
+ * Evidence for every entry is the CLIENT side — the legacy app's own
  * catalogue and call sites (apps/elitea-ui/src/common/constants.js
  * sioEvents, and the hooks that emit/listen). The Go service registers no
  * socket.io handler and mounts no socket.io path, so nothing here is a
@@ -59,7 +59,7 @@ const streamEnvelopeSchema = z.looseObject({
  * builds this from a free-form `eventPayload` object
  * ([fsd]/features/chat/ui/chat-box/ChatBox.jsx:929) merged with a
  * `conversation_uuid`. Both `conversation_uuid` and `conversation_id` are
- * accepted: the deleted Go prototype read the second name, and the pylon
+ * accepted: the deleted Go prototype read the second name, and the legacy
  * server the shipped client talks to is not held to either by this file.
  */
 const predictEmitSchema = z.looseObject({

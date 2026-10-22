@@ -16,7 +16,7 @@
  *   download     GET  /api/v2/artifacts/objects/{projectID}/{bucket}/{key...}
  *   upload       POST /api/v2/artifacts/objects/{projectID}/{bucket}
  *
- * This module previously targeted the LEGACY Pylon plugin's URLs
+ * This module previously targeted the LEGACY runtime plugin's URLs
  * (`/artifacts/s3/...` at root level, `/artifacts/artifact/default/...`),
  * citing a router.go:165-169 mount that no longer exists. Those routes 404
  * on elitea-main, which is why no bucket, file table, preview, download or

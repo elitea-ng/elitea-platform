@@ -103,8 +103,8 @@
  * (internal/infra/extract: PDF, DOCX, PPTX, XLSX), and `chat.attachment-pdf.spec.ts`
  * holds the PDF journey. A file with no text the platform can read is answered
  * 422 with a reason, and the worker adds a note that says the file could not
- * be read and why, rather than failing the turn — pylon's own rule for a file
- * the platform cannot read (`rpc/chat_all.py:384-386`). That path is
+ * be read and why, rather than failing the turn — the legacy runtime's rule for
+ * a file the platform cannot read (`rpc/chat_all.py:384-386`). That path is
  * unit-tested rather than staged here; this spec keeps the .txt shape.
  *
  * That read is NOT the `attachments` INTERNAL TOOL — that toggle is on the
@@ -363,10 +363,10 @@ test('an attachment rides a real turn: the composer sends it, the platform store
     expect(details['filepath'], 'the item must address the same object the upload stored').toBe(
       composerFilepath,
     );
-    // `attachment_type` is pylon's three-value column, not a MIME type. A .txt
-    // is `document` — not `text` — because this path extracts nothing at
-    // admission, which is the value pylon gives it pre-extraction too
-    // (`AttachmentKind`'s own note).
+    // `attachment_type` is the legacy three-value column, not a MIME type. A
+    // .txt is `document` — not `text` — because this path extracts nothing at
+    // admission, which is the value the legacy runtime gives it pre-extraction
+    // too (`AttachmentKind`'s own note).
     expect(details['attachment_type'], 'a .txt is classified document, not image and not text').toBe('document');
 
     // The content SCAFFOLD, decoded — the very chunks that become

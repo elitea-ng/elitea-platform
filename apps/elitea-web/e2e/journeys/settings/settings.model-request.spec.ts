@@ -23,7 +23,7 @@
  *  3. The row EXISTS afterwards. The read-back is the caller's own
  *     `GET /admin/moderation_status/default/{p}/{entity}`, which is scoped to
  *     the requester in SQL — the same call the App Catalogue's "Request Access"
- *     card reads, and the one whose pylon predecessor answered
+ *     card reads, and the one whose legacy predecessor answered
  *     `{"status":"approved"}` to every caller for every entity. A POST that
  *     answered 201 and wrote nothing passes the unit test and fails this.
  *

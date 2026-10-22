@@ -34,7 +34,7 @@ import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
 
-/** Matches the server's `validSecretName` and pylon's `{{secret.…}}` pattern. */
+/** Matches the server's `validSecretName` and the legacy `{{secret.…}}` pattern. */
 const SECRET_NAME_PATTERN = /^[A-Za-z0-9_]+$/;
 
 export interface AdminSecretDialogProps {

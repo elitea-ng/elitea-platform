@@ -31,9 +31,9 @@
  *
  * The wire contract mirrors the Go handler in
  * `services/elitea-main/internal/api/v2/eliteacore/service_descriptors.go`, which
- * keeps pylon's path and mode (`legacy/plugins/elitea_core/api/v2/admin.py`) so
- * the existing admin_ui client reaches the same endpoint unchanged — and now gets
- * the same honest 501 rather than three invented rows.
+ * keeps the legacy path and mode (`legacy/plugins/elitea_core/api/v2/admin.py`)
+ * so the existing admin_ui client reaches the same endpoint unchanged — and now
+ * gets the same honest 501 rather than three invented rows.
  *
  * ## What is reused
  *
@@ -57,23 +57,23 @@ import { unwrapBody } from '@/shared/api/unwrap';
 import { configFailureReason, configFailureStatus } from './adminConfigurationApi';
 
 /**
- * Only `administration` reads this, server-side and in pylon before it —
- * `api_tools.APIBase` registers `mode_handlers = {'administration': AdminAPI}`
- * and no other mode. It is a static path segment on both sides rather than a
- * parameter, so there is no mode a caller could substitute.
+ * Only `administration` reads this, server-side and in the legacy runtime
+ * before it — `api_tools.APIBase` registers `mode_handlers = {'administration':
+ * AdminAPI}` and no other mode. It is a static path segment on both sides
+ * rather than a parameter, so there is no mode a caller could substitute.
  */
 const ADMIN_MODE = 'administration';
 
 const DESCRIPTORS_URL = `/elitea_core/admin/${ADMIN_MODE}`;
 
 /**
- * One row of pylon's `GET /elitea_core/admin/administration`.
+ * One row of the legacy `GET /elitea_core/admin/administration`.
  *
  * `healthy` IS THREE-STATE, and the `| null` is the whole point of it.
  *
- * pylon had two in-process dicts and a descriptor landed in one of them at
- * plugin load, so "nobody has probed this" and "this is down" were the same
- * value — a provider nobody had asked about read as unhealthy. The Go
+ * The legacy runtime had two in-process dicts and a descriptor landed in one of
+ * them at plugin load, so "nobody has probed this" and "this is down" were the
+ * same value — a provider nobody had asked about read as unhealthy. The Go
  * admission plane stores health as a separate PROJECTION with a timestamp
  * (`provider_health_projection`) and answers `null` when no projection is
  * younger than its freshness window.
@@ -117,7 +117,7 @@ export interface AdminServiceDescriptor {
  */
 type AdmissionPosture = 'record' | 'enforce';
 
-/** The listing body pylon returns. `rows` is what the reference client reads. */
+/** The legacy listing body. `rows` is what the reference client reads. */
 interface AdminServiceDescriptorList {
   readonly rows?: readonly AdminServiceDescriptor[];
   readonly total?: number;

@@ -15,7 +15,7 @@
  *
  * The wire contract mirrors the Go handlers in
  * `services/elitea-main/internal/api/v2/admin/projects.go` and
- * `internal/api/v2/eliteacore/users_write.go`, which in turn mirror the pylon
+ * `internal/api/v2/eliteacore/users_write.go`, which in turn mirror the legacy
  * originals (`legacy/plugins/admin/api/v2/projects.py`, `project_suspend.py`,
  * `users.py`) the existing admin_ui client already speaks to — same paths, same
  * query parameters, same body keys.
@@ -40,7 +40,7 @@ import {
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
-/** Only `administration` has a handler, server-side and in pylon before it. */
+/** Only `administration` has a handler, server-side as in the legacy API. */
 export const ADMIN_MODE = 'administration';
 
 /** The page's two tabs. The server filters on the same two words. */
@@ -49,9 +49,9 @@ export type ProjectType = 'team' | 'personal';
 /**
  * The four statuses `projects.py` derives from `suspended` / `create_success`.
  *
- * pylon has a fifth, `pending`, for `create_success IS NULL`. That column is
- * NOT NULL in this schema, so the server never emits it; the type keeps it out
- * rather than carrying a value nothing can produce.
+ * The legacy runtime has a fifth, `pending`, for `create_success IS NULL`. That
+ * column is NOT NULL in this schema, so the server never emits it; the type
+ * keeps it out rather than carrying a value nothing can produce.
  */
 export type ProjectStatus = 'active' | 'suspended' | 'failed';
 
@@ -64,7 +64,7 @@ export type ProjectStatus = 'active' | 'suspended' | 'failed';
  * read a `status` column that has never existed, so its chip could only ever
  * render one value and its suspend toggle only ever computed one direction.
  *
- * `project_name` and `admin_name` are pylon-era aliases the server still emits
+ * `project_name` and `admin_name` are legacy-era aliases the server still emits
  * for the old SPA; this client reads `name` and `owner_name` and does not
  * declare them.
  */
@@ -79,7 +79,7 @@ export interface AdminProjectRow {
   readonly status: ProjectStatus;
   readonly suspended: boolean;
   readonly create_success: boolean;
-  /** True when the name matches pylon's `project_user_%` personal-project rule. */
+  /** True when the name matches the legacy `project_user_%` personal-project rule. */
   readonly is_personal: boolean;
   /**
    * Bytes the project's cloud copies of desktop Local work threads use (the

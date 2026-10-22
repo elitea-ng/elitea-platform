@@ -42,10 +42,11 @@ believed without checking the checker:
 2. every `^  /artifacts…:` path key in `api/openapi/v2.yaml` — no match;
 3. a plain grep for `artifact/default` and `artifacts/default` across the Go
    service — no match;
-4. `deploy/traefik/dynamic.yml`: on the standalone stack, `PathPrefix('/api/')`
-   goes to elitea-main and nowhere else;
-5. `deploy/docker-compose.yml` carries no pylon main runtime — only
-   `pylon-indexer`, the index-plane shim;
+4. the standalone stack's edge (then `deploy/traefik/dynamic.yml`; since
+   #1366 elitea-main is the edge itself): `/api/` goes to elitea-main and
+   nowhere else;
+5. `deploy/docker-compose.yml` carries no legacy main runtime (at the time,
+   only the legacy indexer shim, which #339 later deleted);
 6. the vendored UI's calls are same-origin by construction: `deepwikiui` injects
    `base_url: ""` and sets `connect-src 'self'`, so they reach elitea-main.
 
@@ -53,14 +54,14 @@ believed without checking the checker:
 
 The retired `deploy/centry-hybrid/traefik/index-routes.yml` routed only
 `^/api/v2/artifacts/buckets/[1-9][0-9]*$` and `^/artifacts/s3/…` to the Go
-service. Everything else under `/api/v2/` falls through to pylon — which is
-where this path family is implemented.
+service. Everything else under `/api/v2/` falls through to the legacy runtime —
+which is where this path family is implemented.
 
 So:
 
 | stack | vendored UI's artifact calls |
 | --- | --- |
-| hybrid (pylon present) | served by pylon |
+| hybrid (legacy runtime present) | served by the legacy runtime |
 | standalone / the Go target platform | **404** |
 
 That is a shipped defect, not a finding about the port: the DeepWiki UI landed

@@ -80,18 +80,18 @@ export interface AdminNavGroup {
  *
  * ## Every item names a permission THIS platform issues, as well
  *
- * The reference gates four items on pylon SECTION names — `projects`,
+ * The reference gates four items on legacy SECTION names — `projects`,
  * `projects.projects`, `configuration`, `configuration.roles` — and one on
- * `configuration.service_descriptors`. Pylon registers those names, so they stay
- * here for a pylon-backed deployment. This platform's own administration mode
- * registers none of them: `001_initial.sql` and `migrations/shared/*` seed
- * fully-qualified names only.
+ * `configuration.service_descriptors`. The legacy runtime registers those names,
+ * so they stay here for a legacy-runtime deployment. This platform's own
+ * administration mode registers none of them: `001_initial.sql` and
+ * `migrations/shared/*` seed fully-qualified names only.
  *
  * The nav read that as "the operator lacks the permission" and hid the item.
  * `projects` and `service-descriptors` disappeared from every Go-native admin
  * console, silently, with nothing on screen to explain it. Both now name the
  * permission `internal/api/router.go` resolves for the page they open, beside
- * the pylon name. `roles`, `configuration` and `features` already did.
+ * the legacy name. `roles`, `configuration` and `features` already did.
  *
  * The defect stayed invisible while `adminui/handler.go` HARDCODED a 37-string
  * permission list that echoed the reference's section names back to the browser.
@@ -128,7 +128,7 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/projects',
           label: t('pages.admin.nav.projects', 'Projects'),
           icon: FolderOutlinedIcon,
-          // `projects.projects` is a pylon SECTION name, and this platform's
+          // `projects.projects` is a legacy SECTION name, and this platform's
           // administration mode does not issue it. It issues
           // `projects.projects.projects.view`, which is also the permission
           // `router.go` resolves for the admin project listing this item opens.
@@ -201,12 +201,12 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/service-descriptors',
           label: t('pages.admin.nav.serviceDescriptors', 'Service Descriptors'),
           icon: HubOutlinedIcon,
-          // `configuration.service_descriptors` is a pylon CONFIGURATION-SECTION
-          // name, and this platform issues it to nobody.
+          // `configuration.service_descriptors` is a legacy
+          // CONFIGURATION-SECTION name, and this platform issues it to nobody.
           // `runtime.airun.serviceproviders` is the permission `router.go`
           // resolves for the listing, and 001_initial.sql grants it to both
           // administration-mode admin roles. Keep both: the section name still
-          // reaches a pylon-backed deployment.
+          // reaches a legacy-runtime deployment.
           anyPermission: ['configuration.service_descriptors', 'runtime.airun.serviceproviders'],
         },
         {
@@ -218,11 +218,11 @@ export function navGroups(): readonly AdminNavGroup[] {
           // (`internal/api/router.go`, `central(admin.ToolkitTypeManagePermission)`),
           // and one this platform ISSUES: shared migration 0114 grants
           // `toolkit_catalogue.type.manage` to the administration-mode
-          // super_admin, admin and system. No pylon SECTION name is listed
-          // beside it because pylon has no counterpart surface — its only
-          // toolkit control is the guardrails deny-list on the Configuration
-          // page. See this module's header on why a gate whose permission no
-          // seed grants is a nav item that disappears for good.
+          // super_admin, admin and system. No legacy SECTION name is listed
+          // beside it because the legacy runtime has no counterpart surface —
+          // its only toolkit control is the guardrails deny-list on the
+          // Configuration page. See this module's header on why a gate whose
+          // permission no seed grants is a nav item that disappears for good.
           anyPermission: ['toolkit_catalogue.type.manage'],
         },
         {

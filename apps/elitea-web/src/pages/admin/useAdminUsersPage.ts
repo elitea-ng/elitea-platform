@@ -315,8 +315,9 @@ export function useAdminUsersPage(): AdminUsersPageState {
     })();
   }, [search, userType, sortField, sortDirection, reportFailure]);
 
-  // System users are the platform's own service accounts: pylon offers no role,
-  // suspend or delete control for them, and neither does this port.
+  // System users are the platform's own service accounts: the legacy runtime
+  // offered no role, suspend or delete control for them, and neither does this
+  // port.
   const writable = showsUserControls && !isSystemTab;
 
   const rowActions = useMemo<AdminUserRowActions>(

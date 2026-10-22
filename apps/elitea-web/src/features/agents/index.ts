@@ -176,7 +176,7 @@ export { ApplicationInformation } from './ui/ApplicationInformation';
  *
  * All three halves of that are now closed, and none of them needed a
  * migration — the field never wanted a column. It lives inside
- * `application_versions.meta`, which is where pylon puts it too
+ * `application_versions.meta`, which is where the legacy runtime puts it too
  * (elitea_issues #5410 chose the jsonb precisely to avoid a per-tenant schema
  * change); `VersionMeta.notes` and a top-level `VersionWriteRequest.notes`
  * are both declared in `api/openapi/v2.yaml` now, and every Go write path

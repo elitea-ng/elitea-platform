@@ -4,12 +4,13 @@
  *
  * ## Why this is a rendered page and not a served HTML document
  *
- * pylon served a stored `splash_template` VERBATIM, with no sanitisation,
- * because its hook sat in front of everything including the SPA's own assets —
- * there was no app left to render anything. Here the API is what closes; the
- * SPA still loads. That buys two things the served template could not have: the
- * splash is themed and translated like the rest of the product, and the
- * operator's markup is a BODY inside this page rather than the whole document.
+ * The legacy runtime served a stored `splash_template` VERBATIM, with no
+ * sanitisation, because its hook sat in front of everything including the SPA's
+ * own assets — there was no app left to render anything. Here the API is what
+ * closes; the SPA still loads. That buys two things the served template could
+ * not have: the splash is themed and translated like the rest of the product,
+ * and the operator's markup is a BODY inside this page rather than the whole
+ * document.
  *
  * ## Two fields, because an operator needs both registers
  *

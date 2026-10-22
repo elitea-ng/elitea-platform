@@ -24,8 +24,8 @@
  *
  * The URL disagreement was resolved the OTHER way round by #151. #137 had
  * moved the server onto the client's invented shape; the client's shape was
- * the wrong one (the doubled `/secrets/secrets/` prefix is genuine pylon —
- * plugin + resource module — and elitea-sdk, admin_ui and the API test
+ * the wrong one (the doubled `/secrets/secrets/` prefix is the genuine legacy
+ * shape — plugin + resource module — and elitea-sdk, admin_ui and the API test
  * suite had always used it), so #151 restored the server and corrected the
  * client, mode included (`default`, not `prompt_lib`).
  *
@@ -48,12 +48,12 @@ const SECRETS_PAGE = `${BASE_URL}/app/settings/secrets`;
  * (`secretsBasePath()` → `/secrets/secrets/default/{projectID}`, resolved
  * against `shared/api/http.ts`'s `/api/v2` base).
  *
- * pylon serves `/api/v2/<plugin>/<resource-module>/<mode>/<params>`: the
+ * The legacy API is `/api/v2/<plugin>/<resource-module>/<mode>/<params>`: the
  * plugin is `secrets` and the resource modules are
  * `legacy/plugins/secrets/api/v2/{secrets,secret,hide}.py`, so the doubled
  * segment is the real legacy shape — not the double-mount bug #137 took it
  * for. #151 restored it on the server and corrected this client, along with
- * the mode (`default`, pylon's `c.DEFAULT_MODE`, not `prompt_lib`).
+ * the mode (`default`, the legacy `c.DEFAULT_MODE`, not `prompt_lib`).
  */
 const CLIENT_LIST_URL = `${API_BASE}/secrets/secrets/default/${DEFAULT_PROJECT_ID}`;
 const CLIENT_LIST_GLOB = '**/api/v2/secrets/secrets/default/*';

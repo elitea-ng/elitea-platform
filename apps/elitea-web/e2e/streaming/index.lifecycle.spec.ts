@@ -391,7 +391,8 @@ test('the asynchronous index start refuses every tool but index_data, and admits
    *
    * What this route still promises is narrower, and worth a live assertion
    * because two independent clients depend on it — `indexesApi.ts:219-220`
-   * (which is why it only ever sends `index_data`) and pylon's own callers:
+   * (which is why it only ever sends `index_data`) and the legacy runtime's
+   * callers:
    *
    *  a) With `await_response=false` the handler validates `tool_name` before
    *     anything else and refuses everything but `index_data`

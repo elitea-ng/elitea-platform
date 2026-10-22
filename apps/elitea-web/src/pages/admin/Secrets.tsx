@@ -11,7 +11,7 @@
  * ## This page addresses a different store from Settings › Secrets
  *
  * Settings › Secrets edits ONE project's vault (`project-<id>`). This edits the
- * `admin` row, whose contents pylon merges into EVERY project's
+ * `admin` row, whose contents the legacy runtime merges into EVERY project's
  * `{{secret.…}}` resolution. A write here is platform-wide. The two surfaces
  * share components and share nothing else — different endpoints, different
  * bodies, different query keys.
@@ -28,7 +28,7 @@
  * also assert the project vaults did not move.
  *
  * One control is deliberately absent rather than disabled: the reference has no
- * "hide" affordance either, and pylon's admin hide endpoint answers 401 with
+ * "hide" affordance either, and the legacy admin hide endpoint answers 401 with
  * "There are no hidden secrets in administration mode". The server says the same
  * thing; there is nothing to render.
  *

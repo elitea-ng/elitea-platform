@@ -69,8 +69,8 @@ interface DescriptorGridRow extends AdminServiceDescriptor {
 }
 
 /**
- * The row key is the descriptor's own identity — pylon keys the stored row on
- * exactly this triple (`json.dumps({project_id, provider_name,
+ * The row key is the descriptor's own identity — the legacy runtime keyed the
+ * stored row on exactly this triple (`json.dumps({project_id, provider_name,
  * service_location_url}, sort_keys=True)`), so one provider registered at two
  * URLs, or in two projects, is two rows and must not collapse into one.
  */
@@ -89,10 +89,11 @@ function rowKey(descriptor: AdminServiceDescriptor): string {
  *
  * The third one is the reason this is a lookup and not a ternary. The server
  * answers `null` for "no health projection is fresh enough to say", which is a
- * different statement from "down" — pylon could not make it, and reading that
- * `null` as `false` here would put the lie back on the screen after the server
- * stopped telling it. A two-state column FORCES the server to choose, which is
- * why the API type is `boolean | null` and this map has three entries.
+ * different statement from "down" — the legacy runtime could not make it, and
+ * reading that `null` as `false` here would put the lie back on the screen
+ * after the server stopped telling it. A two-state column FORCES the server to
+ * choose, which is why the API type is `boolean | null` and this map has three
+ * entries.
  */
 const HEALTH_CHIPS = {
   yes: {

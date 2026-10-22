@@ -8,7 +8,7 @@
  * Each test asserts one of:
  *
  *   - the REQUEST the control produced, including the body shape the Go handler
- *     and pylon before it read (`{name}` / `{name, new_name}`);
+ *     and the legacy runtime before it read (`{name}` / `{name, new_name}`);
  *   - that the new column actually APPEARS afterwards. That is the assertion a
  *     seed-once draft breaks: the page keeps its draft across a background
  *     refetch on purpose (#191), so a create whose refetch is not honoured
@@ -157,7 +157,7 @@ describe('Admin › Roles › role definitions', () => {
 
     await waitFor(() => expect(lastWrite('POST')).toBeDefined());
     const sent = lastWrite('POST');
-    // The pair the page's tab is keyed on, and pylon's body shape.
+    // The pair the page's tab is keyed on, and the legacy body shape.
     expect(sent?.scope).toBe('administration');
     expect(sent?.mode).toBe('administration');
     expect(sent?.body).toEqual({ name: 'security_reviewer' });

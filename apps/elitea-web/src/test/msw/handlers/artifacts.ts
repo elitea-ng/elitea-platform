@@ -5,7 +5,7 @@
  *
  * Routing note: every artifact route is mounted UNDER `/api/v2/artifacts`
  * by `mountArtifactRoutes` (router.go:255-311). These patterns previously
- * matched the legacy Pylon plugin's root-level `/artifacts/s3/*` and
+ * matched the legacy runtime plugin's root-level `/artifacts/s3/*` and
  * `/artifacts/artifact/default/*`, which elitea-main does not serve —
  * issue #138.
  */

@@ -128,7 +128,7 @@ function TriggerRowList({ entries, disabled, onEdit, onDelete }: TriggerRowListP
  * WHAT #899 CHANGED, AND WHY IT IS NOT THE BASELINE'S SHAPE. The baseline
  * wrote one `PipelineTrigger` row carrying a `type` discriminator
  * (chat_message | schedule | webhook) and a schedule/webhook jsonb blob, over
- * a pylon route that no longer exists. `internal/api/v2/pipelinetriggers`
+ * a legacy route that no longer exists. `internal/api/v2/pipelinetriggers`
  * serves two INDEPENDENT facilities instead -- `/pipeline_schedules` and
  * `/pipeline_triggers` -- with no trigger-type column at all and with both
  * able to exist on one pipeline version. So:

@@ -93,7 +93,7 @@
       "domain": "deepwiki",
       "kind": "integration",
       "priority": "waived",
-      "title": "Wiki artifacts are read over the legacy pylon artifact routes",
+      "title": "Wiki artifacts are read over the legacy runtime's artifact routes",
       "source": [
         "apps/deepwiki-ui/src/DeepWikiApp.jsx:1115",
         "apps/deepwiki-ui/src/DeepWikiApp.jsx:1232",
@@ -117,7 +117,7 @@
         "min": 0
       },
       "waiver": {
-        "reason": "elitea-main serves no such route. The path family /api/v2/artifacts/artifact(s)/default/... exists only in pylon, so on the standalone Go stack these fifteen call sites answer 404. Reproducing them natively would port a defect. See parity/notes/deepwiki-artifact-store.md for the proof.",
+        "reason": "elitea-main serves no such route. The path family /api/v2/artifacts/artifact(s)/default/... exists only in the legacy runtime, so on the standalone Go stack these fifteen call sites answer 404. Reproducing them natively would port a defect. See parity/notes/deepwiki-artifact-store.md for the proof.",
         "decidedBy": "P2.P0 artifact-store proof",
         "date": "2026-09-01",
         "replacesBehaviour": "The native feature reads and writes through /api/v2/artifacts/objects/{projectID}/{bucket}[/{key}], which elitea-main does serve and which v2.yaml already declares."

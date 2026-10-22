@@ -40,19 +40,19 @@ function asRequestStatus(status: unknown): RequestStatus | undefined {
 /**
  * The status of the caller's most recent request for this entity, or `NONE`.
  *
- * Both shapes are read on purpose. The endpoint's REAL contract — pylon's, and
- * the Go handler's since unit A14 — is a `{total, rows}` envelope of the
- * caller's own rows, newest first, and `ModerationRequestList` in the spec
- * now says so. Until A14 the Go side answered a bare `{"status":"approved"}`
- * from a static stub, which was the only shape this function used to read.
- * Against a real server it found no `status` field and fell through to
- * `NONE`. The "Pending approval" state on a catalogue card was therefore
- * unreachable. The card would keep offering "Request Access" after the
- * request had been filed.
+ * Both shapes are read on purpose. The endpoint's REAL contract — the legacy
+ * runtime's, and the Go handler's since unit A14 — is a `{total, rows}`
+ * envelope of the caller's own rows, newest first, and `ModerationRequestList`
+ * in the spec now says so. Until A14 the Go side answered a bare
+ * `{"status":"approved"}` from a static stub, which was the only shape this
+ * function used to read. Against a real server it found no `status` field and
+ * fell through to `NONE`. The "Pending approval" state on a catalogue card was
+ * therefore unreachable. The card would keep offering "Request Access" after
+ * the request had been filed.
  *
  * The bare-object branch stays because a hybrid deployment can still be served
- * by a pylon that returns the create response's shape from the POST path this
- * hook optimistically reads back.
+ * by a legacy runtime that returns the create response's shape from the POST
+ * path this hook optimistically reads back.
  */
 function statusFromResponse(response: unknown): RequestStatus {
   if (typeof response !== 'object' || response === null) return REQUEST_STATUS.NONE;
@@ -150,7 +150,7 @@ export function useModerationRequests() {
       // never actually reachable here since `eliteaFetch` throws instead of
       // resolving with it (mutator.ts's §3.6 unwrap contract). It is passed as
       // `unknown` so `statusFromResponse` can also read the bare-`{status}`
-      // body a hybrid pylon deployment may still answer with.
+      // body a hybrid legacy-runtime deployment may still answer with.
       map.set(type, statusFromResponse(statusQueries[index]?.data?.data));
     });
     return map;

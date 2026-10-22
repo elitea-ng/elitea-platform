@@ -35,7 +35,7 @@ interface AppDetailRouteParams {
  * The baseline rendered `<iframe src="/ui_host/{provider}/{route}/…">` when
  * an app's version meta carried `custom_ui_route` + `provider`. That path
  * was dead on this stack (no Go handler serves `/ui_host`; the meta keys
- * belong to the retired pylon plugin runtime), its sandbox granted
+ * belong to the retired legacy plugin runtime), its sandbox granted
  * `allow-same-origin` + `allow-scripts` together (which is no sandbox), and
  * it passed context (theme, toolkit id) in the frame URL, which ADR-0013
  * forbids. ADR-0024 decision 8 makes every sub-application a native screen

@@ -12,9 +12,9 @@
  *  - if the server ever answers 200 WITH ROWS, the page shows them and drops the
  *    notice. That is the assertion that would catch someone wiring the endpoint
  *    to a stub, which is the failure this whole unit exists to remove;
- *  - the REQUEST is the one pylon serves — the right path, the right mode, and
- *    GET only. No registration verb is ever issued, because no control exists to
- *    issue one.
+ *  - the REQUEST is the one the legacy API served — the right path, the right
+ *    mode, and GET only. No registration verb is ever issued, because no
+ *    control exists to issue one.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -298,11 +298,12 @@ describe('AdminServiceDescriptors', () => {
   });
 
   it('reports an unprobed provider as Unknown, not as unhealthy', async () => {
-    // THE THREE-STATE CONTRACT, and the one state pylon could not express.
-    // `provider_health_projection` is a separate table with its own timestamp,
-    // and the server answers `null` when no projection is fresh enough to make
-    // a claim. Rendering that as "No" reports a provider nobody has asked about
-    // as broken — the exact defect the projection table was split out to stop.
+    // THE THREE-STATE CONTRACT, and the one state the legacy runtime could not
+    // express. `provider_health_projection` is a separate table with its own
+    // timestamp, and the server answers `null` when no projection is fresh
+    // enough to make a claim. Rendering that as "No" reports a provider nobody
+    // has asked about as broken — the exact defect the projection table was
+    // split out to stop.
     //
     // Both other rows are here on purpose: with only the null row, a component
     // that had collapsed to a single chip would still pass.

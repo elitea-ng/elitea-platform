@@ -66,7 +66,7 @@ export type BackendCapability =
  * `/pipeline_triggers/...` are served by
  * `internal/api/v2/pipelinetriggers` and declared in v2.yaml. The flag
  * was pinned off against a DIFFERENT, deleted route
- * (`/elitea_core/pipeline_trigger/.../trigger`, pylon's single-resource
+ * (`/elitea_core/pipeline_trigger/.../trigger`, the legacy single-resource
  * shape); the client that called it is gone, and this app now speaks the
  * two Go facilities through the generated client.
  *

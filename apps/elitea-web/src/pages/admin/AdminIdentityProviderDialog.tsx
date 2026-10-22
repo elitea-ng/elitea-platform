@@ -92,7 +92,7 @@ function OidcFields({
         }}
         fullWidth
         required
-        // The discovery URL is what an operator moving across from the pylon
+        // The discovery URL is what an operator moving across from the legacy
         // page has in hand. The server accepts it and stores the issuer, so
         // this says so rather than refusing a paste that will work.
         helperText={t(

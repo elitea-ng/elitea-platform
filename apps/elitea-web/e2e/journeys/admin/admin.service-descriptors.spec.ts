@@ -8,9 +8,9 @@
  * was to prove the refusal was the SERVER's and not a sentence the page carried.
  * That mattered: before unit A14 the listing answered 200 with three hardcoded
  * rows — `elitea_core`, `auth` and `indexer`, all "active" at version "2.0.0",
- * which are Pylon plugin names and not providers — and the registration verbs
- * had a dead handler answering `{"ok": true}` to a body it discarded. An
- * operator reading either would have concluded something false.
+ * which are legacy-runtime plugin names and not providers — and the
+ * registration verbs had a dead handler answering `{"ok": true}` to a body it
+ * discarded. An operator reading either would have concluded something false.
  *
  * The admission plane replaced the refusals with storage, so asserting 501 now
  * asserts the absence of the feature. The assertions below are aimed at the
@@ -160,8 +160,8 @@ adminTest('J35c: none of the invented rows is rendered, and no row offers a dele
   });
 
   // The three rows the replaced handler invented, by the names it invented.
-  // They are Pylon PLUGIN names; a provider hub holding them would mean the
-  // stub came back.
+  // They are legacy-runtime PLUGIN names; a provider hub holding them would
+  // mean the stub came back.
   for (const invented of ['2.0.0', 'Core platform service', 'Authentication service']) {
     await expect(page.getByText(invented, { exact: false })).toHaveCount(0);
   }
@@ -192,9 +192,9 @@ adminTest('J35d: a registration is recorded as inactive, with a reason', async (
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        // The ADMISSION PLANE's shape, not pylon's. `provider_name`, an ORIGIN
-        // with no path, and the descriptor itself — see the rejection test
-        // below for the shape this replaces and why sending it is a 400.
+        // The ADMISSION PLANE's shape, not the legacy one. `provider_name`, an
+        // ORIGIN with no path, and the descriptor itself — see the rejection
+        // test below for the shape this replaces and why sending it is a 400.
         body: JSON.stringify({
           provider_name: name,
           service_location_url: 'https://provider.example.invalid',
@@ -285,11 +285,11 @@ adminTest('J35d: a registration is recorded as inactive, with a reason', async (
 adminTest('J35d1: a registration missing what admission needs is refused, not stored', async ({
   page,
 }) => {
-  // The BODY IS PART OF THE CONTRACT, and this is the shape pylon accepted:
-  // `name`, a URL with a path, `configuration` and `provided_toolkits`, and no
-  // descriptor. Recording it would create a revision citing a manifest that
-  // does not exist, so it is refused with a message about the input rather
-  // than a 500 carrying a constraint name.
+  // The BODY IS PART OF THE CONTRACT, and this is the shape the legacy API
+  // accepted: `name`, a URL with a path, `configuration` and
+  // `provided_toolkits`, and no descriptor. Recording it would create a
+  // revision citing a manifest that does not exist, so it is refused with a
+  // message about the input rather than a 500 carrying a constraint name.
   await openServiceDescriptors(page);
 
   const refusals = await page.evaluate(async (endpoint) => {

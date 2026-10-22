@@ -19,13 +19,13 @@
  *
  * It records the operator's answer and TELLS the requester: the decision writes
  * a `centry.notifications` row in the same transaction as the status change.
- * It does not itself grant a capability — nothing in this stack or in pylon
- * reads an approved row and unlocks anything, and a catalogue card's real gate
- * is whether a toolkit schema exists for it. So the two buttons say "approve"
- * and "reject", the page says what that means, and neither is dressed as
- * provisioning. The gap between "approved" and "provisioned" is a product
- * question, not something a port should paper over with a control that implies
- * an outcome it cannot produce.
+ * It does not itself grant a capability — nothing in this stack or in the
+ * legacy runtime reads an approved row and unlocks anything, and a catalogue
+ * card's real gate is whether a toolkit schema exists for it. So the two
+ * buttons say "approve" and "reject", the page says what that means, and
+ * neither is dressed as provisioning. The gap between "approved" and
+ * "provisioned" is a product question, not something a port should paper over
+ * with a control that implies an outcome it cannot produce.
  *
  * ## What this page replaces
  *

@@ -14,15 +14,15 @@
  * ## What this proves, and what it does not
  *
  * `ELITEA-0971` (the manual case) expected the tooltip to list six named
- * Pylon plugins. That was never true of this service and the fix must not
- * make it look true: `useResourcesConfig.ts` hardcoded `components: []`
+ * legacy-runtime plugins. That was never true of this service and the fix must
+ * not make it look true: `useResourcesConfig.ts` hardcoded `components: []`
  * because `GET /admin/system_info/prompt_lib` answered 501 unconditionally,
  * and issue #219 is the reason it did — this service loads no plugins and has
  * no Arbiter bus to ask about other processes. #892 closes the OTHER half of
  * that 501: the two real, local facts this service CAN report about itself
  * (its own build version, and the highest applied shared-scope migration).
  * This test asserts exactly that shape, and separately asserts none of the
- * six Pylon names reappear — the regression #219 guards against.
+ * six legacy plugin names reappear — the regression #219 guards against.
  *
  * `hasVersion` (`ResourceVersionInfo.tsx`) gates the icon on the Information
  * card's admin-configured version label, which this stack does not set by

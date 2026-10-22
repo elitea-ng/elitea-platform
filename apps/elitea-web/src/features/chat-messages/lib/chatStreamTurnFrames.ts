@@ -316,7 +316,7 @@ export function reduceTurnFrame(
       //
       // Appending unconditionally (as the baseline does, `msg.content +=`)
       // therefore renders every answer TWICE. The baseline gets away with it
-      // because pylon sent one or the other, never both.
+      // because the legacy runtime sent one or the other, never both.
       //
       // Gated on what is ALREADY THERE rather than on the frame type: a
       // pipeline emitting several distinct intermediate responses still

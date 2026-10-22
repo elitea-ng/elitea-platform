@@ -12,11 +12,11 @@
  * `shared/api/generated/**`). Handwritten in the same shape as
  * `shared/api/configurationsApi.ts` and `entities/secret/api/secretApi.ts`.
  *
- * The wire contract mirrors pylon (`legacy/plugins/admin/api/v2/auth_users.py`
- * and `user_suspend.py`) and its existing client
- * (`frontends/admin_ui/frontend/src/api/usersApi.js`) exactly — same paths,
- * same `action` discriminator, same body keys — because #137 showed what
- * inventing a shape costs.
+ * The wire contract mirrors the legacy runtime
+ * (`legacy/plugins/admin/api/v2/auth_users.py` and `user_suspend.py`) and its
+ * existing client (`frontends/admin_ui/frontend/src/api/usersApi.js`) exactly —
+ * same paths, same `action` discriminator, same body keys — because #137 showed
+ * what inventing a shape costs.
  */
 import {
   useMutation,
@@ -29,10 +29,10 @@ import {
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
-/** Only `administration` has a handler, server-side and in pylon before it. */
+/** Only `administration` has a handler, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
 
-/** Pylon's two user tabs. `system` rows are the platform's own service accounts. */
+/** The two legacy user tabs. `system` rows are the platform's own service accounts. */
 export type AdminUserType = 'platform' | 'system';
 
 /** The administration-mode roles `set_admin_role` accepts. `null` clears them all. */

@@ -13,12 +13,12 @@
  * ## What is ported, and what is not
  *
  * Each legacy case is two halves. The first is "the policy is written and
- * takes effect immediately, without reloading Pylon" — that half is the
- * enhancement, and every one of its observable consequences is a Go read this
- * stack serves. The second is "an agent then fails to call a GitHub tool in
- * chat", which needs a live GitHub credential AND the full standalone stack's
- * worker and model. That half is out of scope here and is NOT left behind as
- * a permanent skip; the file says so instead.
+ * takes effect immediately, without reloading the legacy runtime" — that half
+ * is the enhancement, and every one of its observable consequences is a Go read
+ * this stack serves. The second is "an agent then fails to call a GitHub tool
+ * in chat", which needs a live GitHub credential AND the full standalone
+ * stack's worker and model. That half is out of scope here and is NOT left
+ * behind as a permanent skip; the file says so instead.
  *
  * `admin.configuration.spec.ts`'s J34a already proves the OTHER end: that the
  * Guardrails section renders a real form with real editors for both tool maps

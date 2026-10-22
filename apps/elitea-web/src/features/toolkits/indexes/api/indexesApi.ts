@@ -182,8 +182,8 @@ export interface StartIndexExecutionParams {
  * Graceful degradation is the CALLER's job, deliberately: a backend without
  * this route (404) or one that answers without a `task_id` both mean "no SSE
  * execution to follow". Note that a `task_id` alone does NOT prove the Go
- * runtime answered — legacy pylon returns one too — so the caller must also
- * treat a stream that fails to open as a fallback signal (see
+ * runtime answered — the legacy runtime returns one too — so the caller must
+ * also treat a stream that fails to open as a fallback signal (see
  * `../../lib/hooks/useToolkitChatDispatch.hooks.ts`).
  */
 export interface StartIndexExecutionResult {

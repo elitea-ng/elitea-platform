@@ -28,7 +28,7 @@
  *
  * The one thing that can be unavailable is the SUPPORT tab, and only when the
  * deployment has not configured a support project (`SUPPORT_PROJECT_ID`). That
- * is the pylon behaviour too — its handler 404s with the same meaning — and it
+ * is the legacy behaviour too — its handler 404s with the same meaning — and it
  * is rendered as the server's own sentence rather than as "Failed to load", so
  * the operator is told what to set.
  *
@@ -41,9 +41,9 @@
  *
  * One deliberate difference from the reference: it disabled the `super_admin`
  * COLUMN for anyone who was not a super admin. No server rule has ever backed
- * that — neither pylon's `permissions.py` nor `roles.go` treats `super_admin`
- * specially here — so reproducing it would be presentation posing as
- * authorisation, the inversion #11 got wrong in the gateway. The column a
+ * that — neither the legacy `permissions.py` nor `roles.go` treats
+ * `super_admin` specially here — so reproducing it would be presentation posing
+ * as authorisation, the inversion #11 got wrong in the gateway. The column a
  * SERVER actually refuses, `system`, is the one rendered disabled.
  */
 import Alert from '@mui/material/Alert';

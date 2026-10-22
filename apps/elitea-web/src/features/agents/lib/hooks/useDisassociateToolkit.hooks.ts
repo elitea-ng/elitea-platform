@@ -46,8 +46,8 @@ import { useSetRefetchDetails } from './useRefetchAgentDetails.hooks';
  *         to carry that serial.
  *     The relation PATCH is keyed on `elitea_tools.id` too, so the id sent
  *     is `resolveToolkitId(tool)` (`tool.tool_id`), NOT `tool.id`. The
- *     baseline sent `tool.id` here, which was correct against pylon's own
- *     `tools[]` shape and is not against this backend's.
+ *     baseline sent `tool.id` here, which was correct against the legacy
+ *     runtime's `tools[]` shape and is not against this backend's.
  *  2. `useUpdateApplicationRelationMutation` (`@/api/applications`) -> the
  *     real generated `useUpdateApplicationRelation`, same tag, real
  *     endpoint, no deviation beyond the RTK-Query-to-TanStack-Query call

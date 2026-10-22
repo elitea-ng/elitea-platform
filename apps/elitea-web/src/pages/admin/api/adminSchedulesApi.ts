@@ -11,10 +11,10 @@
  *
  * The wire contract mirrors the Go handler in
  * `services/elitea-main/internal/api/v2/scheduling/schedules.go`, which in turn
- * mirrors the pylon original (`legacy/plugins/scheduling/api/v2/schedules.py`)
+ * mirrors the legacy original (`legacy/plugins/scheduling/api/v2/schedules.py`)
  * the existing admin_ui client already speaks to — same path, same body keys,
- * same row fields. The trailing `0` in the URL is pylon's `projectID` segment;
- * administration mode ignores it and every client sends `0`.
+ * same row fields. The trailing `0` in the URL is the legacy `projectID`
+ * segment; administration mode ignores it and every client sends `0`.
  *
  * ## What is reused
  *
@@ -35,12 +35,12 @@ import {
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
-/** Only `administration` lists every schedule, server-side and in pylon before it. */
+/** Only `administration` lists every schedule, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
 
 /**
- * pylon's URL carries a project segment even in administration mode, where the
- * handler ignores it. `0` is what every existing client sends.
+ * The legacy URL carries a project segment even in administration mode, where
+ * the handler ignores it. `0` is what every existing client sends.
  */
 const SCHEDULES_URL = `/scheduling/schedules/${ADMIN_MODE}/0`;
 
@@ -148,7 +148,7 @@ export interface AdminScheduleUpdate {
 
 /**
  * `PUT /scheduling/schedules/administration/0` — the id travels in the BODY,
- * which is pylon's shape.
+ * which is the legacy shape.
  *
  * Only the changed field is sent. The server applies exactly what it is given
  * and leaves the rest alone, so toggling the switch cannot silently rewrite a

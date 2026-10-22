@@ -8,10 +8,11 @@
  * ## Sorting and filtering are CLIENT-side here, deliberately
  *
  * `centry.schedule` is a platform table with tens of rows, not a tenant table,
- * and the endpoint is unpaginated in pylon and in the Go handler alike. Adding
- * server-side search would be inventing a contract; sorting a fully-materialised
- * list in the browser is the whole of it. This is the opposite call from the
- * admin Projects page, where the server pages and therefore must also sort.
+ * and the endpoint is unpaginated in the legacy runtime and in the Go handler
+ * alike. Adding server-side search would be inventing a contract; sorting a
+ * fully-materialised list in the browser is the whole of it. This is the
+ * opposite call from the admin Projects page, where the server pages and
+ * therefore must also sort.
  */
 import { useCallback, useMemo, useState } from 'react';
 

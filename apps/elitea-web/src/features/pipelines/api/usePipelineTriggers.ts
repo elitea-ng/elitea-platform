@@ -3,8 +3,8 @@
  * through the GENERATED client (#899).
  *
  * WHAT THIS REPLACES. The ported `usePipelineTrigger.ts` +
- * `entities/pipeline/api/pipelineTriggerApi.ts` pair spoke pylon's
- * single-resource route
+ * `entities/pipeline/api/pipelineTriggerApi.ts` pair spoke the legacy
+ * runtime's single-resource route
  * `/elitea_core/pipeline_trigger/prompt_lib/{p}/pipeline/{v}/trigger`, one
  * `PipelineTrigger` object carrying a `type` discriminator and a
  * schedule/webhook jsonb blob. That route was deleted with #126 and is

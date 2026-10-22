@@ -3,18 +3,18 @@
  *
  * Three calls: the section list, one section's values, and the save. The
  * reference client (`admin_ui`'s `configurationApi.js`) declares fifteen; the
- * other twelve drive Pylon runtime administration — plugin reload, remote plugin
- * YAML, plugin updates, pylon log tailing, maintenance splash — and there is
- * nothing here to call. They are not declared in this module at all, and the
- * sections that would have used them render the server's own reason instead.
- * See `../Configuration.tsx`.
+ * other twelve drive legacy-runtime administration — plugin reload, remote
+ * plugin YAML, plugin updates, runtime log tailing, maintenance splash — and
+ * there is nothing here to call. They are not declared in this module at all,
+ * and the sections that would have used them render the server's own reason
+ * instead. See `../Configuration.tsx`.
  *
  * Not generated: `orval` builds from `v2.yaml`, which does not describe the
  * admin-panel routes. Handwritten in the same shape as `./adminSchedulesApi.ts`.
  *
  * The wire contract mirrors the Go handler in
  * `services/elitea-main/internal/api/v2/admin/config_values.go`, which in turn
- * keeps pylon's path, modes and body keys
+ * keeps the legacy path, modes and body keys
  * (`legacy/plugins/admin/api/v2/plugin_config_values.py`) so the existing
  * admin_ui client speaks to the same endpoint unchanged.
  *
@@ -35,7 +35,7 @@ import {
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
-/** Only `administration` may read or write configuration, server-side and in pylon before it. */
+/** Only `administration` may read or write configuration, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
 
 const SCHEMAS_URL = `/admin/plugin_config_schemas/${ADMIN_MODE}`;
@@ -48,14 +48,15 @@ function sectionValuesUrl(sectionId: string): string {
  * One field of a section, as the server declares it.
  *
  * This is a subset of what the schema carries. `sync_targets`/`_is_sync_target`
- * are still omitted — they describe fanning a value out to a second pylon, which
- * has no meaning here — and declaring them would imply this page honours them.
+ * are still omitted — they describe fanning a value out to a second runtime
+ * instance, which has no meaning here — and declaring them would imply this page
+ * honours them.
  *
  * The `enum_source` family USED to be omitted for the same reason, on the
  * grounds that its endpoint answered 501 because "the toolkit registry is a
- * Pylon surface". That stopped being true: `plugin_config_suggestions` now reads
- * the digest-pinned SDK toolkit snapshot, and the Guardrails section's fields
- * declare all three of these.
+ * legacy-runtime surface". That stopped being true: `plugin_config_suggestions`
+ * now reads the digest-pinned SDK toolkit snapshot, and the Guardrails section's
+ * fields declare all three of these.
  */
 export interface AdminConfigField {
   readonly key: string;
