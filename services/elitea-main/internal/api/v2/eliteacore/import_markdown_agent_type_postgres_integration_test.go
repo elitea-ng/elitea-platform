@@ -4,7 +4,7 @@ package eliteacore_test
 // platform's own API.
 //
 // `?format=md` writes `agent_type: agent` for a stored `openai` agent, which is
-// pylon's spelling and which this port kept on purpose (export_markdown.go,
+// the legacy spelling and which this port kept on purpose (export_markdown.go,
 // markdownAgentType). The import wizard's allow-list never had an `agent`
 // member, so posting that frontmatter straight back answered
 // `Import function has been failed: invalid agent_type` and wrote nothing. The

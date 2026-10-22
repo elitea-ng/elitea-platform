@@ -7,7 +7,7 @@ package mcpregistry
 // of any kind to this service: every exchange here is an outbound request that
 // this process starts and finishes.
 //
-// pylon reaches the same servers through
+// The legacy runtime reaches the same servers through
 // `indexer_worker/methods/indexer_mcp_sync_tools.py`, which imports the Python
 // SDK and calls `discover_mcp_tools`. The tool descriptors it returns carry
 // exactly three fields — `name`, `description`, `inputSchema` — which is what

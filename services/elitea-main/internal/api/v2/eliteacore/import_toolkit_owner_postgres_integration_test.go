@@ -7,13 +7,13 @@ package eliteacore_test
 //
 // Two things make this class of fault invisible, and this file removes both.
 //
-//  1. A pylon-made schema has no owner_id column on elitea_tools at all
+//  1. A legacy-era schema has no owner_id column on elitea_tools at all
 //     (internal/db/schema/toolkit_baseline.sql, the sqlc projection of the
 //     deployed table: id, created_at, updated_at, type, name, description,
 //     settings, author_id, shared_owner_id, shared_id, meta). The identical
 //     statement therefore succeeds there. The column is an invention of
 //     internal/infra/db/migrations/001_initial.sql:435-447, which is the schema
-//     a pylon-free deployment gets — and the direction the platform moves in.
+//     a fresh install gets — and the direction the platform moves in.
 //  2. Every other PostgreSQL test near this handler builds the schema it needs
 //     by hand — platform_flags_postgres_integration_test.go CREATEs a stub
 //     p_<id>.applications of four columns. A hand-made table cannot carry a

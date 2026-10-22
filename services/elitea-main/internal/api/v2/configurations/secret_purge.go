@@ -70,7 +70,7 @@ func (h *Handler) purgeOrphanedHiddenSecrets(
 //
 // WHICH COLUMNS. A sealed reference is copied well beyond the configuration
 // and toolkit rows: agent version snapshots, a conversation's participant
-// settings (and a fork's copy of them), evaluation run snapshots, pylon-owned
+// settings (and a fork's copy of them), evaluation run snapshots, legacy-era
 // tables this service does not know the shape of. That set is open-ended, so
 // the scan is too: every json and jsonb column of every table of the tenant
 // schema, read from pg_catalog at purge time, so a table added later is

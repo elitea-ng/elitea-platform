@@ -6,7 +6,7 @@ package auth
 // so on a new deployment the ONLY way to obtain an administrator is an OIDC or
 // SAML login named by `initial_global_admins` / ELITEA_INITIAL_GLOBAL_ADMINS.
 // newFirstLoginPool hand-builds the handful of tables the grants write, which
-// is exactly the kind of fixture that let a write to a pylon-only table
+// is exactly the kind of fixture that let a write to a legacy-only table
 // (auth_core__user_group) roll back every first login on a real fresh install
 // while the suite stayed green. These tests build the schema the way
 // cmd/elitea-migrate does on an empty database (Bootstrap + ApplyShared) and

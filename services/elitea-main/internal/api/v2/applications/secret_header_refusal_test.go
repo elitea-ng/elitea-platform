@@ -6,7 +6,7 @@ package applications
 // table drives that read directly. The route's PostgreSQL suite
 // (version_expanded_postgres_integration_test.go) proves the same rules through
 // the served response; this file proves the rules themselves, and it is the
-// test that fails first if the pylon fallback returns.
+// test that fails first if the legacy fallback returns.
 
 import (
 	"context"

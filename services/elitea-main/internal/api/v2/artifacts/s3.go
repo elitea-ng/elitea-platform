@@ -30,7 +30,7 @@ import (
 //
 // Despite the name, the response is JSON, not S3's XML: the SDK calls
 // response.json() unconditionally (client.py:1118). The name reflects the
-// legacy pylon route this replaces, not the wire format.
+// legacy route this replaces, not the wire format.
 //
 // Only the representation is new. The bucket resolution, prefix validation,
 // delimiter handling and paging all come from the same helpers the native

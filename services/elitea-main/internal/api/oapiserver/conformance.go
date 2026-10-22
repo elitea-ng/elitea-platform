@@ -299,7 +299,7 @@ func MissingFromSpec(ops []SpecOperation, endpoints []ManifestEndpoint) []Manife
 // route placeholder swallow any literal, which is right when one side is a
 // concrete request path and wrong when both are templates: it read the spec's
 // GET /artifacts/buckets/{projectID}/{bucket} as covering the manifest's
-// GET /artifacts/buckets/default/{project_id}, where `default` is a pylon MODE
+// GET /artifacts/buckets/default/{project_id}, where `default` is a legacy MODE
 // segment and not a bucket name. Deleting that allowlist line would have
 // recorded an endpoint as described that this document does not describe — the
 // same class of false claim the allowlist exists to prevent.

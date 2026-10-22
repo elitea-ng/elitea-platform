@@ -56,13 +56,14 @@ package moderation
 //
 // ## What a decision CAUSES
 //
-// Approving does not itself grant anything, here or in pylon: nothing in either
-// stack reads an approved row and unlocks a capability, and the catalogue card's
-// real gate is whether a toolkit schema exists. What a decision does is record
-// the operator's answer and TELL the requester — legacy fires a
-// `notifications_stream` event, which lands as a `centry.notifications` row and
-// an SSE push. That row is written here, in the same transaction as the status
-// change, so a decision cannot be recorded without the requester learning of it.
+// Approving does not itself grant anything, here or in the legacy runtime:
+// nothing in either stack reads an approved row and unlocks a capability, and
+// the catalogue card's real gate is whether a toolkit schema exists. What a
+// decision does is record the operator's answer and TELL the requester — legacy
+// fires a `notifications_stream` event, which lands as a `centry.notifications`
+// row and an SSE push. That row is written here, in the same transaction as the
+// status change, so a decision cannot be recorded without the requester
+// learning of it.
 //
 // This is stated rather than assumed because it decides what the page may claim.
 // The approve and reject controls say "record a decision and notify the user",
@@ -73,7 +74,7 @@ package moderation
 // A moderation row has two authors and they are not equally trusted.
 //
 // The REQUESTER supplies `issue_type` and `description` and nothing else.
-// `status` is the one that matters: pylon's `ModerationStateCreate` declares
+// `status` is the one that matters: the legacy `ModerationStateCreate` declares
 // `status: ModerationStatus = PENDING`, which is a DEFAULT and not a
 // restriction — a body carrying `"status": "approved"` is accepted verbatim, so
 // any project member holding `admin.moderation.create` can file a request that
@@ -81,55 +82,56 @@ package moderation
 // self-approval, and `createRequest` below refuses any status but `pending`
 // rather than silently downgrading it: a client that believes it set a status
 // and got a 201 is the failure this unit exists to stop. `user_id` is refused
-// for the same reason in the other direction — pylon accepts the field and then
-// ignores it, so a caller cannot tell that authorship (and therefore who the
-// decision notification is delivered to) is not theirs to choose. It is taken
-// from the authenticated principal, and a token principal is not accepted as an
-// author at all.
+// for the same reason in the other direction — the legacy runtime accepts the
+// field and then ignores it, so a caller cannot tell that authorship (and
+// therefore who the decision notification is delivered to) is not theirs to
+// choose. It is taken from the authenticated principal, and a token principal
+// is not accepted as an author at all.
 //
 // The MODERATOR supplies `status` and `rejection_comment` and nothing else. The
 // record of WHAT was asked must not be editable by the person answering it: if
 // the decision endpoint could rewrite `entity_id`, `issue_type` or
 // `description`, an approved row would no longer be evidence of what was
-// approved. `meta` is refused on both sides — pylon lets either party write raw
-// JSONB, and the admin PUT REPLACES rather than merges it, so an operator's
-// decision silently destroys whatever the requester stored. Nothing in either
-// stack reads a key out of it, so refusing a non-empty `meta` costs no
-// legitimate-user outcome; an empty one is tolerated because both existing
-// clients send `{}` and refusing that would break them for nothing.
+// approved. `meta` is refused on both sides — the legacy runtime lets either
+// party write raw JSONB, and the admin PUT REPLACES rather than merges it, so
+// an operator's decision silently destroys whatever the requester stored.
+// Nothing in either stack reads a key out of it, so refusing a non-empty `meta`
+// costs no legitimate-user outcome; an empty one is tolerated because both
+// existing clients send `{}` and refusing that would break them for nothing.
 //
 // This narrowing is deliberate under AGENTS.md's "compatibility never requires
 // preserving a vulnerability".
 //
-// ## Two pylon behaviours corrected rather than reproduced
+// ## Two legacy behaviours corrected rather than reproduced
 //
-//   - `rejection_comment` is REQUIRED when rejecting. pylon declares a
-//     `@field_validator` for it, but a pydantic v2 field validator does not run
-//     when the field is absent from the payload, so `{"id":5,"status":"rejected"}`
-//     validates and rejects with a null reason. The rule is enforced here where
-//     it cannot be sidestepped by omission.
-//   - Searching the queue matches the user's email and name IN SQL. pylon calls
-//     `auth.list_users_paginated(limit=1000)` and filters on the ids it gets
-//     back, so on a deployment with more than a thousand users the queue's
-//     search box silently cannot find most of them — and when nothing matched it
-//     applied `filter(False)`, which is the right answer reached by a route that
-//     stops being right at user 1001.
+//   - `rejection_comment` is REQUIRED when rejecting. The legacy runtime
+//     declares a `@field_validator` for it, but a pydantic v2 field validator
+//     does not run when the field is absent from the payload, so
+//     `{"id":5,"status":"rejected"}` validates and rejects with a null reason.
+//     The rule is enforced here where it cannot be sidestepped by omission.
+//   - Searching the queue matches the user's email and name IN SQL. The legacy
+//     runtime calls `auth.list_users_paginated(limit=1000)` and filters on the
+//     ids it gets back, so on a deployment with more than a thousand users the
+//     queue's search box silently cannot find most of them — and when nothing
+//     matched it applied `filter(False)`, which is the right answer reached by
+//     a route that stops being right at user 1001.
 //
 // ## Authorisation
 //
-// Gated in internal/api/router.go on the permissions the pylon handlers declare
-// (legacy/plugins/admin/api/v2/moderation_status*.py): `admin.moderation` for
-// the queue, `admin.moderation.edit` for the decision, `admin.moderation.view`
-// and `admin.moderation.create` for the two project-scoped routes. The first
-// two resolve CENTRALLY — a platform operator answering requests from every
-// tenant is not a member of the projects they arrive from — and the last two
-// resolve against the caller's membership of `{projectID}`.
+// Gated in internal/api/router.go on the permissions the legacy handlers
+// declare (legacy/plugins/admin/api/v2/moderation_status*.py):
+// `admin.moderation` for the queue, `admin.moderation.edit` for the decision,
+// `admin.moderation.view` and `admin.moderation.create` for the two
+// project-scoped routes. The first two resolve CENTRALLY — a platform operator
+// answering requests from every tenant is not a member of the projects they
+// arrive from — and the last two resolve against the caller's membership of
+// `{projectID}`.
 //
 // The per-entity read is additionally scoped to the CALLER's own rows, in SQL
-// and not in the client, matching pylon: the endpoint answers "what have I
-// asked for", never "what has anyone asked for". The per-entity DELETE carries
-// the same scope, and takes `admin.moderation.create`: a person who may file a
-// request may withdraw it. See RequestDelete.
+// and not in the client, matching the legacy runtime: the endpoint answers
+// "what have I asked for", never "what has anyone asked for". The per-entity
+// DELETE carries the same scope, and takes `admin.moderation.create`: a person
+// who may file a request may withdraw it. See RequestDelete.
 
 import (
 	"context"
@@ -150,8 +152,8 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
 
-// The three legal values of `status`. pylon's `ModerationStatus` enum, which is
-// the only place the vocabulary is enforced there — the column is a plain
+// The three legal values of `status`. The legacy `ModerationStatus` enum, which
+// is the only place the vocabulary is enforced there — the column is a plain
 // VARCHAR(64) in both schemas.
 const (
 	statusPending  = "pending"
@@ -161,10 +163,11 @@ const (
 
 // requestRow is one `centry.moderation_state` row as both listings return it.
 //
-// `user_email` is the one field that is not a column: pylon resolves it per page
-// through the auth service and attaches it, and the admin queue's "Requesting
-// User" column reads it. Here it is a LEFT JOIN, so a request whose author has
-// since been deleted still lists — with an empty address rather than vanishing.
+// `user_email` is the one field that is not a column: the legacy runtime
+// resolves it per page through the auth service and attaches it, and the admin
+// queue's "Requesting User" column reads it. Here it is a LEFT JOIN, so a
+// request whose author has since been deleted still lists — with an empty
+// address rather than vanishing.
 type requestRow struct {
 	ID               int64     `json:"id"`
 	UserID           int64     `json:"user_id"`
@@ -187,11 +190,11 @@ type requestRow struct {
 }
 
 // sortableRequestColumns is both the sort allow-list and what keeps the ORDER BY
-// injection-free, since the value is interpolated. pylon resolves `sort_by` with
-// `getattr` on the model and emits NO ordering at all when the attribute is
-// missing, so an unknown column there means an unordered page — which under
-// LIMIT/OFFSET repeats and drops rows while paging. An unknown column here falls
-// back to `created_at`.
+// injection-free, since the value is interpolated. The legacy runtime resolves
+// `sort_by` with `getattr` on the model and emits NO ordering at all when the
+// attribute is missing, so an unknown column there means an unordered page —
+// which under LIMIT/OFFSET repeats and drops rows while paging. An unknown
+// column here falls back to `created_at`.
 var sortableRequestColumns = map[string]string{
 	"created_at": "m.created_at",
 	"updated_at": "m.updated_at",
@@ -262,7 +265,7 @@ func (h *Handler) AdministrationRequests(w http.ResponseWriter, r *http.Request)
 	writeModerationJSON(w, http.StatusOK, map[string]any{"total": total, "rows": rows})
 }
 
-// paginationParams mirrors the limits pylon's `ModerationStateListQuery`
+// paginationParams mirrors the limits the legacy `ModerationStateListQuery`
 // declares: limit 1..100 defaulting to 20, offset >= 0.
 func paginationParams(query map[string][]string) (limit, offset int) {
 	limit, offset = 20, 0
@@ -281,9 +284,9 @@ func paginationParams(query map[string][]string) (limit, offset int) {
 
 // queueFilters renders the five filters the admin client may send.
 //
-// `search` matches the requester's email or name. pylon matches only users too,
-// so widening it to the description would be answering a different question from
-// the one the search box's own placeholder asks.
+// `search` matches the requester's email or name. The legacy runtime matches
+// only users too, so widening it to the description would be answering a
+// different question from the one the search box's own placeholder asks.
 func queueFilters(params queueParams) (where string, args []any) {
 	conditions := make([]string, 0, 5)
 	add := func(condition string, value any) {
@@ -376,7 +379,7 @@ type requestDecisionBody struct {
 
 // AdministrationRequestUpdate serves `PUT /admin/moderation_status/administration`.
 //
-// The id travels in the BODY, not the path — pylon's shape, and what the
+// The id travels in the BODY, not the path — the legacy shape, and what the
 // existing admin_ui client sends.
 func (h *Handler) AdministrationRequestUpdate(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
@@ -552,9 +555,10 @@ func decisionFields(body requestDecisionBody) (status string, comment *string, e
 		}
 		return status, nil, nil
 	case statusPending:
-		// pylon allows a decided request to be moved back to `pending`, silently
-		// and with no record that it was ever decided. No client sends it and
-		// nothing distinguishes the reopened row from one never answered.
+		// The legacy runtime allows a decided request to be moved back to
+		// `pending`, silently and with no record that it was ever decided. No
+		// client sends it and nothing distinguishes the reopened row from one
+		// never answered.
 		return "", nil, errors.New("a request cannot be returned to pending: approve or reject it")
 	default:
 		return "", nil, fmt.Errorf("status must be %q or %q", statusApproved, statusRejected)
@@ -564,8 +568,8 @@ func decisionFields(body requestDecisionBody) (status string, comment *string, e
 // applyDecision writes the status and the requester's notification atomically.
 //
 // One transaction on purpose: a decision the requester is never told about is
-// the same to them as no decision, and pylon's version — which fires the event
-// after committing and swallows any failure into a log line — can produce
+// the same to them as no decision, and the legacy version — which fires the
+// event after committing and swallows any failure into a log line — can produce
 // exactly that.
 func (h *Handler) applyDecision(
 	ctx context.Context, id int64, status string, comment *string,
@@ -602,10 +606,10 @@ RETURNING id, user_id, project_id, issue_type, COALESCE(entity_id, ''), descript
 	return &row, nil
 }
 
-// insertDecisionNotification mirrors the payload pylon's `notifications_stream`
-// event carries, including the pre-rendered `message`: the notification
-// renderer has no branch for these two event types, in either frontend, so the
-// sentence has to travel with the row.
+// insertDecisionNotification mirrors the payload the legacy
+// `notifications_stream` event carries, including the pre-rendered `message`:
+// the notification renderer has no branch for these two event types, in either
+// frontend, so the sentence has to travel with the row.
 func insertDecisionNotification(ctx context.Context, tx pgx.Tx, row requestRow) error {
 	message := decisionMessage(row)
 
@@ -647,9 +651,9 @@ VALUES ($1::text::uuid, FALSE, $2, $3, $4, $5, now() AT TIME ZONE 'UTC', now() A
 // Requests serves `GET /admin/moderation_status/{mode}/{projectID}/{entityID}`.
 //
 // "What have I asked for, for this entity" — scoped to the caller in SQL, which
-// is where pylon scopes it too. The mode segment selects nothing: this path has
-// only the one handler in pylon, and an `administration` value on it must not
-// widen the answer, so it is not read.
+// is where the legacy runtime scopes it too. The mode segment selects nothing:
+// this path has only the one handler in the legacy runtime, and an
+// `administration` value on it must not widen the answer, so it is not read.
 func (h *Handler) Requests(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
 		writeModerationError(w, http.StatusServiceUnavailable, "database unavailable")
@@ -803,11 +807,11 @@ func createFields(body requestCreateBody) (issueType, description string, err er
 //
 // ## Why this route exists (issue #544)
 //
-// A moderation row could be created and decided, and never removed. pylon has
-// no delete either, so a deployment accumulated one row per request for ever,
-// and the queue's first page filled with dead rows. The end-to-end suite made
-// the same fault visible fastest: 20 runs on one stack left 111 rows, and the
-// journeys that file a probe row could no longer find their own.
+// A moderation row could be created and decided, and never removed. The legacy
+// runtime had no delete either, so a deployment accumulated one row per request
+// for ever, and the queue's first page filled with dead rows. The end-to-end
+// suite made the same fault visible fastest: 20 runs on one stack left 111
+// rows, and the journeys that file a probe row could no longer find their own.
 //
 // ## The scope is the CALLER's own rows, not the operator's queue
 //

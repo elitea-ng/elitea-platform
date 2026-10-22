@@ -779,7 +779,7 @@ func TestProductionRouterMountsOnlyExactCurrentIndexTypesPathWhenComposed(t *tes
 			}
 			// One body, both key sets (#394): the published
 			// DocumentLoadersResponse keys the generated apps/elitea-web
-			// client reads, beside the Pylon maps apps/elitea-ui reads. Each
+			// client reads, beside the legacy maps apps/elitea-ui reads. Each
 			// item lists the extensions of the map its `type` names, so the
 			// two halves cannot disagree.
 			if test.want == http.StatusOK &&
@@ -902,7 +902,7 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 			want:          http.StatusOK,
 			// One body, both clients (#395): `items` is the published
 			// SkillsList contract apps/elitea-web reads, `skills` and
-			// `max_skills` are the Pylon keys apps/elitea-ui reads.
+			// `max_skills` are the legacy keys apps/elitea-ui reads.
 			wantBody: "{\"items\":[{\"id\":\"17\",\"project_id\":\"7\",\"name\":\"deploy\"," +
 				"\"description\":\"Deploy safely\",\"type\":\"skill\",\"is_default\":false," +
 				"\"created_at\":\"0001-01-01T00:00:00Z\",\"updated_at\":\"0001-01-01T00:00:00Z\"}]," +
@@ -2052,7 +2052,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/admin/gateway/providers/{configID}/models",
 		"POST /api/v2/admin/gateway/providers/{configID}/revalidate",
 		// The cross-project bulk membership invite (issue 247). It replaces
-		// pylon's invites_bulkusers and invites_bulkprojects console pages,
+		// the legacy invites_bulkusers and invites_bulkprojects console pages,
 		// which are the same cross product with one side pinned.
 		"POST /api/v2/admin/invites_bulk/administration",
 		"POST /api/v2/admin/moderation_status/project_request",
@@ -2518,11 +2518,11 @@ func perMessageReadRouter(repo v2convs.Repository, granted ...string) http.Handl
 
 const perMessageReadUID = "0f8f6d1e-9c2a-4a1b-8f3e-2b7c5d4e6a90"
 
-// pylon declares `get` and `delete` on ONE module — elitea_core/api/v2/
-// message.py:176-183 — and this router bound only the delete. The read was
-// implemented (`(*conversations.Handler).GetMessage`) and registered by
-// nothing, which is #126's dead-wiring class: `git log -S` finds no commit
-// that ever routed it, so it is a gap rather than a regression.
+// The legacy runtime declares `get` and `delete` on ONE module —
+// elitea_core/api/v2/ message.py:176-183 — and this router bound only the
+// delete. The read was implemented (`(*conversations.Handler).GetMessage`) and
+// registered by nothing, which is #126's dead-wiring class: `git log -S` finds
+// no commit that ever routed it, so it is a gap rather than a regression.
 //
 // TWO claims are asserted together, because either alone passes against a
 // route that does not work:
@@ -2567,7 +2567,7 @@ func TestProductionRouterServesThePerMessageRead(t *testing.T) {
 	}
 }
 
-// The read carries its OWN permission. pylon gates the get on
+// The read carries its OWN permission. Legacy gates the get on
 // `models.chat.messages.details` and the delete on `models.chat.messages.delete`
 // (message.py:39,73), and the two are withheld differently — delete is denied
 // to a viewer in both modes, details is granted to a viewer in both.
@@ -2576,7 +2576,7 @@ func TestProductionRouterServesThePerMessageRead(t *testing.T) {
 // here. Without this, a gate copied from the DELETE one line below it would
 // look correct in every other test in this file: the route would still answer,
 // still reach the handler, and still return the right message — for a
-// principal pylon does not let read it.
+// principal legacy does not let read it.
 func TestPerMessageReadDoesNotAcceptTheDeleteSiblingsPermission(t *testing.T) {
 	repo := &recordingMessageRepo{}
 	router := perMessageReadRouter(repo, "models.chat.messages.delete")

@@ -4,7 +4,7 @@ package applications_test
 // version's content from.
 //
 // `GET /application/prompt_lib/{project}/{id}` answers a `versions` array of
-// summaries. Pylon's `ApplicationVersionListModel`
+// summaries. The legacy `ApplicationVersionListModel`
 // (legacy/plugins/elitea_core/models/pd/version.py) carried `instructions` and
 // `meta` on every entry; Go's `getVersions` projection selected neither, so a
 // caller that read the prompt text off the LIST — which is what the legacy
@@ -18,11 +18,12 @@ package applications_test
 // nothing caught this: a test that read the response's own instructions found
 // them, one field away from the array that had lost them.
 //
-// The two fields the summary carries that pylon did NOT (`agent_type` and
-// `is_default`) are asserted here too, in the same read: both are live reads in
-// apps/elitea-web (editApplicationMappers.ts / editPipelineMappers.ts, and
-// useVersionBarCommands.ts), so restoring parity by deleting them would blank a
-// control that works today. This test is what says so.
+// The two fields the summary carries that the legacy model did NOT
+// (`agent_type` and `is_default`) are asserted here too, in the same read: both
+// are live reads in apps/elitea-web (editApplicationMappers.ts /
+// editPipelineMappers.ts, and useVersionBarCommands.ts), so restoring parity by
+// deleting them would blank a control that works today. This test is what says
+// so.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 

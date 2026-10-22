@@ -11,17 +11,18 @@ import (
 // TestNoLegacyBridgeWiringReturns is the gate that replaces the bridges #383
 // deleted.
 //
-// Four bridges once joined this service to pylon, and every one of them was
-// dead: a shadow comparator that mirrored traffic to pylon and diffed the two
-// answers, a cutover reverse proxy to LEGACY_URL with a Redis endpoint-state
-// tracker behind it, and a Redis remote-call client that asked pylon_auth to
-// validate a credential. None had a composition site outside tests. They
-// survived for a year because nothing proved they were absent — the same class
-// this repository has produced repeatedly (#115, #123, #134, #136, #149).
+// Four bridges once joined this service to the legacy runtime, and every one of
+// them was dead: a shadow comparator that mirrored traffic to the legacy
+// runtime and diffed the two answers, a cutover reverse proxy to LEGACY_URL
+// with a Redis endpoint-state tracker behind it, and a Redis remote-call client
+// that asked the legacy auth plugin to validate a credential. None had a
+// composition site outside tests. They survived for a year because nothing
+// proved they were absent — the same class this repository has produced
+// repeatedly (#115, #123, #134, #136, #149).
 //
 // Deleting them is not what keeps them gone. A future parity task can
 // reasonably reach for the same shapes, and the router would compile and pass
-// every other test with a pylon proxy mounted in it again. This test refuses
+// every other test with a legacy proxy mounted in it again. This test refuses
 // that at the source level.
 //
 // It reads SOURCE rather than building a router, because the property is "no

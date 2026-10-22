@@ -667,8 +667,8 @@ func listMessagesQuery(t *testing.T, rawQuery string) conversations.MessagesQuer
 	return got
 }
 
-// A request that names nothing gets pylon's defaults (messages.py:73-77), not
-// this server's invented page-1-of-50. The 50 was never reachable by any
+// A request that names nothing gets the legacy defaults (messages.py:73-77),
+// not this server's invented page-1-of-50. The 50 was never reachable by any
 // caller, so nothing depends on it.
 func TestListMessages_DefaultPagination(t *testing.T) {
 	got := listMessagesQuery(t, "")
@@ -710,8 +710,9 @@ func TestListMessages_PageAndPageSizeStillWorkAsAFallback(t *testing.T) {
 	}
 }
 
-// Precedence is explicit: limit/offset are the pair pylon defined and the pair
-// every client sends, so they win over page/page_size when both appear.
+// Precedence is explicit: limit/offset are the pair the legacy API defined and
+// the pair every client sends, so they win over page/page_size when both
+// appear.
 func TestListMessages_LimitOffsetWinOverPageAndPageSize(t *testing.T) {
 	got := listMessagesQuery(t, "page=3&page_size=25&limit=5&offset=7")
 	if got.Limit != 5 || got.Offset != 7 {
@@ -734,7 +735,7 @@ func TestListMessages_LimitIsCapped(t *testing.T) {
 
 // Junk must not silently reverse the transcript or zero the window: an
 // unparseable or non-positive value leaves the documented default standing.
-// (Pylon's `desc if sort_order == 'desc' else asc` did reverse it.)
+// (The legacy `desc if sort_order == 'desc' else asc` did reverse it.)
 func TestListMessages_RejectsUnusableParameters(t *testing.T) {
 	got := listMessagesQuery(t, "limit=abc&offset=-5&sort_order=descending")
 	want := conversations.MessagesQuery{Limit: 10, Offset: 0, SortBy: "created_at", SortOrder: "desc"}
@@ -1538,7 +1539,7 @@ func TestGetContextStatus_RefusesTheTokenCountItCannotCompute(t *testing.T) {
 }
 
 // With a runtime record present the counters are served, and utilization is
-// pylon's 0..1 ratio.
+// the legacy 0..1 ratio.
 func TestGetContextStatus_ServesTheRecordedCounters(t *testing.T) {
 	h := conversations.NewHandler(storedStateRepo(contextsettings.ConversationState{
 		Strategy:  []byte(`{"max_context_tokens": 10000}`),
@@ -1828,7 +1829,7 @@ func TestListMessages_ReadsQueryFromTheWire(t *testing.T) {
 	}
 }
 
-// An explicit `query=` is the same as sending nothing, which is what pylon's
+// An explicit `query=` is the same as sending nothing, which is what the legacy
 // truthiness check did. The distinction matters: as a pattern the empty string
 // matches every group, so a cleared search box would look like a working filter
 // returning everything rather than a filter that is off.

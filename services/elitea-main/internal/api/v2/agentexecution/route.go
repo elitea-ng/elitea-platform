@@ -944,8 +944,9 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 
 // parseStartAttachments splits every `payload.attachments` filepath into the
 // (bucket, name) pair the item rows are keyed by, rejecting the whole request
-// if any one of them is malformed. The split itself is pylon's, and lives in
-// the application package so the HTTP layer never decides what a column holds.
+// if any one of them is malformed. The split itself is the legacy runtime's,
+// and lives in the application package so the HTTP layer never decides what a
+// column holds.
 func parseStartAttachments(
 	entries []currentStartAttachment,
 ) ([]agentexecutionapp.CurrentTurnAttachmentRef, bool) {

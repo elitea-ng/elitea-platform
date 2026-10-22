@@ -5,10 +5,10 @@ package auth
 //
 // # What this replaces
 //
-// `legacy/plugins/auth_saml` — a pylon plugin that registers a provider with
-// `auth_core` and spreads issuer, destination, NameID, ACS, signing,
-// certificate and expiry behaviour through `routes/login.py`. There is no such
-// plugin here, and until now no SAML at all: the type existed in
+// `legacy/plugins/auth_saml` — a legacy runtime plugin that registers a
+// provider with `auth_core` and spreads issuer, destination, NameID, ACS,
+// signing, certificate and expiry behaviour through `routes/login.py`. There is
+// no such plugin here, and until now no SAML at all: the type existed in
 // `internal/auth/browserflow` as a provider string and nothing implemented it.
 //
 // The configuration is ONE typed provider revision

@@ -5,7 +5,7 @@
 // WHAT THIS REPLACES. router.go's NOTE(#126) recorded this path among the
 // routes that stood behind a nil `RouterConfig.Predictor` gate nothing ever
 // assigned. Their only implementation was the prototype Redis RPC client to
-// pylon-indexer, which published raw JSON onto a channel served through
+// the legacy indexer, which published raw JSON onto a channel served through
 // arbiter's gzip(pickle(...)) codec — every call was dropped on decode — so
 // #126 deleted the transport rather than repairing it. The capability stayed
 // open as this issue.

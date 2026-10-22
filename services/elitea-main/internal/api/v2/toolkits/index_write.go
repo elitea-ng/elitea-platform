@@ -10,7 +10,7 @@ package toolkits
 // nothing, so deleting an index appeared to work and the row was still there
 // on reload.
 //
-// The behaviour implemented here is taken from the legacy pylon handlers that
+// The behaviour implemented here is taken from the legacy handlers that
 // own this contract today — `legacy/plugins/elitea_core/api/v2/index_meta.py`
 // and `.../index_cancel.py` — reduced to the columns this generation's
 // `p_<project>.index_meta` table actually has (id, toolkit_id, name, status,

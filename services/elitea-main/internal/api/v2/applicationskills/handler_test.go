@@ -118,7 +118,7 @@ func TestCurrentApplicationSkillsRoutePreservesExactCurrentContract(t *testing.T
 
 	// Both halves of the envelope, in one body (#395). `items` is the
 	// published SkillsList contract that apps/elitea-web reads; `skills` and
-	// `max_skills` are the Pylon keys apps/elitea-ui reads, unchanged.
+	// `max_skills` are the legacy keys apps/elitea-ui reads, unchanged.
 	want := "{\"items\":[" +
 		"{\"id\":\"17\",\"project_id\":\"7\",\"name\":\"deploy\"," +
 		"\"description\":\"Deploy safely\",\"type\":\"skill\",\"is_default\":false," +
@@ -608,12 +608,12 @@ func (function currentApplicationSkillsPrincipalValidatorFunc) ValidatePrincipal
 // The published contract for this path is SkillsList — {items, total, page,
 // page_size, total_pages} — in api/openapi/v2.yaml. apps/elitea-web reads it
 // through shared/api/unwrap.ts, which takes `items` first and reports any
-// other shape as unrecognised. So a body with only the Pylon keys renders as
+// other shape as unrecognised. So a body with only the legacy keys renders as
 // "this agent version has no skills" while the route answers 200 with the
 // right rows, and turning the flag on broke the web client instead of fixing
 // it.
 //
-// The Pylon keys are asserted in the same test on purpose: correcting the
+// The legacy keys are asserted in the same test on purpose: correcting the
 // contract half must not cost the parity half, which apps/elitea-ui reads and
 // the edge cutover needs.
 func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
@@ -678,7 +678,7 @@ func TestCurrentApplicationSkillsRouteAnswersThePublishedSkillsListContract(
 			)
 		}
 	}
-	// The Pylon keys apps/elitea-ui reads must survive beside them.
+	// The legacy keys apps/elitea-ui reads must survive beside them.
 	for _, key := range []string{"skills", "max_skills"} {
 		if _, present := body[key]; !present {
 			t.Fatalf("legacy key %q lost from the parity envelope: %q", key, response.Body.String())

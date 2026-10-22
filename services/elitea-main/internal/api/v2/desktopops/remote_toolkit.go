@@ -37,7 +37,7 @@ const (
 	// asks for. It is NOT `models.applications.tool.patch` (what test_tool
 	// takes): running a tool an agent may run is a chat-time action, granted
 	// to every role that may chat (shared/0156), while patch is an edit of the
-	// toolkit. It is a platform string with no pylon `check_api` origin.
+	// toolkit. It is a platform string with no legacy `check_api` origin.
 	RemoteToolkitPermission = "models.applications.tool.execute"
 
 	// workerRust is runtimecomposition.RustWorkerImplementation, restated so

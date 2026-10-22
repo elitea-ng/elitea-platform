@@ -1,38 +1,39 @@
 package admin
 
 // The admin MODES surface — `/admin/modes/administration`, the registry of
-// which user holds which CENTRAL role in which pylon mode.
+// which user holds which CENTRAL role in which mode.
 //
-// The contract is pylon's (legacy/plugins/admin/api/v2/modes.py):
+// The contract is the legacy one (legacy/plugins/admin/api/v2/modes.py):
 //
 //	GET    → {total, rows:[{id, user_id, user_email, user_name, mode, role}]}
 //	POST   {"user_id": 3 | "a@b.c", "mode": "administration", "role": "admin"}
 //	DELETE ?id=<user_id>:<mode>:<role>
 //
 // The composite `id` is what makes the listing a table the client can act on:
-// there is no single row id behind an assignment, so pylon synthesises one from
-// the triple, and DELETE takes it back apart. That is preserved exactly.
+// there is no single row id behind an assignment, so the legacy runtime
+// synthesises one from the triple, and DELETE takes it back apart. That is
+// preserved exactly.
 //
-// Two deliberate divergences from the pylon original:
+// Two deliberate divergences from the legacy original:
 //
-//   - pylon's DELETE is a stub. It parses the composite id, computes the
+//   - The legacy DELETE is a stub. It parses the composite id, computes the
 //     triple, and returns `{"ok": True}` having deleted nothing — the body of
 //     the handler is a `# TODO: RPC in auth_core` comment. Every "remove role"
 //     in the admin console therefore reported success and left the assignment
 //     in place. It deletes here, and answers 404 when the triple names no
 //     assignment rather than reporting a removal that did not happen.
-//   - pylon walks `tools.theme.modes` — a runtime registry populated as plugins
-//     declare modes — and asks for every (user, mode) pair over RPC. There is no
-//     such registry here, so the listing is one join over the assignment table
-//     itself: the modes it reports are the modes that have roles, which is
-//     exactly the set that can hold an assignment.
+//   - The legacy runtime walks `tools.theme.modes` — a runtime registry
+//     populated as plugins declare modes — and asks for every (user, mode) pair
+//     over RPC. There is no such registry here, so the listing is one join over
+//     the assignment table itself: the modes it reports are the modes that have
+//     roles, which is exactly the set that can hold an assignment.
 //
 // `default` mode is READ but not WRITABLE through this endpoint, and that is
-// pylon's behaviour rather than a restriction added here: `assign_user_to_role`
-// routes a `default`-mode assignment to `admin_add_user_to_project`, which
-// asserts on a project id this endpoint has no path segment for
-// (legacy/plugins/auth_core/rpc/roles.py:135-142). Project membership is
-// `/admin/users/{mode}/{projectID}`.
+// the legacy behaviour rather than a restriction added here:
+// `assign_user_to_role` routes a `default`-mode assignment to
+// `admin_add_user_to_project`, which asserts on a project id this endpoint has
+// no path segment for (legacy/plugins/auth_core/rpc/roles.py:135-142). Project
+// membership is `/admin/users/{mode}/{projectID}`.
 
 import (
 	"context"
@@ -67,8 +68,8 @@ func (h *Handler) Modes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One join over the assignment table, rather than pylon's N+1 walk (every
-	// user × every mode, one RPC per pair — 15k users × 4 modes on the
+	// One join over the assignment table, rather than the legacy N+1 walk
+	// (every user × every mode, one RPC per pair — 15k users × 4 modes on the
 	// reference deployment). The result is the same set of rows.
 	rows, err := h.pool.Query(r.Context(), `
 SELECT assignment.user_id,
@@ -117,8 +118,9 @@ func assignmentID(userID int, mode, role string) string {
 /* ── write: POST ───────────────────────────────────────────────────────── */
 
 type modeAssignRequest struct {
-	// pylon accepts either an integer id or an email address here, in the same
-	// field, and resolves the second form through `auth.get_user(email=…)`.
+	// The legacy runtime accepts either an integer id or an email address here,
+	// in the same field, and resolves the second form through
+	// `auth.get_user(email=…)`.
 	UserID json.RawMessage `json:"user_id"`
 	Mode   string          `json:"mode"`
 	Role   string          `json:"role"`
@@ -157,7 +159,8 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// looked up (#6880). Before this, `developer` and any free-form string
 	// reached the INSERT, and a legacy database answered with a developer-mode
 	// assignment that no route reads. The removal below still accepts a
-	// developer-mode id, so an operator can clear a row pylon left behind.
+	// developer-mode id, so an operator can clear a row the legacy runtime left
+	// behind.
 	if _, known := centralRoleModes[mode]; !known {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "unknown role mode " + strconv.Quote(mode) + ": " + centralRoleModesHint,
@@ -351,8 +354,8 @@ func writeModeUserError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to resolve user"})
 }
 
-// resolveModeUser accepts the two spellings pylon accepts in `user_id`: an
-// integer id, or an email address to look one up by.
+// resolveModeUser accepts the two spellings the legacy runtime accepts in
+// `user_id`: an integer id, or an email address to look one up by.
 func (h *Handler) resolveModeUser(ctx context.Context, raw json.RawMessage) (int, error) {
 	if len(raw) == 0 {
 		return 0, modeUserError{status: http.StatusBadRequest, message: "user_id is required"}
@@ -383,7 +386,7 @@ func (h *Handler) resolveModeUser(ctx context.Context, raw json.RawMessage) (int
 		}
 	}
 	// A numeric STRING is an id, not an address — the admin client sends form
-	// values, and pylon's `int(data["user_id"])` accepts "3".
+	// values, and the legacy `int(data["user_id"])` accepts "3".
 	if numeric, err := strconv.Atoi(strings.TrimSpace(text)); err == nil {
 		return h.resolveModeUser(ctx, json.RawMessage(strconv.Itoa(numeric)))
 	}

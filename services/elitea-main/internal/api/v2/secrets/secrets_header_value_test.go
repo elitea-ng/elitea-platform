@@ -15,8 +15,8 @@ func TestNewSecretsHeaderValueIsNotTheGuessableDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSecretsHeaderValue: %v", err)
 	}
-	// "secret" is what pylon's check_secret_header falls back to, and what the
-	// version-details route still accepts from a project that has no value.
+	// "secret" is what the legacy check_secret_header falls back to, and what
+	// the version-details route still accepts from a project that has no value.
 	if value == "secret" {
 		t.Fatal("the generated value is the guessable legacy default")
 	}
@@ -27,8 +27,9 @@ func TestNewSecretsHeaderValueIsNotTheGuessableDefault(t *testing.T) {
 	if len(raw) != secretsHeaderValueBytes {
 		t.Fatalf("the value carries %d bytes of entropy, want %d", len(raw), secretsHeaderValueBytes)
 	}
-	// A header value crosses the SDK, the edge and pylon unchanged. Anything
-	// that has to be quoted or folded would arrive as a different string.
+	// A header value crosses the SDK, the edge and the backend unchanged.
+	// Anything that has to be quoted or folded would arrive as a different
+	// string.
 	if strings.ContainsAny(value, " \t\r\n\"\\,;=+/") {
 		t.Fatalf("the value %q holds a character an HTTP header does not carry verbatim", value)
 	}

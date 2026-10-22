@@ -6,7 +6,7 @@
 //     tracing.view.
 //   - `otlp` reverse-proxies browser-originated OTLP/HTTP payloads to the
 //     configured collector, avoiding a browser-to-collector CORS hop exactly
-//     as the pylon original did against Jaeger (legacy otlp.py).
+//     as the legacy original did against Jaeger (legacy otlp.py).
 //   - `collect` accepts the UI's own span-batch shape (legacy collect.py) and
 //     re-emits it as real spans through the process-wide TracerProvider —
 //     the same one libs/go/observability wires up for elitea-main's own
@@ -17,9 +17,10 @@
 // Option (a) of the two the issue offers: elitea-main proxies collect/otlp to
 // an OTEL collector rather than pointing clients straight at a collector
 // service. This is a straight port of the legacy shape (both collect.py and
-// otlp.py already proxy through pylon_main), keeps the UI/worker client
-// surface unchanged, and needs no collector-facing CORS or authentication
-// configuration in deploy/* — the collector only ever talks to elitea-main.
+// otlp.py already proxy through the legacy main service), keeps the UI/worker
+// client surface unchanged, and needs no collector-facing CORS or
+// authentication configuration in deploy/* — the collector only ever talks to
+// elitea-main.
 //
 // # Authorization
 //

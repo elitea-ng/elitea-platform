@@ -80,8 +80,9 @@ func (p defaultSecretPolicy) suppressed(vault vaultData, r *http.Request) bool {
 		return false
 	}
 	// A header value stored as a JSON number, boolean, null or structure is
-	// no value: its text is guessable (`X-SECRET: null`), and pylon compares
-	// the Python value, which no header string equals. Fail closed.
+	// no value: its text is guessable (`X-SECRET: null`), and the legacy
+	// runtime compares the Python value, which no header string equals. Fail
+	// closed.
 	expected, _, usable := vault.credential(SecretsHeaderValueName)
 	supplied := r.Header.Get("X-SECRET")
 	return !usable || expected == "" || supplied == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(supplied)) != 1

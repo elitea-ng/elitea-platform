@@ -1,6 +1,6 @@
 package toolkits
 
-// The provider-hub projection, against pylon's own rules.
+// The provider-hub projection, against the legacy runtime's own rules.
 //
 // Every expected value below was read out of
 // `legacy/plugins/elitea_core/methods/provider_hub_schemas.py`, not invented:
@@ -229,7 +229,7 @@ func TestProviderHubProjectionReportsAnUnreadableManifest(t *testing.T) {
 }
 
 // One provider's broken manifest must not take the others out of the catalogue,
-// which is pylon's own per-provider try/except.
+// which is the legacy runtime's own per-provider try/except.
 func TestProviderHubProjectionKeepsTheProvidersThatDoParse(t *testing.T) {
 	projection := &providerHubProjection{
 		manifests: stubManifests{manifests: []providerhub.AdmittedManifest{

@@ -31,7 +31,7 @@ import (
 )
 
 // Handler serves the secrets API, backed by the same centry.secrets_key /
-// centry.secrets_data tables that the Python pylon secrets plugin uses.
+// centry.secrets_data tables that the legacy Python secrets plugin uses.
 //
 // Encryption scheme (Python cryptography.fernet.Fernet):
 //
@@ -103,7 +103,7 @@ const AllowUnwrappedEnvVar = "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS"
 // its own. That matters for one shape in particular: Go's base64 decoder
 // IGNORES "\r" and "\n", so a key read from a file with a trailing newline
 // decodes to the same 32 bytes and keeps working. Python's
-// base64.urlsafe_b64decode ignores it too, so pylon's secrets engine agrees.
+// base64.urlsafe_b64decode ignores it too, so the legacy secrets engine agrees.
 // Rejecting a newline here would stop a deployment that works today, which is
 // the opposite of the repair. A space or a tab is a different matter: neither
 // decoder pair agrees on it, so it stays an error.
@@ -142,18 +142,18 @@ func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 	return h
 }
 
-// Legacy pylon API modes (legacy/plugins/shared/tools/config.py:40-41).
-// `mode` is a real path segment that SELECTS THE HANDLER in pylon
+// Legacy API modes (legacy/plugins/shared/tools/config.py:40-41).
+// `mode` is a real path segment that SELECTS THE HANDLER in the legacy runtime
 // (api_tools.APIBase.proxy_method looks it up in mode_handlers and
 // abort(404)s on a miss), not decoration.
 const (
-	// modeDefault is pylon's c.DEFAULT_MODE: the project-scoped vault
-	// (VaultClient.from_project(project_id)).  It is also what pylon uses
-	// when the segment is omitted entirely — proxy_method's `mode` kwarg
-	// defaults to "default", and api_tools.with_modes registers both the
+	// modeDefault is the legacy c.DEFAULT_MODE: the project-scoped vault
+	// (VaultClient.from_project(project_id)).  It is also what the legacy
+	// runtime uses when the segment is omitted entirely — proxy_method's `mode`
+	// kwarg defaults to "default", and api_tools.with_modes registers both the
 	// mode-ful and the mode-less URL for every resource.
 	modeDefault = "default"
-	// modeAdministration is pylon's c.ADMINISTRATION_MODE: a DIFFERENT
+	// modeAdministration is the legacy c.ADMINISTRATION_MODE: a DIFFERENT
 	// handler over the GLOBAL vault (a bare VaultClient(), project_id nil
 	// → row id "admin"), with different request/response shapes.  Unit A14
 	// implements it, in admin.go — see that file's header for why it had to
@@ -165,7 +165,7 @@ const (
 )
 
 // Routes returns the secrets subrouter.  It is Mount()ed at "/secrets" by
-// internal/api/router.go, which reproduces the pylon URL shape exactly:
+// internal/api/router.go, which reproduces the legacy URL shape exactly:
 //
 //	/api/v2/<plugin>/<resource-module>/<mode>/<params>
 //
@@ -181,7 +181,7 @@ const (
 // all four; #151 restores them and moves the new client onto this shape.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	// Each route serves BOTH pylon modes: the first handler is the project
+	// Each route serves BOTH legacy modes: the first handler is the project
 	// vault, the second the global vault (admin.go).  They are separate
 	// handlers over separate stores with separate bodies — see withModes.
 	//
@@ -191,7 +191,7 @@ func (h *Handler) Routes() chi.Router {
 		h.adminGate(permSecretView, h.AdminList)))
 	// POST /secrets/{mode}/{projectID}            – create a new secret
 	//
-	// The administration form of this ONE route is not implemented.  Pylon's
+	// The administration form of this ONE route is not implemented.  The legacy
 	// `AdminAPI.post` takes `{"secrets": {…}}` and REPLACES the entire global
 	// vault in a single call; no client in this workspace calls it (admin_ui
 	// creates through /secret/…/{name}, and elitea-sdk and qa/ never touch
@@ -206,7 +206,7 @@ func (h *Handler) Routes() chi.Router {
 		h.adminGate(permSecretView, h.AdminGet)))
 	// POST /secret/{mode}/{projectID}/{name}      – administration-mode create
 	//
-	// Project mode has no POST on this path (pylon's ProjectAPI defines only
+	// Project mode has no POST on this path (the legacy ProjectAPI defines only
 	// get/put/delete here), so it 405s rather than pretending.
 	r.Post("/secret/{mode}/{projectID}/{name}", h.withModes(methodNotAllowed,
 		h.adminGate(permSecretCreate, h.AdminCreate)))
@@ -223,24 +223,25 @@ func (h *Handler) Routes() chi.Router {
 		h.projectGate(permSecretHide, h.Hide),
 		h.adminGate(permSecretEdit, h.AdminHide)))
 
-	// The mode-LESS form of the show route, which pylon also serves
-	// (with_modes registers `<project_id>/<secret>` alongside
+	// The mode-LESS form of the show route, which the legacy runtime also
+	// serves (with_modes registers `<project_id>/<secret>` alongside
 	// `<mode>/<project_id>/<secret>`) and which elitea-sdk is the sole
 	// caller of: elitea_sdk/runtime/clients/client.py:108 and
 	// sandbox_client.py:237 build
 	// {api_v2}/secrets/secret/{project_id} and append /{name}.
-	// Only this one variant is registered: pylon serves the mode-less form
-	// of every route, but no consumer in the workspace calls any of the
-	// others, and a route with no caller is a route no test can discriminate.
+	// Only this one variant is registered: the legacy runtime serves the
+	// mode-less form of every route, but no consumer in the workspace calls any
+	// of the others, and a route with no caller is a route no test can
+	// discriminate.
 	//
-	// It carries the SAME gate as the mode-ful GET, because in pylon it IS
-	// the mode-ful GET. `api_tools.with_modes` registers the mode-less URL
-	// against the same `APIBase`, and `proxy_method`'s signature is
-	// `def proxy_method(self, method, mode='default', **kwargs)` — so a
+	// It carries the SAME gate as the mode-ful GET, because in the legacy
+	// runtime it IS the mode-ful GET. `api_tools.with_modes` registers the
+	// mode-less URL against the same `APIBase`, and `proxy_method`'s signature
+	// is `def proxy_method(self, method, mode='default', **kwargs)` — so a
 	// request with no mode segment dispatches to `DEFAULT_MODE` →
 	// `ProjectAPI.get`, which declares
 	// `configuration.secrets.secret.unsecret` (secret.py:26). The runtime is
-	// therefore already passing this exact check against pylon in production;
+	// therefore already passing this exact check against the legacy runtime;
 	// gating it here is parity, not a new restriction.
 	//
 	// The principal is not a permission-less service identity: both SDK
@@ -248,15 +249,15 @@ func (h *Handler) Routes() chi.Router {
 	// (runtime/clients/client.py:92, sandbox_client.py:228), and
 	// legacyrbac.PostgresResolver resolves a token to its OWNING USER and
 	// then that user's project roles. The `X-SECRET` header those clients
-	// also send is not an auth credential — pylon compares it to the
-	// `secrets_header_value` secret purely to decide whether to suppress
+	// also send is not an auth credential — the legacy runtime compares it to
+	// the `secrets_header_value` secret purely to decide whether to suppress
 	// default secret keys (`ignore_default_secret_api`), and it grants
 	// nothing.
 	r.Get("/secret/{projectID}/{name}", h.projectGate(permSecretUnsecret, h.Get))
 	return r
 }
 
-// The permissions pylon's `ProjectAPI` methods declare that its `AdminAPI`
+// The permissions the legacy `ProjectAPI` methods declare that its `AdminAPI`
 // ones do not (legacy/plugins/secrets/api/v2/{secrets,secret,hide}.py). The
 // three the two families share — create, edit, delete — are declared once in
 // admin.go and reused here; the values are the same strings in both modes.
@@ -271,7 +272,7 @@ const (
 //
 // It is applied here rather than in `router.go` because the mode that selects
 // this handler is a PATH SEGMENT resolved at request time: one chi route serves
-// both pylon modes, so route-level middleware could not gate one and not the
+// both legacy modes, so route-level middleware could not gate one and not the
 // other.
 //
 // It is passed as the `project` branch of withModes rather than wrapped around
@@ -296,10 +297,10 @@ func (h *Handler) projectGate(permission string, next http.HandlerFunc) http.Han
 	return gated.ServeHTTP
 }
 
-// withModes reproduces pylon's mode dispatch for the routes that carry a
-// {mode} segment.  Anything other than the two modes pylon defines is a 404,
-// exactly as APIBase.proxy_method's `abort(404)` on an unknown mode — which
-// is what makes the third convention the new client had invented
+// withModes reproduces the legacy mode dispatch for the routes that carry a
+// {mode} segment.  Anything other than the two modes the legacy runtime defines
+// is a 404, exactly as APIBase.proxy_method's `abort(404)` on an unknown mode —
+// which is what makes the third convention the new client had invented
 // (`prompt_lib`, #151) a hard error rather than a silently-accepted alias.
 //
 // The two branches are genuinely different handlers, not one handler with a
@@ -333,8 +334,8 @@ func notImplementedBulkReplace(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// methodNotAllowed is the project branch of routes pylon defines for the
-// administration mode only.
+// methodNotAllowed is the project branch of routes the legacy runtime defines
+// for the administration mode only.
 func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed for this mode"})
 }
@@ -342,7 +343,7 @@ func methodNotAllowed(w http.ResponseWriter, _ *http.Request) {
 // ─── response models ─────────────────────────────────────────────────────────
 
 // SecretListItem mirrors the Python SecretList pydantic model returned by
-// the pylon secrets plugin for list responses.
+// the legacy secrets plugin for list responses.
 type SecretListItem struct {
 	Name       string `json:"name"`
 	SecretName string `json:"secret_name"` // {{secret.<name>}}
@@ -620,7 +621,8 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 // Delete removes a secret by name (from either secrets or hidden_secrets).
-// Deleting from a project that has no vault is a no-op success, as in pylon.
+// Deleting from a project that has no vault is a no-op success, as in the
+// legacy runtime.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	policy, policyOK := h.readDefaultSecretPolicy(w, r)
 	if !policyOK {
@@ -658,7 +660,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 // Hide moves a secret from secrets → hidden_secrets.
 //
 // It applies the default-secret policy as every other project route does, and
-// as pylon's hide does (secrets/api/v2/hide.py: 400 "Default secrets API
+// as the legacy hide does (secrets/api/v2/hide.py: 400 "Default secrets API
 // disabled"). Without it a project editor could move a platform-provisioned
 // default secret into hidden_secrets with no X-SECRET, where List no longer
 // shows it and LookupProjectSecret (regular secrets only) stops finding it.
@@ -1341,10 +1343,10 @@ func pkcs7Unpad(data []byte) ([]byte, error) {
 // with no vault rows presented to its owner as "the product has no models".
 // That is what #373 was.
 //
-// The step remains because it is what pylon does — the vault is part of a
-// provisioned project, not an artefact of the first write — and because it
-// keeps every project's vault minted by the one minter described below rather
-// than by whichever route happens to write first.
+// The step remains because it is what the legacy runtime does — the vault is
+// part of a provisioned project, not an artefact of the first write — and
+// because it keeps every project's vault minted by the one minter described
+// below rather than by whichever route happens to write first.
 // internal/application/projectprovisioning calls this as its project_secrets
 // step.
 //

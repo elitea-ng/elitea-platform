@@ -23,7 +23,7 @@ package eliteacore_test
 // defect survives.
 //
 // application_tools is the one exception, and it cannot come from the corpus:
-// no migration in this repository creates it. It is a pylon-owned table, which
+// no migration in this repository creates it. It is a legacy-owned table, which
 // internal/infra/db/repos/applications.go:381-397 probes with to_regclass for
 // exactly that reason. The embed path reads it, so the test creates it in the
 // shape captured from a live legacy database in
@@ -338,7 +338,7 @@ VALUES ($1, 'embed fixture sub-agent', 'application', $2)`, fixture.parentVersio
 // it with to_regclass for that reason. The columns, types and nullability below
 // are the live legacy shape recorded in
 // testdata/postgres/legacy-centry-catalog.json, schema p_1. A looser stub would
-// let the embed write rows that pylon would reject.
+// let the embed write rows that the legacy runtime would reject.
 func createLegacyApplicationTools(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

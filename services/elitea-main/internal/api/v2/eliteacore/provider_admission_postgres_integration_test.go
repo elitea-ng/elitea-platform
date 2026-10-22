@@ -18,8 +18,8 @@ package eliteacore_test
 //   2. What is recorded is INACTIVE. This deployment cannot activate a
 //      provider, and the route must not imply it did.
 //   3. `healthy` is null when no probe has reported, true or false when one
-//      has. Pylon could only say true or false, so a provider nobody had
-//      probed looked broken.
+//      has. The legacy runtime could only say true or false, so a provider
+//      nobody had probed looked broken.
 //   4. DELETE revokes and does NOT delete the row. An admission that was once
 //      in force is a fact about what this deployment ran.
 
@@ -185,7 +185,7 @@ func TestHealthIsNullUntilSomethingProbes(t *testing.T) {
 		return body.Rows[0].Healthy
 	}
 
-	// NOBODY HAS PROBED. Null, not false — the distinction pylon's page could
+	// NOBODY HAS PROBED. Null, not false — the distinction the legacy page could
 	// not express, and the reason an operator can tell a broken provider from
 	// a probe that has stopped running.
 	if healthy := read(); healthy != nil {

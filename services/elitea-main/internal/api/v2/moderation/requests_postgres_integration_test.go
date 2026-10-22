@@ -393,10 +393,10 @@ FROM generate_series(1, 10) AS n;`); err != nil {
 	}
 }
 
-// TestQueueSortsOnTheColumnItWasAskedFor. pylon resolves `sort_by` with
-// `getattr` and emits NO ordering when the attribute is missing, which under
-// LIMIT/OFFSET is the unordered-paging bug above. An unknown column here falls
-// back to `created_at` rather than to nothing.
+// TestQueueSortsOnTheColumnItWasAskedFor. The legacy runtime resolves `sort_by`
+// with `getattr` and emits NO ordering when the attribute is missing, which
+// under LIMIT/OFFSET is the unordered-paging bug above. An unknown column here
+// falls back to `created_at` rather than to nothing.
 func TestQueueSortsOnTheColumnItWasAskedFor(t *testing.T) {
 	pool := newModerationPool(t)
 	prepareFixture(t, pool)
@@ -626,10 +626,10 @@ func assertUTCWallClock(t *testing.T, name string, stored *time.Time, before, af
 	}
 }
 
-// TestRejectionRequiresAReason. pylon declares a pydantic validator for this and
-// it does not fire when the key is ABSENT, so `{"id":n,"status":"rejected"}`
-// rejects with a null reason there — and a bare refusal is what the requester
-// receives.
+// TestRejectionRequiresAReason. The legacy runtime declares a pydantic
+// validator for this and it does not fire when the key is ABSENT, so
+// `{"id":n,"status":"rejected"}` rejects with a null reason there — and a bare
+// refusal is what the requester receives.
 func TestRejectionRequiresAReason(t *testing.T) {
 	pool := newModerationPool(t)
 	prepareFixture(t, pool)
@@ -705,10 +705,10 @@ func TestDecisionRefusesToRewriteWhatWasRequested(t *testing.T) {
 	}
 }
 
-// TestDecisionRefusesToReopenAndToInventStatuses. pylon lets a decided request
-// be moved back to `pending` with no record that it was ever answered, and
-// accepts nothing else because its enum is closed; the enum is the part worth
-// keeping.
+// TestDecisionRefusesToReopenAndToInventStatuses. The legacy runtime lets a
+// decided request be moved back to `pending` with no record that it was ever
+// answered, and accepts nothing else because its enum is closed; the enum is
+// the part worth keeping.
 func TestDecisionRefusesToReopenAndToInventStatuses(t *testing.T) {
 	pool := newModerationPool(t)
 	prepareFixture(t, pool)
@@ -754,7 +754,7 @@ func TestDecisionOnAMissingRequestIsNotFound(t *testing.T) {
 
 /* ── the requester's half of the boundary ──────────────────────────────── */
 
-// TestRequesterCannotApproveTheirOwnRequest. pylon's `ModerationStateCreate`
+// TestRequesterCannotApproveTheirOwnRequest. The legacy `ModerationStateCreate`
 // declares `status: ModerationStatus = PENDING`, which is a DEFAULT and not a
 // restriction: a body carrying `"status": "approved"` is stored verbatim, so any
 // project member holding `admin.moderation.create` can file a request that is
@@ -789,10 +789,11 @@ func TestRequesterCannotApproveTheirOwnRequest(t *testing.T) {
 	}
 }
 
-// TestRequesterCannotForgeAuthorship. pylon accepts `user_id` on both the create
-// and the update models and then ignores it, so a caller cannot tell that
-// authorship — and therefore who the decision notification is delivered to — is
-// not theirs to choose. Refused rather than ignored, for that reason.
+// TestRequesterCannotForgeAuthorship. The legacy runtime accepts `user_id` on
+// both the create and the update models and then ignores it, so a caller cannot
+// tell that authorship — and therefore who the decision notification is
+// delivered to — is not theirs to choose. Refused rather than ignored, for that
+// reason.
 func TestRequesterCannotForgeAuthorship(t *testing.T) {
 	pool := newModerationPool(t)
 	prepareUsers(t, pool)

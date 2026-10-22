@@ -161,8 +161,8 @@ func suspendedSQL(t *testing.T, pool *pgxpool.Pool, id int) bool {
 // The shapes it deliberately creates:
 //   - `a14-team-alpha` has TWO admins besides its owner, so a join-based admin
 //     lookup would emit it twice.
-//   - `project_user_9001` is PERSONAL by pylon's `project_user_%` rule and its
-//     admin is an `editor`, which only counts on a personal project.
+//   - `project_user_9001` is PERSONAL by the legacy `project_user_%` rule and
+//     its admin is an `editor`, which only counts on a personal project.
 //   - `a14-team-gamma` is `create_success = false`, the only source of the
 //     "failed" status.
 //   - one member of alpha is a `viewer` (never an admin), one is an `editor`
@@ -226,7 +226,7 @@ func TestProjectsListReportsOwnerAdminsAndStatus(t *testing.T) {
 	if alpha.OwnerName != "Alpha Owner" {
 		t.Errorf("owner_name = %q, want %q", alpha.OwnerName, "Alpha Owner")
 	}
-	// `admin_name` is the pylon-era alias for the owner; a client reading it
+	// `admin_name` is the legacy-era alias for the owner; a client reading it
 	// must not silently get an admin instead.
 	if alpha.AdminName != "Alpha Owner" {
 		t.Errorf("admin_name = %q, want the owner name", alpha.AdminName)
@@ -275,8 +275,8 @@ func TestProjectsStatusDistinguishesSuspendedAndFailed(t *testing.T) {
 	}
 }
 
-// The owner may have no `name`. pylon falls back to the email; a blank cell
-// would be indistinguishable from "this project has no owner".
+// The owner may have no `name`. The legacy runtime falls back to the email; a
+// blank cell would be indistinguishable from "this project has no owner".
 func TestProjectsFallBackToTheOwnerEmailWhenTheNameIsNull(t *testing.T) {
 	pool := newProjectsPool(t)
 	prepareProjectsFixture(t, pool)
@@ -390,7 +390,8 @@ func TestProjectsSearchMatchesNameIDAndOwner(t *testing.T) {
 
 	// The owner match is not a name-only accident: `Alpha Owner` owns BOTH
 	// a14-team-alpha and the personal project, and searching them must return
-	// both — the same behaviour pylon's `auth_search_users` → `owner_ids` gives.
+	// both — the same behaviour the legacy `auth_search_users` → `owner_ids`
+	// gives.
 	byOwner := projectNames(readProjects(t, router, "search="+url.QueryEscape("Alpha Owner")))
 	assertSameSet(t, `search="Alpha Owner"`, byOwner, []string{"a14-team-alpha", "project_user_9001"})
 }
@@ -636,8 +637,8 @@ func TestProjectSuspendRejectsABadProjectID(t *testing.T) {
 	}
 }
 
-// Only `administration` has a handler, in pylon and here. Another mode must not
-// reach the write at all.
+// Only `administration` has a handler, in the legacy runtime and here. Another
+// mode must not reach the write at all.
 func TestProjectSuspendRejectsANonAdministrationMode(t *testing.T) {
 	pool := newProjectsPool(t)
 	prepareProjectsFixture(t, pool)

@@ -172,7 +172,7 @@ func TestCurrentIndexTypesHTTPPostgresRBACAndTenantMatrix(t *testing.T) {
 			}
 			if test.wantStatus == http.StatusOK {
 				// The body carries both halves since #394: the published
-				// `items`/`total` envelope beside the three Pylon maps. Read
+				// `items`/`total` envelope beside the three legacy maps. Read
 				// the maps back out and hold them to the pinned SDK fixture,
 				// and require the published half to be present.
 				var legacyMaps handler.CurrentIndexTypes

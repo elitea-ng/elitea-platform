@@ -76,7 +76,7 @@ func (executor *handlerInternalSecretExecutor) Execute(
 			return *result, nil
 		}
 		params["name"] = name
-		// Current pylon overwrites the request body's name with the path
+		// The legacy runtime overwrites the request body's name with the path
 		// secret. Pinning it here preserves value-rotation semantics and keeps
 		// a model-supplied body field from becoming an implicit rename.
 		body := map[string]any{"name": name}

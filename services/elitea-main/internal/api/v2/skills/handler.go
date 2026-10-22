@@ -166,9 +166,10 @@ type ListResponse struct {
 
 // SkillEntityTypeAgent is the only entity type that can carry a skill.
 //
-// Pylon closes the set to one member: `SkillEntityTypes` has `agent` and
-// nothing else (legacy/plugins/elitea_core/models/enums/all.py:72-74), and the
-// request model types the field as that enum
+// The legacy runtime closes the set to one member: `SkillEntityTypes` has
+// `agent` and nothing else
+// (legacy/plugins/elitea_core/models/enums/all.py:72-74), and the request model
+// types the field as that enum
 // (legacy/plugins/elitea_core/models/pd/skill.py:355), so "pipeline" is a 400
 // there. Both read paths filter on this literal — the chat read
 // (internal/db/queries/agent_chat.sql:132) and the attached-skill registry
@@ -178,7 +179,7 @@ const SkillEntityTypeAgent = "agent"
 
 // MaxSkillsPerEntityVersion caps the skills one agent version may carry.
 //
-// It is pylon's MAX_SKILLS_PER_AGENT
+// It is the legacy MAX_SKILLS_PER_AGENT
 // (legacy/plugins/elitea_core/utils/skill_utils.py:31). The read side already
 // publishes the same number: applicationskills.MaxCurrentApplicationSkills,
 // which the old skill picker renders as "n/5 skills added" and uses to disable
@@ -225,7 +226,7 @@ type SkillRelation struct {
 
 // SkillAttachment is the attach response body.
 //
-// It is pylon's four-key dict, verbatim
+// It is the legacy four-key dict, verbatim
 // (legacy/plugins/elitea_core/utils/skill_utils.py:1228-1233). The ids are
 // numbers there, so they are numbers here.
 type SkillAttachment struct {
@@ -385,7 +386,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 //
 // internal/api/v2/applicationskills answers this path now. It reads
 // entity_skill_mapping through a transaction-local tenant search_path and
-// carries the published SkillsList keys beside the Pylon ones, so both shipped
+// carries the published SkillsList keys beside the legacy ones, so both shipped
 // clients accept one body.
 
 // Get selects the requested version or the configured default.
@@ -625,7 +626,7 @@ const maxUpdateBytes = 1 << 20 // 1MiB
 
 // updateSkillRelation attaches or detaches one skill.
 //
-// Status codes and bodies follow pylon's `patch`
+// Status codes and bodies follow the legacy `patch`
 // (legacy/plugins/elitea_core/api/v2/skill.py:209-245): attach answers 201 with
 // the four-key attachment, detach answers 200 with {"ok": true}.
 func (h *Handler) updateSkillRelation(
@@ -688,7 +689,7 @@ func (h *Handler) updateSkillRelation(
 		apierr.Write(w, apierr.BadRequest(err.Error()))
 		return
 	}
-	// Required on attach, and pylon says so in a model validator
+	// Required on attach, and the legacy runtime says so in a model validator
 	// (legacy/plugins/elitea_core/models/pd/skill.py:357-362). It is not
 	// optional in practice either: both readers of the row LEFT JOIN
 	// skill_versions through this column and serve
@@ -732,11 +733,11 @@ func relationEntityType(body map[string]json.RawMessage) (string, error) {
 // relationID reads one id off the relation body and returns it as a decimal
 // string, or "" when the key is absent or null.
 //
-// Both a JSON number and a JSON string are accepted. Pylon types these fields
-// `int`, and pydantic coerces a numeric string to an int, so both shapes reach
-// the same place there. Anything that is not a positive whole number is
-// refused rather than coerced: these values address a row, and a coerced id
-// addresses the wrong one.
+// Both a JSON number and a JSON string are accepted. The legacy runtime types
+// these fields `int`, and pydantic coerces a numeric string to an int, so both
+// shapes reach the same place there. Anything that is not a positive whole
+// number is refused rather than coerced: these values address a row, and a
+// coerced id addresses the wrong one.
 func relationID(body map[string]json.RawMessage, key string) (string, error) {
 	raw, present := body[key]
 	if !present || string(raw) == "null" {

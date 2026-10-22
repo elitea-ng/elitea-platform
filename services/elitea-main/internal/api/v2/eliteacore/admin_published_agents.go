@@ -33,7 +33,7 @@ import (
 	"time"
 )
 
-// PublishedAgentsListPermission is the permission the pylon original declares.
+// PublishedAgentsListPermission is the permission the legacy original declares.
 const PublishedAgentsListPermission = "runtime.admin.published_agents"
 
 // maxPublishedAgentsPageSize bounds `?page_size`, so a caller cannot ask for

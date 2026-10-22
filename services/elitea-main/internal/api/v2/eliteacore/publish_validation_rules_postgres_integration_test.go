@@ -9,9 +9,9 @@ package eliteacore_test
 //
 // The Y2 fix wave added the two rules this file used to record as DEFERRED —
 // #908 (llm_settings that names a model but no model_project_id) and #913
-// (pylon's three tag rules, zero tags among them) — with the e2e fixtures
-// that had been written against their absence updated in the same change
-// (`PUBLISHABLE_TAGS` in e2e/fixtures/api.ts).
+// (the legacy runtime's three tag rules, zero tags among them) — with the e2e
+// fixtures that had been written against their absence updated in the same
+// change (`PUBLISHABLE_TAGS` in e2e/fixtures/api.ts).
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -351,9 +351,9 @@ func TestPublishValidationMissingModelProjectID(t *testing.T) {
 }
 
 // TestPublishValidationNoModelIsNotTheMissingProjectRule — #908's boundary: a
-// version that names NO model at all is a different case, and pylon's own
-// differently-worded "No LLM model configured" Critical for it is not ported.
-// Asserted so the rule cannot quietly widen into every modelless agent.
+// version that names NO model at all is a different case, and the legacy
+// runtime's own differently-worded "No LLM model configured" Critical for it is
+// not ported. Asserted so the rule cannot quietly widen into every modelless agent.
 func TestPublishValidationNoModelIsNotTheMissingProjectRule(t *testing.T) {
 	pool := newPubValRulesPool(t)
 	fixture := seedPubValAgent(t, pool, "nomodel agent", "a fixture agent long enough to pass the floor")
@@ -394,7 +394,7 @@ func TestPublishValidationZeroTagsIsCritical(t *testing.T) {
 }
 
 // TestPublishValidationAllGenericTagsIsWarning — #913, second rule: a tag set
-// drawn entirely from pylon's GENERIC_TAG_SET is a Warning, not a refusal.
+// drawn entirely from the legacy GENERIC_TAG_SET is a Warning, not a refusal.
 func TestPublishValidationAllGenericTagsIsWarning(t *testing.T) {
 	pool := newPubValRulesPool(t)
 	fixture := seedPubValAgent(t, pool, "generictags agent", "a fixture agent long enough to pass the floor")
@@ -421,7 +421,7 @@ func TestPublishValidationAllGenericTagsIsWarning(t *testing.T) {
 
 // TestPublishValidationOneDomainTagIsSilent — #913, the quiet case: one
 // non-generic tag raises nothing at all. The Suggestion fires ABOVE two tags
-// (pylon recommends 1-2), which is the opposite of the rule this replaced.
+// (the legacy runtime recommends 1-2), which is the opposite of the rule this replaced.
 func TestPublishValidationOneDomainTagIsSilent(t *testing.T) {
 	pool := newPubValRulesPool(t)
 	fixture := seedPubValAgent(t, pool, "onetag agent", "a fixture agent long enough to pass the floor")

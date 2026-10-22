@@ -43,7 +43,7 @@ type CurrentIndexTypeCategory struct {
 
 // currentIndexTypesResponse answers BOTH shipped clients from one body.
 //
-// The Pylon keys document_types, image_types and code_types are unchanged.
+// The legacy keys document_types, image_types and code_types are unchanged.
 // apps/elitea-ui reads exactly those three maps (src/api/applications.js:849
 // calls this path, src/slices/fileTypes.js:26-28 reads the maps). The pinned
 // SDK fixture in testdata pins their contents.

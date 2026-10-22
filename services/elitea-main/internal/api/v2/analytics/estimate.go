@@ -790,7 +790,7 @@ func estimateByAgent(ctx context.Context, tx pgx.Tx, estimate *costEstimate,
 	}
 	if !present {
 		// The chat projection is required for the execution-to-agent join and
-		// is absent on a Go-bootstrapped database with no pylon history — the
+		// is absent on a Go-bootstrapped database with no legacy history — the
 		// same split agentUsage documents. The attributed count above is still
 		// a true measurement of the window.
 		estimate.ByAgent = []estimateAgentRow{}

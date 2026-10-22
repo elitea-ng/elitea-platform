@@ -20,7 +20,7 @@ type rowQuerier interface {
 }
 
 // DBPersonalProjectResolver resolves a user's personal project id from Postgres,
-// mirroring pylon's projects_get_personal_project_id RPC:
+// mirroring the legacy projects_get_personal_project_id RPC:
 //
 //	project = SELECT id FROM centry.project WHERE name = 'project_user_<uid>'
 //	if project exists AND user is a member of it → return project.id
@@ -36,8 +36,8 @@ type DBPersonalProjectResolver struct {
 	// the SPA's path. A PAT-only caller — the SDK, a scheduled job, a scripted
 	// client — never requests `/social/author`, so hooking that endpoint alone
 	// left those callers with no personal project and `/llm` answering
-	// `project_not_resolved` forever. pylon triggers the same work for every
-	// authenticated request.
+	// `project_not_resolved` forever. The legacy runtime triggered the same
+	// work for every authenticated request.
 	ensurer personalproject.AsyncEnsurer
 }
 
@@ -170,8 +170,8 @@ func (r *DBPersonalProjectResolver) userInProject(ctx context.Context, projectID
 	return exists, nil
 }
 
-// projectIDFromSystemEmail implements pylon's fallback: when there is no named
-// personal project, a system user whose email matches
+// projectIDFromSystemEmail implements the legacy fallback: when there is no
+// named personal project, a system user whose email matches
 // 'system_user_<n>@centry.user' resolves to project id <n>.
 func (r *DBPersonalProjectResolver) projectIDFromSystemEmail(ctx context.Context, userID string) (int, error) {
 	uid, err := strconv.Atoi(userID)

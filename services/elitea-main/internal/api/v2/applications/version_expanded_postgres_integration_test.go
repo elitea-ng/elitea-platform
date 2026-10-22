@@ -6,11 +6,11 @@ package applications_test
 // (elitea_sdk/runtime/clients/client.py:681-688) runs
 // `requests.patch(url, headers=..., verify=False)` with NO body, so this
 // handler is a READ. Before this change the Go router served only GET, PUT and
-// DELETE on the path, and the hybrid edge sent the PATCH to pylon
+// DELETE on the path, and the hybrid edge sent the PATCH to the legacy runtime
 // (the since-retired deploy/centry-hybrid/traefik/index-routes.yml). `GetVersionExpanded`
 // existed but no router registered it, and it authenticated against an
 // `APPLICATION_SECRET_KEY` process environment variable that no deployment
-// sets and that pylon never reads.
+// sets and that the legacy runtime never reads.
 //
 // Every assertion below reads the SERVED body, because a status code cannot
 // tell a correct payload from an empty one — and the SDK indexes this payload
@@ -64,8 +64,8 @@ func newExpandedFixture(t *testing.T, agentType string) *expandedFixture {
 // An EMPTY headerValue seals an unrelated secret instead, which leaves the
 // vault readable and the header value absent. That is the exact narrow gap
 // issue #408 names: the vault opens, so `ResolveSecretValue` answers
-// ErrSecretNotFound rather than a decryption error, and pylon answers that
-// state with the literal "secret".
+// ErrSecretNotFound rather than a decryption error, and the legacy runtime
+// answers that state with the literal "secret".
 func newExpandedFixtureWithHeaderValue(t *testing.T, agentType, headerValue string) *expandedFixture {
 	t.Helper()
 	pool := newHandlerTestPool(t)
@@ -111,11 +111,12 @@ func newExpandedFixtureWithHeaderValue(t *testing.T, agentType, headerValue stri
 	}
 
 	seedExpandedSkill(t, pool, versionID, "Alpha", "The first skill.", "Alpha body.")
-	// A skill whose selected version carries only whitespace. Pylon's
+	// A skill whose selected version carries only whitespace. The legacy
 	// resolve_runtime_skills drops it, because `load_skill` could not serve it.
 	seedExpandedSkill(t, pool, versionID, "Blank", "No body.", "   ")
 
-	// The project vault holds the value pylon's check_secret_header compares.
+	// The project vault holds the value the legacy check_secret_header
+	// compares.
 	storedName, storedValue := "secrets_header_value", headerValue
 	if headerValue == "" {
 		storedName, storedValue = "unrelated", "value"
@@ -251,21 +252,21 @@ func assertAlphaOnly(t *testing.T, body map[string]any, recorder *httptest.Respo
 	if icon["glyph"] != "star" {
 		t.Errorf("expected the skill icon_meta, got %v", skill["icon_meta"])
 	}
-	// The projection pylon serves carries neither of these.
+	// The projection the legacy runtime serves carries neither of these.
 	if _, present := skill["skill_version_id"]; present {
 		t.Errorf("attached_skills must not carry skill_version_id, got %v", skill)
 	}
 	if _, present := skill["version_name"]; present {
 		t.Errorf("attached_skills must not carry version_name, got %v", skill)
 	}
-	// `skills` is the pre-resolution key pylon POPS. Serving it would publish a
-	// key no consumer reads.
+	// `skills` is the pre-resolution key the legacy runtime POPS. Serving it
+	// would publish a key no consumer reads.
 	if _, present := body["skills"]; present {
 		t.Errorf("the response must not carry `skills`; the SDK reads attached_skills")
 	}
 }
 
-// A pipeline contributes no skills at all, which is pylon's rule.
+// A pipeline contributes no skills at all, which is the legacy rule.
 func TestVersionPatchServesNoSkillsForAPipeline(t *testing.T) {
 	fixture := newExpandedFixture(t, "pipeline")
 
@@ -326,7 +327,7 @@ func TestVersionPatchIgnoresTheRetiredEnvironmentSecret(t *testing.T) {
 	}
 }
 
-// A provisioned project refuses the pylon literal (#408).
+// A provisioned project refuses the legacy literal (#408).
 //
 // This is the acceptance criterion "prove a request carrying the old literal
 // `secret` is refused on a newly provisioned project". The fixture's vault
@@ -348,10 +349,10 @@ func TestVersionPatchRefusesTheLegacySecretLiteralOnAProvisionedProject(t *testi
 
 // A READABLE vault with no `secrets_header_value` refuses every caller (#408).
 //
-// This test replaces TestVersionPatchFallsBackToThePylonDefaultSecret, which
+// This test replaces the earlier falls-back-to-the-default-secret test, which
 // required 200 for the literal "secret" and so pinned the defect. The literal
 // is what the SDK sends when nothing supplies XSECRET
-// (elitea-sdk/elitea_sdk/runtime/clients/client.py:94), and pylon's
+// (elitea-sdk/elitea_sdk/runtime/clients/client.py:94), and the legacy
 // check_secret_header accepts it on any project that never set the key.
 //
 // It is safe to refuse now because the worker carries the project's own value:

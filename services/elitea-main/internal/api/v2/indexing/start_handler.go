@@ -71,7 +71,7 @@ func NewStartHandlerWithToolRuns(useCase StartUseCase, toolRuns toolkitrun.UseCa
 }
 
 // Start serves two branches of one path, selected by `await_response` exactly
-// as pylon selects them:
+// as the legacy runtime selects them:
 //
 //	await_response=false  the asynchronous index_data admission (task id only)
 //	anything else         one synchronous tool run, answered with its result

@@ -36,7 +36,7 @@ package conversations
 // IS now written, so the open question recorded here through part 1 of #606 is
 // answered: Go took migration ownership of the table
 // (migrations/tenant/0127_chat_message_attachment_items.sql, which records why
-// the collision risk with pylon's own Alembic history is addressable), and the
+// the collision risk with the legacy Alembic history is addressable), and the
 // row itself is written by the ADMISSION transaction, not by this upload
 // handler — internal/infra/db/repos/agent_execution_jobs.go's
 // insertCurrentTurnAttachments, from `payload.attachments` on the start route.
@@ -54,11 +54,11 @@ package conversations
 // ConversationsRepo.DeleteMessage feeds back to the object store when a
 // message is deleted with ?delete_attachment.
 //
-// STILL NOT PORTED, and not by this change: the extracted document text pylon
-// appends to the item's `content` from a separate processing step, and image
-// thumbnailing. Those read the object through the SDK and belong to the
-// worker/SDK port; the admission writes only the creation-time scaffold chunk
-// (see agentexecutionapp.attachmentContentScaffold).
+// STILL NOT PORTED, and not by this change: the extracted document text the
+// legacy runtime appends to the item's `content` from a separate processing
+// step, and image thumbnailing. Those read the object through the SDK and
+// belong to the worker/SDK port; the admission writes only the creation-time
+// scaffold chunk (see agentexecutionapp.attachmentContentScaffold).
 
 import (
 	"bytes"

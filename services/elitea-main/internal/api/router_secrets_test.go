@@ -12,7 +12,7 @@ import (
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 )
 
-// secretsRoutes is the URL surface the secrets domain must expose: pylon's
+// secretsRoutes is the URL surface the secrets domain must expose: the legacy
 // /api/v2/<plugin>/<resource-module>/<mode>/<params>, where the plugin is
 // `secrets` and the resource modules are legacy/plugins/secrets/api/v2/
 // {secrets,secret,hide}.py.
@@ -29,14 +29,14 @@ var secretsRoutes = []struct {
 	{http.MethodGet, "/api/v2/secrets/secrets/{mode}/{projectID}"},
 	{http.MethodPost, "/api/v2/secrets/secrets/{mode}/{projectID}"},
 	{http.MethodGet, "/api/v2/secrets/secret/{mode}/{projectID}/{name}"},
-	// administration-mode create (unit A14). pylon's ProjectAPI has no POST on
-	// this path; its AdminAPI does, and it is how admin_ui creates a global
+	// administration-mode create (unit A14). The legacy ProjectAPI has no POST
+	// on this path; its AdminAPI does, and it is how admin_ui creates a global
 	// secret.
 	{http.MethodPost, "/api/v2/secrets/secret/{mode}/{projectID}/{name}"},
 	{http.MethodPut, "/api/v2/secrets/secret/{mode}/{projectID}/{name}"},
 	{http.MethodDelete, "/api/v2/secrets/secret/{mode}/{projectID}/{name}"},
 	{http.MethodPost, "/api/v2/secrets/hide/{mode}/{projectID}/{name}"},
-	// The mode-less show route pylon also serves and elitea-sdk is the sole
+	// The mode-less show route legacy also serves and elitea-sdk is the sole
 	// caller of (elitea_sdk/runtime/clients/client.py:108 builds
 	// {api_v2}/secrets/secret/{project_id} and appends /{name}).
 	{http.MethodGet, "/api/v2/secrets/secret/{projectID}/{name}"},
@@ -104,7 +104,7 @@ func newSecretsTestRouter(t *testing.T) chi.Router {
 }
 
 // TestRouterServesSecretsUnderThePluginPrefix pins #151: the six routes sit
-// under the `secrets` plugin mount, reproducing the pylon URL shape.
+// under the `secrets` plugin mount, reproducing the legacy URL shape.
 func TestRouterServesSecretsUnderThePluginPrefix(t *testing.T) {
 	router := newSecretsTestRouter(t)
 
@@ -187,12 +187,12 @@ func TestSecretsRoutesAnswerRequests(t *testing.T) {
 	}
 }
 
-// TestSecretsModeDispatch pins the mode half of #151. pylon's
+// TestSecretsModeDispatch pins the mode half of #151. The legacy
 // APIBase.proxy_method looks `mode` up in mode_handlers and abort(404)s on a
 // miss, so an invented mode must not be silently accepted — `prompt_lib`, the
 // third convention the new client had introduced, is exactly such a miss.
 //
-// `administration` selects pylon's AdminAPI over the GLOBAL vault
+// `administration` selects the legacy AdminAPI over the GLOBAL vault
 // (VaultClient() with no project). Unit A14 implements it as a genuinely
 // separate handler over the `admin` row (internal/api/v2/secrets/admin.go); it
 // used to answer 501, and the reason it did — routing it into the project
@@ -228,7 +228,7 @@ func TestSecretsModeDispatch(t *testing.T) {
 			want: http.StatusForbidden, body: "insufficient permissions",
 		},
 		{
-			// The one administration route deliberately not built: pylon's
+			// The one administration route deliberately not built: the legacy
 			// bulk vault replacement, which no client in the workspace calls.
 			name: "bulk vault replacement is not implemented", method: http.MethodPost,
 			path: "/api/v2/secrets/secrets/administration/0",

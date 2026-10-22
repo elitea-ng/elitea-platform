@@ -86,9 +86,9 @@ func TestPrebuiltStoreLookupAcceptsEveryFormOfTheName(t *testing.T) {
 	}
 }
 
-// An upsert REPLACES the definition. pylon rebuilds its catalogue from the
-// descriptor on every reload, so a save means "this is the definition now" and
-// not "merge this into whatever was there".
+// An upsert REPLACES the definition. The legacy runtime rebuilds its catalogue
+// from the descriptor on every reload, so a save means "this is the definition
+// now" and not "merge this into whatever was there".
 func TestPrebuiltStoreUpsertReplacesRatherThanMerges(t *testing.T) {
 	pool := newCataloguePool(t)
 	store := mcpregistry.NewPrebuiltStore(pool)

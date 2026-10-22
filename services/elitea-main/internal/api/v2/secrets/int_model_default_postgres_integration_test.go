@@ -6,11 +6,11 @@ package secrets
 // The Configurations default-model write (repos.SetCurrentModelDefault) stores
 // `default_<section>_model_project_id` as a JSON integer through
 // centrysecrets.RewriteWrapped — deliberately, because the model-default
-// reader and pylon both read an int. The project routes decoded the vault into
-// `map[string]string`, refused the whole document on that one number, and
-// answered 500 "project vault is unreadable" on List, Get and Create for every
-// project with a default model selected. The live regression run met it as
-// "cleanup sweep cannot list secrets … Received: 500".
+// reader and the legacy runtime both read an int. The project routes decoded
+// the vault into `map[string]string`, refused the whole document on that one
+// number, and answered 500 "project vault is unreadable" on List, Get and
+// Create for every project with a default model selected. The live regression
+// run met it as "cleanup sweep cannot list secrets … Received: 500".
 //
 // The vault is seeded through the PRODUCT writers, in the order a real project
 // meets them: provisioning creates the vault, the Configurations page sets a
@@ -144,7 +144,7 @@ func TestAVaultHoldingAnIntegerDefaultModelIDIsReadable(t *testing.T) {
 
 // assertStoredIntegerID decrypts the stored vault and checks the default-model
 // id is a JSON NUMBER, and that the model-default reader the gateway and
-// pylon parity rely on (centrysecrets.LookupRegularProjectID) still reads it.
+// legacy parity rely on (centrysecrets.LookupRegularProjectID) still reads it.
 func assertStoredIntegerID(t *testing.T, handler *Handler, stage string) {
 	t.Helper()
 	ctx := context.Background()

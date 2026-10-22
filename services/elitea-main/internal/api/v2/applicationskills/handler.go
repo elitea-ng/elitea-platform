@@ -50,7 +50,7 @@ type CurrentApplicationSkill struct {
 	VersionMissing bool            `json:"version_missing"`
 	IconMeta       json.RawMessage `json:"icon_meta"`
 	// CreatedAt carries skills.created_at for the published `items` half of
-	// the envelope. It is `json:"-"` on purpose: the Pylon dict has no such
+	// the envelope. It is `json:"-"` on purpose: the legacy dict has no such
 	// key, and adding one would break the byte parity the rest of this type
 	// exists to hold.
 	CreatedAt time.Time `json:"-"`
@@ -215,7 +215,7 @@ type currentApplicationSkillsHandler struct {
 
 // currentApplicationSkillsResponse answers BOTH shipped clients from one body.
 //
-// The Pylon keys `skills` and `max_skills` are unchanged, byte for byte:
+// The legacy keys `skills` and `max_skills` are unchanged, byte for byte:
 // apps/elitea-ui reads them (features/skill/ui/ApplicationSkills.jsx and the
 // two mention hooks read `data.skills` and `data.max_skills`), and the edge
 // cutover this slice was written for depends on them.

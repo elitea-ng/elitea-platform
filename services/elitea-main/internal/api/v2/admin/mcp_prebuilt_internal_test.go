@@ -222,9 +222,10 @@ func TestPrebuiltSecretNameIsVaultSafe(t *testing.T) {
 // authenticate with a secret belonging to a different server.
 //
 // The pairs below are the reachable collisions, not invented ones. Padding
-// survives normalisation (pylon strips whitespace only after the spaces have
-// become underscores), and every character outside `[a-z0-9_]` reduces to an
-// underscore, so `a-b` and `a/b` are two storable keys with one readable form.
+// survives normalisation (the legacy runtime strips whitespace only after the
+// spaces have become underscores), and every character outside `[a-z0-9_]`
+// reduces to an underscore, so `a-b` and `a/b` are two storable keys with one
+// readable form.
 func TestPrebuiltSecretNamesAreDistinctPerKey(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"github_copilot", "epam_presales"},

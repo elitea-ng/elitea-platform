@@ -599,7 +599,7 @@ func zipArchive(files []exportedFile) ([]byte, error) {
 
 // contentDispositionAttachment quotes the filename and, for a name with
 // non-ASCII characters, adds the RFC 5987 `filename*` form beside it — the
-// same two-form header pylon's own `content_disposition_attachment` writes.
+// same two-form header the legacy runtime's own `content_disposition_attachment` writes.
 func contentDispositionAttachment(filename string) string {
 	ascii := strings.Map(func(r rune) rune {
 		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {

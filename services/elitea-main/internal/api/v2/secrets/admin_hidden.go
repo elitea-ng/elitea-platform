@@ -119,7 +119,7 @@ func (h *Handler) DeleteAdminHiddenSecret(ctx context.Context, name string) erro
 //
 //   - `epam_presales` and `__epam_presales__` differ only in padding, and both
 //     are storable keys — `NormalizeCatalogueKey` turns a padded display name
-//     into a padded key, because pylon's own normalisation strips whitespace
+//     into a padded key, because the legacy normalisation strips whitespace
 //     only after the spaces have already become underscores.
 //   - `a-b` and `a/b` both reduce to `a_b`, since every character outside the
 //     accepted class becomes an underscore.

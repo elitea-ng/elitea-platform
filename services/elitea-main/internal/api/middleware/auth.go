@@ -71,7 +71,7 @@ type BrowserSessionValidator interface {
 
 type AuthConfig struct {
 	// Validator reads a credential back and yields the principal it names.
-	// It is the ONLY token validator now: #383 deleted the pylon Redis-RPC
+	// It is the ONLY token validator now: #383 deleted the legacy Redis-RPC
 	// client that used to fill in when this field was nil, so a nil Validator
 	// admits no bearer or API-key credential at all.
 	Validator          TokenValidator
@@ -176,7 +176,7 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 				}
 			}
 
-			// X-API-Key header (pylon compatibility)
+			// X-API-Key header (legacy client compatibility)
 			if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
 				user, err := validateToken(r.Context(), cfg, apiKey)
 				if err != nil {

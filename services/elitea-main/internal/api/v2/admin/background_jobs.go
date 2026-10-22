@@ -26,8 +26,8 @@ package admin
 // The four keys legacy's listing carries are kept verbatim — `task_id`,
 // `status`, `started_at`, `user` — so an operator's existing tooling still
 // reads. `kind`, `name`, `finished_at`, `project_id` and `cancellable` are
-// added, because pylon had one kind of task, one project, no completion time
-// and a stop button that was always offered.
+// added, because the legacy runtime had one kind of task, one project, no
+// completion time and a stop button that was always offered.
 //
 // `cancellable` is computed per row rather than per kind. A settled job cannot
 // be stopped and a scheduled occurrence never can, so the page can render the

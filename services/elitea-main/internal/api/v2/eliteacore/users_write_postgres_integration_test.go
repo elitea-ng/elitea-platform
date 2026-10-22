@@ -296,7 +296,7 @@ func TestUsersWriteVerbsPersistProjectMembership(t *testing.T) {
 
 	// Administration mode used to answer 501 here, and this case used to assert
 	// it. That was a hole, not a policy: `/admin/users/{mode}/{projectID}`
-	// carries the project id in its own path, pylon's users.py maps BOTH modes
+	// carries the project id in its own path, the legacy users.py maps BOTH modes
 	// to the same body, and the admin Projects page's member dialog is exactly
 	// this call — so it reached a Not Implemented (unit A14, #200). It writes
 	// for real now; what differs between the modes is the route-level GATE

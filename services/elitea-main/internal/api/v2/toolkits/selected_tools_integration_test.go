@@ -197,7 +197,7 @@ func TestRelationPatchPersistsSelectedToolsAndReadsThemBack(t *testing.T) {
 
 // The attach itself, against the schema the migration corpus actually builds.
 //
-// `entity_tool_mapping.entity_id` is in the deployed pylon shape
+// `entity_tool_mapping.entity_id` is in the deployed legacy-era shape
 // (internal/db/schema/agent_chat_baseline.sql:104-113) and in every writer, but
 // was in no migration until tenant/0125. Revert 0125 and this test fails at the
 // first line with the production error, verbatim:

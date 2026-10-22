@@ -184,8 +184,8 @@ func TestGroupCreateAttachesAndIsVisibleInTheListing(t *testing.T) {
 		t.Fatalf("POST status = %d, want 201 (body %s)", recorder.Code, recorder.Body.String())
 	}
 
-	// The response is the project, as pylon serializes it — so the client does
-	// not have to re-fetch to render the new chip.
+	// The response is the project, as the legacy runtime serializes it — so the
+	// client does not have to re-fetch to render the new chip.
 	project := decodeProject(t, recorder)
 	if project.ID != groupProjectID {
 		t.Fatalf("response project id = %d, want %d", project.ID, groupProjectID)
@@ -340,8 +340,8 @@ func TestGroupDeleteDetachesWithoutDestroyingTheGroup(t *testing.T) {
 		t.Fatal("detaching a group deleted the group row")
 	}
 
-	// A detach that detaches nothing says so. pylon answers 204 here, having
-	// swallowed the ValueError its list.remove raises.
+	// A detach that detaches nothing says so. The legacy runtime answers 204
+	// here, having swallowed the ValueError its list.remove raises.
 	if again := groupsDo(t, router, http.MethodDelete,
 		fmt.Sprintf("/projects/group/prompt_lib/%d/1", groupProjectID), nil,
 	); again.Code != http.StatusNotFound {
