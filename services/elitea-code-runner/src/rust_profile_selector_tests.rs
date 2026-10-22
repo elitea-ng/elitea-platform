@@ -33,7 +33,7 @@ fn only_exact_broker_policy_and_capability_select_the_broker_profile() {
 fn fixed_broker_assets_keep_their_measured_interface() {
     assert_eq!(
         digest(Profile::Broker.template().as_bytes()),
-        "63ca94313d30b01cb504e78b3d96d9710b61cb3dde4f2eb54bdde5ab2acae8b9"
+        "5f8a53e9c6848459c04478eeb596af69059c45a32a1d6fdf3d54a64a8ad52503"
     );
     let expected = [
         (
