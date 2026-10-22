@@ -92,10 +92,9 @@ use super::{GraphKey, Result, StoreError, lock};
 use elitea_vector_index::client::{
     ClaimToken, DeleteSelector, MAX_EXACT_LIMIT, SearchParams, VectorClient, inventory_namespace,
 };
+use elitea_vector_index::ids::namespace_v5;
 use elitea_vector_index::pb;
-use sha1::Digest as _;
 use sqlx::postgres::PgPool;
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 /// A ranking (the shared core's type, ADR-0029 decision 7).
@@ -113,89 +112,21 @@ pub const NAMESPACE_ROOT: [u8; 16] = [
 /// which it serves to this exactly searched source in one call.
 pub const MAX_RANKED: u32 = MAX_EXACT_LIMIT;
 
-/// elitea-vector's model-slug limit (`^[a-z0-9][a-z0-9-]{0,62}$`).
-const MAX_SLUG_BYTES: usize = 63;
-/// How much of the model name's SHA-256 a slug carries.
-const SLUG_HASH_HEX: usize = 12;
-/// The longest a point key may be (elitea-vector's `MAX_KEY_BYTES`).
-const MAX_KEY_BYTES: usize = 1024;
-
 /// The vector namespace of the graph `key`: the canonical lower-case text of
 /// `UUIDv5(NAMESPACE_ROOT, "<project_id>/<application_id>")`.
 #[must_use]
 pub fn namespace_id(key: GraphKey) -> String {
-    let mut hasher = sha1::Sha1::new();
-    hasher.update(NAMESPACE_ROOT);
-    hasher.update(format!("{}/{}", key.project_id, key.application_id).as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let mut text = String::with_capacity(36);
-    for (index, byte) in bytes.iter().enumerate() {
-        if matches!(index, 4 | 6 | 8 | 10) {
-            text.push('-');
-        }
-        let _ = write!(text, "{byte:02x}");
-    }
-    text
+    namespace_v5(
+        NAMESPACE_ROOT,
+        &format!("{}/{}", key.project_id, key.application_id),
+    )
 }
 
-/// The embedding space's model slug of the model name `model` (the graph's
-/// `_metadata.embeddings_model` stamp; `""` for an unstamped graph): the
-/// platform's rule, byte for byte the indexing worker's
-/// (`elitea-worker-rust/src/indexing/slug.rs`) — the lower-cased name's runs
-/// of `[a-z0-9]` joined by single dashes, cut to 50 bytes (`model` when
-/// nothing is left), then `-` and the first 12 hex digits of the SHA-256 of
-/// the name as given. The hash keeps two names that read alike apart.
-#[must_use]
-pub fn model_slug(model: &str) -> String {
-    let mut readable = String::with_capacity(model.len());
-    let mut pending_dash = false;
-    for character in model.to_lowercase().chars() {
-        if character.is_ascii_lowercase() || character.is_ascii_digit() {
-            if pending_dash && !readable.is_empty() {
-                readable.push('-');
-            }
-            pending_dash = false;
-            readable.push(character);
-        } else {
-            pending_dash = true;
-        }
-    }
-    let room = MAX_SLUG_BYTES - 1 - SLUG_HASH_HEX;
-    if readable.len() > room {
-        readable.truncate(room);
-        while readable.ends_with('-') {
-            readable.pop();
-        }
-    }
-    if readable.is_empty() {
-        readable.push_str("model");
-    }
-    let digest = sha2::Sha256::digest(model.as_bytes());
-    let mut slug = readable;
-    slug.push('-');
-    for byte in digest.iter().take(SLUG_HASH_HEX / 2) {
-        let _ = write!(slug, "{byte:02x}");
-    }
-    slug
-}
-
-/// The point key of the entity `id`: the id itself when elitea-vector can
-/// hold it as a key, else `sha256:<hex>` of it.
-#[must_use]
-pub fn point_key(id: &str) -> String {
-    if !id.is_empty() && id.len() <= MAX_KEY_BYTES && !id.chars().any(char::is_control) {
-        return id.to_owned();
-    }
-    let mut key = String::from("sha256:");
-    for byte in sha2::Sha256::digest(id.as_bytes()) {
-        let _ = write!(key, "{byte:02x}");
-    }
-    key
-}
+/// The embedding space's model slug of the graph's
+/// `_metadata.embeddings_model` stamp (`""` for an unstamped graph), and the
+/// point key of an entity id: the platform's rules, shared with `DeepWiki`
+/// (`elitea_vector_index::ids`).
+pub use elitea_vector_index::ids::{model_slug, point_key};
 
 /// Access to elitea-vector for one invocation: the process's client and the
 /// invocation's callback bearer (elitea-main admits it for the invocation's
@@ -987,40 +918,20 @@ mod tests {
     }
 
     #[test]
-    fn slugs_follow_the_platform_rule() {
-        let slug = model_slug("text-embedding-3-small");
-        assert!(slug.starts_with("text-embedding-3-small-"), "{slug}");
-        assert_eq!(slug.len(), "text-embedding-3-small-".len() + 12);
-        assert!(model_slug("").starts_with("model-"));
-        assert_ne!(
-            model_slug("A_b"),
-            model_slug("a-b"),
-            "the hash keeps them apart"
+    fn the_root_is_the_documented_uuid_v5() {
+        assert_eq!(
+            namespace_v5(
+                // RFC 9562's NAMESPACE_URL, 6ba7b811-9dad-11d1-80b4-00c04fd430c8.
+                [
+                    0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f,
+                    0xd4, 0x30, 0xc8,
+                ],
+                "https://elitea.ai/ns/inventory/graph-vectors"
+            ),
+            "634fdd4c-7b6b-5648-80b0-46de40560443"
         );
-        for model in [
-            "",
-            "x",
-            "Qwen/Qwen3-Embedding-4B",
-            &"é".repeat(100),
-            &"ab-".repeat(60),
-        ] {
-            let slug = model_slug(model);
-            assert!(slug.len() <= 63, "{slug}");
-            assert!(slug.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit()));
-            assert!(
-                slug.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            );
-        }
-    }
-
-    #[test]
-    fn keys_are_ids_unless_the_store_cannot_hold_them() {
+        assert!(model_slug("text-embedding-3-small").starts_with("text-embedding-3-small-"));
         assert_eq!(point_key("a1b2c3"), "a1b2c3");
-        assert!(point_key("").starts_with("sha256:"));
-        assert!(point_key("a\nb").starts_with("sha256:"));
-        assert!(point_key(&"x".repeat(1025)).starts_with("sha256:"));
-        assert_eq!(point_key(&"x".repeat(1024)), "x".repeat(1024));
     }
 
     #[test]

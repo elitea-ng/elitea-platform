@@ -77,9 +77,7 @@ use elitea_vector_index::{
     ClientConfig, DeleteSelector, SearchParams, VectorClient, callback_bearer, pb,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -88,18 +86,8 @@ use uuid::Uuid;
 /// orphans every stored vector.
 pub const DEEPWIKI_NAMESPACE: Uuid = Uuid::from_u128(0x5669_574f_401d_4878_a59e_0c34_ecc4_3970);
 
-/// The longest `document_key` / `chunk_id` elitea-vector accepts.
-const MAX_KEY_BYTES: usize = 1024;
-
 /// The longest generation elitea-vector accepts.
 const MAX_GENERATION_BYTES: usize = 128;
-
-/// elitea-vector's model-slug limit.
-const MAX_SLUG_BYTES: usize = 63;
-/// The hex digits of the model's SHA-256 a slug carries.
-const SLUG_HASH_HEX: usize = 12;
-/// Room for the readable part of a slug.
-const MAX_SLUG_READABLE: usize = MAX_SLUG_BYTES - 1 - SLUG_HASH_HEX;
 
 /// The name a wiki's namespace id is derived from: `"{project_id}/{wiki_id}"`.
 #[must_use]
@@ -112,44 +100,13 @@ pub fn namespace_name(key: &WikiKey) -> String {
 /// requires.
 #[must_use]
 pub fn namespace_id(key: &WikiKey) -> String {
-    Uuid::new_v5(&DEEPWIKI_NAMESPACE, namespace_name(key).as_bytes())
-        .hyphenated()
-        .to_string()
+    elitea_vector_index::ids::namespace_v5(DEEPWIKI_NAMESPACE.into_bytes(), &namespace_name(key))
 }
 
-/// The platform's vector-space slug of `model` (see the module docs).
-#[must_use]
-pub fn model_slug(model: &str) -> String {
-    let mut readable = String::with_capacity(model.len());
-    let mut pending_dash = false;
-    for character in model.to_lowercase().chars() {
-        if character.is_ascii_lowercase() || character.is_ascii_digit() {
-            if pending_dash && !readable.is_empty() {
-                readable.push('-');
-            }
-            pending_dash = false;
-            readable.push(character);
-        } else {
-            pending_dash = true;
-        }
-    }
-    if readable.len() > MAX_SLUG_READABLE {
-        readable.truncate(MAX_SLUG_READABLE);
-        while readable.ends_with('-') {
-            readable.pop();
-        }
-    }
-    if readable.is_empty() {
-        readable.push_str("model");
-    }
-    let digest = Sha256::digest(model.as_bytes());
-    let mut slug = readable;
-    slug.push('-');
-    for byte in digest.iter().take(SLUG_HASH_HEX / 2) {
-        let _ = write!(slug, "{byte:02x}");
-    }
-    slug
-}
+/// The platform's vector-space slug of a model, and the `document_key` /
+/// `chunk_id` of a node's point: the rules shared with Inventory
+/// (`elitea_vector_index::ids`).
+pub use elitea_vector_index::ids::{model_slug, point_key};
 
 /// The generation of a build: its id, which must already be inside
 /// elitea-vector's `[A-Za-z0-9._:-]{1,128}` (a build id is a UUID).
@@ -170,22 +127,6 @@ pub fn generation_of(build_id: &str) -> Result<String, DenseError> {
             "the build id {build_id:?} cannot be a vector generation"
         )))
     }
-}
-
-/// The `document_key` / `chunk_id` of a node's point.
-#[must_use]
-pub fn point_key(node_id: &str) -> String {
-    let plain = !node_id.is_empty()
-        && node_id.len() <= MAX_KEY_BYTES
-        && !node_id.chars().any(char::is_control);
-    if plain {
-        return node_id.to_owned();
-    }
-    let mut key = String::from("sha256:");
-    for byte in Sha256::digest(node_id.as_bytes()) {
-        let _ = write!(key, "{byte:02x}");
-    }
-    key
 }
 
 /// The embedding space of a wiki's vectors.
@@ -883,6 +824,8 @@ fn cosine(a: &[f32], b: &[f32]) -> f64 {
 mod tests {
     use super::*;
     use crate::storage::ProjectScope;
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
 
     fn key(project: i32, wiki: &str) -> WikiKey {
         WikiKey::new(ProjectScope::new(project).unwrap(), wiki)
@@ -916,44 +859,6 @@ mod tests {
             DEEPWIKI_NAMESPACE.hyphenated().to_string(),
             "5669574f-401d-4878-a59e-0c34ecc43970"
         );
-    }
-
-    #[test]
-    fn the_slug_is_the_platforms_vector_space_slug() {
-        let slug = model_slug("text-embedding-3-small");
-        assert_eq!(
-            slug,
-            format!(
-                "text-embedding-3-small-{}",
-                &sha256_hex("text-embedding-3-small")[..12]
-            )
-        );
-        assert_eq!(
-            model_slug("Org/Model.A"),
-            format!("org-model-a-{}", &sha256_hex("Org/Model.A")[..12])
-        );
-        assert_eq!(
-            model_slug("///"),
-            format!("model-{}", &sha256_hex("///")[..12])
-        );
-        let long = model_slug(&"a".repeat(100));
-        assert_eq!(long.len(), MAX_SLUG_BYTES);
-        assert_ne!(model_slug("Model"), model_slug("model"));
-        for model in ["Model", "Ünïcode-Ëmbed", "-x-", "a_b c"] {
-            let slug = model_slug(model);
-            let bytes = slug.as_bytes();
-            assert!(
-                bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit(),
-                "{slug}"
-            );
-            assert!(slug.len() <= MAX_SLUG_BYTES, "{slug}");
-            assert!(
-                bytes
-                    .iter()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-'),
-                "{slug}"
-            );
-        }
     }
 
     #[test]

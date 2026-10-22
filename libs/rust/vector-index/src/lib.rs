@@ -6,6 +6,7 @@
 //! * [`client`]: a typed `elitea.vector.v1` gRPC client over mTLS. Every
 //!   call carries the claim's bearer token; status codes classify as
 //!   retryable or not ([`error`]).
+//! * [`ids`]: how the engines name a vector space, a point and a namespace.
 //! * [`filter`]: the SDK's filter JSON (langchain-postgres operators)
 //!   translated into the facade's filters, refusing what Qdrant cannot
 //!   express.
@@ -38,6 +39,7 @@ pub mod error;
 pub mod filter;
 pub mod format;
 pub mod hit;
+pub mod ids;
 pub mod memory;
 mod prompts;
 mod pyfmt;

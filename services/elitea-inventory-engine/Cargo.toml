@@ -55,8 +55,6 @@ elitea-platform-rpc = { path = "../../libs/rust/platform-rpc" }
 # float32 exact family): the typed elitea.vector.v1 client, on aws-lc like
 # every other TLS hop of this engine.
 elitea-vector-index = { path = "../../libs/rust/vector-index", default-features = false, features = ["tls-aws-lc"] }
-# The graph's vector namespace is a UUIDv5 (SHA-1, RFC 9562 section 5.5).
-sha1 = "=0.10.7"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.

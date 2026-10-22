@@ -49,7 +49,8 @@ tokio-stream = "0.1.19"
 tonic = "0.14.6"
 tonic-prost = "0.14.6"
 tracing = "0.1.44"
-uuid = { version = "1", default-features = false, features = ["v4"] }
+# v4: memory point ids; v5: the engines' namespace ids (`ids`).
+uuid = { version = "1", default-features = false, features = ["v4", "v5"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3.2.0"

@@ -18,6 +18,9 @@ use crate::error::{Error, Result};
 use crate::pb;
 use crate::pb::vector_service_client::VectorServiceClient;
 
+// `elitea-vector` enforces these very constants (its `service` module
+// re-exports them), so the client and the service cannot drift.
+
 /// The most points `elitea-vector` accepts in one upsert batch.
 pub const MAX_BATCH_POINTS: usize = 512;
 /// The most results one search may ask for.

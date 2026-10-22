@@ -33,22 +33,19 @@ use crate::pb;
 use crate::scope::{self, Scope};
 use crate::store::{Store, unavailable};
 
-/// The most points in one Upsert batch.
-pub const MAX_BATCH_POINTS: usize = 512;
-/// The most results one search returns.
-pub const MAX_LIMIT: u32 = 1000;
-/// The most results one `Search` of an exactly searched family (Inventory)
-/// returns: its whole depth. Its caller needs every point at or above a
-/// threshold, and paging re-ranks from the top for every page (see
-/// [`VectorService::ranked`]), so ten pages of 1000 would cost ten exact
-/// scans, the last one 10000 deep; one call of 10000 costs one. The
-/// response stays inside the message bound (an Inventory point carries no
-/// text and a small metadata object).
-pub const MAX_EXACT_LIMIT: u32 = MAX_SEARCH_DEPTH;
-/// The deepest a `Search` pages: `offset + limit` is at most this. A page
-/// costs the store the whole ranking down to its last point, so the depth is
-/// bounded like a limit is.
-pub const MAX_SEARCH_DEPTH: u32 = 10_000;
+/// A request's bounds, defined once with the client
+/// (`elitea_vector_index::client`) so the two cannot drift: the most points
+/// in one Upsert batch; the most results one search returns, and one
+/// `Search` of an exactly searched family (Inventory) its whole depth
+/// (paging re-ranks from the top for every page, see
+/// [`VectorService::ranked`], so ten pages of 1000 would cost ten exact
+/// scans; an Inventory point carries no text and a small metadata object,
+/// so the response stays inside the message bound); and the deepest a
+/// `Search` pages, `offset + limit` (a page costs the store the whole
+/// ranking down to its last point).
+pub use elitea_vector_index::client::{
+    MAX_BATCH_POINTS, MAX_EXACT_LIMIT, MAX_LIMIT, MAX_SEARCH_DEPTH,
+};
 /// How many candidates past its depth a `Search` reads, at most, to take in
 /// every point that ties with the last one inside the depth (see
 /// [`VectorService::ranked`]).
@@ -58,8 +55,9 @@ const MAX_TEXT_BYTES: usize = 1 << 20;
 const MAX_QUERY_TEXT_BYTES: usize = 8 << 10;
 /// The longest `metadata_json` of a point.
 const MAX_METADATA_BYTES: usize = 64 << 10;
-/// The longest key-like string field of a point.
-const MAX_KEY_BYTES: usize = 1024;
+/// The longest key-like string field of a point (the engines' point keys
+/// are cut to it, `elitea_vector_index::ids`).
+use elitea_vector_index::ids::MAX_KEY_BYTES;
 /// The most `acl` entries of a point.
 const MAX_ACL_ENTRIES: usize = 256;
 /// Facet buckets read per (collection, source) by `ListIndexes`.
