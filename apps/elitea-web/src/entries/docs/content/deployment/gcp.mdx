@@ -63,7 +63,7 @@ Use linked GSAs rather than granting roles to the KSA principal directly. AI DIA
 
 Create a **PostgreSQL 16 or newer** instance with a **private IP** in the cluster's VPC. No extension is needed: the platform keeps its vectors in Qdrant through elitea-vector.
 
-- **Connections.** Set the `max_connections` database flag deliberately and copy the same number into `postgresql.maxConnections`. The chart sizes elitea-main's autoscaler against it; see [the connection budget](/deployment/from-scratch#the-connection-budget).
+- **Connections.** Set the `max_connections` database flag deliberately and copy the same number into `postgresql.maxConnections`. The chart checks every component's pools at their replica ceilings against it; see [the connection budget](/deployment/scaling#the-postgresql-connection-budget).
 - **TLS.** Turn on "Allow only SSL connections" and use `sslmode=require` in both DSNs. The chart has no mount for a server CA, so `verify-full` is not available.
 - **No Cloud SQL Auth Proxy.** The chart renders no sidecars. Connect over private IP. If your policy requires the proxy, run it as its own Deployment and Service, and point the DSNs at that Service.
 

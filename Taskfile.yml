@@ -251,6 +251,14 @@ tasks:
       - task: helm:indexing-runtime
       - task: helm:nats-bundled
       - task: helm:default-on
+      - task: helm:scaling
+
+  helm:scaling:
+    desc: Check scale-out readiness (S11) — every autoscaler with and without its source, bundled KEDA and prometheus-adapter on/off, no replicas under an autoscaler, spread and PDBs, grace periods, the all-component connection budget and the gateway's expected replicas
+    deps: [helm:deps]
+    cmds:
+      # S11. Needs helm, python3 and PyYAML.
+      - bash deploy/helm/tests/render-scaling.sh
 
   helm:default-on:
     desc: Check the shipped defaults (runtime, worker, vector with the bundled Qdrant, DeepWiki, Inventory on) render with only the operator's values, each feature is one switch, and missing values are refused in one message

@@ -22,7 +22,8 @@
 #     NATS JetStream the chart bundles (nats + natsBootstrap).
 #
 #   deploy/kind/kind-stack.sh up       # build, load, install, seed  (~6-9 min cold)
-#   deploy/kind/kind-stack.sh verify   # prove the four claims below
+#   deploy/kind/kind-stack.sh verify   # prove the claims below (and that the
+#                                      # bundled KEDA scales DeepWiki, S11)
 #   deploy/kind/kind-stack.sh down     # delete the cluster
 #
 # podman by default (this machine has no docker); KIND_ENGINE=docker switches
@@ -550,6 +551,37 @@ for o in (b.get("items") or b.get("objects") or []):
     fi
   fi
   stop_port_forward
+
+  # ── 5. the bundled KEDA scales DeepWiki (S11) ──────────────────────────────
+  say "5. the ScaledObject created on the first install is Ready"
+  # keda.enabled installs KEDA's CRDs in this same release, so on the FIRST
+  # install the ScaledObject is a post-install hook (the CRDs did not exist
+  # when Helm mapped the release). Ready=True means all of it worked: the
+  # CRDs, the operator, the hook, and a postgresql scaler that connected with
+  # the TriggerAuthentication's credential and ran its query. Polled: the
+  # operator reconciles on its own schedule after it starts.
+  local so_ready="" so_hpa=""
+  for attempt in $(seq 1 60); do
+    so_ready="$(kc -n "$NS" get scaledobject elitea-deepwiki \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+    [ "$so_ready" = "True" ] && break
+    sleep 3
+  done
+  if [ "$so_ready" != "True" ]; then
+    kc -n "$NS" get scaledobject -o wide >&2 || true
+    kc -n "$NS" describe scaledobject elitea-deepwiki >&2 || true
+    fail "ScaledObject elitea-deepwiki is Ready='${so_ready:-<absent>}', not True"
+  else
+    pass "ScaledObject elitea-deepwiki is Ready=True (bundled KEDA, postgresql trigger)"
+  fi
+  # KEDA drives the Deployment through an HPA it owns; the chart rendered no
+  # replicas: field, so nothing fights it.
+  so_hpa="$(kc -n "$NS" get hpa keda-hpa-elitea-deepwiki -o jsonpath='{.spec.scaleTargetRef.name}' 2>/dev/null || true)"
+  if [ "$so_hpa" != "elitea-deepwiki" ]; then
+    fail "KEDA's HPA keda-hpa-elitea-deepwiki targets '${so_hpa:-<absent>}', not elitea-deepwiki"
+  else
+    pass "KEDA's HPA keda-hpa-elitea-deepwiki scales elitea-deepwiki"
+  fi
 
   echo
   if [ "$failures" -ne 0 ]; then

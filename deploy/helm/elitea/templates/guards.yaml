@@ -12,6 +12,7 @@
 {{- include "elitea.applyFeatureSwitches" . }}{{- /* idempotent; see _feature-switches.tpl */}}
 {{- include "elitea.compiledSnapshots.validate" . }}
 {{- include "elitea.codeNodes.validateWorker" . }}
+{{- include "elitea.scaling.validateClusterAddons" . }}{{- /* KEDA / prometheus-adapter: one per cluster; see _scaling.tpl */}}
 {{- /*
   The runtime Redis (`runtimeRedis`: Deployment, Service, ConfigMap, PVC and
   the elitea-runtime-redis-material Secret) is removed. Nothing has read it

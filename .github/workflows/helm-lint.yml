@@ -255,6 +255,16 @@ jobs:
       - name: The worker's autoscaling refuses when it cannot work
         run: bash deploy/helm/tests/render-worker-autoscaling.sh
 
+      # Scale-out readiness (S11): every autoscaler renders only with its
+      # controller AND its metric source (worker, DeepWiki, Inventory, the
+      # gateway), the bundled KEDA's first-install hook and its adoption, the
+      # bundled prometheus-adapter's rules naming exactly the gateway metric,
+      # SkipDryRunOnMissingResource on every KEDA object, no `replicas:` under
+      # an autoscaler, spread and PDBs, grace >= preStop + drain, the budget
+      # naming every component, and the gateway's derived expected replicas.
+      - name: Scaling renders only what can scale
+        run: bash deploy/helm/tests/render-scaling.sh
+
       # The shared provider shape (templates/_provider.tpl). Every invariant
       # here is one several templates have to agree on, and every disagreement
       # is silent: a migration Job pointed at a different database migrates it

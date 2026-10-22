@@ -96,10 +96,12 @@ spec:
   project: default
   # A git source has no charts/ (it is never committed): the repo-server runs
   # `helm dependency build` from the committed Chart.lock, so it must reach
-  # https://nats-io.github.io/k8s/helm/charts/ and
-  # https://qdrant.github.io/qdrant-helm, and a project that restricts
-  # sourceRepos must list both. The published OCI chart carries its
-  # dependencies and needs neither (deploy/argocd/examples/gke/).
+  # https://nats-io.github.io/k8s/helm/charts/,
+  # https://qdrant.github.io/qdrant-helm, https://kedacore.github.io/charts
+  # and https://prometheus-community.github.io/helm-charts (KEDA and
+  # prometheus-adapter are fetched even while switched off), and a project
+  # that restricts sourceRepos must list all four. The published OCI chart
+  # carries its dependencies and needs none (deploy/argocd/examples/gke/).
   source:
     repoURL: https://github.com/elitea-ng/elitea-platform
     targetRevision: main

@@ -208,13 +208,13 @@ With CloudNativePG, a Cluster with `enableSuperuserAccess: true` publishes a Sec
 
 ### The connection budget
 
-PostgreSQL connections run out before CPU does. With the runtime plane on, each elitea-main replica opens one primary pool of 6 plus six isolated runtime pools totalling 36, and elitea-vector's introspection pool adds 8: **about 50 connections per replica**. The chart multiplies that by the autoscaler maximum and refuses to render when the total exceeds `postgresql.maxConnections - reservedConnections`. The reserve covers the scheduler, the gateway, the worker, the Jobs, backups and interactive `psql`.
+PostgreSQL connections run out before CPU does. With the runtime plane on, each elitea-main replica opens one primary pool of 6 plus six isolated runtime pools totalling 36, and elitea-vector's introspection pool adds 2: **44 connections per replica**. The chart adds up **every** component at its replica ceiling (elitea-main, the gateway, the scheduler, DeepWiki, Inventory and the worker's agent-state pool: 73 more with the defaults at one replica each) and refuses to render when the total exceeds `postgresql.maxConnections - reservedConnections`. The reserve covers the Jobs, backups and interactive `psql`. [Scaling](/deployment/scaling#the-postgresql-connection-budget) has the formula per component.
 
-| `max_connections` on the server | `reservedConnections` | Largest `main.autoscaling.maxReplicas` |
+| `max_connections` on the server | `reservedConnections` | Largest `main.autoscaling.maxReplicas` (other components at their defaults) |
 |---|---|---|
-| 100 | 25 | 1 |
-| 200 | 25 | 3 |
-| 300 | 25 | 5 |
+| 200 | 25 | 2 |
+| 300 | 25 | 4 |
+| 600 (the chart's default) | 25 | 10 |
 
 Read the real value with `SHOW max_connections;`. The chart cannot read it, so it believes the number in `postgresql.maxConnections`. A transaction-mode PgBouncer is shipped with the chart (`pgbouncer.enabled`) when you need more elitea-main replicas than the server can hold. Point `elitea-main-db` at the pooler's Service when you turn it on.
 
@@ -605,7 +605,8 @@ main:
 llmGateway:
   replicaCount: 1
   env:
-    LLM_BUDGET_EXPECTED_REPLICAS: "1"     # always equal to replicaCount
+    # LLM_BUDGET_EXPECTED_REPLICAS is derived by the chart from the
+    # gateway's replica ceiling; leave it unset.
     # Every HTTP origin that reaches /llm, public and in-cluster. A provider
     # credential pointing back here is refused, so a loop is impossible.
     # Not https://elitea-main:9446: the worker and the engines reach the

@@ -11,8 +11,8 @@
 #
 # What is summed, from the RENDERED manifest:
 #   * every Deployment and StatefulSet, every app container's requests, times
-#     its replicas — or, when an HPA targets it (the replicas field is then
-#     omitted), the HPA's minReplicas;
+#     its replicas — or, when an HPA or a KEDA ScaledObject targets it (the
+#     replicas field is then omitted), its minReplicas / minReplicaCount;
 #   * NOT init containers (Kubernetes takes the larger of init and app, never
 #     the sum), NOT hook Jobs or CronJobs (seconds long, never all at once);
 #   * the bundled NATS server from nats.container.merge.resources when this
@@ -79,6 +79,10 @@ problems = []
 
 hpa_min = {(d["spec"]["scaleTargetRef"]["kind"], d["spec"]["scaleTargetRef"]["name"]): d["spec"].get("minReplicas", 1)
            for d in docs if d["kind"] == "HorizontalPodAutoscaler"}
+# A KEDA ScaledObject owns its target the same way (its scaleTargetRef kind
+# defaults to Deployment): count its minReplicaCount.
+hpa_min.update({(d["spec"]["scaleTargetRef"].get("kind", "Deployment"), d["spec"]["scaleTargetRef"]["name"]): d["spec"].get("minReplicaCount", 0)
+                for d in docs if d["kind"] == "ScaledObject"})
 rows, worker, surges = [], None, []
 for d in docs:
     if d["kind"] not in ("Deployment", "StatefulSet"):

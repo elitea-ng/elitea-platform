@@ -16,14 +16,22 @@
 # consumed the last slot. elitea-main.validateConnectionBudget now refuses to
 # render the mismatch instead.
 #
-# 210 is what this profile expects the server to be configured for: four
-# replicas at 44 (36 runtime + 6 primary + 2 for elitea-vector's token
-# introspection, which vector.enabled opens) are 176, plus the 25 reserved,
-# 201. It was 200 before the introspection pool existed; 210 keeps the
-# replica ceiling at four with vector on or off, with a little headroom.
-# Change it to match yours; the guard checks against whatever it says.
+# 280 is what this profile expects the server to be configured for. The guard
+# counts EVERY component at its replica ceiling (S11), not elitea-main alone:
+#   elitea-main       4 x 44 (36 runtime + 6 primary + 2 for elitea-vector's
+#                     token introspection, which vector.enabled opens) = 176
+#   llm-gateway       1 x 8                                            =   8
+#   scheduler         1 x 4                                            =   4
+#   deepwiki          host 1 x (4 + 1), engine 1 x (2 + 2 + 8 + 4)     =  21
+#   inventory engine  1 x 8                                            =   8
+#   worker AgentState 1 x 32                                           =  32
+#                                                                      -----
+#                                                                        249
+# plus the 25 reserved, 274; 280 keeps a little headroom. It was 210 while
+# the guard counted elitea-main alone. Change it to match yours; the guard
+# checks against whatever it says.
 postgresql:
-  maxConnections: 210
+  maxConnections: 280
 
 main:
   # WITH THE RUNTIME PLANE ON, THIS CEILING IS A DATABASE PROPERTY.
@@ -31,10 +39,11 @@ main:
   # The chart's default is 10, chosen against CPU and memory targets. Each
   # replica costs ~44 connections here (36 runtime + 6 primary + 2 for
   # elitea-vector's token introspection when vector.enabled), so ten of them
-  # is 440 against the 185 the server above leaves — the autoscaler would
+  # is 440 against the 255 the server above leaves — the autoscaler would
   # exhaust PostgreSQL long before it exhausted a node.
   #
-  # 4 x 44 = 176, inside 185. Raise this only together with
+  # 4 x 44 = 176, plus the other components' 73, inside 255. Raise this only
+  # together with
   # postgresql.maxConnections; the guard checks the pair, which is the point.
   autoscaling:
     maxReplicas: 4

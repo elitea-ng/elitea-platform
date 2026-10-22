@@ -31,6 +31,7 @@ export const deploymentTab: NavTab = {
       pages: [
         { kind: 'page', slug: 'deployment/configuration', title: 'Post-install configuration' },
         { kind: 'page', slug: 'deployment/operations', title: 'Day-2 operations' },
+        { kind: 'page', slug: 'deployment/scaling', title: 'Scaling' },
       ],
     },
   ],

@@ -12,6 +12,7 @@
 #     Manager (its controller authenticates through its own Workload Identity);
 #   * Cloud SQL for PostgreSQL 16+, private IP, "Allow only SSL connections",
 #     with the role and the two databases created by hand (dbInit below);
+#   * KEDA, installed once for the cluster (scaling below);
 #   * a GCS bucket with uniform bucket-level access, and a Google service
 #     account bound to the elitea-main KSA with roles/iam.workloadIdentityUser
 #     and granted, on that bucket only, object read/write/delete PLUS
@@ -62,7 +63,14 @@
 #     steady state is 4070m / 9472Mi, just past the CPU budget: scaling out
 #     under load is what the headroom above the reservation is for;
 #   * PgBouncer (off: three main replicas fit Cloud SQL's connections, see
-#     postgresql below) — on, it adds 10m/32Mi.
+#     postgresql below) — on, it adds 10m/32Mi;
+#   * KEDA's own pods: it is the cluster's add-on (scaling below), not this
+#     release's, so its operator, metrics server and webhook (about 300m and
+#     300Mi of requests together) come out of the cluster's add-on capacity;
+#   * the autoscalers above their floors: the worker (KEDA, up to 4), DeepWiki
+#     (KEDA, up to 3) and the gateway (CPU, up to 3) start at one replica each,
+#     and their scale-out, like elitea-main's, is what the headroom above the
+#     reservation is for.
 # deploy/helm/tests/render-gke-budget.sh renders this file, sums the requests
 # of every Deployment and StatefulSet at their replica counts and adds the
 # largest rendered surge, so a change here that breaks 4 vCPU / 10 GiB, at
@@ -102,9 +110,24 @@ externalSecrets:
 postgresql:
   existingSecret: elitea-main-db
   key: database-url
-  # The instance's max_connections flag. With the runtime plane each
-  # elitea-main replica holds about 50; 3 x 50 + 25 reserved fits 200.
-  maxConnections: 200
+  # The instance's max_connections. A 4 vCPU / 16 GB Cloud SQL for PostgreSQL
+  # instance defaults to 500 (Cloud SQL sizes the flag by memory: 15 GB up to
+  # 30 GB is 500; https://cloud.google.com/sql/docs/postgres/flags). If you
+  # set the flag yourself, state that number here instead.
+  #
+  # Every component at its replica ceiling (the chart checks the sum):
+  #   elitea-main       3 x (6 primary + 36 runtime + 2 vector)   = 132
+  #   llm-gateway       3 x GATEWAY_DATABASE_MAX_CONNS 8          =  24
+  #   scheduler         1 x 4                                     =   4
+  #   deepwiki host     3 x (4 + 1 owner claim)                   =  15
+  #   deepwiki engine   3 x (2 + 2 + query pool 8 + 4 x 1)        =  48
+  #   inventory engine  1 x POOL_SIZE 8                           =   8
+  #   worker AgentState 4 x delivery_max_concurrency 32           = 128
+  #                                                               -----
+  #                                                                 359
+  # against 500 - 25 reserved = 475: 116 to spare, which is a fourth
+  # elitea-main replica (44) with room, or a worker ceiling of 7.
+  maxConnections: 500
   reservedConnections: 25
 
 # Cloud SQL has no superuser, so the database is prepared by hand, once, as
@@ -127,6 +150,33 @@ agentStateMigrations:
 # Never on GKE: the bucket is a precondition (the chart refuses gcs here).
 objectInit:
   enabled: false
+
+# ── Autoscaling ─────────────────────────────────────────────────────────────
+# KEDA is a PRECONDITION here, installed once for the cluster, not by this
+# release (the Scaling page of the deployment docs, "GKE"):
+#
+#   helm install keda kedacore/keda --version 2.21.0 -n keda --create-namespace
+#
+# scaling.keda.clusterInstalled says so for renders that cannot ask the
+# cluster (`helm template`, Argo CD without the cluster's API versions). The
+# other option is keda.enabled=true: this release installs KEDA itself (the
+# pinned kedacore chart, in the release's namespace). Choose it only for a
+# cluster with no KEDA (one per cluster), add KEDA's three pods to the
+# resource budget, and with Argo CD list https://kedacore.github.io/charts in
+# the AppProject's sourceRepos for a git source (the OCI chart carries it).
+# The cluster-wide install is the default here because KEDA is cluster
+# infrastructure: it outlives this release, and deleting this release then
+# never takes the CRDs (and every other team's ScaledObjects) with it.
+#
+# With KEDA: the worker scales on its JetStream backlog, DeepWiki on its
+# running invocations (KEDA's postgresql trigger, reading the same Secret the
+# host does; Cloud SQL's private IP is reachable from the KEDA operator), and
+# the gateway on CPU (no Prometheus is assumed here; with one, set
+# scaling.prometheus.serverAddress and the gateway and DeepWiki move to their
+# Prometheus triggers by themselves).
+scaling:
+  keda:
+    clusterInstalled: true
 
 networkPolicies:
   enabled: true
@@ -302,6 +352,12 @@ scheduler:
 
 llmGateway:
   replicaCount: 1
+  # CPU here (no Prometheus assumed); LLM_BUDGET_EXPECTED_REPLICAS follows
+  # maxReplicas by itself.
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
   resources:
     requests:
       cpu: 250m
@@ -317,7 +373,6 @@ llmGateway:
     enabled: true
   egressPosture: "allowlist"
   env:
-    LLM_BUDGET_EXPECTED_REPLICAS: "1"
     GATEWAY_SELF_LLM_ORIGINS: >-
       https://elitea.example.com/llm/v1,http://elitea-main:8080/llm/v1
     GATEWAY_EGRESS_ALLOWLIST: >-
@@ -330,6 +385,12 @@ llmGateway:
 
 worker:
   replicaCount: 1
+  # The JetStream backlog, through the cluster's KEDA (scaling above). Four
+  # is the connection budget's choice (postgresql above), not KEDA's.
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 4
   materialSecretName: elitea-worker-material
   # Stop the old worker before the new one starts: a surge worker (1500m/3Gi)
   # does not fit the budget. Commands wait in JetStream and PostgreSQL's
@@ -390,6 +451,12 @@ qdrant:
 deepwiki:
   env:
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+  # Running invocations, through KEDA's postgresql trigger (`auto` picks it:
+  # KEDA is there and no Prometheus is configured).
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
   callbackClient:
     certManager:
       issuerRef:

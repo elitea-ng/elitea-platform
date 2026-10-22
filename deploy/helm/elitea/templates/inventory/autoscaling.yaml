@@ -1,0 +1,9 @@
+{{- if .Values.inventory.enabled }}
+{{- /*
+  The Inventory host's autoscaler, disruption budget and PodMonitor
+  (elitea.scaling.subappAutoscaler). No database secret: the Inventory host
+  keeps its invocations in memory, so there is no store to count, and the
+  render refuses more than one replica (elitea-inventory.validateGuards).
+*/ -}}
+{{- include "elitea.scaling.subappAutoscaler" (dict "ctx" . "key" "inventory" "fullname" (include "elitea-inventory.fullname" .) "labels" (include "elitea-inventory.labels" .) "selector" (include "elitea-inventory.selectorLabels" .) "dbSecret" "") }}
+{{- end }}

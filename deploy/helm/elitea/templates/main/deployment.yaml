@@ -28,9 +28,11 @@ metadata:
   labels:
     {{- include "elitea-main.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.main.autoscaling.enabled }}
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.main "field" "main") }}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.main) }}
   replicas: {{ .Values.main.replicaCount }}
   {{- end }}
+  {{- /* No `replicas:` while the HPA owns the Deployment: see elitea.scaling.autoscaled. */}}
   selector:
     matchLabels:
       {{- include "elitea-main.selectorLabels" . | nindent 6 }}
@@ -49,7 +51,18 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-main.serviceAccountName" . }}
-      terminationGracePeriodSeconds: 30
+      {{- /*
+        One clock for the whole shutdown (main.preStop in values.yaml): the
+        preStop sleep, then ELITEA_SHUTDOWN_TIMEOUT of drain after SIGTERM,
+        then 10s for the pools and NATS to close. It was a hard-coded 30,
+        which the default 15s drain plus a load balancer's deregistration
+        delay could already exceed.
+      */}}
+      {{- $preStop := int (dig "preStop" "sleepSeconds" 0 .Values.main) }}
+      {{- $drain := include "elitea.durationSeconds" (dict "field" "main.env.ELITEA_SHUTDOWN_TIMEOUT" "value" (get (.Values.main.env | default dict) "ELITEA_SHUTDOWN_TIMEOUT" | default "15s")) }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "main" "grace" .Values.main.terminationGracePeriodSeconds "parts" (list (list "preStop.sleepSeconds" $preStop) (list "ELITEA_SHUTDOWN_TIMEOUT" $drain) (list "pool and NATS close" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.main.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.main "selector" (include "elitea-main.selectorLabels" .)) | nindent 6 }}
       {{- $runtimeMaterialInit := and .Values.main.runtime.enabled .Values.main.runtime.material.secretName }}
       {{- $authMaterialInit := and .Values.main.fileConfig.authConfig.enabled .Values.main.fileConfig.authConfig.material.secretName }}
       {{- if or $runtimeMaterialInit $authMaterialInit }}
@@ -274,6 +287,7 @@ spec:
             periodSeconds: {{ .Values.main.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.main.probes.readiness.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.main.probes.readiness.failureThreshold }}
+          {{- include "elitea.scaling.preStop" $preStop | nindent 10 }}
           resources:
             {{- toYaml .Values.main.resources | nindent 12 }}
           volumeMounts:

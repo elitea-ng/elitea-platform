@@ -57,14 +57,18 @@ key = lambda d: (d["name"], str(d["version"]), d["repository"])
 want = [key(d) for d in chart.get("dependencies", [])]
 got = [key(d) for d in lock.get("dependencies", [])]
 ok = True
-if [w[0] for w in want] != ["nats", "qdrant", "elitea-sandbox-runtime"]:
-    print(f"FAIL: Chart.yaml dependencies are {[w[0] for w in want]}, want nats, qdrant and elitea-sandbox-runtime"); ok = False
+# keda and prometheus-adapter (S11) are optional and off by default; they are
+# listed, locked and packaged like the rest.
+WANT = ["nats", "qdrant", "elitea-sandbox-runtime", "keda", "prometheus-adapter"]
+if [w[0] for w in want] != WANT:
+    print(f"FAIL: Chart.yaml dependencies are {[w[0] for w in want]}, want {WANT}"); ok = False
 if want != got:
     print(f"FAIL: Chart.lock pins {got}, Chart.yaml declares {want} (helm dependency update deploy/helm/elitea, commit Chart.lock)"); ok = False
-for dep in ("nats", "qdrant"):
+for dep, cond in (("nats", "nats.enabled"), ("qdrant", "qdrant.enabled"), ("keda", "keda.enabled"),
+                  ("prometheus-adapter", "prometheusAdapter.enabled")):
     found = [d for d in chart["dependencies"] if d["name"] == dep]
-    if found and found[0].get("condition") != f"{dep}.enabled":
-        print(f"FAIL: {dep} dependency condition is {found[0].get('condition')!r}, want {dep}.enabled"); ok = False
+    if found and found[0].get("condition") != cond:
+        print(f"FAIL: {dep} dependency condition is {found[0].get('condition')!r}, want {cond}"); ok = False
 unpacked = [p.name for p in (c / "charts").iterdir() if p.is_dir() or p.is_symlink()] if (c / "charts").exists() else []
 if unpacked:
     print(f"FAIL: charts/ holds unpacked or linked dependencies {unpacked}; build-deps.sh writes archives only"); ok = False

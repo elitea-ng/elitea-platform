@@ -55,7 +55,7 @@ GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set netwo
 # values-standalone.yaml turns the runtime plane on, which vector needs.
 # vector.enabled adds the 2-connection token-introspection pool to every
 # elitea-main replica (44 instead of 42); the profile's 4 replicas still fit
-# its 185 available connections (4 x 44 = 176).
+# its 255 available connections (4 x 44 + gateway 8 + scheduler 4 = 188).
 COMPLETE="\
 -f $CHART/values-standalone.yaml \
 --set llmGateway.egressPosture=allowlist \
@@ -383,10 +383,11 @@ expect_refusal "a Qdrant left on with elitea-vector off" "set qdrant.enabled=fal
   --set vector.enabled=false --set main.runtime.indexIngestDispatch.enabled=false
 expect_refusal "one replica" "minReplicas must be at least 2" \
   --set vector.autoscaling.minReplicas=1
-# 9 primary + 36 runtime + 2 introspection = 47 per replica, 188 for four:
-# over 185, while the same primary without vector (45, 180) fits.
-expect_refusal "the introspection pool is in the connection budget" "47 per elitea-main replica" \
-  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=9
+# 23 primary + 36 runtime + 2 introspection = 61 per replica, 244 for four,
+# plus the gateway's 8 and the scheduler's 4 = 256: over 255, while the same
+# primary without vector (59, 236 + 12 = 248) fits.
+expect_refusal "the introspection pool is in the connection budget" "61 per elitea-main replica" \
+  --set-string main.env.ELITEA_DATABASE_MAX_CONNS=23
 expect_refusal "malformed admin identity" "is not a canonical identity" \
   --set 'vector.adminIdentities[0]=elitea-main'
 expect_refusal "elitea-main's identity equal to elitea-vector's own" "must differ" \

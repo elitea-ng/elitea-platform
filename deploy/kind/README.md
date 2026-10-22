@@ -57,7 +57,7 @@ env: the chart derives it from the one switch per feature.
 
 ```bash
 deploy/kind/kind-stack.sh up       # build, load, install, seed
-deploy/kind/kind-stack.sh verify   # prove the four claims below
+deploy/kind/kind-stack.sh verify   # prove the five claims below
 deploy/kind/kind-stack.sh down     # delete the cluster
 ```
 
@@ -147,6 +147,19 @@ Every check exits non-zero on failure.
    for the manifest and the pages that landed. Those pages reached the bucket
    over ArtifactObjectService on the platform listener, so this check is also
    the proof of the provider's gRPC artifact hop.
+5. **The bundled KEDA scales DeepWiki (S11).** `values-kind.yaml` sets
+   `keda.enabled: true` and `deepwiki.autoscaling.enabled: true`, so the
+   release installs KEDA and DeepWiki's ScaledObject (KEDA's `postgresql`
+   trigger over the host's invocation store, with a TriggerAuthentication on
+   the `elitea-db` Secret). KEDA's CRDs arrive in the same release, so on the
+   first install the ScaledObject is a post-install hook, adopted as an
+   ordinary release object by the next `helm upgrade`. The check polls until
+   `elitea-deepwiki` reports `Ready=True` — CRDs, operator, hook and a scaler
+   that really queried PostgreSQL — and asserts KEDA's
+   `keda-hpa-elitea-deepwiki` targets the Deployment. The KEDA images are
+   pulled from `ghcr.io/kedacore`, not side-loaded. Delete the ScaledObjects
+   before a `helm uninstall` of a release that bundles KEDA (`down` deletes
+   the whole cluster, so it does not need to).
 
 The runtime-plane and NATS steps (#1359 U5) and the S10 defaults (Qdrant,
 elitea-vector, Inventory, the runtime-CA issuer) are **unverified locally**:

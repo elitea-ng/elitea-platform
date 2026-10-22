@@ -21,7 +21,11 @@ metadata:
   labels:
     {{- include "elitea-inventory.labels" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.inventory "field" "inventory") }}
+  {{- if not (include "elitea.scaling.autoscaled" .Values.inventory) }}
   replicas: {{ .Values.inventory.replicaCount }}
+  {{- end }}
+  {{- /* No `replicas:` while an HPA or ScaledObject owns the Deployment (autoscaling.yaml). */}}
   selector:
     matchLabels:
       {{- include "elitea-inventory.selectorLabels" . | nindent 6 }}
@@ -34,6 +38,10 @@ spec:
     metadata:
       labels:
         {{- include "elitea-inventory.selectorLabels" . | nindent 8 }}
+      {{- with (include "elitea.scaling.scrapeAnnotations" (dict "v" .Values.inventory "port" .Values.inventory.admin.port "path" "/metrics") | trim) }}
+      annotations:
+        {{- . | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.inventory.podSecurityContext }}
       securityContext:
@@ -43,7 +51,14 @@ spec:
       # Long enough for an in-flight invocation to be recorded as terminal
       # before the process goes. It does not have to outlast an INGESTION:
       # a lost run is redone, and draining forever would be the wrong trade.
-      terminationGracePeriodSeconds: {{ .Values.inventory.terminationGracePeriodSeconds }}
+      #
+      # The host stops its gRPC listener (up to 10s), waits for running
+      # invocations for ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS, then cancels and records
+      # what is left; 10s more for the store and NATS to close.
+      {{- $drain := include "elitea.integer" (dict "field" "inventory.env.ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" "value" (get $env "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" | default "30" | toString) "min" 0) | int }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "inventory" "grace" .Values.inventory.terminationGracePeriodSeconds "parts" (list (list "gRPC stop" 10) (list "ELITEA_INVENTORY_DRAIN_TIMEOUT_SECONDS" $drain) (list "store and NATS close" 10))) }}
+      terminationGracePeriodSeconds: {{ int .Values.inventory.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.inventory "selector" (include "elitea-inventory.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.inventory.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-inventory

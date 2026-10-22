@@ -31,7 +31,13 @@ CHART="deploy/helm/elitea"
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
-      --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=)
+      --set worker.enabled=true --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
+      # Since S11 the connection budget counts the worker's AgentState pool at
+      # its replica ceiling: 10 x 32 = 320 on top of main's 168 and the
+      # gateway's and scheduler's 12 is 500, more than the standalone profile's
+      # 255. A server sized for the fleet, so the guard under test here is the
+      # autoscaler's and never the budget's.
+      --set postgresql.maxConnections=600)
 KEDA=(--api-versions keda.sh/v1alpha1)
 
 failures=0

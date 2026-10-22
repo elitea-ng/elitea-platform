@@ -1,15 +1,4 @@
 {{- if .Values.main.enabled }}
-{{- if .Values.main.podDisruptionBudget.enabled }}
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "elitea-main.fullname" . }}
-  labels:
-    {{- include "elitea-main.labels" . | nindent 4 }}
-spec:
-  minAvailable: {{ .Values.main.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      {{- include "elitea-main.selectorLabels" . | nindent 6 }}
-{{- end }}
+{{- /* Rendered only while the floor is above one replica: elitea.scaling.pdb. */}}
+{{- include "elitea.scaling.pdb" (dict "ctx" . "v" .Values.main "name" (include "elitea-main.fullname" .) "labels" (include "elitea-main.labels" .) "selector" (include "elitea-main.selectorLabels" .)) }}
 {{- end }}

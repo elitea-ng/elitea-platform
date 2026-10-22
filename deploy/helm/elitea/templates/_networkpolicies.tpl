@@ -80,8 +80,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 #                       gRPC over mutual TLS (#1359): elitea-main, and only
 #                       the identities in {{ .key }}.platformGrpc.clients may
 #                       call it.
-#   {{ .adminPort }} (admin)          /healthz and /readyz, plain HTTP: only
-#                       networkPolicies.probeFrom.
+#   {{ .adminPort }} (admin)          /healthz, /readyz and /metrics, plain HTTP:
+#                       networkPolicies.probeFrom and the Prometheus in
+#                       networkPolicies.metricsFrom (the in-flight gauge a KEDA
+#                       prometheus trigger reads).
 #
 # The engine sidecar has no port: it answers on a Unix socket in the pod.
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
@@ -109,7 +111,8 @@ spec:
         {{- with $np.probeFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-    {{- with $np.probeFrom }}
+    {{- $adminFrom := concat ($np.probeFrom | default list) ($np.metricsFrom | default list) }}
+    {{- with $adminFrom }}
     - ports:
         - port: {{ $.adminPort }}
           protocol: TCP

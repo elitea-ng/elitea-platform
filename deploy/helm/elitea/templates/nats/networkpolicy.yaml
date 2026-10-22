@@ -52,7 +52,13 @@ spec:
             matchLabels:
               {{- include "elitea-nats.serverSelectorLabels" . | nindent 14 }}
     {{- end }}
-    {{- with .Values.nats.networkPolicy.monitoringFrom }}
+    {{- $monitoringFrom := .Values.nats.networkPolicy.monitoringFrom | default list }}
+    {{- if dig "enabled" false (.Values.keda | default dict) }}
+    {{- /* keda.enabled installs the operator in THIS namespace, which the
+           default monitoringFrom (a `keda` namespace) does not name. */}}
+    {{- $monitoringFrom = append $monitoringFrom (dict "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" .Release.Namespace)) "podSelector" (dict "matchLabels" (dict "app" (dig "operator" "name" "keda-operator" .Values.keda)))) }}
+    {{- end }}
+    {{- with $monitoringFrom }}
     # /jsz for the KEDA nats-jetstream scaler.
     - ports:
         - port: {{ dig "config" "monitor" "port" 8222 $.Values.nats }}

@@ -9,3 +9,22 @@ bundled Qdrant is an upstream subchart and reads only its own values: if its
 image ({{ .Values.qdrant.image.repository }}) comes through your registry, list
 the same Secrets under qdrant.imagePullSecrets.
 {{- end }}
+{{- if .Values.keda.enabled }}
+NOTE: this release installs KEDA (keda.enabled=true). KEDA is cluster-wide —
+CRDs and the external.metrics.k8s.io APIService — so a cluster runs ONE. A
+`helm install`/`upgrade` refuses when it can see another; `helm template` and
+Argo CD cannot look, so check that this cluster had none before.
+On the first install the ScaledObjects are created by a post-install hook once
+KEDA's CRDs exist, and adopted as ordinary release objects on the next
+upgrade; KEDA marks them Ready once its operator is up.
+Uninstall: delete this release's ScaledObjects and TriggerAuthentications
+FIRST, or KEDA (removed in the same uninstall) leaves their finalizers behind
+and the CRDs stuck Terminating. The Scaling page of the deployment docs has
+the commands.
+{{- end }}
+{{- if .Values.prometheusAdapter.enabled }}
+NOTE: this release installs prometheus-adapter (prometheusAdapter.enabled=true),
+which serves custom.metrics.k8s.io for the WHOLE cluster: one per cluster.
+Its rules expose only gateway_llm_sse_active_connections, for the gateway's
+HPA. Any other custom-metric HPA in this cluster reads nothing from it.
+{{- end }}

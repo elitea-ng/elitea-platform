@@ -20,16 +20,16 @@
   the same way and worse — the API rejects an unknown kind, or, if a stale CRD
   is present, the object is created and no controller ever reads it.
 
-  `.Capabilities.APIVersions` is the cluster's OWN list of served API groups.
-  Asking it turns "KEDA is not installed" from a silent no-op into a failed
-  install with a message. For `helm template`, which has no cluster to ask,
-  pass `--api-versions keda.sh/v1alpha1` — deploy/helm/tests/render-worker-
-  autoscaling.sh does exactly that, and also checks that WITHOUT it the render
-  is refused.
+  KEDA counts as present from any of three sources (elitea.scaling.kedaServed):
+  this release installs it (keda.enabled); the cluster already serves
+  keda.sh/v1alpha1 (`.Capabilities.APIVersions`, the cluster's OWN list of
+  served API groups); or the operator says it is there
+  (scaling.keda.clusterInstalled), for `helm template` and Argo CD renders
+  that cannot ask. Anything else is a failed install with a message.
+  deploy/helm/tests/render-worker-autoscaling.sh and render-scaling.sh check
+  each source and the refusal without one.
 */}}
-{{- if not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
-{{- fail "worker.autoscaling.enabled=true needs KEDA, and this cluster does not serve keda.sh/v1alpha1. The worker scales on JetStream consumer lag, which no native HorizontalPodAutoscaler can read, so there is no degraded mode to fall back to: a ScaledObject applied without KEDA is an object no controller reads. Install KEDA (https://keda.sh), or set worker.autoscaling.enabled=false and size worker.replicaCount by hand. For `helm template`, pass --api-versions keda.sh/v1alpha1." }}
-{{- end }}
+{{- include "elitea.scaling.requireKeda" (dict "ctx" . "field" "worker.autoscaling.enabled=true" "why" "The worker scales on JetStream consumer lag, which no native HorizontalPodAutoscaler can read, so there is no CPU fallback: set worker.autoscaling.enabled=false and size worker.replicaCount by hand if there is no KEDA.") }}
 {{- $a := .Values.worker.autoscaling }}
 {{- if lt (int $a.maxReplicas) (int $a.minReplicas) }}
 {{- fail (printf "worker.autoscaling.maxReplicas (%d) is below minReplicas (%d)." (int $a.maxReplicas) (int $a.minReplicas)) }}
@@ -85,6 +85,7 @@ metadata:
   # applies built-in kinds (the Deployment) before custom resources.
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    {{- include "elitea.scaling.kedaAnnotations" . | nindent 4 }}
 spec:
   scaleTargetRef:
     name: {{ include "elitea-worker.fullname" . }}

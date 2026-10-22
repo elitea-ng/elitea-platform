@@ -105,6 +105,11 @@
     "description": "The target Kubernetes topology, what the Helm chart creates versus what you bring, and where the signed release artefacts live."
   },
   {
+    "slug": "deployment/scaling",
+    "title": "Scaling",
+    "description": "What each Elitea component scales on and what it needs first, the PostgreSQL connection budget the chart checks, per-replica capacity caps, the high-availability overlays, disruption budgets and spread, drain and grace periods, and the gateway's expected-replicas rule."
+  },
+  {
     "slug": "development/backend",
     "title": "Backend services and workers",
     "description": "Run elitea-main against the compose database, work with migrations, edit the OpenAPI spec, and test the workers."

@@ -220,6 +220,25 @@ deepwiki:
       memory: 256Mi
     limits:
       memory: 2Gi
+  # S11: the bundled-KEDA proof. DeepWiki scales on the running rows of its
+  # shared invocation store (the KEDA postgresql trigger, which `auto` picks
+  # because this host has a database and no Prometheus is configured), and
+  # `verify` asserts the ScaledObject turns Ready=True — which needs the
+  # bundled KEDA's CRDs, its operator, the hook that created the object on
+  # this FIRST install (templates/_scaling.tpl, kedaAnnotations) and a scaler
+  # that really connected to PostgreSQL with the TriggerAuthentication's
+  # credential. maxReplicas 2 keeps the second pod off this small node unless
+  # an invocation is running.
+  autoscaling:
+    enabled: true
+    source: auto
+    minReplicas: 1
+    maxReplicas: 2
+
+# KEDA, installed by this release (keda.enabled; the pinned kedacore chart).
+# A kind cluster has none, which is the precondition: KEDA is one per cluster.
+keda:
+  enabled: true
 
 inventory:
   enabled: true

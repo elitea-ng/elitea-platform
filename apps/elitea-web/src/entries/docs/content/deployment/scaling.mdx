@@ -1,0 +1,135 @@
+---
+title: "Scaling"
+description: "What each Elitea component scales on and what it needs first, the PostgreSQL connection budget the chart checks, per-replica capacity caps, the high-availability overlays, disruption budgets and spread, drain and grace periods, and the gateway's expected-replicas rule."
+---
+
+Every Elitea component that can run more than one replica has an autoscaler in the chart. The rule behind all of them: **an autoscaler renders only when its controller and its metric source are present**. An autoscaler with no controller, or one that reads a metric nothing publishes, holds the fleet at its floor while the load grows and reports nothing. So each source below is detected from the cluster, installed by the release, or stated by you. Anything else is refused at render time, or falls back to CPU.
+
+## What scales on what
+
+| Component | Autoscaler | Scales on | Needs | Default range |
+|---|---|---|---|---|
+| elitea-main | HPA | CPU (70 %) | metrics-server | 2 to 10 |
+| elitea-vector | HPA | CPU (70 %) | metrics-server | 2 to 6 |
+| elitea-web | HPA (off by default) | CPU (70 %) | metrics-server | 2 to 6 |
+| Agent worker | KEDA `nats-jetstream` | consumer lag on the agent command stream; one replica per `delivery_max_concurrency` (32) commands | KEDA | 1 to 10 |
+| DeepWiki | KEDA `prometheus` | `sum(elitea_subapp_invocations_in_flight{app="elitea-deepwiki"})`, one replica per `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` | KEDA, Prometheus scraping the host's admin port | 1 to 3 |
+| | KEDA `postgresql` | `SELECT count(*) FROM invocations WHERE finished_at IS NULL`, same target | KEDA, the host's database | |
+| | HPA | CPU | metrics-server | |
+| Inventory | none | one replica | | 1 |
+| LLM gateway | KEDA `prometheus` | `sum(gateway_llm_sse_active_connections)` in the namespace, 40 streams per replica | KEDA, Prometheus scraping `:8083/metrics` | 1 to 4 |
+| | HPA, Pods metric | `gateway_llm_sse_active_connections` per pod, through `custom.metrics.k8s.io` | a custom metrics adapter | |
+| | HPA | CPU | metrics-server | |
+| Scheduler | none | 1 or 2 replicas (`scheduler.replicaCount`) | | 1 |
+| NATS, Qdrant | none | fixed size; see [High availability](#high-availability) | | 1 |
+
+elitea-main exposes no `/metrics`, so CPU is its only signal. Its load is streams and requests, which costs CPU in proportion.
+
+Each autoscaler turns on with `<component>.autoscaling.enabled: true`. DeepWiki and the gateway take `autoscaling.source`. The default is `auto`, which picks the first source that is available, in the order of the table. Name a source to require it: a named source that is not available is refused, with the reason.
+
+Inventory stays at **one replica**. Its host keeps invocations in memory, and a status read served by another replica would answer "unknown invocation". The chart refuses `inventory.autoscaling.maxReplicas` above 1 until the host has a durable invocation store.
+
+While an autoscaler owns a Deployment, the chart renders **no `replicas:` field** on it. A value there would be written back by every `helm upgrade` and every Argo CD sync, snap the fleet to `replicaCount`, and leave the autoscaler to scale it out again.
+
+## Preconditions: KEDA and a custom metrics adapter
+
+KEDA and a custom metrics adapter are **cluster-wide**: CRDs, plus an `APIService` each (`external.metrics.k8s.io` for KEDA, `custom.metrics.k8s.io` for the adapter). A cluster runs **one of each**. Two of them fight over the same cluster-scoped objects, and the scalers of whichever loses read nothing.
+
+| You have | Set |
+|---|---|
+| KEDA already in the cluster | nothing on `helm install` (the chart sees `keda.sh/v1alpha1`); `scaling.keda.clusterInstalled: true` for `helm template` and for Argo CD |
+| No KEDA, and you want the release to bring it | `keda.enabled: true` (the pinned kedacore chart, 2.21.0) |
+| A custom metrics adapter already | `scaling.customMetrics.clusterInstalled: true` where the chart cannot see it, and a rule for `gateway_llm_sse_active_connections` in that adapter |
+| No adapter, and the gateway should use one | `prometheusAdapter.enabled: true` and `prometheusAdapter.prometheus.url` (the pinned prometheus-community chart, 5.3.0; its rules expose exactly the gateway metric and nothing else) |
+| Prometheus for the KEDA `prometheus` triggers | `scaling.prometheus.serverAddress`, plus a scrape: a PodMonitor (rendered by default wherever the Prometheus Operator's API is served), `<component>.metrics.scrapeAnnotations: true`, or `<component>.metrics.scrapedExternally: true` for a scrape config of your own |
+
+`helm install` and `helm upgrade` refuse `keda.enabled` or `prometheusAdapter.enabled` when they can see one that this release does not own. `helm template` and Argo CD cannot look into the cluster, so the install notes warn instead. Enable the bundled ones only on a cluster that has none.
+
+### The first install with the bundled KEDA
+
+KEDA's chart ships its CRDs as templates, so on the **first** `helm install` a ScaledObject in the same release has no API to map to yet, and Helm refuses the whole install. The chart avoids that. While the cluster does not serve `keda.sh/v1alpha1` and this release installs KEDA, each ScaledObject and TriggerAuthentication renders as a **post-install hook** that carries the release's ownership metadata. The next `helm upgrade` renders them as ordinary resources and Helm adopts the existing objects. `--wait` is not needed: the hook only creates the objects, and KEDA marks them Ready once its operator is up. The kind smoke in CI proves this path on every chart change: a ScaledObject created on the first install must turn `Ready=True`.
+
+For Argo CD, every ScaledObject and TriggerAuthentication carries `argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true`. On the first sync the dry run skips them, and Argo CD applies the CRDs before them.
+
+<Warning title="Uninstalling a release that bundles KEDA">
+Delete the release's ScaledObjects and TriggerAuthentications **before** `helm uninstall`. The uninstall removes KEDA's operator together with its CRDs. A ScaledObject whose finalizer never ran then keeps the CRD, and the namespace, in `Terminating`.
+
+```bash
+kubectl -n elitea delete scaledobjects,triggerauthentications -l app.kubernetes.io/instance=elitea
+helm -n elitea uninstall elitea
+```
+
+If it already happened, remove the finalizer by hand: `kubectl -n elitea patch scaledobject <name> --type=merge -p '{"metadata":{"finalizers":null}}'`.
+</Warning>
+
+## The PostgreSQL connection budget
+
+Every pool size is explicit, and the chart adds them up at each component's **replica ceiling**: `autoscaling.maxReplicas` while an autoscaler owns the Deployment, otherwise `replicaCount`. The question is what the release can open without anybody doing anything. The render is refused when
+
+`Σ (replica ceiling × connections per replica)  ≤  postgresql.maxConnections − postgresql.reservedConnections`
+
+does not hold. The refusal lists every component's share. Exhaustion does not show up on the component that caused it: the next one to connect, usually a migration Job or the scheduler, fails with `sorry, too many clients already`.
+
+| Component | Connections per replica | Shipped default |
+|---|---|---|
+| elitea-main | `ELITEA_DATABASE_MAX_CONNS` + the six runtime-plane pools (36) + elitea-vector's introspection pool (2) + 4 per distinct AgentState receipt DSN | 6 + 36 + 2 = 44 |
+| elitea-main behind PgBouncer | `pgbouncer.poolSize + reservePoolSize` **once**, plus the AgentState receipt pools per replica | |
+| LLM gateway | `GATEWAY_DATABASE_MAX_CONNS` | 8 |
+| Scheduler | `ELITEA_DATABASE_MAX_CONNS` | 4 |
+| DeepWiki host | `ELITEA_DEEPWIKI_DATABASE_MAX_CONNS` + 1 (the owner claim) | 4 + 1 |
+| DeepWiki engine | 2 + 2 + `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` + 4 × `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` | 2 + 2 + 8 + 4 = 16 |
+| Inventory engine | `ELITEA_INVENTORY_POOL_SIZE` | 8 |
+| Worker | `limits.delivery_max_concurrency` AgentState connections, when the agent-state database is on this server (`postgresql.agentStateSharesServer`) | 32 |
+
+`reservedConnections` (25) covers what the chart does not model: hook Jobs, an interactive `psql`, backups. A pool left unset is refused rather than guessed: each service then falls back to pgx's `max(4, numCPU)`, which depends on the node the pod lands on.
+
+With the shipped defaults at their ceilings: main 10 × 44 = 440, gateway 8, scheduler 4, DeepWiki 5 + 16, Inventory 8, worker 32, which totals **513**. `postgresql.maxConnections` defaults to **600**, so 575 are available. Turning on an autoscaler raises its line. The worker at its default ceiling of 10 is 320 on its own, so size the server, lower a ceiling, or move the agent-state database to another server (`postgresql.agentStateSharesServer: false`).
+
+`values-gke.yaml` sizes for a Cloud SQL instance with 4 vCPU and 16 GB. Cloud SQL sets `max_connections` from memory, and from 15 GB up to 30 GB the value is **500**. The arithmetic, also in the file: main 3 × 44 = 132, gateway 3 × 8 = 24, scheduler 4, DeepWiki host 3 × 5 = 15, DeepWiki engine 3 × 16 = 48, Inventory 8, worker 4 × 32 = 128. That totals **359** of the 475 available. If you set the flag yourself, state that number in `postgresql.maxConnections`.
+
+## Per-replica capacity
+
+| Component | Cap per replica | Setting |
+|---|---|---|
+| elitea-main | 256 concurrent SSE streams, 16 per principal, 128 per project | `main.runtime.sse.*` |
+| LLM gateway | 50 concurrent provider calls; the autoscaler targets 40 streams | `GATEWAY_PROVIDER_CONCURRENCY`, `llmGateway.autoscaling.targetSSEConnectionsPerPod` |
+| Agent worker | 32 commands in flight | `worker.runtime.limits.delivery_max_concurrency` |
+| DeepWiki | 1 generation at a time | `ELITEA_DEEPWIKI_MAX_PARALLEL_WORKERS` |
+| Inventory | the single replica; its engine's database pool is 8 | `ELITEA_INVENTORY_POOL_SIZE` |
+
+The fleet's capacity is the cap times the replica ceiling. 1000 concurrent agent flows need about 1000 live streams: four elitea-main replicas at 256 each.
+
+## High availability
+
+The defaults run NATS and Qdrant as single nodes. Two overlays make them highly available:
+
+- `values-nats-ha.yaml`: three NATS nodes, the streams and key-value buckets replicated three times (`natsBootstrap.replicas: 3`), and routes over mutual TLS.
+- `values-qdrant-ha.yaml`: a three-node Qdrant cluster with peer TLS. Raise `vector.collection.replicationFactor` along with it.
+
+```bash
+helm upgrade --install elitea oci://ghcr.io/elitea-ng/charts/elitea -n elitea \
+  -f your-values.yaml -f values-nats-ha.yaml -f values-qdrant-ha.yaml
+```
+
+## Disruption budgets and spread
+
+Each multi-replica workload gets two **soft** topology spread constraints, over zones and then over nodes (`whenUnsatisfiable: ScheduleAnyway`). They are rendered when the component can run more than one replica. Soft on purpose: a single-zone or single-node cluster still schedules every replica. `<component>.topologySpreadConstraints` replaces them, and `scaling.topologySpread.enabled: false` turns them off everywhere.
+
+A PodDisruptionBudget (`minAvailable: 1`) is rendered only where the component's **floor** is above one replica: `autoscaling.minReplicas`, else `replicaCount`. Over a single replica it would block every voluntary eviction for good: `kubectl drain`, a node-pool upgrade, the cluster autoscaler. With the defaults, elitea-main, elitea-vector and elitea-web have one. The gateway and the worker get one from a floor of two.
+
+## Drain and grace periods
+
+Kubernetes starts `terminationGracePeriodSeconds` when it runs the preStop hook, so the hook, the drain and what follows all spend the same clock. Past it, the kubelet sends SIGKILL in the middle of the drain. The chart refuses a grace period that is too short:
+
+| Component | preStop | Drain | Grace (default) | Rule |
+|---|---|---|---|---|
+| elitea-main | sleep 10 | `ELITEA_SHUTDOWN_TIMEOUT` 30s | 50 | ≥ 10 + drain + 10 |
+| LLM gateway | sleep 10 | `GATEWAY_SHUTDOWN_TIMEOUT` 150s | 190 | ≥ 10 + drain + 30 |
+| DeepWiki, Inventory | | `*_DRAIN_TIMEOUT_SECONDS` 30 | 60 | ≥ 10 + drain + 10 |
+| Agent worker | | `limits.shutdown_timeout_millis` 30 000 | 45 | ≥ drain + 15 |
+
+The preStop hook is the native `sleep` action, which needs Kubernetes 1.30 or newer; the images are distroless and have no `sleep` binary. It gives the endpoint controllers and the load balancer time to take the pod out of rotation before the process gets SIGTERM. At its deadline elitea-main closes the SSE streams that are still open, and the browser reconnects and resumes on another replica.
+
+## The gateway's expected replicas
+
+The gateway divides its degraded-mode budget cap by `LLM_BUDGET_EXPECTED_REPLICAS`. If that number is below the real fleet, every replica spends a share meant for fewer, and the fleet overspends while it is degraded. The chart **derives** it from the gateway's replica ceiling: `autoscaling.maxReplicas` while autoscaling, else `replicaCount`. Leave it unset. An explicit value below the ceiling is refused, and one above it is accepted.

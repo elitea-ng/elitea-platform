@@ -162,8 +162,11 @@ assert any("elitea-main" in c["spec"].get("dnsNames", []) for c in client), "cli
 PY
 
 echo "== gateway HPA: custom /llm SSE metric (design §9.5) =="
+# The Pods metric renders only where custom.metrics.k8s.io is served (S11);
+# clusterInstalled states it for a render with no cluster to ask. Without a
+# source the HPA falls back to CPU (render-scaling.sh covers that).
 "$HELM" template gw "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" \
-  --set llmGateway.autoscaling.enabled=true > "$TMP/gw-hpa.yaml"
+  --set llmGateway.autoscaling.enabled=true --set scaling.customMetrics.clusterInstalled=true > "$TMP/gw-hpa.yaml"
 python3 - "$TMP/gw-hpa.yaml" <<'PY' && ok "HPA scales on gateway_llm_sse_active_connections Pods metric" || bad "HPA custom metric"
 import sys, yaml
 docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]

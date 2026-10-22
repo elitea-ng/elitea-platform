@@ -382,14 +382,16 @@ version in `Chart.yaml`, `helm dependency update deploy/helm/elitea`, commit
 ### scale-1 — the default
 
 Single NATS node, assets at `replicas = 1`, file storage. HA is intentionally
-waived. Pair with `LLM_BUDGET_EXPECTED_REPLICAS=1`. Nothing to set.
+waived. Nothing to set (the chart derives the gateway's
+`LLM_BUDGET_EXPECTED_REPLICAS` from its replica ceiling).
 
 ### HA (`values-nats-ha.yaml`) — opt-in
 
 3 nodes, assets at `replicas = 3` (the file sets `natsBootstrap.replicas` too),
 routes over TLS with mutual verification against the route CA (their own
-identity, not a client's). HA operators MUST also set the gateway's
-`LLM_BUDGET_EXPECTED_REPLICAS` to the real gateway replica count.
+identity, not a client's). The gateway's `LLM_BUDGET_EXPECTED_REPLICAS` is
+derived by the chart from the gateway's replica ceiling (`autoscaling.maxReplicas`,
+else `replicaCount`); an explicit value below it is refused.
 
 ```bash
 helm upgrade --install elitea deploy/helm/elitea -n elitea \

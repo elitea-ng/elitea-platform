@@ -255,7 +255,13 @@ monitoring_case() {
   fi
 }
 monitoring_case "elitea: Operator defaults scrape and alert together" yes yes
-monitoring_case "elitea: no scrape path, no rule" no no --set scheduler.metrics.podMonitor.enabled=false
+# Since S11 the gateway (and DeepWiki/Inventory when on) ship their own
+# PodMonitor under the Operator; switch them off so "scrape=no" measures the
+# scheduler's scrape path alone.
+OTHER_MONITORS=(--set llmGateway.metrics.podMonitor.enabled=false
+                --set deepwiki.metrics.podMonitor.enabled=false
+                --set inventory.metrics.podMonitor.enabled=false)
+monitoring_case "elitea: no scrape path, no rule" no no --set scheduler.metrics.podMonitor.enabled=false "${OTHER_MONITORS[@]}"
 monitoring_case "elitea: annotations alone carry the rule" yes yes --set scheduler.metrics.podMonitor.enabled=false --set scheduler.metrics.scrapeAnnotations=true
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.enabled=false --set natsClient.tls.enabled=false
 refuse "elitea: plaintext with the bundled server" "plaintext is only for a NATS you run yourself" "${EL[@]}" --set natsClient.tls.enabled=false --set natsClient.tls.allowPlaintext=true

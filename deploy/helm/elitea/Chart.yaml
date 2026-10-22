@@ -8,7 +8,7 @@ description: >-
   one connection contract.
 type: application
 
-# THREE dependencies, fetched by `helm dependency build` from Chart.lock (all
+# FIVE dependencies, fetched by `helm dependency build` from Chart.lock (all
 # pinned). charts/ is never committed (.gitignore).
 #
 # NATS JetStream is bundled (`nats`, `nats.enabled: true` by default): the
@@ -28,17 +28,27 @@ type: application
 # one source and is still published on its own. k3s and EKS turn it on; GKE
 # leaves it off (GKE Sandbox ships the gvisor RuntimeClass).
 #
+# KEDA (`keda`) and prometheus-adapter (`prometheusAdapter`) are OPTIONAL and
+# OFF by default (S11, scaling readiness). Both are CLUSTER-WIDE — CRDs, and an
+# APIService each (external.metrics.k8s.io, custom.metrics.k8s.io) — so turn
+# one on only on a cluster that has none: one per cluster. The usual shape is
+# the cluster's own install, stated with scaling.keda.clusterInstalled /
+# scaling.customMetrics.clusterInstalled; these two are for a cluster this
+# release has to itself. The Scaling page of the deployment docs says which
+# autoscaler reads which.
+#
 # How each install path gets them:
 #   * the published OCI chart carries all three as .tgz (helm package includes
 #     charts/): nothing to do. This is the recommended path.
 #   * Argo CD with a git source runs `helm dependency build` itself; a
-#     restricted AppProject must list the nats AND qdrant repositories in
-#     sourceRepos.
+#     restricted AppProject must list EVERY https repository below in
+#     sourceRepos (nats, qdrant, kedacore, prometheus-community), whether or
+#     not the optional ones are enabled: the build fetches them all.
 #   * `helm install` from a clone: deploy/helm/elitea/build-deps.sh first.
 #   * air-gapped: mirror the OCI chart.
 # deploy/helm/tests/render-nats-bundled.sh fails when Chart.lock and
-# Chart.yaml disagree or a dependency does not resolve. To bump nats or
-# qdrant: change `version` below, `helm dependency update deploy/helm/elitea`,
+# Chart.yaml disagree or a dependency does not resolve. To bump one: change
+# `version` below, `helm dependency update deploy/helm/elitea`,
 # commit Chart.lock.
 version: 0.1.0
 appVersion: "0.1.0"
@@ -63,3 +73,21 @@ dependencies:
     version: "0.1.0"
     repository: "file://../elitea-sandbox-runtime"
     condition: sandboxRuntime.enabled
+  - name: keda
+    # KEDA (https://keda.sh): the controller behind every ScaledObject this
+    # chart renders (the worker's JetStream lag, the sub-application and gateway
+    # triggers). OFF by default; values.yaml `keda`. Its CRDs are TEMPLATES of
+    # this chart, not a crds/ directory, which is why a ScaledObject in the same
+    # release renders as a hook on the first install (_scaling.tpl,
+    # elitea.scaling.kedaAnnotations).
+    version: "2.21.0"
+    repository: "https://kedacore.github.io/charts"
+    condition: keda.enabled
+  - name: prometheus-adapter
+    # The custom metrics API (custom.metrics.k8s.io) for the gateway's HPA
+    # Pods metric. OFF by default; values.yaml `prometheusAdapter`, whose rules
+    # name exactly the metrics this chart's HPAs read and nothing else.
+    alias: prometheusAdapter
+    version: "5.3.0"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: prometheusAdapter.enabled

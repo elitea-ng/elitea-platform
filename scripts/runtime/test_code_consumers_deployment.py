@@ -34,7 +34,10 @@ CODE = {"sandboxAudiences": ["dns:elitea-sandbox-deno", "dns:elitea-sandbox-rust
 def render(extra):
     with tempfile.TemporaryDirectory(prefix="elitea-code-chart-") as work:
         override = Path(work) / "values.yaml"
-        override.write_text(yaml.safe_dump({"postgresql": {"maxConnections": 250}, **extra}))
+        # 300: the budget counts every component since S11 (Main's 192 with
+        # the debug receipts, plus the gateway, scheduler, DeepWiki, Inventory
+        # and the worker's AgentState pool: 265).
+        override.write_text(yaml.safe_dump({"postgresql": {"maxConnections": 300}, **extra}))
         return subprocess.run(
             ["helm", "template", "code", "deploy/helm/elitea", "-f",
              "deploy/helm/elitea/values-standalone.yaml", "-f", str(override),
@@ -171,8 +174,10 @@ class PackagingTests(unittest.TestCase):
         # Standalone uses four Main replicas, each with 44 product/runtime
         # connections (2 of them the vector introspection pool, on by default).
         # Debug adds four independent receipt connections per replica:
-        # 4 x 48 = 192, plus 25 reserved.
-        for budget, allowed in ((216, False), (217, True)):
+        # 4 x 48 = 192. The rest of the release adds 73 (gateway 8, scheduler
+        # 4, DeepWiki host 5 + engine 16, Inventory engine 8, worker AgentState
+        # 32): 265, plus 25 reserved.
+        for budget, allowed in ((289, False), (290, True)):
             with self.subTest(budget=budget):
                 result = render({"main": {"runtime": CODE},
                                  "postgresql": {"maxConnections": budget}})
@@ -190,7 +195,7 @@ class PackagingTests(unittest.TestCase):
             "tenantEntries": 10, "tenantBytes": 268435456,
             "publishingTtlSeconds": 60, "readyTtlSeconds": 3600}
         result = render({"main": {"runtime": runtime},
-                         "postgresql": {"maxConnections": 217},
+                         "postgresql": {"maxConnections": 258},
                          "worker": {"enabled": False},
                          "sandboxKubernetes": {"supervisor": {"enabled": False}}})
         self.assertEqual(result.returncode, 0, result.stderr)

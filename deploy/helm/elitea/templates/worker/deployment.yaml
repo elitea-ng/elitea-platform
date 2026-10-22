@@ -397,6 +397,15 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /*
+        The worker drains on SIGTERM for limits.shutdown_timeout_millis. With
+        no grace period set, Kubernetes' default 30s equalled the default
+        drain, so SIGKILL landed exactly when the drain ran its course.
+      */}}
+      {{- $drainMs := include "elitea.integer" (dict "field" "worker.runtime.limits.shutdown_timeout_millis" "value" .Values.worker.runtime.limits.shutdown_timeout_millis "min" 0) | int }}
+      {{- include "elitea.scaling.validateGrace" (dict "field" "worker" "grace" .Values.worker.terminationGracePeriodSeconds "parts" (list (list "shutdown_timeout_millis/1000" (div (add $drainMs 999) 1000)) (list "margin" 15))) }}
+      terminationGracePeriodSeconds: {{ int .Values.worker.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.worker "selector" (printf "%s\napp.kubernetes.io/component: worker" (include "elitea-worker.selectorLabels" .))) | nindent 6 }}
       {{- with .Values.worker.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}

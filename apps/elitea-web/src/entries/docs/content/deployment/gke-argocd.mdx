@@ -37,6 +37,7 @@ The chart creates none of these. Each one fails the first sync, or a pod soon af
 | DNS and TLS | a global static IP, a DNS record for it, a cert-manager issuer for the public certificate | [Edge](#edge-ip-dns-tls-and-an-optional-proxy) |
 | External Secrets Operator | installed, with a `ClusterSecretStore` on Secret Manager | [Secrets](#external-secrets-operator) |
 | Argo CD | installed, with the chart registry registered | [Argo CD](#argo-cd) |
+| KEDA | installed once for the cluster (or `keda.enabled: true` in a cluster that has none) | [Autoscaling](#autoscaling) |
 | Capacity | about 4 vCPU and 10 GiB of requests for the release | [Budget](#resource-budget) |
 
 The commands use these names. Change them consistently:
@@ -76,10 +77,10 @@ Create a **PostgreSQL 16 or newer** instance with a **private IP** on the cluste
 gcloud sql instances create elitea-pg --database-version POSTGRES_16 \
   --region "$REGION" --network "projects/$PROJECT_ID/global/networks/<VPC>" \
   --no-assign-ip --ssl-mode ENCRYPTED_ONLY \
-  --tier <tier> --database-flags max_connections=200
+  --tier db-custom-4-16384
 ```
 
-`max_connections=200` is what `values-gke.yaml` sizes for (`postgresql.maxConnections: 200`, three elitea-main replicas at about 50 connections each). Change both together.
+`values-gke.yaml` sizes for this tier: 4 vCPU and 16 GB, where Cloud SQL sets `max_connections` to **500** from the memory size (`postgresql.maxConnections: 500`). The chart adds up every component at its replica ceiling (elitea-main, the gateway, the scheduler, DeepWiki, Inventory and the worker's agent state: 359) and refuses a release that does not fit in 500 minus the 25 it reserves. If you set `--database-flags max_connections=…` yourself, state the same number in `postgresql.maxConnections`. [Scaling](/deployment/scaling#the-postgresql-connection-budget) has the formula.
 
 Cloud SQL has no superuser, so prepare the role and both databases once by hand. The password is the `db-password` that the mint script in the first of the [steps](#steps) writes:
 
@@ -187,7 +188,22 @@ Argo CD pulls the chart from `ghcr.io` as an OCI Helm chart. Register the regist
 kubectl apply -f bootstrap/helm-repository.yaml
 ```
 
-Argo CD renders the chart with the Helm 3 it bundles, and the chart supports that (Helm 3.8 or newer). The Argo CD project you deploy into must allow the `elitea` namespace as a destination. The OCI chart carries its dependencies (the upstream NATS and Qdrant charts included), so the project needs no other source repository; a git source would also need `https://nats-io.github.io/k8s/helm/charts/` and `https://qdrant.github.io/qdrant-helm` in `sourceRepos` (see [GitOps with Argo CD](/deployment/argocd#source-the-published-chart)).
+Argo CD renders the chart with the Helm 3 it bundles, and the chart supports that (Helm 3.8 or newer). The Argo CD project you deploy into must allow the `elitea` namespace as a destination. The OCI chart carries its dependencies (the upstream NATS, Qdrant, KEDA and prometheus-adapter charts included), so the project needs no other source repository. A git source also needs `https://nats-io.github.io/k8s/helm/charts/`, `https://qdrant.github.io/qdrant-helm`, `https://kedacore.github.io/charts` and `https://prometheus-community.github.io/helm-charts` in `sourceRepos` (see [GitOps with Argo CD](/deployment/argocd#source-the-published-chart)). In an air-gapped cluster, mirror the OCI chart: it carries all four.
+
+### Autoscaling
+
+`values-gke.yaml` turns autoscaling on: the worker scales on its JetStream backlog (1 to 4), DeepWiki on its running invocations (1 to 3, KEDA's `postgresql` trigger on the host's own Cloud SQL Secret), the gateway on CPU (1 to 3) and elitea-main on CPU (2 to 3). The worker and DeepWiki need **KEDA**, and there are two ways to provide it:
+
+- **KEDA installed once for the cluster (the default here).** KEDA is cluster infrastructure: it outlives this release, and deleting the release then never takes the CRDs, or other teams' ScaledObjects, with it. Install it before the first sync. `values-gke.yaml` sets `scaling.keda.clusterInstalled: true`, which tells the chart about it, because Argo CD does not pass the cluster's API versions.
+
+  ```bash
+  helm repo add kedacore https://kedacore.github.io/charts
+  helm install keda kedacore/keda --version 2.21.0 -n keda --create-namespace
+  ```
+
+- **KEDA in this release.** Set `keda.enabled: true` and `scaling.keda.clusterInstalled: false`, only in a cluster with no KEDA: it is one per cluster. Add KEDA's three pods to the resource budget. On the first sync the ScaledObjects come after the CRDs (each carries `SkipDryRunOnMissingResource=true`).
+
+With a Prometheus in the cluster, set `scaling.prometheus.serverAddress` and both the gateway and DeepWiki move to their Prometheus triggers, on concurrent `/llm` streams and on running invocations. [Scaling](/deployment/scaling) has what each component scales on, the disruption budgets and the grace periods.
 
 ### Resource budget
 

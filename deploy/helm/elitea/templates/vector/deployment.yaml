@@ -10,6 +10,7 @@ metadata:
   annotations:
     {{- include "elitea-vector.syncWave" . | nindent 4 }}
 spec:
+  {{- include "elitea.scaling.validateRange" (dict "v" .Values.vector "field" "vector") }}
   {{- if not .Values.vector.autoscaling.enabled }}
   replicas: {{ .Values.vector.replicaCount }}
   {{- end }}
@@ -33,6 +34,7 @@ spec:
       serviceAccountName: {{ include "elitea-vector.serviceAccountName" . }}
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: {{ .Values.vector.terminationGracePeriodSeconds }}
+      {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.vector "selector" (include "elitea-vector.selectorLabels" .)) | nindent 6 }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.vector.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: elitea-vector
