@@ -73,7 +73,9 @@
 use crate::config::VectorSettings;
 use crate::storage::WikiKey;
 use elitea_vector_index::client::MAX_LIMIT;
-use elitea_vector_index::{ClientConfig, DeleteSelector, SearchParams, VectorClient, pb};
+use elitea_vector_index::{
+    ClientConfig, DeleteSelector, SearchParams, VectorClient, callback_bearer, pb,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -335,21 +337,6 @@ pub fn connect(settings: &VectorSettings) -> Result<VectorClient, DenseError> {
         config.server_name.clone_from(&settings.server_name);
     }
     Ok(VectorClient::connect_lazy(&config)?)
-}
-
-/// The bearer an invocation carries for its callbacks: `llm_settings.api_key`
-/// (or `openai_api_key`), the per-invocation callback token elitea-main
-/// minted and recorded a `deepwiki` grant for. elitea-vector admits it for
-/// the invocation's project and source `deepwiki` only.
-#[must_use]
-pub fn callback_bearer(arguments: &serde_json::Map<String, Value>) -> Option<String> {
-    let settings = arguments.get("llm_settings")?.as_object()?;
-    ["api_key", "openai_api_key"]
-        .iter()
-        .filter_map(|key| settings.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .find(|value| !value.is_empty())
-        .map(str::to_owned)
 }
 
 /// How an invocation reaches the dense store.
@@ -981,24 +968,6 @@ mod tests {
         assert_eq!(hashed, format!("sha256:{}", sha256_hex(&long)));
         assert!(point_key("a\nb").starts_with("sha256:"));
         assert!(point_key("").starts_with("sha256:"));
-    }
-
-    #[test]
-    fn the_bearer_is_the_callback_api_key() {
-        let arguments = |value: Value| value.as_object().cloned().unwrap_or_default();
-        assert_eq!(
-            callback_bearer(&arguments(json!({"llm_settings": {"api_key": " t "}}))),
-            Some("t".to_owned())
-        );
-        assert_eq!(
-            callback_bearer(&arguments(json!({"llm_settings": {"openai_api_key": "o"}}))),
-            Some("o".to_owned())
-        );
-        assert_eq!(
-            callback_bearer(&arguments(json!({"llm_settings": {}}))),
-            None
-        );
-        assert_eq!(callback_bearer(&arguments(json!({}))), None);
     }
 
     #[tokio::test]

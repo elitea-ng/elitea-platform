@@ -206,19 +206,17 @@ impl NativeRunner {
     }
 
     /// The graph store with this invocation's vector access: the bearer the
-    /// platform minted for it (`params.llm_settings.api_key`). Without one
-    /// (a call that did not come through the platform's facade) a write
-    /// publishes no vector generation and the first ranking backfills it.
+    /// platform minted for it (`params.llm_settings.api_key`, or
+    /// `openai_api_key`; `elitea_vector_index::callback_bearer`, shared with
+    /// `DeepWiki`). Without one (a call that did not come through the
+    /// platform's facade) a write publishes no vector generation and the
+    /// first ranking backfills it.
     fn graphs(&self, params: &Map<String, Value>) -> store::PgGraphStore {
-        let bearer = params
-            .get("llm_settings")
-            .and_then(|settings| settings.get("api_key"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let bearer = elitea_vector_index::callback_bearer(params).unwrap_or_default();
         self.views
             .store()
             .clone()
-            .with_vectors(self.vectors_with(bearer))
+            .with_vectors(self.vectors_with(&bearer))
     }
 
     /// Run `tool` of the `inventory` / `inventory_search` family.

@@ -1,6 +1,8 @@
 //! The caller side of `elitea-vector` (ADR-0030 decisions 2 and 5,
 //! ADR-0031 decisions 1 and 4).
 //!
+//! * [`callback`]: the callback bearer of an engine invocation (`DeepWiki`,
+//!   Inventory).
 //! * [`client`]: a typed `elitea.vector.v1` gRPC client over mTLS. Every
 //!   call carries the claim's bearer token; status codes classify as
 //!   retryable or not ([`error`]).
@@ -30,6 +32,7 @@
     reason = "VectorClient and VectorBackend read best under these names"
 )]
 
+pub mod callback;
 pub mod client;
 pub mod error;
 pub mod filter;
@@ -59,6 +62,7 @@ mod proto {
 /// The `elitea.vector.v1` messages and service stubs.
 pub use proto::elitea::vector::v1 as pb;
 
+pub use callback::callback_bearer;
 pub use client::{
     ClaimToken, ClientConfig, DeleteSelector, HybridSearchParams, MemoryTarget, SearchParams,
     UpsertSummary, VectorClient,
