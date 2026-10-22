@@ -118,9 +118,7 @@ func TestProvisionWritesVaultMaterialTheDeploymentMasterKeyCanOpen(t *testing.T)
 	 * nothing can decrypt. This writes through the deployment's handler and
 	 * reads the value back, which opens the vault both ways.
 	 */
-	if err := handler.StoreProjectSecrets(ctx, projectVaultID, map[string]string{
-		"issue_399_round_trip": "round-trip-value",
-	}); err != nil {
+	if err := handler.StoreSecret(ctx, nil, projectVaultID, "issue_399_round_trip", "round-trip-value"); err != nil {
 		t.Fatalf("write vault material through the deployment's key: %v", err)
 	}
 	readBack, err := handler.LookupProjectSecret(ctx, projectVaultID, "issue_399_round_trip")

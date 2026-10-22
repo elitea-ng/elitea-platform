@@ -59,8 +59,8 @@ func NewSecretsHeaderValue() (string, error) {
 // reports `false, nil`, and so does a project whose owner set the value by
 // hand.
 //
-// The vault must exist. This function does not create one, for the reason
-// StoreProjectSecrets does not: an absent vault means the caller ran before
+// The vault must exist. This function does not create one: an absent vault
+// means the caller ran before
 // the project_secrets provisioning step, and minting a vault here would put a
 // second minter beside EnsureProjectVault. The provisioning step calls
 // EnsureProjectVault first, and the backfill reads the vault table to find its

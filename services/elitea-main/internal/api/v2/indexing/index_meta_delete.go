@@ -155,12 +155,6 @@ func writeCurrentIndexMetaDeleteError(
 			"ok":    false,
 			"error": "Toolkit id is missing for toolkit None",
 		})
-	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaConnectionMissing):
-		writeJSON(writer, http.StatusBadRequest, map[string]any{
-			"ok": false,
-			"error": "Index storage is not available for toolkit " +
-				strconv.FormatInt(toolkitID, 10),
-		})
 	case errors.Is(err, indexmetaapp.ErrCurrentIndexMetaTargetMissing):
 		writeJSON(writer, http.StatusBadRequest, map[string]any{
 			"ok": false,

@@ -1421,48 +1421,6 @@ func (h *Handler) RemoveProjectVaultTx(ctx context.Context, tx pgx.Tx, projectID
 	return nil
 }
 
-// StoreProjectSecrets writes several regular secrets to one project vault in a
-// SINGLE rewrite. It never creates a vault: an absent or unreadable vault is an
-// error (#399).
-//
-// WHY IT IS HERE AND NOT IN THE PROVISIONER, for the same reason
-// EnsureProjectVault is. This handler holds the only master key a deployment
-// actually sets. A material writer built anywhere else derives its own key, so
-// it writes material this handler cannot open, and it cannot open material this
-// handler wrote. The creator and the writer must share one key source, or the
-// vault is unusable whichever creator ran first.
-//
-// WHY ONE REWRITE, AND NOT REPEATED StoreSecret CALLS. Values that belong
-// together must land together. Two calls are two read-modify-write cycles, so a
-// failure between them leaves half the material behind. (The production caller
-// this was written for, the per-project PgVector provisioning step that stored
-// a password and its connection string, was removed by #1359. No production
-// path calls this now; the Postgres integration tests seed vaults with it.)
-//
-// The caller must create the vault first (EnsureProjectVault, which the
-// project_secrets provisioning step runs).
-func (h *Handler) StoreProjectSecrets(ctx context.Context, projectID string, values map[string]string) error {
-	vaultID := dbKey(projectID)
-	if len(values) == 0 {
-		return fmt.Errorf("store %s secrets: no values given", vaultID)
-	}
-	for name := range values {
-		if name == "" {
-			return fmt.Errorf("store %s secrets: a secret name is empty", vaultID)
-		}
-	}
-	err := h.mutateVaultCtx(ctx, projectID, false, func(vault *vaultData) (bool, error) {
-		for name, value := range values {
-			vault.Secrets[name] = value
-		}
-		return true, nil
-	})
-	if err != nil && !errors.Is(err, errVaultWrite) {
-		return fmt.Errorf("store %s secrets: %w", vaultID, err)
-	}
-	return err
-}
-
 // LookupProjectSecret reads one regular secret from a project vault.
 //
 // It answers with the package's ONE not-found idiom, the ErrSecretNotFound

@@ -14,10 +14,10 @@ package secrets
 //
 // The vault is seeded through the PRODUCT writers, in the order a real project
 // meets them: provisioning creates the vault, the Configurations page sets a
-// default model, and a multi-secret write goes through this handler's own
-// rewrite (StoreProjectSecrets; the per-project pgvector provisioning that
-// wrote this way went with #1359, so the step stands in for any such write). The last step is the write-back case: it rewrites a
-// vault that holds an integer, and the integer must still be one afterwards.
+// default model, and a programmatic write goes through this handler's own
+// vault rewrite (StoreSecret). The last step is the write-back case: it
+// rewrites a vault that holds an integer, and the integer must still be one
+// afterwards.
 //
 // Requires a PostgreSQL to create an isolated database in; skipped otherwise.
 
@@ -40,7 +40,7 @@ const (
 	intModelTargetProject = 42
 	intModelIDName        = "default_chat_model_project_id"
 	intModelNameName      = "default_chat_model_name"
-	pgvectorSecretName    = "pgvector_project_password"
+	writeBackSecretName   = "written_back_secret"
 )
 
 func TestAVaultHoldingAnIntegerDefaultModelIDIsReadable(t *testing.T) {
@@ -72,15 +72,12 @@ func TestAVaultHoldingAnIntegerDefaultModelIDIsReadable(t *testing.T) {
 	}
 	assertStoredIntegerID(t, handler, "after the model-default write")
 
-	// 3. A multi-secret write (once pgvector provisioning's) rewrites the same
-	// vault through this handler.
-	// It used to fail here too: StoreProjectSecrets opens the vault first.
-	if err := handler.StoreProjectSecrets(ctx, intModelProjectID, map[string]string{
-		pgvectorSecretName: "pgvector-password",
-	}); err != nil {
-		t.Fatalf("store pgvector material in a vault holding an integer: %v", err)
+	// 3. A programmatic write rewrites the same vault through this handler.
+	// It used to fail here too: the rewrite opens the vault first.
+	if err := handler.StoreSecret(ctx, nil, intModelProjectID, writeBackSecretName, "value"); err != nil {
+		t.Fatalf("store a secret in a vault holding an integer: %v", err)
 	}
-	assertStoredIntegerID(t, handler, "after the pgvector write-back")
+	assertStoredIntegerID(t, handler, "after the programmatic write-back")
 
 	router := secretsRouter(t, pool, allSecretPermissions())
 
@@ -97,7 +94,7 @@ func TestAVaultHoldingAnIntegerDefaultModelIDIsReadable(t *testing.T) {
 	for _, item := range items {
 		names = append(names, item.Name)
 	}
-	for _, want := range []string{intModelIDName, intModelNameName, pgvectorSecretName} {
+	for _, want := range []string{intModelIDName, intModelNameName, writeBackSecretName} {
 		if !slices.Contains(names, want) {
 			t.Fatalf("List names = %v, missing %q", names, want)
 		}

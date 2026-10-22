@@ -10,7 +10,6 @@ const MaxCurrentIndexMetaCollectionBytes = 4 << 10
 
 var (
 	ErrCurrentIndexMetaNotFound           = errors.New("current index metadata was not found")
-	ErrCurrentIndexMetaConnectionMissing  = errors.New("current index metadata connection string is unavailable")
 	ErrCurrentIndexScheduleToolkitMissing = errors.New("current index metadata schedule toolkit was not found")
 	ErrCurrentIndexScheduleUnavailable    = errors.New("current index metadata schedule cleanup failed")
 )

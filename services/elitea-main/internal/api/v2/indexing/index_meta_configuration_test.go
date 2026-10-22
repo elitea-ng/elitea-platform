@@ -248,12 +248,8 @@ func TestCurrentIndexConfigurationRouteMapsApplicationRefusals(t *testing.T) {
 			err: indexmetaapp.ErrCurrentIndexMetaToolkitMissing, wantStatus: http.StatusBadRequest,
 			wantBody: "Toolkit id is missing for toolkit 9",
 		},
-		"no pgvector": {
+		"no index storage": {
 			err: indexmetaapp.ErrCurrentIndexMetaTargetMissing, wantStatus: http.StatusBadRequest,
-			wantBody: "Index storage is not available for toolkit 9",
-		},
-		"no connection string": {
-			err: indexmetaapp.ErrCurrentIndexMetaConnectionMissing, wantStatus: http.StatusBadRequest,
 			wantBody: "Index storage is not available for toolkit 9",
 		},
 		"index missing": {
